@@ -390,3 +390,54 @@ func TestUncommittedConfigGetsStagingFix(t *testing.T) {
 		t.Fatalf("amending a commit that does not contain the change would waste the operator's one careful attempt: %q", got.Fix)
 	}
 }
+
+// TestCoreRepositoryDistinguishesUnreadableFromAbsent guards against the
+// report telling an operator to re-initialize a core whose history is intact.
+//
+// git refuses a repository it will not read for reasons that have nothing to
+// do with the repository being absent — ownership is the one seen in
+// production — and the previous wording turned every such failure into "core
+// is not a git repository" with "git init" as the fix. Following that advice
+// on a healthy core discards its history.
+func TestCoreRepositoryDistinguishesUnreadableFromAbsent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no repository at all", func(t *testing.T) {
+		t.Parallel()
+		workspace := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workspace, "core"), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		check := checkByName(t, run(t, workspace), "core_repository")
+		if check.Status != StatusFail {
+			t.Fatalf("core_repository = %s, want fail", check.Status)
+		}
+		if !strings.HasPrefix(check.Fix, "git -C ") || !strings.HasSuffix(check.Fix, " init") {
+			t.Fatalf("a genuinely absent repository should still be fixed by init, got %q", check.Fix)
+		}
+	})
+
+	t.Run("present but unreadable", func(t *testing.T) {
+		t.Parallel()
+		workspace := t.TempDir()
+		// An empty .git stands in for the shape that matters: something is
+		// there, and git will not read it.
+		if err := os.MkdirAll(filepath.Join(workspace, "core", ".git"), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		report := run(t, workspace)
+		check := checkByName(t, report, "core_repository")
+		if check.Status != StatusFail {
+			t.Fatalf("core_repository = %s, want fail", check.Status)
+		}
+		if strings.HasPrefix(check.Fix, "git -C ") && strings.HasSuffix(check.Fix, " init") {
+			t.Fatalf("must not advise init when .git is present: %q", check.Fix)
+		}
+		if !strings.Contains(check.Fix, "do not run") {
+			t.Fatalf("fix should warn against init explicitly, got %q", check.Fix)
+		}
+		if !strings.Contains(check.Detail, "cannot read it") {
+			t.Fatalf("detail should say git could not read the repository, got %q", check.Detail)
+		}
+	})
+}

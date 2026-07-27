@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/app"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/coreintegrity"
 )
@@ -35,17 +37,23 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 	if cfgPath == "" {
 		cfgPath = configPath
 	}
+	// Admission needs a loaded config to know which roots exist and whose
+	// signatures may establish them, so it only runs once the config parses.
+	var admission []app.RootAdmission
+	if loadErr == nil {
+		admission = app.CheckRootAdmission(context.Background(), cfg)
+	}
 	if outputFmt == "json" {
 		// Always emit JSON to stdout, even on failure — scripts may
 		// want the structured error. The error is still returned so
 		// the exit code reflects validity.
-		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity); err != nil {
+		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity, admission); err != nil {
 			return err
 		}
 		if loadErr != nil {
 			return terminal(loadErr)
 		}
-		return integrityError(integrity)
+		return firstError(integrityError(integrity), admissionError(admission))
 	}
 	if loadErr != nil {
 		// Config could not load, but the integrity report is often the
@@ -62,7 +70,80 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		fmt.Fprintln(w)
 		writeIntegrityText(w, *integrity)
 	}
-	return integrityError(integrity)
+	if len(admission) > 0 {
+		fmt.Fprintln(w)
+		writeAdmissionText(w, admission)
+	}
+	return firstError(integrityError(integrity), admissionError(admission))
+}
+
+// firstError returns the first non-nil error, so validate reports every
+// section it can and still exits on the earliest thing serve would refuse
+// over.
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// admissionError converts failing root admission into the error that stops
+// `thane validate && thane serve`.
+//
+// Only roots under verify_signatures: required produce it. That is not
+// leniency — it mirrors what serve does, which is refuse on required and log
+// on warn. Failing here for a warn root would make validate stricter than the
+// gate it reports on, which breaks the guard just as surely as being more
+// permissive.
+func admissionError(results []app.RootAdmission) error {
+	var fatal []string
+	for _, result := range results {
+		if result.Fatal() {
+			fatal = append(fatal, result.Root)
+		}
+	}
+	if len(fatal) == 0 {
+		return nil
+	}
+	sort.Strings(fatal)
+	return terminal(fmt.Errorf("document root admission failed for %s (see the report above; thane serve will refuse to start)",
+		strings.Join(fatal, ", ")))
+}
+
+// writeAdmissionText prints the per-root admission report. A root that fails
+// prints the full reason rather than a summary, because admission failures are
+// repaired from the detail — which key signed, and what to declare.
+func writeAdmissionText(w io.Writer, results []app.RootAdmission) {
+	sort.Slice(results, func(i, j int) bool { return results[i].Root < results[j].Root })
+
+	admitted := true
+	names := make([]string, 0, len(results))
+	for _, result := range results {
+		names = append(names, result.Root)
+		if !result.Admitted() {
+			admitted = false
+		}
+	}
+	if admitted {
+		fmt.Fprintf(w, "✓ Root admission: %s\n", strings.Join(names, ", "))
+		return
+	}
+	fmt.Fprint(w, "✗ Root admission\n\n")
+	for _, result := range results {
+		if result.Admitted() {
+			fmt.Fprintf(w, "  ✓ %s\n", result.Root)
+			continue
+		}
+		marker := "✗"
+		if !result.Fatal() {
+			// A warn root is reported without claiming serve will refuse,
+			// because it will not.
+			marker = "!"
+		}
+		fmt.Fprintf(w, "  %s %s (%s)\n      %s\n", marker, result.Root, result.Mode, result.Err)
+	}
 }
 
 // integrityError converts a failing report into the error that makes
@@ -174,7 +255,29 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 
 // writeValidateJSON emits the structured validation report. cfg may be
 // nil when load failed; loadErr is non-nil when validation failed.
-func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report) error {
+func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report, admission []app.RootAdmission) error {
+	type rootAdmissionJSON struct {
+		Root     string `json:"root"`
+		RepoPath string `json:"repo_path,omitempty"`
+		Mode     string `json:"mode"`
+		Admitted bool   `json:"admitted"`
+		Error    string `json:"error,omitempty"`
+	}
+	roots := make([]rootAdmissionJSON, 0, len(admission))
+	for _, entry := range admission {
+		row := rootAdmissionJSON{
+			Root:     entry.Root,
+			RepoPath: entry.RepoPath,
+			Mode:     string(entry.Mode),
+			Admitted: entry.Admitted(),
+		}
+		if entry.Err != nil {
+			row.Error = entry.Err.Error()
+		}
+		roots = append(roots, row)
+	}
+	sort.Slice(roots, func(i, j int) bool { return roots[i].Root < roots[j].Root })
+
 	// Path always emits (no omitempty) so the JSON schema is stable
 	// for scripts piping into jq — even discovery-failure cases get
 	// a path field, possibly empty.
@@ -184,10 +287,12 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 		Error     string                `json:"error,omitempty"`
 		Summary   map[string]any        `json:"summary,omitempty"`
 		Integrity *coreintegrity.Report `json:"integrity,omitempty"`
+		Roots     []rootAdmissionJSON   `json:"root_admission,omitempty"`
 	}{
 		Path:      cfgPath,
 		Valid:     loadErr == nil,
 		Integrity: integrity,
+		Roots:     roots,
 	}
 	if loadErr != nil {
 		result.Error = loadErr.Error()

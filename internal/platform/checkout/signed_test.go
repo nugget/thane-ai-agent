@@ -42,18 +42,23 @@ func writeSigningKey(t *testing.T, name string) (privPath, pub string) {
 
 func TestOpenSignedBootstrapsAndReconciles(t *testing.T) {
 	worktree := t.TempDir()
-	signingKey, _ := writeSigningKey(t, "checkout-test")
+	signingKey, agentPublic := writeSigningKey(t, "checkout-test")
 	_, operatorPublic := writeSigningKey(t, "operator-test")
 
 	signed, err := OpenSigned(t.Context(), SignedSpec{
 		Name:           "kb",
 		WorktreePath:   worktree,
 		SigningKeyPath: signingKey,
-		SeedSigners: []provenance.TrustedSigner{{
-			Principal: "operator@example.com",
-			PublicKey: operatorPublic,
-			Comment:   "operator laptop",
-		}},
+		SeedSigners: []provenance.TrustedSigner{
+			// The agent makes the birth commit here, so it is entitled to
+			// establish this root alongside the operator.
+			{Principal: provenance.AgentPrincipal, PublicKey: agentPublic},
+			{
+				Principal: "operator@example.com",
+				PublicKey: operatorPublic,
+				Comment:   "operator laptop",
+			},
+		},
 		Logger: slog.Default(),
 	})
 	if err != nil {

@@ -213,10 +213,29 @@ func (c checker) coreRepository(r *Report, coreOK bool) bool {
 			Detail: "core directory is missing"})
 		return false
 	}
-	if out, err := c.git("rev-parse", "--is-inside-work-tree"); err == nil && out == "true" {
+	out, err := c.git("rev-parse", "--is-inside-work-tree")
+	if err == nil && strings.TrimSpace(out) == "true" {
 		r.Checks = append(r.Checks, Check{Name: "core_repository", Status: StatusPass,
 			Detail: "core is a git repository"})
 		return true
+	}
+	// A core that has a .git directory git nonetheless refuses to read is a
+	// different failure with a different fix, and "git init" is actively
+	// wrong advice for it: the repository exists and its history is intact.
+	// The common cause is ownership — git refuses a repository owned by
+	// another user — which produces an error mentioning nothing about
+	// repositories being absent. Reporting that as "core is not a git
+	// repository" sends an operator to re-initialize a core that is fine.
+	if _, statErr := os.Stat(filepath.Join(c.core, ".git")); statErr == nil {
+		detail := "core has a .git directory but git cannot read it as a repository"
+		if err != nil {
+			detail += ": " + err.Error()
+		}
+		r.Checks = append(r.Checks, Check{Name: "core_repository", Status: StatusFail,
+			Detail: detail,
+			Fix: "check that " + filepath.Join(c.core, ".git") + " is intact and owned by the user Thane runs as" +
+				" — do not run 'git init', which would discard a history that is still there"})
+		return false
 	}
 	r.Checks = append(r.Checks, Check{Name: "core_repository", Status: StatusFail,
 		Detail: "core is not a git repository, so its contents carry no history and cannot be signed",

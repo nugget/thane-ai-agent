@@ -96,10 +96,10 @@ func TestRenderAllowedSigners_Rejections(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "operator reuses agent key",
+			name:  "operator reuses agent key under another principal",
 			agent: testAgentKey,
 			ops:   []TrustedSigner{{Principal: "evil@example.com", PublicKey: testAgentKey}},
-			want:  "agent's own signing key",
+			want:  "duplicates the key already trusted",
 		},
 		{
 			name:  "duplicate operator key under two principals",
@@ -161,13 +161,63 @@ func TestRenderAllowedSigners_Rejections(t *testing.T) {
 
 // TestRenderAllowedSigners_CanonicalizesComments confirms that keys differing
 // only by trailing comment are treated as identical (so a comment can't slip a
-// duplicate past dedup, and the agent-key check can't be evaded by appending a
-// comment).
+// duplicate past dedup, and the agent-key spoof check can't be evaded by
+// appending a comment).
 func TestRenderAllowedSigners_CanonicalizesComments(t *testing.T) {
 	t.Parallel()
 	_, err := RenderAllowedSigners(testAgentKey, []TrustedSigner{{Principal: "evil@example.com", PublicKey: testAgentKey + " looks-different"}})
-	if err == nil || !strings.Contains(err.Error(), "agent's own signing key") {
-		t.Fatalf("RenderAllowedSigners() error = %v, want agent-key rejection despite comment", err)
+	if err == nil || !strings.Contains(err.Error(), "duplicates the key already trusted") {
+		t.Fatalf("RenderAllowedSigners() error = %v, want agent-key spoof rejection despite comment", err)
+	}
+}
+
+// TestRenderAllowedSigners_AcceptsAgentPrincipal confirms a root may declare
+// the agent key entitled to establish it. The rendered file is unchanged —
+// the agent line is already emitted implicitly — but the declaration has to be
+// accepted, because refusing it is what would make an agent-founded root
+// impossible to admit.
+func TestRenderAllowedSigners_AcceptsAgentPrincipal(t *testing.T) {
+	t.Parallel()
+	withAgent, err := RenderAllowedSigners(testAgentKey, []TrustedSigner{{Principal: AgentPrincipal, PublicKey: testAgentKey}})
+	if err != nil {
+		t.Fatalf("RenderAllowedSigners() with agent principal = %v, want nil", err)
+	}
+	withoutAgent, err := RenderAllowedSigners(testAgentKey, nil)
+	if err != nil {
+		t.Fatalf("RenderAllowedSigners() bare = %v, want nil", err)
+	}
+	if withAgent != withoutAgent {
+		t.Fatalf("declaring the agent key changed the rendered file:\n got %q\nwant %q", withAgent, withoutAgent)
+	}
+}
+
+// TestRenderSeedSigners_OmitsImplicitAgentKey is the property admission rests
+// on: the seed file must contain only what config declared, so an
+// agent-founded root cannot admit itself.
+func TestRenderSeedSigners_OmitsImplicitAgentKey(t *testing.T) {
+	t.Parallel()
+	got, err := RenderSeedSigners([]TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey}})
+	if err != nil {
+		t.Fatalf("RenderSeedSigners() = %v, want nil", err)
+	}
+	if strings.Contains(got, AgentPrincipal) {
+		t.Fatalf("RenderSeedSigners() = %q, want no implicit %s line", got, AgentPrincipal)
+	}
+	if !strings.Contains(got, "alice@example.com") {
+		t.Fatalf("RenderSeedSigners() = %q, want the declared seed", got)
+	}
+}
+
+// TestRenderSeedSigners_KeepsDeclaredAgentKey confirms the agent is entitled
+// where — and only where — config says so.
+func TestRenderSeedSigners_KeepsDeclaredAgentKey(t *testing.T) {
+	t.Parallel()
+	got, err := RenderSeedSigners([]TrustedSigner{{Principal: AgentPrincipal, PublicKey: testAgentKey}})
+	if err != nil {
+		t.Fatalf("RenderSeedSigners() = %v, want nil", err)
+	}
+	if !strings.Contains(got, AgentPrincipal) {
+		t.Fatalf("RenderSeedSigners() = %q, want the declared agent seed", got)
 	}
 }
 
@@ -199,7 +249,12 @@ func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
 	}
 	dir := t.TempDir()
 	signer := testSigner(t)
-	ops := []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "Alice laptop"}}
+	// The agent signs the birth commit, so it has to be among the keys
+	// entitled to establish the root or the root is born inadmissible.
+	ops := []TrustedSigner{
+		{Principal: AgentPrincipal, PublicKey: signer.PublicKey()},
+		{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "Alice laptop"},
+	}
 	s, err := NewWithOptions(dir, signer, slog.Default(), Options{SeedSigners: ops})
 	if err != nil {
 		t.Fatalf("NewWithOptions: %v", err)

@@ -37,6 +37,40 @@ This is a foundation, not the full peer-trust system. Peer CA exchange,
 delegation certificates, inherited-trust policy enforcement, and transport
 mTLS still need dedicated runtime paths.
 
+### Document Root Admission
+
+**Status: Implemented**
+
+A signed document root is not trusted merely because its commits carry
+signatures. Before any of its history counts, the root must prove its
+birth: it has exactly one parentless commit, that commit is signed by a
+key declared in config as one of the root's `seed_signers`, and every
+commit that has ever changed the in-tree `.allowed_signers` was signed by
+such a key too.
+
+The structural point is where the answer comes from. Verifying against a
+root's own `.allowed_signers` lets the repository vouch for itself, since
+whoever wrote that file also chose what it says. Seed signers live in
+config, outside the repository they govern, so admission is the one
+question a root cannot answer in its own favor. Nothing but the seed set
+counts here: the in-tree file is excluded from admission entirely, or a
+commit that added a key could be validated by the entry it introduced.
+
+This makes hardening a config expression rather than a code path. A root
+that omits the agent principal from its seed signers is one the agent may
+not establish or amend; that is the intended shape for `core`, which
+holds the config deciding what the instance trusts. Where the agent has
+shell access it can still write that config, but it cannot sign the
+change, so the boot gate refuses and names `admission`. Detection, not
+prevention — which is the right property, because the realistic failure
+is an agent steered by a poisoned document rather than a deliberate
+adversary, and that drift is otherwise silent.
+
+Admission runs for every git-backed root under `verify_signatures: warn`
+or `required`, including roots Thane only reads and never writes to —
+those carry entirely foreign history, so they are where it matters most.
+See [Document Roots](document-roots.md) for the operator-facing detail.
+
 ### Trust Zones
 
 **Status: Implemented**

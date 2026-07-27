@@ -258,9 +258,20 @@ read-only root must live elsewhere, also include that directory in
 signed git commit. By default the root itself is the repository; set
 `git.repo_path` when several roots live under one larger repo. Thane
 uses the repository-local `.allowed_signers` file for SSH signature
-verification. For signer-backed roots, Thane creates that file from the
-configured signing key when it is missing; after that, the file itself is
-the trust configuration surface.
+verification. Thane creates that file once, when the root is first
+established, from the agent key plus the root's declared `seed_signers`;
+after that the file is the root's own trust surface and config never
+rewrites it.
+
+A root that signs commits must declare `seed_signers` — the keys
+entitled to establish it. At boot, a git-backed root under
+`verify_signatures: warn` or `required` must prove its birth is
+attributable to one of them, and that every change to `.allowed_signers`
+was signed by one of them. A root founded by the agent must therefore
+declare `thane@provenance.local` with the public half of its
+`git.signing_key`; omitting that principal is how a root declares that
+the agent may not establish or amend it. Failures report through the
+root's own `verify_signatures` policy and name the `admission` check.
 
 `git.verify_signatures` controls read-side enforcement. `none` disables
 checks, `warn` logs and reports verification failures without blocking,

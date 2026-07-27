@@ -176,6 +176,20 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 			writer = w
 		}
 
+		// Admission asks whether this root's history was ever entitled to
+		// exist. That is prior to anything either the writer or the verifier
+		// does with it, and it does not depend on whether this instance
+		// writes to the root — a corpus Thane only reads, pulled from a
+		// remote, carries entirely foreign history and is precisely where an
+		// unattributable birth matters most. So it runs here, once per root,
+		// rather than inside whichever constructor happens to be built.
+		//
+		// It follows the writer because a root Thane creates has no history
+		// to judge until BootstrapBirthCommit has made one.
+		if err := a.verifyRootAdmission(root, rootPath, rootCfg, policy.Git.VerifySignatures, resolver, logger); err != nil {
+			return documents.StoreOptions{}, err
+		}
+
 		var verifier *documentRootProvenanceVerifier
 		if policy.Git.Enabled && policy.Git.VerifySignatures != documents.VerificationNone {
 			v, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
@@ -325,22 +339,9 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	}
 	signingKey = resolvePath(signingKey, resolver)
 
-	repoPath := strings.TrimSpace(gitCfg.RepoPath)
-	if repoPath == "" {
-		repoPath = rootPath
-	} else {
-		repoPath = resolvePath(repoPath, resolver)
-	}
-	absRepoPath, err := filepath.Abs(repoPath)
+	absRepoPath, absRootPath, err := resolveRootPaths(root, rootPath, gitCfg, resolver)
 	if err != nil {
-		return nil, fmt.Errorf("resolve doc_roots.%s.git.repo_path: %w", root, err)
-	}
-	absRootPath, err := filepath.Abs(rootPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve document root %s path: %w", root, err)
-	}
-	if _, err := checkout.ResolveRoot(absRepoPath, absRootPath); err != nil {
-		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
+		return nil, err
 	}
 	logger := a.logger
 	if logger == nil {
@@ -366,7 +367,7 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	mode := documents.VerificationMode(strings.TrimSpace(gitCfg.VerifySignatures))
 	switch mode {
 	case documents.VerificationRequired, documents.VerificationWarn:
-		if err := applyBootVerification(mode, root, signed.VerifyHead(context.Background()), logger); err != nil {
+		if err := applyBootVerification(mode, root, "allowed_signers", signed.VerifyHead(context.Background()), logger); err != nil {
 			return nil, err
 		}
 	}
@@ -380,22 +381,9 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 }
 
 func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg config.DocumentRootGitConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
-	repoPath := strings.TrimSpace(gitCfg.RepoPath)
-	if repoPath == "" {
-		repoPath = rootPath
-	} else {
-		repoPath = resolvePath(repoPath, resolver)
-	}
-	absRepoPath, err := filepath.Abs(repoPath)
+	absRepoPath, absRootPath, err := resolveRootPaths(root, rootPath, gitCfg, resolver)
 	if err != nil {
-		return nil, fmt.Errorf("resolve doc_roots.%s.git.repo_path: %w", root, err)
-	}
-	absRootPath, err := filepath.Abs(rootPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve document root %s path: %w", root, err)
-	}
-	if _, err := checkout.ResolveRoot(absRepoPath, absRootPath); err != nil {
-		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
+		return nil, err
 	}
 	logger := a.logger
 	if logger == nil {
@@ -413,20 +401,24 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 	return &documentRootProvenanceVerifier{verifier: verified.Verifier, prefix: verified.Prefix}, nil
 }
 
-// applyBootVerification maps a boot-time VerifyHead result onto the root's
+// applyBootVerification maps one boot-time check's result onto the root's
 // verification policy: a required root fails to construct, a warn root logs and
 // continues, and any other mode is a no-op. A nil verifyErr is always a no-op,
-// so callers can pass the VerifyHead result directly.
-func applyBootVerification(mode documents.VerificationMode, root string, verifyErr error, logger *slog.Logger) error {
+// so callers can pass a check's result directly.
+//
+// check names the requirement that failed ("admission", "allowed_signers"), so
+// an operator reading the refusal knows which question came back wrong — the
+// two ask different things and are repaired differently.
+func applyBootVerification(mode documents.VerificationMode, root, check string, verifyErr error, logger *slog.Logger) error {
 	if verifyErr == nil {
 		return nil
 	}
 	switch mode {
 	case documents.VerificationRequired:
-		return fmt.Errorf("doc_roots.%s allowed_signers boot verification: %w", root, verifyErr)
+		return fmt.Errorf("doc_roots.%s %s boot verification: %w", root, check, verifyErr)
 	case documents.VerificationWarn:
-		logger.Warn("document root allowed_signers boot verification failed",
-			"root", root, "error", verifyErr)
+		logger.Warn("document root boot verification failed",
+			"root", root, "check", check, "error", verifyErr)
 		return nil
 	default:
 		return nil
