@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,7 @@ func TestTieredOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
 
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 	props, _ := publish.Parameters["properties"].(map[string]any)
-	for _, key := range []string{"status_line", "teaser", "full", "note"} {
+	for _, key := range []string{"status_line", "teaser", "full", "notes"} {
 		if _, ok := props[key]; !ok {
 			t.Fatalf("publish tool schema missing %q argument; got %v", key, props)
 		}
@@ -180,7 +181,7 @@ func TestPublishToolRejectsOverBudgetWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestPublishToolNoteAppendsInternalWorkingNotes(t *testing.T) {
+func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
@@ -195,12 +196,12 @@ func TestPublishToolNoteAppendsInternalWorkingNotes(t *testing.T) {
 		"status_line": "Printer online.",
 		"teaser":      "Nothing needs attention.",
 		"full":        "# Office\n\nAll quiet.",
-		"note":        "Dropped the delivery warning — both packages were signed for at 14:20.",
+		"notes":       "Current view: both packages signed for at 14:20, so the delivery warning no longer applies. Watching whether the 14:00 sweep is early enough.",
 	})
 	if err != nil {
 		t.Fatalf("publish handler: %v", err)
 	}
-	if !strings.Contains(result, "note_recorded") {
+	if !strings.Contains(result, "notes_written") {
 		t.Fatalf("result should report the recorded note: %s", result)
 	}
 
@@ -209,8 +210,8 @@ func TestPublishToolNoteAppendsInternalWorkingNotes(t *testing.T) {
 		t.Fatalf("ReadFile notes: %v", err)
 	}
 	notes := string(raw)
-	if !strings.Contains(notes, "both packages were signed for") {
-		t.Fatalf("working notes missing the entry:\n%s", notes)
+	if !strings.Contains(notes, "both packages signed for at 14:20") {
+		t.Fatalf("working notes missing the current view:\n%s", notes)
 	}
 	// The audience stamp is what makes the notes document invisible to
 	// search and tagged-guidance injection.
@@ -232,7 +233,7 @@ func TestPublishToolNoteAppendsInternalWorkingNotes(t *testing.T) {
 	}
 }
 
-func TestWorkingNotesAppendToolStampsInternalAudience(t *testing.T) {
+func TestWorkingNotesToolStampsInternalAudience(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
@@ -241,15 +242,19 @@ func TestWorkingNotesAppendToolStampsInternalAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
-	appendNotes := findRuntimeTool(t, hydrated, "append_output_office_notes")
-	if !strings.Contains(appendNotes.Description, "private process log") {
-		t.Fatalf("working-notes tool should frame itself as private: %q", appendNotes.Description)
+	// Notes are rewritten, not appended: they hold what the loop
+	// currently believes rather than a history of what it used to.
+	notesTool := findRuntimeTool(t, hydrated, "replace_output_office_notes")
+	for _, want := range []string{"private thinking", "working theories", "current view"} {
+		if !strings.Contains(notesTool.Description, want) {
+			t.Fatalf("working-notes tool description missing %q: %q", want, notesTool.Description)
+		}
 	}
 
-	if _, err := appendNotes.Handler(context.Background(), map[string]any{
-		"entry": "Reconsidered the trough threshold.",
+	if _, err := notesTool.Handler(context.Background(), map[string]any{
+		"body": "Current theory: the trough threshold is too low overnight.",
 	}); err != nil {
-		t.Fatalf("append notes handler: %v", err)
+		t.Fatalf("notes handler: %v", err)
 	}
 	doc, err := store.Read(context.Background(), "core:office-notes.md")
 	if err != nil {
@@ -368,10 +373,73 @@ func TestTieredOutputContextReportsPublishMode(t *testing.T) {
 	if !strings.Contains(block, `"mode": "publish"`) {
 		t.Fatalf("tiered output context should report publish mode:\n%s", block)
 	}
-	if strings.Contains(block, `"mode": "replace"`) {
-		t.Fatalf("tiered output context still reports replace mode:\n%s", block)
+	// The notes output in the same block reports replace now, so this
+	// asserts per output rather than over the whole block.
+	var payload struct {
+		Outputs []struct {
+			Name string `json:"name"`
+			Mode string `json:"mode"`
+		} `json:"outputs"`
 	}
-	if !strings.Contains(block, `"mode": "append"`) {
-		t.Fatalf("working-notes output should still report append mode:\n%s", block)
+	// The block is markdown wrapping a JSON payload.
+	start := strings.Index(block, "{")
+	end := strings.LastIndex(block, "}")
+	if start < 0 || end <= start {
+		t.Fatalf("no JSON payload in context block:\n%s", block)
+	}
+	if err := json.Unmarshal([]byte(block[start:end+1]), &payload); err != nil {
+		t.Fatalf("decode context block: %v\n%s", err, block)
+	}
+	modes := map[string]string{}
+	for _, o := range payload.Outputs {
+		modes[o.Name] = o.Mode
+	}
+	if len(modes) != 2 {
+		t.Fatalf("expected the tiered document and its notes, got %v", modes)
+	}
+	// The fixture is fixed, so name the outputs rather than matching on a
+	// substring that any future output could collide with.
+	for name, want := range map[string]string{
+		"office status": "publish",
+		"office notes":  "replace",
+	} {
+		if modes[name] != want {
+			t.Errorf("output %q reports mode %q, want %q", name, modes[name], want)
+		}
+	}
+}
+
+// TestWorkingNotesRewriteKeepsAudienceStamp guards the regression this
+// change nearly shipped. Notes used to be written through the journal
+// path, which stamped the audience on every append. Switching them to a
+// maintained document routed them through the generic replace handler,
+// which wrote only a body — so the second write dropped the stamp that
+// keeps a loop's private thinking out of search and out of other loops'
+// context, and nothing failed.
+func TestWorkingNotesRewriteKeepsAudienceStamp(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newLoopOutputDocumentStore(t)
+	app := &App{documentStore: store}
+	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	if err != nil {
+		t.Fatalf("hydrateLoopOutputs: %v", err)
+	}
+	notesTool := findRuntimeTool(t, hydrated, "replace_output_office_notes")
+
+	for i, body := range []string{
+		"First view: the trough threshold looks too low overnight.",
+		"Revised: the threshold is fine, the sensor reports late.",
+	} {
+		if _, err := notesTool.Handler(context.Background(), map[string]any{"body": body}); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+		doc, err := store.Read(context.Background(), "core:office-notes.md")
+		if err != nil {
+			t.Fatalf("read after write %d: %v", i, err)
+		}
+		if got := firstFrontmatterValue(doc, "audience"); got != "internal" {
+			t.Fatalf("write %d dropped the audience stamp: audience = %q", i, got)
+		}
 	}
 }

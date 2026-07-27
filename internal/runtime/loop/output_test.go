@@ -86,21 +86,24 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "working notes defaults append",
+			// Notes hold what the loop currently believes, so it rewrites
+			// them rather than appending to a history it would have to
+			// re-read to find its own present view.
+			name: "working notes default to replace",
 			output: OutputSpec{
 				Name: "ranch notes",
 				Type: OutputTypeWorkingNotes,
 				Ref:  "core:ranch-notes.md",
 			},
-			wantTool: "append_output_ranch_notes",
+			wantTool: "replace_output_ranch_notes",
 		},
 		{
-			name: "working notes rejects replace mode",
+			name: "working notes reject append mode",
 			output: OutputSpec{
 				Name: "ranch notes",
 				Type: OutputTypeWorkingNotes,
 				Ref:  "core:ranch-notes.md",
-				Mode: OutputModeReplace,
+				Mode: OutputModeAppend,
 			},
 			wantErr: true,
 		},

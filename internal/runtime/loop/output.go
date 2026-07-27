@@ -19,10 +19,16 @@ const (
 	// OutputTypeJournalDocument describes an append-only journal
 	// document maintained by the loop.
 	OutputTypeJournalDocument OutputType = "journal_document"
-	// OutputTypeWorkingNotes describes a loop-private process journal:
-	// append-only like a journal document, internal-audience by default.
-	// It holds the loop's own timeline — drift, refinement, and curation
-	// rationale — and is never projected into consumer surfaces.
+	// OutputTypeWorkingNotes describes a loop's private thinking:
+	// maintained like its published document and internal-audience by
+	// default, never projected into consumer surfaces.
+	//
+	// It holds what the loop currently believes — working theories, the
+	// state of an experiment, what it expects next — and is rewritten as
+	// that changes rather than appended to. A loop that appends its
+	// theories has to reconstruct its own current view from a history of
+	// superseded ones every turn, which is the difficulty holding state
+	// across turns that this exists to remove, not a way to solve it.
 	OutputTypeWorkingNotes OutputType = "working_notes"
 )
 
@@ -126,8 +132,10 @@ func (o OutputSpec) EffectiveMode() OutputMode {
 	switch o.Type {
 	case OutputTypeMaintainedDocument:
 		return OutputModeReplace
-	case OutputTypeJournalDocument, OutputTypeWorkingNotes:
+	case OutputTypeJournalDocument:
 		return OutputModeAppend
+	case OutputTypeWorkingNotes:
+		return OutputModeReplace
 	default:
 		return ""
 	}
@@ -192,12 +200,12 @@ func (o OutputSpec) Validate() error {
 	mode := o.EffectiveMode()
 	switch mode {
 	case OutputModeReplace:
-		if o.Type != OutputTypeMaintainedDocument {
-			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeMaintainedDocument)
+		if o.Type != OutputTypeMaintainedDocument && o.Type != OutputTypeWorkingNotes {
+			return fmt.Errorf("mode %q is only valid for types %q and %q", mode, OutputTypeMaintainedDocument, OutputTypeWorkingNotes)
 		}
 	case OutputModeAppend:
-		if o.Type != OutputTypeJournalDocument && o.Type != OutputTypeWorkingNotes {
-			return fmt.Errorf("mode %q is only valid for types %q and %q", mode, OutputTypeJournalDocument, OutputTypeWorkingNotes)
+		if o.Type != OutputTypeJournalDocument {
+			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeJournalDocument)
 		}
 	default:
 		return fmt.Errorf("unsupported mode %q", mode)
