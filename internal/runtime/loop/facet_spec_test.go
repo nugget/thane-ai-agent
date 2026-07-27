@@ -28,9 +28,12 @@ func TestFacetSpecDecodesBothShapes(t *testing.T) {
 	}
 }
 
-// TestFacetSpecMarshalsShortWhenPlain keeps a round trip from inflating
-// every declaration into an object it did not start as.
-func TestFacetSpecMarshalsShortWhenPlain(t *testing.T) {
+// TestFacetSpecMarshalsBareNameWhenNoAttributes keeps a round trip from
+// inflating every declaration into an object it did not start as.
+//
+// Named for the absence of attributes rather than for "plain", which is
+// a format in this package and would read as the subject of the test.
+func TestFacetSpecMarshalsBareNameWhenNoAttributes(t *testing.T) {
 	data, err := json.Marshal([]FacetSpec{
 		{Name: OutputFacetStatusLine},
 		{Name: OutputFacetDigest, Format: FacetFormatJSON},
