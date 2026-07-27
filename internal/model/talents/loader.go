@@ -4,7 +4,6 @@ package talents
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // Loader handles talent file loading.
@@ -125,11 +125,15 @@ var skipNoticed sync.Map
 // silent and total: the file stays on disk, the loader says nothing, and the
 // model quietly stops receiving it. Naming the file is what makes the
 // difference between the two cases visible without refusing the harmless one.
-func noteSkippedUndeclared(path string) {
+//
+// It logs through the context logger rather than [slog.Default]: a notice
+// that lands in a different sink or format than the rest of the loop's logs
+// is not visible in the way this needs to be.
+func noteSkippedUndeclared(ctx context.Context, path string) {
 	if _, already := skipNoticed.LoadOrStore(path, struct{}{}); already {
 		return
 	}
-	slog.Default().Info("skipping markdown file in talents directory: no frontmatter, so not a talent",
+	logging.Logger(ctx).Info("skipping markdown file in talents directory: no frontmatter, so not a talent",
 		"path", path)
 }
 
@@ -171,17 +175,25 @@ func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, c
 		if err != nil {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
-		// A talent declares itself by opening with frontmatter. A .md file
-		// that doesn't is a human-facing doc sharing the directory — an
-		// authoring guide, a README — and is not guidance to inject. Asking
-		// the parser keeps this rule identical to the one it enforces rather
-		// than a second copy that can drift from it.
-		if _, _, ok := parseOneBlock(string(data)); !ok {
-			noteSkippedUndeclared(path)
+		// A talent declares itself by opening with a frontmatter delimiter. A
+		// .md file that doesn't is a human-facing doc sharing the directory —
+		// an authoring guide, a README — and is not guidance to inject.
+		raw := string(data)
+		if !opensWithFrontmatter(raw) {
+			noteSkippedUndeclared(ctx, path)
 			continue
 		}
+		// Past that point the file has declared itself, so a frontmatter
+		// block it cannot parse is an authoring error rather than a document.
+		// Silently skipping it here — or letting the lenient parser stop at
+		// the bad block and drop the rest of a multi-node file — would lose
+		// real guidance exactly as quietly as the rule above exists to
+		// prevent.
+		blocks, err := parseBlocksStrict(raw)
+		if err != nil {
+			return nil, fmt.Errorf("talent %s: %w", path, err)
+		}
 		filename := strings.TrimSuffix(f, ".md")
-		blocks := ParseFrontmatterBlocks(string(data))
 		fileTalents, err := talentsFromBlocks(blocks, filename, path)
 		if err != nil {
 			return nil, err
@@ -390,8 +402,41 @@ func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 // Multi-node files return one [Block] per node. Returns a length-1
 // slice with the raw input as content when no frontmatter is found at
 // the file start — same fallback as the legacy single-block parser.
+// opensWithFrontmatter reports whether raw begins with a frontmatter
+// delimiter — the declaration that makes a markdown file a talent rather
+// than a document that happens to share the directory. It is deliberately
+// weaker than parsing: a file can open the declaration and still botch it,
+// and those two outcomes get different treatment.
+func opensWithFrontmatter(raw string) bool {
+	return strings.HasPrefix(raw, "---")
+}
+
+// parseBlocksStrict parses every frontmatter block in raw, refusing any it
+// cannot read rather than stopping where [ParseFrontmatterBlocks] would.
+//
+// The lenient parser breaks out of its loop at the first block that will
+// not parse and returns what it collected, which drops the remainder of a
+// multi-node file without a word. That is tolerable for opportunistic
+// scanning and wrong for loading guidance: a missing closing delimiter on
+// node three is an authoring mistake, not a decision to publish two nodes.
+func parseBlocksStrict(raw string) ([]Block, error) {
+	var blocks []Block
+	remaining := raw
+	for {
+		block, rest, ok := parseOneBlock(remaining)
+		if !ok {
+			return nil, fmt.Errorf("node %d has malformed frontmatter (missing closing --- delimiter?)", len(blocks)+1)
+		}
+		blocks = append(blocks, block)
+		if rest == "" {
+			return blocks, nil
+		}
+		remaining = rest
+	}
+}
+
 func ParseFrontmatterBlocks(raw string) []Block {
-	if !strings.HasPrefix(raw, "---") {
+	if !opensWithFrontmatter(raw) {
 		return []Block{{Content: raw}}
 	}
 	var blocks []Block
@@ -418,7 +463,7 @@ func ParseFrontmatterBlocks(raw string) []Block {
 // iteration), and ok=false when raw doesn't start with a frontmatter.
 // The content ends at the next node boundary or EOF.
 func parseOneBlock(raw string) (Block, string, bool) {
-	if !strings.HasPrefix(raw, "---") {
+	if !opensWithFrontmatter(raw) {
 		return Block{}, "", false
 	}
 	rest := raw[3:]

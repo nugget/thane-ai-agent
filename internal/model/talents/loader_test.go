@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 func TestParseFrontmatter_Tags(t *testing.T) {
@@ -401,26 +403,85 @@ func TestTalents_NotesSkippedUndeclaredFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "presence.md", "# Presence\n\nidentity prose that lost its frontmatter.")
 
+	// Through the context logger, not slog.Default: the notice has to land
+	// in the same sink as the rest of the loop's logs to be visible at all.
 	var buf bytes.Buffer
-	restore := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	defer slog.SetDefault(restore)
+	ctx := logging.WithLogger(context.Background(),
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	if _, err := NewLoader(dir).Talents(); err != nil {
-		t.Fatalf("Talents() error: %v", err)
+	if _, err := NewLoader(dir).TalentsVerified(ctx, nil, ""); err != nil {
+		t.Fatalf("TalentsVerified() error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "presence.md") {
-		t.Errorf("skip notice should name the file; got: %s", buf.String())
+		t.Errorf("skip notice should reach the context logger and name the file; got: %s", buf.String())
 	}
 
 	// Deduped by path: the loader re-reads on every turn, and a line that
 	// repeated forever would be noise rather than a signal.
 	buf.Reset()
-	if _, err := NewLoader(dir).Talents(); err != nil {
-		t.Fatalf("Talents() second call: %v", err)
+	if _, err := NewLoader(dir).TalentsVerified(ctx, nil, ""); err != nil {
+		t.Fatalf("TalentsVerified() second call: %v", err)
 	}
 	if strings.Contains(buf.String(), "presence.md") {
 		t.Errorf("skip notice should fire once per path; got: %s", buf.String())
+	}
+}
+
+// TestTalents_RefusesMalformedFrontmatter separates the two ways a file can
+// fail to declare itself. Opening with no frontmatter is a document and gets
+// skipped; opening a frontmatter block and botching it is an authoring error
+// and must be refused, because skipping it would drop real guidance exactly
+// as quietly as the skip rule exists to prevent.
+//
+// The mid-file case is the sharper one: the lenient parser stops at the bad
+// node and returns the good ones, so a three-node talent silently becomes a
+// two-node talent with nothing logged anywhere.
+func TestTalents_RefusesMalformedFrontmatter(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "unclosed frontmatter at file start",
+			content: "---\ntags: [loops]\n# Body with no closing delimiter",
+		},
+		{
+			name:    "unclosed frontmatter on a later node",
+			content: "---\nname: first\ntags: [loops]\n---\n# First\n\n---\nname: second\ntags: [loops]\n# Second never closes",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "broken.md", tc.content)
+
+			_, err := NewLoader(dir).Talents()
+			if err == nil {
+				t.Fatal("malformed frontmatter should be refused, not skipped")
+			}
+			if !strings.Contains(err.Error(), "broken.md") {
+				t.Errorf("error %q should name the file", err)
+			}
+		})
+	}
+}
+
+// TestTalents_HorizontalRuleStaysContent guards the blast radius of strict
+// parsing. A bare "---" in a talent body is a markdown horizontal rule, not
+// a node boundary, and refusing files over one would reject prose that has
+// always been legal.
+func TestTalents_HorizontalRuleStaysContent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "rules.md", "---\ntags: [loops]\n---\n# Rules\n\nfirst part.\n\n---\n\nsecond part.")
+
+	got, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("a horizontal rule in the body should load fine: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(talents) = %d, want 1 (the rule is not a node boundary)", len(got))
+	}
+	if !strings.Contains(got[0].Content, "second part") {
+		t.Errorf("content after the rule was dropped: %q", got[0].Content)
 	}
 }
 
