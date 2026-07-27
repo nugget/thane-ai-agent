@@ -346,11 +346,12 @@ func coerceInt(v any) (int, error) {
 // and injects current-document context into each iteration prompt — so
 // the model gets a typed write surface and "what's already there?"
 // answered without re-reading the doc itself.
-func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.OutputSpec {
+func buildCurateOutputSpec(name, docRef, outputMode, intent string, tiers []looppkg.OutputTier) looppkg.OutputSpec {
 	out := looppkg.OutputSpec{
 		Name:    name,
 		Ref:     docRef,
 		Purpose: intent,
+		Tiers:   tiers,
 	}
 	switch outputMode {
 	case "journal":
@@ -372,12 +373,14 @@ func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.Outp
 // construction (see [loop.Loop.buildTaskTurn]), so it doesn't appear
 // here. Kept short and shape-clear so the model can act without
 // re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputMode, outputToolName string) string {
+func buildCurateTask(intent, docRef, outputMode, outputToolName string, tiered bool) string {
 	var verb string
-	switch outputMode {
-	case "journal":
+	switch {
+	case outputMode == "journal":
 		verb = "Append a dated entry to"
-	case "maintain":
+	case tiered:
+		verb = "Publish the current state of"
+	case outputMode == "maintain":
 		verb = "Update the body of"
 	default:
 		verb = "Update"
@@ -388,7 +391,7 @@ func buildCurateTask(intent, docRef, outputMode, outputToolName string) string {
 	sb.WriteString(verb)
 	sb.WriteString(" ")
 	sb.WriteString(docRef)
-	sb.WriteString(" with the current state. Write through the declared output tool ")
+	sb.WriteString(". Write through the declared output tool ")
 	sb.WriteString(outputToolName)
 	sb.WriteString(". ")
 	switch outputMode {
@@ -530,4 +533,49 @@ func parseDurationArg(args map[string]any, key string) (d time.Duration, present
 		return 0, true, fmt.Errorf("%s %q: %w", key, s, err)
 	}
 	return d, true, nil
+}
+
+// parseOutputTiers reads the declared projection ladder from the guided
+// tool's output argument. Unknown names are refused rather than dropped:
+// a tier that is silently ignored produces a loop that publishes fewer
+// projections than its author asked for, and nothing says so.
+func parseOutputTiers(raw any) ([]looppkg.OutputTier, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		if raw == nil {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("output.tiers must be an array of tier names")
+	}
+	out := make([]looppkg.OutputTier, 0, len(items))
+	for _, item := range items {
+		name, _ := item.(string)
+		tier := looppkg.OutputTier(strings.TrimSpace(name))
+		switch tier {
+		case looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser, looppkg.OutputTierDigest:
+			out = append(out, tier)
+		default:
+			return nil, fmt.Errorf("output.tiers %q is not a projection; use status_line, teaser, or digest", name)
+		}
+	}
+	return out, nil
+}
+
+// buildWorkingNotesSpec derives the private log that sits beside a
+// curating loop's published document. The ref is the document's own with
+// a -notes suffix, so the pair stays together in the root rather than
+// landing wherever a second call happened to put it.
+func buildWorkingNotesSpec(name, docRef, intent string) looppkg.OutputSpec {
+	ref := docRef
+	if ext := strings.LastIndex(ref, "."); ext > strings.LastIndex(ref, "/") {
+		ref = ref[:ext] + "-notes" + ref[ext:]
+	} else {
+		ref += "-notes"
+	}
+	return looppkg.OutputSpec{
+		Name:    name + "_notes",
+		Ref:     ref,
+		Type:    looppkg.OutputTypeWorkingNotes,
+		Purpose: "Private reasoning behind " + intent,
+	}
 }
