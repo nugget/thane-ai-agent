@@ -21,11 +21,16 @@ option listed equally, no opinion taken, no decision easier.
 ### Foundation prose (always on)
 
 `foundation.md`, `presence.md`, `awareness.md`, `communication.md`,
-`delegation.md`, `working-memory.md`. No frontmatter, no tags. The
+`delegation.md`, `working-memory.md`, each tagged `persona`. The
 content is identity — how the model should *be* across every turn,
 regardless of what it's doing. Concrete-tool guidance does not belong
 here; the right home for "use email_read when the message is worth
 reading" is the email-tagged doctrine talent, not foundation prose.
+
+Foundation prose declares its applicability like everything else: `always`
+for guidance that holds on every turn whatever its shape, `persona` for
+guidance that only means something where the persona is present. The six
+files above are `persona` because each speaks in or about the voice.
 
 Add a foundation talent rarely. Every line earns an always-on slot in
 the model's prompt forever. The bar is "this is who the model is,"
@@ -502,18 +507,22 @@ etc.), add it to the allowlist with a comment explaining why. The
 allowlist is short on purpose; every addition is a small architectural
 decision.
 
-The third safety net is `TestTalents_SkipsContributorDocs` in the
-loader tests — it pins the rule that **uppercase-leading** markdown
-files in the talents directory (`README.md`, `CONTRIBUTING.md`,
-`LICENSE.md`) are treated as contributor docs and skipped, not as
-talents. Without that filter, `talents/README.md` would silently
-inject into every model prompt forever.
+The third safety net is `TestTalents_SkipsDocsWithoutFrontmatter` in the
+loader tests — it pins the rule that a markdown file in the talents
+directory is a talent only if it opens with frontmatter. `README.md`,
+`CONTRIBUTING.md`, and a stray copy of this very guide are all skipped
+for the same reason: they declare nothing, so they are documents that
+happen to share a directory.
 
-The filter is filename-shape only: a lowercase-named markdown file
-that ends up inside `talents/` — say, a stray copy of this very guide
-named `talent-authoring.md` — would still load as an untagged
-always-on talent. Keep contributor docs uppercase-leading, or place
-them outside the directory.
+This used to be a guess about filenames — uppercase-leading meant
+contributor doc — which was needed only while a tagless file loaded
+unconditionally, making an undeclared README indistinguishable from
+guidance. Now that every talent declares when it applies, the
+declaration answers the question and capitalization means nothing. The
+companion rule is the one that makes it safe: a file that *does* open
+with frontmatter but declares no `tags:` is refused at load rather than
+assumed always-on, so the two failure directions are a skip and a loud
+error, never a silent injection.
 
 ## When you're stuck
 

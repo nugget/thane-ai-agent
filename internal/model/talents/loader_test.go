@@ -1,13 +1,17 @@
 package talents
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 func TestParseFrontmatter_Tags(t *testing.T) {
@@ -157,13 +161,13 @@ func TestFilterByTags(t *testing.T) {
 			want:       []string{"core guidance", "ha guidance", "web guidance", "multi guidance"},
 		},
 		{
-			name:       "unknown tag only loads untagged",
+			name:       "unknown tag only loads always-on",
 			activeTags: map[string]bool{"nonexistent": true, TagAlways: true},
 			want:       []string{"core guidance"},
 			wantAbsent: []string{"ha guidance", "web guidance", "multi guidance"},
 		},
 		{
-			name:       "empty active tags map loads only untagged",
+			name:       "only always active loads only always-on",
 			activeTags: map[string]bool{TagAlways: true},
 			want:       []string{"core guidance"},
 			wantAbsent: []string{"ha guidance", "web guidance", "multi guidance"},
@@ -252,8 +256,8 @@ func TestSplitByTags_PreservesAlwaysOnAndTaggedOrdering(t *testing.T) {
 func TestTalents(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write talent files with and without frontmatter.
-	writeFile(t, dir, "core.md", "# Core\nAlways loaded.")
+	// Write talent files across the applicability shapes.
+	writeFile(t, dir, "core.md", "---\ntags: ["+TagAlways+"]\n---\n# Core\nAlways loaded.")
 	writeFile(t, dir, "ha-tools.md", "---\nkind: trailhead\ntags: [ha]\nteaser: \"Open when the work touches home state.\"\nnext_tags: [awareness, notifications]\n---\n# HA Tools\nHome Assistant guidance.")
 	writeFile(t, dir, "web.md", "---\ntags: [web, remote]\n---\n# Web\nWeb guidance.")
 
@@ -271,8 +275,7 @@ func TestTalents(t *testing.T) {
 	if talents[0].Name != "core" {
 		t.Errorf("talents[0].Name = %q, want %q", talents[0].Name, "core")
 	}
-	// A file declaring no tags is normalized at the boundary rather than
-	// left for later code to interpret.
+	// Applicability is carried exactly as declared.
 	if len(talents[0].Tags) != 1 || talents[0].Tags[0] != TagAlways {
 		t.Errorf("talents[0].Tags = %v, want [%s]", talents[0].Tags, TagAlways)
 	}
@@ -346,25 +349,25 @@ func TestTalentsVerified_VerifiesBeforeRead(t *testing.T) {
 	}
 }
 
-// TestTalents_SkipsContributorDocs pins the loader's "skip
-// uppercase-leading .md files" rule. Without it, files like
-// README.md, CONTRIBUTING.md, and LICENSE.md would be parsed as
-// untagged talents and the always-on injection path would silently
-// pump contributor docs into every model prompt. Regression guard for
-// the bug Copilot caught on PR #912 — adding talents/README.md
-// without this filter would dump the authoring guide into context on
-// every turn.
-func TestTalents_SkipsContributorDocs(t *testing.T) {
+// TestTalents_SkipsDocsWithoutFrontmatter pins what separates a talent
+// from a plain document sharing the directory: frontmatter, not the
+// filename. This replaces the "skip uppercase-leading .md files" guess
+// the loader needed while tagless files loaded unconditionally (the bug
+// Copilot caught on PR #912, where adding talents/README.md dumped the
+// authoring guide into every prompt). The filename cases run in both
+// directions here, because a rule that still keyed on capitalization
+// would pass a test that only checked README.
+func TestTalents_SkipsDocsWithoutFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 	for filename, content := range map[string]string{
-		// Talent files (lowercase-leading): should load.
+		// Declares frontmatter: a talent, whatever it is called.
 		"loops-doctrine.md":      "---\ntags: [loops]\n---\n# Loops",
-		"presence.md":            "# Presence\n\nposture prose.",
 		"awareness-trailhead.md": "---\nkind: trailhead\ntags: [awareness]\nteaser: \"...\"\nnext_tags: [ha]\n---\n# Awareness Trailhead",
-		// Contributor docs (uppercase-leading): should skip.
+		"README-doctrine.md":     "---\ntags: [" + TagAlways + "]\n---\n# Uppercase but declared",
+		// Declares nothing: a document, whatever it is called.
+		"presence.md":     "# Presence\n\nposture prose, no frontmatter.",
 		"README.md":       "# Authoring Guide\n\nThis describes how to write talents.",
 		"CONTRIBUTING.md": "# Contributing\n\nFork and submit a PR.",
-		"LICENSE.md":      "# License",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
 			t.Fatalf("write %s: %v", filename, err)
@@ -379,15 +382,139 @@ func TestTalents_SkipsContributorDocs(t *testing.T) {
 	for _, talent := range talents {
 		loaded[talent.Name] = true
 	}
-	for _, want := range []string{"loops-doctrine", "presence", "awareness-trailhead"} {
+	for _, want := range []string{"loops-doctrine", "awareness-trailhead", "README-doctrine"} {
 		if !loaded[want] {
-			t.Errorf("expected to load talent %q, got %v", want, loaded)
+			t.Errorf("expected to load declared talent %q, got %v", want, loaded)
 		}
 	}
-	for _, skip := range []string{"README", "CONTRIBUTING", "LICENSE"} {
+	for _, skip := range []string{"presence", "README", "CONTRIBUTING"} {
 		if loaded[skip] {
-			t.Errorf("expected to skip contributor doc %q, but it loaded as a talent", skip)
+			t.Errorf("expected to skip undeclared document %q, but it loaded as a talent", skip)
 		}
+	}
+}
+
+// TestTalents_NotesSkippedUndeclaredFile covers the migration hazard in
+// the skip rule. Skipping is right for a README, but it is also what
+// happens to real guidance whose frontmatter was never backported — and
+// that loss is otherwise total and silent. The notice is what lets an
+// operator tell the two apart, so it has to name the file.
+func TestTalents_NotesSkippedUndeclaredFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "presence.md", "# Presence\n\nidentity prose that lost its frontmatter.")
+
+	// Through the context logger, not slog.Default: the notice has to land
+	// in the same sink as the rest of the loop's logs to be visible at all.
+	var buf bytes.Buffer
+	ctx := logging.WithLogger(context.Background(),
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	if _, err := NewLoader(dir).TalentsVerified(ctx, nil, ""); err != nil {
+		t.Fatalf("TalentsVerified() error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "presence.md") {
+		t.Errorf("skip notice should reach the context logger and name the file; got: %s", buf.String())
+	}
+
+	// Deduped by path: the loader re-reads on every turn, and a line that
+	// repeated forever would be noise rather than a signal.
+	buf.Reset()
+	if _, err := NewLoader(dir).TalentsVerified(ctx, nil, ""); err != nil {
+		t.Fatalf("TalentsVerified() second call: %v", err)
+	}
+	if strings.Contains(buf.String(), "presence.md") {
+		t.Errorf("skip notice should fire once per path; got: %s", buf.String())
+	}
+}
+
+// TestTalents_RefusesMalformedFrontmatter separates the two ways a file can
+// fail to declare itself. Opening with no frontmatter is a document and gets
+// skipped; opening a frontmatter block and botching it is an authoring error
+// and must be refused, because skipping it would drop real guidance exactly
+// as quietly as the skip rule exists to prevent.
+//
+// The mid-file case is the sharper one: the lenient parser stops at the bad
+// node and returns the good ones, so a three-node talent silently becomes a
+// two-node talent with nothing logged anywhere.
+func TestTalents_RefusesMalformedFrontmatter(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "unclosed frontmatter at file start",
+			content: "---\ntags: [loops]\n# Body with no closing delimiter",
+		},
+		{
+			name:    "unclosed frontmatter on a later node",
+			content: "---\nname: first\ntags: [loops]\n---\n# First\n\n---\nname: second\ntags: [loops]\n# Second never closes",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "broken.md", tc.content)
+
+			_, err := NewLoader(dir).Talents()
+			if err == nil {
+				t.Fatal("malformed frontmatter should be refused, not skipped")
+			}
+			if !strings.Contains(err.Error(), "broken.md") {
+				t.Errorf("error %q should name the file", err)
+			}
+		})
+	}
+}
+
+// TestTalents_HorizontalRuleStaysContent guards the blast radius of strict
+// parsing. A bare "---" in a talent body is a markdown horizontal rule, not
+// a node boundary, and refusing files over one would reject prose that has
+// always been legal.
+func TestTalents_HorizontalRuleStaysContent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "rules.md", "---\ntags: [loops]\n---\n# Rules\n\nfirst part.\n\n---\n\nsecond part.")
+
+	got, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("a horizontal rule in the body should load fine: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(talents) = %d, want 1 (the rule is not a node boundary)", len(got))
+	}
+	if !strings.Contains(got[0].Content, "second part") {
+		t.Errorf("content after the rule was dropped: %q", got[0].Content)
+	}
+}
+
+// TestTalents_RefusesDeclaredTalentWithoutTags is the other half of the
+// rule: a file that opens with frontmatter has declared itself guidance,
+// so silence about when it applies is an authoring error and not an
+// implicit "every turn". Refusing at load is what keeps the meaning of
+// silence from having two answers.
+func TestTalents_RefusesDeclaredTalentWithoutTags(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"no tags key", "---\nkind: trailhead\nteaser: \"...\"\n---\n# Orphan"},
+		{"empty tag list", "---\ntags: []\n---\n# Orphan"},
+		{"tagless node in multi-node file", "---\nname: first\ntags: [loops]\n---\n# First\n\n---\nname: second\n---\n# Second"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "orphan.md", tc.content)
+
+			_, err := NewLoader(dir).Talents()
+			if err == nil {
+				t.Fatal("expected a talent declaring no tags to be refused")
+			}
+			// The message has to tell an operator what to write, since
+			// this surfaces as a boot failure on their instance.
+			for _, want := range []string{"orphan.md", "declares no tags", TagAlways, TagPersona} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q should mention %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -527,13 +654,13 @@ func TestShouldIncludeTalent(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "untagged with nil active tags",
+			name:       "always-on with nil active tags",
 			talent:     Talent{Tags: []string{TagAlways}},
 			activeTags: nil,
 			want:       true,
 		},
 		{
-			name:       "untagged with active tags",
+			name:       "always-on with active tags",
 			talent:     Talent{Tags: []string{TagAlways}},
 			activeTags: map[string]bool{"ha": true, TagAlways: true},
 			want:       true,

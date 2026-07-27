@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // Loader handles talent file loading.
@@ -30,7 +32,7 @@ func NewLoader(dir string) *Loader {
 // Talent represents a parsed talent file with optional tag metadata.
 type Talent struct {
 	Name       string   // Filename without .md extension
-	Tags       []string // Tags from YAML frontmatter (nil = untagged)
+	Tags       []string // Tags from YAML frontmatter; never empty, the loader refuses a talent that declares none
 	Kind       string   // Canonical frontmatter kind (for example [KindTrailhead]); empty for ordinary doctrine
 	Teaser     string   // Optional short menu copy for trailhead talents
 	NextTags   []string // Optional likely follow-on tags for trailhead talents
@@ -76,14 +78,14 @@ type Block struct {
 	Content     string
 }
 
-// listFiles returns a sorted slice of .md filenames in l.dir, excluding
-// files whose name begins with an uppercase ASCII letter. Talent
-// filenames follow a lowercase-with-hyphens convention (e.g.
-// loops-doctrine.md, awareness-trailhead.md); uppercase-leading names
-// like README.md, CONTRIBUTING.md, or LICENSE.md are contributor docs
-// that shouldn't load as model context. Without this filter the
-// loader's "untagged talents always load" rule would inject every
-// repo's README straight into the prompt.
+// listFiles returns a sorted slice of every .md filename in l.dir.
+//
+// Which of them are talents is not a question a filename can answer, so
+// this no longer tries: a file declares itself a talent by opening with
+// frontmatter, and [Loader.TalentsVerified] skips the ones that don't.
+// The previous filename-capitalization rule existed only because tagless
+// files loaded unconditionally, which made an undeclared README indis-
+// tinguishable from guidance; declared applicability retires the guess.
 //
 // Returns nil, nil when dir is unset or does not exist.
 func (l *Loader) listFiles() ([]string, error) {
@@ -102,23 +104,37 @@ func (l *Loader) listFiles() ([]string, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		if isContributorDocFilename(e.Name()) {
-			continue
-		}
 		files = append(files, e.Name())
 	}
 	sort.Strings(files)
 	return files, nil
 }
 
-// isContributorDocFilename reports whether name belongs to a
-// contributor-facing markdown file that should not load as a talent.
-// The discriminator is the first byte: talents are all lowercase
-// (loops-doctrine.md, awareness-trailhead.md), so a leading uppercase
-// ASCII letter is a reliable signal that the file is a README,
-// CONTRIBUTING, LICENSE, or similar human-facing doc.
-func isContributorDocFilename(name string) bool {
-	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
+// skipNoticed dedupes the undeclared-file notice by path, matching
+// [WarnIfKindAlias]: the loader re-reads the directory on every loop turn,
+// so an un-deduped line would repeat forever.
+var skipNoticed sync.Map
+
+// noteSkippedUndeclared reports, once per file per process, that a markdown
+// file in the talents directory was not loaded because it declares no
+// frontmatter.
+//
+// Skipping is the right outcome for a README, but it is also what an
+// operator sees if guidance loses its frontmatter — foundation prose whose
+// applicability tags were never backported, say. That failure is otherwise
+// silent and total: the file stays on disk, the loader says nothing, and the
+// model quietly stops receiving it. Naming the file is what makes the
+// difference between the two cases visible without refusing the harmless one.
+//
+// It logs through the context logger rather than [slog.Default]: a notice
+// that lands in a different sink or format than the rest of the loop's logs
+// is not visible in the way this needs to be.
+func noteSkippedUndeclared(ctx context.Context, path string) {
+	if _, already := skipNoticed.LoadOrStore(path, struct{}{}); already {
+		return
+	}
+	logging.Logger(ctx).Info("skipping markdown file in talents directory: no frontmatter, so not a talent",
+		"path", path)
 }
 
 // Talents reads all .md files from the talents directory, parses their
@@ -159,8 +175,25 @@ func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, c
 		if err != nil {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
+		// A talent declares itself by opening with a frontmatter delimiter. A
+		// .md file that doesn't is a human-facing doc sharing the directory —
+		// an authoring guide, a README — and is not guidance to inject.
+		raw := string(data)
+		if !opensWithFrontmatter(raw) {
+			noteSkippedUndeclared(ctx, path)
+			continue
+		}
+		// Past that point the file has declared itself, so a frontmatter
+		// block it cannot parse is an authoring error rather than a document.
+		// Silently skipping it here — or letting the lenient parser stop at
+		// the bad block and drop the rest of a multi-node file — would lose
+		// real guidance exactly as quietly as the rule above exists to
+		// prevent.
+		blocks, err := parseBlocksStrict(raw)
+		if err != nil {
+			return nil, fmt.Errorf("talent %s: %w", path, err)
+		}
 		filename := strings.TrimSuffix(f, ".md")
-		blocks := ParseFrontmatterBlocks(string(data))
 		fileTalents, err := talentsFromBlocks(blocks, filename, path)
 		if err != nil {
 			return nil, err
@@ -193,13 +226,16 @@ func talentsFromBlocks(blocks []Block, filename, path string) ([]Talent, error) 
 			return nil, fmt.Errorf("talent %s: duplicate node name %q within file", path, name)
 		}
 		seen[name] = true
+		if len(block.Frontmatter.Tags) == 0 {
+			return nil, fmt.Errorf("talent %s: node %q declares no tags; every talent must say when it applies — %q for every turn, %q where the persona is present, or the capability tags that select it", path, name, TagAlways, TagPersona)
+		}
 		canonical, deprecated := CanonicalKind(block.Frontmatter.Kind)
 		if deprecated {
 			aliasSeenInFile = true
 		}
 		out = append(out, Talent{
 			Name:       name,
-			Tags:       applicabilityTags(block.Frontmatter.Tags),
+			Tags:       append([]string(nil), block.Frontmatter.Tags...),
 			Kind:       canonical,
 			Teaser:     block.Frontmatter.Teaser,
 			NextTags:   append([]string(nil), block.Frontmatter.NextTags...),
@@ -214,8 +250,10 @@ func talentsFromBlocks(blocks []Block, filename, path string) ([]Talent, error) 
 }
 
 // FilterByTags returns the combined content of talents matching the
-// given active tags. Untagged talents are always included (they have
-// no tag restrictions). If activeTags is nil, all talents are included.
+// given active tags. Every talent declares the tags that select it, so
+// inclusion is always a match rather than an absence of restrictions;
+// [TagAlways] is in the active set on every turn. If activeTags is nil,
+// all talents are included.
 func FilterByTags(talents []Talent, activeTags map[string]bool) string {
 	alwaysOn, tagged := SplitByTags(talents, activeTags)
 	switch {
@@ -234,7 +272,7 @@ func FilterByTags(talents []Talent, activeTags map[string]bool) string {
 //
 // The first case used to be "carries no tags", which worked only because
 // tagless happened to mean always-applicable. Asking the question directly
-// keeps the ordering intact once taglessness stops being a category.
+// keeps the ordering intact now that taglessness is not a category at all.
 func talentOrderKey(t Talent) int {
 	switch {
 	case appliesByTurnShapeOnly(t):
@@ -244,25 +282,6 @@ func talentOrderKey(t Talent) int {
 	default:
 		return 2
 	}
-}
-
-// applicabilityTags makes a talent's applicability explicit at the boundary,
-// so nothing downstream has to infer meaning from silence.
-//
-// A file with no tags carried an implicit rule — it applied to every turn —
-// which is what this change is retiring. Normalizing it to [TagAlways] here
-// preserves that behaviour exactly while making it visible: the stability
-// split, the filter, and anything reading a Talent afterwards all see a
-// declared tag rather than an absence they must interpret.
-//
-// It is transitional. Once the loader refuses tagless files outright, this
-// stops firing and can go, and refusing becomes the single answer to what
-// silence means rather than one of two.
-func applicabilityTags(declared []string) []string {
-	if len(declared) > 0 {
-		return declared
-	}
-	return []string{TagAlways}
 }
 
 // appliesByTurnShapeOnly reports whether a talent is selected purely by what
@@ -330,8 +349,9 @@ func renderTalents(included []Talent) string {
 }
 
 // shouldIncludeTalent returns true if the talent should be included
-// given the active tag set. Untagged talents are always included.
-// Tagged talents are included when any of their tags is active.
+// given the active tag set: any one of its declared tags being active is
+// enough. A nil set disables filtering entirely (callers rendering every
+// talent, not a turn).
 func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 	if activeTags == nil {
 		return true // No tag filtering active
@@ -382,8 +402,41 @@ func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 // Multi-node files return one [Block] per node. Returns a length-1
 // slice with the raw input as content when no frontmatter is found at
 // the file start — same fallback as the legacy single-block parser.
+// opensWithFrontmatter reports whether raw begins with a frontmatter
+// delimiter — the declaration that makes a markdown file a talent rather
+// than a document that happens to share the directory. It is deliberately
+// weaker than parsing: a file can open the declaration and still botch it,
+// and those two outcomes get different treatment.
+func opensWithFrontmatter(raw string) bool {
+	return strings.HasPrefix(raw, "---")
+}
+
+// parseBlocksStrict parses every frontmatter block in raw, refusing any it
+// cannot read rather than stopping where [ParseFrontmatterBlocks] would.
+//
+// The lenient parser breaks out of its loop at the first block that will
+// not parse and returns what it collected, which drops the remainder of a
+// multi-node file without a word. That is tolerable for opportunistic
+// scanning and wrong for loading guidance: a missing closing delimiter on
+// node three is an authoring mistake, not a decision to publish two nodes.
+func parseBlocksStrict(raw string) ([]Block, error) {
+	var blocks []Block
+	remaining := raw
+	for {
+		block, rest, ok := parseOneBlock(remaining)
+		if !ok {
+			return nil, fmt.Errorf("node %d has malformed frontmatter (missing closing --- delimiter?)", len(blocks)+1)
+		}
+		blocks = append(blocks, block)
+		if rest == "" {
+			return blocks, nil
+		}
+		remaining = rest
+	}
+}
+
 func ParseFrontmatterBlocks(raw string) []Block {
-	if !strings.HasPrefix(raw, "---") {
+	if !opensWithFrontmatter(raw) {
 		return []Block{{Content: raw}}
 	}
 	var blocks []Block
@@ -410,7 +463,7 @@ func ParseFrontmatterBlocks(raw string) []Block {
 // iteration), and ok=false when raw doesn't start with a frontmatter.
 // The content ends at the next node boundary or EOF.
 func parseOneBlock(raw string) (Block, string, bool) {
-	if !strings.HasPrefix(raw, "---") {
+	if !opensWithFrontmatter(raw) {
 		return Block{}, "", false
 	}
 	rest := raw[3:]
@@ -564,9 +617,8 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 
 	return &Talent{
 		Name: "_capability_manifest",
-		// Declared rather than left tagless: the manifest applies to every
-		// turn, and saying so keeps it in the prompt's stable prefix instead
-		// of the shorter-lived block tagless content would now fall into.
+		// Declared like any authored talent: the manifest applies to every
+		// turn, and saying so puts it in the prompt's stable prefix.
 		Tags:    []string{TagAlways},
 		Content: toolcatalog.RenderCapabilityManifestMarkdown(entries),
 	}
