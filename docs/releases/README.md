@@ -41,4 +41,4 @@ This directory is Thane's durable release record. Each `v*.md` file contains the
 - GitHub remains the distribution surface, but the in-repository Markdown file is the source for every future release body.
 - After publication, a normal follow-up commit appends the live release metadata and file digest to the manifest and index. Values that do not exist until GitHub publishes the release are never predicted or backdated.
 
-The manifest is a snapshot of GitHub metadata captured at `2026-07-27T22:34:10Z`. Download counts and mutable GitHub fields describe that capture, not permanent facts. Artifact `digest` values are GitHub's reported hashes; `archived_file_sha256` covers the in-repository note itself.
+The initial historical backfill, covering v0.2.0 through v0.10.2, records GitHub metadata captured at `2026-07-27T22:34:10Z`. For those entries, download counts and other mutable GitHub fields describe that capture, not permanent facts. Artifact `digest` values are GitHub's reported hashes; `archived_file_sha256` covers the in-repository note itself.
