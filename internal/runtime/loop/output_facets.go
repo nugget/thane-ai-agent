@@ -51,9 +51,9 @@ type FacetField struct {
 // facetSection binds one projection to its canonical document section and
 // its budget.
 type facetSection struct {
-	// Tier is the declared facet this section publishes, or empty for
+	// Facet is the declared facet this section publishes, or empty for
 	// the always-present full projection.
-	Tier    OutputFacet
+	Facet   OutputFacet
 	Field   FacetField
 	Heading string
 	value   func(*FacetPayload) *string
@@ -66,7 +66,7 @@ type facetSection struct {
 // spec's facets list carries no meaning.
 var facetSections = []facetSection{
 	{
-		Tier:    OutputFacetStatusLine,
+		Facet:   OutputFacetStatusLine,
 		Heading: "Status Line",
 		Field: FacetField{
 			Key:        "status_line",
@@ -77,7 +77,7 @@ var facetSections = []facetSection{
 		value: func(p *FacetPayload) *string { return &p.StatusLine },
 	},
 	{
-		Tier:    OutputFacetTeaser,
+		Facet:   OutputFacetTeaser,
 		Heading: "Teaser",
 		Field: FacetField{
 			Key:      "teaser",
@@ -87,7 +87,7 @@ var facetSections = []facetSection{
 		value: func(p *FacetPayload) *string { return &p.Teaser },
 	},
 	{
-		Tier:    OutputFacetDigest,
+		Facet:   OutputFacetDigest,
 		Heading: "Digest",
 		Field: FacetField{
 			Key:      "digest",
@@ -123,11 +123,11 @@ func (o OutputSpec) FacetFields() []FacetField {
 	for _, section := range facetSections {
 		// The full body is always published and is never declared, so it
 		// carries the contract's own format rather than a facet's.
-		if section.Tier == "" {
+		if section.Facet == "" {
 			fields = append(fields, section.Field)
 			continue
 		}
-		if facet, ok := declared[section.Tier]; ok {
+		if facet, ok := declared[section.Facet]; ok {
 			field := section.Field
 			field.Format = facet.EffectiveFormat()
 			fields = append(fields, field)
@@ -151,7 +151,7 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 		return fmt.Errorf("output %q does not declare facets", o.Name)
 	}
 	for _, field := range o.FacetFields() {
-		section, ok := tierSectionByKey(field.Key)
+		section, ok := facetSectionByKey(field.Key)
 		if !ok {
 			continue
 		}
@@ -170,7 +170,7 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 				return fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than letting it be cut, because a clipped projection reads as a fragment with no sign that anything is missing", field.Key, runes, field.MaxRunes)
 			}
 		}
-		if heading, found := firstReservedTierHeading(value); found {
+		if heading, found := firstReservedFacetHeading(value); found {
 			return fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
 		}
 	}
@@ -187,6 +187,11 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 	for _, field := range fields {
 		published[field.Key] = struct{}{}
 	}
+	formats := make(map[string]FacetFormat, len(fields))
+	for _, field := range fields {
+		formats[field.Key] = field.Format
+	}
+
 	blocks := make([]string, 0, len(fields))
 	for _, section := range facetSections {
 		if _, ok := published[section.Field.Key]; !ok {
@@ -196,12 +201,15 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 		if value == "" {
 			continue
 		}
+		if formats[section.Field.Key] == FacetFormatJSON {
+			value = jsonFence + "\n" + value + "\n" + fenceClose
+		}
 		blocks = append(blocks, "## "+section.Heading+"\n\n"+value)
 	}
 	return strings.Join(blocks, "\n\n")
 }
 
-// ParseTierDocument reads a rendered document body back into a payload.
+// ParseFacetDocument reads a rendered document body back into a payload.
 // It is the inverse of [OutputSpec.RenderFacetDocument] and the reason
 // the document is the canonical store: any derived binding — an
 // ambient rail, a published entity, a remote display — can be re-seeded
@@ -211,14 +219,14 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 // which is what lets an existing facetless maintained document be adopted
 // into the faceted contract without losing its content. Content ahead of
 // the first recognized heading is folded into Full for the same reason.
-func ParseTierDocument(body string) FacetPayload {
+func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
 	var payload FacetPayload
 	var preamble []string
 	current := ""
 	collected := make(map[string][]string, len(facetSections))
 
 	for _, line := range strings.Split(body, "\n") {
-		if heading, ok := reservedTierHeadingOf(line); ok {
+		if heading, ok := reservedFacetHeadingOf(line); ok {
 			current = heading
 			continue
 		}
@@ -229,12 +237,27 @@ func ParseTierDocument(body string) FacetPayload {
 		collected[current] = append(collected[current], line)
 	}
 
+	// Only a field this output declared as json is unfenced. A markdown
+	// facet whose content legitimately opens with a fenced JSON example
+	// would otherwise come back with that fence eaten — the parser cannot
+	// tell an example from an encoding without being told which is which.
+	jsonFields := make(map[string]bool, len(o.Facets))
+	for _, field := range o.FacetFields() {
+		if field.Format == FacetFormatJSON {
+			jsonFields[field.Key] = true
+		}
+	}
+
 	for _, section := range facetSections {
 		lines, ok := collected[section.Heading]
 		if !ok {
 			continue
 		}
-		*section.value(&payload) = strings.TrimSpace(strings.Join(lines, "\n"))
+		value := strings.TrimSpace(strings.Join(lines, "\n"))
+		if jsonFields[section.Field.Key] {
+			value = unfence(value)
+		}
+		*section.value(&payload) = value
 	}
 
 	if leading := strings.TrimSpace(strings.Join(preamble, "\n")); leading != "" {
@@ -247,8 +270,8 @@ func ParseTierDocument(body string) FacetPayload {
 	return payload
 }
 
-// tierSectionByKey looks up the section table entry for a field key.
-func tierSectionByKey(key string) (facetSection, bool) {
+// facetSectionByKey looks up the section table entry for a field key.
+func facetSectionByKey(key string) (facetSection, bool) {
 	for _, section := range facetSections {
 		if section.Field.Key == key {
 			return section, true
@@ -257,10 +280,10 @@ func tierSectionByKey(key string) (facetSection, bool) {
 	return facetSection{}, false
 }
 
-// reservedTierHeadingOf reports the canonical heading a line declares,
+// reservedFacetHeadingOf reports the canonical heading a line declares,
 // if the line is exactly one of the contract's H2 section headings.
 // Deeper headings inside a projection are ordinary content.
-func reservedTierHeadingOf(line string) (string, bool) {
+func reservedFacetHeadingOf(line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "## ") {
 		return "", false
@@ -274,13 +297,13 @@ func reservedTierHeadingOf(line string) (string, bool) {
 	return "", false
 }
 
-// firstReservedTierHeading finds a reserved section heading inside
+// firstReservedFacetHeading finds a reserved section heading inside
 // projection content. Such a line would be read back as a section
 // boundary, silently moving content between projections, so publishing
 // is refused instead.
-func firstReservedTierHeading(value string) (string, bool) {
+func firstReservedFacetHeading(value string) (string, bool) {
 	for _, line := range strings.Split(value, "\n") {
-		if heading, ok := reservedTierHeadingOf(line); ok {
+		if heading, ok := reservedFacetHeadingOf(line); ok {
 			return "## " + heading, true
 		}
 	}
@@ -321,4 +344,34 @@ func FormatGuidance(format FacetFormat) string {
 	default:
 		return ""
 	}
+}
+
+const (
+	// jsonFence opens the block a json facet is rendered inside, and
+	// fenceClose closes it.
+	jsonFence  = "```json"
+	fenceClose = "```"
+)
+
+// unfence removes the code fence a json facet was rendered inside, so
+// the parse half of the round trip returns the value that was published
+// rather than the markdown it was published as.
+//
+// The fence earns its place by making the document readable rather than
+// by protecting the parser: a raw JSON value sitting under a heading
+// beside prose sections reads as damage, and the fence also marks the
+// section as machine-readable to anyone scanning the file. The parser
+// splits only on the four reserved headings, so an arbitrary "## " line
+// inside a value was never a hazard.
+func unfence(value string) string {
+	if !strings.HasPrefix(value, jsonFence) || !strings.HasSuffix(value, fenceClose) {
+		return value
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(value, jsonFence), fenceClose)
+	// A value that merely opens and closes with fences is not one block:
+	// unwrapping it would splice unrelated content together.
+	if strings.Contains(inner, fenceClose) {
+		return value
+	}
+	return strings.TrimSpace(inner)
 }
