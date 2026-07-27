@@ -599,11 +599,6 @@ shell_exec:
 # Keep this separate from human-authored and model-authored
 # document roots. Default: "./db".
 data_dir: ./db
-# TalentsDir is the directory containing talent markdown files that
-# extend the system prompt. In higher-integrity deployments, this is
-# a curated managed root rather than a scratch workspace.
-# Default: "./talents".
-talents_dir: ./talents
 #
 # (optional) Archive configures session archive behavior.
 # archive:

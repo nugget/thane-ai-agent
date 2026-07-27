@@ -119,8 +119,9 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 
 	fmt.Fprintf(w, "Initializing Thane workspace in %s\n", absDir)
 
-	// Create directory structure.
-	for _, sub := range []string{"db", "talents"} {
+	// Create directory structure. Talents are not among these: they live
+	// inside core now, and arrive as part of its birth commit.
+	for _, sub := range []string{"db"} {
 		p := filepath.Join(absDir, sub)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", sub, err)
@@ -137,23 +138,9 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 		return err
 	}
 
-	// Write talent files from embedded defaults.
-	err = fs.WalkDir(talents.DefaultFiles, "defaults", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		name := filepath.Base(path)
-		if !strings.HasSuffix(name, ".md") {
-			return nil
-		}
-		data, err := talents.DefaultFiles.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read embedded %s: %w", name, err)
-		}
-		return writeIfMissing(w, filepath.Join(absDir, "talents", name), data, 0o644)
-	})
+	bundledTalents, err := bundledTalentFiles()
 	if err != nil {
-		return fmt.Errorf("deploy talents: %w", err)
+		return err
 	}
 
 	ctx := context.Background()
@@ -161,12 +148,13 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	if err != nil {
 		return err
 	}
-	result, err := identity.BootstrapCore(ctx, filepath.Join(absDir, "core"), filepath.Base(absDir), operator, slog.Default())
+	result, err := identity.BootstrapCore(ctx, filepath.Join(absDir, "core"), filepath.Base(absDir), operator, bundledTalents, slog.Default())
 	if err != nil {
 		return fmt.Errorf("bootstrap core identity: %w", err)
 	}
 	if result.Created {
 		fmt.Fprintf(w, "  ✓ %s (core identity, signing %s)\n", result.CoreDir, result.SigningKeyFingerprint)
+		fmt.Fprintf(w, "  ✓ %d talents, signed as part of core's birth\n", len(bundledTalents))
 		describeCorePosture(w, result, why)
 	} else {
 		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
@@ -268,4 +256,34 @@ func runInitCommand(stdout, stderr io.Writer, args []string) error {
 		dir = fs.Arg(0)
 	}
 	return runInit(stdout, dir, opts)
+}
+
+// bundledTalentFiles reads the talent set compiled into the binary, keyed by
+// the repo-relative path it takes inside core.
+//
+// They are handed to the birth commit rather than written to disk first, so a
+// fresh instance never has a moment where its behaviour definitions exist
+// unsigned. That also means they are covered by the operator key when one
+// founds the instance, rather than by whoever commits next.
+func bundledTalentFiles() (map[string]string, error) {
+	out := make(map[string]string)
+	err := fs.WalkDir(talents.DefaultFiles, "defaults", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		name := filepath.Base(path)
+		if !strings.HasSuffix(name, ".md") {
+			return nil
+		}
+		data, err := talents.DefaultFiles.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read embedded %s: %w", name, err)
+		}
+		out["talents/"+name] = string(data)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collect bundled talents: %w", err)
+	}
+	return out, nil
 }
