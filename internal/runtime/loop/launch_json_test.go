@@ -16,12 +16,11 @@ func TestLaunchMarshalJSONUsesDurationStrings(t *testing.T) {
 	t.Parallel()
 
 	data, err := json.Marshal(Launch{
-		Task:            "test launch",
-		RunTimeout:      2 * time.Minute,
-		ToolTimeout:     45 * time.Second,
-		AllowedTools:    []string{"ha_get_state"},
-		FallbackContent: "please try again",
-		PromptMode:      agentctx.PromptModeTask,
+		Task:         "test launch",
+		RunTimeout:   2 * time.Minute,
+		ToolTimeout:  45 * time.Second,
+		AllowedTools: []string{"ha_get_state"},
+		PromptMode:   agentctx.PromptModeTask,
 	})
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
@@ -32,9 +31,6 @@ func TestLaunchMarshalJSONUsesDurationStrings(t *testing.T) {
 	}
 	if !strings.Contains(body, `"tool_timeout":"45s"`) {
 		t.Fatalf("marshal output missing string tool_timeout: %s", body)
-	}
-	if !strings.Contains(body, `"fallback_content":"please try again"`) {
-		t.Fatalf("marshal output missing fallback_content: %s", body)
 	}
 	if !strings.Contains(body, `"prompt_mode":"task"`) {
 		t.Fatalf("marshal output missing prompt_mode: %s", body)
@@ -63,9 +59,6 @@ func TestLaunchUnmarshalJSONParsesDurationStrings(t *testing.T) {
 	}
 	if launch.CompletionChannel == nil || launch.CompletionChannel.Channel != "owu" || launch.CompletionChannel.ConversationID != "conv-1" {
 		t.Fatalf("CompletionChannel = %#v", launch.CompletionChannel)
-	}
-	if launch.FallbackContent != "please try again" {
-		t.Fatalf("FallbackContent = %q, want %q", launch.FallbackContent, "please try again")
 	}
 	if launch.PromptMode != agentctx.PromptModeTask {
 		t.Fatalf("PromptMode = %q, want task", launch.PromptMode)
@@ -142,7 +135,6 @@ func TestLaunchHasOverrides(t *testing.T) {
 		{"conversation_id", func(l *Launch) { l.ConversationID = "c" }, "ConversationID"},
 		{"parent_id", func(l *Launch) { l.ParentID = "p" }, "ParentID"},
 		{"system_prompt", func(l *Launch) { l.SystemPrompt = "s" }, "SystemPrompt"},
-		{"fallback_content", func(l *Launch) { l.FallbackContent = "f" }, "FallbackContent"},
 		{"skip_context", func(l *Launch) { l.SkipContext = true }, "SkipContext"},
 		{"skip_tag_filter", func(l *Launch) { l.SkipTagFilter = true }, "SkipTagFilter"},
 		{"suppress_always_context", func(l *Launch) { l.SuppressAlwaysContext = true }, "SuppressAlwaysContext"},

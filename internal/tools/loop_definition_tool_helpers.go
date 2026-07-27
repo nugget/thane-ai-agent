@@ -298,10 +298,6 @@ func loopLaunchOverrideProperties() map[string]any {
 			"additionalProperties": map[string]any{"type": "string"},
 			"description":          "Opaque string/string tags attached to the launched loop for correlation or audit. NOT used for routing, tools, budgets, or any runtime behavior. To pin a model, set spec.profile.model on the stored definition (or in the spec passed to spawn_loop). To override tools use \"allowed_tools\" / \"exclude_tools\". To override budgets use \"max_iterations\" / \"max_output_tokens\".",
 		},
-		"fallback_content": map[string]any{
-			"type":        "string",
-			"description": "Static fallback reply used if the nested agent run produces no content but the launch still needs a last-resort response.",
-		},
 		"tool_timeout": map[string]any{
 			"type":        "string",
 			"description": "Per-tool-call timeout for nested agent tool executions inside this loop. Use a Go duration string like \"30s\" or \"2m\".",

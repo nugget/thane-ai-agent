@@ -1326,7 +1326,6 @@ archivist:
 #       on_retrigger: 0
 #       routing_factors: {}
 #       delegation_gating: ""
-#       fallback_content: ""
 #       metadata:
 #         category: observer
 #       parent_id: ""
