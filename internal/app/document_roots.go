@@ -327,6 +327,7 @@ func documentRootPolicyFromConfig(rootCfg config.DocumentRootConfig) documents.R
 		Inject:      strings.TrimSpace(rootCfg.Context.Inject),
 		Search:      strings.TrimSpace(rootCfg.Context.Search),
 		RequiresTag: strings.TrimSpace(rootCfg.Context.RequiresTag),
+		Untagged:    strings.TrimSpace(rootCfg.Context.Untagged),
 	}
 	return policy
 }

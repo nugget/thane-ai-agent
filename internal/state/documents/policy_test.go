@@ -355,3 +355,30 @@ func newPolicyStoreWithOptions(t *testing.T, policies map[string]RootPolicy, wri
 	}
 	return store, kbDir
 }
+
+// TestRootSummaryTellsTheModelWhatUntaggedMeans keeps a rule the model is held
+// to from being invisible to it.
+//
+// The model authors documents into these roots. A root that refuses tagless
+// content will not start once one exists, so a model that cannot see the
+// policy will eventually write the document that stops the instance.
+func TestRootSummaryTellsTheModelWhatUntaggedMeans(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		policy RootContextPolicy
+		want   string
+	}{
+		{name: "declared refusal", policy: RootContextPolicy{Inject: RootInjectTagged, Untagged: RootUntaggedRefuse}, want: RootUntaggedRefuse},
+		{name: "silent default", policy: RootContextPolicy{Inject: RootInjectTagged}, want: RootUntaggedIgnore},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &Store{rootPolicies: map[string]RootPolicy{"kb": {Context: tc.policy}}}
+			got := store.rootPolicySummary("kb")
+			if got.Context.Untagged != tc.want {
+				t.Fatalf("summary untagged = %q, want %q", got.Context.Untagged, tc.want)
+			}
+		})
+	}
+}

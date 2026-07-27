@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
@@ -129,10 +130,20 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		contextVerifier = a.documentStore
 	}
 
+	injectRoots := injectionEligibleRoots(cfg, s.resolver, logger)
+	// Enforce the refusal here rather than only at scan time. A root that
+	// refuses unclassified content is saying its documents are load-bearing,
+	// and a per-turn warning about one of them going missing is the quiet
+	// failure the policy exists to prevent — the instance should decline to
+	// run and name the file, the way it declines an uncommitted one.
+	if err := agent.CheckUnclassifiedDocuments(injectRoots); err != nil {
+		return fmt.Errorf("document root refuses unclassified content: %w", err)
+	}
+
 	tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
 		CapTags:     resolvedCapTags,
 		KBDir:       kbDir,
-		InjectRoots: injectionEligibleRoots(cfg, s.resolver, logger),
+		InjectRoots: injectRoots,
 		Resolver:    s.resolver,
 		Verifier:    contextVerifier,
 		HAInject:    a.loop.HAInject(),
@@ -249,7 +260,11 @@ func injectionEligibleRoots(cfg *config.Config, resolver *paths.Resolver, logger
 				"root", name, "error", err)
 			continue
 		}
-		eligible[name] = agent.InjectRoot{Dir: dir, RequiresTag: policy.Context.RequiresTag}
+		eligible[name] = agent.InjectRoot{
+			Dir:         dir,
+			RequiresTag: policy.Context.RequiresTag,
+			Untagged:    policy.Context.EffectiveUntagged(),
+		}
 	}
 	logger.Info("context injection policy resolved",
 		"injection_eligible_roots", len(eligible))
