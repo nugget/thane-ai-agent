@@ -91,7 +91,7 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 		case looppkg.OutputModeReplace:
 			out = append(out, looppkg.RuntimeTool{
 				Name:               output.ToolName(),
-				Description:        fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane.", output.Name, output.Ref),
+				Description:        replaceOutputDescription(output),
 				SkipContentResolve: true,
 				Parameters: map[string]any{
 					"type": "object",
@@ -117,6 +117,12 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 					result, err := store.Write(ctx, documents.WriteArgs{
 						Ref:  output.Ref,
 						Body: &content,
+						// Stamped on every write, not only the first: the
+						// exclusion in search and tagged-guidance injection
+						// reads this key off the document, so a rewrite that
+						// dropped it would quietly publish the loop's private
+						// thinking.
+						Frontmatter: loopOutputAudienceFrontmatter(output),
 					})
 					if err != nil {
 						return "", err
@@ -185,7 +191,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		for _, field := range output.TierFields() {
 			entry.Tiers = append(entry.Tiers, field.Key)
 		}
-		if output.Type == looppkg.OutputTypeJournalDocument || output.Type == looppkg.OutputTypeWorkingNotes {
+		if output.Type == looppkg.OutputTypeJournalDocument {
 			entry.Journal = &loopOutputJournal{
 				Window:     output.JournalWindow,
 				MaxWindows: output.MaxWindows,
@@ -208,7 +214,11 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		switch output.Type {
 		case looppkg.OutputTypeMaintainedDocument:
 			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
-		case looppkg.OutputTypeJournalDocument, looppkg.OutputTypeWorkingNotes:
+		case looppkg.OutputTypeWorkingNotes:
+			// The head, not the tail: a loop rewriting its current
+			// thinking needs to see what it is replacing.
+			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
+		case looppkg.OutputTypeJournalDocument:
 			entry.RecentContent, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputRecentBytes, true)
 		}
 		payload.Outputs = append(payload.Outputs, entry)
@@ -277,15 +287,28 @@ func loopOutputContextMode(output looppkg.OutputSpec) string {
 	return string(output.EffectiveMode())
 }
 
-// appendOutputDescription frames an append-mode output for the model.
-// Working notes get their own framing: the value of a private process
-// log is that it holds the reasoning a published document should not
-// carry, and a model that thinks it is writing another public surface
-// will not write that.
-func appendOutputDescription(output looppkg.OutputSpec) string {
+// replaceOutputDescription frames a replace-mode output. Working notes
+// and a published document are both rewritten wholesale, but what
+// belongs in each is opposite, so they do not share framing.
+func replaceOutputDescription(output looppkg.OutputSpec) string {
 	if output.Type == looppkg.OutputTypeWorkingNotes {
-		return fmt.Sprintf("Append to this loop's working notes %q at %s — the loop's private process log. Record how the understanding is evolving: what changed and why, what drifted, what was refined, what is worth remembering later. No consumer surface reads it: it stays out of search results and out of other loops' context, so write the reasoning that would clutter a published document. Pass only the new entry; Thane stamps, windows, prunes, and indexes.", output.Name, output.Ref)
+		return workingNotesDescription(output)
 	}
+	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane.", output.Name, output.Ref)
+}
+
+// workingNotesDescription frames the loop's private thinking. What
+// belongs here is what a reader should never see, and a model that
+// thinks it is writing another public surface will not write it. The
+// instruction to rewrite rather than add is the load-bearing part:
+// notes that accumulate stop being a current view and become a history
+// the loop has to interpret.
+func workingNotesDescription(output looppkg.OutputSpec) string {
+	return fmt.Sprintf("Rewrite this loop's working notes %q at %s — its private thinking, carried from turn to turn. Hold what you currently believe: working theories, what an experiment is showing so far, what you expect to happen next, what you are unsure of and what would settle it. Replace the whole body each time so it stays a current view rather than a log; drop what you no longer think and keep what still holds. No consumer surface reads it — it stays out of search results and out of other loops' context — so write what would clutter or mislead a published document.", output.Name, output.Ref)
+}
+
+// appendOutputDescription frames an append-mode output for the model.
+func appendOutputDescription(output looppkg.OutputSpec) string {
 	return fmt.Sprintf("Append to the loop-declared journal output %q at %s. Pass only the new journal entry; Thane stamps, windows, prunes, indexes, and applies root policy.", output.Name, output.Ref)
 }
 

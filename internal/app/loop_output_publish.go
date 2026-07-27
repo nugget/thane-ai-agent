@@ -45,9 +45,9 @@ func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, n
 		required = append(required, field.Key)
 	}
 	if notes != nil {
-		properties["note"] = map[string]any{
+		properties["notes"] = map[string]any{
 			"type":        "string",
-			"description": fmt.Sprintf("Optional: why this publish changed what it changed. Appended as a timestamped entry to this loop's working notes (%s) in the same call — the private record of how this understanding evolved, which no consumer surface reads. Revision history already records what changed; this is for why.", notes.Ref),
+			"description": fmt.Sprintf("Optional: your working notes (%s) as they now stand, rewritten in the same call — private thinking no consumer surface reads. Hold what you currently believe: theories, what an experiment is showing, what you expect next, what would change your mind. This replaces the whole body rather than adding to it, so carry forward what still holds and drop what you no longer think. Revision history already records what changed; this is for what you make of it.", notes.Ref),
 		}
 	}
 
@@ -82,8 +82,8 @@ func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, n
 			}
 
 			published := map[string]any{"published": result}
-			if note, _ := args["note"].(string); strings.TrimSpace(note) != "" && notes != nil {
-				noteResult, noteErr := appendLoopWorkingNote(ctx, store, *notes, note)
+			if note, _ := args["notes"].(string); strings.TrimSpace(note) != "" && notes != nil {
+				noteResult, noteErr := writeLoopWorkingNotes(ctx, store, *notes, note)
 				switch {
 				case noteErr != nil:
 					// The document publish already succeeded, so this is
@@ -146,14 +146,13 @@ func tierPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppk
 	return payload, nil
 }
 
-// appendLoopWorkingNote appends one entry to a working-notes output,
-// stamping the audience that keeps it out of consumer surfaces.
-func appendLoopWorkingNote(ctx context.Context, store *documents.Store, notes looppkg.OutputSpec, entry string) (*documents.MutationResult, error) {
-	return store.JournalUpdate(ctx, documents.JournalUpdateArgs{
+// writeLoopWorkingNotes replaces a working-notes body, stamping the
+// audience that keeps it out of consumer surfaces on every write —
+// notes hold a current view, so each one supersedes the last.
+func writeLoopWorkingNotes(ctx context.Context, store *documents.Store, notes looppkg.OutputSpec, body string) (*documents.MutationResult, error) {
+	return store.Write(ctx, documents.WriteArgs{
 		Ref:         notes.Ref,
-		Entry:       entry,
-		Window:      notes.JournalWindow,
-		MaxWindows:  notes.MaxWindows,
+		Body:        &body,
 		Frontmatter: loopOutputAudienceFrontmatter(notes),
 	})
 }
