@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -253,7 +253,7 @@ func companionToolDefinitionDiff(a, b companionToolClaim) []string {
 	if a.def.Description != b.def.Description {
 		fields = append(fields, "description")
 	}
-	if !slices.Equal(a.def.Tags, b.def.Tags) {
+	if !equalStringSets(a.def.Tags, b.def.Tags) {
 		fields = append(fields, "tags")
 	}
 	// Both schemas are JSON-derived (map/[]any/float64/string/bool/nil), the
@@ -262,6 +262,23 @@ func companionToolDefinitionDiff(a, b companionToolClaim) []string {
 		fields = append(fields, "input_schema")
 	}
 	return fields
+}
+
+// equalStringSets reports whether two tag lists carry the same members.
+// Tags are a set everywhere they are consumed — tag indexing and gating —
+// so companions that authored the same tags in a different order have not
+// disagreed about anything the model can observe, and comparing them in
+// order would report the ordinary multi-Mac case as skew.
+func equalStringSets(a, b []string) bool {
+	return maps.Equal(stringSet(a), stringSet(b))
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		set[v] = struct{}{}
+	}
+	return set
 }
 
 // synthesize turns one companion-authored tool definition into a

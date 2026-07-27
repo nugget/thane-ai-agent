@@ -315,6 +315,32 @@ func TestCompanionRegistrar_MatchingClaimsAreSilent(t *testing.T) {
 	}
 }
 
+// TestCompanionRegistrar_TagOrderIsNotDisagreement pins tags as a set. They
+// are consumed as one (tag indexing and gating), so two companions listing
+// the same tags in a different order have not disagreed about anything the
+// model can observe, and must not be reported as skew.
+func TestCompanionRegistrar_TagOrderIsNotDisagreement(t *testing.T) {
+	first := contactsProvider()
+	first.Capabilities[0].Tools[0].Tags = []string{"people", "scheduling"}
+
+	second := contactsProvider()
+	second.ID = "prov_second"
+	second.ClientID = "uuid-b"
+	second.Capabilities[0].Tools[0].Tags = []string{"scheduling", "people"}
+
+	logs := rebuildLogs(t, first, second)
+	if strings.Contains(logs, `"level":"WARN"`) {
+		t.Errorf("reordered tags must not warn; got: %s", logs)
+	}
+
+	// A genuine membership difference is still skew and must be reported.
+	second.Capabilities[0].Tools[0].Tags = []string{"people", "reminders"}
+	logs = rebuildLogs(t, first, second)
+	if !strings.Contains(logs, `"differs":"tags"`) {
+		t.Errorf("differing tag membership must warn; got: %s", logs)
+	}
+}
+
 // TestCompanionRegistrar_DivergentClaimsWarn covers version skew between two
 // Macs: the definitions disagree, so the model may read the winner's schema
 // while Registry.Call routes to the companion that authored the other one.
