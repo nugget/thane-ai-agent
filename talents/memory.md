@@ -235,6 +235,6 @@ section is the *operational* documentation; that one is the craft.
   not stored facts.
 - For the *craft* of writing session working memory (tone, arc,
   texture rather than action notes), the
-  [`working-memory.md`](working-memory.md) foundation talent loads
-  on every turn already; this leaf carries only the operational
-  read/write semantics.
+  [`working-memory.md`](working-memory.md) foundation talent carries
+  it, and loads wherever the persona is present; this leaf carries
+  only the operational read/write semantics.
