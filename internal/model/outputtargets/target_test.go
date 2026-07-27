@@ -73,20 +73,25 @@ func TestTargetValidateRejectsMalformed(t *testing.T) {
 			want:   "target id is required",
 		},
 		{
-			name:   "no slots",
+			name:   "no title",
 			target: Target{ID: "x"},
+			want:   "has no title",
+		},
+		{
+			name:   "no slots",
+			target: Target{ID: "x", Title: "X"},
 			want:   "declares no slots",
 		},
 		{
 			name: "no primary",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "value", Kind: SlotKindText, MaxRunes: 4},
 			}},
 			want: "exactly one is required",
 		},
 		{
 			name: "two primaries",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindText, MaxRunes: 4, Required: true, Primary: true},
 				{Name: "b", Kind: SlotKindText, MaxRunes: 4, Required: true, Primary: true},
 			}},
@@ -94,7 +99,7 @@ func TestTargetValidateRejectsMalformed(t *testing.T) {
 		},
 		{
 			name: "duplicate slot",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindText, MaxRunes: 4, Required: true, Primary: true},
 				{Name: "a", Kind: SlotKindText, MaxRunes: 4},
 			}},
@@ -102,28 +107,28 @@ func TestTargetValidateRejectsMalformed(t *testing.T) {
 		},
 		{
 			name: "text slot without budget",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindText, Required: true, Primary: true},
 			}},
 			want: "needs a positive max_runes",
 		},
 		{
 			name: "non-text primary",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindFraction, Required: true, Primary: true},
 			}},
 			want: "must be text",
 		},
 		{
 			name: "optional primary",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindText, MaxRunes: 4, Primary: true},
 			}},
 			want: "must be required",
 		},
 		{
 			name: "budget on a color slot",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindText, MaxRunes: 4, Required: true, Primary: true},
 				{Name: "tint", Kind: SlotKindColor, MaxRunes: 7},
 			}},
@@ -131,7 +136,7 @@ func TestTargetValidateRejectsMalformed(t *testing.T) {
 		},
 		{
 			name: "unknown kind",
-			target: Target{ID: "x", Slots: []Slot{
+			target: Target{ID: "x", Title: "X", Slots: []Slot{
 				{Name: "a", Kind: SlotKindText, MaxRunes: 4, Required: true, Primary: true},
 				{Name: "b", Kind: SlotKind("mystery")},
 			}},

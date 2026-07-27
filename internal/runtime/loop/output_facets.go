@@ -3,8 +3,11 @@ package loop
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nugget/thane-ai-agent/internal/model/outputtargets"
 )
 
 // Rune budgets for the published projection facets. They are display
@@ -29,6 +32,12 @@ type FacetPayload struct {
 	Teaser     string
 	Digest     string
 	Full       string
+	// Targets holds the slot object published to each declared target
+	// facet, keyed by target ID and JSON-encoded exactly as it is stored
+	// in the document. The slots are the canonical content: what a sink
+	// publishes is derived from them by the registry, so the document
+	// keeps what the model wrote rather than what a binding made of it.
+	Targets map[string]string
 }
 
 // FacetField describes one publishable field of a faceted output, as the
@@ -46,25 +55,36 @@ type FacetField struct {
 	// Format is how this facet's value is encoded. Empty on the full
 	// body, which is always markdown.
 	Format FacetFormat
+	// Target is the registered surface this field fills, empty for a
+	// reading projection. A field that names one takes its arguments,
+	// budgets, and validation from the registry rather than from the
+	// contract here, so a consumer must ask the registry what it accepts.
+	Target string
 }
 
 // facetSection binds one projection to its canonical document section and
 // its budget.
 type facetSection struct {
 	// Facet is the declared facet this section publishes, or empty for
-	// the always-present full projection.
+	// the always-present full projection and for target sections.
 	Facet   OutputFacet
 	Field   FacetField
 	Heading string
-	value   func(*FacetPayload) *string
+	get     func(FacetPayload) string
+	set     func(*FacetPayload, string)
 }
 
-// facetSections is the single source of truth for the publish tool's
-// schema, the payload validator, the document renderer, and the parser
-// that reads a rendered document back — so those four cannot drift
-// apart. Order is the canonical ladder order; declaration order in a
+// readingSections and fullSection are the single source of truth for the
+// publish tool's schema, the payload validator, the document renderer,
+// and the parser that reads a rendered document back — so those four
+// cannot drift apart. Order here is canonical; declaration order in a
 // spec's facets list carries no meaning.
-var facetSections = []facetSection{
+//
+// They are split because a spec's section table is assembled rather than
+// fixed: target facets land between the reading projections and the full
+// body, near the machine-readable end and ahead of the document's
+// substance.
+var readingSections = []facetSection{
 	{
 		Facet:   OutputFacetStatusLine,
 		Heading: "Status Line",
@@ -74,7 +94,8 @@ var facetSections = []facetSection{
 			SingleLine: true,
 			Guidance:   "One standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
 		},
-		value: func(p *FacetPayload) *string { return &p.StatusLine },
+		get: func(p FacetPayload) string { return p.StatusLine },
+		set: func(p *FacetPayload, v string) { p.StatusLine = v },
 	},
 	{
 		Facet:   OutputFacetTeaser,
@@ -84,7 +105,8 @@ var facetSections = []facetSection{
 			MaxRunes: teaserMaxRunes,
 			Guidance: "One short paragraph on why a reader would open this document right now. Surfaces as the snippet in search results and cross-references, so write the hook — the reason to look — rather than a compressed summary.",
 		},
-		value: func(p *FacetPayload) *string { return &p.Teaser },
+		get: func(p FacetPayload) string { return p.Teaser },
+		set: func(p *FacetPayload, v string) { p.Teaser = v },
 	},
 	{
 		Facet:   OutputFacetDigest,
@@ -94,44 +116,71 @@ var facetSections = []facetSection{
 			MaxRunes: digestMaxRunes,
 			Guidance: "A standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
 		},
-		value: func(p *FacetPayload) *string { return &p.Digest },
-	},
-	{
-		Heading: "Details",
-		Field: FacetField{
-			Key:      "full",
-			Guidance: "The complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
-		},
-		value: func(p *FacetPayload) *string { return &p.Full },
+		get: func(p FacetPayload) string { return p.Digest },
+		set: func(p *FacetPayload, v string) { p.Digest = v },
 	},
 }
 
-// FacetFields returns the fields a faceted output publishes, in canonical
-// ladder order: each declared facet, then the always-present full
-// projection. Every returned field is required at publish time —
-// optionality lives in the declaration (a spec may declare only
-// status_line), not in the write.
-func (o OutputSpec) FacetFields() []FacetField {
+var fullSection = facetSection{
+	Heading: "Details",
+	Field: FacetField{
+		Key:      "full",
+		Guidance: "The complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
+	},
+	get: func(p FacetPayload) string { return p.Full },
+	set: func(p *FacetPayload, v string) { p.Full = v },
+}
+
+// sections returns this output's section table in render order: each
+// declared reading projection, each declared target, then the
+// always-present full body.
+func (o OutputSpec) sections() []facetSection {
 	if len(o.Facets) == 0 {
 		return nil
 	}
 	declared := make(map[OutputFacet]FacetSpec, len(o.Facets))
+	targets := make([]string, 0, len(o.Facets))
 	for _, facet := range o.Facets {
-		declared[facet.Name] = facet
-	}
-	fields := make([]FacetField, 0, len(o.Facets)+1)
-	for _, section := range facetSections {
-		// The full body is always published and is never declared, so it
-		// carries the contract's own format rather than a facet's.
-		if section.Facet == "" {
-			fields = append(fields, section.Field)
+		if facet.IsTarget() {
+			targets = append(targets, strings.TrimSpace(facet.Target))
 			continue
 		}
-		if facet, ok := declared[section.Facet]; ok {
-			field := section.Field
-			field.Format = facet.EffectiveFormat()
-			fields = append(fields, field)
+		declared[facet.Name] = facet
+	}
+
+	sections := make([]facetSection, 0, len(o.Facets)+1)
+	for _, section := range readingSections {
+		facet, ok := declared[section.Facet]
+		if !ok {
+			continue
 		}
+		section.Field.Format = facet.EffectiveFormat()
+		sections = append(sections, section)
+	}
+	// Sorted by ID so the document's section order is a property of the
+	// spec's content rather than of the order an author happened to type.
+	sort.Strings(targets)
+	for _, id := range targets {
+		if section, ok := targetSection(id); ok {
+			sections = append(sections, section)
+		}
+	}
+	return append(sections, fullSection)
+}
+
+// FacetFields returns the fields a faceted output publishes, in canonical
+// order: each declared facet, then the always-present full projection.
+// Every returned field is required at publish time — optionality lives in
+// the declaration (a spec may declare only status_line), not in the
+// write.
+func (o OutputSpec) FacetFields() []FacetField {
+	sections := o.sections()
+	if len(sections) == 0 {
+		return nil
+	}
+	fields := make([]FacetField, 0, len(sections))
+	for _, section := range sections {
+		fields = append(fields, section.Field)
 	}
 	return fields
 }
@@ -150,12 +199,10 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 	if !o.HasFacets() {
 		return fmt.Errorf("output %q does not declare facets", o.Name)
 	}
-	for _, field := range o.FacetFields() {
-		section, ok := facetSectionByKey(field.Key)
-		if !ok {
-			continue
-		}
-		value := strings.TrimSpace(*section.value(&payload))
+	sections := o.sections()
+	for _, section := range sections {
+		field := section.Field
+		value := strings.TrimSpace(section.get(payload))
 		if value == "" {
 			return fmt.Errorf("%s is required; every declared projection is published together so they cannot describe different moments", field.Key)
 		}
@@ -170,7 +217,7 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 				return fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than letting it be cut, because a clipped projection reads as a fragment with no sign that anything is missing", field.Key, runes, field.MaxRunes)
 			}
 		}
-		if heading, found := firstReservedFacetHeading(value); found {
+		if heading, found := reservedHeadingIn(sections, value); found {
 			return fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
 		}
 	}
@@ -182,26 +229,14 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 // structure so the model never authors the section convention and the
 // document stays parseable back into a payload.
 func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
-	fields := o.FacetFields()
-	published := make(map[string]struct{}, len(fields))
-	for _, field := range fields {
-		published[field.Key] = struct{}{}
-	}
-	formats := make(map[string]FacetFormat, len(fields))
-	for _, field := range fields {
-		formats[field.Key] = field.Format
-	}
-
-	blocks := make([]string, 0, len(fields))
-	for _, section := range facetSections {
-		if _, ok := published[section.Field.Key]; !ok {
-			continue
-		}
-		value := strings.TrimSpace(*section.value(&payload))
+	sections := o.sections()
+	blocks := make([]string, 0, len(sections))
+	for _, section := range sections {
+		value := strings.TrimSpace(section.get(payload))
 		if value == "" {
 			continue
 		}
-		if formats[section.Field.Key] == FacetFormatJSON {
+		if section.Field.Format == FacetFormatJSON {
 			value = jsonFence + "\n" + value + "\n" + fenceClose
 		}
 		blocks = append(blocks, "## "+section.Heading+"\n\n"+value)
@@ -220,13 +255,14 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 // into the faceted contract without losing its content. Content ahead of
 // the first recognized heading is folded into Full for the same reason.
 func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
+	sections := o.sections()
 	var payload FacetPayload
 	var preamble []string
 	current := ""
-	collected := make(map[string][]string, len(facetSections))
+	collected := make(map[string][]string, len(sections))
 
 	for _, line := range strings.Split(body, "\n") {
-		if heading, ok := reservedFacetHeadingOf(line); ok {
+		if heading, ok := reservedHeadingOf(sections, line); ok {
 			current = heading
 			continue
 		}
@@ -237,27 +273,21 @@ func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
 		collected[current] = append(collected[current], line)
 	}
 
-	// Only a field this output declared as json is unfenced. A markdown
-	// facet whose content legitimately opens with a fenced JSON example
-	// would otherwise come back with that fence eaten — the parser cannot
-	// tell an example from an encoding without being told which is which.
-	jsonFields := make(map[string]bool, len(o.Facets))
-	for _, field := range o.FacetFields() {
-		if field.Format == FacetFormatJSON {
-			jsonFields[field.Key] = true
-		}
-	}
-
-	for _, section := range facetSections {
+	for _, section := range sections {
 		lines, ok := collected[section.Heading]
 		if !ok {
 			continue
 		}
 		value := strings.TrimSpace(strings.Join(lines, "\n"))
-		if jsonFields[section.Field.Key] {
+		// Only a field this output declared as json is unfenced. A
+		// markdown facet whose content legitimately opens with a fenced
+		// JSON example would otherwise come back with that fence eaten —
+		// the parser cannot tell an example from an encoding without
+		// being told which is which.
+		if section.Field.Format == FacetFormatJSON {
 			value = unfence(value)
 		}
-		*section.value(&payload) = value
+		section.set(&payload, value)
 	}
 
 	if leading := strings.TrimSpace(strings.Join(preamble, "\n")); leading != "" {
@@ -270,26 +300,16 @@ func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
 	return payload
 }
 
-// facetSectionByKey looks up the section table entry for a field key.
-func facetSectionByKey(key string) (facetSection, bool) {
-	for _, section := range facetSections {
-		if section.Field.Key == key {
-			return section, true
-		}
-	}
-	return facetSection{}, false
-}
-
-// reservedFacetHeadingOf reports the canonical heading a line declares,
-// if the line is exactly one of the contract's H2 section headings.
-// Deeper headings inside a projection are ordinary content.
-func reservedFacetHeadingOf(line string) (string, bool) {
+// reservedHeadingOf reports the canonical heading a line declares, if the
+// line is exactly one of this output's H2 section headings. Deeper
+// headings inside a projection are ordinary content.
+func reservedHeadingOf(sections []facetSection, line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "## ") {
 		return "", false
 	}
 	text := strings.TrimSpace(strings.TrimPrefix(trimmed, "## "))
-	for _, section := range facetSections {
+	for _, section := range sections {
 		if strings.EqualFold(text, section.Heading) {
 			return section.Heading, true
 		}
@@ -297,13 +317,13 @@ func reservedFacetHeadingOf(line string) (string, bool) {
 	return "", false
 }
 
-// firstReservedFacetHeading finds a reserved section heading inside
+// reservedHeadingIn finds one of this output's section headings inside
 // projection content. Such a line would be read back as a section
 // boundary, silently moving content between projections, so publishing
 // is refused instead.
-func firstReservedFacetHeading(value string) (string, bool) {
+func reservedHeadingIn(sections []facetSection, value string) (string, bool) {
 	for _, line := range strings.Split(value, "\n") {
-		if heading, ok := reservedFacetHeadingOf(line); ok {
+		if heading, ok := reservedHeadingOf(sections, line); ok {
 			return "## " + heading, true
 		}
 	}
@@ -325,6 +345,26 @@ func validateFacetFormat(field FacetField, value string) error {
 	}
 	if !json.Valid([]byte(value)) {
 		return fmt.Errorf("%s declares format %q but the value is not valid JSON; a consumer that asked for json cannot read prose", field.Key, FacetFormatJSON)
+	}
+	if field.Target == "" {
+		return nil
+	}
+	// A target facet's value is a slot object the registry defines, so
+	// valid JSON is only the first half of the check: the registry
+	// decides whether these are the right slots, within their budgets.
+	// Running it here rather than only at the tool boundary means a
+	// payload assembled any other way — a repair, a migration, a seeded
+	// document — meets the same contract the surface does.
+	target, ok := outputtargets.Lookup(field.Target)
+	if !ok {
+		return fmt.Errorf("%s is cut for target %q, which is not registered; valid targets are %s", field.Key, field.Target, strings.Join(outputtargets.IDs(), ", "))
+	}
+	var slots map[string]any
+	if err := json.Unmarshal([]byte(value), &slots); err != nil {
+		return fmt.Errorf("%s must be a JSON object of slot values for target %q: %w", field.Key, field.Target, err)
+	}
+	if _, err := target.Normalize(slots); err != nil {
+		return fmt.Errorf("%s: %w", field.Key, err)
 	}
 	return nil
 }

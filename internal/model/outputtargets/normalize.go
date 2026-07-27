@@ -33,11 +33,59 @@ type Payload struct {
 // not carry values forward from a previous payload, because the tool
 // contract is a full replacement.
 func (t Target) Normalize(args map[string]any) (Payload, error) {
-	if err := t.rejectUnknownSlots(args); err != nil {
+	slots, err := t.NormalizeSlots(args)
+	if err != nil {
 		return Payload{}, err
 	}
 
-	payload := Payload{Attributes: make(map[string]any, len(t.Slots))}
+	payload := Payload{Attributes: make(map[string]any, len(slots))}
+	for _, slot := range t.Slots {
+		value, ok := slots[slot.Name]
+		if !ok {
+			continue
+		}
+		if slot.Primary {
+			// validate guarantees the primary slot is text, so this
+			// assertion cannot fail for a registered target.
+			payload.State, _ = value.(string)
+			continue
+		}
+		payload.Attributes[slot.Name] = value
+	}
+
+	if payload.State == "" {
+		// Unreachable for a registered target (validate guarantees a
+		// required primary slot, and NormalizeSlots rejects a missing
+		// required slot), but a sink publishing an empty state would
+		// produce an entity HA renders as "unknown" — fail here instead.
+		return Payload{}, fmt.Errorf("target %q produced no state value", t.ID)
+	}
+	if len(payload.Attributes) == 0 {
+		payload.Attributes = nil
+	}
+	return payload, nil
+}
+
+// NormalizeSlots validates raw tool arguments and returns the canonical
+// slot values, keyed by slot name.
+//
+// It is the half of [Target.Normalize] that a store wants rather than a
+// sink: slot values keep which slot each one filled, so they can be
+// re-normalized for any binding later, while a [Payload] has already
+// collapsed them into one state and a bag of attributes. Canonical here
+// means what normalization is allowed to change — whitespace trimmed,
+// color hex uppercased — so two callers sending the same values in
+// different spellings store the same thing.
+//
+// A cleared slot (absent, null, or blank text) is absent from the result
+// rather than present and empty, so a caller can tell "not set" from
+// "set to nothing" without consulting the target.
+func (t Target) NormalizeSlots(args map[string]any) (map[string]any, error) {
+	if err := t.rejectUnknownSlots(args); err != nil {
+		return nil, err
+	}
+
+	slots := make(map[string]any, len(t.Slots))
 	for _, slot := range t.Slots {
 		raw, present := args[slot.Name]
 		// An explicit JSON null is how some model families spell "leave
@@ -47,62 +95,47 @@ func (t Target) Normalize(args map[string]any) (Payload, error) {
 		}
 		if !present {
 			if slot.Required {
-				return Payload{}, fmt.Errorf("slot %q is required for target %q but was not supplied; %s", slot.Name, t.ID, slot.Description)
+				return nil, fmt.Errorf("slot %q is required for target %q but was not supplied; %s", slot.Name, t.ID, slot.Description)
 			}
 			continue
 		}
 
 		// Each kind is handled in its own branch rather than through a
-		// common any-returning helper: only text slots can be primary
-		// or blank-and-therefore-cleared, and routing every kind through
-		// one signature would mean type-asserting that back out.
+		// common any-returning helper: only text slots can be
+		// blank-and-therefore-cleared, and routing every kind through one
+		// signature would mean type-asserting that back out.
 		switch slot.Kind {
 		case SlotKindText:
 			text, err := slot.normalizeText(raw)
 			if err != nil {
-				return Payload{}, fmt.Errorf("slot %q: %w", slot.Name, err)
+				return nil, fmt.Errorf("slot %q: %w", slot.Name, err)
 			}
 			if text == "" {
 				if slot.Required {
-					return Payload{}, fmt.Errorf("slot %q is required for target %q but was empty after trimming whitespace", slot.Name, t.ID)
+					return nil, fmt.Errorf("slot %q is required for target %q but was empty after trimming whitespace", slot.Name, t.ID)
 				}
 				// An optional slot explicitly set to blank means "clear
 				// it", which is the same as omitting it.
 				continue
 			}
-			if slot.Primary {
-				payload.State = text
-				continue
-			}
-			payload.Attributes[slot.Name] = text
+			slots[slot.Name] = text
 		case SlotKindFraction:
 			fraction, err := slot.normalizeFraction(raw)
 			if err != nil {
-				return Payload{}, fmt.Errorf("slot %q: %w", slot.Name, err)
+				return nil, fmt.Errorf("slot %q: %w", slot.Name, err)
 			}
-			payload.Attributes[slot.Name] = fraction
+			slots[slot.Name] = fraction
 		case SlotKindColor:
 			color, err := slot.normalizeColor(raw)
 			if err != nil {
-				return Payload{}, fmt.Errorf("slot %q: %w", slot.Name, err)
+				return nil, fmt.Errorf("slot %q: %w", slot.Name, err)
 			}
-			payload.Attributes[slot.Name] = color
+			slots[slot.Name] = color
 		default:
-			return Payload{}, fmt.Errorf("slot %q: unsupported slot kind %q", slot.Name, slot.Kind)
+			return nil, fmt.Errorf("slot %q: unsupported slot kind %q", slot.Name, slot.Kind)
 		}
 	}
-
-	if payload.State == "" {
-		// Unreachable for a registered target (validate guarantees a
-		// required primary slot, and the required check above fires
-		// first), but a sink publishing an empty state would produce an
-		// entity HA renders as "unknown" — fail here instead.
-		return Payload{}, fmt.Errorf("target %q produced no state value", t.ID)
-	}
-	if len(payload.Attributes) == 0 {
-		payload.Attributes = nil
-	}
-	return payload, nil
+	return slots, nil
 }
 
 // rejectUnknownSlots fails on any argument key the target does not

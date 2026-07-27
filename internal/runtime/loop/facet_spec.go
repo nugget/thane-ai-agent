@@ -35,15 +35,39 @@ const (
 // case is a name and nothing else — `facets: [status_line, teaser]`
 // stays readable, and an author who needs an attribute reaches for the
 // longer form only on the facet that needs it.
+//
+// A facet is identified either by [FacetSpec.Name] — one of the reading
+// projections, cut for surfaces that show prose at different sizes — or
+// by [FacetSpec.Target], cut for a surface that shows no prose at all.
+// The two are alternatives rather than a name with a modifier: a watch
+// complication is not a longer status line, it is a different face.
 type FacetSpec struct {
-	// Name is which face this is: status_line, teaser, or digest.
-	Name OutputFacet `yaml:"name" json:"name"`
-	// Format is how the value is encoded. Empty means markdown.
+	// Name is which reading projection this is: status_line, teaser, or
+	// digest. Empty when Target is set.
+	Name OutputFacet `yaml:"name,omitempty" json:"name,omitempty"`
+	// Target is the registered [outputtargets] surface this facet is cut
+	// for, such as "apple_watch.rectangular". The surface's slots, their
+	// budgets, and their validation all come from the registry, so an
+	// author declares where the value goes and nothing about its shape.
+	Target string `yaml:"target,omitempty" json:"target,omitempty"`
+	// Format is how the value is encoded. Empty means markdown, or json
+	// for a target facet, whose value is always a slot object.
 	Format FacetFormat `yaml:"format,omitempty" json:"format,omitempty"`
 }
 
-// EffectiveFormat resolves the declared format, defaulting to markdown.
+// IsTarget reports whether this facet is cut for a registered surface
+// rather than for reading.
+func (f FacetSpec) IsTarget() bool {
+	return strings.TrimSpace(f.Target) != ""
+}
+
+// EffectiveFormat resolves the declared format. A target facet is always
+// json — its value is a slot object the registry defines — and every
+// other facet defaults to markdown.
 func (f FacetSpec) EffectiveFormat() FacetFormat {
+	if f.IsTarget() {
+		return FacetFormatJSON
+	}
 	if f.Format == "" {
 		return FacetFormatMarkdown
 	}
@@ -88,9 +112,11 @@ func (f *FacetSpec) UnmarshalYAML(unmarshal func(any) error) error {
 }
 
 // MarshalJSON writes the short form when nothing but the name is set, so
-// a round trip does not inflate every declaration into an object.
+// a round trip does not inflate every declaration into an object. A
+// target facet always takes the object form: its identity lives in a
+// field the short form cannot carry.
 func (f FacetSpec) MarshalJSON() ([]byte, error) {
-	if f.Format == "" {
+	if f.Format == "" && !f.IsTarget() {
 		return json.Marshal(string(f.Name))
 	}
 	type facetSpecWire FacetSpec

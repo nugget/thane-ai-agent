@@ -85,6 +85,14 @@ func (t Target) Slot(name string) (Slot, bool) {
 	return Slot{}, false
 }
 
+// ArgKey returns the target's ID in a form usable where a dot is not
+// allowed — a tool argument name, a document section key, an MQTT topic
+// segment. The registry guarantees these stay unique across targets, so
+// a consumer may key on it as safely as on the ID itself.
+func (t Target) ArgKey() string {
+	return strings.ReplaceAll(t.ID, ".", "_")
+}
+
 // SlotNames returns every slot name in render order, for error messages
 // that need to enumerate the valid parameters.
 func (t Target) SlotNames() []string {
@@ -102,6 +110,11 @@ func (t Target) SlotNames() []string {
 func (t Target) validate() error {
 	if strings.TrimSpace(t.ID) == "" {
 		return fmt.Errorf("target id is required")
+	}
+	if strings.TrimSpace(t.Title) == "" {
+		// The title is how a consumer names this surface to a reader, so
+		// an empty one is a target that renders as a blank heading.
+		return fmt.Errorf("target %q has no title", t.ID)
 	}
 	if len(t.Slots) == 0 {
 		return fmt.Errorf("target %q declares no slots", t.ID)
@@ -152,6 +165,13 @@ var registry = func() map[string]Target {
 		appleWatchCircular,
 	}
 	out := make(map[string]Target, len(targets))
+	// Titles and arg keys are identities too: a consumer renders a target
+	// by title and keys arguments by ArgKey, so a collision in either
+	// would make two distinct surfaces indistinguishable downstream. They
+	// are checked here, where the registry is the only place that can
+	// introduce one.
+	titles := make(map[string]string, len(targets))
+	argKeys := make(map[string]string, len(targets))
 	for _, target := range targets {
 		if err := target.validate(); err != nil {
 			panic("outputtargets: invalid built-in target: " + err.Error())
@@ -159,6 +179,14 @@ var registry = func() map[string]Target {
 		if _, dup := out[target.ID]; dup {
 			panic("outputtargets: duplicate built-in target id " + target.ID)
 		}
+		if other, dup := titles[strings.ToLower(target.Title)]; dup {
+			panic("outputtargets: targets " + other + " and " + target.ID + " share the title " + target.Title)
+		}
+		if other, dup := argKeys[target.ArgKey()]; dup {
+			panic("outputtargets: targets " + other + " and " + target.ID + " share the arg key " + target.ArgKey())
+		}
+		titles[strings.ToLower(target.Title)] = target.ID
+		argKeys[target.ArgKey()] = target.ID
 		out[target.ID] = target
 	}
 	return out

@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -219,7 +220,7 @@ func TestFacetDocumentRoundTrip(t *testing.T) {
 				t.Fatalf("payload should be valid: %v", err)
 			}
 			got := tt.output.ParseFacetDocument(tt.output.RenderFacetDocument(tt.payload))
-			if got != tt.payload {
+			if !reflect.DeepEqual(got, tt.payload) {
 				t.Fatalf("round trip changed the payload:\ngot  %#v\nwant %#v", got, tt.payload)
 			}
 		})

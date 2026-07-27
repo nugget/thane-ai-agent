@@ -3,9 +3,12 @@ package tools
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // TestTalentExampleSpecValidates decodes the loop spec published in the
@@ -51,9 +54,27 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 		t.Fatalf("outputs = %d, want 2 (faceted document + working notes)", len(decoded.Outputs))
 	}
 	faceted := decoded.Outputs[0]
-	if len(faceted.Facets) != 3 {
-		t.Errorf("facets = %v, want three projections", faceted.Facets)
+	// The example teaches both kinds of facet, so it has to carry both:
+	// every reading projection, and at least one rendering target whose
+	// slots the publish sample fills.
+	var reading []looppkg.OutputFacet
+	var targets []string
+	for _, facet := range faceted.Facets {
+		if facet.IsTarget() {
+			targets = append(targets, facet.Target)
+			continue
+		}
+		reading = append(reading, facet.Name)
 	}
+	wantReading := []looppkg.OutputFacet{looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest}
+	if !reflect.DeepEqual(reading, wantReading) {
+		t.Errorf("reading projections = %v, want %v", reading, wantReading)
+	}
+	if len(targets) == 0 {
+		t.Fatal("the example declares no target facet, but its prose teaches one")
+	}
+
+	assertExamplePublishSampleIsValid(t, node[start:], faceted)
 	if got := faceted.ToolName(); !strings.HasPrefix(got, "publish_output_") {
 		t.Errorf("generated tool = %q, want publish_output_* — the example claims it swaps", got)
 	}
@@ -71,4 +92,57 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 	if !hasDocuments {
 		t.Error("a loop that owns documents needs the documents tag to reach doc_read")
 	}
+}
+
+// assertExamplePublishSampleIsValid runs the example's publish payload
+// through the same validation a real call meets.
+//
+// The spec and the sample are taught together, so a sample that would be
+// rejected teaches a call that fails — and the target slots are exactly
+// where that is easy to get wrong, because their budgets live in the
+// registry rather than in this file.
+func assertExamplePublishSampleIsValid(t *testing.T, section string, output looppkg.OutputSpec) {
+	t.Helper()
+
+	blocks := regexp.MustCompile("(?s)```json\n(.*?)```").FindAllStringSubmatch(section, -1)
+	if len(blocks) < 2 {
+		t.Fatalf("expected a spec block and a publish block, found %d", len(blocks))
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(blocks[1][1]), &args); err != nil {
+		t.Fatalf("publish sample does not parse: %v", err)
+	}
+
+	// Every declared field has to be present: a publish carries the whole
+	// payload, so a sample missing one would be rejected in practice.
+	for _, field := range output.FacetFields() {
+		if _, ok := args[field.Key]; !ok {
+			t.Errorf("publish sample is missing the %q argument", field.Key)
+		}
+	}
+	for key := range args {
+		if key == "notes" {
+			continue
+		}
+		if _, ok := facetFieldByKey(output, key); !ok {
+			t.Errorf("publish sample passes %q, which this output does not declare", key)
+		}
+	}
+
+	payload, err := output.FacetPayloadFromArgs(args)
+	if err != nil {
+		t.Fatalf("publish sample does not decode: %v", err)
+	}
+	if err := output.ValidateFacetPayload(payload); err != nil {
+		t.Fatalf("publish sample would be rejected: %v", err)
+	}
+}
+
+func facetFieldByKey(output looppkg.OutputSpec, key string) (looppkg.FacetField, bool) {
+	for _, field := range output.FacetFields() {
+		if field.Key == key {
+			return field, true
+		}
+	}
+	return looppkg.FacetField{}, false
 }

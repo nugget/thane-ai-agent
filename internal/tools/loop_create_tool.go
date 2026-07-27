@@ -598,11 +598,7 @@ func thaneLoopCreateSchema() map[string]any {
 						"type":        "string",
 						"description": "Optional human title for the document. Defaults to the loop name.",
 					},
-					"facets": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-						"description": "Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
-					},
+					"facets": loopFacetsSchema(),
 				},
 				"required": []string{"document"},
 			},

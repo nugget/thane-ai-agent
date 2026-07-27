@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/nugget/thane-ai-agent/internal/model/outputtargets"
 )
 
 const maxOutputToolNameLength = 64
@@ -220,12 +222,24 @@ func validateOutputFacets(o OutputSpec) error {
 		return fmt.Errorf("facets declare published projections, but audience is %q; an internal output has no consumers to cut a facet for", OutputAudienceInternal)
 	}
 	seen := make(map[OutputFacet]struct{}, len(o.Facets))
+	seenTargets := make(map[string]struct{}, len(o.Facets))
 	hasStatusLine := false
 	for i, facet := range o.Facets {
+		if facet.IsTarget() {
+			if err := validateTargetFacet(i, facet); err != nil {
+				return err
+			}
+			id := strings.TrimSpace(facet.Target)
+			if _, dup := seenTargets[id]; dup {
+				return fmt.Errorf("facets[%d]: duplicate target %q; one facet is one face, and a surface cannot be shown two different values at once", i, id)
+			}
+			seenTargets[id] = struct{}{}
+			continue
+		}
 		switch facet.Name {
 		case OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest:
 		default:
-			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q (the full body is the document itself, not a declared facet)", i, facet.Name, OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q for reading projections, or {\"target\": \"...\"} for a rendering surface (the full body is the document itself, not a declared facet)", i, facet.Name, OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
 		}
 		if _, ok := validFacetFormats[facet.EffectiveFormat()]; !ok {
 			return fmt.Errorf("facets[%d]: unsupported format %q for %q; use %q, %q, or %q", i, facet.Format, facet.Name, FacetFormatMarkdown, FacetFormatPlain, FacetFormatJSON)
@@ -240,6 +254,24 @@ func validateOutputFacets(o OutputSpec) error {
 	}
 	if !hasStatusLine {
 		return fmt.Errorf("facets must include %q; the ambient one-line projection is the one every surface can take (teaser and digest are optional)", OutputFacetStatusLine)
+	}
+	return nil
+}
+
+// validateTargetFacet checks a facet cut for a rendering surface. The
+// registry owns everything about the surface itself, so what is checked
+// here is only that the declaration points at a real one and does not
+// also try to be a reading projection.
+func validateTargetFacet(i int, facet FacetSpec) error {
+	id := strings.TrimSpace(facet.Target)
+	if facet.Name != "" {
+		return fmt.Errorf("facets[%d]: declares both name %q and target %q; a facet is one face — a rendering surface is not a variant of a reading projection, so declare them as separate facets", i, facet.Name, id)
+	}
+	if facet.Format != "" && facet.Format != FacetFormatJSON {
+		return fmt.Errorf("facets[%d]: target %q declares format %q, but a target facet is always %q — its value is the surface's slot object, not prose", i, id, facet.Format, FacetFormatJSON)
+	}
+	if _, ok := outputtargets.Lookup(id); !ok {
+		return fmt.Errorf("facets[%d]: unknown target %q; registered targets are %s", i, id, strings.Join(outputtargets.IDs(), ", "))
 	}
 	return nil
 }

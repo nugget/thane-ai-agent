@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/outputtargets"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -34,14 +35,7 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 	properties := make(map[string]any, len(fields)+1)
 	required := make([]string, 0, len(fields))
 	for _, field := range fields {
-		description := field.Guidance + looppkg.FormatGuidance(field.Format)
-		if field.MaxRunes > 0 {
-			description = fmt.Sprintf("%s Maximum %d characters.", description, field.MaxRunes)
-		}
-		properties[field.Key] = map[string]any{
-			"type":        "string",
-			"description": description,
-		}
+		properties[field.Key] = facetArgumentSchema(field)
 		required = append(required, field.Key)
 	}
 	if notes != nil {
@@ -61,7 +55,7 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 			"required":   required,
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			payload, err := facetPayloadFromArgs(output, args)
+			payload, err := output.FacetPayloadFromArgs(args)
 			if err != nil {
 				return "", err
 			}
@@ -100,6 +94,36 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 	}
 }
 
+// facetArgumentSchema returns the JSON-Schema fragment for one publish
+// argument.
+//
+// A reading projection is a string with a budget. A target facet is not:
+// the surface it is cut for has named slots with their own types and
+// limits, so the argument is that slot object, taken whole from the
+// registry. The model then fills a watch complication by naming its
+// slots rather than by hand-encoding JSON into a string — the shape is
+// something it can be told, so it is.
+func facetArgumentSchema(field looppkg.FacetField) map[string]any {
+	if field.Target != "" {
+		if target, ok := outputtargets.Lookup(field.Target); ok {
+			schema := target.Schema()
+			schema["description"] = fmt.Sprintf(
+				"The %s. %s Every publish replaces the whole set: slots you omit are cleared. %s",
+				target.Title, target.Summary, target.Binding,
+			)
+			return schema
+		}
+	}
+	description := field.Guidance + looppkg.FormatGuidance(field.Format)
+	if field.MaxRunes > 0 {
+		description = fmt.Sprintf("%s Maximum %d characters.", description, field.MaxRunes)
+	}
+	return map[string]any{
+		"type":        "string",
+		"description": description,
+	}
+}
+
 // facetPublishDescription frames the publish interface for the model:
 // what it owns, that structure is not the model's job, and that the
 // projections move together.
@@ -116,34 +140,6 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 		description += " Pass notes to rewrite this loop's private working notes in the same call — what you currently believe, not an entry about this change."
 	}
 	return description
-}
-
-// facetPayloadFromArgs reads the publish arguments into a payload,
-// rejecting a non-string value with the argument name rather than
-// silently treating it as empty.
-func facetPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppkg.FacetPayload, error) {
-	var payload looppkg.FacetPayload
-	for _, field := range output.FacetFields() {
-		raw, present := args[field.Key]
-		if !present {
-			continue
-		}
-		value, ok := raw.(string)
-		if !ok {
-			return looppkg.FacetPayload{}, fmt.Errorf("%s must be a string", field.Key)
-		}
-		switch field.Key {
-		case "status_line":
-			payload.StatusLine = value
-		case "teaser":
-			payload.Teaser = value
-		case "digest":
-			payload.Digest = value
-		case "full":
-			payload.Full = value
-		}
-	}
-	return payload, nil
 }
 
 // writeLoopWorkingNotes replaces a working-notes body, stamping the

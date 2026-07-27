@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -505,48 +506,59 @@ func parseDurationArg(args map[string]any, key string) (d time.Duration, present
 	return d, true, nil
 }
 
-// parseOutputFacets reads the declared projection ladder from the guided
-// tool's output argument. Unknown names are refused rather than dropped:
-// a facet that is silently ignored produces a loop that publishes fewer
-// projections than its author asked for, and nothing says so.
+// parseOutputFacets reads the declared facets from the guided tool's
+// output argument.
+//
+// It decodes through [looppkg.FacetSpec] rather than reading the shapes
+// itself, so the guided path accepts exactly what the raw path does: a
+// bare name, a name with a format, or a rendering target. A second
+// parser here would be a second answer to "what is a facet", and the two
+// would drift the first time either grew a field.
+//
+// Validation is left to the spec: an unknown facet has to be refused
+// rather than dropped — a facet silently ignored produces a loop
+// publishing fewer projections than its author asked for, with nothing
+// saying so — and validateOutputFacets already refuses it with the
+// message that names the alternatives.
 func parseOutputFacets(raw any) ([]looppkg.FacetSpec, error) {
 	if raw == nil {
 		return nil, nil
 	}
-
-	// A decoded tool call yields []any; a Go caller is likelier to build
-	// []string. Both are accepted, and a non-string element is named by
-	// index and type rather than coerced — an element coerced to "" would
-	// be reported as an empty facet name, which describes the symptom
-	// instead of the mistake.
-	var names []string
+	// Normalized to []any so each element can be decoded — and reported —
+	// on its own. A single decode of the whole array would name the type
+	// that failed but not which entry it was, and an author reading
+	// "cannot unmarshal number" has to count facets by hand to find it.
+	var items []any
 	switch v := raw.(type) {
-	case []string:
-		names = v
 	case []any:
-		names = make([]string, 0, len(v))
-		for i, item := range v {
-			name, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("output.facets[%d] is %T; facet names are strings — status_line, teaser, or digest", i, item)
-			}
-			names = append(names, name)
+		items = v
+	case []string:
+		items = make([]any, 0, len(v))
+		for _, name := range v {
+			items = append(items, name)
 		}
+	case []looppkg.FacetSpec:
+		return v, nil
 	default:
-		return nil, fmt.Errorf("output.facets must be an array of facet names, got %T", raw)
+		return nil, fmt.Errorf("output.facets must be an array of facets, got %T", raw)
 	}
 
-	out := make([]looppkg.FacetSpec, 0, len(names))
-	for _, name := range names {
-		facet := looppkg.OutputFacet(strings.TrimSpace(name))
-		switch facet {
-		case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
-			out = append(out, looppkg.FacetSpec{Name: facet})
-		default:
-			return nil, fmt.Errorf("output.facets %q is not a projection; use status_line, teaser, or digest", name)
+	// Each element round-trips through JSON to reach FacetSpec's own
+	// decoder; a decoded tool call is already the product of one, so this
+	// costs an encode on a list that is at most a handful of entries.
+	facets := make([]looppkg.FacetSpec, 0, len(items))
+	for i, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, fmt.Errorf("output.facets[%d]: %w", i, err)
 		}
+		var facet looppkg.FacetSpec
+		if err := json.Unmarshal(encoded, &facet); err != nil {
+			return nil, fmt.Errorf("output.facets[%d] is %T: a facet is a name (status_line, teaser, digest), an object with a name and a format, or an object with a target", i, item)
+		}
+		facets = append(facets, facet)
 	}
-	return out, nil
+	return facets, nil
 }
 
 // buildWorkingNotesSpec derives the private log that sits beside a

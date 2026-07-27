@@ -47,6 +47,38 @@ Declare `status_line` for any faceted output; add `teaser` when the
 output is something others search or link to, and `digest` when a
 reader should be able to act without opening the document.
 
+## Facets cut for a surface that shows no prose
+
+`status_line`, `teaser`, and `digest` are all cut for readers, differing
+only in how much room the reader has. A watch complication is not the
+next size down that ladder: it has four short lines, a gauge that wants
+a number between 0 and 1, and no place for a sentence at all. Writing
+prose short enough to survive it produces something that reads badly
+everywhere and renders badly there.
+
+So declare that surface as its own facet, by target rather than by name:
+
+```json
+"facets": ["status_line", "teaser", {"target": "apple_watch.rectangular"}]
+```
+
+A target facet's argument on `publish_output_*` is not a string. It is
+the surface's own named slots — `value`, `title`, `subtitle`,
+`fraction` — each with its own type and its own budget, described to you
+in the tool schema. Fill the slots; the encoding, the section in the
+document, and the wiring to whatever renders it are not your problem.
+
+Two things follow from the slots being real. The budgets are small and
+enforced, so a value over its limit is rejected with the limit named
+rather than trimmed to fit — twelve characters means a number and a
+unit, not an abbreviated sentence. And every publish replaces the whole
+slot set, so a slot you omit is cleared: send the complete current state
+each time, exactly as you already do for the reading projections.
+
+Declare a target when something outside Thane renders this loop's state
+on a fixed surface. Declare only reading projections when it does not —
+an unfilled complication is worse than an absent one.
+
 ## Where the thinking goes
 
 What a loop publishes is current state. What it *thinks* — working

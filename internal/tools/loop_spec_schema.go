@@ -1,5 +1,12 @@
 package tools
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/model/outputtargets"
+)
+
 // loopSpecSchema returns the JSON-Schema description of the agent-facing
 // loop-definition spec object, shared by loop_definition_set,
 // loop_definition_lint, and spawn_loop. Until this existed those tools
@@ -168,30 +175,59 @@ func loopProfileSchema(description string) map[string]any {
 	}
 }
 
+// loopFacetsSchema describes an output's facets array.
+//
+// The target enum is read from the registry rather than written out
+// here, so a surface added there is declarable the same day without a
+// second edit — and the model is never offered a target that does not
+// exist.
+func loopFacetsSchema() map[string]any {
+	targets := outputtargets.All()
+	descriptions := make([]string, 0, len(targets))
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		ids = append(ids, target.ID)
+		descriptions = append(descriptions, fmt.Sprintf("%s = %s", target.ID, target.Summary))
+	}
+
+	return map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"oneOf": []any{
+				map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":   map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+						"format": map[string]any{"type": "string", "enum": []string{"markdown", "plain", "json"}, "description": "How this facet is encoded. markdown (default) suits a document section; plain has no markup and is safe to speak aloud or show where nothing renders; json is for consumers that are code, and a non-JSON value is rejected."},
+					},
+					"required": []string{"name"},
+				},
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"target": map[string]any{
+							"type":        "string",
+							"enum":        ids,
+							"description": "The rendering surface this facet is cut for. " + strings.Join(descriptions, " "),
+						},
+					},
+					"required": []string{"target"},
+				},
+			},
+		},
+		"description": "The facets this output publishes alongside its full body — views of the same understanding, each cut for a surface rather than shortened from the one above. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per facet. status_line is required whenever facets are declared; teaser and digest are optional. A facet is either a reading projection (a bare name, or an object with a name and a format) or a rendering surface (an object with a target), never both: a watch complication is not a longer status line, it is a different face, and its argument is the surface's own named slots rather than prose. Order carries no meaning.",
+	}
+}
+
 // loopOutputSpecSchema describes one entry in a spec's outputs array.
 func loopOutputSpecSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name": map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
-			"type": map[string]any{"type": "string", "enum": []string{"maintained_document", "working_notes"}, "description": "maintained_document = the loop rewrites it each cycle to reflect current state; working_notes = the same, but private — the loop's current thinking, never projected into search, context, or any other consumer surface. Use working_notes for working theories, what an experiment is showing, and what you expect next; use a maintained_document for what a reader should see. For an append-only dated record, journal a document directly with the doc tools rather than declaring it as an output."},
-			"facets": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"oneOf": []any{
-						map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-						map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"name":   map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-								"format": map[string]any{"type": "string", "enum": []string{"markdown", "plain", "json"}, "description": "How this facet is encoded. markdown (default) suits a document section; plain has no markup and is safe to speak aloud or show where nothing renders; json is for consumers that are code, and a non-JSON value is rejected."},
-							},
-							"required": []string{"name"},
-						},
-					},
-				},
-				"description": "The facets this output publishes alongside its full body — condensed views of the same understanding, each cut for a surface rather than shortened from the one above. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per facet. status_line is required whenever facets are declared; teaser and digest are optional. Write a bare name for the default encoding, or an object to set a format. Order carries no meaning.",
-			},
+			"name":   map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
+			"type":   map[string]any{"type": "string", "enum": []string{"maintained_document", "working_notes"}, "description": "maintained_document = the loop rewrites it each cycle to reflect current state; working_notes = the same, but private — the loop's current thinking, never projected into search, context, or any other consumer surface. Use working_notes for working theories, what an experiment is showing, and what you expect next; use a maintained_document for what a reader should see. For an append-only dated record, journal a document directly with the doc tools rather than declaring it as an output."},
+			"facets": loopFacetsSchema(),
 			"audience": map[string]any{
 				"type":        "string",
 				"enum":        []string{"published", "internal"},

@@ -147,7 +147,7 @@ takes the same spec and catches mistakes before anything persists.
       "name": "closet_state",
       "type": "maintained_document",
       "ref": "kb:dashboards/server-closet.md",
-      "facets": ["status_line", "teaser", "digest"],
+      "facets": ["status_line", "teaser", "digest", {"target": "apple_watch.rectangular"}],
       "purpose": "Current state of the server closet for anyone who asks."
     },
     {
@@ -173,11 +173,26 @@ the section headings; they are rendered for you.
   "status_line": "Closet 21.4°C, 38% RH, UPS on mains, dehumidifier idle.",
   "teaser": "Server closet is stable. Temperature and humidity have held inside normal range for six hours; the UPS is on mains power with a full charge, and the dehumidifier has not needed to run since morning.",
   "digest": "Environment: 21.4°C (range 20.8–22.1 over 24h), 38% RH, both comfortably inside bounds...",
-  "full": "# Server Closet\n\n## Environment\n\n..."
+  "full": "# Server Closet\n\n## Environment\n\n...",
+  "apple_watch_rectangular": {
+    "value": "21.4°C",
+    "title": "Server Closet",
+    "subtitle": "38% RH, stable",
+    "bottom_text": "UPS on mains",
+    "fraction": 0.38
+  }
 }
 ```
 
-Each projection has a rune budget — 120 for `status_line`, 500 for
+The last one is a facet cut for a surface rather than a reader. Its
+argument is the complication's own slots, not prose: four short lines
+and a gauge fill, each with a budget the schema tells you. Note what it
+is *not* — it is not the status line shortened. "Closet 21.4°C, 38% RH,
+UPS on mains, dehumidifier idle" is a good sentence and a bad
+complication; the slots let the same reading land as a reading rather
+than as a clipped sentence.
+
+Each reading projection has a rune budget — 120 for `status_line`, 500 for
 `teaser`, 2048 for `digest` — and an over-budget value is rejected
 rather than trimmed, because a clipped projection reads as a fragment
 with no sign that anything is missing. Write to the budget, not near it.
@@ -189,11 +204,14 @@ The digest is enough to act on without opening it.
 
 ## Where the reasoning goes
 
-The `working_notes` output is the loop's private log — internal by
-construction, never projected into search or another loop's context. Put
-the reasoning there: what changed and why, what drifted, what was
-refined. `publish_output_*` takes a `note` argument, so a publish and
-its reasoning are one call.
+The `working_notes` output holds this loop's current thinking —
+internal by construction, never projected into search or another loop's
+context. Put your present view there: what you believe is happening,
+what you are watching, what would change your mind. Rewrite it rather
+than appending to it, so the next turn reads a position instead of
+reconstructing one from a history of superseded ones. `publish_output_*`
+takes a `notes` argument, so a publish and the thinking behind it are
+one call.
 
 Published projections carry current state, not the story of how it got
 there. Keeping those apart is what lets the document stay short.
