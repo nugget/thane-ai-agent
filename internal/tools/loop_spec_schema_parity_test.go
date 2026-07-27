@@ -9,19 +9,59 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// jsonFieldNames returns the wire names of a struct's exported fields,
-// skipping those the encoder omits.
+// jsonFieldNames returns the wire names encoding/json would use for a
+// struct's exported fields.
+//
+// Only `json:"-"` is omitted. An exported field with no json tag, or one
+// carrying only options like `json:",omitempty"`, is still encoded —
+// under its Go name — so treating those as absent would let exactly the
+// kind of field this gate exists to catch slip through it.
 func jsonFieldNames(t reflect.Type) []string {
 	out := make([]string, 0, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		if name == "" || name == "-" {
+		field := t.Field(i)
+		if !field.IsExported() {
 			continue
+		}
+		tag := field.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = field.Name
 		}
 		out = append(out, name)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestJSONFieldNamesMatchesEncoder pins the helper against the encoder
+// it stands in for. The gate is only as good as its idea of which fields
+// are on the wire: a field carrying no json tag is still encoded, under
+// its Go name, and reading that as "absent" would let the gate skip
+// precisely the field it exists to catch.
+func TestJSONFieldNamesMatchesEncoder(t *testing.T) {
+	type sample struct {
+		Tagged   string `json:"tagged"`
+		OnlyOpts string `json:",omitempty"`
+		NoTag    string
+		Excluded string `json:"-"`
+		//nolint:unused // presence is the point: unexported fields are not encoded
+		unexported string
+	}
+
+	got := jsonFieldNames(reflect.TypeOf(sample{}))
+	want := []string{"NoTag", "OnlyOpts", "tagged"}
+	if len(got) != len(want) {
+		t.Fatalf("jsonFieldNames = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("jsonFieldNames = %v, want %v", got, want)
+		}
+	}
 }
 
 // TestLoopSpecSchemaCoversEveryField is the gate the loop spec did not

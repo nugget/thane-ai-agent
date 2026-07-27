@@ -89,9 +89,10 @@ func TestGuidedCreateProducesTieredOutput(t *testing.T) {
 // shape. Notes are internal by construction, which is what keeps a
 // loop's reasoning out of what it publishes.
 func TestGuidedCreateWorkingNotes(t *testing.T) {
+	// No opt-in argument: the notes surface is unconditional, and passing a
+	// key the schema does not define would imply a flag that does not exist.
 	spec, result := dryRunSpec(t, curateArgs(map[string]any{
-		"tiers":         []any{"status_line"},
-		"working_notes": true,
+		"tiers": []any{"status_line"},
 	}))
 
 	if len(spec.Outputs) != 2 {
