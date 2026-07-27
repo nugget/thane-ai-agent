@@ -91,12 +91,9 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	def, found := looppkg.FindDefinition(snapshot, name)
-	if !found {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
-	}
-	if def.Source == looppkg.DefinitionSourceConfig {
-		return "", (&looppkg.ImmutableDefinitionError{Name: name})
+	def, err := requireMutableDefinition(snapshot, name)
+	if err != nil {
+		return "", err
 	}
 
 	// Read-modify-write through the spec's own JSON wire form. The overlay

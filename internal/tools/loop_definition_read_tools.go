@@ -182,9 +182,9 @@ func (r *Registry) handleLoopDefinitionLint(_ context.Context, args map[string]a
 		errText string
 	)
 	if snapshot, snapErr := currentLoopDefinitionSnapshot(r); snapErr == nil {
-		if existing, ok := looppkg.FindDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
+		if _, _, mutErr := ensureDefinitionMutable(snapshot, spec.Name); mutErr != nil {
 			valid = false
-			errText = (&looppkg.ImmutableDefinitionError{Name: spec.Name}).Error()
+			errText = mutErr.Error()
 		}
 	}
 	if valid {

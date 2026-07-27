@@ -85,17 +85,16 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 	replace, _ := args["replace"].(bool)
 	tags := parseLoopCreateTags(args)
 
-	if snap := deps.Registry.Snapshot(); snap != nil {
-		if existing, ok := looppkg.FindDefinition(snap, name); ok {
-			if existing.Source == looppkg.DefinitionSourceConfig {
-				return "", (&looppkg.ImmutableDefinitionError{Name: name})
-			}
-			if !replace {
-				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
-			}
-			if existing.Spec.Operation != looppkg.OperationContainer {
-				return "", fmt.Errorf("loop definition %q already exists as operation %q; refusing to convert it into a container", name, existing.Spec.Operation)
-			}
+	existing, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name)
+	if err != nil {
+		return "", err
+	}
+	if found {
+		if !replace {
+			return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
+		}
+		if existing.Spec.Operation != looppkg.OperationContainer {
+			return "", fmt.Errorf("loop definition %q already exists as operation %q; refusing to convert it into a container", name, existing.Spec.Operation)
 		}
 	}
 
@@ -217,15 +216,10 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		outputs = []looppkg.OutputSpec{outputSpec}
 	}
 
-	if snap := deps.Registry.Snapshot(); snap != nil {
-		if existing, ok := looppkg.FindDefinition(snap, name); ok {
-			if existing.Source == looppkg.DefinitionSourceConfig {
-				return "", (&looppkg.ImmutableDefinitionError{Name: name})
-			}
-			if !replace {
-				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
-			}
-		}
+	if _, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name); err != nil {
+		return "", err
+	} else if found && !replace {
+		return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
 	}
 	if err := r.resolveLoopParent(parentName); err != nil {
 		return "", err
@@ -343,11 +337,7 @@ func (r *Registry) commitAndLaunchLoop(ctx context.Context, spec looppkg.Spec) (
 	deps := r.loopIntentDeps
 	prior := r.runningLoopByName(spec.Name)
 	updatedAt := time.Now().UTC()
-	if deps.CommitSpec != nil {
-		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
-			return looppkg.LaunchResult{}, nil, err
-		}
-	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
+	if err := commitSpecThroughChokepoint(ctx, deps.CommitSpec, deps.Registry, spec, updatedAt); err != nil {
 		return looppkg.LaunchResult{}, nil, err
 	}
 	res, err := deps.LaunchDefinition(ctx, spec.Name, looppkg.Launch{})
