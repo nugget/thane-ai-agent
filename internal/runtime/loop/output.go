@@ -37,21 +37,21 @@ const (
 	OutputModeReplace OutputMode = "replace"
 )
 
-// OutputTier names one declared fidelity level in a tiered output's
-// published projection ladder. Full fidelity is not a tier: it is the
+// OutputFacet names one declared fidelity level in a faceted output's
+// set of facets a maintained document publishes. The full body is not a facet: it is the
 // document body itself.
-type OutputTier string
+type OutputFacet string
 
 const (
-	// OutputTierStatusLine is the ambient projection: current state in
+	// OutputFacetStatusLine is the ambient projection: current state in
 	// one standalone line, no markdown structure.
-	OutputTierStatusLine OutputTier = "status_line"
-	// OutputTierTeaser is the interest hook: one short paragraph on why
+	OutputFacetStatusLine OutputFacet = "status_line"
+	// OutputFacetTeaser is the interest hook: one short paragraph on why
 	// a reader would open the full document right now.
-	OutputTierTeaser OutputTier = "teaser"
-	// OutputTierDigest is the standalone summary: enough detail to act
+	OutputFacetTeaser OutputFacet = "teaser"
+	// OutputFacetDigest is the standalone summary: enough detail to act
 	// on without opening the full document.
-	OutputTierDigest OutputTier = "digest"
+	OutputFacetDigest OutputFacet = "digest"
 )
 
 // OutputAudience describes which surfaces may project an output's
@@ -82,14 +82,14 @@ type OutputSpec struct {
 	Mode OutputMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Purpose is optional model-facing guidance for this output.
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
-	// Tiers declares the published projection ladder for a maintained
+	// Facets declares which condensed views this output publishes for a maintained
 	// document: which of status_line, teaser, and digest the loop
-	// publishes alongside the full body. Empty means untiered. The
+	// publishes alongside the full body. Empty means no facets. The
 	// declaration is a set — element order carries no meaning, because
 	// the ladder's order is fixed by the contract itself
 	// (status_line → teaser → digest); renderers and consumers use that
 	// canonical order and must not read anything into declaration order.
-	Tiers []OutputTier `yaml:"tiers,omitempty" json:"tiers,omitempty"`
+	Facets []OutputFacet `yaml:"facets,omitempty" json:"facets,omitempty"`
 	// Audience overrides which surfaces may project this output. Empty
 	// defaults from Type: working_notes is internal, every other type
 	// is published.
@@ -141,11 +141,11 @@ func (o OutputSpec) EffectiveAudience() OutputAudience {
 }
 
 // ToolName returns the scoped mutation tool name generated for this
-// output declaration. A tiered output gets a publish verb rather than a
+// output declaration. A faceted output gets a publish verb rather than a
 // replace verb because its interface is a set of typed projections, not
 // a document body.
 func (o OutputSpec) ToolName() string {
-	if o.IsTiered() {
+	if o.HasFacets() {
 		return "publish_output_" + safeOutputToolSuffix(o.Name)
 	}
 	switch o.EffectiveMode() {
@@ -199,44 +199,44 @@ func (o OutputSpec) Validate() error {
 	if o.Type == OutputTypeWorkingNotes && o.Audience == OutputAudiencePublished {
 		return fmt.Errorf("audience %q contradicts type %q; working notes are a loop's private thinking — declare a maintained_document for anything a reader should see", OutputAudiencePublished, OutputTypeWorkingNotes)
 	}
-	if err := validateOutputTiers(o); err != nil {
+	if err := validateOutputFacets(o); err != nil {
 		return err
 	}
 	return nil
 }
 
-// validateOutputTiers checks a declared projection ladder. Tiers are a
+// validateOutputFacets checks a declared facet set. Facets are a
 // published-projection contract, so they attach only to published
 // maintained documents, and status_line anchors the ladder whenever any
-// tier is declared.
-func validateOutputTiers(o OutputSpec) error {
-	if len(o.Tiers) == 0 {
+// facet is declared.
+func validateOutputFacets(o OutputSpec) error {
+	if len(o.Facets) == 0 {
 		return nil
 	}
 	if o.Type != OutputTypeMaintainedDocument {
-		return fmt.Errorf("tiers are only valid for type %q; %q outputs are not tiered", OutputTypeMaintainedDocument, o.Type)
+		return fmt.Errorf("facets are only valid for type %q; %q outputs have none", OutputTypeMaintainedDocument, o.Type)
 	}
 	if o.EffectiveAudience() == OutputAudienceInternal {
-		return fmt.Errorf("tiers declare published projections, but audience is %q; an internal output has no consumers to tier for", OutputAudienceInternal)
+		return fmt.Errorf("facets declare published projections, but audience is %q; an internal output has no consumers to cut a facet for", OutputAudienceInternal)
 	}
-	seen := make(map[OutputTier]struct{}, len(o.Tiers))
+	seen := make(map[OutputFacet]struct{}, len(o.Facets))
 	hasStatusLine := false
-	for i, tier := range o.Tiers {
-		switch tier {
-		case OutputTierStatusLine, OutputTierTeaser, OutputTierDigest:
+	for i, facet := range o.Facets {
+		switch facet {
+		case OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest:
 		default:
-			return fmt.Errorf("tiers[%d]: unsupported tier %q; use %q, %q, or %q (full fidelity is the document body, not a declared tier)", i, tier, OutputTierStatusLine, OutputTierTeaser, OutputTierDigest)
+			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q (the full body is the document itself, not a declared facet)", i, facet, OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
 		}
-		if _, dup := seen[tier]; dup {
-			return fmt.Errorf("tiers[%d]: duplicate tier %q", i, tier)
+		if _, dup := seen[facet]; dup {
+			return fmt.Errorf("facets[%d]: duplicate facet %q", i, facet)
 		}
-		seen[tier] = struct{}{}
-		if tier == OutputTierStatusLine {
+		seen[facet] = struct{}{}
+		if facet == OutputFacetStatusLine {
 			hasStatusLine = true
 		}
 	}
 	if !hasStatusLine {
-		return fmt.Errorf("tiers must include %q; the ambient one-line projection anchors the ladder (teaser and digest are optional)", OutputTierStatusLine)
+		return fmt.Errorf("facets must include %q; the ambient one-line projection is the one every surface can take (teaser and digest are optional)", OutputFacetStatusLine)
 	}
 	return nil
 }
@@ -250,7 +250,7 @@ func validateOutputs(outputs []OutputSpec) error {
 			return fmt.Errorf("outputs[%d]: %w", i, err)
 		}
 		if output.Type == OutputTypeWorkingNotes {
-			// One private log per loop: the note argument on a tiered
+			// One private log per loop: the note argument on a faceted
 			// publish writes to "the" working notes, and a second
 			// declaration would make that target an arbitrary pick
 			// between two documents. A loop that wants a second private
@@ -282,7 +282,7 @@ func cloneOutputs(src []OutputSpec) []OutputSpec {
 	dst := make([]OutputSpec, len(src))
 	copy(dst, src)
 	for i := range dst {
-		dst[i].Tiers = append([]OutputTier(nil), src[i].Tiers...)
+		dst[i].Facets = append([]OutputFacet(nil), src[i].Facets...)
 	}
 	return dst
 }

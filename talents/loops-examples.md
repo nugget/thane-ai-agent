@@ -73,7 +73,7 @@ believes. Two questions decide the rest:
 
 1. **Will anyone else consult this?** A loop whose value is being read
    by other turns, other loops, or an ambient surface should declare
-   `tiers` so each reader takes the length it can afford. That needs the
+   `facets` so each reader takes the length it can afford. That needs the
    full spec: author it with `loop_definition_set` and start it with
    `loop_definition_launch`. A loop nobody reads but its owner can stay
    untiered on the shorter front door.
@@ -113,17 +113,17 @@ kind: trailhead
 teaser: "Curate a domain others consult: one document, published at several fidelities."
 ---
 
-# Curate: Dashboard (tiered publish)
+# Curate: Dashboard (faceted publish)
 
 A loop that keeps an understanding current for other readers should
-publish it at more than one length. Declaring `tiers` on a maintained
+publish it at more than one length. Declaring `facets` on a maintained
 output curates condensed views alongside the full body, so an ambient
 row takes `status_line`, a search snippet takes `teaser`, a digest row
 takes `digest`, and a reader who wants everything opens the document.
-Without tiers every consumer pays for the whole document or gets a
+Without facets every consumer pays for the whole document or gets a
 blind truncation of it.
 
-Tiers need the full spec, so author this with `loop_definition_set` and
+Facets need the full spec, so author this with `loop_definition_set` and
 start it with `loop_definition_launch`. Lint first — `loop_definition_lint`
 takes the same spec and catches mistakes before anything persists.
 
@@ -147,7 +147,7 @@ takes the same spec and catches mistakes before anything persists.
       "name": "closet_state",
       "type": "maintained_document",
       "ref": "kb:dashboards/server-closet.md",
-      "tiers": ["status_line", "teaser", "digest"],
+      "facets": ["status_line", "teaser", "digest"],
       "purpose": "Current state of the server closet for anyone who asks."
     },
     {
@@ -161,7 +161,7 @@ takes the same spec and catches mistakes before anything persists.
 
 ## Publishing
 
-Declaring tiers swaps the generated tool: instead of
+Declaring facets swaps the generated tool: instead of
 `replace_output_closet_state` taking a body, the loop gets
 `publish_output_closet_state` taking one argument per projection. Pass
 them all in one call — they are written together so no reader sees a

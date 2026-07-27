@@ -198,7 +198,7 @@ layer.
 Some tools exist only because a specific loop run declared a narrow
 interface. Loop-declared document outputs are the current example:
 `replace_output_<name>` replaces one maintained document, and
-`publish_output_<name>` writes every projection of a tiered one.
+`publish_output_<name>` writes every projection of a faceted one.
 
 Do not register these tools globally or ask the model to discover the
 underlying file path. Generate them from the loop spec, advertise them

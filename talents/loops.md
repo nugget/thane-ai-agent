@@ -13,27 +13,27 @@ self-paces inside. Its outputs declare what it owns — optional, since a
 service loop can act without maintaining a document — and when an output
 is declared the running loop writes through a generated tool named for
 it: `replace_output_*` for a whole-document rewrite, or
-`publish_output_*` when the output declares tiers.
+`publish_output_*` when the output declares facets.
 If a maintained output is marked `truncated` in Declared Durable
 Outputs, read the full document before replacing it.
 
-Declaring tiers or working notes requires the full spec, so author those
+Declaring facets or working notes requires the full spec, so author those
 loops with `loop_definition_set` and start them with
 `loop_definition_launch`.
 
 ## Who reads this output?
 
 A loop that curates an understanding others consult — the state of a
-domain, a watchlist, a standing summary — should declare `tiers` on its
+domain, a watchlist, a standing summary — should declare `facets` on its
 maintained document. The loop then curates condensed views of its own
 work alongside the full body, and each consuming surface takes the one
 it can afford: an ambient overview row takes `status_line`, a search
 snippet takes `teaser`, a digest row takes `digest`, and a reader who
-wants everything opens the document. Without tiers, every consumer pays
+wants everything opens the document. Without facets, every consumer pays
 for the whole document or gets a blind truncation of it, so a curator
 whose value is being *consulted often* is the case for declaring them.
 
-Declaring tiers changes the write interface: instead of
+Declaring facets changes the write interface: instead of
 `replace_output_*` taking a document body, the loop gets
 `publish_output_*` taking one argument per projection. Pass them all in
 one call — they are written together so no reader ever sees a status
@@ -43,7 +43,7 @@ budget, and an over-budget value is rejected rather than trimmed,
 because a clipped teaser reads as a fragment with no sign that anything
 is missing. Write to the budget rather than near it.
 
-Declare `status_line` for any tiered output; add `teaser` when the
+Declare `status_line` for any faceted output; add `teaser` when the
 output is something others search or link to, and `digest` when a
 reader should be able to act without opening the document.
 

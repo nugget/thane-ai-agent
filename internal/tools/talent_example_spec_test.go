@@ -9,7 +9,7 @@ import (
 )
 
 // TestTalentExampleSpecValidates decodes the loop spec published in the
-// tiered curate example and runs it through the same decode-and-validate
+// faceted curate example and runs it through the same decode-and-validate
 // path loop_definition_set uses.
 //
 // A worked example is what a model copies, so an example that would not
@@ -26,9 +26,9 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 		t.Fatalf("read talent: %v", err)
 	}
 	node := string(raw)
-	start := strings.Index(node, "# Curate: Dashboard (tiered publish)")
+	start := strings.Index(node, "# Curate: Dashboard (faceted publish)")
 	if start < 0 {
-		t.Fatal("tiered curate example not found")
+		t.Fatal("faceted curate example not found")
 	}
 	block := regexp.MustCompile("(?s)```json\n(.*?)```").FindStringSubmatch(node[start:])
 	if block == nil {
@@ -48,13 +48,13 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 	}
 
 	if len(decoded.Outputs) != 2 {
-		t.Fatalf("outputs = %d, want 2 (tiered document + working notes)", len(decoded.Outputs))
+		t.Fatalf("outputs = %d, want 2 (faceted document + working notes)", len(decoded.Outputs))
 	}
-	tiered := decoded.Outputs[0]
-	if len(tiered.Tiers) != 3 {
-		t.Errorf("tiers = %v, want three projections", tiered.Tiers)
+	faceted := decoded.Outputs[0]
+	if len(faceted.Facets) != 3 {
+		t.Errorf("facets = %v, want three projections", faceted.Facets)
 	}
-	if got := tiered.ToolName(); !strings.HasPrefix(got, "publish_output_") {
+	if got := faceted.ToolName(); !strings.HasPrefix(got, "publish_output_") {
 		t.Errorf("generated tool = %q, want publish_output_* — the example claims it swaps", got)
 	}
 

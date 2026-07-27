@@ -41,7 +41,7 @@ type loopOutputContextEntry struct {
 	BytesShown       int      `json:"bytes_shown,omitempty"`
 	BytesTotal       int      `json:"bytes_total,omitempty"`
 	UnavailableError string   `json:"unavailable_error,omitempty"`
-	Tiers            []string `json:"tiers,omitempty"`
+	Facets           []string `json:"facets,omitempty"`
 	Audience         string   `json:"audience,omitempty"`
 }
 
@@ -73,10 +73,10 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 	notes := findWorkingNotesOutput(outputs)
 	for _, output := range outputs {
 		output := output
-		if output.IsTiered() {
-			// A tiered output's interface is a set of typed projections,
+		if output.HasFacets() {
+			// A faceted output's interface is a set of typed projections,
 			// so it gets the publish tool instead of a body-blob replace.
-			out = append(out, buildTieredPublishTool(store, output, notes))
+			out = append(out, buildFacetPublishTool(store, output, notes))
 			continue
 		}
 		switch output.EffectiveMode() {
@@ -147,8 +147,8 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 			Interface: outputInterfaceDescription(output),
 			Audience:  string(output.EffectiveAudience()),
 		}
-		for _, field := range output.TierFields() {
-			entry.Tiers = append(entry.Tiers, field.Key)
+		for _, field := range output.FacetFields() {
+			entry.Facets = append(entry.Facets, field.Key)
 		}
 		doc, err := store.Read(ctx, output.Ref)
 		if err != nil {
@@ -207,9 +207,9 @@ func loopOutputDelta(value string, now time.Time) string {
 }
 
 func outputInterfaceDescription(output looppkg.OutputSpec) string {
-	if output.IsTiered() {
+	if output.HasFacets() {
 		keys := make([]string, 0, 4)
-		for _, field := range output.TierFields() {
+		for _, field := range output.FacetFields() {
 			keys = append(keys, field.Key)
 		}
 		return "Call " + output.ToolName() + " with every projection in one call (" + strings.Join(keys, ", ") + "). Headings are rendered for you; each projection has its own size budget."
@@ -223,14 +223,14 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 }
 
 // loopOutputContextMode reports the write interface the model actually
-// has for this output. A tiered output's spec-level mode is still
-// replace — tiers are the only declaration, so there is no authorable
+// has for this output. A faceted output's spec-level mode is still
+// replace — facets are the only declaration, so there is no authorable
 // publish mode to contradict — but its generated tool takes projections
 // rather than a document body. Reporting the spec mode here would pair
 // "publish_output_*" with "mode: replace" in the same context block and
 // leave the model to guess which one describes the call it should make.
 func loopOutputContextMode(output looppkg.OutputSpec) string {
-	if output.IsTiered() {
+	if output.HasFacets() {
 		return "publish"
 	}
 	return string(output.EffectiveMode())
@@ -296,7 +296,7 @@ func cloneLoopOutputs(src []looppkg.OutputSpec) []looppkg.OutputSpec {
 	dst := make([]looppkg.OutputSpec, len(src))
 	copy(dst, src)
 	for i := range dst {
-		dst[i].Tiers = append([]looppkg.OutputTier(nil), src[i].Tiers...)
+		dst[i].Facets = append([]looppkg.OutputFacet(nil), src[i].Facets...)
 	}
 	return dst
 }

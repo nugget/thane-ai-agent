@@ -20,7 +20,7 @@ const (
 	loopOutputManagedByKey = "managed_by"
 )
 
-// buildTieredPublishTool generates the publish interface for one tiered
+// buildFacetPublishTool generates the publish interface for one faceted
 // maintained document. The tool advertises one typed argument per
 // declared projection plus the full body, validates the whole payload
 // before writing anything, and renders the document itself — the model
@@ -29,8 +29,8 @@ const (
 // notes is the loop's declared working-notes output when it has one.
 // Its presence adds the optional notes argument, so the argument exists
 // only when there is somewhere for the notes to land.
-func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, notes *looppkg.OutputSpec) looppkg.RuntimeTool {
-	fields := output.TierFields()
+func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, notes *looppkg.OutputSpec) looppkg.RuntimeTool {
+	fields := output.FacetFields()
 	properties := make(map[string]any, len(fields)+1)
 	required := make([]string, 0, len(fields))
 	for _, field := range fields {
@@ -53,7 +53,7 @@ func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, n
 
 	return looppkg.RuntimeTool{
 		Name:               output.ToolName(),
-		Description:        tieredPublishDescription(output, notes),
+		Description:        facetPublishDescription(output, notes),
 		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type":       "object",
@@ -61,14 +61,14 @@ func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, n
 			"required":   required,
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			payload, err := tierPayloadFromArgs(output, args)
+			payload, err := facetPayloadFromArgs(output, args)
 			if err != nil {
 				return "", err
 			}
-			if err := output.ValidateTierPayload(payload); err != nil {
+			if err := output.ValidateFacetPayload(payload); err != nil {
 				return "", err
 			}
-			body := output.RenderTierDocument(payload)
+			body := output.RenderFacetDocument(payload)
 			result, err := store.Write(ctx, documents.WriteArgs{
 				Ref:  output.Ref,
 				Body: &body,
@@ -100,12 +100,12 @@ func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, n
 	}
 }
 
-// tieredPublishDescription frames the publish interface for the model:
+// facetPublishDescription frames the publish interface for the model:
 // what it owns, that structure is not the model's job, and that the
 // projections move together.
-func tieredPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpec) string {
+func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpec) string {
 	keys := make([]string, 0, 4)
-	for _, field := range output.TierFields() {
+	for _, field := range output.FacetFields() {
 		keys = append(keys, field.Key)
 	}
 	description := fmt.Sprintf(
@@ -118,19 +118,19 @@ func tieredPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSp
 	return description
 }
 
-// tierPayloadFromArgs reads the publish arguments into a payload,
+// facetPayloadFromArgs reads the publish arguments into a payload,
 // rejecting a non-string value with the argument name rather than
 // silently treating it as empty.
-func tierPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppkg.TierPayload, error) {
-	var payload looppkg.TierPayload
-	for _, field := range output.TierFields() {
+func facetPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppkg.FacetPayload, error) {
+	var payload looppkg.FacetPayload
+	for _, field := range output.FacetFields() {
 		raw, present := args[field.Key]
 		if !present {
 			continue
 		}
 		value, ok := raw.(string)
 		if !ok {
-			return looppkg.TierPayload{}, fmt.Errorf("%s must be a string", field.Key)
+			return looppkg.FacetPayload{}, fmt.Errorf("%s must be a string", field.Key)
 		}
 		switch field.Key {
 		case "status_line":

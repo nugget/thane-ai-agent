@@ -39,17 +39,18 @@ hoc one does not.
   frontmatter points at a loop that no longer exists.
 
 `thane_loop_create` is a shorter front door to the durable path. It
-takes one output document and cannot declare tiers or working notes, so
-reach for `loop_definition_set` whenever the loop curates something
-others consult — which is most service loops worth writing.
+takes one output document, can declare its facets, and always gives the
+loop a private working-notes document alongside. Reach for
+`loop_definition_set` when a loop needs more than one published document
+or a field the front door does not expose.
 
 ## Where to go next
 
 - The doctrine that follows this file covers pacing, output ownership,
-  tiered publishing, and working notes. Read it before authoring a spec.
-- `loops_examples` opens worked specs — a curating loop, a journal, a
-  dashboard, a delegated one-shot. Start there rather than composing a
-  spec from the schema alone.
+  faceted publishing, and working notes. Read it before authoring a spec.
+- `loops_examples` opens worked specs — a curating loop with facets, a
+  bi-directional service, a delegated one-shot. Start there rather than
+  composing a spec from the schema alone.
 - `documents` covers the managed roots a loop's outputs live in, and the
   policy that decides whether an output is searchable, injectable, or
   private.

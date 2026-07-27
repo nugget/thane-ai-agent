@@ -118,8 +118,8 @@ Output shapes available today:
 - **Working notes** outputs are the loop's private current thinking,
   rewritten through a generated `replace_output_<name>` tool and never
   projected into search, context, or any other consumer surface.
-- **Tiered maintained document** outputs — a maintained document that
-  declares `tiers` — publish condensed projections alongside the full
+- **Faceted maintained document** outputs — a maintained document that
+  declares `facets` — publish condensed projections alongside the full
   body through a generated `publish_output_<name>` tool, one argument
   per projection. Thane renders the document's sections, enforces a
   per-projection size budget, and can parse the document back into the

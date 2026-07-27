@@ -241,7 +241,7 @@ or signed deltas like `-604800s`.
 Loop-declared document output tools are request-scoped and do not appear
 in the global catalog above. When a loop declares an output, Thane
 generates a tool such as `replace_output_metacognitive_state` or — for a
-maintained document that declares `tiers` — `publish_output_office_status`,
+maintained document that declares `facets` — `publish_output_office_status`,
 only for that loop run. These tools route through managed document roots, so
 root policy, indexing, and provenance remain centralized instead of
 being reimplemented in each loop prompt.

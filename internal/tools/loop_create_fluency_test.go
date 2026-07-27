@@ -56,20 +56,20 @@ func curateArgs(extra map[string]any) map[string]any {
 	return out
 }
 
-// TestGuidedCreateProducesTieredOutput is the hole that started #1287:
+// TestGuidedCreateProducesFacetedOutput is the hole that started #1287:
 // the front door could not express the shape its own doctrine calls the
-// important case, and dropped tiers silently when asked.
-func TestGuidedCreateProducesTieredOutput(t *testing.T) {
+// important case, and dropped facets silently when asked.
+func TestGuidedCreateProducesFacetedOutput(t *testing.T) {
 	spec, result := dryRunSpec(t, curateArgs(map[string]any{
-		"tiers": []any{"status_line", "teaser", "digest"},
+		"facets": []any{"status_line", "teaser", "digest"},
 	}))
 
 	// The document plus the notes surface every document-owning loop gets.
 	if len(spec.Outputs) != 2 {
-		t.Fatalf("outputs = %d, want the tiered document plus its notes", len(spec.Outputs))
+		t.Fatalf("outputs = %d, want the faceted document plus its notes", len(spec.Outputs))
 	}
-	if got := len(spec.Outputs[0].Tiers); got != 3 {
-		t.Fatalf("tiers = %v, want three projections", spec.Outputs[0].Tiers)
+	if got := len(spec.Outputs[0].Facets); got != 3 {
+		t.Fatalf("facets = %v, want three projections", spec.Outputs[0].Facets)
 	}
 	if got := spec.Outputs[0].ToolName(); !strings.HasPrefix(got, "publish_output_") {
 		t.Errorf("generated tool = %q, want publish_output_*", got)
@@ -80,8 +80,8 @@ func TestGuidedCreateProducesTieredOutput(t *testing.T) {
 	if !strings.Contains(spec.Task, "Publish") {
 		t.Errorf("task does not describe publishing: %q", spec.Task)
 	}
-	if result["tiers"] == nil {
-		t.Error("result should report the declared tiers")
+	if result["facets"] == nil {
+		t.Error("result should report the declared facets")
 	}
 }
 
@@ -92,11 +92,11 @@ func TestGuidedCreateWorkingNotes(t *testing.T) {
 	// No opt-in argument: the notes surface is unconditional, and passing a
 	// key the schema does not define would imply a flag that does not exist.
 	spec, result := dryRunSpec(t, curateArgs(map[string]any{
-		"tiers": []any{"status_line"},
+		"facets": []any{"status_line"},
 	}))
 
 	if len(spec.Outputs) != 2 {
-		t.Fatalf("outputs = %d, want the tiered document plus its notes", len(spec.Outputs))
+		t.Fatalf("outputs = %d, want the faceted document plus its notes", len(spec.Outputs))
 	}
 	notes := spec.Outputs[1]
 	if notes.Type != looppkg.OutputTypeWorkingNotes {
@@ -110,39 +110,39 @@ func TestGuidedCreateWorkingNotes(t *testing.T) {
 	}
 }
 
-// TestGuidedCreateRefusesUnknownTier pins the failure direction. A tier
+// TestGuidedCreateRefusesUnknownFacet pins the failure direction. A facet
 // name that is quietly dropped yields a loop publishing fewer
 // projections than its author asked for, with nothing to say so.
-func TestGuidedCreateRefusesUnknownTier(t *testing.T) {
+func TestGuidedCreateRefusesUnknownFacet(t *testing.T) {
 	rig := newCurateTestRig(t)
-	args := curateArgs(map[string]any{"tiers": []any{"status_line", "summary"}})
+	args := curateArgs(map[string]any{"facets": []any{"status_line", "summary"}})
 	args["dry_run"] = true
 	if _, err := rig.tool.Handler(context.Background(), args); err == nil {
-		t.Fatal("unknown tier should be refused, not dropped")
+		t.Fatal("unknown facet should be refused, not dropped")
 	} else if !strings.Contains(err.Error(), "summary") {
-		t.Errorf("error should name the offending tier: %v", err)
+		t.Errorf("error should name the offending facet: %v", err)
 	}
 }
 
 // TestGuidedCreateTierInputShapes covers the two array forms a caller can
 // present and the element that is neither. A non-string coerced to ""
-// would be reported as an empty tier name, which names the symptom
+// would be reported as an empty facet name, which names the symptom
 // rather than the mistake.
 func TestGuidedCreateTierInputShapes(t *testing.T) {
 	t.Run("[]string is accepted", func(t *testing.T) {
-		got, err := parseOutputTiers([]string{"status_line", "digest"})
+		got, err := parseOutputFacets([]string{"status_line", "digest"})
 		if err != nil {
 			t.Fatalf("[]string: %v", err)
 		}
-		if len(got) != 2 || got[0] != looppkg.OutputTierStatusLine {
-			t.Errorf("tiers = %v", got)
+		if len(got) != 2 || got[0] != looppkg.OutputFacetStatusLine {
+			t.Errorf("facets = %v", got)
 		}
 	})
 
 	t.Run("non-string element is named by index and type", func(t *testing.T) {
-		_, err := parseOutputTiers([]any{"status_line", 7})
+		_, err := parseOutputFacets([]any{"status_line", 7})
 		if err == nil {
-			t.Fatal("a numeric tier should be refused")
+			t.Fatal("a numeric facet should be refused")
 		}
 		for _, want := range []string{"[1]", "int"} {
 			if !strings.Contains(err.Error(), want) {
@@ -152,13 +152,13 @@ func TestGuidedCreateTierInputShapes(t *testing.T) {
 	})
 
 	t.Run("a non-array is refused by type", func(t *testing.T) {
-		if _, err := parseOutputTiers("status_line"); err == nil {
+		if _, err := parseOutputFacets("status_line"); err == nil {
 			t.Fatal("a bare string should be refused")
 		}
 	})
 
 	t.Run("absent is not an error", func(t *testing.T) {
-		got, err := parseOutputTiers(nil)
+		got, err := parseOutputFacets(nil)
 		if err != nil || got != nil {
 			t.Errorf("nil = (%v, %v), want (nil, nil)", got, err)
 		}

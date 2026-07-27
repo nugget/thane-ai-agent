@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Rune budgets for the published projection tiers. They are display
+// Rune budgets for the published projection facets. They are display
 // budgets, not storage limits: each one is the size at which that
 // projection still fits the surfaces that consume it — a fleet overview
 // row, a search snippet, a subscription digest. Overflow is rejected
@@ -18,21 +18,21 @@ const (
 	digestMaxRunes     = 2048
 )
 
-// TierPayload is one complete published projection set for a tiered
+// FacetPayload is one complete published projection set for a faceted
 // maintained document. Every publish carries the whole payload: a
 // rendered document shows exactly the last publish, so a partially
 // updated payload would leave one projection describing a state the
 // others have moved past.
-type TierPayload struct {
+type FacetPayload struct {
 	StatusLine string
 	Teaser     string
 	Digest     string
 	Full       string
 }
 
-// TierField describes one publishable field of a tiered output, as the
+// FacetField describes one publishable field of a faceted output, as the
 // generated publish tool advertises it to the model.
-type TierField struct {
+type FacetField struct {
 	// Key is the tool argument name.
 	Key string
 	// MaxRunes is the display budget in runes; zero is unbounded.
@@ -44,79 +44,79 @@ type TierField struct {
 	Guidance string
 }
 
-// tierSection binds one projection to its canonical document section and
+// facetSection binds one projection to its canonical document section and
 // its budget.
-type tierSection struct {
-	// Tier is the declared tier this section publishes, or empty for
+type facetSection struct {
+	// Tier is the declared facet this section publishes, or empty for
 	// the always-present full projection.
-	Tier    OutputTier
-	Field   TierField
+	Tier    OutputFacet
+	Field   FacetField
 	Heading string
-	value   func(*TierPayload) *string
+	value   func(*FacetPayload) *string
 }
 
-// tierSections is the single source of truth for the publish tool's
+// facetSections is the single source of truth for the publish tool's
 // schema, the payload validator, the document renderer, and the parser
 // that reads a rendered document back — so those four cannot drift
 // apart. Order is the canonical ladder order; declaration order in a
-// spec's tiers list carries no meaning.
-var tierSections = []tierSection{
+// spec's facets list carries no meaning.
+var facetSections = []facetSection{
 	{
-		Tier:    OutputTierStatusLine,
+		Tier:    OutputFacetStatusLine,
 		Heading: "Status Line",
-		Field: TierField{
+		Field: FacetField{
 			Key:        "status_line",
 			MaxRunes:   statusLineMaxRunes,
 			SingleLine: true,
 			Guidance:   "One standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
 		},
-		value: func(p *TierPayload) *string { return &p.StatusLine },
+		value: func(p *FacetPayload) *string { return &p.StatusLine },
 	},
 	{
-		Tier:    OutputTierTeaser,
+		Tier:    OutputFacetTeaser,
 		Heading: "Teaser",
-		Field: TierField{
+		Field: FacetField{
 			Key:      "teaser",
 			MaxRunes: teaserMaxRunes,
 			Guidance: "One short paragraph on why a reader would open this document right now. Surfaces as the snippet in search results and cross-references, so write the hook — the reason to look — rather than a compressed summary.",
 		},
-		value: func(p *TierPayload) *string { return &p.Teaser },
+		value: func(p *FacetPayload) *string { return &p.Teaser },
 	},
 	{
-		Tier:    OutputTierDigest,
+		Tier:    OutputFacetDigest,
 		Heading: "Digest",
-		Field: TierField{
+		Field: FacetField{
 			Key:      "digest",
 			MaxRunes: digestMaxRunes,
 			Guidance: "A standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
 		},
-		value: func(p *TierPayload) *string { return &p.Digest },
+		value: func(p *FacetPayload) *string { return &p.Digest },
 	},
 	{
 		Heading: "Details",
-		Field: TierField{
+		Field: FacetField{
 			Key:      "full",
 			Guidance: "The complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
 		},
-		value: func(p *TierPayload) *string { return &p.Full },
+		value: func(p *FacetPayload) *string { return &p.Full },
 	},
 }
 
-// TierFields returns the fields a tiered output publishes, in canonical
-// ladder order: each declared tier, then the always-present full
+// FacetFields returns the fields a faceted output publishes, in canonical
+// ladder order: each declared facet, then the always-present full
 // projection. Every returned field is required at publish time —
 // optionality lives in the declaration (a spec may declare only
 // status_line), not in the write.
-func (o OutputSpec) TierFields() []TierField {
-	if len(o.Tiers) == 0 {
+func (o OutputSpec) FacetFields() []FacetField {
+	if len(o.Facets) == 0 {
 		return nil
 	}
-	declared := make(map[OutputTier]struct{}, len(o.Tiers))
-	for _, tier := range o.Tiers {
-		declared[tier] = struct{}{}
+	declared := make(map[OutputFacet]struct{}, len(o.Facets))
+	for _, facet := range o.Facets {
+		declared[facet] = struct{}{}
 	}
-	fields := make([]TierField, 0, len(o.Tiers)+1)
-	for _, section := range tierSections {
+	fields := make([]FacetField, 0, len(o.Facets)+1)
+	for _, section := range facetSections {
 		if section.Tier == "" {
 			fields = append(fields, section.Field)
 			continue
@@ -128,21 +128,21 @@ func (o OutputSpec) TierFields() []TierField {
 	return fields
 }
 
-// IsTiered reports whether this output publishes through the tiered
+// HasFacets reports whether this output publishes through the faceted
 // projection contract rather than a whole-body replacement.
-func (o OutputSpec) IsTiered() bool {
-	return o.Type == OutputTypeMaintainedDocument && len(o.Tiers) > 0
+func (o OutputSpec) HasFacets() bool {
+	return o.Type == OutputTypeMaintainedDocument && len(o.Facets) > 0
 }
 
-// ValidateTierPayload checks one payload against the output's declared
+// ValidateFacetPayload checks one payload against the output's declared
 // ladder. Errors name the field, the limit, and the observed size so the
 // model can correct the offending projection in one more attempt without
 // re-deriving the whole payload.
-func (o OutputSpec) ValidateTierPayload(payload TierPayload) error {
-	if !o.IsTiered() {
-		return fmt.Errorf("output %q does not declare tiers", o.Name)
+func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
+	if !o.HasFacets() {
+		return fmt.Errorf("output %q does not declare facets", o.Name)
 	}
-	for _, field := range o.TierFields() {
+	for _, field := range o.FacetFields() {
 		section, ok := tierSectionByKey(field.Key)
 		if !ok {
 			continue
@@ -160,24 +160,24 @@ func (o OutputSpec) ValidateTierPayload(payload TierPayload) error {
 			}
 		}
 		if heading, found := firstReservedTierHeading(value); found {
-			return fmt.Errorf("%s contains the reserved section heading %q; the tier headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
+			return fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
 		}
 	}
 	return nil
 }
 
-// RenderTierDocument renders a payload as the canonical document body:
+// RenderFacetDocument renders a payload as the canonical document body:
 // one H2 section per published projection, in ladder order. Go owns this
 // structure so the model never authors the section convention and the
 // document stays parseable back into a payload.
-func (o OutputSpec) RenderTierDocument(payload TierPayload) string {
-	fields := o.TierFields()
+func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
+	fields := o.FacetFields()
 	published := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
 		published[field.Key] = struct{}{}
 	}
 	blocks := make([]string, 0, len(fields))
-	for _, section := range tierSections {
+	for _, section := range facetSections {
 		if _, ok := published[section.Field.Key]; !ok {
 			continue
 		}
@@ -191,20 +191,20 @@ func (o OutputSpec) RenderTierDocument(payload TierPayload) string {
 }
 
 // ParseTierDocument reads a rendered document body back into a payload.
-// It is the inverse of [OutputSpec.RenderTierDocument] and the reason
+// It is the inverse of [OutputSpec.RenderFacetDocument] and the reason
 // the document is the canonical store: any derived binding — an
 // ambient rail, a published entity, a remote display — can be re-seeded
 // from the document alone after a restart.
 //
-// A body with no recognized tier sections parses entirely into Full,
-// which is what lets an existing untiered maintained document be adopted
-// into the tiered contract without losing its content. Content ahead of
+// A body with no recognized facet sections parses entirely into Full,
+// which is what lets an existing facetless maintained document be adopted
+// into the faceted contract without losing its content. Content ahead of
 // the first recognized heading is folded into Full for the same reason.
-func ParseTierDocument(body string) TierPayload {
-	var payload TierPayload
+func ParseTierDocument(body string) FacetPayload {
+	var payload FacetPayload
 	var preamble []string
 	current := ""
-	collected := make(map[string][]string, len(tierSections))
+	collected := make(map[string][]string, len(facetSections))
 
 	for _, line := range strings.Split(body, "\n") {
 		if heading, ok := reservedTierHeadingOf(line); ok {
@@ -218,7 +218,7 @@ func ParseTierDocument(body string) TierPayload {
 		collected[current] = append(collected[current], line)
 	}
 
-	for _, section := range tierSections {
+	for _, section := range facetSections {
 		lines, ok := collected[section.Heading]
 		if !ok {
 			continue
@@ -237,13 +237,13 @@ func ParseTierDocument(body string) TierPayload {
 }
 
 // tierSectionByKey looks up the section table entry for a field key.
-func tierSectionByKey(key string) (tierSection, bool) {
-	for _, section := range tierSections {
+func tierSectionByKey(key string) (facetSection, bool) {
+	for _, section := range facetSections {
 		if section.Field.Key == key {
 			return section, true
 		}
 	}
-	return tierSection{}, false
+	return facetSection{}, false
 }
 
 // reservedTierHeadingOf reports the canonical heading a line declares,
@@ -255,7 +255,7 @@ func reservedTierHeadingOf(line string) (string, bool) {
 		return "", false
 	}
 	text := strings.TrimSpace(strings.TrimPrefix(trimmed, "## "))
-	for _, section := range tierSections {
+	for _, section := range facetSections {
 		if strings.EqualFold(text, section.Heading) {
 			return section.Heading, true
 		}
