@@ -21,10 +21,10 @@ func tieredSpec() looppkg.Spec {
 		Completion: looppkg.CompletionNone,
 		Outputs: []looppkg.OutputSpec{
 			{
-				Name:  "office status",
-				Type:  looppkg.OutputTypeMaintainedDocument,
-				Ref:   "core:office.md",
-				Tiers: []looppkg.OutputTier{looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser},
+				Name:   "office status",
+				Type:   looppkg.OutputTypeMaintainedDocument,
+				Ref:    "core:office.md",
+				Facets: []looppkg.OutputFacet{looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser},
 			},
 			{
 				Name: "office notes",

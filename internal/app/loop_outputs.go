@@ -41,7 +41,7 @@ type loopOutputContextEntry struct {
 	BytesShown       int      `json:"bytes_shown,omitempty"`
 	BytesTotal       int      `json:"bytes_total,omitempty"`
 	UnavailableError string   `json:"unavailable_error,omitempty"`
-	Tiers            []string `json:"tiers,omitempty"`
+	Facets           []string `json:"facets,omitempty"`
 	Audience         string   `json:"audience,omitempty"`
 }
 
@@ -73,7 +73,7 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 	notes := findWorkingNotesOutput(outputs)
 	for _, output := range outputs {
 		output := output
-		if output.IsTiered() {
+		if output.HasFacets() {
 			// A tiered output's interface is a set of typed projections,
 			// so it gets the publish tool instead of a body-blob replace.
 			out = append(out, buildTieredPublishTool(store, output, notes))
@@ -147,8 +147,8 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 			Interface: outputInterfaceDescription(output),
 			Audience:  string(output.EffectiveAudience()),
 		}
-		for _, field := range output.TierFields() {
-			entry.Tiers = append(entry.Tiers, field.Key)
+		for _, field := range output.FacetFields() {
+			entry.Facets = append(entry.Facets, field.Key)
 		}
 		doc, err := store.Read(ctx, output.Ref)
 		if err != nil {
@@ -207,9 +207,9 @@ func loopOutputDelta(value string, now time.Time) string {
 }
 
 func outputInterfaceDescription(output looppkg.OutputSpec) string {
-	if output.IsTiered() {
+	if output.HasFacets() {
 		keys := make([]string, 0, 4)
-		for _, field := range output.TierFields() {
+		for _, field := range output.FacetFields() {
 			keys = append(keys, field.Key)
 		}
 		return "Call " + output.ToolName() + " with every projection in one call (" + strings.Join(keys, ", ") + "). Headings are rendered for you; each projection has its own size budget."
@@ -230,7 +230,7 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 // "publish_output_*" with "mode: replace" in the same context block and
 // leave the model to guess which one describes the call it should make.
 func loopOutputContextMode(output looppkg.OutputSpec) string {
-	if output.IsTiered() {
+	if output.HasFacets() {
 		return "publish"
 	}
 	return string(output.EffectiveMode())
@@ -296,7 +296,7 @@ func cloneLoopOutputs(src []looppkg.OutputSpec) []looppkg.OutputSpec {
 	dst := make([]looppkg.OutputSpec, len(src))
 	copy(dst, src)
 	for i := range dst {
-		dst[i].Tiers = append([]looppkg.OutputTier(nil), src[i].Tiers...)
+		dst[i].Facets = append([]looppkg.OutputFacet(nil), src[i].Facets...)
 	}
 	return dst
 }

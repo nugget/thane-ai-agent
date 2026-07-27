@@ -99,73 +99,73 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "tiered maintained document publishes projections",
+			name: "faceted maintained document publishes projections",
 			output: OutputSpec{
-				Name:  "ranch status",
-				Type:  OutputTypeMaintainedDocument,
-				Ref:   "core:ranch.md",
-				Tiers: []OutputTier{OutputTierStatusLine, OutputTierTeaser, OutputTierDigest},
+				Name:   "ranch status",
+				Type:   OutputTypeMaintainedDocument,
+				Ref:    "core:ranch.md",
+				Facets: []OutputFacet{OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest},
 			},
 			wantTool: "publish_output_ranch_status",
 		},
 		{
 			name: "status line alone anchors the ladder",
 			output: OutputSpec{
-				Name:  "ranch status",
-				Type:  OutputTypeMaintainedDocument,
-				Ref:   "core:ranch.md",
-				Tiers: []OutputTier{OutputTierStatusLine},
+				Name:   "ranch status",
+				Type:   OutputTypeMaintainedDocument,
+				Ref:    "core:ranch.md",
+				Facets: []OutputFacet{OutputFacetStatusLine},
 			},
 			wantTool: "publish_output_ranch_status",
 		},
 		{
-			name: "tiers without status line rejected",
+			name: "facets without status line rejected",
 			output: OutputSpec{
-				Name:  "ranch status",
-				Type:  OutputTypeMaintainedDocument,
-				Ref:   "core:ranch.md",
-				Tiers: []OutputTier{OutputTierTeaser, OutputTierDigest},
+				Name:   "ranch status",
+				Type:   OutputTypeMaintainedDocument,
+				Ref:    "core:ranch.md",
+				Facets: []OutputFacet{OutputFacetTeaser, OutputFacetDigest},
 			},
 			wantErr: true,
 		},
 		{
 			name: "unknown tier rejected",
 			output: OutputSpec{
-				Name:  "ranch status",
-				Type:  OutputTypeMaintainedDocument,
-				Ref:   "core:ranch.md",
-				Tiers: []OutputTier{OutputTierStatusLine, OutputTier("hud")},
+				Name:   "ranch status",
+				Type:   OutputTypeMaintainedDocument,
+				Ref:    "core:ranch.md",
+				Facets: []OutputFacet{OutputFacetStatusLine, OutputFacet("hud")},
 			},
 			wantErr: true,
 		},
 		{
 			name: "duplicate tier rejected",
 			output: OutputSpec{
-				Name:  "ranch status",
-				Type:  OutputTypeMaintainedDocument,
-				Ref:   "core:ranch.md",
-				Tiers: []OutputTier{OutputTierStatusLine, OutputTierStatusLine},
+				Name:   "ranch status",
+				Type:   OutputTypeMaintainedDocument,
+				Ref:    "core:ranch.md",
+				Facets: []OutputFacet{OutputFacetStatusLine, OutputFacetStatusLine},
 			},
 			wantErr: true,
 		},
 		{
-			name: "tiers on working notes rejected",
+			name: "facets on working notes rejected",
 			output: OutputSpec{
-				Name:  "ranch notes",
-				Type:  OutputTypeWorkingNotes,
-				Ref:   "core:ranch-notes.md",
-				Tiers: []OutputTier{OutputTierStatusLine},
+				Name:   "ranch notes",
+				Type:   OutputTypeWorkingNotes,
+				Ref:    "core:ranch-notes.md",
+				Facets: []OutputFacet{OutputFacetStatusLine},
 			},
 			wantErr: true,
 		},
 		{
-			name: "tiers on internal maintained document rejected",
+			name: "facets on internal maintained document rejected",
 			output: OutputSpec{
 				Name:     "hypotheses",
 				Type:     OutputTypeMaintainedDocument,
 				Ref:      "core:hypotheses.md",
 				Audience: OutputAudienceInternal,
-				Tiers:    []OutputTier{OutputTierStatusLine},
+				Facets:   []OutputFacet{OutputFacetStatusLine},
 			},
 			wantErr: true,
 		},
@@ -219,15 +219,15 @@ func TestOutputSpecEffectiveAudience(t *testing.T) {
 
 func TestCloneOutputsDeepCopiesTiers(t *testing.T) {
 	src := []OutputSpec{{
-		Name:  "ranch status",
-		Type:  OutputTypeMaintainedDocument,
-		Ref:   "core:ranch.md",
-		Tiers: []OutputTier{OutputTierStatusLine, OutputTierTeaser},
+		Name:   "ranch status",
+		Type:   OutputTypeMaintainedDocument,
+		Ref:    "core:ranch.md",
+		Facets: []OutputFacet{OutputFacetStatusLine, OutputFacetTeaser},
 	}}
 	dst := cloneOutputs(src)
-	dst[0].Tiers[1] = OutputTierDigest
-	if src[0].Tiers[1] != OutputTierTeaser {
-		t.Fatalf("cloneOutputs shares Tiers backing array: src mutated to %q", src[0].Tiers[1])
+	dst[0].Facets[1] = OutputFacetDigest
+	if src[0].Facets[1] != OutputFacetTeaser {
+		t.Fatalf("cloneOutputs shares Facets backing array: src mutated to %q", src[0].Facets[1])
 	}
 }
 
@@ -287,7 +287,7 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 				Type:    OutputTypeMaintainedDocument,
 				Ref:     "generated:status.md",
 				Purpose: "Current status.",
-				Tiers:   []OutputTier{OutputTierStatusLine, OutputTierTeaser},
+				Facets:  []OutputFacet{OutputFacetStatusLine, OutputFacetTeaser},
 			},
 			{
 				Name: "notes",
@@ -304,8 +304,8 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	if !strings.Contains(string(data), `"outputs"`) {
 		t.Fatalf("marshaled spec missing outputs: %s", string(data))
 	}
-	if !strings.Contains(string(data), `"tiers"`) {
-		t.Fatalf("marshaled spec missing tiers: %s", string(data))
+	if !strings.Contains(string(data), `"facets"`) {
+		t.Fatalf("marshaled spec missing facets: %s", string(data))
 	}
 
 	var got Spec
@@ -316,10 +316,10 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 		t.Fatalf("Outputs len = %d, want 2", len(got.Outputs))
 	}
 	if got.Outputs[0].ToolName() != "publish_output_status" {
-		t.Fatalf("output tool = %q, want publish_output_status for a tiered output", got.Outputs[0].ToolName())
+		t.Fatalf("output tool = %q, want publish_output_status for a faceted output", got.Outputs[0].ToolName())
 	}
-	if len(got.Outputs[0].Tiers) != 2 || got.Outputs[0].Tiers[0] != OutputTierStatusLine {
-		t.Fatalf("round-tripped tiers = %v, want [status_line teaser]", got.Outputs[0].Tiers)
+	if len(got.Outputs[0].Facets) != 2 || got.Outputs[0].Facets[0] != OutputFacetStatusLine {
+		t.Fatalf("round-tripped facets = %v, want [status_line teaser]", got.Outputs[0].Facets)
 	}
 	if got.Outputs[1].EffectiveAudience() != OutputAudienceInternal {
 		t.Fatalf("working notes audience = %q, want internal", got.Outputs[1].EffectiveAudience())

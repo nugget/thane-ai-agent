@@ -403,7 +403,7 @@ runtime tools:
 - `replace_output_<name>` for a working-notes document, which holds the
   loop's current thinking and is rewritten rather than accumulated.
 - `publish_output_<name>` for a maintained document that declares
-  `tiers`: one typed argument per published projection
+  `facets`: one typed argument per published projection
   (`status_line`, `teaser`, `digest`) plus the full body, written
   together in a single call. Thane renders the document sections from
   the payload, so the loop supplies content and never structure.

@@ -175,7 +175,7 @@ func loopOutputSpecSchema() map[string]any {
 		"properties": map[string]any{
 			"name": map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
 			"type": map[string]any{"type": "string", "enum": []string{"maintained_document", "working_notes"}, "description": "maintained_document = the loop rewrites it each cycle to reflect current state; working_notes = the same, but private — the loop's current thinking, never projected into search, context, or any other consumer surface. Use working_notes for working theories, what an experiment is showing, and what you expect next; use a maintained_document for what a reader should see. For an append-only dated record, journal a document directly with the doc tools rather than declaring it as an output."},
-			"tiers": map[string]any{
+			"facets": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
 				"description": "Published projection ladder for a maintained_document: which condensed views this output curates alongside its full body. Declaring tiers swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when tiers are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a tiered output is read at a fraction of the cost of the full document. Order here carries no meaning.",

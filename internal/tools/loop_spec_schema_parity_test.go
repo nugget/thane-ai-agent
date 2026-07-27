@@ -73,7 +73,7 @@ func TestJSONFieldNamesMatchesEncoder(t *testing.T) {
 // This is the same failure shape as a native tool that is registered but
 // absent from the tool catalog, which TestNativeToolLiteralsAreCatalogued
 // already guards, and the same shape as thane_loop_create silently
-// dropping a tiers array it had no property for.
+// dropping a facets array it had no property for.
 //
 // The direction that matters is struct → schema. The reverse is checked
 // separately and more loosely, because the schema legitimately documents
@@ -107,7 +107,7 @@ var specFieldsNotOffered = map[string]string{
 }
 
 // TestLoopOutputSpecSchemaCoversEveryField guards the nested declaration
-// where the gap actually bit: output.tiers reached OutputSpec before the
+// where the gap actually bit: output.facets reached OutputSpec before the
 // guided tool had anywhere to put it.
 func TestLoopOutputSpecSchemaCoversEveryField(t *testing.T) {
 	props := schemaProperties(t, loopSpecSchema("parity"))

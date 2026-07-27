@@ -241,7 +241,7 @@ or signed deltas like `-604800s`.
 Loop-declared document output tools are request-scoped and do not appear
 in the global catalog above. When a loop declares an output, Thane
 generates a tool such as `replace_output_metacognitive_state` or — for a
-maintained document that declares `tiers` — `publish_output_office_status`,
+maintained document that declares `facets` — `publish_output_office_status`,
 only for that loop run. These tools route through managed document roots, so
 root policy, indexing, and provenance remain centralized instead of
 being reimplemented in each loop prompt.
@@ -514,7 +514,7 @@ tools for Signal-specific workflows.
 |------|-------------|
 | `model_registry_list` | List available models with capability metadata. |
 | `model_registry_get` | Retrieve one model deployment's metadata. |
-| `model_registry_summary` | Summary of routing policy and cost tiers. |
+| `model_registry_summary` | Summary of routing policy and cost facets. |
 | `model_route_explain` | Dry-run a routing decision with the router's rationale. |
 | `model_deployment_set_policy` | Update deployment-level routing policy. |
 | `model_resource_set_policy` | Update resource-level routing policy. |

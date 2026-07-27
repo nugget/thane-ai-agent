@@ -21,7 +21,7 @@ the UI can grow richer without turning noisy or inconsistent.
   definition nodes should each live in a stable tone family.
 
 - Radius: capacity tier.
-  Radius should reflect weighted context-window tiers, not raw proportional
+  Radius should reflect weighted context-window facets, not raw proportional
   scaling. Fallback heuristics may use model size estimates when context is not
   yet known.
 

@@ -347,12 +347,12 @@ func coerceInt(v any) (int, error) {
 // and injects current-document context into each iteration prompt — so
 // the model gets a typed write surface and "what's already there?"
 // answered without re-reading the doc itself.
-func buildCurateOutputSpec(name, docRef, intent string, tiers []looppkg.OutputTier) looppkg.OutputSpec {
+func buildCurateOutputSpec(name, docRef, intent string, tiers []looppkg.OutputFacet) looppkg.OutputSpec {
 	return looppkg.OutputSpec{
 		Name:    name,
 		Ref:     docRef,
 		Purpose: intent,
-		Tiers:   tiers,
+		Facets:  tiers,
 		Type:    looppkg.OutputTypeMaintainedDocument,
 		Mode:    looppkg.OutputModeReplace,
 	}
@@ -505,11 +505,11 @@ func parseDurationArg(args map[string]any, key string) (d time.Duration, present
 	return d, true, nil
 }
 
-// parseOutputTiers reads the declared projection ladder from the guided
+// parseOutputFacets reads the declared projection ladder from the guided
 // tool's output argument. Unknown names are refused rather than dropped:
 // a tier that is silently ignored produces a loop that publishes fewer
 // projections than its author asked for, and nothing says so.
-func parseOutputTiers(raw any) ([]looppkg.OutputTier, error) {
+func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -536,11 +536,11 @@ func parseOutputTiers(raw any) ([]looppkg.OutputTier, error) {
 		return nil, fmt.Errorf("output.tiers must be an array of tier names, got %T", raw)
 	}
 
-	out := make([]looppkg.OutputTier, 0, len(names))
+	out := make([]looppkg.OutputFacet, 0, len(names))
 	for _, name := range names {
-		tier := looppkg.OutputTier(strings.TrimSpace(name))
+		tier := looppkg.OutputFacet(strings.TrimSpace(name))
 		switch tier {
-		case looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser, looppkg.OutputTierDigest:
+		case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
 			out = append(out, tier)
 		default:
 			return nil, fmt.Errorf("output.tiers %q is not a projection; use status_line, teaser, or digest", name)

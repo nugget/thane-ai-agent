@@ -106,15 +106,15 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 
 func TestCloneLoopOutputsDeepCopiesTiers(t *testing.T) {
 	src := []looppkg.OutputSpec{{
-		Name:  "ranch status",
-		Type:  looppkg.OutputTypeMaintainedDocument,
-		Ref:   "kb:ranch.md",
-		Tiers: []looppkg.OutputTier{looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser},
+		Name:   "ranch status",
+		Type:   looppkg.OutputTypeMaintainedDocument,
+		Ref:    "kb:ranch.md",
+		Facets: []looppkg.OutputFacet{looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser},
 	}}
 	dst := cloneLoopOutputs(src)
-	dst[0].Tiers[1] = looppkg.OutputTierDigest
-	if src[0].Tiers[1] != looppkg.OutputTierTeaser {
-		t.Fatalf("cloneLoopOutputs shares Tiers backing array: src mutated to %q", src[0].Tiers[1])
+	dst[0].Facets[1] = looppkg.OutputFacetDigest
+	if src[0].Facets[1] != looppkg.OutputFacetTeaser {
+		t.Fatalf("cloneLoopOutputs shares Facets backing array: src mutated to %q", src[0].Facets[1])
 	}
 }
 

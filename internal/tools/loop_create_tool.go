@@ -230,7 +230,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		documentRef string
 		title       string
 		hasOutput   bool
-		tiers       []looppkg.OutputTier
+		tiers       []looppkg.OutputFacet
 		notesRef    string
 	)
 	if raw, ok := args["output"].(map[string]any); ok && raw != nil {
@@ -246,7 +246,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		if deps.DocTools == nil {
 			return nil, fmt.Errorf("output document requested but the document store is not configured")
 		}
-		tiers, err = parseOutputTiers(raw["tiers"])
+		tiers, err = parseOutputFacets(raw["facets"])
 		if err != nil {
 			return nil, err
 		}
@@ -349,8 +349,8 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 			if plan.notesRef != "" {
 				result["working_notes_document"] = plan.notesRef
 			}
-			if len(spec.Outputs) > 0 && len(spec.Outputs[0].Tiers) > 0 {
-				result["tiers"] = spec.Outputs[0].Tiers
+			if len(spec.Outputs) > 0 && len(spec.Outputs[0].Facets) > 0 {
+				result["facets"] = spec.Outputs[0].Facets
 			}
 		}
 		return ldMarshalToolJSON(result)
@@ -418,8 +418,8 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		if plan.notesRef != "" {
 			result["working_notes_document"] = plan.notesRef
 		}
-		if len(spec.Outputs) > 0 && len(spec.Outputs[0].Tiers) > 0 {
-			result["tiers"] = spec.Outputs[0].Tiers
+		if len(spec.Outputs) > 0 && len(spec.Outputs[0].Facets) > 0 {
+			result["facets"] = spec.Outputs[0].Facets
 		}
 	}
 	if op == looppkg.OperationService {
@@ -598,7 +598,7 @@ func thaneLoopCreateSchema() map[string]any {
 						"type":        "string",
 						"description": "Optional human title for the document. Defaults to the loop name.",
 					},
-					"tiers": map[string]any{
+					"facets": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
 						"description": "Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
