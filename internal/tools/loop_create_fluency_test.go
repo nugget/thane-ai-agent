@@ -123,6 +123,47 @@ func TestGuidedCreateRefusesUnknownTier(t *testing.T) {
 	}
 }
 
+// TestGuidedCreateTierInputShapes covers the two array forms a caller can
+// present and the element that is neither. A non-string coerced to ""
+// would be reported as an empty tier name, which names the symptom
+// rather than the mistake.
+func TestGuidedCreateTierInputShapes(t *testing.T) {
+	t.Run("[]string is accepted", func(t *testing.T) {
+		got, err := parseOutputTiers([]string{"status_line", "digest"})
+		if err != nil {
+			t.Fatalf("[]string: %v", err)
+		}
+		if len(got) != 2 || got[0] != looppkg.OutputTierStatusLine {
+			t.Errorf("tiers = %v", got)
+		}
+	})
+
+	t.Run("non-string element is named by index and type", func(t *testing.T) {
+		_, err := parseOutputTiers([]any{"status_line", 7})
+		if err == nil {
+			t.Fatal("a numeric tier should be refused")
+		}
+		for _, want := range []string{"[1]", "int"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a non-array is refused by type", func(t *testing.T) {
+		if _, err := parseOutputTiers("status_line"); err == nil {
+			t.Fatal("a bare string should be refused")
+		}
+	})
+
+	t.Run("absent is not an error", func(t *testing.T) {
+		got, err := parseOutputTiers(nil)
+		if err != nil || got != nil {
+			t.Errorf("nil = (%v, %v), want (nil, nil)", got, err)
+		}
+	})
+}
+
 // TestGuidedCreateRefusesTiersOnJournal keeps the two document shapes
 // distinct: a journal appends dated entries and has no current state to
 // project.

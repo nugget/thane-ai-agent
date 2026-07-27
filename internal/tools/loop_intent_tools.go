@@ -540,16 +540,34 @@ func parseDurationArg(args map[string]any, key string) (d time.Duration, present
 // a tier that is silently ignored produces a loop that publishes fewer
 // projections than its author asked for, and nothing says so.
 func parseOutputTiers(raw any) ([]looppkg.OutputTier, error) {
-	items, ok := raw.([]any)
-	if !ok {
-		if raw == nil {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("output.tiers must be an array of tier names")
+	if raw == nil {
+		return nil, nil
 	}
-	out := make([]looppkg.OutputTier, 0, len(items))
-	for _, item := range items {
-		name, _ := item.(string)
+
+	// A decoded tool call yields []any; a Go caller is likelier to build
+	// []string. Both are accepted, and a non-string element is named by
+	// index and type rather than coerced — an element coerced to "" would
+	// be reported as an empty tier name, which describes the symptom
+	// instead of the mistake.
+	var names []string
+	switch v := raw.(type) {
+	case []string:
+		names = v
+	case []any:
+		names = make([]string, 0, len(v))
+		for i, item := range v {
+			name, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("output.tiers[%d] is %T; tier names are strings — status_line, teaser, or digest", i, item)
+			}
+			names = append(names, name)
+		}
+	default:
+		return nil, fmt.Errorf("output.tiers must be an array of tier names, got %T", raw)
+	}
+
+	out := make([]looppkg.OutputTier, 0, len(names))
+	for _, name := range names {
 		tier := looppkg.OutputTier(strings.TrimSpace(name))
 		switch tier {
 		case looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser, looppkg.OutputTierDigest:
