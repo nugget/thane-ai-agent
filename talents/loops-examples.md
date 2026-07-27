@@ -88,9 +88,12 @@ questions decide the shape:
 
 ## The sleep envelope is the one judgment call
 
-A service loop requires `sleep_min` and `sleep_max`. The loop self-paces inside that envelope via
-`set_next_sleep`, which is clamped to the bounds. Pick bounds to match
-the topic's metabolism:
+`thane_loop_create` requires `sleep_min` and `sleep_max`. The full spec
+does not — it defaults to 30s–5m, which is wrong for almost anything
+worth curating, and wrong quietly: the loop runs, just far too often.
+Set the envelope deliberately whichever door you use. The loop
+self-paces inside it via `set_next_sleep`, which is clamped to the
+bounds. Pick bounds to match the topic's metabolism:
 
 - UPS guardian: `[5m, 30m]`
 - Burn-ban monitor: `[1h, 6h]`
@@ -142,7 +145,7 @@ takes the same spec and catches mistakes before anything persists.
     {"entity_id": "sensor.ups_hor_rack_status"},
     {"entity_id": "switch.dehumidifier"}
   ],
-  "tags": ["home", "ha", "awareness"],
+  "tags": ["home", "ha", "awareness", "documents"],
   "outputs": [
     {
       "name": "closet_state",

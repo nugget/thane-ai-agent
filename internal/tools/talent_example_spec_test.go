@@ -57,4 +57,18 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 	if got := tiered.ToolName(); !strings.HasPrefix(got, "publish_output_") {
 		t.Errorf("generated tool = %q, want publish_output_* — the example claims it swaps", got)
 	}
+
+	// doc_read is gated behind the documents tag, and the example's own
+	// prose tells the loop to read its document when the injected body is
+	// truncated. A spec can validate perfectly and still describe a task
+	// its tag set cannot perform, so this is asserted rather than trusted.
+	var hasDocuments bool
+	for _, tag := range decoded.Tags {
+		if tag == "documents" {
+			hasDocuments = true
+		}
+	}
+	if !hasDocuments {
+		t.Error("a loop that owns documents needs the documents tag to reach doc_read")
+	}
 }
