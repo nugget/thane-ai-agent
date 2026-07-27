@@ -31,7 +31,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("runInit failed: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestRunInit_ArchiveBootstrapIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("first runInit: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestRunInit_ArchiveBootstrapIdempotent(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("second runInit: %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 	var buf bytes.Buffer
 
 	// First run: create everything.
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("first runInit failed: %v", err)
 	}
 
@@ -228,7 +228,7 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 
 	// Second run: should skip existing files.
 	buf.Reset()
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("second runInit failed: %v", err)
 	}
 

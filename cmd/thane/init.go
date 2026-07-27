@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -53,7 +54,64 @@ var interactionsSchemaV1JSON []byte
 // runInit initializes a Thane working directory with bundled defaults.
 // It creates the directory structure and writes default config, persona,
 // and talent files. Existing files are never overwritten.
-func runInit(w io.Writer, dir string) error {
+// initOptions carries the operator's answer to "who founds this instance".
+type initOptions struct {
+	// OperatorKey is an explicit private key path. Empty means discover one
+	// from the operator's git configuration.
+	OperatorKey string
+	// OperatorPrincipal overrides the identity the key signs as.
+	OperatorPrincipal string
+	// SelfSigned skips the search entirely and founds core with the agent's
+	// own key, for an operator who has decided that is what they want.
+	SelfSigned bool
+}
+
+// resolveOperatorSigner decides which key founds core, and explains the
+// choice.
+//
+// An explicit key is an instruction rather than a preference, so failing to
+// load one is an error: silently falling back to a self-signed core after
+// being handed a key would produce a weaker instance than the operator asked
+// for, and say nothing about it.
+func resolveOperatorSigner(ctx context.Context, opts initOptions) (*identity.OperatorSigner, string, error) {
+	if opts.SelfSigned {
+		return nil, "asked for a self-signed core", nil
+	}
+	if strings.TrimSpace(opts.OperatorKey) != "" {
+		signer, err := identity.LoadOperatorSigner(ctx, opts.OperatorKey, opts.OperatorPrincipal)
+		if err != nil {
+			return nil, "", fmt.Errorf("operator key: %w", err)
+		}
+		return signer, "", nil
+	}
+	signer, why := identity.DiscoverOperatorSigner(ctx, opts.OperatorPrincipal)
+	return signer, why, nil
+}
+
+// describeCorePosture tells the operator which of the two shapes they got, in
+// the vocabulary they already have from TLS.
+//
+// A self-signed core is not a failure and is not presented as one — it works,
+// and for a single-operator instance it may be all anyone wants. What it must
+// not do is arrive silently, because the property it gives up is the one an
+// operator would assume they had: that the agent cannot re-establish the root
+// holding its own config.
+func describeCorePosture(w io.Writer, result *identity.BootstrapResult, why string) {
+	if !result.SelfSigned {
+		fmt.Fprintf(w, "  ✓ core anchored to %s — the agent can write to core but cannot re-establish it\n", result.OperatorPrincipal)
+		return
+	}
+	fmt.Fprintln(w, "  ! core is self-signed: its only seed signer is this instance's own agent key,")
+	fmt.Fprintln(w, "    so nothing outside the instance attests to it and the agent could re-establish")
+	fmt.Fprintln(w, "    the root that holds its config.")
+	if why != "" {
+		fmt.Fprintf(w, "    Why: %s.\n", why)
+	}
+	fmt.Fprintln(w, "    To anchor it to a key you hold, re-initialize an empty workspace with:")
+	fmt.Fprintln(w, "      thane init -operator-key ~/.ssh/id_ed25519 <dir>")
+}
+
+func runInit(w io.Writer, dir string, opts initOptions) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return fmt.Errorf("resolve path: %w", err)
@@ -98,12 +156,18 @@ func runInit(w io.Writer, dir string) error {
 		return fmt.Errorf("deploy talents: %w", err)
 	}
 
-	result, err := identity.BootstrapCore(context.Background(), filepath.Join(absDir, "core"), filepath.Base(absDir), slog.Default())
+	ctx := context.Background()
+	operator, why, err := resolveOperatorSigner(ctx, opts)
+	if err != nil {
+		return err
+	}
+	result, err := identity.BootstrapCore(ctx, filepath.Join(absDir, "core"), filepath.Base(absDir), operator, slog.Default())
 	if err != nil {
 		return fmt.Errorf("bootstrap core identity: %w", err)
 	}
 	if result.Created {
 		fmt.Fprintf(w, "  ✓ %s (core identity, signing %s)\n", result.CoreDir, result.SigningKeyFingerprint)
+		describeCorePosture(w, result, why)
 	} else {
 		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
 	}
@@ -175,4 +239,30 @@ func writeIfMissing(w io.Writer, path string, data []byte, mode os.FileMode) err
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", path)
 	return nil
+}
+
+// runInitCommand parses `thane init`'s own flags.
+//
+// The flags exist as much for wrapper installers as for people: a GUI front
+// end can ask "which key is yours?" in whatever way suits it and pass the
+// answer here, instead of asking someone at first run to reason about trust
+// roots.
+func runInitCommand(w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(w)
+	var opts initOptions
+	fs.StringVar(&opts.OperatorKey, "operator-key", "",
+		"private SSH key that founds core, making the instance answerable to its holder (default: from git's user.signingkey)")
+	fs.StringVar(&opts.OperatorPrincipal, "operator-principal", "",
+		"identity the operator key signs as (default: git's user.email)")
+	fs.BoolVar(&opts.SelfSigned, "self-signed", false,
+		"found core with the instance's own agent key, without looking for an operator key")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir := "."
+	if fs.NArg() > 0 {
+		dir = fs.Arg(0)
+	}
+	return runInit(w, dir, opts)
 }
