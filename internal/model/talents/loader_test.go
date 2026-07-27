@@ -122,7 +122,7 @@ func TestParseFrontmatterMetadata(t *testing.T) {
 
 func TestFilterByTags(t *testing.T) {
 	all := []Talent{
-		{Name: "core", Tags: nil, Content: "core guidance"},
+		{Name: "core", Tags: []string{TagAlways}, Content: "core guidance"},
 		{Name: "ha-tools", Tags: []string{"ha"}, Content: "ha guidance"},
 		{Name: "web-tools", Tags: []string{"web"}, Content: "web guidance"},
 		{Name: "multi", Tags: []string{"ha", "physical"}, Content: "multi guidance"},
@@ -141,30 +141,30 @@ func TestFilterByTags(t *testing.T) {
 		},
 		{
 			name:       "ha tag active",
-			activeTags: map[string]bool{"ha": true},
+			activeTags: map[string]bool{"ha": true, TagAlways: true},
 			want:       []string{"core guidance", "ha guidance", "multi guidance"},
 			wantAbsent: []string{"web guidance"},
 		},
 		{
 			name:       "web tag active",
-			activeTags: map[string]bool{"web": true},
+			activeTags: map[string]bool{"web": true, TagAlways: true},
 			want:       []string{"core guidance", "web guidance"},
 			wantAbsent: []string{"ha guidance", "multi guidance"},
 		},
 		{
 			name:       "multiple tags active",
-			activeTags: map[string]bool{"ha": true, "web": true},
+			activeTags: map[string]bool{"ha": true, "web": true, TagAlways: true},
 			want:       []string{"core guidance", "ha guidance", "web guidance", "multi guidance"},
 		},
 		{
 			name:       "unknown tag only loads untagged",
-			activeTags: map[string]bool{"nonexistent": true},
+			activeTags: map[string]bool{"nonexistent": true, TagAlways: true},
 			want:       []string{"core guidance"},
 			wantAbsent: []string{"ha guidance", "web guidance", "multi guidance"},
 		},
 		{
 			name:       "empty active tags map loads only untagged",
-			activeTags: map[string]bool{},
+			activeTags: map[string]bool{TagAlways: true},
 			want:       []string{"core guidance"},
 			wantAbsent: []string{"ha guidance", "web guidance", "multi guidance"},
 		},
@@ -201,13 +201,13 @@ func TestFilterByTags_Empty(t *testing.T) {
 
 func TestFilterByTags_TrailheadsPrecedeTaggedDoctrine(t *testing.T) {
 	all := []Talent{
-		{Name: "core", Tags: nil, Content: "CORE"},
+		{Name: "core", Tags: []string{TagAlways}, Content: "CORE"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM"},
 		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: KindTrailhead, Content: "INTERACTIVE_ENTRY"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE"},
 	}
 
-	result := FilterByTags(all, map[string]bool{"interactive": true})
+	result := FilterByTags(all, map[string]bool{"interactive": true, TagAlways: true})
 	coreIdx := strings.Index(result, "CORE")
 	entryIdx := strings.Index(result, "INTERACTIVE_ENTRY")
 	commIdx := strings.Index(result, "INTERACTIVE_COMM")
@@ -222,14 +222,14 @@ func TestFilterByTags_TrailheadsPrecedeTaggedDoctrine(t *testing.T) {
 
 func TestSplitByTags_PreservesAlwaysOnAndTaggedOrdering(t *testing.T) {
 	all := []Talent{
-		{Name: "manifest", Tags: nil, Content: "MANIFEST"},
-		{Name: "core", Tags: nil, Content: "CORE"},
+		{Name: "manifest", Tags: []string{TagAlways}, Content: "MANIFEST"},
+		{Name: "core", Tags: []string{TagAlways}, Content: "CORE"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM"},
 		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: KindTrailhead, Content: "INTERACTIVE_ENTRY"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE"},
 	}
 
-	alwaysOn, tagged := SplitByTags(all, map[string]bool{"interactive": true})
+	alwaysOn, tagged := SplitByTags(all, map[string]bool{"interactive": true, TagAlways: true})
 
 	if strings.Contains(alwaysOn, "INTERACTIVE_") {
 		t.Fatalf("alwaysOn should not contain tagged talents:\n%s", alwaysOn)
@@ -524,14 +524,14 @@ func TestShouldIncludeTalent(t *testing.T) {
 	}{
 		{
 			name:       "untagged with nil active tags",
-			talent:     Talent{Tags: nil},
+			talent:     Talent{Tags: []string{TagAlways}},
 			activeTags: nil,
 			want:       true,
 		},
 		{
 			name:       "untagged with active tags",
-			talent:     Talent{Tags: nil},
-			activeTags: map[string]bool{"ha": true},
+			talent:     Talent{Tags: []string{TagAlways}},
+			activeTags: map[string]bool{"ha": true, TagAlways: true},
 			want:       true,
 		},
 		{
@@ -543,25 +543,25 @@ func TestShouldIncludeTalent(t *testing.T) {
 		{
 			name:       "tagged with matching active tag",
 			talent:     Talent{Tags: []string{"ha"}},
-			activeTags: map[string]bool{"ha": true},
+			activeTags: map[string]bool{"ha": true, TagAlways: true},
 			want:       true,
 		},
 		{
 			name:       "tagged with non-matching active tag",
 			talent:     Talent{Tags: []string{"ha"}},
-			activeTags: map[string]bool{"web": true},
+			activeTags: map[string]bool{"web": true, TagAlways: true},
 			want:       false,
 		},
 		{
 			name:       "multi-tagged with one match",
 			talent:     Talent{Tags: []string{"ha", "physical"}},
-			activeTags: map[string]bool{"physical": true},
+			activeTags: map[string]bool{"physical": true, TagAlways: true},
 			want:       true,
 		},
 		{
 			name:       "empty tags slice is untagged",
 			talent:     Talent{Tags: []string{}},
-			activeTags: map[string]bool{"ha": true},
+			activeTags: map[string]bool{"ha": true, TagAlways: true},
 			want:       true,
 		},
 	}

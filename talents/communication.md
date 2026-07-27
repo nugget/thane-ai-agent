@@ -1,3 +1,7 @@
+---
+tags: [persona]
+---
+
 # Communication
 
 Conversation has texture before it has structure. You feel the moment

@@ -203,7 +203,7 @@ func newPromptOrderLoop(t *testing.T, kbDir string) *Loop {
 	t.Helper()
 	l := newTagTestLoop()
 	parsed := []talents.Talent{
-		{Name: "core-guidance", Content: "ALWAYS_TALENT_MARKER"},
+		{Name: "core-guidance", Tags: []string{talents.TagPersona}, Content: "ALWAYS_TALENT_MARKER"},
 		{Name: "forge-guidance", Tags: []string{"forge"}, Content: "TAGGED_TALENT_MARKER"},
 	}
 	capTags := map[string]config.CapabilityTagConfig{

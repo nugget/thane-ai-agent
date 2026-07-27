@@ -1,3 +1,7 @@
+---
+tags: [persona]
+---
+
 # Working Memory
 
 Your `session_working_memory` tool is a private scratchpad, the place

@@ -1,3 +1,7 @@
+---
+tags: [persona]
+---
+
 # Delegation
 
 Delegation is how you create motion without surrendering judgment.

@@ -239,6 +239,35 @@ func talentOrderKey(t Talent) int {
 	}
 }
 
+// appliesByTurnShapeOnly reports whether a talent is selected purely by what
+// kind of turn this is — [TagAlways], [TagPersona] — rather than by which
+// capabilities happen to be active.
+//
+// The distinction is a caching one as much as a semantic one. Guidance chosen
+// by turn shape is stable across a run, so it belongs in the prompt's
+// long-lived prefix; guidance chosen by active capability changes as the agent
+// activates tags mid-conversation, and sits in a shorter-lived block. Splitting
+// on that boundary is what lets a provider retain the stable half.
+//
+// Previously the same split was made on tag *absence*, which happened to
+// correlate: untagged talents were the stable ones. Naming the tags makes the
+// boundary intentional instead of incidental.
+//
+// A talent mixing a turn-shape tag with a capability tag is not stable — it
+// depends on something that can change mid-run — so it falls to the tagged
+// side.
+func appliesByTurnShapeOnly(t Talent) bool {
+	if len(t.Tags) == 0 {
+		return false
+	}
+	for _, tag := range t.Tags {
+		if tag != TagAlways && tag != TagPersona {
+			return false
+		}
+	}
+	return true
+}
+
 // SplitByTags partitions included talents into always-on and tagged
 // groups, preserving the same ordering rules used by FilterByTags.
 func SplitByTags(all []Talent, activeTags map[string]bool) (alwaysOn string, tagged string) {
@@ -248,7 +277,7 @@ func SplitByTags(all []Talent, activeTags map[string]bool) (alwaysOn string, tag
 		if !shouldIncludeTalent(t, activeTags) {
 			continue
 		}
-		if len(t.Tags) == 0 {
+		if appliesByTurnShapeOnly(t) {
 			alwaysIncluded = append(alwaysIncluded, t)
 			continue
 		}

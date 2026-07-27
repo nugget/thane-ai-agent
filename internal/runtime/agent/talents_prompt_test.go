@@ -14,7 +14,7 @@ func TestBuildSystemPrompt_TaggedTalentsLoadForActiveTags(t *testing.T) {
 	parsed := []talents.Talent{
 		{Name: "knowledge", Tags: []string{"knowledge"}, Content: "KNOWLEDGE_TREE_MARKER"},
 		{Name: "files", Tags: []string{"files"}, Content: "FILES_DOCTRINE_MARKER"},
-		{Name: "untagged", Tags: nil, Content: "UNTAGGED_MARKER"},
+		{Name: "untagged", Tags: []string{talents.TagAlways}, Content: "UNTAGGED_MARKER"},
 	}
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
 		"knowledge": {Description: "Knowledge", Core: true},
@@ -37,7 +37,7 @@ func TestBuildSystemPrompt_TaggedTalentsLoadForActiveTags(t *testing.T) {
 func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 	l := newTagTestLoop()
 	parsed := []talents.Talent{
-		{Name: "communication", Tags: nil, Content: "CORE_COMMUNICATION_MARKER"},
+		{Name: "communication", Tags: []string{talents.TagAlways}, Content: "CORE_COMMUNICATION_MARKER"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMMUNICATION_MARKER"},
 		{Name: "development-communication", Tags: []string{"development", "forge"}, Content: "DEVELOPMENT_COMMUNICATION_MARKER"},
 	}
@@ -63,7 +63,7 @@ func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 func TestBuildSystemPrompt_TrailheadTalentsPrecedeTaggedDoctrine(t *testing.T) {
 	l := newTagTestLoop()
 	parsed := []talents.Talent{
-		{Name: "readme", Tags: nil, Content: "CORE_MARKER"},
+		{Name: "readme", Tags: []string{talents.TagAlways}, Content: "CORE_MARKER"},
 		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: talents.KindTrailhead, Content: "INTERACTIVE_ENTRY_MARKER"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM_MARKER"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
@@ -89,7 +89,7 @@ func TestBuildSystemPromptWithProfileSections_SplitsCacheableBehaviorPrefix(t *t
 	l := newTagTestLoop()
 	l.persona = "PERSONA_MARKER"
 	parsed := []talents.Talent{
-		{Name: "readme", Tags: nil, Content: "CORE_MARKER"},
+		{Name: "readme", Tags: []string{talents.TagAlways}, Content: "CORE_MARKER"},
 		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: talents.KindTrailhead, Content: "INTERACTIVE_ENTRY_MARKER"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
 	}
