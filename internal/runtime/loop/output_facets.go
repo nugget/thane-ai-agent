@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Rune budgets for the published projection tiers. They are display
+// Rune budgets for the published projection facets. They are display
 // budgets, not storage limits: each one is the size at which that
 // projection still fits the surfaces that consume it — a fleet overview
 // row, a search snippet, a subscription digest. Overflow is rejected
@@ -18,7 +18,7 @@ const (
 	digestMaxRunes     = 2048
 )
 
-// FacetPayload is one complete published projection set for a tiered
+// FacetPayload is one complete published projection set for a faceted
 // maintained document. Every publish carries the whole payload: a
 // rendered document shows exactly the last publish, so a partially
 // updated payload would leave one projection describing a state the
@@ -30,7 +30,7 @@ type FacetPayload struct {
 	Full       string
 }
 
-// FacetField describes one publishable field of a tiered output, as the
+// FacetField describes one publishable field of a faceted output, as the
 // generated publish tool advertises it to the model.
 type FacetField struct {
 	// Key is the tool argument name.
@@ -47,7 +47,7 @@ type FacetField struct {
 // facetSection binds one projection to its canonical document section and
 // its budget.
 type facetSection struct {
-	// Tier is the declared tier this section publishes, or empty for
+	// Tier is the declared facet this section publishes, or empty for
 	// the always-present full projection.
 	Tier    OutputFacet
 	Field   FacetField
@@ -59,7 +59,7 @@ type facetSection struct {
 // schema, the payload validator, the document renderer, and the parser
 // that reads a rendered document back — so those four cannot drift
 // apart. Order is the canonical ladder order; declaration order in a
-// spec's tiers list carries no meaning.
+// spec's facets list carries no meaning.
 var facetSections = []facetSection{
 	{
 		Tier:    OutputFacetStatusLine,
@@ -102,8 +102,8 @@ var facetSections = []facetSection{
 	},
 }
 
-// FacetFields returns the fields a tiered output publishes, in canonical
-// ladder order: each declared tier, then the always-present full
+// FacetFields returns the fields a faceted output publishes, in canonical
+// ladder order: each declared facet, then the always-present full
 // projection. Every returned field is required at publish time —
 // optionality lives in the declaration (a spec may declare only
 // status_line), not in the write.
@@ -112,8 +112,8 @@ func (o OutputSpec) FacetFields() []FacetField {
 		return nil
 	}
 	declared := make(map[OutputFacet]struct{}, len(o.Facets))
-	for _, tier := range o.Facets {
-		declared[tier] = struct{}{}
+	for _, facet := range o.Facets {
+		declared[facet] = struct{}{}
 	}
 	fields := make([]FacetField, 0, len(o.Facets)+1)
 	for _, section := range facetSections {
@@ -128,7 +128,7 @@ func (o OutputSpec) FacetFields() []FacetField {
 	return fields
 }
 
-// HasFacets reports whether this output publishes through the tiered
+// HasFacets reports whether this output publishes through the faceted
 // projection contract rather than a whole-body replacement.
 func (o OutputSpec) HasFacets() bool {
 	return o.Type == OutputTypeMaintainedDocument && len(o.Facets) > 0
@@ -140,7 +140,7 @@ func (o OutputSpec) HasFacets() bool {
 // re-deriving the whole payload.
 func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 	if !o.HasFacets() {
-		return fmt.Errorf("output %q does not declare tiers", o.Name)
+		return fmt.Errorf("output %q does not declare facets", o.Name)
 	}
 	for _, field := range o.FacetFields() {
 		section, ok := tierSectionByKey(field.Key)
@@ -160,7 +160,7 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 			}
 		}
 		if heading, found := firstReservedTierHeading(value); found {
-			return fmt.Errorf("%s contains the reserved section heading %q; the tier headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
+			return fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
 		}
 	}
 	return nil
@@ -196,9 +196,9 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 // ambient rail, a published entity, a remote display — can be re-seeded
 // from the document alone after a restart.
 //
-// A body with no recognized tier sections parses entirely into Full,
-// which is what lets an existing untiered maintained document be adopted
-// into the tiered contract without losing its content. Content ahead of
+// A body with no recognized facet sections parses entirely into Full,
+// which is what lets an existing facetless maintained document be adopted
+// into the faceted contract without losing its content. Content ahead of
 // the first recognized heading is folded into Full for the same reason.
 func ParseTierDocument(body string) FacetPayload {
 	var payload FacetPayload

@@ -514,7 +514,7 @@ tools for Signal-specific workflows.
 |------|-------------|
 | `model_registry_list` | List available models with capability metadata. |
 | `model_registry_get` | Retrieve one model deployment's metadata. |
-| `model_registry_summary` | Summary of routing policy and cost facets. |
+| `model_registry_summary` | Summary of routing policy and cost tiers. |
 | `model_route_explain` | Dry-run a routing decision with the router's rationale. |
 | `model_deployment_set_policy` | Update deployment-level routing policy. |
 | `model_resource_set_policy` | Update resource-level routing policy. |

@@ -12,7 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
-func tieredSpec() looppkg.Spec {
+func facetedSpec() looppkg.Spec {
 	return looppkg.Spec{
 		Name:       "ranch_office",
 		Enabled:    true,
@@ -46,13 +46,13 @@ func findRuntimeTool(t *testing.T, spec looppkg.Spec, name string) looppkg.Runti
 	return looppkg.RuntimeTool{}
 }
 
-func TestTieredOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
+func TestFacetedOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
 
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPublishToolWithoutWorkingNotesOmitsNoteArgument(t *testing.T) {
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	spec := tieredSpec()
+	spec := facetedSpec()
 	spec.Outputs = spec.Outputs[:1] // drop the working-notes declaration
 
 	hydrated, err := app.hydrateLoopOutputs(spec)
@@ -101,7 +101,7 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 
 	store, coreDir := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestPublishToolRejectsOverBudgetWithoutWriting(t *testing.T) {
 
 	store, coreDir := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 
 	store, coreDir := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestWorkingNotesToolStampsInternalAudience(t *testing.T) {
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -276,12 +276,12 @@ func firstFrontmatterValue(doc *documents.DocumentRecord, key string) string {
 	return ""
 }
 
-func TestTieredOutputContextAdvertisesProjections(t *testing.T) {
+func TestFacetedOutputContextAdvertisesProjections(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestPublishToolRejectsNonStringProjection(t *testing.T) {
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -323,12 +323,12 @@ func TestPublishToolRejectsNonStringProjection(t *testing.T) {
 	}
 }
 
-func TestTieredOutputContextReportsPublishMode(t *testing.T) {
+func TestFacetedOutputContextReportsPublishMode(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
@@ -336,11 +336,11 @@ func TestTieredOutputContextReportsPublishMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OutputContextBuilder: %v", err)
 	}
-	// A tiered output advertises publish_output_*, so pairing it with
+	// A faceted output advertises publish_output_*, so pairing it with
 	// the spec-level replace mode would describe a call that does not
 	// exist for this output.
 	if !strings.Contains(block, `"mode": "publish"`) {
-		t.Fatalf("tiered output context should report publish mode:\n%s", block)
+		t.Fatalf("faceted output context should report publish mode:\n%s", block)
 	}
 	// The notes output in the same block reports replace now, so this
 	// asserts per output rather than over the whole block.
@@ -364,7 +364,7 @@ func TestTieredOutputContextReportsPublishMode(t *testing.T) {
 		modes[o.Name] = o.Mode
 	}
 	if len(modes) != 2 {
-		t.Fatalf("expected the tiered document and its notes, got %v", modes)
+		t.Fatalf("expected the faceted document and its notes, got %v", modes)
 	}
 	// The fixture is fixed, so name the outputs rather than matching on a
 	// substring that any future output could collide with.
@@ -390,7 +390,7 @@ func TestWorkingNotesRewriteKeepsAudienceStamp(t *testing.T) {
 
 	store, _ := newLoopOutputDocumentStore(t)
 	app := &App{documentStore: store}
-	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}

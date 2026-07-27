@@ -129,7 +129,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "unknown tier rejected",
+			name: "unknown facet rejected",
 			output: OutputSpec{
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
@@ -139,7 +139,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "duplicate tier rejected",
+			name: "duplicate facet rejected",
 			output: OutputSpec{
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,

@@ -11,15 +11,15 @@ import (
 )
 
 // These tests pin the running-loop contracts of the definition-write
-// surfaces, which split into two facets. Relaunch tier (loop_definition_set,
+// surfaces, which split into two tiers. Relaunch facet (loop_definition_set,
 // thane_loop_create replace, loop_definition_launch's short-circuit): a
 // running loop keeps its launched-time config until a full relaunch
 // (ReconcileDefinition deliberately no-ops on a live loop), so those results
-// must carry the stale-config notice. Conforming tier (loop_definition_update):
+// must carry the stale-config notice. Conforming facet (loop_definition_update):
 // scalar retunes apply live via QueueRetune and the result confirms it
 // instead. The notice resolves liveness through runningLoopByName, which
 // falls back to the intent-tool deps' live registry — the wiring used here.
-// The gate for both facets is the prior instance SURVIVING the write: a loop
+// The gate for both tiers is the prior instance SURVIVING the write: a loop
 // spawned by the commit's own reconcile runs the just-written spec and must
 // not be called stale (nor retuned twice).
 

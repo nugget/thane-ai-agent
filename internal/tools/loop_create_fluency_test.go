@@ -56,10 +56,10 @@ func curateArgs(extra map[string]any) map[string]any {
 	return out
 }
 
-// TestGuidedCreateProducesTieredOutput is the hole that started #1287:
+// TestGuidedCreateProducesFacetedOutput is the hole that started #1287:
 // the front door could not express the shape its own doctrine calls the
 // important case, and dropped facets silently when asked.
-func TestGuidedCreateProducesTieredOutput(t *testing.T) {
+func TestGuidedCreateProducesFacetedOutput(t *testing.T) {
 	spec, result := dryRunSpec(t, curateArgs(map[string]any{
 		"facets": []any{"status_line", "teaser", "digest"},
 	}))
@@ -110,23 +110,23 @@ func TestGuidedCreateWorkingNotes(t *testing.T) {
 	}
 }
 
-// TestGuidedCreateRefusesUnknownTier pins the failure direction. A tier
+// TestGuidedCreateRefusesUnknownFacet pins the failure direction. A facet
 // name that is quietly dropped yields a loop publishing fewer
 // projections than its author asked for, with nothing to say so.
-func TestGuidedCreateRefusesUnknownTier(t *testing.T) {
+func TestGuidedCreateRefusesUnknownFacet(t *testing.T) {
 	rig := newCurateTestRig(t)
 	args := curateArgs(map[string]any{"facets": []any{"status_line", "summary"}})
 	args["dry_run"] = true
 	if _, err := rig.tool.Handler(context.Background(), args); err == nil {
-		t.Fatal("unknown tier should be refused, not dropped")
+		t.Fatal("unknown facet should be refused, not dropped")
 	} else if !strings.Contains(err.Error(), "summary") {
-		t.Errorf("error should name the offending tier: %v", err)
+		t.Errorf("error should name the offending facet: %v", err)
 	}
 }
 
 // TestGuidedCreateTierInputShapes covers the two array forms a caller can
 // present and the element that is neither. A non-string coerced to ""
-// would be reported as an empty tier name, which names the symptom
+// would be reported as an empty facet name, which names the symptom
 // rather than the mistake.
 func TestGuidedCreateTierInputShapes(t *testing.T) {
 	t.Run("[]string is accepted", func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestGuidedCreateTierInputShapes(t *testing.T) {
 	t.Run("non-string element is named by index and type", func(t *testing.T) {
 		_, err := parseOutputFacets([]any{"status_line", 7})
 		if err == nil {
-			t.Fatal("a numeric tier should be refused")
+			t.Fatal("a numeric facet should be refused")
 		}
 		for _, want := range []string{"[1]", "int"} {
 			if !strings.Contains(err.Error(), want) {

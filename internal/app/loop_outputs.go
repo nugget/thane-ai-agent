@@ -74,9 +74,9 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 	for _, output := range outputs {
 		output := output
 		if output.HasFacets() {
-			// A tiered output's interface is a set of typed projections,
+			// A faceted output's interface is a set of typed projections,
 			// so it gets the publish tool instead of a body-blob replace.
-			out = append(out, buildTieredPublishTool(store, output, notes))
+			out = append(out, buildFacetPublishTool(store, output, notes))
 			continue
 		}
 		switch output.EffectiveMode() {
@@ -223,8 +223,8 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 }
 
 // loopOutputContextMode reports the write interface the model actually
-// has for this output. A tiered output's spec-level mode is still
-// replace — tiers are the only declaration, so there is no authorable
+// has for this output. A faceted output's spec-level mode is still
+// replace — facets are the only declaration, so there is no authorable
 // publish mode to contradict — but its generated tool takes projections
 // rather than a document body. Reporting the spec mode here would pair
 // "publish_output_*" with "mode: replace" in the same context block and

@@ -54,7 +54,7 @@ func loopSpecSchema(description string) map[string]any {
 			"supervisor_profile": loopProfileSchema("Overlay applied on supervisor turns (e.g. a higher quality_floor and review-specific instructions). Any field set here wins over profile; unset fields fall back to profile."),
 			"outputs": map[string]any{
 				"type":        "array",
-				"description": "Durable documents this loop owns, each exposed as a scoped runtime tool: whole-document rewrites (replace_output_*), journal appends (append_output_*), and tiered publishes (publish_output_*).",
+				"description": "Durable documents this loop owns, each exposed as a scoped runtime tool: whole-document rewrites (replace_output_*), or faceted publishes (publish_output_*) when the output declares facets.",
 				"items":       loopOutputSpecSchema(),
 			},
 			"tags": map[string]any{
@@ -178,7 +178,7 @@ func loopOutputSpecSchema() map[string]any {
 			"facets": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-				"description": "Published projection ladder for a maintained_document: which condensed views this output curates alongside its full body. Declaring tiers swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when tiers are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a tiered output is read at a fraction of the cost of the full document. Order here carries no meaning.",
+				"description": "Published set of published projections for a maintained_document: which condensed views this output curates alongside its full body. Declaring facets swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when facets are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a faceted output is read at a fraction of the cost of the full document. Order here carries no meaning.",
 			},
 			"audience": map[string]any{
 				"type":        "string",
@@ -186,7 +186,7 @@ func loopOutputSpecSchema() map[string]any {
 				"description": "Who may see this output's content. published (default) allows projection into search results, context injection, and ambient surfaces; internal keeps it to this loop's own context and explicit reads by ref. working_notes outputs are internal automatically. Internal is context hygiene, not secrecy: operators and the archive still see the document.",
 			},
 			"ref":     map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
-			"mode":    map[string]any{"type": "string", "enum": []string{"replace"}, "description": "Write mode. Both output types are rewritten each cycle, so this defaults correctly when omitted and there is no reason to set it. A tiered maintained_document publishes projections instead."},
+			"mode":    map[string]any{"type": "string", "enum": []string{"replace"}, "description": "Write mode. Both output types are rewritten each cycle, so this defaults correctly when omitted and there is no reason to set it. A faceted maintained_document publishes projections instead."},
 			"purpose": map[string]any{"type": "string", "description": "Optional model-facing guidance describing what this output is for."},
 		},
 	}

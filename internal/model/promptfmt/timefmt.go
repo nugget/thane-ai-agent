@@ -39,7 +39,7 @@ func FormatDeltaOnly(t time.Time, now time.Time) string {
 	return "+" + formatDeltaMagnitude(secs)
 }
 
-// formatDeltaMagnitude renders an absolute second count in the tiered
+// formatDeltaMagnitude renders an absolute second count in the faceted
 // unit shape shared by FormatDelta and FormatDeltaOnly: exact seconds
 // under an hour, hours+minutes under two days, then days+hours. At
 // most two units appear and zero-valued trailing units are dropped, so

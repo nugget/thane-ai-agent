@@ -343,16 +343,16 @@ func coerceInt(v any) (int, error) {
 // buildCurateOutputSpec converts the intent-shaped output argument into
 // a declared OutputSpec on the loop. Once declared, the hydration layer
 // generates a scoped mutation tool (replace_output_*, or publish_output_*
-// when the output declares tiers)
+// when the output declares facets)
 // and injects current-document context into each iteration prompt — so
 // the model gets a typed write surface and "what's already there?"
 // answered without re-reading the doc itself.
-func buildCurateOutputSpec(name, docRef, intent string, tiers []looppkg.OutputFacet) looppkg.OutputSpec {
+func buildCurateOutputSpec(name, docRef, intent string, facets []looppkg.OutputFacet) looppkg.OutputSpec {
 	return looppkg.OutputSpec{
 		Name:    name,
 		Ref:     docRef,
 		Purpose: intent,
-		Facets:  tiers,
+		Facets:  facets,
 		Type:    looppkg.OutputTypeMaintainedDocument,
 		Mode:    looppkg.OutputModeReplace,
 	}
@@ -367,9 +367,9 @@ func buildCurateOutputSpec(name, docRef, intent string, tiers []looppkg.OutputFa
 // construction (see [loop.Loop.buildTaskTurn]), so it doesn't appear
 // here. Kept short and shape-clear so the model can act without
 // re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputToolName string, tiered bool) string {
+func buildCurateTask(intent, docRef, outputToolName string, faceted bool) string {
 	verb := "Update the body of"
-	if tiered {
+	if faceted {
 		verb = "Publish the current state of"
 	}
 	var sb strings.Builder
@@ -507,7 +507,7 @@ func parseDurationArg(args map[string]any, key string) (d time.Duration, present
 
 // parseOutputFacets reads the declared projection ladder from the guided
 // tool's output argument. Unknown names are refused rather than dropped:
-// a tier that is silently ignored produces a loop that publishes fewer
+// a facet that is silently ignored produces a loop that publishes fewer
 // projections than its author asked for, and nothing says so.
 func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
 	if raw == nil {
@@ -517,7 +517,7 @@ func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
 	// A decoded tool call yields []any; a Go caller is likelier to build
 	// []string. Both are accepted, and a non-string element is named by
 	// index and type rather than coerced — an element coerced to "" would
-	// be reported as an empty tier name, which describes the symptom
+	// be reported as an empty facet name, which describes the symptom
 	// instead of the mistake.
 	var names []string
 	switch v := raw.(type) {
@@ -528,12 +528,12 @@ func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
 		for i, item := range v {
 			name, ok := item.(string)
 			if !ok {
-				return nil, fmt.Errorf("output.tiers[%d] is %T; tier names are strings — status_line, teaser, or digest", i, item)
+				return nil, fmt.Errorf("output.facets[%d] is %T; facet names are strings — status_line, teaser, or digest", i, item)
 			}
 			names = append(names, name)
 		}
 	default:
-		return nil, fmt.Errorf("output.tiers must be an array of tier names, got %T", raw)
+		return nil, fmt.Errorf("output.facets must be an array of facet names, got %T", raw)
 	}
 
 	out := make([]looppkg.OutputFacet, 0, len(names))
@@ -543,7 +543,7 @@ func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
 		case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
 			out = append(out, tier)
 		default:
-			return nil, fmt.Errorf("output.tiers %q is not a projection; use status_line, teaser, or digest", name)
+			return nil, fmt.Errorf("output.facets %q is not a projection; use status_line, teaser, or digest", name)
 		}
 	}
 	return out, nil

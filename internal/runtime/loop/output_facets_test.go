@@ -73,7 +73,7 @@ func TestValidateTierPayload(t *testing.T) {
 	}{
 		{name: "complete payload", output: full, payload: good},
 		{
-			name:    "missing declared tier",
+			name:    "missing declared facet",
 			output:  full,
 			payload: FacetPayload{StatusLine: good.StatusLine, Digest: good.Digest, Full: good.Full},
 			wantErr: "teaser is required",
@@ -85,7 +85,7 @@ func TestValidateTierPayload(t *testing.T) {
 			wantErr: "full is required",
 		},
 		{
-			name:    "undeclared tier is not required",
+			name:    "undeclared facet is not required",
 			output:  facetedOutput(OutputFacetStatusLine),
 			payload: FacetPayload{StatusLine: good.StatusLine, Full: good.Full},
 		},
@@ -126,7 +126,7 @@ func TestValidateTierPayload(t *testing.T) {
 		{
 			name:    "deeper heading inside full is content",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: good.Teaser, Digest: good.Digest, Full: "### Teaser\n\nA subsection named like a tier is fine."},
+			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: good.Teaser, Digest: good.Digest, Full: "### Teaser\n\nA subsection named like a facet is fine."},
 		},
 	}
 
@@ -161,7 +161,7 @@ func TestRenderTierDocumentUsesCanonicalSections(t *testing.T) {
 	body := out.RenderFacetDocument(FacetPayload{
 		StatusLine: "All clear.",
 		Teaser:     "Nothing needs attention today.",
-		Digest:     "This tier is not declared and must not render.",
+		Digest:     "This facet is not declared and must not render.",
 		Full:       "Everything is fine.",
 	})
 
@@ -255,7 +255,7 @@ func TestParseTierDocumentAcceptsHeadingCaseDrift(t *testing.T) {
 	}
 }
 
-func TestTieredOutputToolNameUsesPublishVerb(t *testing.T) {
+func TestFacetedOutputToolNameUsesPublishVerb(t *testing.T) {
 	faceted := facetedOutput(OutputFacetStatusLine)
 	if got := faceted.ToolName(); got != "publish_output_ranch_status" {
 		t.Fatalf("faceted ToolName() = %q, want publish_output_ranch_status", got)
