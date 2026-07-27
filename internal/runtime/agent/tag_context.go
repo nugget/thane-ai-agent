@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // TagContextAssembler builds typed prompt context sections from three
@@ -141,8 +143,36 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 // scan, and the optional capability tag that must be active before any
 // of its documents are considered at all.
 type InjectRoot struct {
+	// Untagged is what a tagless document means here: [documents.RootUntaggedIgnore]
+	// skips it, [documents.RootUntaggedRefuse] surfaces it as a fault.
+	Untagged    string
 	Dir         string
 	RequiresTag string
+}
+
+// CheckUnclassifiedDocuments reports the first root that refuses tagless
+// documents and contains one, so startup can decline rather than discover it
+// a turn at a time.
+//
+// The per-turn scan surfaces the same fault, but only as a log line on a root
+// whose articles were then dropped — which is guidance going missing with a
+// warning, the shape this policy exists to end.
+func CheckUnclassifiedDocuments(roots map[string]InjectRoot) error {
+	names := make([]string, 0, len(roots))
+	for name := range roots {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		root := roots[name]
+		if root.Dir == "" || root.Untagged != documents.RootUntaggedRefuse {
+			continue
+		}
+		if _, err := scanKBArticles(root.Dir, root.Untagged); err != nil {
+			return fmt.Errorf("roots.%s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // loadKBArticles returns the current list of tag-aware articles from
@@ -160,7 +190,7 @@ func (a *TagContextAssembler) loadKBArticles() []kbArticle {
 		if a.kbDir == "" {
 			return nil
 		}
-		articles, err := scanKBArticles(a.kbDir)
+		articles, err := scanKBArticles(a.kbDir, documents.RootUntaggedIgnore)
 		if err != nil {
 			a.logger.Warn("failed to scan KB directory for tagged articles",
 				"dir", a.kbDir, "error", err)
@@ -181,7 +211,7 @@ func (a *TagContextAssembler) loadKBArticles() []kbArticle {
 		if root.Dir == "" {
 			continue
 		}
-		articles, err := scanKBArticles(root.Dir)
+		articles, err := scanKBArticles(root.Dir, root.Untagged)
 		if err != nil {
 			a.logger.Warn("failed to scan injection-eligible root for tagged articles",
 				"root", name, "dir", root.Dir, "error", err)
@@ -726,10 +756,17 @@ func isTrailheadKind(kind string) bool {
 // scanKBArticles walks the KB directory for .md files with tags:
 // frontmatter. Only top-level and one-level-deep files are scanned
 // (matching typical KB layouts like kb:dossiers/foo.md).
-func scanKBArticles(dir string) ([]kbArticle, error) {
+//
+// untagged decides what a tagless file means here. Skipping is right for a
+// corpus where most documents are reference material and only some are
+// injectable. Refusing is right where every document is meant to be
+// classified: there, a missing frontmatter line is guidance silently going
+// absent, and the root would rather name the file than guess.
+func scanKBArticles(dir, untagged string) ([]kbArticle, error) {
 	var articles []kbArticle
+	var unclassified []string
 
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error { //nolint:revive // walk closure
 		if err != nil {
 			return nil // skip unreadable entries
 		}
@@ -752,7 +789,14 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 
 		meta, _ := talents.ParseFrontmatterMetadata(string(data))
 		if len(meta.Tags) == 0 && len(meta.TagsAll) == 0 {
-			return nil // untagged KB articles are not auto-loaded
+			if untagged == documents.RootUntaggedRefuse {
+				if rel, relErr := filepath.Rel(dir, path); relErr == nil {
+					unclassified = append(unclassified, rel)
+				} else {
+					unclassified = append(unclassified, path)
+				}
+			}
+			return nil // untagged documents are not auto-loaded
 		}
 		if strings.EqualFold(strings.TrimSpace(meta.Audience), "internal") {
 			// The #1250 audience contract: an internal-audience document
@@ -778,6 +822,11 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if len(unclassified) > 0 {
+		sort.Strings(unclassified)
+		return nil, fmt.Errorf("%d document(s) in %s carry no tags and this root refuses unclassified content: %s",
+			len(unclassified), dir, strings.Join(unclassified, ", "))
 	}
 
 	// Sort for deterministic ordering.

@@ -1040,6 +1040,21 @@ const (
 	RootSearchOnRequest = "on_request"
 	// RootSearchNever excludes the root from document search entirely.
 	RootSearchNever = "never"
+
+	// RootUntaggedIgnore skips a document carrying no tags. It is the
+	// default, and it is what every injecting root has always done.
+	RootUntaggedIgnore = "ignore"
+	// RootUntaggedRefuse makes a tagless document an error naming the
+	// file, for a root whose contents must all be classified.
+	//
+	// The alternative to refusing is guessing, and the guess has already
+	// proven brittle: the talent loader treats a tagless file as
+	// permanent guidance, which forced a heuristic excluding filenames
+	// that begin with a capital so a README would not be injected into
+	// every prompt. Capitalization is not a semantic. A root that
+	// refuses says which file is unclassified instead of inferring an
+	// answer from its name.
+	RootUntaggedRefuse = "refuse"
 )
 
 // RootContextPolicy declares how one document root may reach a model.
@@ -1066,6 +1081,15 @@ type RootContextPolicy struct {
 	// Gating search the same way would need the document store to see
 	// active capability tags, which it deliberately does not.
 	RequiresTag string `yaml:"requires_tag,omitempty"`
+
+	// Untagged decides what a document carrying no tags means in this
+	// root: "ignore" (default) skips it, "refuse" makes it an error.
+	//
+	// Refusing matters where the documents are load-bearing. Guidance
+	// that shapes every turn should not be able to go missing quietly
+	// because someone forgot a frontmatter line — the instance should
+	// name the file and stop, the way it does for an uncommitted one.
+	Untagged string `yaml:"untagged,omitempty"`
 }
 
 // Declared reports whether this root states a context policy at all.
@@ -1096,6 +1120,15 @@ func (p RootContextPolicy) EffectiveSearch() string {
 	return p.Search
 }
 
+// EffectiveUntagged resolves what a tagless document means here,
+// defaulting to skipping it.
+func (p RootContextPolicy) EffectiveUntagged() string {
+	if p.Untagged == "" {
+		return RootUntaggedIgnore
+	}
+	return p.Untagged
+}
+
 // Validate checks the declared policy values.
 func (p RootContextPolicy) Validate(rootName string) error {
 	switch p.Inject {
@@ -1107,6 +1140,18 @@ func (p RootContextPolicy) Validate(rootName string) error {
 	case "", RootSearchDefault, RootSearchOnRequest, RootSearchNever:
 	default:
 		return fmt.Errorf("roots.%s.context.search must be %q, %q, or %q, got %q", rootName, RootSearchDefault, RootSearchOnRequest, RootSearchNever, p.Search)
+	}
+	switch p.Untagged {
+	case "", RootUntaggedIgnore, RootUntaggedRefuse:
+	default:
+		return fmt.Errorf("roots.%s.context.untagged must be %q or %q, got %q", rootName, RootUntaggedIgnore, RootUntaggedRefuse, p.Untagged)
+	}
+	if p.Untagged == RootUntaggedRefuse && p.EffectiveInject() != RootInjectTagged {
+		// Refusing tagless documents is a statement about what may
+		// inject. On a root that never injects it would reject files
+		// for failing to qualify for something they were never eligible
+		// for, which reads as a broken config rather than a policy.
+		return fmt.Errorf("roots.%s.context.untagged is %q but the root does not inject; set inject: %q or drop the untagged policy", rootName, RootUntaggedRefuse, RootInjectTagged)
 	}
 	// requires_tag gates prompt injection only. Search runs below the
 	// capability layer — the document store has no view of which tags

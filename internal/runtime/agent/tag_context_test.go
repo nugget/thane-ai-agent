@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -1153,5 +1154,42 @@ func TestBuildSystemPrompt_InjectRootRequiresTagGatesWholeRoot(t *testing.T) {
 
 	if prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello"); strings.Contains(prompt, "Gated corpus content.") {
 		t.Error("requires_tag should keep the whole root out until its capability is active")
+	}
+}
+
+// TestUnclassifiedDocumentsRefusedAtStartup covers the policy that makes
+// guidance unable to go missing quietly.
+//
+// A root declaring its documents load-bearing gets a named file and a refusal,
+// rather than a warning about a root whose articles were then dropped — which
+// is the same silent absence with extra steps.
+func TestUnclassifiedDocumentsRefusedAtStartup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tagged.md"), []byte("---\ntags: [home]\n---\n\nguidance\n"), 0o644); err != nil {
+		t.Fatalf("write tagged: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "forgot-the-frontmatter.md"), []byte("# just prose\n"), 0o644); err != nil {
+		t.Fatalf("write untagged: %v", err)
+	}
+
+	// Ignoring is the historical behaviour and must stay silent.
+	if err := CheckUnclassifiedDocuments(map[string]InjectRoot{
+		"kb": {Dir: dir, Untagged: documents.RootUntaggedIgnore},
+	}); err != nil {
+		t.Fatalf("an ignoring root should tolerate untagged files: %v", err)
+	}
+
+	err := CheckUnclassifiedDocuments(map[string]InjectRoot{
+		"talents": {Dir: dir, Untagged: documents.RootUntaggedRefuse},
+	})
+	if err == nil {
+		t.Fatal("a refusing root accepted an unclassified document")
+	}
+	if !strings.Contains(err.Error(), "forgot-the-frontmatter.md") {
+		t.Fatalf("refusal must name the file so it can be fixed, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "talents") {
+		t.Fatalf("refusal must name the root, got: %v", err)
 	}
 }

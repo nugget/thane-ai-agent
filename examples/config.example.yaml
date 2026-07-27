@@ -268,6 +268,14 @@ roots:
       # Gating search the same way would need the document store to see
       # active capability tags, which it deliberately does not.
       requires_tag: ""
+      # Untagged decides what a document carrying no tags means in this
+      # root: "ignore" (default) skips it, "refuse" makes it an error.
+      # 
+      # Refusing matters where the documents are load-bearing. Guidance
+      # that shapes every turn should not be able to go missing quietly
+      # because someone forgot a frontmatter line — the instance should
+      # name the file and stop, the way it does for an uncommitted one.
+      untagged: ""
     # SeedSigners are the keys entitled to establish this root. They
     # seed its .allowed_signers at birth and are not re-applied after,
     # because from then on the root's own file is its record of whom it
@@ -417,6 +425,14 @@ roots:
       # Gating search the same way would need the document store to see
       # active capability tags, which it deliberately does not.
       requires_tag: ""
+      # Untagged decides what a document carrying no tags means in this
+      # root: "ignore" (default) skips it, "refuse" makes it an error.
+      # 
+      # Refusing matters where the documents are load-bearing. Guidance
+      # that shapes every turn should not be able to go missing quietly
+      # because someone forgot a frontmatter line — the instance should
+      # name the file and stop, the way it does for an uncommitted one.
+      untagged: ""
     # SeedSigners are the keys entitled to establish this root. They
     # seed its .allowed_signers at birth and are not re-applied after,
     # because from then on the root's own file is its record of whom it
@@ -531,6 +547,14 @@ roots:
       # Gating search the same way would need the document store to see
       # active capability tags, which it deliberately does not.
       requires_tag: ""
+      # Untagged decides what a document carrying no tags means in this
+      # root: "ignore" (default) skips it, "refuse" makes it an error.
+      # 
+      # Refusing matters where the documents are load-bearing. Guidance
+      # that shapes every turn should not be able to go missing quietly
+      # because someone forgot a frontmatter line — the instance should
+      # name the file and stop, the way it does for an uncommitted one.
+      untagged: ""
     # SeedSigners are the keys entitled to establish this root. They
     # seed its .allowed_signers at birth and are not re-applied after,
     # because from then on the root's own file is its record of whom it

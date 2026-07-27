@@ -55,6 +55,8 @@ const (
 	RootSearchDefault   = "default"
 	RootSearchOnRequest = "on_request"
 	RootSearchNever     = "never"
+	RootUntaggedIgnore  = "ignore"
+	RootUntaggedRefuse  = "refuse"
 )
 
 // RootContextPolicy describes how a root's documents may reach a model:
@@ -64,6 +66,7 @@ type RootContextPolicy struct {
 	Inject      string `json:"inject,omitempty"`
 	Search      string `json:"search,omitempty"`
 	RequiresTag string `json:"requires_tag,omitempty"`
+	Untagged    string `json:"untagged,omitempty"`
 }
 
 // EffectiveInject resolves injection eligibility, defaulting to none.
@@ -72,6 +75,16 @@ func (p RootContextPolicy) EffectiveInject() string {
 		return RootInjectNone
 	}
 	return p.Inject
+}
+
+// EffectiveUntagged resolves what a tagless document means in this root,
+// defaulting to skipping it — which is what every injecting root has
+// always done.
+func (p RootContextPolicy) EffectiveUntagged() string {
+	if p.Untagged == "" {
+		return RootUntaggedIgnore
+	}
+	return p.Untagged
 }
 
 // EffectiveSearch resolves search visibility, defaulting to full.
