@@ -201,7 +201,7 @@ func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish handler: %v", err)
 	}
-	if !strings.Contains(result, "note_recorded") {
+	if !strings.Contains(result, "notes_written") {
 		t.Fatalf("result should report the recorded note: %s", result)
 	}
 
@@ -397,13 +397,14 @@ func TestTieredOutputContextReportsPublishMode(t *testing.T) {
 	if len(modes) != 2 {
 		t.Fatalf("expected the tiered document and its notes, got %v", modes)
 	}
-	for name, mode := range modes {
-		want := "publish"
-		if strings.Contains(name, "note") {
-			want = "replace"
-		}
-		if mode != want {
-			t.Errorf("output %q reports mode %q, want %q", name, mode, want)
+	// The fixture is fixed, so name the outputs rather than matching on a
+	// substring that any future output could collide with.
+	for name, want := range map[string]string{
+		"office status": "publish",
+		"office notes":  "replace",
+	} {
+		if modes[name] != want {
+			t.Errorf("output %q reports mode %q, want %q", name, modes[name], want)
 		}
 	}
 }

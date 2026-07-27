@@ -27,8 +27,8 @@ const (
 // supplies content, never structure.
 //
 // notes is the loop's declared working-notes output when it has one.
-// Its presence adds the optional note argument, so the argument exists
-// only when there is somewhere for the note to land.
+// Its presence adds the optional notes argument, so the argument exists
+// only when there is somewhere for the notes to land.
 func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, notes *looppkg.OutputSpec) looppkg.RuntimeTool {
 	fields := output.TierFields()
 	properties := make(map[string]any, len(fields)+1)
@@ -90,9 +90,9 @@ func buildTieredPublishTool(store *documents.Store, output looppkg.OutputSpec, n
 					// not a failed call to retry: report the partial
 					// outcome instead of an error that would invite a
 					// duplicate publish.
-					published["note_error"] = fmt.Sprintf("%s was published, but the working note was not recorded: %v", output.Ref, noteErr)
+					published["notes_error"] = fmt.Sprintf("%s was published, but the working notes were not updated: %v", output.Ref, noteErr)
 				default:
-					published["note_recorded"] = noteResult
+					published["notes_written"] = noteResult
 				}
 			}
 			return marshalLoopOutputToolResult(published)
@@ -113,7 +113,7 @@ func tieredPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSp
 		output.Name, output.Ref, strings.Join(keys, ", "),
 	)
 	if notes != nil {
-		description += " Pass note to record why this publish changed what it changed into the loop's working notes."
+		description += " Pass notes to rewrite this loop's private working notes in the same call — what you currently believe, not an entry about this change."
 	}
 	return description
 }
