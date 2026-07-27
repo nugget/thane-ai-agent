@@ -48,7 +48,7 @@ func curateArgs(extra map[string]any) map[string]any {
 		"sleep_min": "10m",
 		"sleep_max": "30m",
 	}
-	output := map[string]any{"mode": "maintain", "document": "kb:dashboards/closet.md"}
+	output := map[string]any{"document": "kb:dashboards/closet.md"}
 	for k, v := range extra {
 		output[k] = v
 	}
@@ -165,36 +165,20 @@ func TestGuidedCreateTierInputShapes(t *testing.T) {
 	})
 }
 
-// TestGuidedCreateRefusesTiersOnJournal keeps the two document shapes
-// distinct: a journal appends dated entries and has no current state to
-// project.
-func TestGuidedCreateRefusesTiersOnJournal(t *testing.T) {
-	rig := newCurateTestRig(t)
-	args := curateArgs(map[string]any{"mode": "journal", "tiers": []any{"status_line"}})
-	args["dry_run"] = true
-	if _, err := rig.tool.Handler(context.Background(), args); err == nil {
-		t.Fatal("tiers on a journal output should be refused")
-	}
-}
-
 // TestGuidedCreateAlwaysDerivesNotes pins that the notes surface is not
 // a choice. An opt-in every caller should take is a default in the wrong
 // position, and the cost of an unused one is a single context-block line
 // — nothing is scaffolded until the loop writes to it.
 func TestGuidedCreateAlwaysDerivesNotes(t *testing.T) {
-	for _, mode := range []string{"maintain", "journal"} {
-		t.Run(mode, func(t *testing.T) {
-			spec, result := dryRunSpec(t, curateArgs(map[string]any{"mode": mode}))
-			if len(spec.Outputs) != 2 {
-				t.Fatalf("outputs = %d, want the document plus its notes", len(spec.Outputs))
-			}
-			if spec.Outputs[1].Type != looppkg.OutputTypeWorkingNotes {
-				t.Errorf("second output = %q, want working_notes", spec.Outputs[1].Type)
-			}
-			if result["working_notes_document"] == nil {
-				t.Error("the derived notes document must be reported, not silently created")
-			}
-		})
+	spec, result := dryRunSpec(t, curateArgs(nil))
+	if len(spec.Outputs) != 2 {
+		t.Fatalf("outputs = %d, want the document plus its notes", len(spec.Outputs))
+	}
+	if spec.Outputs[1].Type != looppkg.OutputTypeWorkingNotes {
+		t.Errorf("second output = %q, want working_notes", spec.Outputs[1].Type)
+	}
+	if result["working_notes_document"] == nil {
+		t.Error("the derived notes document must be reported, not silently created")
 	}
 }
 

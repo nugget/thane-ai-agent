@@ -59,32 +59,28 @@ name: loops_examples_curate
 tags: [loops_examples_curate]
 kind: trailhead
 teaser: "Recurring service loops that maintain a managed document over time."
-next_tags: [loops_examples_curate_dashboard, loops_examples_curate_journal, loops_examples_curate_circle]
+next_tags: [loops_examples_curate_dashboard, loops_examples_curate_circle]
 ---
 
 # Curate
 
 A service loop is self-paced and recurring. It may maintain a managed
 markdown document, but need not — omit outputs entirely for a service
-loop that just does recurring work. When it does own one, three
-questions decide the shape:
+loop that just does recurring work. A document-owning
+loop rewrites its document each cycle to reflect current state, and gets
+a private working-notes document alongside it for what it currently
+believes. Two questions decide the rest:
 
-1. **Does each cycle replace the document or append to it?**
-   - Replace (idempotent rewrite) → activate
-     `loops_examples_curate_dashboard`
-   - Append a dated entry → activate `loops_examples_curate_journal`
-
-2. **Will anyone else consult this?** A loop whose value is being read
+1. **Will anyone else consult this?** A loop whose value is being read
    by other turns, other loops, or an ambient surface should declare
    `tiers` so each reader takes the length it can afford. That needs the
    full spec: author it with `loop_definition_set` and start it with
    `loop_definition_launch`. A loop nobody reads but its owner can stay
    untiered on the shorter front door.
 
-3. **Does the loop need to escalate decisions to you, or accept new
+2. **Does the loop need to escalate decisions to you, or accept new
    focus when you adjust its scope?**
    - Yes (bi-directional) → activate `loops_examples_curate_circle`
-     after picking dashboard or journal
 
 ## The sleep envelope is the one judgment call
 
@@ -201,40 +197,6 @@ its reasoning are one call.
 
 Published projections carry current state, not the story of how it got
 there. Keeping those apart is what lets the document stay short.
-
----
-name: loops_examples_curate_journal
-tags: [loops_examples_curate_journal]
-kind: trailhead
-teaser: "Append a dated entry to a journal document each cycle."
----
-
-# Curate: Journal (journal mode)
-
-Use `mode: journal` when each cycle adds a *new entry* and prior
-entries are preserved. Research notes, decision logs, daily digests.
-The generated output tool is `append_output_<loop_name>` — it writes a
-new dated section without touching prior entries.
-
-```json
-{
-  "name": "burn_ban_monitor",
-  "intent": "Check the Comal County fire marshal site for the current burn ban status. Note any changes from the prior entry; otherwise note 'no change.'",
-  "operation": "service",
-  "sleep_min": "1h",
-  "sleep_max": "6h",
-  "output": {
-    "document": "kb:journals/burn-ban.md",
-    "mode": "journal",
-    "title": "Burn Ban Status Journal"
-  },
-  "tags": ["web"]
-}
-```
-
-Journal mode is right when continuity matters — you want to look back
-at the trail. Dashboard mode is right when only "right now" matters
-and yesterday's state is just noise.
 
 ---
 name: loops_examples_curate_circle

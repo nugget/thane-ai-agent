@@ -12,8 +12,8 @@ A service loop's `sleep_min` and `sleep_max` set the envelope it
 self-paces inside. Its outputs declare what it owns — optional, since a
 service loop can act without maintaining a document — and when an output
 is declared the running loop writes through a generated tool named for
-it: `replace_output_*` for a whole-document rewrite, `append_output_*`
-for a journal entry, `publish_output_*` when the output declares tiers.
+it: `replace_output_*` for a whole-document rewrite, or
+`publish_output_*` when the output declares tiers.
 If a maintained output is marked `truncated` in Declared Durable
 Outputs, read the full document before replacing it.
 
@@ -47,21 +47,25 @@ Declare `status_line` for any tiered output; add `teaser` when the
 output is something others search or link to, and `digest` when a
 reader should be able to act without opening the document.
 
-## Where the reasoning goes
+## Where the thinking goes
 
-Published projections carry current state, not the story of how it got
-there. A curating loop should also declare a `working_notes` output: its
-private process log, append-only, invisible to every consumer surface —
-out of search results, out of other loops' context. Use it for how the
-understanding is evolving: what changed and why, what drifted, what was
-refined, what a future turn should know. Revision history already
-records *what* changed; working notes are for *why*.
+What a loop publishes is current state. What it *thinks* — working
+theories, what an experiment is showing so far, what it expects next,
+what it is unsure of and what would settle it — belongs in its
+`working_notes` output: a private document, invisible to every consumer
+surface, out of search results and out of other loops' context.
 
-The smooth path is the `note` argument on `publish_output_*`: publish
-the projections and record the reasoning in the same call, so the
-timeline accumulates as a side effect of the work instead of a chore.
-`append_output_*` on the notes output writes an entry on its own when
-there is something to record without a publish.
+Notes are rewritten, not accumulated. They hold what you believe now,
+not a record of what you used to believe, so carry forward what still
+holds and drop what you no longer think. A log of superseded theories is
+not a place to keep a theory: the next turn would have to reconstruct
+your present view by reading its own history, which is the difficulty
+these exist to remove.
+
+The smooth path is the `notes` argument on `publish_output_*`: publish
+the projections and restate your current thinking in the same call, so
+the two never drift apart. The notes output's own `replace_output_*`
+writes them when your thinking changes without a publish.
 
 Choose stream wiring by attention cost:
 

@@ -400,8 +400,8 @@ runtime tools:
 
 - `replace_output_<name>` for a maintained document that should be
   rewritten as a complete current state.
-- `append_output_<name>` for a journal document, or for a working-notes
-  document, that should receive new entries over time.
+- `replace_output_<name>` for a working-notes document, which holds the
+  loop's current thinking and is rewritten rather than accumulated.
 - `publish_output_<name>` for a maintained document that declares
   `tiers`: one typed argument per published projection
   (`status_line`, `teaser`, `digest`) plus the full body, written

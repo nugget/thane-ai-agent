@@ -175,7 +175,6 @@ type executingLoopPlan struct {
 	replace     bool
 	hasOutput   bool
 	documentRef string
-	outputMode  string
 	title       string
 	outputTool  string
 	notesRef    string
@@ -229,7 +228,6 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		outputs     []looppkg.OutputSpec
 		outputSpec  looppkg.OutputSpec
 		documentRef string
-		outputMode  string
 		title       string
 		hasOutput   bool
 		tiers       []looppkg.OutputTier
@@ -237,11 +235,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 	)
 	if raw, ok := args["output"].(map[string]any); ok && raw != nil {
 		hasOutput = true
-		outputMode, _ = raw["mode"].(string)
 		documentRef, _ = raw["document"].(string)
-		if outputMode != "journal" && outputMode != "maintain" {
-			return nil, fmt.Errorf("output.mode must be \"journal\" or \"maintain\"")
-		}
 		if strings.TrimSpace(documentRef) == "" {
 			return nil, fmt.Errorf("output.document is required when output is set (e.g. \"kb:dashboards/foo.md\")")
 		}
@@ -256,10 +250,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		if err != nil {
 			return nil, err
 		}
-		if len(tiers) > 0 && outputMode != "maintain" {
-			return nil, fmt.Errorf("output.tiers apply to a maintained document; got mode %q", outputMode)
-		}
-		outputSpec = buildCurateOutputSpec(name, documentRef, outputMode, intent, tiers)
+		outputSpec = buildCurateOutputSpec(name, documentRef, intent, tiers)
 		outputs = []looppkg.OutputSpec{outputSpec}
 
 		// Every document-owning loop gets a notes surface. It is not a
@@ -284,7 +275,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 
 	task := intent
 	if hasOutput {
-		task = buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), len(tiers) > 0)
+		task = buildCurateTask(intent, documentRef, outputSpec.ToolName(), len(tiers) > 0)
 	}
 
 	now := time.Now().UTC()
@@ -324,7 +315,6 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		replace:     replace,
 		hasOutput:   hasOutput,
 		documentRef: documentRef,
-		outputMode:  outputMode,
 		title:       title,
 		outputTool:  outputSpec.ToolName(),
 		notesRef:    notesRef,
@@ -366,7 +356,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		return ldMarshalToolJSON(result)
 	}
 
-	hasOutput, documentRef, outputMode, title := plan.hasOutput, plan.documentRef, plan.outputMode, plan.title
+	hasOutput, documentRef, title := plan.hasOutput, plan.documentRef, plan.title
 	replace, warnings, envelope, now := plan.replace, plan.warnings, plan.envelope, plan.createdAt
 	entityCount, outputTool := plan.entityCount, plan.outputTool
 	parentName, tags := spec.ParentName, spec.Tags
@@ -384,11 +374,10 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
 			}
 		}
-		body := renderScaffoldBody(outputMode, title, intent)
+		body := renderScaffoldBody(title, intent)
 		frontmatter := map[string][]string{
 			"loop_definition_name": {name},
 			"loop_intent":          {intent},
-			"output_mode":          {outputMode},
 			"created":              {now.Format(time.RFC3339)},
 		}
 		if op == looppkg.OperationService {
@@ -425,7 +414,6 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	}
 	if hasOutput {
 		result["document_path"] = documentRef
-		result["output_mode"] = outputMode
 		result["output_tool"] = outputTool
 		if plan.notesRef != "" {
 			result["working_notes_document"] = plan.notesRef
@@ -602,11 +590,6 @@ func thaneLoopCreateSchema() map[string]any {
 				"type":        "object",
 				"description": "Optional managed document this loop maintains (service/event_driven only). Scaffolded with ownership frontmatter before launch.",
 				"properties": map[string]any{
-					"mode": map[string]any{
-						"type":        "string",
-						"enum":        []string{"journal", "maintain"},
-						"description": "journal = append a dated entry each cycle; maintain = idempotent rewrite each cycle.",
-					},
 					"document": map[string]any{
 						"type":        "string",
 						"description": "Managed-root document ref, e.g. \"kb:dashboards/pr-watchlist.md\" or \"core:journal/decisions.md\".",

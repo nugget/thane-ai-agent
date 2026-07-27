@@ -23,25 +23,6 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantTool: "replace_output_metacognitive_state",
 		},
 		{
-			name: "journal document defaults append",
-			output: OutputSpec{
-				Name: "service-journal",
-				Type: OutputTypeJournalDocument,
-				Ref:  "core:service-journal.md",
-			},
-			wantTool: "append_output_service_journal",
-		},
-		{
-			name: "invalid mode for type",
-			output: OutputSpec{
-				Name: "state",
-				Type: OutputTypeMaintainedDocument,
-				Ref:  "core:state.md",
-				Mode: OutputModeAppend,
-			},
-			wantErr: true,
-		},
-		{
 			name: "missing ref",
 			output: OutputSpec{
 				Name: "state",
@@ -98,16 +79,6 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantTool: "replace_output_ranch_notes",
 		},
 		{
-			name: "working notes reject append mode",
-			output: OutputSpec{
-				Name: "ranch notes",
-				Type: OutputTypeWorkingNotes,
-				Ref:  "core:ranch-notes.md",
-				Mode: OutputModeAppend,
-			},
-			wantErr: true,
-		},
-		{
 			name: "working notes rejects published audience",
 			output: OutputSpec{
 				Name:     "ranch notes",
@@ -116,16 +87,6 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Audience: OutputAudiencePublished,
 			},
 			wantErr: true,
-		},
-		{
-			name: "journal accepts explicit internal audience",
-			output: OutputSpec{
-				Name:     "private journal",
-				Type:     OutputTypeJournalDocument,
-				Ref:      "core:private-journal.md",
-				Audience: OutputAudienceInternal,
-			},
-			wantTool: "append_output_private_journal",
 		},
 		{
 			name: "unknown audience rejected",
@@ -188,16 +149,6 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "tiers on journal rejected",
-			output: OutputSpec{
-				Name:  "service journal",
-				Type:  OutputTypeJournalDocument,
-				Ref:   "core:service-journal.md",
-				Tiers: []OutputTier{OutputTierStatusLine},
-			},
-			wantErr: true,
-		},
-		{
 			name: "tiers on working notes rejected",
 			output: OutputSpec{
 				Name:  "ranch notes",
@@ -251,18 +202,8 @@ func TestOutputSpecEffectiveAudience(t *testing.T) {
 			want:   OutputAudiencePublished,
 		},
 		{
-			name:   "journal defaults published",
-			output: OutputSpec{Type: OutputTypeJournalDocument},
-			want:   OutputAudiencePublished,
-		},
-		{
 			name:   "working notes default internal",
 			output: OutputSpec{Type: OutputTypeWorkingNotes},
-			want:   OutputAudienceInternal,
-		},
-		{
-			name:   "explicit audience wins",
-			output: OutputSpec{Type: OutputTypeJournalDocument, Audience: OutputAudienceInternal},
 			want:   OutputAudienceInternal,
 		},
 	}

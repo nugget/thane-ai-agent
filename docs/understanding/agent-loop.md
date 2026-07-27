@@ -115,8 +115,9 @@ Output shapes available today:
 
 - **Maintained document** outputs replace the whole current document
   through a generated `replace_output_<name>` tool.
-- **Journal document** outputs append a timestamped entry through a
-  generated `append_output_<name>` tool.
+- **Working notes** outputs are the loop's private current thinking,
+  rewritten through a generated `replace_output_<name>` tool and never
+  projected into search, context, or any other consumer surface.
 - **Tiered maintained document** outputs — a maintained document that
   declares `tiers` — publish condensed projections alongside the full
   body through a generated `publish_output_<name>` tool, one argument

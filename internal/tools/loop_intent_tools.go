@@ -346,22 +346,15 @@ func coerceInt(v any) (int, error) {
 // and injects current-document context into each iteration prompt — so
 // the model gets a typed write surface and "what's already there?"
 // answered without re-reading the doc itself.
-func buildCurateOutputSpec(name, docRef, outputMode, intent string, tiers []looppkg.OutputTier) looppkg.OutputSpec {
-	out := looppkg.OutputSpec{
+func buildCurateOutputSpec(name, docRef, intent string, tiers []looppkg.OutputTier) looppkg.OutputSpec {
+	return looppkg.OutputSpec{
 		Name:    name,
 		Ref:     docRef,
 		Purpose: intent,
 		Tiers:   tiers,
+		Type:    looppkg.OutputTypeMaintainedDocument,
+		Mode:    looppkg.OutputModeReplace,
 	}
-	switch outputMode {
-	case "journal":
-		out.Type = looppkg.OutputTypeJournalDocument
-		out.Mode = looppkg.OutputModeAppend
-	case "maintain":
-		out.Type = looppkg.OutputTypeMaintainedDocument
-		out.Mode = looppkg.OutputModeReplace
-	}
-	return out
 }
 
 // buildCurateTask renders the per-iteration task prompt for a
@@ -373,17 +366,10 @@ func buildCurateOutputSpec(name, docRef, outputMode, intent string, tiers []loop
 // construction (see [loop.Loop.buildTaskTurn]), so it doesn't appear
 // here. Kept short and shape-clear so the model can act without
 // re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputMode, outputToolName string, tiered bool) string {
-	var verb string
-	switch {
-	case outputMode == "journal":
-		verb = "Append a dated entry to"
-	case tiered:
+func buildCurateTask(intent, docRef, outputToolName string, tiered bool) string {
+	verb := "Update the body of"
+	if tiered {
 		verb = "Publish the current state of"
-	case outputMode == "maintain":
-		verb = "Update the body of"
-	default:
-		verb = "Update"
 	}
 	var sb strings.Builder
 	sb.WriteString(intent)
@@ -394,41 +380,24 @@ func buildCurateTask(intent, docRef, outputMode, outputToolName string, tiered b
 	sb.WriteString(". Write through the declared output tool ")
 	sb.WriteString(outputToolName)
 	sb.WriteString(". ")
-	switch outputMode {
-	case "journal":
-		// Append-only: the recent tail in the context block is enough; the
-		// model never needs the full history to write a new entry.
-		sb.WriteString("Recent entries are surfaced in the Declared Durable Outputs context block above; no separate read is needed before appending.")
-	case "maintain":
-		// Complete-replacement: the context block shows the document head,
-		// possibly truncated at 16 KiB (see loopOutputContentBytes in
-		// app.loop_outputs). The model MUST notice the `truncated` flag and
-		// read the full document before replacing, or it will silently drop
-		// everything past the truncation boundary.
-		sb.WriteString("The current document body is shown in the Declared Durable Outputs context block above. If that entry is marked `truncated: true`, read the full document with doc_read before replacing — the output tool overwrites the entire body.")
-	default:
-		sb.WriteString("The document's current contents are surfaced in the Declared Durable Outputs context block above.")
-	}
+	// Complete-replacement: the context block shows the document head,
+	// possibly truncated at 16 KiB (see loopOutputContentBytes in
+	// app.loop_outputs). The model MUST notice the `truncated` flag and
+	// read the full document before replacing, or it will silently drop
+	// everything past the truncation boundary.
+	sb.WriteString("The current document body is shown in the Declared Durable Outputs context block above. If that entry is marked `truncated: true`, read the full document with doc_read before replacing — the output tool overwrites the entire body.")
 	return sb.String()
 }
 
 // renderScaffoldBody returns the initial markdown body for the output
-// document. Two templates today (journal, maintain); the Phase 2/3
-// rollout will add investigation, digest, and freeform.
-func renderScaffoldBody(outputMode, title, intent string) string {
+// document.
+func renderScaffoldBody(title, intent string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s\n\n", title)
 	fmt.Fprintf(&sb, "*%s*\n\n", intent)
-	switch outputMode {
-	case "journal":
-		sb.WriteString("*This document is maintained by a service loop. Each cycle appends a dated entry below.*\n\n")
-		sb.WriteString("## Entries\n\n")
-		sb.WriteString("_(awaiting first cycle)_\n")
-	case "maintain":
-		sb.WriteString("*This document is maintained by a service loop. Each cycle rewrites the body to reflect the current snapshot.*\n\n")
-		sb.WriteString("## Current State\n\n")
-		sb.WriteString("_(awaiting first cycle)_\n")
-	}
+	sb.WriteString("*This document is maintained by a service loop. Each cycle rewrites the body to reflect the current snapshot.*\n\n")
+	sb.WriteString("## Current State\n\n")
+	sb.WriteString("_(awaiting first cycle)_\n")
 	return sb.String()
 }
 

@@ -25,7 +25,6 @@ func TestThaneLoopCreateDryRunWritesNothing(t *testing.T) {
 		"sleep_min": "10m",
 		"sleep_max": "30m",
 		"output": map[string]any{
-			"mode":     "maintain",
 			"document": "kb:dashboards/dry-run-probe.md",
 		},
 		"dry_run": true,

@@ -285,15 +285,15 @@ func TestValidateOutputsRejectsSecondWorkingNotes(t *testing.T) {
 	if err == nil {
 		t.Fatal("ValidatePersistable() error = nil for two working_notes outputs, want error")
 	}
-	if !strings.Contains(err.Error(), "one private log") {
-		t.Fatalf("error = %v, want it to explain the single-log rule", err)
+	if !strings.Contains(err.Error(), "one place for its current thinking") {
+		t.Fatalf("error = %v, want it to explain the single-notes rule", err)
 	}
 
 	// The escape hatch the error names must actually validate.
 	spec.Outputs[1] = OutputSpec{
-		Name:     "shop journal",
-		Type:     OutputTypeJournalDocument,
-		Ref:      "core:shop-journal.md",
+		Name:     "shop log",
+		Type:     OutputTypeMaintainedDocument,
+		Ref:      "core:shop-log.md",
 		Audience: OutputAudienceInternal,
 	}
 	if err := spec.ValidatePersistable(); err != nil {
