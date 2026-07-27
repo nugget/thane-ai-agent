@@ -44,6 +44,7 @@ type Verifier struct {
 	mu                 sync.Mutex
 	path               string
 	allowedSignersPath string
+	seedSigners        []TrustedSigner
 	logger             *slog.Logger
 }
 
@@ -79,6 +80,7 @@ func NewVerifier(path string, logger *slog.Logger, opts Options) (*Verifier, err
 	return &Verifier{
 		path:               absPath,
 		allowedSignersPath: allowedSignersPath,
+		seedSigners:        opts.SeedSigners,
 		logger:             logger,
 	}, nil
 }
@@ -163,11 +165,15 @@ func (v *Verifier) verifyPathspec(ctx context.Context, pathspec string, requireT
 	}
 
 	if out, err := v.gitOutput(ctx, true, "verify-commit", commit); err != nil {
-		msg := strings.TrimSpace(out)
-		if msg == "" {
-			msg = err.Error()
+		// The root's own trust file does not vouch for this commit. Fall back
+		// to the seed set, which the root cannot withdraw — see trustedBySeed.
+		if !trustedBySeed(ctx, v.path, v.seedSigners, commit) {
+			msg := strings.TrimSpace(out)
+			if msg == "" {
+				msg = err.Error()
+			}
+			return failedVerification(commit, "commit signature verification failed: "+msg)
 		}
-		return failedVerification(commit, "commit signature verification failed: "+msg)
 	}
 
 	return VerificationResult{

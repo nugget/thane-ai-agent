@@ -511,3 +511,96 @@ func TestAdmissionIgnoresRepositoryConfiguredSignatureProgram(t *testing.T) {
 		t.Fatal("a root that configured its own signature program was admitted")
 	}
 }
+
+// TestSeedSignerRemainsTrustedAfterRemovalFromTrustFile is the floor.
+//
+// A seed signer is entitled to sign a root permanently, and nothing inside the
+// repository can withdraw that. Without it the recovery guarantee this design
+// leads with is false: verification reads only the in-tree trust file, so an
+// edit to that file could remove the very key needed to repair it, and the
+// root would be unrecoverable by exactly the person entitled to recover it.
+func TestSeedSignerRemainsTrustedAfterRemovalFromTrustFile(t *testing.T) {
+	t.Parallel()
+	operator := newAdmissionKey(t, "operator@example.com")
+	agent := newAdmissionKey(t, AgentPrincipal)
+
+	repo := newAdmissionRepo(t)
+	repo.commitAs(operator, "birth", map[string]string{
+		TrustFileName: trustFile(operator, agent),
+	})
+	// The trust file is edited to drop the operator — the pollution the floor
+	// exists to survive. The commit doing it is signed by the operator, so it
+	// is a legitimate edit rather than an attack; the point is what happens to
+	// the operator's own authority afterwards.
+	repo.commitAs(operator, "drop the operator from the trust file", map[string]string{
+		TrustFileName: trustFile(agent),
+	})
+
+	seeds := []TrustedSigner{operator.signer()}
+
+	// Control: the root's own trust file no longer vouches for HEAD, so
+	// in-tree verification alone refuses it.
+	if err := repo.gitTry("-c", "gpg.ssh.allowedSignersFile="+filepath.Join(repo.dir, TrustFileName),
+		"verify-commit", "HEAD"); err == nil {
+		t.Fatal("control failed: the in-tree file still vouches for HEAD, so the floor is untested")
+	}
+
+	if !trustedBySeed(t.Context(), repo.dir, seeds, "HEAD") {
+		t.Fatal("a seed signer lost the ability to sign after being removed from the in-tree trust file")
+	}
+
+	// And a key that was never a seed gains nothing from the fallback.
+	stranger := newAdmissionKey(t, "stranger@example.com")
+	if trustedBySeed(t.Context(), repo.dir, []TrustedSigner{stranger.signer()}, "HEAD") {
+		t.Fatal("the floor admitted a commit signed by a key that is not a declared seed")
+	}
+}
+
+// TestVerifierFallsBackToTheSeedFloor exercises the wiring rather than the
+// helper: a Verifier constructed with a root's seed set accepts a commit the
+// root's own trust file has stopped vouching for, and still refuses one no
+// declared key signed.
+func TestVerifierFallsBackToTheSeedFloor(t *testing.T) {
+	t.Parallel()
+	operator := newAdmissionKey(t, "operator@example.com")
+	agent := newAdmissionKey(t, AgentPrincipal)
+
+	repo := newAdmissionRepo(t)
+	repo.commitAs(operator, "birth", map[string]string{
+		TrustFileName: trustFile(operator, agent),
+	})
+	repo.commitAs(operator, "drop the operator, leave a document behind", map[string]string{
+		TrustFileName: trustFile(agent),
+		"notes.md":    "written while the operator was still listed",
+	})
+
+	withoutFloor, err := NewVerifier(repo.dir, slog.New(slog.DiscardHandler), Options{})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if result, _ := withoutFloor.VerifyFile(t.Context(), "notes.md"); result.Trusted() {
+		t.Fatal("control failed: the in-tree file still vouches for HEAD, so the floor is untested")
+	}
+
+	withFloor, err := NewVerifier(repo.dir, slog.New(slog.DiscardHandler), Options{
+		SeedSigners: []TrustedSigner{operator.signer()},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier with seeds: %v", err)
+	}
+	result, err := withFloor.VerifyFile(t.Context(), "notes.md")
+	if !result.Trusted() {
+		t.Fatalf("seed-signed commit was refused despite the declared floor: %v (%s)", err, result.Message)
+	}
+
+	stranger := newAdmissionKey(t, "stranger@example.com")
+	wrongFloor, err := NewVerifier(repo.dir, slog.New(slog.DiscardHandler), Options{
+		SeedSigners: []TrustedSigner{stranger.signer()},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier with unrelated seeds: %v", err)
+	}
+	if result, _ := wrongFloor.VerifyFile(t.Context(), "notes.md"); result.Trusted() {
+		t.Fatal("a floor of keys that signed nothing here still admitted the commit")
+	}
+}

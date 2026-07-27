@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
 
 // signCore gives a core repository an SSH signing identity and the
 // matching .allowed_signers, so commits made afterwards verify the way
 // a real instance's do. Returns nothing: every later commit in the test
 // is signed by construction.
-func signCore(t *testing.T, dir string) {
+func signCore(t *testing.T, dir string) string {
 	t.Helper()
 	keyPath := filepath.Join(t.TempDir(), "signing_ed25519")
 	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "test@example.com", "-f", keyPath)
@@ -39,6 +41,7 @@ func signCore(t *testing.T, dir string) {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
+	return strings.TrimSpace(string(pub))
 }
 
 func gitInit(t *testing.T, dir string) {
@@ -440,4 +443,55 @@ func TestCoreRepositoryDistinguishesUnreadableFromAbsent(t *testing.T) {
 			t.Fatalf("detail should say git could not read the repository, got %q", check.Detail)
 		}
 	})
+}
+
+// TestConfigSignedFallsBackToSeedSigners is the seed floor applied to core.
+//
+// Everywhere else, a seed signer keeps its authority over a root no matter what
+// the root's own trust file later says. Core has to behave the same way or the
+// guarantee inverts exactly where it matters most: a trust file that stopped
+// listing the operator would fail config_signed, serve would refuse, and the
+// person entitled to repair core would be locked out of the instance by the
+// very key that entitles them.
+func TestConfigSignedFallsBackToSeedSigners(t *testing.T) {
+	t.Parallel()
+
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	publicKey := signCore(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(core, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	gitCommitAll(t, core, "adopt config into core")
+
+	// The trust file stops listing the key that signed everything here. The
+	// edit is itself signed by that key, so this is a legitimate operation
+	// rather than an attack — the question is what happens to the signer's
+	// authority afterwards.
+	if err := os.WriteFile(filepath.Join(core, ".allowed_signers"), []byte("someone-else@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGYFzshHIX3K8OkSRKXRsSNyYDH7zAatbEFX7dW74evA\n"), 0o644); err != nil {
+		t.Fatalf("rewrite allowed signers: %v", err)
+	}
+	gitCommitAll(t, core, "drop the founding key from the trust file")
+
+	// Control: with no declared seed set there is no floor to stand on, and
+	// core's own trust file no longer vouches for its history.
+	if got := checkByName(t, run(t, workspace), "config_signed"); got.Status != StatusFail {
+		t.Fatalf("control failed: config_signed = %s without seeds, so the floor is untested", got.Status)
+	}
+
+	report, err := Run(t.Context(), workspace, Options{
+		SeedSigners: []provenance.TrustedSigner{{
+			Principal: "test@example.com",
+			PublicKey: publicKey,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run with seeds: %v", err)
+	}
+	if got := checkByName(t, report, "config_signed"); got.Status != StatusPass {
+		t.Fatalf("config_signed = %s (%s), want pass: a declared seed signer must keep its authority over core", got.Status, got.Detail)
+	}
 }

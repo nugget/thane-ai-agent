@@ -201,6 +201,7 @@ func checkCoreIntegrity(cfg *config.Config, configPath, workspacePath string) *c
 	}
 	report, err := coreintegrity.Run(context.Background(), workspace, coreintegrity.Options{
 		ConfigFileName: config.ConfigFileName,
+		SeedSigners:    app.CoreSeedSigners(cfg),
 	})
 	if err != nil {
 		return nil

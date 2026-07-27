@@ -261,7 +261,11 @@ func (s *Store) VerifyHead(ctx context.Context) error {
 	defer s.mu.Unlock()
 	args := append(signatureTrustArgs(), "verify-commit", "HEAD")
 	if err := s.git(ctx, nil, nil, args...); err != nil {
-		return fmt.Errorf("verify HEAD against allowed_signers: %w", err)
+		// A seed signer may always sign this root, whatever the in-tree file
+		// currently says — see trustedBySeed.
+		if !trustedBySeed(ctx, s.path, s.seedSigners, "HEAD") {
+			return fmt.Errorf("verify HEAD against allowed_signers: %w", err)
+		}
 	}
 	return nil
 }

@@ -22,6 +22,10 @@ type VerifySpec struct {
 	// RepoPath optionally points at the backing git repository. Empty means the
 	// worktree path itself is the repository.
 	RepoPath string
+	// SeedSigners are the keys entitled to establish this root. They remain
+	// able to sign it permanently, so verification falls back to them when the
+	// root's own trust file does not vouch for a commit.
+	SeedSigners []provenance.TrustedSigner
 	// Logger receives setup logs. Nil uses slog.Default.
 	Logger *slog.Logger
 }
@@ -65,7 +69,7 @@ func OpenVerified(ctx context.Context, spec VerifySpec) (*Verified, error) {
 	if err := ConfigureRepoLocalAllowedSigners(ctx, name, root.RepoPath, logger); err != nil {
 		return nil, err
 	}
-	verifier, err := provenance.NewVerifier(root.RepoPath, logger, provenance.Options{})
+	verifier, err := provenance.NewVerifier(root.RepoPath, logger, provenance.Options{SeedSigners: spec.SeedSigners})
 	if err != nil {
 		return nil, fmt.Errorf("%s: initialize verifier: %w", name, err)
 	}

@@ -124,6 +124,34 @@ func attributionHint(ctx context.Context, repoPath, commit string) string {
 	}
 }
 
+// trustedBySeed reports whether a commit is signed by one of the root's
+// declared seed signers.
+//
+// This is the floor: seed signers are entitled to sign a root permanently, and
+// nothing inside the repository can withdraw that. Without it the guarantee the
+// design leads with — that a seed key can always re-assert control over a root
+// whose .allowed_signers has been polluted — is not true, because verification
+// reads only the in-tree file and an edit to that file could remove the very
+// key needed to repair it.
+//
+// It is consulted only after in-tree verification has already failed, so the
+// ordinary path costs nothing and the fallback runs on a signature the root
+// itself does not vouch for. A missing or unreadable seed set is not an error
+// here: it simply means there is no floor to stand on, and the in-tree failure
+// stands as the answer.
+func trustedBySeed(ctx context.Context, repoPath string, seeds []TrustedSigner, commit string) bool {
+	if len(seeds) == 0 || strings.TrimSpace(commit) == "" {
+		return false
+	}
+	seedFile, cleanup, err := materializeSeedSigners(seeds)
+	if err != nil {
+		return false
+	}
+	defer cleanup()
+	_, err = runGitTextVerify(ctx, repoPath, seedFile, "verify-commit", commit)
+	return err == nil
+}
+
 // rootCommits returns every parentless commit reachable from HEAD.
 //
 // The three ways this can fail are deliberately not collapsed. A repository

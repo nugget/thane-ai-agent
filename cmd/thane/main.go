@@ -454,6 +454,7 @@ func gateOnCoreIntegrity(ctx context.Context, logger *slog.Logger, cfg *config.C
 	}
 	report, err := coreintegrity.Run(ctx, cfg.Workspace.Path, coreintegrity.Options{
 		ConfigFileName: config.ConfigFileName,
+		SeedSigners:    app.CoreSeedSigners(cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("check core integrity: %w", err)
