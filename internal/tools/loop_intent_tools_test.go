@@ -193,7 +193,7 @@ func TestThaneCurate_RejectsInvalidKnobs(t *testing.T) {
 		return map[string]any{
 			"name": "knob_test", "intent": "track stuff", "operation": "service",
 			"sleep_min": "5m", "sleep_max": "30m",
-			"output": map[string]any{"mode": "maintain", "document": "kb:knob.md"},
+			"output": map[string]any{"document": "kb:knob.md"},
 		}
 	}
 	cases := []struct {
@@ -278,7 +278,6 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
-			"mode":     "maintain",
 			"document": "kb:dashboards/pr-watchlist.md",
 			"title":    "PR Watchlist",
 		},
@@ -304,9 +303,6 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	}
 	if resp["loop_definition_name"] != "test_pr_watchlist" {
 		t.Errorf("loop_definition_name = %v, want test_pr_watchlist", resp["loop_definition_name"])
-	}
-	if resp["output_mode"] != "maintain" {
-		t.Errorf("output_mode = %v, want maintain", resp["output_mode"])
 	}
 	if resp["output_tool"] != "replace_output_test_pr_watchlist" {
 		t.Errorf("output_tool = %v, want replace_output_test_pr_watchlist", resp["output_tool"])
@@ -446,9 +442,6 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if !strings.Contains(doc, "test_pr_watchlist") {
 		t.Errorf("scaffold missing loop name in frontmatter:\n%s", doc)
 	}
-	if !strings.Contains(doc, "output_mode") {
-		t.Errorf("scaffold missing output_mode frontmatter:\n%s", doc)
-	}
 	rawDoc, err := os.ReadFile(filepath.Join(kbDir, "dashboards", "pr-watchlist.md"))
 	if err != nil {
 		t.Fatalf("read raw scaffold doc: %v", err)
@@ -522,7 +515,6 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
-			"mode":     "journal",
 			"document": "kb:journal/existing.md",
 		},
 	})
@@ -594,7 +586,6 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
-			"mode":     "maintain",
 			"document": "kb:notes/existing.md",
 		},
 	})
@@ -612,100 +603,6 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 	}
 	if !strings.Contains(doc, "Do not overwrite") {
 		t.Errorf("pre-existing document was modified despite refusal:\n%s", doc)
-	}
-}
-
-// TestThaneCurate_JournalDeclaresAppendOutput verifies that journal-mode
-// loops carry a journal_document OutputSpec with append mode, so the
-// hydration layer generates an append_output_* scoped tool instead of
-// the replace_output_* tool used by maintain-mode loops.
-func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	kbDir := filepath.Join(tempDir, "kb")
-	if err := mkdirAllForTest(kbDir); err != nil {
-		t.Fatalf("mkdir kb: %v", err)
-	}
-	db, err := database.OpenMemory()
-	if err != nil {
-		t.Fatalf("open memory db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
-	if err != nil {
-		t.Fatalf("documents.NewStore: %v", err)
-	}
-	docTools := documents.NewTools(docStore)
-
-	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
-	if err != nil {
-		t.Fatalf("NewDefinitionRegistry: %v", err)
-	}
-	reg := NewEmptyRegistry()
-	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
-		DocTools:    docTools,
-		Registry:    defRegistry,
-		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		CommitSpec:  upsertCommitSpec(defRegistry),
-		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
-			return looppkg.LaunchResult{LoopID: "loop-journal-1"}, nil
-		},
-	})
-
-	tool := reg.Get("thane_loop_create")
-	if _, err := tool.Handler(context.Background(), map[string]any{
-		"name":      "release_journal",
-		"intent":    "Capture forge releases as a dated log.",
-		"operation": "service",
-		"sleep_min": "54m",
-		"sleep_max": "66m",
-		"output": map[string]any{
-			"mode":     "journal",
-			"document": "kb:journal/releases.md",
-		},
-	}); err != nil {
-		t.Fatalf("thane_loop_create handler: %v", err)
-	}
-
-	snap := defRegistry.Snapshot()
-	var found *looppkg.DefinitionSnapshot
-	for i := range snap.Definitions {
-		if snap.Definitions[i].Spec.Name == "release_journal" {
-			found = &snap.Definitions[i]
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("definition not registered")
-	}
-	if len(found.Spec.Outputs) != 2 {
-		t.Fatalf("Outputs len = %d, want 2 (the journal plus its notes)", len(found.Spec.Outputs))
-	}
-	out := found.Spec.Outputs[0]
-	if out.Type != looppkg.OutputTypeJournalDocument {
-		t.Errorf("Type = %q, want journal_document", out.Type)
-	}
-	if out.Mode != looppkg.OutputModeAppend {
-		t.Errorf("Mode = %q, want append", out.Mode)
-	}
-	if got, want := out.ToolName(), "append_output_release_journal"; got != want {
-		t.Errorf("ToolName = %q, want %q", got, want)
-	}
-	if !strings.Contains(found.Spec.Task, "append_output_release_journal") {
-		t.Errorf("task prompt should reference scoped output tool, got: %s", found.Spec.Task)
-	}
-	// Journal mode is append-only: the recent tail in the context block
-	// is enough, so the prompt should explicitly say no separate read is
-	// needed before appending.
-	if !strings.Contains(found.Spec.Task, "no separate read") {
-		t.Errorf("journal-mode task prompt should reassure no read needed, got: %s", found.Spec.Task)
-	}
-	// Conversely, journal mode must NOT carry the maintain-mode truncation
-	// warning — appending doesn't need the full history.
-	if strings.Contains(found.Spec.Task, "truncated") {
-		t.Errorf("journal-mode task prompt should not carry maintain-mode truncation warning, got: %s", found.Spec.Task)
 	}
 }
 
@@ -764,7 +661,6 @@ func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
 		"sleep_max":    "30m",
 		"instructions": "  " + steering + "  ", // whitespace trimmed
 		"output": map[string]any{
-			"mode":     "maintain",
 			"document": "kb:dashboards/rack.md",
 		},
 	}); err != nil {
@@ -840,7 +736,6 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 		"sleep_min": "5m",
 		"sleep_max": "30m",
 		"output": map[string]any{
-			"mode":     "maintain",
 			"document": "kb:dashboards/no-inst.md",
 		},
 	}); err != nil {
@@ -944,7 +839,6 @@ func TestThaneCurate_PersistsSubscriptions(t *testing.T) {
 		"sleep_min": "21h",
 		"sleep_max": "27h",
 		"output": map[string]any{
-			"mode":     "journal",
 			"document": "kb:home/hvac.md",
 		},
 		"entities": []any{
@@ -1011,7 +905,6 @@ func TestThaneCurate_ReplaceOverwritesSubscriptions(t *testing.T) {
 			"sleep_min": "21h",
 			"sleep_max": "27h",
 			"output": map[string]any{
-				"mode":     "journal",
 				"document": "kb:home/hvac.md",
 			},
 		}
@@ -1067,7 +960,6 @@ func TestThaneCurate_RejectsDuplicateEntityID(t *testing.T) {
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
-			"mode":     "journal",
 			"document": "kb:dup.md",
 		},
 		"entities": []any{
@@ -1100,7 +992,6 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
-			"mode":     "journal",
 			"document": "kb:frac.md",
 		},
 		"entities": []any{
@@ -1126,7 +1017,6 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
-			"mode":     "journal",
 			"document": "kb:whole.md",
 		},
 		"entities": []any{

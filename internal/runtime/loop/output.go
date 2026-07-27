@@ -16,9 +16,6 @@ const (
 	// OutputTypeMaintainedDocument describes a document the loop owns
 	// as a current complete state.
 	OutputTypeMaintainedDocument OutputType = "maintained_document"
-	// OutputTypeJournalDocument describes an append-only journal
-	// document maintained by the loop.
-	OutputTypeJournalDocument OutputType = "journal_document"
 	// OutputTypeWorkingNotes describes a loop's private thinking:
 	// maintained like its published document and internal-audience by
 	// default, never projected into consumer surfaces.
@@ -38,8 +35,6 @@ type OutputMode string
 const (
 	// OutputModeReplace requires complete replacement content.
 	OutputModeReplace OutputMode = "replace"
-	// OutputModeAppend requires append-only journal entries.
-	OutputModeAppend OutputMode = "append"
 )
 
 // OutputTier names one declared fidelity level in a tiered output's
@@ -87,12 +82,6 @@ type OutputSpec struct {
 	Mode OutputMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Purpose is optional model-facing guidance for this output.
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
-	// JournalWindow is the default rolling window for journal outputs:
-	// day, week, or month. Empty uses the document layer default.
-	JournalWindow string `yaml:"journal_window,omitempty" json:"journal_window,omitempty"`
-	// MaxWindows caps retained journal windows. Zero uses the document
-	// layer default for the selected window.
-	MaxWindows int `yaml:"max_windows,omitempty" json:"max_windows,omitempty"`
 	// Tiers declares the published projection ladder for a maintained
 	// document: which of status_line, teaser, and digest the loop
 	// publishes alongside the full body. Empty means untiered. The
@@ -132,8 +121,6 @@ func (o OutputSpec) EffectiveMode() OutputMode {
 	switch o.Type {
 	case OutputTypeMaintainedDocument:
 		return OutputModeReplace
-	case OutputTypeJournalDocument:
-		return OutputModeAppend
 	case OutputTypeWorkingNotes:
 		return OutputModeReplace
 	default:
@@ -164,8 +151,6 @@ func (o OutputSpec) ToolName() string {
 	switch o.EffectiveMode() {
 	case OutputModeReplace:
 		return "replace_output_" + safeOutputToolSuffix(o.Name)
-	case OutputModeAppend:
-		return "append_output_" + safeOutputToolSuffix(o.Name)
 	default:
 		return "write_output_" + safeOutputToolSuffix(o.Name)
 	}
@@ -193,7 +178,7 @@ func (o OutputSpec) Validate() error {
 		return err
 	}
 	switch o.Type {
-	case OutputTypeMaintainedDocument, OutputTypeJournalDocument, OutputTypeWorkingNotes:
+	case OutputTypeMaintainedDocument, OutputTypeWorkingNotes:
 	default:
 		return fmt.Errorf("unsupported type %q", o.Type)
 	}
@@ -202,10 +187,6 @@ func (o OutputSpec) Validate() error {
 	case OutputModeReplace:
 		if o.Type != OutputTypeMaintainedDocument && o.Type != OutputTypeWorkingNotes {
 			return fmt.Errorf("mode %q is only valid for types %q and %q", mode, OutputTypeMaintainedDocument, OutputTypeWorkingNotes)
-		}
-	case OutputModeAppend:
-		if o.Type != OutputTypeJournalDocument {
-			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeJournalDocument)
 		}
 	default:
 		return fmt.Errorf("unsupported mode %q", mode)
@@ -216,13 +197,10 @@ func (o OutputSpec) Validate() error {
 		return fmt.Errorf("unsupported audience %q; use %q or %q", o.Audience, OutputAudiencePublished, OutputAudienceInternal)
 	}
 	if o.Type == OutputTypeWorkingNotes && o.Audience == OutputAudiencePublished {
-		return fmt.Errorf("audience %q contradicts type %q; working notes are internal by definition — declare a journal_document instead for a published journal", OutputAudiencePublished, OutputTypeWorkingNotes)
+		return fmt.Errorf("audience %q contradicts type %q; working notes are a loop's private thinking — declare a maintained_document for anything a reader should see", OutputAudiencePublished, OutputTypeWorkingNotes)
 	}
 	if err := validateOutputTiers(o); err != nil {
 		return err
-	}
-	if o.MaxWindows < 0 {
-		return fmt.Errorf("max_windows must be >= 0")
 	}
 	return nil
 }
@@ -275,11 +253,11 @@ func validateOutputs(outputs []OutputSpec) error {
 			// One private log per loop: the note argument on a tiered
 			// publish writes to "the" working notes, and a second
 			// declaration would make that target an arbitrary pick
-			// between two documents. A loop that wants another private
-			// journal can declare journal_document with
+			// between two documents. A loop that wants a second private
+			// document can declare a maintained_document with
 			// audience: internal, which carries no such implicit target.
 			if workingNotes != "" {
-				return fmt.Errorf("outputs[%d]: loop already declares the working_notes output %q; a loop has one private log, so declare additional private journals as journal_document with audience: %q", i, workingNotes, OutputAudienceInternal)
+				return fmt.Errorf("outputs[%d]: loop already declares the working_notes output %q; a loop has one place for its current thinking, so put it all there — for an additional private document declare a maintained_document with audience: %q", i, workingNotes, OutputAudienceInternal)
 			}
 			workingNotes = output.Name
 		}

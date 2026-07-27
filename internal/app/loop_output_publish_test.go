@@ -27,11 +27,9 @@ func tieredSpec() looppkg.Spec {
 				Tiers: []looppkg.OutputTier{looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser},
 			},
 			{
-				Name:          "office notes",
-				Type:          looppkg.OutputTypeWorkingNotes,
-				Ref:           "core:office-notes.md",
-				JournalWindow: "month",
-				MaxWindows:    6,
+				Name: "office notes",
+				Type: looppkg.OutputTypeWorkingNotes,
+				Ref:  "core:office-notes.md",
 			},
 		},
 	}
@@ -276,35 +274,6 @@ func firstFrontmatterValue(doc *documents.DocumentRecord, key string) string {
 		return values[0]
 	}
 	return ""
-}
-
-func TestJournalOutputDoesNotClaimInternalAudience(t *testing.T) {
-	t.Parallel()
-
-	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
-	spec := tieredSpec()
-	spec.Outputs = []looppkg.OutputSpec{{
-		Name:          "office journal",
-		Type:          looppkg.OutputTypeJournalDocument,
-		Ref:           "core:office-journal.md",
-		JournalWindow: "day",
-	}}
-	hydrated, err := app.hydrateLoopOutputs(spec)
-	if err != nil {
-		t.Fatalf("hydrateLoopOutputs: %v", err)
-	}
-	appendJournal := findRuntimeTool(t, hydrated, "append_output_office_journal")
-	if _, err := appendJournal.Handler(context.Background(), map[string]any{"entry": "Ordinary entry."}); err != nil {
-		t.Fatalf("append journal handler: %v", err)
-	}
-	doc, err := store.Read(context.Background(), "core:office-journal.md")
-	if err != nil {
-		t.Fatalf("Read journal: %v", err)
-	}
-	if got := firstFrontmatterValue(doc, "audience"); got != "" {
-		t.Fatalf("a published journal must carry no audience stamp, got %q", got)
-	}
 }
 
 func TestTieredOutputContextAdvertisesProjections(t *testing.T) {

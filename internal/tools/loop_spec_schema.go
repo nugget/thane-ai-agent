@@ -174,7 +174,7 @@ func loopOutputSpecSchema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"name": map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
-			"type": map[string]any{"type": "string", "enum": []string{"maintained_document", "journal_document", "working_notes"}, "description": "maintained_document = idempotent rewrite each cycle; journal_document = append-only dated entries; working_notes = this loop's private process log, append-only and never projected into any consumer surface (use it for how the understanding is evolving — drift, refinement, the reasoning behind a change)."},
+			"type": map[string]any{"type": "string", "enum": []string{"maintained_document", "working_notes"}, "description": "maintained_document = the loop rewrites it each cycle to reflect current state; working_notes = the same, but private — the loop's current thinking, never projected into search, context, or any other consumer surface. Use working_notes for working theories, what an experiment is showing, and what you expect next; use a maintained_document for what a reader should see. For an append-only dated record, journal a document directly with the doc tools rather than declaring it as an output."},
 			"tiers": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
@@ -185,11 +185,9 @@ func loopOutputSpecSchema() map[string]any {
 				"enum":        []string{"published", "internal"},
 				"description": "Who may see this output's content. published (default) allows projection into search results, context injection, and ambient surfaces; internal keeps it to this loop's own context and explicit reads by ref. working_notes outputs are internal automatically. Internal is context hygiene, not secrecy: operators and the archive still see the document.",
 			},
-			"ref":            map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
-			"mode":           map[string]any{"type": "string", "enum": []string{"replace", "append"}, "description": "Write mode; defaults from type when omitted (maintained→replace, journal and working_notes→append). A tiered maintained_document publishes projections instead, so leave this unset there."},
-			"purpose":        map[string]any{"type": "string", "description": "Optional model-facing guidance describing what this output is for."},
-			"journal_window": map[string]any{"type": "string", "enum": []string{"day", "week", "month"}, "description": "Rolling window for append-mode outputs (journal_document and working_notes); empty uses the document-layer default."},
-			"max_windows":    map[string]any{"type": "integer", "description": "Cap on retained windows for append-mode outputs; 0 uses the document-layer default. Windows beyond the cap are pruned from the document — the archive and the root's revision history keep them."},
+			"ref":     map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
+			"mode":    map[string]any{"type": "string", "enum": []string{"replace"}, "description": "Write mode. Both output types are rewritten each cycle, so this defaults correctly when omitted and there is no reason to set it. A tiered maintained_document publishes projections instead."},
+			"purpose": map[string]any{"type": "string", "description": "Optional model-facing guidance describing what this output is for."},
 		},
 	}
 }

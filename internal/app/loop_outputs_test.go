@@ -33,11 +33,9 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 				Purpose: "Current metacognitive state.",
 			},
 			{
-				Name:          "metacognitive_journal",
-				Type:          looppkg.OutputTypeJournalDocument,
-				Ref:           "core:metacognitive-journal.md",
-				JournalWindow: "day",
-				MaxWindows:    2,
+				Name: "metacognitive_notes",
+				Type: looppkg.OutputTypeWorkingNotes,
+				Ref:  "core:metacognitive-notes.md",
 			},
 		},
 	}
@@ -52,7 +50,7 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	if hydrated.RuntimeTools[0].Name != "replace_output_metacognitive_state" {
 		t.Fatalf("RuntimeTools[0].Name = %q", hydrated.RuntimeTools[0].Name)
 	}
-	if hydrated.RuntimeTools[1].Name != "append_output_metacognitive_journal" {
+	if hydrated.RuntimeTools[1].Name != "replace_output_metacognitive_notes" {
 		t.Fatalf("RuntimeTools[1].Name = %q", hydrated.RuntimeTools[1].Name)
 	}
 	for _, tool := range hydrated.RuntimeTools {
@@ -76,17 +74,17 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	}
 
 	_, err = hydrated.RuntimeTools[1].Handler(context.Background(), map[string]any{
-		"entry": "Observed quiet conditions.",
+		"body": "Current view: conditions are quiet and the trend holds.",
 	})
 	if err != nil {
-		t.Fatalf("append output handler: %v", err)
+		t.Fatalf("notes handler: %v", err)
 	}
-	journal, err := os.ReadFile(filepath.Join(coreDir, "metacognitive-journal.md"))
+	notes, err := os.ReadFile(filepath.Join(coreDir, "metacognitive-notes.md"))
 	if err != nil {
-		t.Fatalf("ReadFile journal: %v", err)
+		t.Fatalf("ReadFile notes: %v", err)
 	}
-	if !strings.Contains(string(journal), "Observed quiet conditions.") {
-		t.Fatalf("journal = %s, want appended entry", string(journal))
+	if !strings.Contains(string(notes), "conditions are quiet") {
+		t.Fatalf("notes = %s, want the rewritten body", string(notes))
 	}
 
 	ctx, err := hydrated.OutputContextBuilder(context.Background(), hydrated.Outputs)
@@ -96,9 +94,9 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	for _, want := range []string{
 		"Declared Durable Outputs",
 		"replace_output_metacognitive_state",
-		"append_output_metacognitive_journal",
+		"replace_output_metacognitive_notes",
 		"Everything is calm.",
-		"Observed quiet conditions.",
+		"conditions are quiet",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Fatalf("output context missing %q:\n%s", want, ctx)

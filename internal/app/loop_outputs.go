@@ -18,7 +18,6 @@ import (
 
 const (
 	loopOutputContentBytes = 16 * 1024
-	loopOutputRecentBytes  = 8 * 1024
 )
 
 type loopOutputContext struct {
@@ -26,31 +25,24 @@ type loopOutputContext struct {
 }
 
 type loopOutputContextEntry struct {
-	Name             string             `json:"name"`
-	Type             string             `json:"type"`
-	Mode             string             `json:"mode"`
-	Ref              string             `json:"ref"`
-	Purpose          string             `json:"purpose,omitempty"`
-	ToolName         string             `json:"tool_name"`
-	Interface        string             `json:"interface"`
-	Policy           string             `json:"policy"`
-	Exists           bool               `json:"exists"`
-	Title            string             `json:"title,omitempty"`
-	UpdatedDelta     string             `json:"updated_delta,omitempty"`
-	Content          string             `json:"content,omitempty"`
-	RecentContent    string             `json:"recent_content,omitempty"`
-	Truncated        bool               `json:"truncated,omitempty"`
-	BytesShown       int                `json:"bytes_shown,omitempty"`
-	BytesTotal       int                `json:"bytes_total,omitempty"`
-	UnavailableError string             `json:"unavailable_error,omitempty"`
-	Journal          *loopOutputJournal `json:"journal,omitempty"`
-	Tiers            []string           `json:"tiers,omitempty"`
-	Audience         string             `json:"audience,omitempty"`
-}
-
-type loopOutputJournal struct {
-	Window     string `json:"window,omitempty"`
-	MaxWindows int    `json:"max_windows,omitempty"`
+	Name             string   `json:"name"`
+	Type             string   `json:"type"`
+	Mode             string   `json:"mode"`
+	Ref              string   `json:"ref"`
+	Purpose          string   `json:"purpose,omitempty"`
+	ToolName         string   `json:"tool_name"`
+	Interface        string   `json:"interface"`
+	Policy           string   `json:"policy"`
+	Exists           bool     `json:"exists"`
+	Title            string   `json:"title,omitempty"`
+	UpdatedDelta     string   `json:"updated_delta,omitempty"`
+	Content          string   `json:"content,omitempty"`
+	Truncated        bool     `json:"truncated,omitempty"`
+	BytesShown       int      `json:"bytes_shown,omitempty"`
+	BytesTotal       int      `json:"bytes_total,omitempty"`
+	UnavailableError string   `json:"unavailable_error,omitempty"`
+	Tiers            []string `json:"tiers,omitempty"`
+	Audience         string   `json:"audience,omitempty"`
 }
 
 // hydrateLoopOutputs is the universal "make this spec runtime-ready"
@@ -130,39 +122,6 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 					return marshalLoopOutputToolResult(result)
 				},
 			})
-		case looppkg.OutputModeAppend:
-			out = append(out, looppkg.RuntimeTool{
-				Name:               output.ToolName(),
-				Description:        appendOutputDescription(output),
-				SkipContentResolve: true,
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"entry": map[string]any{
-							"type":        "string",
-							"description": "Journal entry content to append.",
-						},
-					},
-					"required": []string{"entry"},
-				},
-				Handler: func(ctx context.Context, args map[string]any) (string, error) {
-					entry, _ := args["entry"].(string)
-					if strings.TrimSpace(entry) == "" {
-						return "", fmt.Errorf("entry is required")
-					}
-					result, err := store.JournalUpdate(ctx, documents.JournalUpdateArgs{
-						Ref:         output.Ref,
-						Entry:       entry,
-						Window:      output.JournalWindow,
-						MaxWindows:  output.MaxWindows,
-						Frontmatter: loopOutputAudienceFrontmatter(output),
-					})
-					if err != nil {
-						return "", err
-					}
-					return marshalLoopOutputToolResult(result)
-				},
-			})
 		}
 	}
 	return out
@@ -191,12 +150,6 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		for _, field := range output.TierFields() {
 			entry.Tiers = append(entry.Tiers, field.Key)
 		}
-		if output.Type == looppkg.OutputTypeJournalDocument {
-			entry.Journal = &loopOutputJournal{
-				Window:     output.JournalWindow,
-				MaxWindows: output.MaxWindows,
-			}
-		}
 		doc, err := store.Read(ctx, output.Ref)
 		if err != nil {
 			if strings.Contains(err.Error(), "document not found") || errors.Is(err, os.ErrNotExist) {
@@ -218,8 +171,6 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 			// The head, not the tail: a loop rewriting its current
 			// thinking needs to see what it is replacing.
 			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
-		case looppkg.OutputTypeJournalDocument:
-			entry.RecentContent, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputRecentBytes, true)
 		}
 		payload.Outputs = append(payload.Outputs, entry)
 	}
@@ -266,8 +217,6 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 	switch output.EffectiveMode() {
 	case looppkg.OutputModeReplace:
 		return "Call " + output.ToolName() + " with complete replacement markdown content for this maintained document."
-	case looppkg.OutputModeAppend:
-		return "Call " + output.ToolName() + " with one new journal entry; do not rewrite old entries."
 	default:
 		return "Use the generated output tool for this declaration."
 	}
@@ -305,11 +254,6 @@ func replaceOutputDescription(output looppkg.OutputSpec) string {
 // the loop has to interpret.
 func workingNotesDescription(output looppkg.OutputSpec) string {
 	return fmt.Sprintf("Rewrite this loop's working notes %q at %s — its private thinking, carried from turn to turn. Hold what you currently believe: working theories, what an experiment is showing so far, what you expect to happen next, what you are unsure of and what would settle it. Replace the whole body each time so it stays a current view rather than a log; drop what you no longer think and keep what still holds. No consumer surface reads it — it stays out of search results and out of other loops' context — so write what would clutter or mislead a published document.", output.Name, output.Ref)
-}
-
-// appendOutputDescription frames an append-mode output for the model.
-func appendOutputDescription(output looppkg.OutputSpec) string {
-	return fmt.Sprintf("Append to the loop-declared journal output %q at %s. Pass only the new journal entry; Thane stamps, windows, prunes, indexes, and applies root policy.", output.Name, output.Ref)
 }
 
 func truncateLoopOutputText(s string, maxBytes int, tail bool) (string, bool, int, int) {
