@@ -196,9 +196,9 @@ At boot, every git-backed root that declares seed signers and sets
 3. **A trust file only seeds have touched.** Every commit that created or
    changed `.allowed_signers` is signed by a declared seed signer.
 
-All three are checked against a rendered seed-only signers file, never
-the root's in-tree one. Otherwise a commit that added a key could be
-validated by the very entry it introduced.
+Only seed signers satisfy these three rules. The root's own
+`.allowed_signers` gets no say in them — if it did, a commit that added a
+key could be validated by the very entry it introduced.
 
 Keys the trust file delegates to may sign ordinary content. Only a seed
 signer may widen the trust file itself, so a delegated key cannot

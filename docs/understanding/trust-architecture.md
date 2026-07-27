@@ -52,9 +52,9 @@ The structural point is where the answer comes from. Verifying against a
 root's own `.allowed_signers` lets the repository vouch for itself, since
 whoever wrote that file also chose what it says. Seed signers live in
 config, outside the repository they govern, so admission is the one
-question a root cannot answer in its own favor. Checks run against a
-rendered seed-only signers file for the same reason — a commit that added
-a key must not be validated by the entry it introduced.
+question a root cannot answer in its own favor. Nothing but the seed set
+counts here: the in-tree file is excluded from admission entirely, or a
+commit that added a key could be validated by the entry it introduced.
 
 This makes hardening a config expression rather than a code path. A root
 that omits the agent principal from its seed signers is one the agent may
