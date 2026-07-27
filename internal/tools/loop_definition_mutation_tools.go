@@ -22,8 +22,8 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if err != nil {
 		return "", err
 	}
-	if existing, ok := looppkg.FindDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
-		return "", (&looppkg.ImmutableDefinitionError{Name: spec.Name})
+	if _, _, err := ensureDefinitionMutable(snapshot, spec.Name); err != nil {
+		return "", err
 	}
 	// Captured before the commit: the commit's reconcile can SPAWN an absent
 	// active definition, and a loop that is live only after the commit runs
@@ -34,11 +34,7 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	// Single durable commit (persist + upsert + reconcile). Fall back to a
 	// bare overlay upsert when no commit hook is wired so a registry-only
 	// configuration still works.
-	if r.commitLoopDefinitionSpec != nil {
-		if err := r.commitLoopDefinitionSpec(ctx, spec, updatedAt); err != nil {
-			return "", err
-		}
-	} else if err := r.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
+	if err := commitSpecThroughChokepoint(ctx, r.commitLoopDefinitionSpec, r.loopDefinitionRegistry, spec, updatedAt); err != nil {
 		return "", err
 	}
 	view, err := currentLoopDefinitionView(r)
@@ -80,11 +76,9 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	existing, ok := looppkg.FindDefinition(snapshot, name)
-	if ok && existing.Source == looppkg.DefinitionSourceConfig {
-		return "", (&looppkg.ImmutableDefinitionError{Name: name})
-	} else if !ok {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
+	existing, err := requireMutableDefinition(snapshot, name)
+	if err != nil {
+		return "", err
 	}
 
 	// Containers anchor a chunk of the loop graph; deleting one while
@@ -303,12 +297,9 @@ func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return "", err
 	}
-	def, ok := looppkg.FindDefinition(snapshot, name)
-	if !ok {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
-	}
-	if def.Source == looppkg.DefinitionSourceConfig {
-		return "", (&looppkg.ImmutableDefinitionError{Name: name})
+	def, err := requireMutableDefinition(snapshot, name)
+	if err != nil {
+		return "", err
 	}
 
 	// Prefer the always-wired runtime registry. loopIntentDeps is only
