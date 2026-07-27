@@ -147,9 +147,14 @@ func signatureTrustArgs() []string {
 }
 
 // runGitTextVerify runs a read-only git command with SSH signature
-// verification enabled: it injects the allowed_signers file when one is
-// configured (a verify-only Verifier), and otherwise relies on the repo-local
-// git config a Store already set at init.
+// verification enabled.
+//
+// The two halves of "is this signature good" are treated differently on
+// purpose. What decides — the format and the program — is always pinned here
+// and never taken from configuration. Who counts — the allowed_signers file —
+// is injected when the caller names one (a verify-only Verifier), and
+// otherwise left to the repo-local config a Store set at init, since a Store
+// owns the repository it is verifying.
 func runGitTextVerify(ctx context.Context, repoPath, allowedSignersPath string, args ...string) (string, error) {
 	prefix := signatureTrustArgs()
 	if strings.TrimSpace(allowedSignersPath) != "" {

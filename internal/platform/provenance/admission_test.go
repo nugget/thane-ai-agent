@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -84,6 +85,13 @@ func (r *admissionRepo) git(args ...string) string {
 		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// gitTry runs git and returns its error instead of failing the test, for the
+// cases where the exit status is itself what is being examined.
+func (r *admissionRepo) gitTry(args ...string) error {
+	r.t.Helper()
+	return exec.Command("git", append([]string{"-C", r.dir}, args...)...).Run()
 }
 
 // commitAs writes files and commits them signed by the given key.
@@ -398,6 +406,24 @@ func TestVerifyAdmissionDistinguishesUnreadableFromUnborn(t *testing.T) {
 	})
 }
 
+// swapSignersProgram is a gpg.ssh.program that delegates to the real
+// ssh-keygen but substitutes its own allowed-signers file. Rotating the
+// positional parameters preserves each argument exactly, so a path containing
+// spaces survives; only the value after -f is replaced.
+const swapSignersProgram = `#!/bin/sh
+swap=0
+n=$#
+i=0
+while [ $i -lt $n ]; do
+	a="$1"; shift
+	if [ "$swap" = 1 ]; then set -- "$@" '%s'; swap=0
+	elif [ "$a" = "-f" ]; then set -- "$@" "-f"; swap=1
+	else set -- "$@" "$a"; fi
+	i=$((i + 1))
+done
+exec ssh-keygen "$@"
+`
+
 // TestAdmissionIgnoresRepositoryConfiguredSignatureProgram proves the trust
 // decision cannot be reassigned by editing configuration.
 //
@@ -408,12 +434,22 @@ func TestVerifyAdmissionDistinguishesUnreadableFromUnborn(t *testing.T) {
 // could nominate its own judge, which is the same self-vouching that admission
 // exists to refuse, moved one level down.
 //
-// The attack here is the one that actually works: rather than forging
-// ssh-keygen's output, the configured program delegates to the real one and
-// swaps the allowed-signers file for its own. git then reports a genuinely
-// good signature by a key it was told to trust.
+// The attack is the one that actually works: rather than forging ssh-keygen's
+// output, the configured program delegates to the real one and swaps the
+// allowed-signers file for its own, so git reports a genuinely good signature
+// by a key it was handed.
+//
+// The two control assertions are the point of the test rather than decoration.
+// Admission refusing proves nothing on its own — it would refuse just as
+// readily if the wrapper were broken, /bin/sh were missing, or git had stopped
+// honoring the setting. So the test first shows the honest check refusing this
+// commit, then shows the wrapper turning that same check into a pass. Only
+// then does refusal by admission mean the pin is what did it.
 func TestAdmissionIgnoresRepositoryConfiguredSignatureProgram(t *testing.T) {
 	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
 	operator := newAdmissionKey(t, "operator@example.com")
 	stranger := newAdmissionKey(t, "stranger@example.com")
 
@@ -423,17 +459,33 @@ func TestAdmissionIgnoresRepositoryConfiguredSignatureProgram(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	attackerSigners := filepath.Join(dir, "attacker_allowed")
-	if err := os.WriteFile(attackerSigners, []byte(stranger.principal+" "+stranger.publicKey+"\n"), 0o644); err != nil {
+	honest := filepath.Join(dir, "honest_allowed")
+	if err := os.WriteFile(honest, []byte(operator.principal+" "+operator.publicKey+"\n"), 0o644); err != nil {
+		t.Fatalf("write honest signers: %v", err)
+	}
+	attacker := filepath.Join(dir, "attacker_allowed")
+	if err := os.WriteFile(attacker, []byte(stranger.principal+" "+stranger.publicKey+"\n"), 0o644); err != nil {
 		t.Fatalf("write attacker signers: %v", err)
 	}
 	program := filepath.Join(dir, "swap-signers.sh")
-	script := "#!/bin/sh\nnew=\"\"\nnext=0\nfor a in \"$@\"; do\n  if [ \"$next\" = 1 ]; then new=\"$new " + attackerSigners + "\"; next=0; continue; fi\n  case \"$a\" in\n    -f) new=\"$new -f\"; next=1 ;;\n    *) new=\"$new $a\" ;;\n  esac\ndone\nexec ssh-keygen $new\n"
-	if err := os.WriteFile(program, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(program, fmt.Appendf(nil, swapSignersProgram, attacker), 0o755); err != nil {
 		t.Fatalf("write program: %v", err)
 	}
-	repo.git("config", "gpg.ssh.program", program)
 
+	// Control: honestly checked, this birth is signed by a key the trust set
+	// does not name, and git refuses it.
+	if err := repo.gitTry("-c", "gpg.ssh.allowedSignersFile="+honest, "verify-commit", "HEAD"); err == nil {
+		t.Fatal("control failed: an untrusted birth verified without the wrapper")
+	}
+	// Control: the wrapper turns that refusal into a pass, so the bypass this
+	// test guards against is live and the assertion below can attribute a
+	// refusal to the pin rather than to a broken fixture.
+	if err := repo.gitTry("-c", "gpg.ssh.allowedSignersFile="+honest,
+		"-c", "gpg.ssh.program="+program, "verify-commit", "HEAD"); err != nil {
+		t.Fatalf("control failed: the wrapper did not forge a passing verification, so this test proves nothing: %v", err)
+	}
+
+	repo.git("config", "gpg.ssh.program", program)
 	if _, err := VerifyAdmission(t.Context(), repo.dir, []TrustedSigner{operator.signer()}); err == nil {
 		t.Fatal("a root that configured its own signature program was admitted")
 	}
