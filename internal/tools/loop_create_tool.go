@@ -262,14 +262,15 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		outputSpec = buildCurateOutputSpec(name, documentRef, outputMode, intent, tiers)
 		outputs = []looppkg.OutputSpec{outputSpec}
 
-		// A curating loop keeps its reasoning out of what it publishes, so
-		// the notes output is offered alongside the tiered one rather than
-		// left to a second call the caller has to know to make.
-		if wantNotes, _ := raw["working_notes"].(bool); wantNotes {
-			notesSpec := buildWorkingNotesSpec(name, documentRef, intent)
-			outputs = append(outputs, notesSpec)
-			notesRef = notesSpec.Ref
-		}
+		// Every document-owning loop gets a notes surface. It is not a
+		// choice worth offering: a loop that publishes has reasoning that
+		// should not be published, and an opt-in that every caller should
+		// take is just a default in the wrong position. The cost of an
+		// unused one is a single context-block line saying it exists —
+		// nothing is scaffolded until the loop writes to it.
+		notesSpec := buildWorkingNotesSpec(name, documentRef, intent)
+		outputs = append(outputs, notesSpec)
+		notesRef = notesSpec.Ref
 	}
 
 	if _, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name); err != nil {
@@ -373,6 +374,15 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	if hasOutput {
 		if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil && !replace {
 			return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
+		}
+		// The notes ref is derived rather than supplied, so a collision is
+		// something the caller never chose and would not expect: appending a
+		// loop's private reasoning onto an unrelated document is worse than
+		// refusing to start.
+		if plan.notesRef != "" && !replace {
+			if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: plan.notesRef}); readErr == nil {
+				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
+			}
 		}
 		body := renderScaffoldBody(outputMode, title, intent)
 		frontmatter := map[string][]string{
@@ -609,10 +619,6 @@ func thaneLoopCreateSchema() map[string]any {
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
 						"description": "maintain mode only. Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
-					},
-					"working_notes": map[string]any{
-						"type":        "boolean",
-						"description": "Also give the loop a private working-notes document beside this one (same path with a -notes suffix). Notes are internal: never projected into search results or another loop's context. A loop that curates something should record why its understanding changed somewhere that is not what it publishes.",
 					},
 				},
 				"required": []string{"mode", "document"},

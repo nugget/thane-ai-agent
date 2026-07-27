@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // dryRunSpec runs thane_loop_create in dry-run and returns the decoded
@@ -63,8 +64,9 @@ func TestGuidedCreateProducesTieredOutput(t *testing.T) {
 		"tiers": []any{"status_line", "teaser", "digest"},
 	}))
 
-	if len(spec.Outputs) != 1 {
-		t.Fatalf("outputs = %d, want 1", len(spec.Outputs))
+	// The document plus the notes surface every document-owning loop gets.
+	if len(spec.Outputs) != 2 {
+		t.Fatalf("outputs = %d, want the tiered document plus its notes", len(spec.Outputs))
 	}
 	if got := len(spec.Outputs[0].Tiers); got != 3 {
 		t.Fatalf("tiers = %v, want three projections", spec.Outputs[0].Tiers)
@@ -132,3 +134,51 @@ func TestGuidedCreateRefusesTiersOnJournal(t *testing.T) {
 		t.Fatal("tiers on a journal output should be refused")
 	}
 }
+
+// TestGuidedCreateAlwaysDerivesNotes pins that the notes surface is not
+// a choice. An opt-in every caller should take is a default in the wrong
+// position, and the cost of an unused one is a single context-block line
+// — nothing is scaffolded until the loop writes to it.
+func TestGuidedCreateAlwaysDerivesNotes(t *testing.T) {
+	for _, mode := range []string{"maintain", "journal"} {
+		t.Run(mode, func(t *testing.T) {
+			spec, result := dryRunSpec(t, curateArgs(map[string]any{"mode": mode}))
+			if len(spec.Outputs) != 2 {
+				t.Fatalf("outputs = %d, want the document plus its notes", len(spec.Outputs))
+			}
+			if spec.Outputs[1].Type != looppkg.OutputTypeWorkingNotes {
+				t.Errorf("second output = %q, want working_notes", spec.Outputs[1].Type)
+			}
+			if result["working_notes_document"] == nil {
+				t.Error("the derived notes document must be reported, not silently created")
+			}
+		})
+	}
+}
+
+// TestGuidedCreateRefusesNotesCollision covers the hazard a derived path
+// carries that a supplied one does not: the caller never chose this ref,
+// so appending a loop's private reasoning onto whatever already lives
+// there would be a surprise it had no way to anticipate.
+func TestGuidedCreateRefusesNotesCollision(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	if _, err := rig.docTools.Write(ctx, documents.WriteArgs{
+		Ref:   "kb:dashboards/closet-notes.md",
+		Title: "Something else entirely",
+		Body:  strPtr("prior content"),
+	}); err != nil {
+		t.Fatalf("seed colliding document: %v", err)
+	}
+
+	_, err := rig.tool.Handler(ctx, curateArgs(nil))
+	if err == nil {
+		t.Fatal("a derived notes ref that already exists should refuse")
+	}
+	if !strings.Contains(err.Error(), "closet-notes.md") {
+		t.Errorf("error should name the colliding document: %v", err)
+	}
+}
+
+func strPtr(s string) *string { return &s }
