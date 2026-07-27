@@ -342,7 +342,8 @@ func coerceInt(v any) (int, error) {
 
 // buildCurateOutputSpec converts the intent-shaped output argument into
 // a declared OutputSpec on the loop. Once declared, the hydration layer
-// generates a scoped mutation tool (replace_output_* / append_output_*)
+// generates a scoped mutation tool (replace_output_*, or publish_output_*
+// when the output declares tiers)
 // and injects current-document context into each iteration prompt — so
 // the model gets a typed write surface and "what's already there?"
 // answered without re-reading the doc itself.

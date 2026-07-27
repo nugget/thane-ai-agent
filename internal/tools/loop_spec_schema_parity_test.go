@@ -144,3 +144,44 @@ func TestSpecFieldsNotOfferedStayReal(t *testing.T) {
 		}
 	}
 }
+
+// TestSchemasRequireOnlyDefinedProperties catches the half-removal that
+// prompted it: `mode` was deleted from thane_loop_create's output object
+// and left in its `required` list, so a schema-aware caller had to send
+// a field the schema did not define or fail validation — no answer was
+// correct. A required key with no property is internally inconsistent
+// and mechanically checkable, which makes it the reviewer's job only
+// until it is a test's.
+func TestSchemasRequireOnlyDefinedProperties(t *testing.T) {
+	for name, schema := range map[string]map[string]any{
+		"loopSpecSchema":        loopSpecSchema("parity"),
+		"thaneLoopCreateSchema": thaneLoopCreateSchema(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkRequiredAreDefined(t, name, schema)
+		})
+	}
+}
+
+// checkRequiredAreDefined walks nested objects and array items, because
+// the offending list was two levels down inside output.
+func checkRequiredAreDefined(t *testing.T, path string, node map[string]any) {
+	t.Helper()
+
+	props, _ := node["properties"].(map[string]any)
+	if required, ok := node["required"].([]string); ok {
+		for _, key := range required {
+			if _, defined := props[key]; !defined {
+				t.Errorf("%s requires %q but defines no such property", path, key)
+			}
+		}
+	}
+	for key, child := range props {
+		if obj, ok := child.(map[string]any); ok {
+			checkRequiredAreDefined(t, path+"."+key, obj)
+			if items, ok := obj["items"].(map[string]any); ok {
+				checkRequiredAreDefined(t, path+"."+key+"[]", items)
+			}
+		}
+	}
+}

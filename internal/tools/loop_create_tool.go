@@ -31,7 +31,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
 			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — give it an entity subscription with wake: true (wakes on that entity's changes), point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; without at least one trigger it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
-			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently, and a maintain output that declares tiers publishes condensed projections alongside the body instead — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
+			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring tiers publishes condensed projections alongside the body instead. It is scaffolded with ownership frontmatter before launch, and comes with a private working-notes document for the loop's own thinking. Omit it for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, tiers when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
@@ -601,10 +601,10 @@ func thaneLoopCreateSchema() map[string]any {
 					"tiers": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-						"description": "maintain mode only. Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
+						"description": "Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
 					},
 				},
-				"required": []string{"mode", "document"},
+				"required": []string{"document"},
 			},
 			"entities": map[string]any{
 				"type":        "array",

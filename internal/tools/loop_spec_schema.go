@@ -186,7 +186,7 @@ func loopOutputSpecSchema() map[string]any {
 				"description": "Who may see this output's content. published (default) allows projection into search results, context injection, and ambient surfaces; internal keeps it to this loop's own context and explicit reads by ref. working_notes outputs are internal automatically. Internal is context hygiene, not secrecy: operators and the archive still see the document.",
 			},
 			"ref":     map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
-			"mode":    map[string]any{"type": "string", "enum": []string{"replace", "append"}, "description": "Write mode; defaults from type when omitted (maintained→replace, journal and working_notes→append). A tiered maintained_document publishes projections instead, so leave this unset there."},
+			"mode":    map[string]any{"type": "string", "enum": []string{"replace"}, "description": "Write mode. Both output types are rewritten each cycle, so this defaults correctly when omitted and there is no reason to set it. A tiered maintained_document publishes projections instead."},
 			"purpose": map[string]any{"type": "string", "description": "Optional model-facing guidance describing what this output is for."},
 		},
 	}

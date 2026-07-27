@@ -253,8 +253,8 @@ func validateOutputs(outputs []OutputSpec) error {
 			// One private log per loop: the note argument on a tiered
 			// publish writes to "the" working notes, and a second
 			// declaration would make that target an arbitrary pick
-			// between two documents. A loop that wants another private
-			// journal can declare journal_document with
+			// between two documents. A loop that wants a second private
+			// document can declare a maintained_document with
 			// audience: internal, which carries no such implicit target.
 			if workingNotes != "" {
 				return fmt.Errorf("outputs[%d]: loop already declares the working_notes output %q; a loop has one place for its current thinking, so put it all there — for an additional private document declare a maintained_document with audience: %q", i, workingNotes, OutputAudienceInternal)
