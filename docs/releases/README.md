@@ -35,10 +35,10 @@ This directory is Thane's durable release record. Each `v*.md` file contains the
 
 - Release-note filenames are the exact Git tag followed by `.md`.
 - Published releases and prereleases are both retained.
-- Historical files preserve the GitHub release body with only deterministic text normalization: UTF-8 encoding, LF line endings, and exactly one terminal newline.
+- Each file begins with the GitHub release title as an H1. Everything after that document-only heading preserves the GitHub release body with only deterministic text normalization: UTF-8 encoding, LF line endings, and exactly one terminal newline.
 - [`manifest.json`](manifest.json) records the GitHub release identity, provenance timestamps, author, release state, target, asset metadata, and SHA-256 digest of every archived Markdown file.
 - `published_at` is the public-release timestamp. `created_at` and `updated_at` retain GitHub's separate lifecycle timestamps. Git commit dates are not rewritten to imitate publication history.
-- GitHub remains the distribution surface, but the in-repository Markdown file is the source for every future release body.
+- GitHub remains the distribution surface, but the in-repository Markdown file is the source for every future release body. Publication omits the document-only H1 because GitHub renders the release title separately.
 - After publication, a normal follow-up commit appends the live release metadata and file digest to the manifest and index. Values that do not exist until GitHub publishes the release are never predicted or backdated.
 
 The initial historical backfill, covering v0.2.0 through v0.10.2, records GitHub metadata captured at `2026-07-27T22:34:10Z`. For those entries, download counts and other mutable GitHub fields describe that capture, not permanent facts. Artifact `digest` values are GitHub's reported hashes; `archived_file_sha256` covers the in-repository note itself.

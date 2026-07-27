@@ -4,7 +4,7 @@
   "source": "https://github.com/nugget/thane-ai-agent/releases",
   "archived_at": "2026-07-27T22:34:10Z",
   "normalization": {
-    "markdown_files": "GitHub release body encoded as UTF-8, line endings normalized to LF, and terminated by exactly one newline",
+    "markdown_files": "GitHub release title as an H1, one blank line, then the GitHub release body encoded as UTF-8, with line endings normalized to LF and exactly one terminal newline",
     "archived_file_sha256": "SHA-256 of the normalized archived Markdown file"
   },
   "releases": [
@@ -24,7 +24,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.2.0.md",
-      "archived_file_sha256": "23a9b2314e456fe846dca0e52502be7a3a61d871aca57a3261b380216d21a76c",
+      "archived_file_sha256": "6fdf7a6b706ccb61da80e5d6e330c163326758f4fff187990b8acc5f90d0c90d",
       "assets": []
     },
     {
@@ -43,7 +43,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.2.1.md",
-      "archived_file_sha256": "ef2ba8ee14f5bad7aef1528c751b01e90c53fc8164fd60c5b7bbaf5734002318",
+      "archived_file_sha256": "8520ddf3ebb92b0c81da35baa7f5340d0026a722356b5bec70128fc557fd0af7",
       "assets": []
     },
     {
@@ -62,7 +62,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.2.2.md",
-      "archived_file_sha256": "ed8a2443b63b217ca249ec66879571f0e564a2fbe6d16d10ae333fe39b89e468",
+      "archived_file_sha256": "4ba31246775197363fdbe0e98dce7d08990a63ab190f1107814ee49790cc8893",
       "assets": []
     },
     {
@@ -81,7 +81,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.2.3.md",
-      "archived_file_sha256": "fed9ad24cb1e03d5c50b55d9ef32f2b7a2cef207d26247cdec20f5c49e452ff1",
+      "archived_file_sha256": "3bcf79e3a87c5772444e5d73013ca9106f3c1531411a525cf6bf756e4ef8cc20",
       "assets": []
     },
     {
@@ -100,7 +100,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.3.0.md",
-      "archived_file_sha256": "e193c03c06324454a85fd8cff4d7a00d2a98be210b0a1fa8fd1dd163e07dc7da",
+      "archived_file_sha256": "920cb1f203c9e4f8fe58208f39fe641f96b196c658fd61e9f0e29ac524aeb53d",
       "assets": []
     },
     {
@@ -119,7 +119,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.3.1.md",
-      "archived_file_sha256": "372c9d1a0a4fd405ca3432ece007100d5c56398b4dacc372895f840622996d0f",
+      "archived_file_sha256": "6e9aa3087fbde0d6f34efe7d19cfc2c89261ad7502ceec6d08ea974a44f8bfc9",
       "assets": []
     },
     {
@@ -138,7 +138,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.4.0.md",
-      "archived_file_sha256": "1bd16ebdef168e74362877f2ba8a2d3be14a54fc01e8a58279bae1c3d74945d6",
+      "archived_file_sha256": "ea1d6fc95ace9b5d53851c9479d649b2605f8223df94738288fa9484906ec391",
       "assets": []
     },
     {
@@ -157,7 +157,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.6.0.md",
-      "archived_file_sha256": "e7f55bc823e842bbed9ce9af1790038f51e884d682b1e028559a49121ccc1e53",
+      "archived_file_sha256": "d11b2aeb72bd78f86206bc993b468d64a7aac87d673217180d082d189f6d7270",
       "assets": []
     },
     {
@@ -176,7 +176,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.7.0.md",
-      "archived_file_sha256": "a74cdbe49a32b6a6c998370a91d2a0b71897a9fbd438a6d93680ecd861eda904",
+      "archived_file_sha256": "260881002ec3a9242ef5d4f88b3d1e60850be8aa6a0a65a0b402ab1abcedcff1",
       "assets": []
     },
     {
@@ -195,7 +195,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.7.1.md",
-      "archived_file_sha256": "75359ff31bcbde6b8e30030fb34bb267fda70706a1377fa70aa9f0a35ade9b7a",
+      "archived_file_sha256": "07fe78bf52a05ffac4ceb290429628cd25dbb70be05417f95ad7893bcbe8d10b",
       "assets": []
     },
     {
@@ -214,7 +214,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.8.0.md",
-      "archived_file_sha256": "dd5bc7fc5db17d8e773c50625cac33eafdab6453f314c0370a8fb330e6e64467",
+      "archived_file_sha256": "a35587f0e0688ffd2b30c0373f13f779f82948fa2787c3e17ff2aeee5956d839",
       "assets": []
     },
     {
@@ -233,7 +233,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.8.1.md",
-      "archived_file_sha256": "ba01957b6ff1cae6eaaf31fffc2907c9c245861c29c0fa44a961f3327eee10d7",
+      "archived_file_sha256": "08a926424371155f07a201242ece70cc4e8eec75cc445a6502e950ff271c294f",
       "assets": []
     },
     {
@@ -252,7 +252,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.8.2.md",
-      "archived_file_sha256": "9b2bbb039160a53d2f23d7e50ba5036389671c7a22fcd58e898788c32c481314",
+      "archived_file_sha256": "5cbb1bdd196f93de985c24c9ef04435281347b61347fb5d290a622ade4736c79",
       "assets": []
     },
     {
@@ -271,7 +271,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.8.3.md",
-      "archived_file_sha256": "fa4a028166182040eef3d1f4eb2f044cb18162de56d49c5a28d8c99d5ab94f4a",
+      "archived_file_sha256": "316835b6457f83b87aa37fc7098b611641bd710730e2fba35a0e463ab5e5bb2c",
       "assets": []
     },
     {
@@ -290,7 +290,7 @@
       "draft": false,
       "immutable": false,
       "archived_file": "v0.8.4.md",
-      "archived_file_sha256": "1545349e4724727658c77b730c1a64c0a1ec64e74321da79f2e9c64e043edc03",
+      "archived_file_sha256": "d6ff6d5e29fe7ac04507840144281678250442424b086624612692022fdf5779",
       "assets": []
     },
     {
@@ -309,7 +309,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.9.0-rc.md",
-      "archived_file_sha256": "8be762fdc7d914e0a840cfa111292045c3b5cb769715684a22accc9c3584977d",
+      "archived_file_sha256": "3513bbf4b9ad40bbd08a912a6d607db608e1361c1177454e38860c58005bd7b0",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.9.0-rc/thane_0.9.0-rc_checksums.txt",
@@ -379,7 +379,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.9.1-rc.1.md",
-      "archived_file_sha256": "3bbf811ffd32133ac8380e700b7d61ec246efd82ec78dfd6cf8a3c2d63b1aab0",
+      "archived_file_sha256": "4521712c9644365c8a6b2a73994cc1b970f15a929ea6b4035987e9e0fc9db8a9",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.9.1-rc.1/thane_0.9.1-rc.1_checksums.txt",
@@ -449,7 +449,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.9.1-rc.2.md",
-      "archived_file_sha256": "8d4eca92814a7e36f29c6e23a104d9914c0bbf5277db2b648f142dfec8cc517f",
+      "archived_file_sha256": "c340ecf80f883b7f3214137abf0f7464f6a2e368a52ce0efbc7b40523858bab1",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.9.1-rc.2/thane_0.9.1-rc.2_checksums.txt",
@@ -519,7 +519,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.9.1.md",
-      "archived_file_sha256": "4c8242dcc66909d9287709ac84158faee98a9337f58a175cacb646890a02c509",
+      "archived_file_sha256": "a96fd76e3d5427ff38fab240776782ae5164e08201a2d8e8319b9197b4c46c38",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.9.1/thane_0.9.1_checksums.txt",
@@ -589,7 +589,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.9.2.md",
-      "archived_file_sha256": "2ef12a1e0b569daef8c46c52b7b85ca84f2940bee5dbf9d3a6d0c443369cf84b",
+      "archived_file_sha256": "ba1e03319ff5c8424065d10d25c005136d7af1cf971639d3885dd388d7111cfd",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.9.2/thane_0.9.2_checksums.txt",
@@ -659,7 +659,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.10.0-rc.1.md",
-      "archived_file_sha256": "77f827a41e625417feb970bca3d10994c2920d373552ff874925f44c38c601a8",
+      "archived_file_sha256": "38b86a3a3ffe11444396bc4a025738241b8767361e826f10f2bee20847795be0",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.0-rc.1/thane_0.10.0-rc.1_checksums.txt",
@@ -729,7 +729,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.10.0.md",
-      "archived_file_sha256": "9764624bbadd334a9a3f60a012392a9f9d2b38ec74972c4d17de1a03f0a61d29",
+      "archived_file_sha256": "d058fcc960e09d9c50322a5aa7118a5206899ad771476c6eb2d02ad450bb29dd",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.0/thane_0.10.0_checksums.txt",
@@ -799,7 +799,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.10.1.md",
-      "archived_file_sha256": "49f2677a9072be11cbc6fd44a9025b75e748b8881ccfe2e71867caf378ad8045",
+      "archived_file_sha256": "0617b7bb369ebfccacbd2db8415e9b7887fe5f29cedc49b0882a6f4517d58d1f",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.1/thane_0.10.1_checksums.txt",
@@ -869,7 +869,7 @@
       "draft": false,
       "immutable": true,
       "archived_file": "v0.10.2.md",
-      "archived_file_sha256": "c747ff015aed19e563439a109457d43e3d475ba7d2705c47ea11fd4ae172e8ac",
+      "archived_file_sha256": "8827e81971f39101614377b81bf2675eb66617b3911cbdd28806819f0895c529",
       "assets": [
         {
           "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.2/thane_0.10.2_checksums.txt",

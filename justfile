@@ -681,11 +681,13 @@ release-github-upload version target_commit="" release_kind="auto":
     version="${version#v}"
     tag="v${version}"
     notes_path="docs/releases/${tag}.md"
+    notes_body_path="{{release-dir}}/${tag}-release-notes.md"
     target_commit="{{target_commit}}"
     release_kind="{{release_kind}}"
     release_exists=0
     prerelease=0
     release_id=""
+    release_title=""
     current_prerelease=""
     current_draft=""
     is_immutable=""
@@ -708,6 +710,19 @@ release-github-upload version target_commit="" release_kind="auto":
         echo "Release notes file is empty: $notes_path" >&2
         exit 1
     }
+    case "$(sed -n '1p' "$notes_path")" in
+        "# "*) ;;
+        *)
+            echo "Release notes must begin with the GitHub release title as an H1: $notes_path" >&2
+            exit 1
+            ;;
+    esac
+    test -z "$(sed -n '2p' "$notes_path")" || {
+        echo "Release-note H1 must be followed by a blank line: $notes_path" >&2
+        exit 1
+    }
+    release_title="$(sed -n '1s/^# //p' "$notes_path")"
+    tail -n +3 "$notes_path" > "$notes_body_path"
 
     case "$release_kind" in
         auto)
@@ -727,7 +742,7 @@ release-github-upload version target_commit="" release_kind="auto":
             ;;
     esac
 
-    create_args=("${tag}" --title "${tag}" --notes-file "${notes_path}")
+    create_args=("${tag}" --title "${release_title}" --notes-file "${notes_body_path}")
     if [ "$prerelease" -eq 1 ]; then
         create_args+=(--prerelease)
         create_args+=(--latest=false)

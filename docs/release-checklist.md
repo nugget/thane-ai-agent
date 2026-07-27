@@ -185,8 +185,10 @@ Tree is clean — verify it builds.
 
 - [ ] **Release notes committed** — author the complete release body at
       `docs/releases/v<version>.md`, using the exact intended tag as the
-      filename. The repository file is the publication source;
-      `release-github` rejects missing or empty notes rather than generating a
+      filename. Begin the document with the intended GitHub release title as
+      an H1, followed by a blank line and the body. The repository file is the
+      publication source; `release-github` removes the document-only H1 and
+      rejects missing, empty, or malformed notes rather than generating a
       GitHub-only body.
 - [ ] Release candidate identity recorded before validation: intended
       version, build suffix, commit SHA, branch, and target host
