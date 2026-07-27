@@ -218,7 +218,7 @@ func TestTierDocumentRoundTrip(t *testing.T) {
 			if err := tt.output.ValidateFacetPayload(tt.payload); err != nil {
 				t.Fatalf("payload should be valid: %v", err)
 			}
-			got := ParseTierDocument(tt.output.RenderFacetDocument(tt.payload))
+			got := tt.output.ParseFacetDocument(tt.output.RenderFacetDocument(tt.payload))
 			if got != tt.payload {
 				t.Fatalf("round trip changed the payload:\ngot  %#v\nwant %#v", got, tt.payload)
 			}
@@ -226,12 +226,12 @@ func TestTierDocumentRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParseTierDocumentAdoptsUnfacetedBody(t *testing.T) {
+func TestParseFacetDocumentAdoptsUnfacetedBody(t *testing.T) {
 	// An existing maintained document being adopted into the faceted
 	// contract has no recognized sections; its whole body is the full
 	// projection rather than being lost.
 	body := "# Ranch Office\n\nEverything written before facets existed."
-	got := ParseTierDocument(body)
+	got := facetedOutput(OutputFacetStatusLine).ParseFacetDocument(body)
 	if got.Full != body {
 		t.Fatalf("Full = %q, want the whole legacy body", got.Full)
 	}
@@ -240,9 +240,9 @@ func TestParseTierDocumentAdoptsUnfacetedBody(t *testing.T) {
 	}
 }
 
-func TestParseTierDocumentFoldsPreambleIntoFull(t *testing.T) {
+func TestParseFacetDocumentFoldsPreambleIntoFull(t *testing.T) {
 	body := "Stray lead paragraph.\n\n## Status Line\n\nAll clear.\n\n## Details\n\nBody proper."
-	got := ParseTierDocument(body)
+	got := facetedOutput(OutputFacetStatusLine).ParseFacetDocument(body)
 	if got.StatusLine != "All clear." {
 		t.Fatalf("StatusLine = %q", got.StatusLine)
 	}
@@ -251,9 +251,9 @@ func TestParseTierDocumentFoldsPreambleIntoFull(t *testing.T) {
 	}
 }
 
-func TestParseTierDocumentAcceptsHeadingCaseDrift(t *testing.T) {
+func TestParseFacetDocumentAcceptsHeadingCaseDrift(t *testing.T) {
 	// An operator hand-editing the document may not match our casing.
-	got := ParseTierDocument("## status line\n\nAll clear.\n\n## DETAILS\n\nBody.")
+	got := facetedOutput(OutputFacetStatusLine).ParseFacetDocument("## status line\n\nAll clear.\n\n## DETAILS\n\nBody.")
 	if got.StatusLine != "All clear." || got.Full != "Body." {
 		t.Fatalf("case-insensitive heading match failed: %#v", got)
 	}

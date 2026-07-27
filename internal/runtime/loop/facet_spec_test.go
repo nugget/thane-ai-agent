@@ -114,7 +114,7 @@ func TestJSONFacetRoundTripsThroughTheDocument(t *testing.T) {
 		t.Errorf("fenced block malformed:\n%s", body)
 	}
 
-	got := ParseTierDocument(body)
+	got := out.ParseFacetDocument(body)
 	if got.Digest != payload.Digest {
 		t.Errorf("digest did not survive the round trip:\n got %q\nwant %q", got.Digest, payload.Digest)
 	}
@@ -136,14 +136,42 @@ func TestJSONFacetRoundTripsThroughTheDocument(t *testing.T) {
 // fence has to survive a value that spans lines, because a payload a
 // human is meant to read in the document usually will.
 func TestJSONFacetRoundTripsPrettyPrinted(t *testing.T) {
+	// digest, not status_line: status_line is SingleLine, so a multi-line
+	// payload there would be refused at publish and this would be testing
+	// a call that cannot happen.
 	out := OutputSpec{
 		Name: "bays", Type: OutputTypeMaintainedDocument, Ref: "kb:b.md",
-		Facets: []FacetSpec{{Name: OutputFacetStatusLine, Format: FacetFormatJSON}},
+		Facets: []FacetSpec{
+			{Name: OutputFacetStatusLine},
+			{Name: OutputFacetDigest, Format: FacetFormatJSON},
+		},
 	}
 	value := "{\n  \"bay_1\": \"empty\",\n  \"bay_2\": \"NC Miata\",\n  \"bay_3\": \"truck\"\n}"
+	payload := FacetPayload{StatusLine: "Bays 2 and 3 occupied.", Digest: value, Full: "body"}
 
-	got := ParseTierDocument(out.RenderFacetDocument(FacetPayload{StatusLine: value, Full: "body"}))
-	if got.StatusLine != value {
-		t.Errorf("multi-line value did not survive:\n got %q\nwant %q", got.StatusLine, value)
+	// The publish path has to accept it, or the round trip is academic.
+	if err := out.ValidateFacetPayload(payload); err != nil {
+		t.Fatalf("payload should be publishable: %v", err)
+	}
+	got := out.ParseFacetDocument(out.RenderFacetDocument(payload))
+	if got.Digest != value {
+		t.Errorf("multi-line value did not survive:\n got %q\nwant %q", got.Digest, value)
+	}
+}
+
+// TestMarkdownFacetKeepsItsOwnFence covers what made the first unfence
+// wrong: a prose facet may legitimately contain a fenced JSON example,
+// and eating that fence would silently change what the author wrote.
+func TestMarkdownFacetKeepsItsOwnFence(t *testing.T) {
+	out := OutputSpec{
+		Name: "doc", Type: OutputTypeMaintainedDocument, Ref: "kb:d.md",
+		Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetDigest}},
+	}
+	example := "```json\n{\"example\": true}\n```"
+	payload := FacetPayload{StatusLine: "One line.", Digest: example, Full: "body"}
+
+	got := out.ParseFacetDocument(out.RenderFacetDocument(payload))
+	if got.Digest != example {
+		t.Errorf("a markdown facet lost its fence:\n got %q\nwant %q", got.Digest, example)
 	}
 }

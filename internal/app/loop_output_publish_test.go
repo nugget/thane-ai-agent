@@ -143,7 +143,7 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 	if got := firstFrontmatterValue(doc, "managed_by"); got != "publish_output_office_status" {
 		t.Fatalf("managed_by frontmatter = %q, want the publish tool name", got)
 	}
-	payload := looppkg.ParseTierDocument(doc.Body)
+	payload := facetedSpec().Outputs[0].ParseFacetDocument(doc.Body)
 	if payload.StatusLine != "Printer online; 2 packages waiting." {
 		t.Fatalf("re-parsed status line = %q", payload.StatusLine)
 	}
