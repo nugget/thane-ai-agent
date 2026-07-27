@@ -38,7 +38,7 @@ func (r *Registry) registerThaneLoopCreate() {
 		ContentResolveExempt: []string{
 			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
 			"instructions", "sleep_min", "sleep_max", "sleep_default", "jitter",
-			"quality_floor", "exclude_tools", "metadata", "replace",
+			"quality_floor", "exclude_tools", "metadata", "replace", "dry_run",
 		},
 		Parameters: thaneLoopCreateSchema(),
 		Handler:    r.handleThaneLoopCreate,
@@ -114,6 +114,17 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		return "", fmt.Errorf("derived container spec invalid: %w", err)
 	}
 
+	// Containers honour dry_run for the same reason executing loops do, and
+	// because a flag that works for two of three operations and is silently
+	// ignored by the third is worse than one that does not exist.
+	if dryRun, _ := args["dry_run"].(bool); dryRun {
+		return ldMarshalToolJSON(map[string]any{
+			"status":   "dry_run",
+			"spec":     spec,
+			"warnings": looppkg.BuildDefinitionWarnings(spec),
+		})
+	}
+
 	launchResult, reused, err := r.commitAndLaunchLoop(ctx, spec)
 	if err != nil {
 		return "", err
@@ -149,11 +160,37 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 // createLoopExecuting builds and launches a service or event_driven loop. The
 // service path requires a sleep envelope; the event_driven path rejects one (it
 // has no timer). An output document is optional for both.
-func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any, name, intent string, op looppkg.Operation) (string, error) {
+// executingLoopPlan is everything createLoopExecuting derives from its
+// arguments before anything is written: the spec it would persist, plus
+// the scaffolding and reporting details the spec itself does not carry.
+//
+// Separating derivation from writes is what lets dry_run answer "what
+// would you build" without creating a document or a definition, and it
+// is what makes the inference this tool is growing testable without a
+// registry standing behind it.
+type executingLoopPlan struct {
+	spec     looppkg.Spec
+	warnings []looppkg.DefinitionWarning
+
+	replace     bool
+	hasOutput   bool
+	documentRef string
+	outputMode  string
+	title       string
+	outputTool  string
+	entityCount int
+	envelope    sleepEnvelope
+	createdAt   time.Time
+}
+
+// planExecutingLoop derives the plan without writing anything. It reads
+// registry state — whether this name is taken, whether the named parent
+// exists — because those decide whether a plan is possible at all.
+func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, op looppkg.Operation) (*executingLoopPlan, error) {
 	deps := r.loopIntentDeps
 	if op == looppkg.OperationEventDriven {
 		if err := rejectArgsForOperation(args, op, "sleep_min", "sleep_max", "sleep_default", "jitter"); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
@@ -164,15 +201,15 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 
 	qualityFloor, err := parseLoopCreateQualityFloor(args)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	metadata, err := parseLoopCreateMetadata(args)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	entities, err := parseEntityList("entities", args["entities"])
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	excludeTools := loopCreateExcludeTools(args)
 
@@ -180,7 +217,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	if op == looppkg.OperationService {
 		envelope, err = parseSleepEnvelope(args)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
@@ -200,29 +237,29 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		outputMode, _ = raw["mode"].(string)
 		documentRef, _ = raw["document"].(string)
 		if outputMode != "journal" && outputMode != "maintain" {
-			return "", fmt.Errorf("output.mode must be \"journal\" or \"maintain\"")
+			return nil, fmt.Errorf("output.mode must be \"journal\" or \"maintain\"")
 		}
 		if strings.TrimSpace(documentRef) == "" {
-			return "", fmt.Errorf("output.document is required when output is set (e.g. \"kb:dashboards/foo.md\")")
+			return nil, fmt.Errorf("output.document is required when output is set (e.g. \"kb:dashboards/foo.md\")")
 		}
 		title, _ = raw["title"].(string)
 		if strings.TrimSpace(title) == "" {
 			title = name
 		}
 		if deps.DocTools == nil {
-			return "", fmt.Errorf("output document requested but the document store is not configured")
+			return nil, fmt.Errorf("output document requested but the document store is not configured")
 		}
 		outputSpec = buildCurateOutputSpec(name, documentRef, outputMode, intent)
 		outputs = []looppkg.OutputSpec{outputSpec}
 	}
 
 	if _, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name); err != nil {
-		return "", err
+		return nil, err
 	} else if found && !replace {
-		return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
+		return nil, fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
 	}
 	if err := r.resolveLoopParent(parentName); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	task := intent
@@ -257,9 +294,48 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		spec.Jitter = &jitter
 	}
 	if err := spec.ValidatePersistable(); err != nil {
-		return "", fmt.Errorf("derived spec invalid: %w", err)
+		return nil, fmt.Errorf("derived spec invalid: %w", err)
 	}
 	warnings := looppkg.BuildDefinitionWarnings(spec)
+
+	return &executingLoopPlan{
+		spec:        spec,
+		warnings:    warnings,
+		replace:     replace,
+		hasOutput:   hasOutput,
+		documentRef: documentRef,
+		outputMode:  outputMode,
+		title:       title,
+		outputTool:  outputSpec.ToolName(),
+		entityCount: len(entities),
+		envelope:    envelope,
+		createdAt:   now,
+	}, nil
+}
+
+func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any, name, intent string, op looppkg.Operation) (string, error) {
+	deps := r.loopIntentDeps
+	plan, err := r.planExecutingLoop(args, name, intent, op)
+	if err != nil {
+		return "", err
+	}
+	spec := plan.spec
+
+	// dry_run stops here, before the document is scaffolded and before
+	// anything is committed: the answer to "what would you build" must not
+	// build it.
+	if dryRun, _ := args["dry_run"].(bool); dryRun {
+		return ldMarshalToolJSON(map[string]any{
+			"status":   "dry_run",
+			"spec":     spec,
+			"warnings": plan.warnings,
+		})
+	}
+
+	hasOutput, documentRef, outputMode, title := plan.hasOutput, plan.documentRef, plan.outputMode, plan.title
+	replace, warnings, envelope, now := plan.replace, plan.warnings, plan.envelope, plan.createdAt
+	entityCount, outputTool := plan.entityCount, plan.outputTool
+	parentName, tags := spec.ParentName, spec.Tags
 
 	if hasOutput {
 		if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil && !replace {
@@ -297,7 +373,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		"loop_id":              launchResult.LoopID,
 		"operation":            string(op),
 		"parent_name":          parentName,
-		"entity_subscriptions": len(entities),
+		"entity_subscriptions": entityCount,
 		"warnings":             warnings,
 	}
 	if reused != nil {
@@ -307,7 +383,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	if hasOutput {
 		result["document_path"] = documentRef
 		result["output_mode"] = outputMode
-		result["output_tool"] = outputSpec.ToolName()
+		result["output_tool"] = outputTool
 	}
 	if op == looppkg.OperationService {
 		result["sleep_envelope"] = map[string]any{
@@ -589,6 +665,10 @@ func thaneLoopCreateSchema() map[string]any {
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
 				"description":          "Optional opaque string-keyed metadata stored on the loop definition (service/event_driven).",
+			},
+			"dry_run": map[string]any{
+				"type":        "boolean",
+				"description": "Return the loop spec this call would create, without creating anything: no document is scaffolded, no definition is committed, nothing launches. Use it to inspect or adjust the derived spec before committing, or to hand the spec to loop_definition_set yourself when you want to change a field this tool does not expose.",
 			},
 			"replace": map[string]any{
 				"type":        "boolean",
