@@ -187,6 +187,11 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 	for _, field := range fields {
 		published[field.Key] = struct{}{}
 	}
+	formats := make(map[string]FacetFormat, len(fields))
+	for _, field := range fields {
+		formats[field.Key] = field.Format
+	}
+
 	blocks := make([]string, 0, len(fields))
 	for _, section := range facetSections {
 		if _, ok := published[section.Field.Key]; !ok {
@@ -195,6 +200,9 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 		value := strings.TrimSpace(*section.value(&payload))
 		if value == "" {
 			continue
+		}
+		if formats[section.Field.Key] == FacetFormatJSON {
+			value = jsonFence + "\n" + value + "\n" + fenceClose
 		}
 		blocks = append(blocks, "## "+section.Heading+"\n\n"+value)
 	}
@@ -234,7 +242,7 @@ func ParseTierDocument(body string) FacetPayload {
 		if !ok {
 			continue
 		}
-		*section.value(&payload) = strings.TrimSpace(strings.Join(lines, "\n"))
+		*section.value(&payload) = unfence(strings.TrimSpace(strings.Join(lines, "\n")))
 	}
 
 	if leading := strings.TrimSpace(strings.Join(preamble, "\n")); leading != "" {
@@ -321,4 +329,31 @@ func FormatGuidance(format FacetFormat) string {
 	default:
 		return ""
 	}
+}
+
+const (
+	// jsonFence opens the block a json facet is rendered inside, and
+	// fenceClose closes it.
+	jsonFence  = "```json"
+	fenceClose = "```"
+)
+
+// unfence removes the code fence a json facet was rendered inside, so
+// the parse half of the round trip returns the value that was published
+// rather than the markdown it was published as.
+//
+// The fence earns its place by making the document readable rather than
+// by protecting the parser: a raw JSON value sitting under a heading
+// beside prose sections reads as damage, and the fence also marks the
+// section as machine-readable to anyone scanning the file. The parser
+// splits only on the four reserved headings, so an arbitrary "## " line
+// inside a value was never a hazard, and valid JSON cannot contain a
+// raw newline in the first place.
+func unfence(value string) string {
+	if !strings.HasPrefix(value, jsonFence) {
+		return value
+	}
+	trimmed := strings.TrimPrefix(value, jsonFence)
+	trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), fenceClose)
+	return strings.TrimSpace(trimmed)
 }
