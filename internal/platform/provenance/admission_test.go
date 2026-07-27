@@ -1,6 +1,7 @@
 package provenance
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -602,5 +603,61 @@ func TestVerifierFallsBackToTheSeedFloor(t *testing.T) {
 	}
 	if result, _ := wrongFloor.VerifyFile(t.Context(), "notes.md"); result.Trusted() {
 		t.Fatal("a floor of keys that signed nothing here still admitted the commit")
+	}
+}
+
+// TestSeedFloorWarnsWhenItRescuesAVerification pins the signal rather than the
+// verdict.
+//
+// The floor makes a polluted trust file survivable, which is the point — but
+// surviving silently would hide the pollution. Store.VerifyHead exists as a
+// boot-time round-trip precisely to surface a malformed or polluted trust file
+// early, so a floor that quietly rescued it would defeat the check it passes
+// through.
+func TestSeedFloorWarnsWhenItRescuesAVerification(t *testing.T) {
+	t.Parallel()
+	operator := newAdmissionKey(t, "operator@example.com")
+	agent := newAdmissionKey(t, AgentPrincipal)
+
+	repo := newAdmissionRepo(t)
+	repo.commitAs(operator, "birth", map[string]string{
+		TrustFileName: trustFile(operator, agent),
+	})
+	repo.commitAs(operator, "drop the operator from the trust file", map[string]string{
+		TrustFileName: trustFile(agent),
+	})
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	verifier, err := NewVerifier(repo.dir, logger, Options{
+		SeedSigners: []TrustedSigner{operator.signer()},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	result, _ := verifier.VerifyTree(t.Context(), "")
+	if !result.Trusted() {
+		t.Fatalf("the seed floor should have rescued this verification: %s", result.Message)
+	}
+	if logged := buf.String(); !strings.Contains(logged, "seed floor") {
+		t.Fatalf("the floor rescued a verification without warning; operators would never learn the trust file is polluted:\n%s", logged)
+	}
+
+	// The ordinary path must stay quiet, or the warning means nothing.
+	buf.Reset()
+	healthy := newAdmissionRepo(t)
+	healthy.commitAs(operator, "birth", map[string]string{
+		TrustFileName: trustFile(operator),
+	})
+	quiet, err := NewVerifier(healthy.dir, logger, Options{SeedSigners: []TrustedSigner{operator.signer()}})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if result, _ := quiet.VerifyTree(t.Context(), ""); !result.Trusted() {
+		t.Fatalf("control failed: a healthy root should verify against its own trust file: %s", result.Message)
+	}
+	if logged := buf.String(); strings.Contains(logged, "seed floor") {
+		t.Fatalf("a healthy root warned about the seed floor, so the signal is noise:\n%s", logged)
 	}
 }

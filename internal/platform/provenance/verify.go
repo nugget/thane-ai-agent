@@ -174,6 +174,7 @@ func (v *Verifier) verifyPathspec(ctx context.Context, pathspec string, requireT
 			}
 			return failedVerification(commit, "commit signature verification failed: "+msg)
 		}
+		logSeedFloorUsed(v.logger, v.path, commit)
 	}
 
 	return VerificationResult{

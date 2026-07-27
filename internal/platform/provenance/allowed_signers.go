@@ -266,6 +266,7 @@ func (s *Store) VerifyHead(ctx context.Context) error {
 		if !trustedBySeed(ctx, s.path, s.seedSigners, "HEAD") {
 			return fmt.Errorf("verify HEAD against allowed_signers: %w", err)
 		}
+		logSeedFloorUsed(s.logger, s.path, "HEAD")
 	}
 	return nil
 }

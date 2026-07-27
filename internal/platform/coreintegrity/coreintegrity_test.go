@@ -13,8 +13,8 @@ import (
 
 // signCore gives a core repository an SSH signing identity and the
 // matching .allowed_signers, so commits made afterwards verify the way
-// a real instance's do. Returns nothing: every later commit in the test
-// is signed by construction.
+// a real instance's do. Returns the public key, so a test can declare it
+// as a seed signer; every later commit in the test is signed by construction.
 func signCore(t *testing.T, dir string) string {
 	t.Helper()
 	keyPath := filepath.Join(t.TempDir(), "signing_ed25519")
