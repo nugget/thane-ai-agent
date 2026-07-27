@@ -347,7 +347,7 @@ func coerceInt(v any) (int, error) {
 // and injects current-document context into each iteration prompt — so
 // the model gets a typed write surface and "what's already there?"
 // answered without re-reading the doc itself.
-func buildCurateOutputSpec(name, docRef, intent string, facets []looppkg.OutputFacet) looppkg.OutputSpec {
+func buildCurateOutputSpec(name, docRef, intent string, facets []looppkg.FacetSpec) looppkg.OutputSpec {
 	return looppkg.OutputSpec{
 		Name:    name,
 		Ref:     docRef,
@@ -509,7 +509,7 @@ func parseDurationArg(args map[string]any, key string) (d time.Duration, present
 // tool's output argument. Unknown names are refused rather than dropped:
 // a facet that is silently ignored produces a loop that publishes fewer
 // projections than its author asked for, and nothing says so.
-func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
+func parseOutputFacets(raw any) ([]looppkg.FacetSpec, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -536,12 +536,12 @@ func parseOutputFacets(raw any) ([]looppkg.OutputFacet, error) {
 		return nil, fmt.Errorf("output.facets must be an array of facet names, got %T", raw)
 	}
 
-	out := make([]looppkg.OutputFacet, 0, len(names))
+	out := make([]looppkg.FacetSpec, 0, len(names))
 	for _, name := range names {
-		tier := looppkg.OutputFacet(strings.TrimSpace(name))
-		switch tier {
+		facet := looppkg.OutputFacet(strings.TrimSpace(name))
+		switch facet {
 		case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
-			out = append(out, tier)
+			out = append(out, looppkg.FacetSpec{Name: facet})
 		default:
 			return nil, fmt.Errorf("output.facets %q is not a projection; use status_line, teaser, or digest", name)
 		}

@@ -230,7 +230,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		documentRef string
 		title       string
 		hasOutput   bool
-		facets      []looppkg.OutputFacet
+		facets      []looppkg.FacetSpec
 		notesRef    string
 	)
 	if raw, ok := args["output"].(map[string]any); ok && raw != nil {

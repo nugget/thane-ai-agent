@@ -37,9 +37,9 @@ const (
 	OutputModeReplace OutputMode = "replace"
 )
 
-// OutputFacet names one declared fidelity level in a faceted output's
-// set of facets a maintained document publishes. The full body is not a facet: it is the
-// document body itself.
+// OutputFacet names one face a maintained document publishes. The full
+// body is not a facet: it is the document itself, and the facets are
+// views of it.
 type OutputFacet string
 
 const (
@@ -89,7 +89,7 @@ type OutputSpec struct {
 	// the ladder's order is fixed by the contract itself
 	// (status_line → teaser → digest); renderers and consumers use that
 	// canonical order and must not read anything into declaration order.
-	Facets []OutputFacet `yaml:"facets,omitempty" json:"facets,omitempty"`
+	Facets []FacetSpec `yaml:"facets,omitempty" json:"facets,omitempty"`
 	// Audience overrides which surfaces may project this output. Empty
 	// defaults from Type: working_notes is internal, every other type
 	// is published.
@@ -222,16 +222,19 @@ func validateOutputFacets(o OutputSpec) error {
 	seen := make(map[OutputFacet]struct{}, len(o.Facets))
 	hasStatusLine := false
 	for i, facet := range o.Facets {
-		switch facet {
+		switch facet.Name {
 		case OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest:
 		default:
-			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q (the full body is the document itself, not a declared facet)", i, facet, OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q (the full body is the document itself, not a declared facet)", i, facet.Name, OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
 		}
-		if _, dup := seen[facet]; dup {
-			return fmt.Errorf("facets[%d]: duplicate facet %q", i, facet)
+		if _, ok := validFacetFormats[facet.EffectiveFormat()]; !ok {
+			return fmt.Errorf("facets[%d]: unsupported format %q for %q; use %q, %q, or %q", i, facet.Format, facet.Name, FacetFormatMarkdown, FacetFormatPlain, FacetFormatJSON)
 		}
-		seen[facet] = struct{}{}
-		if facet == OutputFacetStatusLine {
+		if _, dup := seen[facet.Name]; dup {
+			return fmt.Errorf("facets[%d]: duplicate facet %q", i, facet.Name)
+		}
+		seen[facet.Name] = struct{}{}
+		if facet.Name == OutputFacetStatusLine {
 			hasStatusLine = true
 		}
 	}
@@ -282,7 +285,7 @@ func cloneOutputs(src []OutputSpec) []OutputSpec {
 	dst := make([]OutputSpec, len(src))
 	copy(dst, src)
 	for i := range dst {
-		dst[i].Facets = append([]OutputFacet(nil), src[i].Facets...)
+		dst[i].Facets = append([]FacetSpec(nil), src[i].Facets...)
 	}
 	return dst
 }

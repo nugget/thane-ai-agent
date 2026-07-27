@@ -134,7 +134,7 @@ func TestGuidedCreateTierInputShapes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("[]string: %v", err)
 		}
-		if len(got) != 2 || got[0] != looppkg.OutputFacetStatusLine {
+		if len(got) != 2 || got[0].Name != looppkg.OutputFacetStatusLine {
 			t.Errorf("facets = %v", got)
 		}
 	})

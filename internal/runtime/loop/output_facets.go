@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -42,6 +43,9 @@ type FacetField struct {
 	// Guidance is the model-facing description of what this field is
 	// for and where it surfaces.
 	Guidance string
+	// Format is how this facet's value is encoded. Empty on the full
+	// body, which is always markdown.
+	Format FacetFormat
 }
 
 // facetSection binds one projection to its canonical document section and
@@ -111,18 +115,22 @@ func (o OutputSpec) FacetFields() []FacetField {
 	if len(o.Facets) == 0 {
 		return nil
 	}
-	declared := make(map[OutputFacet]struct{}, len(o.Facets))
+	declared := make(map[OutputFacet]FacetSpec, len(o.Facets))
 	for _, facet := range o.Facets {
-		declared[facet] = struct{}{}
+		declared[facet.Name] = facet
 	}
 	fields := make([]FacetField, 0, len(o.Facets)+1)
 	for _, section := range facetSections {
+		// The full body is always published and is never declared, so it
+		// carries the contract's own format rather than a facet's.
 		if section.Tier == "" {
 			fields = append(fields, section.Field)
 			continue
 		}
-		if _, ok := declared[section.Tier]; ok {
-			fields = append(fields, section.Field)
+		if facet, ok := declared[section.Tier]; ok {
+			field := section.Field
+			field.Format = facet.EffectiveFormat()
+			fields = append(fields, field)
 		}
 	}
 	return fields
@@ -150,6 +158,9 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 		value := strings.TrimSpace(*section.value(&payload))
 		if value == "" {
 			return fmt.Errorf("%s is required; every declared projection is published together so they cannot describe different moments", field.Key)
+		}
+		if err := validateFacetFormat(field, value); err != nil {
+			return err
 		}
 		if field.SingleLine && strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("%s must be a single line with no line breaks; it renders as one row on surfaces that show nothing else", field.Key)
@@ -274,4 +285,40 @@ func firstReservedTierHeading(value string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// validateFacetFormat enforces what a declared format actually promises
+// a consumer.
+//
+// Only json is mechanically checkable, and it is the one worth checking:
+// a consumer that declared it is code, and code given prose fails at the
+// far end where nothing can explain why. plain is advisory — markdown is
+// a spectrum rather than a grammar, and rejecting a stray asterisk would
+// cost more than the surfaces gain — so it shapes the guidance a model
+// reads instead of the value it may send.
+func validateFacetFormat(field FacetField, value string) error {
+	if field.Format != FacetFormatJSON {
+		return nil
+	}
+	if !json.Valid([]byte(value)) {
+		return fmt.Errorf("%s declares format %q but the value is not valid JSON; a consumer that asked for json cannot read prose", field.Key, FacetFormatJSON)
+	}
+	return nil
+}
+
+// FormatGuidance returns the sentence appended to a facet's model-facing
+// description when its format is anything but the markdown default.
+//
+// A rule that is enforced but never explained is one the model learns by
+// failing, so the format that shapes validation also shapes the
+// description the model reads before it writes.
+func FormatGuidance(format FacetFormat) string {
+	switch format {
+	case FacetFormatPlain:
+		return " Write plain text with no markdown: this is spoken aloud or shown somewhere that renders nothing, so asterisks and backticks are read out."
+	case FacetFormatJSON:
+		return " Emit valid JSON, not prose: this is read by code rather than a person, and a non-JSON value is rejected."
+	default:
+		return ""
+	}
 }
