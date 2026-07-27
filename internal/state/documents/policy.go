@@ -122,6 +122,12 @@ type RootContextSummary struct {
 	Inject      string `json:"inject"`
 	Search      string `json:"search"`
 	RequiresTag string `json:"requires_tag,omitempty"`
+	// Untagged says what a document carrying no tags means here. It is
+	// emitted always rather than only when refusing, because it changes
+	// what counts as a valid write: authoring a tagless document into a
+	// refusing root produces an instance that declines to start. A rule
+	// the model is held to but cannot see is one it will break.
+	Untagged string `json:"untagged"`
 }
 
 // RootGitPolicySummary is the model-facing form of [RootGitPolicy].
@@ -309,6 +315,7 @@ func (s *Store) rootPolicySummary(root string) RootPolicySummary {
 			Inject:      policy.Context.EffectiveInject(),
 			Search:      policy.Context.EffectiveSearch(),
 			RequiresTag: policy.Context.RequiresTag,
+			Untagged:    policy.Context.EffectiveUntagged(),
 		},
 	}
 }
