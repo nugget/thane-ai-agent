@@ -188,7 +188,7 @@ func (a *Archiver) deleteBatch(ctx context.Context, ids []string) error {
 
 	// One placeholder per ID; archiveBatchSize is far below SQLite's
 	// variable limit, and fetchBatch is what bounds the slice.
-	placeholders := strings.TrimPrefix(strings.Repeat(",?", len(ids)), ",")
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
