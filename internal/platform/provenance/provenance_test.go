@@ -398,3 +398,33 @@ func TestStoreFilePath(t *testing.T) {
 		t.Errorf("FilePath = %q, want %q", got, want)
 	}
 }
+
+// TestValidateFilenameRejectsGitMetadata keeps managed writes out of the
+// repository's own machinery.
+//
+// A write landing in .git/ is not a document — it changes the thing that
+// judges documents. .git/hooks/pre-commit is the sharpest case: it executes on
+// the very next commit, so a single accepted write would run arbitrary code
+// during the commit meant to record it. .git/config is where a repository
+// would otherwise nominate its own signature program, which is the redirection
+// #1270 pinned at the other end.
+func TestValidateFilenameRejectsGitMetadata(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{
+		".git/config",
+		".git/hooks/pre-commit",
+		".GIT/config",
+		"./.git/config",
+	} {
+		if err := validateFilename(name); err == nil {
+			t.Errorf("validateFilename(%q) = nil, want refusal", name)
+		}
+	}
+	// The dotfiles a root legitimately carries must still be writable, or the
+	// guard would break the trust surface it exists to protect.
+	for _, name := range []string{".gitignore", ".allowed_signers", "talents/loops.md", "notes/.gitkeep"} {
+		if err := validateFilename(name); err != nil {
+			t.Errorf("validateFilename(%q) = %v, want allowed", name, err)
+		}
+	}
+}

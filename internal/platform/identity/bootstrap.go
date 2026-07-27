@@ -77,7 +77,12 @@ func operatorPrincipal(operator *OperatorSigner) string {
 // Private key material is written under core/ with 0600 permissions and
 // ignored by git. Public key material, the channel CA certificate, and
 // core/config.yaml are committed together as the signed birth commit.
-func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *OperatorSigner, logger *slog.Logger) (*BootstrapResult, error) {
+// birthFiles are additional repo-relative files to include in the birth
+// commit. The talent set travels this way: talents steer every turn, so an
+// instance whose behaviour definitions are covered by the same operator
+// signature that founds it is attested from its first moment rather than from
+// whenever someone remembers to commit them.
+func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *OperatorSigner, birthFiles map[string]string, logger *slog.Logger) (*BootstrapResult, error) {
 	absCoreDir, err := filepath.Abs(coreDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve core dir: %w", err)
@@ -156,13 +161,23 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *
 		return nil, err
 	}
 
-	if err := signed.Store.WriteFiles(ctx, map[string]string{
+	birth := map[string]string{
 		".gitignore":         coreGitIgnore,
 		".allowed_signers":   trustSurface,
 		SigningPublicKeyFile: signing.Public,
 		ChannelCACertFile:    string(channelCA.Certificate),
 		CoreConfigFile:       string(policy),
-	}, "bootstrap core identity"); err != nil {
+	}
+	for name, content := range birthFiles {
+		// Identity files win: a caller cannot displace the trust surface or
+		// the config by naming them, which would make the birth commit
+		// describe an instance other than the one being created.
+		if _, reserved := birth[name]; reserved {
+			return nil, fmt.Errorf("birth file %q collides with core identity material", name)
+		}
+		birth[name] = content
+	}
+	if err := signed.Store.WriteFiles(ctx, birth, "bootstrap core identity"); err != nil {
 		return nil, err
 	}
 

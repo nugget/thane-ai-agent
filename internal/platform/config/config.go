@@ -298,11 +298,14 @@ type Config struct {
 	// document roots. Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
-	// TalentsDir is the directory containing talent markdown files that
-	// extend the system prompt. In higher-integrity deployments, this is
-	// a curated managed root rather than a scratch workspace.
-	// Default: "./talents".
-	TalentsDir string `yaml:"talents_dir"`
+	// TalentsDir is the directory holding the talent markdown that extends
+	// the system prompt.
+	//
+	// Derived as {workspace}/core/talents, never authored: talents steer
+	// every turn, so they carry the same signed history and the same
+	// cleanliness rule as the prompts beside them. Declaring it is refused
+	// with the migration — see [rejectRetiredKeys].
+	TalentsDir string `yaml:"-"`
 
 	// Archive configures session archive behavior.
 	Archive ArchiveConfig `yaml:"archive"`
@@ -1676,8 +1679,8 @@ func (c CapabilityTagConfig) Validate(tagName string, builtin bool) error {
 // Path and cannot escape it.
 type WorkspaceConfig struct {
 	// Path is the root directory for file operations: the writable
-	// parent holding Thane-owned roots such as core/, talents/,
-	// knowledge/, generated/, and scratchpad/.
+	// parent holding Thane-owned roots such as core/, knowledge/,
+	// generated/, and scratchpad/.
 	//
 	// It is derived, never authored. A config lives at
 	// {workspace}/core/config.yaml, so it states its workspace by
@@ -2494,6 +2497,8 @@ func rejectRetiredKeys(data []byte) error {
 			if err := rejectRetiredSigningKeys(valueNode); err != nil {
 				return err
 			}
+		case "talents_dir":
+			return fmt.Errorf("config declares talents_dir, which is now derived as {workspace}/core/talents rather than authored. Talents steer every turn, so they belong under the same signed history as the prompts beside them: move the directory into core (mv <talents_dir> {workspace}/core/talents), commit it, and remove the talents_dir: line")
 		case "curator":
 			return fmt.Errorf("config has top-level curator: section, which was renamed to archivist: when the loop became a self-paced queue consumer. Rename it (the field shape is unchanged) and re-load")
 		case "workspace":
@@ -2736,7 +2741,16 @@ func (c *Config) applyDefaults() {
 		c.DataDir = "./db"
 	}
 	if c.TalentsDir == "" {
-		c.TalentsDir = "./talents"
+		// Derived, never authored: talents live inside core so they carry the
+		// same signed history and the same cleanliness rule as the prompts
+		// they sit beside. Falls back to a relative path only when there is no
+		// workspace to derive from, which is the in-memory-config case tests
+		// and one-shot commands use.
+		if root := c.CoreRoot(); root != "" {
+			c.TalentsDir = filepath.Join(root, "talents")
+		} else {
+			c.TalentsDir = "./talents"
+		}
 	}
 	if c.Models.OllamaURL == "" && len(c.Models.Resources) == 0 {
 		c.Models.OllamaURL = "http://localhost:11434"

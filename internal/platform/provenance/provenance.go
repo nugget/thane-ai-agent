@@ -363,6 +363,18 @@ func validateFilename(filename string) error {
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal not allowed: %s", filename)
 	}
+	// Nothing may write into the repository's own metadata. A managed write
+	// that lands in .git/ is not a document — it is a change to the machinery
+	// that judges documents. .git/hooks/pre-commit is the sharpest case, since
+	// it executes on the very next commit, and .git/config is where a
+	// repository would otherwise get to nominate its own signature program.
+	//
+	// This lives here rather than at any one caller because every write —
+	// managed document, birth commit, loop output — passes through this
+	// check, and a guard at one entrance is a guard on one entrance.
+	if first, _, _ := strings.Cut(filepath.ToSlash(cleaned), "/"); strings.EqualFold(first, ".git") {
+		return fmt.Errorf("writes into the repository's own git metadata are not allowed: %s", filename)
+	}
 	return nil
 }
 
