@@ -2,7 +2,7 @@
 name: loops_examples
 tags: [loops_examples]
 kind: trailhead
-teaser: "Open when about to launch any loop-shaped work. Walks you to the right thane_* call."
+teaser: "Open when about to launch any loop-shaped work. Walks you to the right shape and the right door."
 next_tags: [loops_examples_curate, loops_examples_now, loops_examples_assign, loops_examples_advanced]
 ---
 
@@ -64,28 +64,36 @@ next_tags: [loops_examples_curate_dashboard, loops_examples_curate_journal, loop
 
 # Curate
 
-`thane_loop_create` with `operation: service` creates a self-paced
-recurring loop. A service loop can maintain a managed markdown document
-(via the optional `output`), but the document is no longer required —
-omit `output` for a service loop that just does recurring work. When it
-does own a document, two questions decide which sub-shape fits:
+A service loop is self-paced and recurring. It may maintain a managed
+markdown document, but need not — omit outputs entirely for a service
+loop that just does recurring work. When it does own one, three
+questions decide the shape:
 
 1. **Does each cycle replace the document or append to it?**
    - Replace (idempotent rewrite) → activate
      `loops_examples_curate_dashboard`
    - Append a dated entry → activate `loops_examples_curate_journal`
 
-2. **Does the loop need to escalate decisions to you, or accept new
+2. **Will anyone else consult this?** A loop whose value is being read
+   by other turns, other loops, or an ambient surface should declare
+   `tiers` so each reader takes the length it can afford. That needs the
+   full spec: author it with `loop_definition_set` and start it with
+   `loop_definition_launch`. A loop nobody reads but its owner can stay
+   untiered on the shorter front door.
+
+3. **Does the loop need to escalate decisions to you, or accept new
    focus when you adjust its scope?**
    - Yes (bi-directional) → activate `loops_examples_curate_circle`
      after picking dashboard or journal
 
 ## The sleep envelope is the one judgment call
 
-`thane_loop_create` with `operation: service` requires `sleep_min` and
-`sleep_max`. The loop self-paces inside that envelope via
-`set_next_sleep`, which is clamped to the bounds. Pick bounds to match
-the topic's metabolism:
+`thane_loop_create` requires `sleep_min` and `sleep_max`. The full spec
+does not — it defaults to 30s–5m, which is wrong for almost anything
+worth curating, and wrong quietly: the loop runs, just far too often.
+Set the envelope deliberately whichever door you use. The loop
+self-paces inside it via `set_next_sleep`, which is clamped to the
+bounds. Pick bounds to match the topic's metabolism:
 
 - UPS guardian: `[5m, 30m]`
 - Burn-ban monitor: `[1h, 6h]`
@@ -106,41 +114,93 @@ the core tag set. A service loop watching HA entities needs at least
 name: loops_examples_curate_dashboard
 tags: [loops_examples_curate_dashboard]
 kind: trailhead
-teaser: "Maintain a single dashboard document idempotently each cycle."
+teaser: "Curate a domain others consult: one document, published at several fidelities."
 ---
 
-# Curate: Dashboard (maintain mode)
+# Curate: Dashboard (tiered publish)
 
-Use `mode: maintain` when the document should reflect *current state*,
-not history. Each cycle rewrites the body; the generated output tool is
-`replace_output_<loop_name>`.
+A loop that keeps an understanding current for other readers should
+publish it at more than one length. Declaring `tiers` on a maintained
+output curates condensed views alongside the full body, so an ambient
+row takes `status_line`, a search snippet takes `teaser`, a digest row
+takes `digest`, and a reader who wants everything opens the document.
+Without tiers every consumer pays for the whole document or gets a
+blind truncation of it.
+
+Tiers need the full spec, so author this with `loop_definition_set` and
+start it with `loop_definition_launch`. Lint first — `loop_definition_lint`
+takes the same spec and catches mistakes before anything persists.
 
 ```json
 {
   "name": "server_closet_guardian",
-  "intent": "Watch the server-closet environment and equipment health. Document trends. Surface UPS dropouts, dehumidifier failure, or temperature excursions that need attention.",
+  "intent": "Keep the current state of the server closet — environment, power, and equipment health — legible to anyone who asks, and surface excursions that need attention.",
+  "task": "Read the current sensor values and the document you maintain. If the state has moved materially, publish all projections together. If nothing has changed, publish nothing and record why in working notes.",
   "operation": "service",
   "sleep_min": "10m",
   "sleep_max": "30m",
-  "entities": [
+  "subscriptions": [
     {"entity_id": "sensor.server_closet_temperature"},
     {"entity_id": "sensor.server_closet_humidity"},
     {"entity_id": "sensor.ups_hor_rack_status"},
-    {"entity_id": "sensor.ups_hor_rack_battery_runtime"},
     {"entity_id": "switch.dehumidifier"}
   ],
-  "output": {
-    "document": "kb:dashboards/server-closet.md",
-    "mode": "maintain",
-    "title": "Server Closet Guardian"
-  },
-  "tags": ["home", "ha", "awareness"]
+  "tags": ["home", "ha", "awareness", "documents"],
+  "outputs": [
+    {
+      "name": "closet_state",
+      "type": "maintained_document",
+      "ref": "kb:dashboards/server-closet.md",
+      "tiers": ["status_line", "teaser", "digest"],
+      "purpose": "Current state of the server closet for anyone who asks."
+    },
+    {
+      "name": "notes",
+      "type": "working_notes",
+      "ref": "kb:dashboards/server-closet-notes.md"
+    }
+  ]
 }
 ```
 
-The loop's prompt sees the current document body each turn (truncated
-if oversized — in that case, read it with `doc_read` first), then the
-model rewrites the body via `replace_output_server_closet_guardian`.
+## Publishing
+
+Declaring tiers swaps the generated tool: instead of
+`replace_output_closet_state` taking a body, the loop gets
+`publish_output_closet_state` taking one argument per projection. Pass
+them all in one call — they are written together so no reader sees a
+status line describing a state the details have moved past. Do not write
+the section headings; they are rendered for you.
+
+```json
+{
+  "status_line": "Closet 21.4°C, 38% RH, UPS on mains, dehumidifier idle.",
+  "teaser": "Server closet is stable. Temperature and humidity have held inside normal range for six hours; the UPS is on mains power with a full charge, and the dehumidifier has not needed to run since morning.",
+  "digest": "Environment: 21.4°C (range 20.8–22.1 over 24h), 38% RH, both comfortably inside bounds...",
+  "full": "# Server Closet\n\n## Environment\n\n..."
+}
+```
+
+Each projection has a rune budget — 120 for `status_line`, 500 for
+`teaser`, 2048 for `digest` — and an over-budget value is rejected
+rather than trimmed, because a clipped projection reads as a fragment
+with no sign that anything is missing. Write to the budget, not near it.
+
+Think about what each length is *for* rather than truncating the one
+above it. The status line is a glance: what is true right now. The
+teaser is what a reader needs to decide whether to open the document.
+The digest is enough to act on without opening it.
+
+## Where the reasoning goes
+
+The `working_notes` output is the loop's private log — internal by
+construction, never projected into search or another loop's context. Put
+the reasoning there: what changed and why, what drifted, what was
+refined. `publish_output_*` takes a `note` argument, so a publish and
+its reasoning are one call.
+
+Published projections carry current state, not the story of how it got
+there. Keeping those apart is what lets the document stay short.
 
 ---
 name: loops_examples_curate_journal
