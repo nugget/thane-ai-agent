@@ -129,7 +129,7 @@ func (t Target) rejectUnknownSlots(args map[string]any) error {
 func (s Slot) normalizeText(raw any) (string, error) {
 	text, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("expected a string, got %T (%v)", raw, raw)
+		return "", fmt.Errorf("expected a string, got %T (%s)", raw, preview(raw))
 	}
 	text = strings.TrimSpace(text)
 	if i := strings.IndexFunc(text, isDisplayControl); i >= 0 {
@@ -138,7 +138,7 @@ func (s Slot) normalizeText(raw any) (string, error) {
 	// Rune count, not len: a budget measured in bytes would reject
 	// legitimate accented or emoji values that fit the display fine.
 	if count := utf8.RuneCountInString(text); count > s.MaxRunes {
-		return "", fmt.Errorf("is %d characters but this slot renders at most %d; shorten it rather than relying on truncation (got %q)", count, s.MaxRunes, text)
+		return "", fmt.Errorf("is %d characters but this slot renders at most %d; shorten it rather than relying on truncation (got %s)", count, s.MaxRunes, preview(text))
 	}
 	return text, nil
 }
@@ -147,7 +147,7 @@ func (s Slot) normalizeText(raw any) (string, error) {
 func (s Slot) normalizeFraction(raw any) (float64, error) {
 	value, ok := coerceFloat(raw)
 	if !ok {
-		return 0, fmt.Errorf("expected a number between 0.0 and 1.0, got %T (%v)", raw, raw)
+		return 0, fmt.Errorf("expected a number between 0.0 and 1.0, got %T (%s)", raw, preview(raw))
 	}
 	if value < 0 || value > 1 {
 		return 0, fmt.Errorf("is %v but must be between 0.0 and 1.0; normalize it first, e.g. (value - minimum) / (maximum - minimum) clamped to the range", value)
@@ -159,12 +159,12 @@ func (s Slot) normalizeFraction(raw any) (float64, error) {
 func (s Slot) normalizeColor(raw any) (string, error) {
 	text, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("expected an \"#RRGGBB\" hex color string, got %T (%v)", raw, raw)
+		return "", fmt.Errorf("expected an \"#RRGGBB\" hex color string, got %T (%s)", raw, preview(raw))
 	}
 	trimmed := strings.TrimSpace(text)
 	trimmed = strings.TrimPrefix(trimmed, "#")
 	if len(trimmed) != 6 || !isHex(trimmed) {
-		return "", fmt.Errorf("must be a six-digit hex color like \"#3FB950\"; got %q", text)
+		return "", fmt.Errorf("must be a six-digit hex color like \"#3FB950\"; got %s", preview(text))
 	}
 	return "#" + strings.ToUpper(trimmed), nil
 }
@@ -217,4 +217,21 @@ func quoteAll(values []string) []string {
 		out[i] = strconv.Quote(value)
 	}
 	return out
+}
+
+// preview bounds a model-supplied value before it enters an error.
+//
+// Slot values arrive from tool arguments, so their size is decided by
+// the model rather than by this package. An error that echoes the whole
+// value lands in the log and in the model's next turn, where a runaway
+// string costs context at the exact moment something is already going
+// wrong. Enough to recognise what was sent is enough to fix it.
+func preview(raw any) string {
+	const max = 80
+	text := fmt.Sprintf("%v", raw)
+	if utf8.RuneCountInString(text) <= max {
+		return fmt.Sprintf("%q", text)
+	}
+	runes := []rune(text)
+	return fmt.Sprintf("%q… (%d characters)", string(runes[:max]), len(runes))
 }

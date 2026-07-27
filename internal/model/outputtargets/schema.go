@@ -50,7 +50,7 @@ func (s Slot) schema() map[string]any {
 		return map[string]any{
 			"type":        "string",
 			"pattern":     "^#?[0-9A-Fa-f]{6}$",
-			"description": s.Description + " Format: \"#RRGGBB\".",
+			"description": s.Description + " A six-digit hex colour, case-insensitive, with or without a leading \"#\" — stored as \"#RRGGBB\".",
 		}
 	default:
 		// Unreachable for registered targets: Target.validate rejects

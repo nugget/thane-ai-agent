@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func testTarget() Target {
@@ -206,5 +207,34 @@ func TestNormalizeAgainstRegisteredTargets(t *testing.T) {
 	}
 	if _, err := circular.Normalize(map[string]any{"value": "1013 hPa"}); err == nil {
 		t.Fatal("expected the circular target to reject a value well over its budget")
+	}
+}
+
+// TestPreviewBoundsModelSuppliedValues pins the size of an error, not
+// its wording. Slot values arrive from tool arguments, so a runaway
+// string would otherwise be echoed into the log and into the model's
+// next turn — spending context at the exact moment something is already
+// going wrong.
+func TestPreviewBoundsModelSuppliedValues(t *testing.T) {
+	huge := strings.Repeat("é", 5000)
+	slot := Slot{Name: "title", Kind: SlotKindText, MaxRunes: 18}
+
+	_, err := slot.normalizeText(huge)
+	if err == nil {
+		t.Fatal("an over-budget value should be refused")
+	}
+	if n := utf8.RuneCountInString(err.Error()); n > 300 {
+		t.Errorf("error is %d characters; a bounded preview should keep it short", n)
+	}
+	if !strings.Contains(err.Error(), "5000 characters") {
+		t.Errorf("the error should say how much arrived: %v", err)
+	}
+
+	// A short value is still quoted in full — the bound exists for the
+	// runaway case, not to make ordinary errors vaguer.
+	if _, err := slot.normalizeText("a value that is merely too long for this slot"); err == nil {
+		t.Fatal("expected refusal")
+	} else if !strings.Contains(err.Error(), "merely too long") {
+		t.Errorf("a short value should appear in full: %v", err)
 	}
 }
