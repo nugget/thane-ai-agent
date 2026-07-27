@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -186,13 +185,9 @@ func (a *Archiver) deleteBatch(ctx context.Context, ids []string) error {
 		return nil
 	}
 
-	// One placeholder per ID; archiveBatchSize is far below SQLite's
-	// variable limit, and fetchBatch is what bounds the slice.
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
+	// archiveBatchSize is far below SQLite's variable limit, and
+	// fetchBatch is what bounds the slice.
+	placeholders, args := database.InList(ids)
 
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {

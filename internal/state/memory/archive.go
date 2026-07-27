@@ -547,17 +547,12 @@ func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
 		return
 	}
 
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
+	placeholders, args := database.InList(ids)
 
 	query := fmt.Sprintf(
 		`SELECT session_id, COUNT(*) FROM %s WHERE session_id IN (%s) GROUP BY session_id`,
 		s.msgTableName,
-		strings.Join(placeholders, ","),
+		placeholders,
 	)
 
 	rows, err := s.msgDB().Query(query, args...)

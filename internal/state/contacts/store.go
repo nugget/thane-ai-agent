@@ -740,7 +740,7 @@ func (s *Store) GetPropertiesForContacts(contactIDs []uuid.UUID) (map[uuid.UUID]
 		return result, nil
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(contactIDs)), ",")
+	placeholders := database.Placeholders(len(contactIDs))
 	args := make([]any, len(contactIDs))
 	for i, id := range contactIDs {
 		result[id] = nil

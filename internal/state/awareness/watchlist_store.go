@@ -247,8 +247,7 @@ func (s *WatchlistStore) CoreEntityGates(candidates []string) (map[string]string
 	if len(args) == 0 {
 		return out, nil
 	}
-	placeholders := strings.Repeat("?,", len(args))
-	placeholders = placeholders[:len(placeholders)-1]
+	placeholders := database.Placeholders(len(args))
 	query := `SELECT entity_id, added_at, options FROM watched_entity_subscriptions
 		 WHERE owner = ? AND entity_id IN (` + placeholders + `)`
 	rows, err := s.db.Query(query, append([]any{OwnerCore}, args...)...)
