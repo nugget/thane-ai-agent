@@ -133,9 +133,19 @@ func fileExists(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// expandHome resolves a leading ~ against this process's own home directory.
+//
+// Only "~" and "~/…" are expanded. A "~other/…" form names a different user's
+// home, which this cannot resolve — and quietly treating it as a path under
+// *our* home would turn ~alice/.ssh/id_ed25519 into $HOME/alice/.ssh/id_ed25519
+// and then report that file as missing, sending the reader to look for a
+// typo that is not there. Refusing names the actual limitation.
 func expandHome(path string) (string, error) {
 	if path == "" || !strings.HasPrefix(path, "~") {
 		return path, nil
+	}
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return "", fmt.Errorf("%s names another user's home directory, which cannot be resolved here; give an absolute path", path)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

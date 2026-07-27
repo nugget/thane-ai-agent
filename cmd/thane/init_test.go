@@ -346,3 +346,21 @@ func TestWriteIfMissing_CreateError(t *testing.T) {
 		t.Errorf("error = %q, want it to mention 'create'", err)
 	}
 }
+
+// TestInitFlagErrorsGoToStderr holds init to run()'s contract: terminal output
+// belongs on stderr. Usage text mixed into stdout would interleave with the
+// progress report a caller may be parsing, and would do it precisely when
+// something already went wrong.
+func TestInitFlagErrorsGoToStderr(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	if err := runInitCommand(&stdout, &stderr, []string{"-no-such-flag"}); err == nil {
+		t.Fatal("an unknown flag should fail")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("flag failure wrote to stdout:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no-such-flag") {
+		t.Fatalf("stderr should carry the flag failure, got:\n%s", stderr.String())
+	}
+}

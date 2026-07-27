@@ -247,9 +247,12 @@ func writeIfMissing(w io.Writer, path string, data []byte, mode os.FileMode) err
 // end can ask "which key is yours?" in whatever way suits it and pass the
 // answer here, instead of asking someone at first run to reason about trust
 // roots.
-func runInitCommand(w io.Writer, args []string) error {
+func runInitCommand(stdout, stderr io.Writer, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(w)
+	// Parse failures and usage are terminal, and run() puts terminal output on
+	// stderr. Sending them to stdout would interleave them with the progress
+	// report a caller may be parsing.
+	fs.SetOutput(stderr)
 	var opts initOptions
 	fs.StringVar(&opts.OperatorKey, "operator-key", "",
 		"private SSH key that founds core, making the instance answerable to its holder (default: from git's user.signingkey)")
@@ -264,5 +267,5 @@ func runInitCommand(w io.Writer, args []string) error {
 	if fs.NArg() > 0 {
 		dir = fs.Arg(0)
 	}
-	return runInit(w, dir, opts)
+	return runInit(stdout, dir, opts)
 }

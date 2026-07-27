@@ -57,6 +57,14 @@ func TestSignableKeyPath(t *testing.T) {
 			raw:     filepath.Join(dir, "absent"),
 			wantWhy: "does not exist",
 		},
+		{
+			// Silently rewriting this under our own home would report a
+			// missing file and send the reader hunting for a typo that is
+			// not there.
+			name:    "another user's home",
+			raw:     "~someone/.ssh/id_ed25519",
+			wantWhy: "another user's home directory",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

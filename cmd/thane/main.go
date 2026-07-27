@@ -199,7 +199,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	case "serve":
 		return runServe(ctx, stdout, stderr, configPath, workspacePath)
 	case "init":
-		return runInitCommand(stdout, cmdArgs)
+		return runInitCommand(stdout, stderr, cmdArgs)
 	case "validate":
 		return runValidate(stdout, configPath, workspacePath, outputFmt)
 	case "ask":
