@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -153,4 +154,41 @@ func TestBuildDefinitionWarnings_MetadataShadowDeterministicOrder(t *testing.T) 
 	if !strings.Contains(order[0], "parent_name") || !strings.Contains(order[1], "tags") {
 		t.Errorf("shadow warnings not deterministically sorted: %#v", order)
 	}
+}
+
+// TestShadowableSpecFieldsMatchWireTags keeps the shadow list from
+// drifting off the wire shape it describes.
+//
+// shadowableSpecFields is hand-maintained and specJSON is not, so the
+// two fall out of step in both directions and neither fails. A name left
+// behind after a field is removed warns that a metadata key shadows
+// something that no longer exists; a name never added lets a real
+// collision go unreported. Removing Spec.FallbackContent produced the
+// first of those, which is what prompted this.
+func TestShadowableSpecFieldsMatchWireTags(t *testing.T) {
+	wire := make(map[string]bool)
+	typ := reflect.TypeOf(specJSON{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		tag := field.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = field.Name
+		}
+		wire[name] = true
+	}
+
+	for name := range shadowableSpecFields {
+		if !wire[name] {
+			t.Errorf("shadowableSpecFields lists %q, which is not a specJSON field — a metadata key by that name would be warned about for shadowing something that does not exist", name)
+		}
+	}
+	// The reverse is not asserted: specJSON carries legacy compat keys
+	// that are deliberately outside the shadow set.
 }
