@@ -206,7 +206,7 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 			}
 		}
 
-		// Faceted delta per the model-facing time convention (#458, #1160).
+		// Tiered delta per the model-facing time convention (#458, #1160).
 		if !l.LastWakeAt.IsZero() {
 			e.LastActivity = promptfmt.FormatDeltaOnly(l.LastWakeAt, now)
 		}

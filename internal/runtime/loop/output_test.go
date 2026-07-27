@@ -217,7 +217,7 @@ func TestOutputSpecEffectiveAudience(t *testing.T) {
 	}
 }
 
-func TestCloneOutputsDeepCopiesTiers(t *testing.T) {
+func TestCloneOutputsDeepCopiesFacets(t *testing.T) {
 	src := []OutputSpec{{
 		Name:   "ranch status",
 		Type:   OutputTypeMaintainedDocument,

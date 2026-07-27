@@ -178,7 +178,7 @@ func loopOutputSpecSchema() map[string]any {
 			"facets": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-				"description": "Published set of published projections for a maintained_document: which condensed views this output curates alongside its full body. Declaring facets swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when facets are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a faceted output is read at a fraction of the cost of the full document. Order here carries no meaning.",
+				"description": "The facets this output publishes alongside its full body: which condensed views this output curates alongside its full body. Declaring facets swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when facets are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a faceted output is read at a fraction of the cost of the full document. Order here carries no meaning.",
 			},
 			"audience": map[string]any{
 				"type":        "string",

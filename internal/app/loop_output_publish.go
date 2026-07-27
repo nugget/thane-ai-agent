@@ -61,7 +61,7 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 			"required":   required,
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			payload, err := tierPayloadFromArgs(output, args)
+			payload, err := facetPayloadFromArgs(output, args)
 			if err != nil {
 				return "", err
 			}
@@ -118,10 +118,10 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 	return description
 }
 
-// tierPayloadFromArgs reads the publish arguments into a payload,
+// facetPayloadFromArgs reads the publish arguments into a payload,
 // rejecting a non-string value with the argument name rather than
 // silently treating it as empty.
-func tierPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppkg.FacetPayload, error) {
+func facetPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppkg.FacetPayload, error) {
 	var payload looppkg.FacetPayload
 	for _, field := range output.FacetFields() {
 		raw, present := args[field.Key]

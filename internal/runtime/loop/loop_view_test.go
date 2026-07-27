@@ -75,7 +75,7 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 	if len(v.EffectiveTags) != 2 || v.EffectiveTags[0].From != "travel" {
 		t.Errorf("EffectiveTags = %#v, want inheritance provenance carried through", v.EffectiveTags)
 	}
-	// Signed faceted deltas per the model-facing convention: 4h12m ago
+	// Signed tiered deltas per the model-facing convention: 4h12m ago
 	// renders hours+minutes, last wake 47s ago stays exact seconds.
 	if v.StartedDelta == nil || *v.StartedDelta != "-4h12m" {
 		t.Errorf("StartedDelta = %v, want -4h12m", v.StartedDelta)

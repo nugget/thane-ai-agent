@@ -38,7 +38,7 @@ const (
 )
 
 // OutputFacet names one declared fidelity level in a faceted output's
-// published set of published projections. Full fidelity is not a facet: it is the
+// set of facets a maintained document publishes. The full body is not a facet: it is the
 // document body itself.
 type OutputFacet string
 
@@ -82,7 +82,7 @@ type OutputSpec struct {
 	Mode OutputMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Purpose is optional model-facing guidance for this output.
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
-	// Facets declares the published set of published projections for a maintained
+	// Facets declares which condensed views this output publishes for a maintained
 	// document: which of status_line, teaser, and digest the loop
 	// publishes alongside the full body. Empty means no facets. The
 	// declaration is a set — element order carries no meaning, because
@@ -205,7 +205,7 @@ func (o OutputSpec) Validate() error {
 	return nil
 }
 
-// validateOutputFacets checks a declared set of published projections. Facets are a
+// validateOutputFacets checks a declared facet set. Facets are a
 // published-projection contract, so they attach only to published
 // maintained documents, and status_line anchors the ladder whenever any
 // facet is declared.

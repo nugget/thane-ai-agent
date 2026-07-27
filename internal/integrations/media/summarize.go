@@ -48,15 +48,15 @@ const (
 var sentenceBoundaryRe = regexp.MustCompile(`[.!?]\s+[A-Z]`)
 
 // chunkTranscript splits a transcript into chunks of approximately
-// targetSize characters using a faceted strategy:
+// targetSize characters using a tiered strategy:
 //
 //  1. Paragraph boundaries (double newlines) — preserves natural topic breaks.
 //  2. Sentence boundaries — fallback when paragraphs are absent or oversized.
 //  3. Word boundaries — last resort when sentences are also oversized.
 //
 // A chunk is considered oversized when it exceeds 2× targetSize. When any
-// chunk from a facet is oversized, the entire transcript is re-split using
-// the next facet down.
+// chunk from a tier is oversized, the entire transcript is re-split using
+// the next tier down.
 func chunkTranscript(transcript string, targetSize int) []string {
 	if strings.TrimSpace(transcript) == "" {
 		return nil

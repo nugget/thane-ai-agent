@@ -104,7 +104,7 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	}
 }
 
-func TestCloneLoopOutputsDeepCopiesTiers(t *testing.T) {
+func TestCloneLoopOutputsDeepCopiesFacets(t *testing.T) {
 	src := []looppkg.OutputSpec{{
 		Name:   "ranch status",
 		Type:   looppkg.OutputTypeMaintainedDocument,
