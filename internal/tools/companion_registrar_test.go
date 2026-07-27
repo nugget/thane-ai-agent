@@ -1,9 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -256,44 +259,172 @@ func TestAugmentSchemaWithRouting_DoesNotMutateSource(t *testing.T) {
 // providers author the same tool name, the winner (and its method binding)
 // is stable regardless of the nondeterministic provider order List() yields.
 func TestCompanionRegistrar_DeterministicCollisionWinner(t *testing.T) {
-	mk := func(id, method string) companion.ProviderInfo {
-		return companion.ProviderInfo{
-			ID: id,
-			Capabilities: []companion.Capability{{
-				Name: "macos.contacts",
-				Tools: []companion.ToolDefinition{{
-					Name: "macos_x", Method: method,
-					InputSchema: map[string]any{"type": "object"},
-				}},
-			}},
-		}
-	}
-	provA := mk("prov_a", "m_a")
-	provB := mk("prov_b", "m_b")
+	provA := claimant("prov_a", "uuid-a", "m_a")
+	provB := claimant("prov_b", "uuid-b", "m_b")
 
-	winningMethod := func(order []companion.ProviderInfo) string {
-		src := &fakeCompanionSource{infos: order, result: json.RawMessage(`{}`)}
-		cr := newCompanionRegistrar(src.List, src.Call, nil)
-		synth, _ := cr.Snapshot()
-		if len(synth) != 1 {
-			t.Fatalf("collision should yield 1 tool, got %d", len(synth))
-		}
-		if _, err := findTool(synth, "macos_x").Handler(context.Background(), nil); err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		return src.calls[0].Method
-	}
-
-	// Both input orders must pick the same provider (sorted by ID -> prov_b
-	// is "last" and wins).
-	forward := winningMethod([]companion.ProviderInfo{provA, provB})
-	reversed := winningMethod([]companion.ProviderInfo{provB, provA})
+	// Both input orders must pick the same provider (sorted by client_id ->
+	// uuid-b is "last" and wins).
+	forward := winningMethod(t, provA, provB)
+	reversed := winningMethod(t, provB, provA)
 	if forward != reversed {
 		t.Errorf("collision winner flipped with input order: %q vs %q", forward, reversed)
 	}
 	if forward != "m_b" {
-		t.Errorf("expected deterministic winner m_b (highest provider ID), got %q", forward)
+		t.Errorf("expected deterministic winner m_b (highest client_id), got %q", forward)
 	}
+}
+
+// TestCompanionRegistrar_CollisionWinnerSurvivesReconnect pins the winner to
+// the operator-configured identity rather than the provider ID, which the
+// server re-mints on every connection. Without this the advertised contract
+// for a tool two Macs both claim would flip whenever either one reconnected.
+func TestCompanionRegistrar_CollisionWinnerSurvivesReconnect(t *testing.T) {
+	// Provider IDs sort opposite to client_ids, so an ID-keyed tiebreak
+	// would pick the other Mac here.
+	before := winningMethod(t,
+		claimant("prov_z", "uuid-a", "m_a"),
+		claimant("prov_a", "uuid-b", "m_b"),
+	)
+	// Both Macs reconnect and draw fresh provider IDs; identities are stable.
+	after := winningMethod(t,
+		claimant("prov_b", "uuid-a", "m_a"),
+		claimant("prov_y", "uuid-b", "m_b"),
+	)
+	if before != after {
+		t.Errorf("winner flipped across reconnect: %q then %q", before, after)
+	}
+	if after != "m_b" {
+		t.Errorf("expected winner m_b (highest client_id), got %q", after)
+	}
+}
+
+// TestCompanionRegistrar_MatchingClaimsAreSilent covers the supported
+// multi-Mac deployment: two companions on the same build advertise identical
+// definitions, so the duplicate is not reportable — whichever wins, the
+// model sees the same contract.
+func TestCompanionRegistrar_MatchingClaimsAreSilent(t *testing.T) {
+	first := contactsProvider()
+	second := contactsProvider()
+	second.ID = "prov_second"
+	second.ClientID = "uuid-b"
+	second.ClientName = "studio"
+
+	logs := rebuildLogs(t, first, second)
+	if strings.Contains(logs, `"level":"WARN"`) {
+		t.Errorf("identical definitions must not warn; got: %s", logs)
+	}
+}
+
+// TestCompanionRegistrar_TagOrderIsNotDisagreement pins tags as a set. They
+// are consumed as one (tag indexing and gating), so two companions listing
+// the same tags in a different order have not disagreed about anything the
+// model can observe, and must not be reported as skew.
+func TestCompanionRegistrar_TagOrderIsNotDisagreement(t *testing.T) {
+	first := contactsProvider()
+	first.Capabilities[0].Tools[0].Tags = []string{"people", "scheduling"}
+
+	second := contactsProvider()
+	second.ID = "prov_second"
+	second.ClientID = "uuid-b"
+	second.Capabilities[0].Tools[0].Tags = []string{"scheduling", "people"}
+
+	logs := rebuildLogs(t, first, second)
+	if strings.Contains(logs, `"level":"WARN"`) {
+		t.Errorf("reordered tags must not warn; got: %s", logs)
+	}
+
+	// A genuine membership difference is still skew and must be reported.
+	second.Capabilities[0].Tools[0].Tags = []string{"people", "reminders"}
+	logs = rebuildLogs(t, first, second)
+	if !strings.Contains(logs, `"differs":"tags"`) {
+		t.Errorf("differing tag membership must warn; got: %s", logs)
+	}
+}
+
+// TestCompanionRegistrar_DivergentClaimsWarn covers version skew between two
+// Macs: the definitions disagree, so the model may read the winner's schema
+// while Registry.Call routes to the companion that authored the other one.
+// The warning has to name both sides and what differs to be actionable.
+func TestCompanionRegistrar_DivergentClaimsWarn(t *testing.T) {
+	first := contactsProvider()
+	second := contactsProvider()
+	second.ID = "prov_second"
+	second.ClientID = "uuid-b"
+	second.Capabilities[0].Tools[0].Description = "Search contacts, now with fuzzy matching."
+	second.Capabilities[0].Tools[0].InputSchema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+			"fuzzy": map[string]any{"type": "boolean"},
+		},
+	}
+
+	logs := rebuildLogs(t, first, second)
+	if !strings.Contains(logs, `"level":"WARN"`) {
+		t.Fatalf("divergent definitions must warn; got: %s", logs)
+	}
+	for _, want := range []string{
+		"macos_search_contacts",
+		"description,input_schema", // differing fields, sorted
+		"aimee/uuid-b",             // winner: highest client_id
+		"aimee/uuid-a",             // ignored claimant
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("warning missing %q; got: %s", want, logs)
+		}
+	}
+	// A field both Macs agree on must not be reported as divergent.
+	if strings.Contains(logs, "method") {
+		t.Errorf("method matches and must not be reported; got: %s", logs)
+	}
+}
+
+// claimant builds a provider claiming the shared macos_x tool name, bound to
+// the given method so dispatch reveals which one won.
+func claimant(providerID, clientID, method string) companion.ProviderInfo {
+	return companion.ProviderInfo{
+		ID:       providerID,
+		Account:  "aimee",
+		ClientID: clientID,
+		Capabilities: []companion.Capability{{
+			Name: "macos.contacts",
+			Tools: []companion.ToolDefinition{{
+				Name: "macos_x", Method: method,
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}},
+	}
+}
+
+// winningMethod dispatches the collided tool and reports the method the
+// surviving definition bound to.
+func winningMethod(t *testing.T, infos ...companion.ProviderInfo) string {
+	t.Helper()
+	src := &fakeCompanionSource{infos: infos, result: json.RawMessage(`{}`)}
+	cr := newCompanionRegistrar(src.List, src.Call, discardLogger())
+	synth, _ := cr.Snapshot()
+	if len(synth) != 1 {
+		t.Fatalf("collision should yield 1 tool, got %d", len(synth))
+	}
+	if _, err := findTool(synth, "macos_x").Handler(context.Background(), nil); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	return src.calls[0].Method
+}
+
+// rebuildLogs builds a registrar over the given providers and returns
+// everything it logged during the initial rebuild.
+func rebuildLogs(t *testing.T, infos ...companion.ProviderInfo) string {
+	t.Helper()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	src := &fakeCompanionSource{infos: infos}
+	newCompanionRegistrar(src.List, src.Call, logger)
+	return buf.String()
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // TestCompanionRegistrar_DispatchCapsResult verifies an oversized companion

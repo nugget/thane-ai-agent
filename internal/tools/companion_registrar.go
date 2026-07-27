@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -113,33 +115,44 @@ func (cr *CompanionRegistrar) Snapshot() ([]*Tool, map[string][]string) {
 func (cr *CompanionRegistrar) Rebuild() {
 	infos := cr.list()
 
-	// Resolve cross-provider tool-name collisions deterministically.
-	// Registry.List iterates a map, so provider order is nondeterministic;
-	// sort by provider ID first. Without this, the winning definition for a
-	// collided name (and its capability/method binding) could flip between
-	// rebuilds with no real registry change, breaking the cache-stable
-	// manifest.
-	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+	// Order providers by the stable identity the operator configured, so a
+	// tool name claimed by more than one companion resolves to the same one
+	// on every rebuild. Registry.List iterates a map, so its order is
+	// nondeterministic, and the provider ID is minted fresh per connection —
+	// tie-breaking on either would let the winning definition flip whenever a
+	// laptop reconnects, churning the manifest with no registry change.
+	sort.Slice(infos, func(i, j int) bool {
+		if infos[i].Account != infos[j].Account {
+			return infos[i].Account < infos[j].Account
+		}
+		if infos[i].ClientID != infos[j].ClientID {
+			return infos[i].ClientID < infos[j].ClientID
+		}
+		return infos[i].ID < infos[j].ID
+	})
 
-	// Dedup by tool name across providers (last writer wins, matching
-	// Registry.Register). The sorted provider order above makes "last"
-	// deterministic. Final tool names are sorted below for a stable manifest.
-	byName := make(map[string]*Tool)
+	// Collect every provider's claim on each tool name. Several companions
+	// advertising the same names is the ordinary multi-Mac case, not a fault:
+	// the duplicate only matters when the claimants disagree about what the
+	// tool is, which reportDivergentClaims decides below.
+	claims := make(map[string][]companionToolClaim)
 	for _, info := range infos {
 		for _, cap := range info.Capabilities {
 			for _, def := range cap.Tools {
-				tool := cr.synthesize(cap.Name, def)
-				if existing := byName[tool.Name]; existing != nil {
-					cr.logger.Warn("companion tool name collision; replacing",
-						"tool", tool.Name)
+				claim := companionToolClaim{
+					tool:       cr.synthesize(cap.Name, def),
+					def:        def,
+					capability: cap.Name,
+					account:    info.Account,
+					clientID:   info.ClientID,
 				}
-				byName[tool.Name] = tool
+				claims[claim.tool.Name] = append(claims[claim.tool.Name], claim)
 			}
 		}
 	}
 
-	names := make([]string, 0, len(byName))
-	for name := range byName {
+	names := make([]string, 0, len(claims))
+	for name := range claims {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -147,9 +160,14 @@ func (cr *CompanionRegistrar) Rebuild() {
 	synth := make([]*Tool, 0, len(names))
 	tagAdds := make(map[string][]string)
 	for _, name := range names {
-		tool := byName[name]
-		synth = append(synth, tool)
-		for _, tag := range tool.Tags {
+		// Last stable writer wins, matching Registry.Register.
+		group := claims[name]
+		winner := group[len(group)-1]
+		if len(group) > 1 {
+			cr.reportDivergentClaims(name, group)
+		}
+		synth = append(synth, winner.tool)
+		for _, tag := range winner.tool.Tags {
 			tagAdds[tag] = append(tagAdds[tag], name)
 		}
 	}
@@ -158,6 +176,109 @@ func (cr *CompanionRegistrar) Rebuild() {
 	cr.synthesized = synth
 	cr.tagAdditions = tagAdds
 	cr.mu.Unlock()
+}
+
+// companionToolClaim is one provider's authored definition of a tool name,
+// paired with the model-facing tool synthesized from it and the stable
+// identity of the companion that authored it.
+type companionToolClaim struct {
+	tool       *Tool
+	def        companion.ToolDefinition
+	capability string
+	account    string
+	clientID   string
+}
+
+// label identifies the claiming companion by the identity an operator
+// configured, never by the provider ID (re-minted on every connection, so
+// useless for telling one warning from the next).
+func (c companionToolClaim) label() string {
+	return c.account + "/" + c.clientID
+}
+
+// reportDivergentClaims warns when the companions claiming one tool name do
+// not agree on what it is. Matching claims are silent: households run more
+// than one Mac by design, and identical definitions carry no information.
+// Divergence does, because it means the companions are running different
+// builds — the manifest shows the winner's contract while Registry.Call
+// still routes by capability/method and may reach a companion that authored
+// a different one, so the model can read one schema and dispatch against
+// another.
+func (cr *CompanionRegistrar) reportDivergentClaims(name string, group []companionToolClaim) {
+	winner := group[len(group)-1]
+
+	var (
+		fields  []string
+		seen    = make(map[string]bool)
+		ignored []string
+	)
+	for _, other := range group[:len(group)-1] {
+		diff := companionToolDefinitionDiff(winner, other)
+		if len(diff) == 0 {
+			continue
+		}
+		for _, field := range diff {
+			if !seen[field] {
+				seen[field] = true
+				fields = append(fields, field)
+			}
+		}
+		ignored = append(ignored, other.label())
+	}
+	if len(fields) == 0 {
+		return
+	}
+	sort.Strings(fields)
+
+	cr.logger.Warn("companion providers disagree on a tool definition; using one",
+		"tool", name,
+		"differs", strings.Join(fields, ","),
+		"using", winner.label(),
+		"ignoring", strings.Join(ignored, ","),
+	)
+}
+
+// companionToolDefinitionDiff names the fields in which two providers'
+// definitions of the same tool name disagree. An empty result means the two
+// companions authored the same contract, so which one wins cannot be
+// observed by the model.
+func companionToolDefinitionDiff(a, b companionToolClaim) []string {
+	var fields []string
+	if a.capability != b.capability {
+		fields = append(fields, "capability")
+	}
+	if a.def.Method != b.def.Method {
+		fields = append(fields, "method")
+	}
+	if a.def.Description != b.def.Description {
+		fields = append(fields, "description")
+	}
+	if !equalStringSets(a.def.Tags, b.def.Tags) {
+		fields = append(fields, "tags")
+	}
+	// Both schemas are JSON-derived (map/[]any/float64/string/bool/nil), the
+	// value space reflect.DeepEqual compares exactly.
+	if !reflect.DeepEqual(a.def.InputSchema, b.def.InputSchema) {
+		fields = append(fields, "input_schema")
+	}
+	return fields
+}
+
+// equalStringSets reports whether two tag lists carry the same members.
+// Tags are a set everywhere they are consumed — tag indexing and gating —
+// so companions that authored the same tags in a different order have not
+// disagreed about anything the model can observe, and comparing them in
+// order would report the ordinary multi-Mac case as skew.
+func equalStringSets(a, b []string) bool {
+	return maps.Equal(stringSet(a), stringSet(b))
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		set[v] = struct{}{}
+	}
+	return set
 }
 
 // synthesize turns one companion-authored tool definition into a
