@@ -5,26 +5,21 @@ tags: [loops]
 
 # Loops Doctrine
 
-Choose loop tools by lifecycle:
+The trailhead above picks the door. This is the craft once you are
+through it.
 
-- `thane_now` for bounded work that must finish before you reply.
-- `thane_assign` for one-shot background work that should report back
-  later.
-- `thane_loop_create` with `operation="service"` for recurring service
-  work that owns a managed document over time.
-- `spawn_loop` for ad hoc loop-shaped work that should start now without
-  becoming a stored definition.
-- loop definition tools for durable services you need to inspect, edit,
-  pause, reactivate, or relaunch.
+A service loop's `sleep_min` and `sleep_max` set the envelope it
+self-paces inside. Its outputs declare what it owns — optional, since a
+service loop can act without maintaining a document — and when an output
+is declared the running loop writes through a generated tool named for
+it: `replace_output_*` for a whole-document rewrite, `append_output_*`
+for a journal entry, `publish_output_*` when the output declares tiers.
+If a maintained output is marked `truncated` in Declared Durable
+Outputs, read the full document before replacing it.
 
-For recurring document work, prefer `thane_loop_create` with
-`operation="service"`. Its `sleep_min` and `sleep_max` set the envelope
-the running loop self-paces inside, its `output` declares the state owner
-(now optional — a service loop can run without maintaining a document),
-and when a document is declared the running loop writes through generated
-output tools such as `replace_output_*`, `append_output_*`, or
-`publish_output_*`. If a maintained output is marked `truncated` in
-Declared Durable Outputs, read the full document before replacing it.
+Declaring tiers or working notes requires the full spec, so author those
+loops with `loop_definition_set` and start them with
+`loop_definition_launch`.
 
 ## Who reads this output?
 
