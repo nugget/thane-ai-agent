@@ -5,7 +5,11 @@ import (
 	"testing"
 )
 
-func facetedOutput(facets ...OutputFacet) OutputSpec {
+func facetedOutput(names ...OutputFacet) OutputSpec {
+	facets := make([]FacetSpec, 0, len(names))
+	for _, name := range names {
+		facets = append(facets, FacetSpec{Name: name})
+	}
 	return OutputSpec{
 		Name:   "ranch status",
 		Type:   OutputTypeMaintainedDocument,

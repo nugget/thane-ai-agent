@@ -104,7 +104,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []OutputFacet{OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest},
+				Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetTeaser}, {Name: OutputFacetDigest}},
 			},
 			wantTool: "publish_output_ranch_status",
 		},
@@ -114,7 +114,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []OutputFacet{OutputFacetStatusLine},
+				Facets: []FacetSpec{{Name: OutputFacetStatusLine}},
 			},
 			wantTool: "publish_output_ranch_status",
 		},
@@ -124,7 +124,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []OutputFacet{OutputFacetTeaser, OutputFacetDigest},
+				Facets: []FacetSpec{{Name: OutputFacetTeaser}, {Name: OutputFacetDigest}},
 			},
 			wantErr: true,
 		},
@@ -134,7 +134,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []OutputFacet{OutputFacetStatusLine, OutputFacet("hud")},
+				Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacet("hud")}},
 			},
 			wantErr: true,
 		},
@@ -144,7 +144,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []OutputFacet{OutputFacetStatusLine, OutputFacetStatusLine},
+				Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetStatusLine}},
 			},
 			wantErr: true,
 		},
@@ -154,7 +154,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch notes",
 				Type:   OutputTypeWorkingNotes,
 				Ref:    "core:ranch-notes.md",
-				Facets: []OutputFacet{OutputFacetStatusLine},
+				Facets: []FacetSpec{{Name: OutputFacetStatusLine}},
 			},
 			wantErr: true,
 		},
@@ -165,7 +165,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Type:     OutputTypeMaintainedDocument,
 				Ref:      "core:hypotheses.md",
 				Audience: OutputAudienceInternal,
-				Facets:   []OutputFacet{OutputFacetStatusLine},
+				Facets:   []FacetSpec{{Name: OutputFacetStatusLine}},
 			},
 			wantErr: true,
 		},
@@ -222,11 +222,11 @@ func TestCloneOutputsDeepCopiesFacets(t *testing.T) {
 		Name:   "ranch status",
 		Type:   OutputTypeMaintainedDocument,
 		Ref:    "core:ranch.md",
-		Facets: []OutputFacet{OutputFacetStatusLine, OutputFacetTeaser},
+		Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetTeaser}},
 	}}
 	dst := cloneOutputs(src)
-	dst[0].Facets[1] = OutputFacetDigest
-	if src[0].Facets[1] != OutputFacetTeaser {
+	dst[0].Facets[1] = FacetSpec{Name: OutputFacetDigest}
+	if src[0].Facets[1].Name != OutputFacetTeaser {
 		t.Fatalf("cloneOutputs shares Facets backing array: src mutated to %q", src[0].Facets[1])
 	}
 }
@@ -287,7 +287,7 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 				Type:    OutputTypeMaintainedDocument,
 				Ref:     "generated:status.md",
 				Purpose: "Current status.",
-				Facets:  []OutputFacet{OutputFacetStatusLine, OutputFacetTeaser},
+				Facets:  []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetTeaser}},
 			},
 			{
 				Name: "notes",
@@ -318,7 +318,7 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	if got.Outputs[0].ToolName() != "publish_output_status" {
 		t.Fatalf("output tool = %q, want publish_output_status for a faceted output", got.Outputs[0].ToolName())
 	}
-	if len(got.Outputs[0].Facets) != 2 || got.Outputs[0].Facets[0] != OutputFacetStatusLine {
+	if len(got.Outputs[0].Facets) != 2 || got.Outputs[0].Facets[0].Name != OutputFacetStatusLine {
 		t.Fatalf("round-tripped facets = %v, want [status_line teaser]", got.Outputs[0].Facets)
 	}
 	if got.Outputs[1].EffectiveAudience() != OutputAudienceInternal {

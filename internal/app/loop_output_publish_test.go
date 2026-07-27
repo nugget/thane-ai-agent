@@ -24,7 +24,7 @@ func facetedSpec() looppkg.Spec {
 				Name:   "office status",
 				Type:   looppkg.OutputTypeMaintainedDocument,
 				Ref:    "core:office.md",
-				Facets: []looppkg.OutputFacet{looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser},
+				Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}, {Name: looppkg.OutputFacetTeaser}},
 			},
 			{
 				Name: "office notes",

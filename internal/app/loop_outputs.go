@@ -296,7 +296,7 @@ func cloneLoopOutputs(src []looppkg.OutputSpec) []looppkg.OutputSpec {
 	dst := make([]looppkg.OutputSpec, len(src))
 	copy(dst, src)
 	for i := range dst {
-		dst[i].Facets = append([]looppkg.OutputFacet(nil), src[i].Facets...)
+		dst[i].Facets = append([]looppkg.FacetSpec(nil), src[i].Facets...)
 	}
 	return dst
 }

@@ -176,9 +176,21 @@ func loopOutputSpecSchema() map[string]any {
 			"name": map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
 			"type": map[string]any{"type": "string", "enum": []string{"maintained_document", "working_notes"}, "description": "maintained_document = the loop rewrites it each cycle to reflect current state; working_notes = the same, but private — the loop's current thinking, never projected into search, context, or any other consumer surface. Use working_notes for working theories, what an experiment is showing, and what you expect next; use a maintained_document for what a reader should see. For an append-only dated record, journal a document directly with the doc tools rather than declaring it as an output."},
 			"facets": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-				"description": "The facets this output publishes alongside its full body: which condensed views this output curates alongside its full body. Declaring facets swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when facets are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a faceted output is read at a fraction of the cost of the full document. Order here carries no meaning.",
+				"type": "array",
+				"items": map[string]any{
+					"oneOf": []any{
+						map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+						map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"name":   map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+								"format": map[string]any{"type": "string", "enum": []string{"markdown", "plain", "json"}, "description": "How this facet is encoded. markdown (default) suits a document section; plain has no markup and is safe to speak aloud or show where nothing renders; json is for consumers that are code, and a non-JSON value is rejected."},
+							},
+							"required": []string{"name"},
+						},
+					},
+				},
+				"description": "The facets this output publishes alongside its full body — condensed views of the same understanding, each cut for a surface rather than shortened from the one above. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per facet. status_line is required whenever facets are declared; teaser and digest are optional. Write a bare name for the default encoding, or an object to set a format. Order carries no meaning.",
 			},
 			"audience": map[string]any{
 				"type":        "string",

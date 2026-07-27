@@ -109,11 +109,11 @@ func TestCloneLoopOutputsDeepCopiesFacets(t *testing.T) {
 		Name:   "ranch status",
 		Type:   looppkg.OutputTypeMaintainedDocument,
 		Ref:    "kb:ranch.md",
-		Facets: []looppkg.OutputFacet{looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser},
+		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}, {Name: looppkg.OutputFacetTeaser}},
 	}}
 	dst := cloneLoopOutputs(src)
-	dst[0].Facets[1] = looppkg.OutputFacetDigest
-	if src[0].Facets[1] != looppkg.OutputFacetTeaser {
+	dst[0].Facets[1] = looppkg.FacetSpec{Name: looppkg.OutputFacetDigest}
+	if src[0].Facets[1].Name != looppkg.OutputFacetTeaser {
 		t.Fatalf("cloneLoopOutputs shares Facets backing array: src mutated to %q", src[0].Facets[1])
 	}
 }
