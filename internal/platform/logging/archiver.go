@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -168,22 +169,44 @@ func (a *Archiver) processBatch(ctx context.Context, ids []string, archiveDir st
 
 // deleteBatch removes the given request IDs from log_request_content
 // and log_tool_content in a single transaction.
+//
+// Both tables are cleared with one statement each rather than a
+// statement per ID. SQLite in WAL mode admits exactly one writer, and
+// this transaction holds that slot for its whole duration while the
+// live logging path is still writing to the same file. Issuing
+// 2×archiveBatchSize statements held the write lock long enough to push
+// concurrent writers past their five-second busy timeout, which
+// surfaced as SQLITE_BUSY under the "content archive failed" warning
+// during backfill runs — and because the JSONL is flushed before the
+// delete, a failed batch is re-archived on the next pass as duplicate
+// lines. Two statements keep the lock held for as long as the delete
+// actually needs.
 func (a *Archiver) deleteBatch(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// One placeholder per ID; archiveBatchSize is far below SQLite's
+	// variable limit, and fetchBatch is what bounds the slice.
+	placeholders := strings.TrimPrefix(strings.Repeat(",?", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin delete tx: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM log_tool_content WHERE request_id = ?`, id); err != nil {
-			return fmt.Errorf("delete tool rows for %s: %w", id, err)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM log_request_content WHERE request_id = ?`, id); err != nil {
-			return fmt.Errorf("delete request row for %s: %w", id, err)
-		}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM log_tool_content WHERE request_id IN (`+placeholders+`)`, args...); err != nil {
+		return fmt.Errorf("delete tool rows for %d requests: %w", len(ids), err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM log_request_content WHERE request_id IN (`+placeholders+`)`, args...); err != nil {
+		return fmt.Errorf("delete request rows for %d requests: %w", len(ids), err)
 	}
 
 	return tx.Commit()

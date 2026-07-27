@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -231,5 +232,50 @@ func TestMonthKeyFor(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("monthKeyFor(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+// TestArchiver_DeleteBatchClearsFullBatch exercises deleteBatch at the
+// size a real run produces. The per-ID loop it replaced held SQLite's
+// single WAL writer slot for 2×archiveBatchSize statements, long enough
+// to push concurrent writers past their busy timeout; a full-size batch
+// also proves the IN-list stays inside SQLite's variable limit, which a
+// two-row fixture would never reach.
+func TestArchiver_DeleteBatchClearsFullBatch(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	ids := make([]string, archiveBatchSize)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("req-%03d", i)
+		if _, err := db.Exec(
+			`INSERT INTO log_request_content (request_id, user_content, model, created_at)
+			 VALUES (?, 'u', 'test', ?)`, ids[i], "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatalf("insert request %s: %v", ids[i], err)
+		}
+		if _, err := db.Exec(
+			`INSERT INTO log_tool_content (request_id, iteration_index, tool_name, arguments, result, created_at)
+			 VALUES (?, 0, 'x', '{}', 'ok', ?)`, ids[i], "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatalf("insert tool row %s: %v", ids[i], err)
+		}
+	}
+
+	if err := NewArchiver(db, t.TempDir(), slog.Default()).deleteBatch(ctx, ids); err != nil {
+		t.Fatalf("deleteBatch: %v", err)
+	}
+
+	for _, table := range []string{"log_request_content", "log_tool_content"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 0 {
+			t.Errorf("%s: %d rows survived the batch delete, want 0", table, n)
+		}
+	}
+
+	// Empty batches must not build a degenerate `IN ()` statement.
+	if err := NewArchiver(db, t.TempDir(), slog.Default()).deleteBatch(ctx, nil); err != nil {
+		t.Errorf("empty batch should be a no-op, got %v", err)
 	}
 }
