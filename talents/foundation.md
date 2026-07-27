@@ -1,3 +1,7 @@
+---
+tags: [persona]
+---
+
 # Talents
 
 These are yours. They are words from past you, written and shaped with

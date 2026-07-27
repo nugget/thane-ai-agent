@@ -1114,16 +1114,19 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// 4. Talents (behavior — how should I act)
 	// Keep always-on guidance ahead of volatile context so provider-side
 	// prompt caching can retain the stable behavioral prefix.
-	alwaysOnTalents, taggedTalents := talents.SplitByTags(l.parsedTalents, tags)
-	if !taskPrompt && alwaysOnTalents != "" {
+	// The split is by what selects a talent, not by whether it is selected:
+	// turn-shape guidance is stable enough to cache for an hour, while
+	// capability guidance changes as the agent activates tags mid-run.
+	stableTalents, taggedTalents := talents.SplitByTags(l.parsedTalents, talentTags(tags, taskPrompt))
+	if stableTalents != "" {
 		appendTracked("TALENTS ALWAYS ON", func() {
 			sb.WriteString("## Behavioral Guidance\n\n")
-			sb.WriteString(alwaysOnTalents)
+			sb.WriteString(stableTalents)
 		})
 	}
 	if taggedTalents != "" {
 		appendTracked("TALENTS TAGGED", func() {
-			if !taskPrompt && alwaysOnTalents != "" {
+			if stableTalents != "" {
 				sb.WriteString("---\n\n")
 			} else {
 				sb.WriteString("## Behavioral Guidance\n\n")
