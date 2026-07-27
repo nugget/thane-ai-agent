@@ -41,9 +41,8 @@ type LoopDefinitionToolDeps struct {
 // ConfigureLoopDefinitionTools stores the runtime dependencies needed by
 // the loop-definition tool family and registers the tools.
 func (r *Registry) ConfigureLoopDefinitionTools(deps LoopDefinitionToolDeps) {
-	r.loopDefinitionRegistry = deps.Registry
+	r.setSharedLoopDeps(deps.Registry, deps.CommitSpec)
 	r.loopDefinitionView = deps.View
-	r.commitLoopDefinitionSpec = deps.CommitSpec
 	r.deletePersistedLoopDefinition = deps.DeleteSpec
 	r.persistLoopDefinitionPolicy = deps.PersistPolicy
 	r.deletePersistedLoopDefinitionPolicy = deps.DeletePolicy

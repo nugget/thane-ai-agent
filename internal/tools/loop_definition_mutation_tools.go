@@ -18,23 +18,8 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if err != nil {
 		return "", err
 	}
-	snapshot, err := currentLoopDefinitionSnapshot(r)
+	stale, err := r.persistLoopSpec(ctx, spec)
 	if err != nil {
-		return "", err
-	}
-	if _, _, err := ensureDefinitionMutable(snapshot, spec.Name); err != nil {
-		return "", err
-	}
-	// Captured before the commit: the commit's reconcile can SPAWN an absent
-	// active definition, and a loop that is live only after the commit runs
-	// the just-written spec — only an instance that survived the commit is
-	// stale.
-	prior := r.runningLoopByName(spec.Name)
-	updatedAt := time.Now().UTC()
-	// Single durable commit (persist + upsert + reconcile). Fall back to a
-	// bare overlay upsert when no commit hook is wired so a registry-only
-	// configuration still works.
-	if err := commitSpecThroughChokepoint(ctx, r.commitLoopDefinitionSpec, r.loopDefinitionRegistry, spec, updatedAt); err != nil {
 		return "", err
 	}
 	view, err := currentLoopDefinitionView(r)
@@ -50,16 +35,12 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 		"generation": view.Generation,
 		"definition": def,
 	}
-	// The reconcile's stop branch clears the other direction: a loop the
-	// commit stopped (spec made non-durable or ineligible) is gone by now and
-	// correctly gets no notice. The notice recipe keys off the LIVE
-	// instance's operation, not the just-written spec's — set can rewrite
-	// operation while the running loop keeps its old shape, and the relaunch
-	// guidance must match what is actually running.
-	if prior != nil {
-		if after := r.runningLoopByName(spec.Name); after != nil && after.ID() == prior.ID() {
-			result["notice"] = staleRunningLoopNotice(spec.Name, after.Operation())
-		}
+	// The notice keys off the LIVE instance's operation, not the
+	// just-written spec's — set can rewrite operation while the running loop
+	// keeps its old shape, and the relaunch guidance must match what is
+	// actually running.
+	if stale != nil {
+		result["notice"] = staleRunningLoopNotice(spec.Name, stale.Operation())
 	}
 	return ldMarshalToolJSON(result)
 }
