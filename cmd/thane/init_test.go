@@ -375,6 +375,7 @@ func TestInitFlagErrorsGoToStderr(t *testing.T) {
 // that same key covers them.
 func TestInitDeploysTalentsIntoCoresBirthCommit(t *testing.T) {
 	t.Parallel()
+	requireGit(t)
 	dir := t.TempDir()
 	var buf bytes.Buffer
 	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
