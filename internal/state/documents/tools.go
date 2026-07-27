@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -99,6 +100,24 @@ func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
 		return "", err
 	}
 	return marshalToolResult(toModelDocumentRecord(doc, nowUTC()))
+}
+
+// Record returns one document as stored, for a caller that needs to
+// shape its own result rather than take the standard read payload.
+//
+// It exists for the facet-level read: choosing a projection means
+// parsing the body against the loop-output contract, which this package
+// deliberately knows nothing about. Exposing the record lets the layer
+// that does know do the work, instead of this one growing a second
+// understanding of what a document's sections mean.
+func (t *Tools) Record(ctx context.Context, ref string) (*DocumentRecord, error) {
+	if t == nil || t.store == nil {
+		return nil, fmt.Errorf("document index not configured")
+	}
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("ref is required")
+	}
+	return t.store.Read(ctx, ref)
 }
 
 // Roots returns summaries of the indexed document roots.

@@ -47,6 +47,13 @@ Declare `status_line` for any faceted output; add `teaser` when the
 output is something others search or link to, and `digest` when a
 reader should be able to act without opening the document.
 
+What makes this concrete on the reading side: `doc_read` takes a `level`,
+so any consumer — another loop, a later turn of this one, you — can pull
+`status_line` for a glance instead of the whole document. That is the
+payoff for curating them. A projection nobody can ask for separately is
+just a longer document; a projection that answers a question at one line
+is why the loop wrote it.
+
 ## Where the thinking goes
 
 What a loop publishes is current state. What it *thinks* — working

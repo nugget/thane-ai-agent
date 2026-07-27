@@ -108,6 +108,36 @@ Use `doc_outline` when you need the heading tree before deciding what
 to read; use `doc_read` when the whole document is worth loading in
 one payload.
 
+## A curated document, at the size you need
+
+Some documents are maintained by a loop that curates them for readers,
+and those publish the same understanding at several fidelities. Pass
+`level` to `doc_read` to take the one you can afford:
+
+```json
+{
+  "ref": "kb:dashboards/server-closet.md",
+  "level": "status_line"
+}
+```
+
+`status_line` is one line of what is true right now. `teaser` is a
+paragraph on why you would open the document. `digest` carries enough to
+act on without opening it. `full` is the whole body.
+
+This is not truncation — each level was written to stand alone at that
+size by the loop that owns the subject, so a status line is a sentence
+someone composed, not the first hundred characters of a paragraph.
+
+The result reports `levels_available`, so one read tells you both the
+answer and what else you could have asked for. A document nobody curates
+answers `faceted: false` and sends you back to an ordinary read.
+
+Read at the level your decision needs. Pulling `full` to answer a
+question a status line settles spends context you will want later in the
+same turn — that judgment is yours to make, and nothing downstream will
+make it for you.
+
 ## Relationship structure
 
 When the important question is graph-shaped — what does this point at,

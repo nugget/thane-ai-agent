@@ -220,14 +220,52 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 // into the faceted contract without losing its content. Content ahead of
 // the first recognized heading is folded into Full for the same reason.
 func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
+	payload, _ := ParseFacetSections(body)
+	// Only a field this output declared as json is unfenced. A markdown
+	// facet whose content legitimately opens with a fenced JSON example
+	// would otherwise come back with that fence eaten — the parser cannot
+	// tell an example from an encoding without being told which is which,
+	// and only the spec knows.
+	for _, field := range o.FacetFields() {
+		if field.Format != FacetFormatJSON {
+			continue
+		}
+		section, ok := facetSectionByKey(field.Key)
+		if !ok {
+			continue
+		}
+		value := section.value(&payload)
+		*value = unfence(*value)
+	}
+	return payload
+}
+
+// ParseFacetSections splits a rendered body into its facets without a
+// spec, reporting whether the body carried any facet section at all.
+//
+// A reader consulting someone else's document has the body and not the
+// declaration behind it, and does not need it: the section headings are
+// fixed by the contract, so what a document *has* is answerable from the
+// document. Only the json unfencing needs the spec, which is why that
+// step lives in [OutputSpec.ParseFacetDocument] and this does not repeat
+// the split.
+//
+// A body with no recognized facet sections parses entirely into Full and
+// reports false, which is what lets an ordinary maintained document be
+// read through the same path and answer "no facets" rather than error.
+// Content ahead of the first recognized heading folds into Full for the
+// same reason.
+func ParseFacetSections(body string) (FacetPayload, bool) {
 	var payload FacetPayload
 	var preamble []string
 	current := ""
+	found := false
 	collected := make(map[string][]string, len(facetSections))
 
 	for _, line := range strings.Split(body, "\n") {
 		if heading, ok := reservedFacetHeadingOf(line); ok {
 			current = heading
+			found = true
 			continue
 		}
 		if current == "" {
@@ -237,27 +275,12 @@ func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
 		collected[current] = append(collected[current], line)
 	}
 
-	// Only a field this output declared as json is unfenced. A markdown
-	// facet whose content legitimately opens with a fenced JSON example
-	// would otherwise come back with that fence eaten — the parser cannot
-	// tell an example from an encoding without being told which is which.
-	jsonFields := make(map[string]bool, len(o.Facets))
-	for _, field := range o.FacetFields() {
-		if field.Format == FacetFormatJSON {
-			jsonFields[field.Key] = true
-		}
-	}
-
 	for _, section := range facetSections {
 		lines, ok := collected[section.Heading]
 		if !ok {
 			continue
 		}
-		value := strings.TrimSpace(strings.Join(lines, "\n"))
-		if jsonFields[section.Field.Key] {
-			value = unfence(value)
-		}
-		*section.value(&payload) = value
+		*section.value(&payload) = strings.TrimSpace(strings.Join(lines, "\n"))
 	}
 
 	if leading := strings.TrimSpace(strings.Join(preamble, "\n")); leading != "" {
@@ -267,7 +290,29 @@ func (o OutputSpec) ParseFacetDocument(body string) FacetPayload {
 			payload.Full = leading + "\n\n" + payload.Full
 		}
 	}
-	return payload
+	return payload, found
+}
+
+// FacetByKey returns one facet's value from a payload by its field key,
+// so a consumer can ask for the level it wants without a switch of its
+// own over the ladder.
+func (p FacetPayload) FacetByKey(key string) (string, bool) {
+	section, ok := facetSectionByKey(key)
+	if !ok {
+		return "", false
+	}
+	value := *section.value(&p)
+	return value, strings.TrimSpace(value) != ""
+}
+
+// FacetKeys returns every facet key in canonical order, for a consumer
+// advertising the levels a document offers.
+func FacetKeys() []string {
+	keys := make([]string, 0, len(facetSections))
+	for _, section := range facetSections {
+		keys = append(keys, section.Field.Key)
+	}
+	return keys
 }
 
 // facetSectionByKey looks up the section table entry for a field key.
@@ -405,4 +450,11 @@ func (o OutputSpec) FacetPayloadFromArgs(args map[string]any) (FacetPayload, err
 		*section.value(&payload) = value
 	}
 	return payload, nil
+}
+
+// IsFacetKey reports whether key names a facet in the contract, for a
+// consumer validating a caller-supplied level before using it.
+func IsFacetKey(key string) bool {
+	_, ok := facetSectionByKey(key)
+	return ok
 }
