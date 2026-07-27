@@ -229,8 +229,13 @@ func failedVerification(commit string, message string) (VerificationResult, erro
 
 func (v *Verifier) gitOutput(ctx context.Context, verify bool, args ...string) (string, error) {
 	cmdArgs := []string{"-C", v.path}
-	if verify && v.allowedSignersPath != "" {
-		cmdArgs = append(cmdArgs, "-c", "gpg.ssh.allowedSignersFile="+v.allowedSignersPath)
+	if verify {
+		// Pin what decides the signature before naming who may sign it;
+		// see signatureTrustArgs for why this cannot be left to config.
+		cmdArgs = append(cmdArgs, signatureTrustArgs()...)
+		if v.allowedSignersPath != "" {
+			cmdArgs = append(cmdArgs, "-c", "gpg.ssh.allowedSignersFile="+v.allowedSignersPath)
+		}
 	}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)

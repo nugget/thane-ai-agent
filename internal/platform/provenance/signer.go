@@ -3,6 +3,7 @@ package provenance
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 )
 
@@ -114,13 +115,45 @@ func signerKind(principal string) string {
 	}
 }
 
+// sshKeygenProgram is the executable git is told to use for SSH signature
+// operations, resolved once rather than left to configuration.
+//
+// Resolution still consults PATH, which is not a boundary against someone who
+// controls the process environment — but such a person could replace the thane
+// binary itself, so it is not an escalation. Configuration is a different
+// matter: it is ordinary writable state, in the operator's home directory or
+// inside the very repository being judged.
+var sshKeygenProgram = func() string {
+	if resolved, err := exec.LookPath("ssh-keygen"); err == nil {
+		return resolved
+	}
+	return "ssh-keygen"
+}()
+
+// signatureTrustArgs pins the configuration that decides whether a signature
+// is good, overriding whatever the system, global, and repository config files
+// say.
+//
+// `gpg.ssh.program` names the executable git consults to answer that question,
+// and `gpg.format` selects the scheme. Both are writable by anything with
+// filesystem access — including this agent, wherever shell access is enabled —
+// so leaving them to configuration means the verdict of the trust gate can be
+// redirected by editing a file. A gate whose answer can be reassigned that way
+// is not a gate. These flags are passed with -c, which takes precedence over
+// every config file, so a repo-local .git/config inside an untrusted root
+// cannot reach the decision.
+func signatureTrustArgs() []string {
+	return []string{"-c", "gpg.format=ssh", "-c", "gpg.ssh.program=" + sshKeygenProgram}
+}
+
 // runGitTextVerify runs a read-only git command with SSH signature
 // verification enabled: it injects the allowed_signers file when one is
 // configured (a verify-only Verifier), and otherwise relies on the repo-local
 // git config a Store already set at init.
 func runGitTextVerify(ctx context.Context, repoPath, allowedSignersPath string, args ...string) (string, error) {
+	prefix := signatureTrustArgs()
 	if strings.TrimSpace(allowedSignersPath) != "" {
-		args = append([]string{"-c", "gpg.ssh.allowedSignersFile=" + allowedSignersPath}, args...)
+		prefix = append(prefix, "-c", "gpg.ssh.allowedSignersFile="+allowedSignersPath)
 	}
-	return runGitText(ctx, repoPath, args...)
+	return runGitText(ctx, repoPath, append(prefix, args...)...)
 }

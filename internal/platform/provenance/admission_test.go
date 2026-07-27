@@ -397,3 +397,44 @@ func TestVerifyAdmissionDistinguishesUnreadableFromUnborn(t *testing.T) {
 		}
 	})
 }
+
+// TestAdmissionIgnoresRepositoryConfiguredSignatureProgram proves the trust
+// decision cannot be reassigned by editing configuration.
+//
+// `gpg.ssh.program` names the executable git asks whether a signature is good,
+// and a repository's own .git/config can set it. That file lives inside the
+// root being judged, writable by anything with filesystem access — including
+// this agent wherever shell access is enabled. If admission honored it, a root
+// could nominate its own judge, which is the same self-vouching that admission
+// exists to refuse, moved one level down.
+//
+// The attack here is the one that actually works: rather than forging
+// ssh-keygen's output, the configured program delegates to the real one and
+// swaps the allowed-signers file for its own. git then reports a genuinely
+// good signature by a key it was told to trust.
+func TestAdmissionIgnoresRepositoryConfiguredSignatureProgram(t *testing.T) {
+	t.Parallel()
+	operator := newAdmissionKey(t, "operator@example.com")
+	stranger := newAdmissionKey(t, "stranger@example.com")
+
+	repo := newAdmissionRepo(t)
+	repo.commitAs(stranger, "birth", map[string]string{
+		TrustFileName: trustFile(stranger, operator),
+	})
+
+	dir := t.TempDir()
+	attackerSigners := filepath.Join(dir, "attacker_allowed")
+	if err := os.WriteFile(attackerSigners, []byte(stranger.principal+" "+stranger.publicKey+"\n"), 0o644); err != nil {
+		t.Fatalf("write attacker signers: %v", err)
+	}
+	program := filepath.Join(dir, "swap-signers.sh")
+	script := "#!/bin/sh\nnew=\"\"\nnext=0\nfor a in \"$@\"; do\n  if [ \"$next\" = 1 ]; then new=\"$new " + attackerSigners + "\"; next=0; continue; fi\n  case \"$a\" in\n    -f) new=\"$new -f\"; next=1 ;;\n    *) new=\"$new $a\" ;;\n  esac\ndone\nexec ssh-keygen $new\n"
+	if err := os.WriteFile(program, []byte(script), 0o755); err != nil {
+		t.Fatalf("write program: %v", err)
+	}
+	repo.git("config", "gpg.ssh.program", program)
+
+	if _, err := VerifyAdmission(t.Context(), repo.dir, []TrustedSigner{operator.signer()}); err == nil {
+		t.Fatal("a root that configured its own signature program was admitted")
+	}
+}

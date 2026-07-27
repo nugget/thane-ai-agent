@@ -259,7 +259,8 @@ func (s *Store) writeAllowedSigners(ctx context.Context, operators []TrustedSign
 func (s *Store) VerifyHead(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.git(ctx, nil, nil, "verify-commit", "HEAD"); err != nil {
+	args := append(signatureTrustArgs(), "verify-commit", "HEAD")
+	if err := s.git(ctx, nil, nil, args...); err != nil {
 		return fmt.Errorf("verify HEAD against allowed_signers: %w", err)
 	}
 	return nil
