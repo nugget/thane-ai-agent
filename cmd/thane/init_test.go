@@ -38,7 +38,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	out := buf.String()
 
 	// Verify directory structure.
-	for _, sub := range []string{"core", "db", "talents"} {
+	for _, sub := range []string{"core", "db", filepath.Join("core", "talents")} {
 		info, err := os.Stat(filepath.Join(dir, sub))
 		if err != nil {
 			t.Errorf("expected directory %s: %v", sub, err)
@@ -65,8 +65,9 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		t.Errorf("persona.md permissions = %o, want 0644", got)
 	}
 
-	// Verify at least one talent file was deployed.
-	entries, err := os.ReadDir(filepath.Join(dir, "talents"))
+	// Verify at least one talent file was deployed. They live inside core,
+	// so they arrive through its birth commit rather than as loose files.
+	entries, err := os.ReadDir(filepath.Join(dir, "core", "talents"))
 	if err != nil {
 		t.Fatalf("read talents dir: %v", err)
 	}
@@ -362,5 +363,42 @@ func TestInitFlagErrorsGoToStderr(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no-such-flag") {
 		t.Fatalf("stderr should carry the flag failure, got:\n%s", stderr.String())
+	}
+}
+
+// TestInitDeploysTalentsIntoCoresBirthCommit pins where talents live and when
+// they become attested.
+//
+// They arrive as part of the birth commit rather than being written to disk
+// first, so a fresh instance never has a moment where its behaviour
+// definitions exist unsigned — and when an operator key founds the instance,
+// that same key covers them.
+func TestInitDeploysTalentsIntoCoresBirthCommit(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(dir, "core", "talents"))
+	if err != nil {
+		t.Fatalf("talents should live inside core: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no talents deployed into core")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "talents")); !os.IsNotExist(err) {
+		t.Fatalf("talents must not also be deployed beside core: %v", err)
+	}
+
+	// The whole point: core is clean afterwards, so the instance can start.
+	out, err := exec.Command("git", "-C", filepath.Join(dir, "core"), "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("core should be clean after init, got:\n%s", out)
 	}
 }
