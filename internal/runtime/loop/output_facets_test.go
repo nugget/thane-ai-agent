@@ -18,14 +18,14 @@ func facetedOutput(names ...OutputFacet) OutputSpec {
 	}
 }
 
-func TestOutputSpecTierFieldsFollowCanonicalOrder(t *testing.T) {
+func TestOutputSpecFacetFieldsFollowCanonicalOrder(t *testing.T) {
 	tests := []struct {
 		name   string
 		output OutputSpec
 		want   []string
 	}{
 		{
-			name:   "full ladder",
+			name:   "every facet",
 			output: facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest),
 			want:   []string{"status_line", "teaser", "digest", "full"},
 		},
@@ -60,7 +60,7 @@ func TestOutputSpecTierFieldsFollowCanonicalOrder(t *testing.T) {
 	}
 }
 
-func TestValidateTierPayload(t *testing.T) {
+func TestValidateFacetPayload(t *testing.T) {
 	full := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
 	good := FacetPayload{
 		StatusLine: "Sensors nominal; gate closed.",
@@ -153,14 +153,14 @@ func TestValidateTierPayload(t *testing.T) {
 	}
 }
 
-func TestValidateTierPayloadRejectsUnfacetedOutput(t *testing.T) {
+func TestValidateFacetPayloadRejectsUnfacetedOutput(t *testing.T) {
 	out := OutputSpec{Name: "state", Type: OutputTypeMaintainedDocument, Ref: "core:state.md"}
 	if err := out.ValidateFacetPayload(FacetPayload{Full: "body"}); err == nil {
 		t.Fatal("ValidateFacetPayload() error = nil for an unfaceted output, want error")
 	}
 }
 
-func TestRenderTierDocumentUsesCanonicalSections(t *testing.T) {
+func TestRenderFacetDocumentUsesCanonicalSections(t *testing.T) {
 	out := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser)
 	body := out.RenderFacetDocument(FacetPayload{
 		StatusLine: "All clear.",
@@ -175,17 +175,17 @@ func TestRenderTierDocumentUsesCanonicalSections(t *testing.T) {
 	}
 }
 
-// TestTierDocumentRoundTrip is the guarantee the whole storage decision
+// TestFacetDocumentRoundTrip is the guarantee the whole storage decision
 // rests on: the rendered document is the canonical store, so any derived
 // binding can be re-seeded by parsing it back.
-func TestTierDocumentRoundTrip(t *testing.T) {
+func TestFacetDocumentRoundTrip(t *testing.T) {
 	tests := []struct {
 		name    string
 		output  OutputSpec
 		payload FacetPayload
 	}{
 		{
-			name:   "full ladder",
+			name:   "every facet",
 			output: facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest),
 			payload: FacetPayload{
 				StatusLine: "Sensors nominal; 2 waters below 40%.",
