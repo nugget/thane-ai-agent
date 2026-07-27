@@ -421,13 +421,14 @@ func TestCoreServiceRegistrationHydrate(t *testing.T) {
 			if spec.TaskBuilder != nil {
 				t.Error("Hydrate should not attach a TaskBuilder; the prompt is the declarative spec Task")
 			}
-			// metacognitive is the only core loop with a remaining runtime
-			// hook: the PostIterate iteration-log writer (which needs the
-			// resolved state-file path). ego and archivist are hook-free
-			// here — the archivist's work-queue tools are attached later, at
-			// app hydration, not by this registration closure.
-			if reg.Name == "metacognitive" && spec.PostIterate == nil {
-				t.Error("metacognitive Hydrate should attach the PostIterate iteration-log writer")
+			// No core loop attaches a runtime hook here any more. The
+			// metacognitive iteration-log writer was the last one, and it
+			// appended telemetry to the very document whose signed history
+			// now records the same iterations far better. The archivist's
+			// work-queue tools are attached later, at app hydration, not by
+			// this registration closure.
+			if spec.PostIterate != nil {
+				t.Errorf("%s Hydrate should not attach a PostIterate hook", reg.Name)
 			}
 		})
 	}

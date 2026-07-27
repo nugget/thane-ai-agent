@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
@@ -90,12 +89,7 @@ var metacognitiveRegistration = coreServiceRegistration{
 		if a.metacogCfg == nil {
 			return looppkg.Spec{}, fmt.Errorf("metacognitive definition requires metacognitive config")
 		}
-		stateFileName := filepath.Base(a.metacogCfg.StateFile)
-		stateFilePath := coreFilePath(a.cfg.Workspace.Path, stateFileName)
-		return metacognitive.HydrateSpec(spec, *a.metacogCfg, metacognitive.Opts{
-			StateFilePath: stateFilePath,
-			StateFileName: stateFileName,
-		}), nil
+		return metacognitive.HydrateSpec(spec, *a.metacogCfg), nil
 	},
 }
 
