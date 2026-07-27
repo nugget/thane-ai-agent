@@ -31,10 +31,10 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
 			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — give it an entity subscription with wake: true (wakes on that entity's changes), point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; without at least one trigger it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
-			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
+			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently, and a maintain output that declares tiers publishes condensed projections alongside the body instead — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
-			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
+			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, tiers when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
 		ContentResolveExempt: []string{
 			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
 			"instructions", "sleep_min", "sleep_max", "sleep_default", "jitter",
@@ -178,6 +178,7 @@ type executingLoopPlan struct {
 	outputMode  string
 	title       string
 	outputTool  string
+	notesRef    string
 	entityCount int
 	envelope    sleepEnvelope
 	createdAt   time.Time
@@ -231,6 +232,8 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		outputMode  string
 		title       string
 		hasOutput   bool
+		tiers       []looppkg.OutputTier
+		notesRef    string
 	)
 	if raw, ok := args["output"].(map[string]any); ok && raw != nil {
 		hasOutput = true
@@ -249,8 +252,25 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		if deps.DocTools == nil {
 			return nil, fmt.Errorf("output document requested but the document store is not configured")
 		}
-		outputSpec = buildCurateOutputSpec(name, documentRef, outputMode, intent)
+		tiers, err = parseOutputTiers(raw["tiers"])
+		if err != nil {
+			return nil, err
+		}
+		if len(tiers) > 0 && outputMode != "maintain" {
+			return nil, fmt.Errorf("output.tiers apply to a maintained document; got mode %q", outputMode)
+		}
+		outputSpec = buildCurateOutputSpec(name, documentRef, outputMode, intent, tiers)
 		outputs = []looppkg.OutputSpec{outputSpec}
+
+		// Every document-owning loop gets a notes surface. It is not a
+		// choice worth offering: a loop that publishes has reasoning that
+		// should not be published, and an opt-in that every caller should
+		// take is just a default in the wrong position. The cost of an
+		// unused one is a single context-block line saying it exists —
+		// nothing is scaffolded until the loop writes to it.
+		notesSpec := buildWorkingNotesSpec(name, documentRef, intent)
+		outputs = append(outputs, notesSpec)
+		notesRef = notesSpec.Ref
 	}
 
 	if _, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name); err != nil {
@@ -264,7 +284,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 
 	task := intent
 	if hasOutput {
-		task = buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName())
+		task = buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), len(tiers) > 0)
 	}
 
 	now := time.Now().UTC()
@@ -307,6 +327,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		outputMode:  outputMode,
 		title:       title,
 		outputTool:  outputSpec.ToolName(),
+		notesRef:    notesRef,
 		entityCount: len(entities),
 		envelope:    envelope,
 		createdAt:   now,
@@ -325,11 +346,24 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	// anything is committed: the answer to "what would you build" must not
 	// build it.
 	if dryRun, _ := args["dry_run"].(bool); dryRun {
-		return ldMarshalToolJSON(map[string]any{
+		result := map[string]any{
 			"status":   "dry_run",
 			"spec":     spec,
 			"warnings": plan.warnings,
-		})
+		}
+		// Derived decisions are reported here for the same reason they are
+		// reported on a real create: a preview that hides what the tool
+		// chose for you is not a preview of what it would do.
+		if plan.hasOutput {
+			result["output_tool"] = plan.outputTool
+			if plan.notesRef != "" {
+				result["working_notes_document"] = plan.notesRef
+			}
+			if len(spec.Outputs) > 0 && len(spec.Outputs[0].Tiers) > 0 {
+				result["tiers"] = spec.Outputs[0].Tiers
+			}
+		}
+		return ldMarshalToolJSON(result)
 	}
 
 	hasOutput, documentRef, outputMode, title := plan.hasOutput, plan.documentRef, plan.outputMode, plan.title
@@ -340,6 +374,15 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	if hasOutput {
 		if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil && !replace {
 			return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
+		}
+		// The notes ref is derived rather than supplied, so a collision is
+		// something the caller never chose and would not expect: appending a
+		// loop's private reasoning onto an unrelated document is worse than
+		// refusing to start.
+		if plan.notesRef != "" && !replace {
+			if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: plan.notesRef}); readErr == nil {
+				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
+			}
 		}
 		body := renderScaffoldBody(outputMode, title, intent)
 		frontmatter := map[string][]string{
@@ -384,6 +427,12 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		result["document_path"] = documentRef
 		result["output_mode"] = outputMode
 		result["output_tool"] = outputTool
+		if plan.notesRef != "" {
+			result["working_notes_document"] = plan.notesRef
+		}
+		if len(spec.Outputs) > 0 && len(spec.Outputs[0].Tiers) > 0 {
+			result["tiers"] = spec.Outputs[0].Tiers
+		}
 	}
 	if op == looppkg.OperationService {
 		result["sleep_envelope"] = map[string]any{
@@ -565,6 +614,11 @@ func thaneLoopCreateSchema() map[string]any {
 					"title": map[string]any{
 						"type":        "string",
 						"description": "Optional human title for the document. Defaults to the loop name.",
+					},
+					"tiers": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+						"description": "maintain mode only. Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
 					},
 				},
 				"required": []string{"mode", "document"},

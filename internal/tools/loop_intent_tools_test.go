@@ -392,8 +392,14 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	// Verify the declared output rides on the spec so the hydration
 	// layer can generate the scoped output tool and inject document
 	// context on each iteration.
-	if len(found.Spec.Outputs) != 1 {
-		t.Fatalf("Outputs len = %d, want 1: %+v", len(found.Spec.Outputs), found.Spec.Outputs)
+	// Two: the declared document, and the working-notes surface every
+	// document-owning loop gets so its reasoning has somewhere to go that
+	// is not what it publishes.
+	if len(found.Spec.Outputs) != 2 {
+		t.Fatalf("Outputs len = %d, want 2: %+v", len(found.Spec.Outputs), found.Spec.Outputs)
+	}
+	if notes := found.Spec.Outputs[1]; notes.Type != looppkg.OutputTypeWorkingNotes {
+		t.Errorf("Outputs[1].Type = %q, want working_notes", notes.Type)
 	}
 	out := found.Spec.Outputs[0]
 	if out.Name != "test_pr_watchlist" {
@@ -674,8 +680,8 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 	if found == nil {
 		t.Fatal("definition not registered")
 	}
-	if len(found.Spec.Outputs) != 1 {
-		t.Fatalf("Outputs len = %d, want 1", len(found.Spec.Outputs))
+	if len(found.Spec.Outputs) != 2 {
+		t.Fatalf("Outputs len = %d, want 2 (the journal plus its notes)", len(found.Spec.Outputs))
 	}
 	out := found.Spec.Outputs[0]
 	if out.Type != looppkg.OutputTypeJournalDocument {

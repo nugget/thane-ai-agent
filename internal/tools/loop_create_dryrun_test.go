@@ -80,8 +80,8 @@ func TestThaneLoopCreateDryRunWritesNothing(t *testing.T) {
 	if err := decoded.ValidatePersistable(); err != nil {
 		t.Fatalf("dry-run spec does not validate: %v", err)
 	}
-	if decoded.Name != "dry_run_probe" || len(decoded.Outputs) != 1 {
-		t.Errorf("round-tripped spec lost detail: name=%q outputs=%d", decoded.Name, len(decoded.Outputs))
+	if decoded.Name != "dry_run_probe" || len(decoded.Outputs) != 2 {
+		t.Errorf("round-tripped spec lost detail: name=%q outputs=%d (want the document plus its notes)", decoded.Name, len(decoded.Outputs))
 	}
 	if !strings.HasPrefix(decoded.Outputs[0].ToolName(), "replace_output_") {
 		t.Errorf("output tool = %q, want replace_output_* for maintain mode", decoded.Outputs[0].ToolName())
