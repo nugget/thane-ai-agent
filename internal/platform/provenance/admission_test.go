@@ -51,6 +51,27 @@ func newAdmissionKey(t *testing.T, principal string) admissionKey {
 	}
 }
 
+// TestMain detaches every git invocation in this package from whatever
+// configuration the developer running the tests happens to have — both the
+// tests' own commits and the ones the code under test makes.
+//
+// These tests sign with git itself rather than through the Store, which is the
+// point: admission has to judge history an operator committed by hand, not
+// only history the agent wrote. But that means a global `gpg.ssh.program`
+// applies, and the common one is 1Password's signer, which gets handed a test
+// key it has never seen and refuses the commit. Verification reads the same
+// setting, so a machine configured that way fails on both sides. Ambient
+// `commit.gpgsign`, hooks, and commit templates are the same class of problem.
+//
+// Each test repository configures everything it needs locally, so the fix is
+// to let nothing else in. Without it the suite passes or fails according to
+// whose laptop it runs on, which is worse than either result on its own.
+func TestMain(m *testing.M) {
+	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	os.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	os.Exit(m.Run())
+}
+
 // admissionRepo is a git repository tests drive directly, so a commit can be
 // attributed to any key rather than only to the Store's own signer. Real roots
 // acquire history both ways — the agent writes through the Store, an operator
