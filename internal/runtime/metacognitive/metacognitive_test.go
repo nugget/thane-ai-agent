@@ -1,11 +1,6 @@
 package metacognitive
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,242 +85,11 @@ func TestParseConfig_InvalidDuration(t *testing.T) {
 	}
 }
 
-// --- appendIterationLog tests ---
-
-func TestAppendIterationLog(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "metacognitive.md")
-
-	// Write an initial state file.
-	initial := "## Current Sense\nAll quiet.\n"
-	if err := os.WriteFile(statePath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-
-	result := &loop.IterationResult{
-		ConvID:       "metacog-12345",
-		Model:        "llama3:8b",
-		InputTokens:  12000,
-		OutputTokens: 500,
-		ToolsUsed:    map[string]int{"ha_get_state": 3, "replace_output_metacognitive_state": 1},
-		Elapsed:      3*time.Minute + 12*time.Second,
-		Supervisor:   false,
-		Sleep:        8 * time.Minute,
-	}
-
-	appendIterationLog(context.Background(), slog.Default(), statePath, nil, "", result)
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
-	s := string(data)
-
-	// Verify the original content is preserved.
-	if !strings.Contains(s, "All quiet.") {
-		t.Error("original content should be preserved")
-	}
-
-	// Verify log block fields.
-	if !strings.Contains(s, "<!-- iteration_log:") {
-		t.Error("should contain iteration_log prefix")
-	}
-	if !strings.Contains(s, "conversation=metacog-12345") {
-		t.Error("should contain conversation ID")
-	}
-	if !strings.Contains(s, "model=llama3:8b") {
-		t.Error("should contain model name")
-	}
-	if !strings.Contains(s, "supervisor=false") {
-		t.Error("should contain supervisor flag")
-	}
-	if !strings.Contains(s, "tokens_in=12000") {
-		t.Error("should contain input tokens")
-	}
-	if !strings.Contains(s, "tokens_out=500") {
-		t.Error("should contain output tokens")
-	}
-	if !strings.Contains(s, "sleep_set=8m0s") {
-		t.Error("should contain sleep duration")
-	}
-	if !strings.Contains(s, "ha_get_state x3") {
-		t.Error("should contain tools with counts")
-	}
-	if !strings.Contains(s, "replace_output_metacognitive_state") {
-		t.Error("should contain tool names")
-	}
-	if !strings.Contains(s, "elapsed=3m12s") {
-		t.Error("should contain elapsed time")
-	}
-}
-
-func TestAppendIterationLog_NoStateFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "metacognitive.md")
-
-	result := &loop.IterationResult{
-		ConvID:       "metacog-first",
-		Model:        "test-model",
-		InputTokens:  100,
-		OutputTokens: 50,
-		Elapsed:      time.Second,
-		Sleep:        5 * time.Minute,
-	}
-
-	appendIterationLog(context.Background(), slog.Default(), statePath, nil, "", result)
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
-	s := string(data)
-
-	if !strings.Contains(s, "<!-- iteration_log:") {
-		t.Error("log block should be written even when no state file existed")
-	}
-	if !strings.Contains(s, "conversation=metacog-first") {
-		t.Error("should contain conversation ID")
-	}
-}
-
-type panicProvenanceWriter struct{}
-
-func (*panicProvenanceWriter) Read(string) (string, error) {
-	panic("unexpected provenance read")
-}
-
-func (*panicProvenanceWriter) Write(context.Context, string, string, string) error {
-	panic("unexpected provenance write")
-}
-
-func TestAppendIterationLog_TypedNilProvenanceWriterFallsBackToFileIO(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, "metacognitive.md")
-	if err := os.WriteFile(statePath, []byte("## Current Sense\nStill here.\n"), 0o644); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-
-	var store ProvenanceWriter = (*panicProvenanceWriter)(nil)
-	result := &loop.IterationResult{
-		ConvID:       "metacog-typed-nil",
-		Model:        "llama3:8b",
-		InputTokens:  111,
-		OutputTokens: 22,
-		Elapsed:      2 * time.Second,
-		Sleep:        3 * time.Minute,
-	}
-
-	appendIterationLog(context.Background(), slog.Default(), statePath, store, "metacognitive.md", result)
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
-	if !strings.Contains(string(data), "conversation=metacog-typed-nil") {
-		t.Error("iteration log should still be appended via direct file I/O")
-	}
-}
-
-// --- pruneIterationLogs tests ---
-
-func TestPruneIterationLogs_NoLogs(t *testing.T) {
-	content := "## Current Sense\nAll quiet.\n\n<!-- metacognitive: iteration=x updated=y -->\n"
-	got := pruneIterationLogs(content, 5)
-	if got != content {
-		t.Errorf("content with no iteration logs should be unchanged\ngot: %q\nwant: %q", got, content)
-	}
-}
-
-func TestPruneIterationLogs_UnderLimit(t *testing.T) {
-	var sb strings.Builder
-	sb.WriteString("## State\n")
-	for i := 0; i < 3; i++ {
-		fmt.Fprintf(&sb, "\n<!-- iteration_log: conversation=c%d model=m supervisor=false\n     tokens_in=100 tokens_out=50 -->\n", i)
-	}
-	content := sb.String()
-
-	got := pruneIterationLogs(content, 5)
-	if got != content {
-		t.Error("content with fewer logs than limit should be unchanged")
-	}
-}
-
-func TestPruneIterationLogs_AtLimit(t *testing.T) {
-	var sb strings.Builder
-	sb.WriteString("## State\n")
-	for i := 0; i < 5; i++ {
-		fmt.Fprintf(&sb, "\n<!-- iteration_log: conversation=c%d model=m supervisor=false\n     tokens_in=100 tokens_out=50 -->\n", i)
-	}
-	content := sb.String()
-
-	got := pruneIterationLogs(content, 5)
-	if got != content {
-		t.Error("content with exactly limit logs should be unchanged")
-	}
-}
-
-func TestPruneIterationLogs_OverLimit(t *testing.T) {
-	var sb strings.Builder
-	sb.WriteString("## State\nSome content.\n")
-	for i := 0; i < 8; i++ {
-		fmt.Fprintf(&sb, "\n<!-- iteration_log: conversation=c%d model=m supervisor=false\n     tokens_in=100 tokens_out=50 -->\n", i)
-	}
-	content := sb.String()
-
-	got := pruneIterationLogs(content, 5)
-
-	// Should contain last 5 (c3..c7) but not first 3 (c0..c2).
-	for i := 0; i < 3; i++ {
-		if strings.Contains(got, fmt.Sprintf("conversation=c%d", i)) {
-			t.Errorf("pruned content should not contain conversation=c%d", i)
-		}
-	}
-	for i := 3; i < 8; i++ {
-		if !strings.Contains(got, fmt.Sprintf("conversation=c%d", i)) {
-			t.Errorf("pruned content should contain conversation=c%d", i)
-		}
-	}
-
-	// Original non-log content should be preserved.
-	if !strings.Contains(got, "Some content.") {
-		t.Error("non-log content should be preserved")
-	}
-}
-
-// --- formatToolsUsed tests ---
-
-func TestFormatToolsUsed_Empty(t *testing.T) {
-	got := formatToolsUsed(nil)
-	if got != "[]" {
-		t.Errorf("formatToolsUsed(nil) = %q, want %q", got, "[]")
-	}
-}
-
-func TestFormatToolsUsed_Sorted(t *testing.T) {
-	toolsMap := map[string]int{
-		"set_next_sleep":                     1,
-		"ha_get_state":                       3,
-		"replace_output_metacognitive_state": 1,
-	}
-	got := formatToolsUsed(toolsMap)
-
-	// Should be sorted alphabetically.
-	if got != "[ha_get_state x3, replace_output_metacognitive_state, set_next_sleep]" {
-		t.Errorf("formatToolsUsed = %q, want sorted with counts", got)
-	}
-}
-
 // --- Hydrated spec/config projection tests ---
 
 func TestHydratedSpec(t *testing.T) {
-	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{
-		WorkspacePath: tmpDir,
-		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
-	}
-
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
 	if spec.Name != "metacognitive" {
 		t.Errorf("Name = %q, want metacognitive", spec.Name)
 	}
@@ -373,41 +137,9 @@ func TestDefinitionSpecPersistable(t *testing.T) {
 	}
 }
 
-func TestHydrateSpecAttachesLoopRuntimeHooks(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := testConfig()
-	opts := Opts{
-		WorkspacePath: tmpDir,
-		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
-		StateFileName: cfg.StateFile,
-	}
-
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
-	// Declarative prompt: no TaskBuilder. The one runtime hook hydration
-	// attaches is the PostIterate iteration-log writer.
-	if spec.TaskBuilder != nil {
-		t.Fatal("metacognitive loop is declarative; HydrateSpec should attach no TaskBuilder")
-	}
-	if !strings.Contains(spec.Task, "Metacognitive loop iteration") {
-		t.Error("spec.Task should be the metacognitive base prompt")
-	}
-	if spec.PostIterate == nil {
-		t.Fatal("PostIterate (iteration-log writer) should be set after hydration")
-	}
-	if spec.Setup != nil {
-		t.Fatal("HydrateSpec should not attach app-level setup hooks")
-	}
-}
-
 func TestHydratedConfig(t *testing.T) {
-	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{
-		WorkspacePath: tmpDir,
-		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
-	}
-
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
 	lc := spec.ToConfig()
 
 	if lc.Name != "metacognitive" {
@@ -431,8 +163,8 @@ func TestHydratedConfig(t *testing.T) {
 	if !strings.Contains(lc.Task, "Metacognitive loop iteration") {
 		t.Error("lc.Task should be the metacognitive base prompt")
 	}
-	if lc.PostIterate == nil {
-		t.Error("PostIterate should be set")
+	if lc.PostIterate != nil {
+		t.Error("metacognitive attaches no PostIterate hook; its iteration history is the state document's own signed history")
 	}
 	// Profile-derived routing factors (mission/source) and DelegationGating
 	// are applied by the live loop at request time via Profile.RequestOptions,
@@ -452,14 +184,8 @@ func TestHydratedConfig(t *testing.T) {
 }
 
 func TestHydratedConfig_Task(t *testing.T) {
-	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{
-		WorkspacePath: tmpDir,
-		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
-	}
-
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
 	lc := spec.ToConfig()
 
 	// The prompt is now a static Task (no TaskBuilder); current state
@@ -475,44 +201,6 @@ func TestHydratedConfig_Task(t *testing.T) {
 	}
 	if strings.Contains(lc.Task, "does not exist yet") {
 		t.Error("Task should not carry the old first-iteration placeholder")
-	}
-}
-
-func TestHydratedConfig_PostIterate(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := testConfig()
-	statePath := filepath.Join(tmpDir, cfg.StateFile)
-	opts := Opts{
-		WorkspacePath: tmpDir,
-		StateFilePath: statePath,
-	}
-
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
-	lc := spec.ToConfig()
-
-	result := loop.IterationResult{
-		ConvID:       "metacog-post-test",
-		Model:        "test-model",
-		InputTokens:  100,
-		OutputTokens: 50,
-		Elapsed:      time.Second,
-		Sleep:        5 * time.Minute,
-	}
-
-	err := lc.PostIterate(context.Background(), result)
-	if err != nil {
-		t.Fatalf("PostIterate: %v", err)
-	}
-
-	// Verify state file was written with iteration log.
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
-	s := string(data)
-
-	if !strings.Contains(s, "conversation=metacog-post-test") {
-		t.Error("PostIterate should append iteration log with conversation ID")
 	}
 }
 
