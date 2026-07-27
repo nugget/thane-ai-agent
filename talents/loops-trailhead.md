@@ -7,15 +7,20 @@ next_tags: [loops_examples, documents, awareness]
 
 # Loops Trailhead
 
-A loop is work that outlives the turn that created it. Before reaching
-for one, answer two questions in order — the first picks the door, the
-second decides whether anything needs to be stored at all.
+Everything here runs on the same loop machinery — the operations differ
+in how often they run and in what they leave behind. Answer two
+questions in order: the first picks how often, the second decides
+whether anything needs to be stored.
 
-**1. Must it finish before you reply?** Then it is not a loop.
-`thane_now` runs bounded work inline and returns its result to this
-turn. `thane_assign` hands off one-shot background work that reports
-back later. Neither leaves a reusable definition behind, and that is the
-point: they do work and exit.
+**1. Does it run once, or keep running?** One-shot work is a loop that
+executes and finishes. `thane_now` runs it inline and returns the result
+to this turn, so reach for it when you cannot answer without the work.
+`thane_assign` runs it detached and reports back later, so reach for it
+when the turn should not wait. Neither leaves a reusable definition, and
+neither is worth a definition: they do the work and end.
+
+Work that recurs on its own schedule, or waits quiescent for a trigger,
+is the rest of this file.
 
 **2. Should it still exist tomorrow?** A durable loop leaves a stored
 definition you can inspect, edit, pause, reactivate, and relaunch. An ad
@@ -27,10 +32,11 @@ hoc one does not.
   mistakes before anything persists. This is the path for any loop that
   curates an understanding over time.
 - **Ad hoc** — `spawn_loop` launches immediately from a full spec and
-  persists nothing. Right for a temporary service or detached research
-  that should not join the durable registry. Wrong for anything that
-  owns a document: the loop ends, the document remains, and its
-  ownership frontmatter points at a loop that no longer exists.
+  persists nothing. Right for a temporary service that should not join
+  the durable registry, and for one-shot work needing spec-level control
+  `thane_assign` does not expose. Wrong for anything that owns a
+  document: the loop ends, the document remains, and its ownership
+  frontmatter points at a loop that no longer exists.
 
 `thane_loop_create` is a shorter front door to the durable path. It
 takes one output document and cannot declare tiers or working notes, so
