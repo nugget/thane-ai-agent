@@ -199,7 +199,7 @@ func talentsFromBlocks(blocks []Block, filename, path string) ([]Talent, error) 
 		}
 		out = append(out, Talent{
 			Name:       name,
-			Tags:       block.Frontmatter.Tags,
+			Tags:       applicabilityTags(block.Frontmatter.Tags),
 			Kind:       canonical,
 			Teaser:     block.Frontmatter.Teaser,
 			NextTags:   append([]string(nil), block.Frontmatter.NextTags...),
@@ -228,15 +228,41 @@ func FilterByTags(talents []Talent, activeTags map[string]bool) string {
 	}
 }
 
+// talentOrderKey orders guidance from most general to most specific:
+// turn-shape guidance first, then the trailheads that introduce a capability
+// area, then the doctrine within one.
+//
+// The first case used to be "carries no tags", which worked only because
+// tagless happened to mean always-applicable. Asking the question directly
+// keeps the ordering intact once taglessness stops being a category.
 func talentOrderKey(t Talent) int {
 	switch {
-	case len(t.Tags) == 0:
+	case appliesByTurnShapeOnly(t):
 		return 0
 	case strings.TrimSpace(t.Kind) == KindTrailhead:
 		return 1
 	default:
 		return 2
 	}
+}
+
+// applicabilityTags makes a talent's applicability explicit at the boundary,
+// so nothing downstream has to infer meaning from silence.
+//
+// A file with no tags carried an implicit rule — it applied to every turn —
+// which is what this change is retiring. Normalizing it to [TagAlways] here
+// preserves that behaviour exactly while making it visible: the stability
+// split, the filter, and anything reading a Talent afterwards all see a
+// declared tag rather than an absence they must interpret.
+//
+// It is transitional. Once the loader refuses tagless files outright, this
+// stops firing and can go, and refusing becomes the single answer to what
+// silence means rather than one of two.
+func applicabilityTags(declared []string) []string {
+	if len(declared) > 0 {
+		return declared
+	}
+	return []string{TagAlways}
 }
 
 // appliesByTurnShapeOnly reports whether a talent is selected purely by what
@@ -307,9 +333,6 @@ func renderTalents(included []Talent) string {
 // given the active tag set. Untagged talents are always included.
 // Tagged talents are included when any of their tags is active.
 func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
-	if len(t.Tags) == 0 {
-		return true // Untagged talents always load
-	}
 	if activeTags == nil {
 		return true // No tag filtering active
 	}
@@ -540,8 +563,11 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 	}
 
 	return &Talent{
-		Name:    "_capability_manifest",
-		Tags:    nil, // Untagged — always loads
+		Name: "_capability_manifest",
+		// Declared rather than left tagless: the manifest applies to every
+		// turn, and saying so keeps it in the prompt's stable prefix instead
+		// of the shorter-lived block tagless content would now fall into.
+		Tags:    []string{TagAlways},
 		Content: toolcatalog.RenderCapabilityManifestMarkdown(entries),
 	}
 }

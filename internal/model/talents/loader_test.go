@@ -271,8 +271,10 @@ func TestTalents(t *testing.T) {
 	if talents[0].Name != "core" {
 		t.Errorf("talents[0].Name = %q, want %q", talents[0].Name, "core")
 	}
-	if talents[0].Tags != nil {
-		t.Errorf("talents[0].Tags = %v, want nil", talents[0].Tags)
+	// A file declaring no tags is normalized at the boundary rather than
+	// left for later code to interpret.
+	if len(talents[0].Tags) != 1 || talents[0].Tags[0] != TagAlways {
+		t.Errorf("talents[0].Tags = %v, want [%s]", talents[0].Tags, TagAlways)
 	}
 	if talents[0].Kind != "" {
 		t.Errorf("talents[0].Kind = %q, want empty", talents[0].Kind)
@@ -426,8 +428,10 @@ func TestGenerateManifest(t *testing.T) {
 	if talent.Name != "_capability_manifest" {
 		t.Errorf("Name = %q, want %q", talent.Name, "_capability_manifest")
 	}
-	if talent.Tags != nil {
-		t.Errorf("Tags = %v, want nil (untagged)", talent.Tags)
+	// The manifest declares its applicability so it stays in the prompt's
+	// stable prefix, rather than relying on taglessness to mean "always".
+	if len(talent.Tags) != 1 || talent.Tags[0] != TagAlways {
+		t.Errorf("Tags = %v, want [%s]", talent.Tags, TagAlways)
 	}
 
 	// Preamble text.
@@ -559,10 +563,10 @@ func TestShouldIncludeTalent(t *testing.T) {
 			want:       true,
 		},
 		{
-			name:       "empty tags slice is untagged",
+			name:       "a talent declaring nothing matches nothing",
 			talent:     Talent{Tags: []string{}},
 			activeTags: map[string]bool{"ha": true, TagAlways: true},
-			want:       true,
+			want:       false,
 		},
 	}
 

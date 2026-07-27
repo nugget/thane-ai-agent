@@ -37,7 +37,7 @@ func TestBuildSystemPrompt_TaggedTalentsLoadForActiveTags(t *testing.T) {
 func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 	l := newTagTestLoop()
 	parsed := []talents.Talent{
-		{Name: "communication", Tags: []string{talents.TagAlways}, Content: "CORE_COMMUNICATION_MARKER"},
+		{Name: "communication", Tags: []string{talents.TagPersona}, Content: "CORE_COMMUNICATION_MARKER"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMMUNICATION_MARKER"},
 		{Name: "development-communication", Tags: []string{"development", "forge"}, Content: "DEVELOPMENT_COMMUNICATION_MARKER"},
 	}

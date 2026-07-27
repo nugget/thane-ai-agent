@@ -1,9 +1,14 @@
 package talents
 
-// TagAlways and TagPersona are the two applicability tags every talent is
-// expected to carry at least one of. They answer "on which turns does this
-// guidance apply", which is a different question from the capability tags
-// that answer "what can the agent do right now".
+// TagAlways and TagPersona are applicability tags: they answer "on which turns
+// does this guidance apply", which is a different question from the capability
+// tags that answer "what can the agent do right now".
+//
+// They are not required, and most talents carry neither. A talent tagged `web`
+// is selected by a capability being active, which already says when it
+// applies. These two exist for guidance that is not tied to any capability —
+// the doctrine that shapes how the agent behaves rather than what it can
+// reach — and they compose freely with capability tags on the same file.
 //
 // They replace an older encoding where a talent with no tags at all meant
 // permanent guidance. Absence is a poor way to say "always": it cannot be
