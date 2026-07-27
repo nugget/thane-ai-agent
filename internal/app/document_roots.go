@@ -192,7 +192,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 
 		var verifier *documentRootProvenanceVerifier
 		if policy.Git.Enabled && policy.Git.VerifySignatures != documents.VerificationNone {
-			v, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
+			v, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg, resolver)
 			if err != nil {
 				if policy.Git.VerifySignatures == documents.VerificationRequired {
 					return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s verify_signatures=required but verifier unavailable: %w", root, err)
@@ -380,7 +380,8 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	return &documentRootProvenanceWriter{checkout: signed}, nil
 }
 
-func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg config.DocumentRootGitConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
+func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, rootCfg config.DocumentRootConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
+	gitCfg := rootCfg.Git
 	absRepoPath, absRootPath, err := resolveRootPaths(root, rootPath, gitCfg, resolver)
 	if err != nil {
 		return nil, err
@@ -393,6 +394,7 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 		Name:         "doc_roots." + root + ".git",
 		WorktreePath: absRootPath,
 		RepoPath:     absRepoPath,
+		SeedSigners:  buildTrustedSigners(rootCfg.SeedSigners, gitCfg.AllowedSigners),
 		Logger:       logger.With("component", "document_root_verifier", "root", root),
 	})
 	if err != nil {

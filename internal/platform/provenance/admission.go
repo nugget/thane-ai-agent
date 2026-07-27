@@ -3,6 +3,7 @@ package provenance
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,6 +123,58 @@ func attributionHint(ctx context.Context, repoPath, commit string) string {
 	default:
 		return ""
 	}
+}
+
+// trustedBySeed reports whether a commit is signed by one of the root's
+// declared seed signers.
+//
+// This is the floor: seed signers are entitled to sign a root permanently, and
+// nothing inside the repository can withdraw that. Without it the guarantee the
+// design leads with — that a seed key can always re-assert control over a root
+// whose .allowed_signers has been polluted — is not true, because verification
+// reads only the in-tree file and an edit to that file could remove the very
+// key needed to repair it.
+//
+// It is consulted only after in-tree verification has already failed, so the
+// ordinary path costs nothing and the fallback runs on a signature the root
+// itself does not vouch for. A missing or unreadable seed set is not an error
+// here: it simply means there is no floor to stand on, and the in-tree failure
+// stands as the answer.
+func trustedBySeed(ctx context.Context, repoPath string, seeds []TrustedSigner, commit string) bool {
+	if len(seeds) == 0 || strings.TrimSpace(commit) == "" {
+		return false
+	}
+	seedFile, cleanup, err := materializeSeedSigners(seeds)
+	if err != nil {
+		return false
+	}
+	defer cleanup()
+	_, err = runGitTextVerify(ctx, repoPath, seedFile, "verify-commit", commit)
+	return err == nil
+}
+
+// logSeedFloorUsed records that a commit was trusted by the seed floor rather
+// than by the root's own trust file.
+//
+// The floor is a recovery mechanism, not a normal path: reaching it means the
+// in-tree .allowed_signers has stopped vouching for history it previously
+// covered. Succeeding silently would hide exactly the condition the floor
+// exists to survive, and would defeat the boot-time round-trip that
+// [Store.VerifyHead] performs — whose whole purpose is to surface a malformed
+// or polluted trust file early rather than let it emerge later as a puzzling
+// read failure.
+//
+// Both repairs are legitimate, so the message names both rather than assuming
+// which one the operator meant.
+func logSeedFloorUsed(logger *slog.Logger, repoPath, commit string) {
+	if logger == nil {
+		return
+	}
+	logger.Warn("commit trusted by the seed floor; this root's own .allowed_signers no longer vouches for it",
+		"repo", repoPath,
+		"commit", shortCommit(commit),
+		"remedy", "restore the seed signer to .allowed_signers, or remove it from seed_signers if dropping it was intended",
+	)
 }
 
 // rootCommits returns every parentless commit reachable from HEAD.

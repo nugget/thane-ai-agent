@@ -209,3 +209,23 @@ func CheckRootAdmission(ctx context.Context, cfg *config.Config) []RootAdmission
 	}
 	return out
 }
+
+// CoreSeedSigners returns the seed set declared for the core root.
+//
+// Core integrity is checked before — and sometimes instead of — building
+// document roots, so it cannot reach the per-root wiring that hands every
+// other root its seeds. Without this the seed floor would hold for every root
+// except the one holding the config, which is the root an operator most needs
+// to be able to repair.
+func CoreSeedSigners(cfg *config.Config) []provenance.TrustedSigner {
+	if cfg == nil {
+		return nil
+	}
+	for name, rootCfg := range cfg.DocRoots {
+		if strings.TrimSuffix(strings.TrimSpace(name), ":") != "core" {
+			continue
+		}
+		return buildTrustedSigners(rootCfg.SeedSigners, rootCfg.Git.AllowedSigners)
+	}
+	return nil
+}

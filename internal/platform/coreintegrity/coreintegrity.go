@@ -4,13 +4,17 @@
 // no uncommitted changes to tracked files.
 //
 // Signature verification resolves signers from core's own
-// .allowed_signers. That is sufficient while core has no remote: an
-// attacker who can rewrite the signer list already has local write
-// access and does not need to forge anything. It stops being sufficient
-// the moment core syncs from somewhere, because then someone who can
-// push could rewrite the config and the list of who may sign it in one
-// commit — so an out-of-tree anchor is a prerequisite for giving core a
-// remote, not for this check.
+// .allowed_signers, plus the seed signers config declares for core. The
+// seed set is the out-of-tree anchor: it lives in configuration rather
+// than in the repository being judged, so a commit signed by a seed is
+// trusted whether or not core's own trust file still lists it. That is
+// what keeps a polluted trust file from locking out the operator
+// entitled to repair it.
+//
+// The seed set is absent when the config could not be loaded, and then
+// the in-tree file is the only answer available — which is the right
+// degradation, since these checks exist partly to explain why a config
+// would not load.
 //
 // The checks live here rather than inside the boot path so one
 // definition serves both `thane validate`, which reports, and the boot
@@ -125,6 +129,20 @@ func gitignoreKeyMaterialLines() []string {
 type Options struct {
 	// ConfigFileName is the runtime config's name inside core.
 	ConfigFileName string
+
+	// SeedSigners are the keys config declares entitled to establish core.
+	// They remain able to sign it permanently, so a config commit signed by
+	// one is trusted even when core's own trust file has stopped listing it.
+	//
+	// Without this the floor would hold everywhere except the root that needs
+	// it most: a polluted trust file in core would fail config_signed, serve
+	// would refuse, and the operator entitled to repair core would be locked
+	// out of the instance by the very key that entitles them.
+	//
+	// Empty is normal rather than exceptional — these checks must also run when
+	// the config could not be loaded at all, and then there is no declared seed
+	// set to consult and the in-tree file is the only answer available.
+	SeedSigners []provenance.TrustedSigner
 }
 
 // Run evaluates every core integrity requirement for a workspace and
@@ -148,7 +166,7 @@ func Run(ctx context.Context, workspace string, opts Options) (Report, error) {
 		ConfigPath: filepath.Join(corePath, configName),
 	}
 
-	c := checker{ctx: ctx, core: corePath, configName: configName}
+	c := checker{ctx: ctx, core: corePath, configName: configName, seedSigners: opts.SeedSigners}
 
 	// Every check appears in every report, including the ones a failed
 	// prerequisite made unrunnable. A check that vanishes is
@@ -166,9 +184,10 @@ func Run(ctx context.Context, workspace string, opts Options) (Report, error) {
 }
 
 type checker struct {
-	ctx        context.Context
-	core       string
-	configName string
+	ctx         context.Context
+	core        string
+	configName  string
+	seedSigners []provenance.TrustedSigner
 }
 
 func (c checker) git(args ...string) (string, error) {
@@ -364,7 +383,7 @@ func (c checker) configSigned(r *Report, configOK bool) {
 		return
 	}
 
-	verifier, err := provenance.NewVerifier(c.core, slog.New(slog.DiscardHandler), provenance.Options{})
+	verifier, err := provenance.NewVerifier(c.core, slog.New(slog.DiscardHandler), provenance.Options{SeedSigners: c.seedSigners})
 	if err != nil {
 		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
 			Detail: "cannot resolve the trusted signer set: " + err.Error(),
