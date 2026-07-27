@@ -2,18 +2,6 @@
 
 This directory is Thane's durable release record. Each `v*.md` file contains the corresponding GitHub release body, retained as a standalone document rather than a cumulative changelog.
 
-## Archival contract
-
-- Release-note filenames are the exact Git tag followed by `.md`.
-- Published releases and prereleases are both retained.
-- Historical files preserve the GitHub release body with only deterministic text normalization: UTF-8 encoding, LF line endings, and exactly one terminal newline.
-- [`manifest.json`](manifest.json) records the GitHub release identity, provenance timestamps, author, release state, target, asset metadata, and SHA-256 digest of every archived Markdown file.
-- `published_at` is the public-release timestamp. `created_at` and `updated_at` retain GitHub's separate lifecycle timestamps. Git commit dates are not rewritten to imitate publication history.
-- GitHub remains the distribution surface, but the in-repository Markdown file is the source for every future release body.
-- After publication, a normal follow-up commit appends the live release metadata and file digest to the manifest and index. Values that do not exist until GitHub publishes the release are never predicted or backdated.
-
-The manifest is a snapshot of GitHub metadata captured at `2026-07-27T22:34:10Z`. Download counts and mutable GitHub fields describe that capture, not permanent facts. Artifact `digest` values are GitHub's reported hashes; `archived_file_sha256` covers the in-repository note itself.
-
 ## Releases
 
 | Published (UTC) | Release | State | GitHub |
@@ -42,3 +30,15 @@ The manifest is a snapshot of GitHub metadata captured at `2026-07-27T22:34:10Z`
 | 2026-02-11T20:13:07Z | [v0.2.2](v0.2.2.md) | prerelease | [source](https://github.com/nugget/thane-ai-agent/releases/tag/v0.2.2) |
 | 2026-02-11T19:58:50Z | [v0.2.1](v0.2.1.md) | prerelease | [source](https://github.com/nugget/thane-ai-agent/releases/tag/v0.2.1) |
 | 2026-02-10T23:04:00Z | [v0.2.0](v0.2.0.md) | prerelease | [source](https://github.com/nugget/thane-ai-agent/releases/tag/v0.2.0) |
+
+## Archival contract
+
+- Release-note filenames are the exact Git tag followed by `.md`.
+- Published releases and prereleases are both retained.
+- Historical files preserve the GitHub release body with only deterministic text normalization: UTF-8 encoding, LF line endings, and exactly one terminal newline.
+- [`manifest.json`](manifest.json) records the GitHub release identity, provenance timestamps, author, release state, target, asset metadata, and SHA-256 digest of every archived Markdown file.
+- `published_at` is the public-release timestamp. `created_at` and `updated_at` retain GitHub's separate lifecycle timestamps. Git commit dates are not rewritten to imitate publication history.
+- GitHub remains the distribution surface, but the in-repository Markdown file is the source for every future release body.
+- After publication, a normal follow-up commit appends the live release metadata and file digest to the manifest and index. Values that do not exist until GitHub publishes the release are never predicted or backdated.
+
+The manifest is a snapshot of GitHub metadata captured at `2026-07-27T22:34:10Z`. Download counts and mutable GitHub fields describe that capture, not permanent facts. Artifact `digest` values are GitHub's reported hashes; `archived_file_sha256` covers the in-repository note itself.
