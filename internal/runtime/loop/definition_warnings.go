@@ -110,7 +110,7 @@ var shadowableSpecFields = map[string]struct{}{
 	"sleep_default": {}, "jitter": {}, "max_duration": {}, "max_iter": {},
 	"supervisor": {}, "supervisor_prob": {}, "supervisor_profile": {},
 	"on_retrigger": {}, "routing_factors": {}, "delegation_gating": {},
-	"fallback_content": {}, "parent_name": {}, "parent_id": {},
+	"parent_name": {}, "parent_id": {},
 }
 
 // metadataShadowWarnings flags metadata keys that collide with a real

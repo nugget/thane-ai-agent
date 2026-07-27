@@ -104,12 +104,6 @@ var specFieldsNotOffered = map[string]string{
 
 	"delegation_gating": "the spec-level door is profile.delegation_gating, which the schema does offer; this top-level field is the runtime variant",
 	"routing_factors":   "request-routing internals; the authoring surface for routing is profile",
-
-	// Narrow but arguably authorable: an interactive loop can set it to
-	// guarantee a reply. Excluded because it only applies to
-	// request_reply runs, which neither guided door creates — thane_now
-	// owns that shape. Raised on #1287 rather than widened unilaterally.
-	"fallback_content": "applies only to request_reply runs, which the loop-authoring doors do not create",
 }
 
 // TestLoopOutputSpecSchemaCoversEveryField guards the nested declaration

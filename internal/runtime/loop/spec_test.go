@@ -118,12 +118,11 @@ func TestSpecValidate(t *testing.T) {
 func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	jitter := 0.4
 	spec := &Spec{
-		Name:            "copy-test",
-		Task:            "Watch the room.",
-		Tags:            []string{"monitoring"},
-		ExcludeTools:    []string{"shell_exec"},
-		Jitter:          &jitter,
-		FallbackContent: "please try again",
+		Name:         "copy-test",
+		Task:         "Watch the room.",
+		Tags:         []string{"monitoring"},
+		ExcludeTools: []string{"shell_exec"},
+		Jitter:       &jitter,
 		RoutingFactors: map[string]string{
 			"source": "loop",
 		},
@@ -153,9 +152,6 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	}
 	if *spec.Jitter != 0.4 {
 		t.Fatalf("spec.Jitter mutated = %v", *spec.Jitter)
-	}
-	if cfg.FallbackContent != "please try again" {
-		t.Fatalf("cfg.FallbackContent = %q, want %q", cfg.FallbackContent, "please try again")
 	}
 }
 

@@ -847,7 +847,7 @@ func (l *Loop) SetSubscriptions(subs []EntitySubscription) {
 // Beyond the structural fields, a handful of plain-data config scalars
 // are also deliberately NOT promoted because they sit outside the
 // retune tier: top-level exclude_tools, routing_factors,
-// delegation_gating, fallback_content, on_retrigger, intent (spec-level
+// delegation_gating, on_retrigger, intent (spec-level
 // fields owned by the full-replace path), and max_duration (compiled
 // into the run context's deadline at start). MaxIter IS promoted and
 // counts this instance's lifetime attempts: retuning it at or below the

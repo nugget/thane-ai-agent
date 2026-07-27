@@ -272,11 +272,6 @@ type Spec struct {
 	// Profile.DelegationGating for spec-level configuration.
 	DelegationGating string `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"`
 
-	// FallbackContent is static text used when the loop completes a
-	// request/reply run without any user-visible content. Interactive
-	// loops can set this to guarantee a reply.
-	FallbackContent string `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
-
 	// Setup is called by the registry spawn helpers after [New] or
 	// [NewFromSpec] but before [Loop.Start].
 	Setup func(l *Loop) `yaml:"-" json:"-"`
@@ -525,7 +520,6 @@ func (s *Spec) ToConfig() Config {
 		Handler:              ns.Handler,
 		RoutingFactors:       cloneStringMap(ns.RoutingFactors),
 		DelegationGating:     ns.DelegationGating,
-		FallbackContent:      ns.FallbackContent,
 		Setup:                ns.Setup,
 		RuntimeTools:         cloneRuntimeTools(ns.RuntimeTools),
 		OutputContextBuilder: ns.OutputContextBuilder,
