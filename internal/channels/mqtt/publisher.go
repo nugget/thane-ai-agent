@@ -135,6 +135,45 @@ func (p *Publisher) RegisterSensors(sensors []DynamicSensor) {
 	p.dynamicSensors = append(p.dynamicSensors, sensors...)
 }
 
+// EnsureSensor registers one dynamic sensor and publishes its discovery
+// config immediately, so an entity created after [Publisher.Start] shows
+// up in Home Assistant without waiting for the next reconnect. This is
+// the runtime counterpart to [Publisher.RegisterSensors], which only
+// takes effect at connect time.
+//
+// Re-registering an existing EntitySuffix replaces that definition
+// instead of appending a duplicate, so callers that cannot cheaply track
+// whether they have registered yet may call this before every publish.
+// It returns an error when the broker connection is not up; the
+// registration is still recorded and will be published on the next
+// reconnect.
+func (p *Publisher) EnsureSensor(ctx context.Context, sensor DynamicSensor) error {
+	if strings.TrimSpace(sensor.EntitySuffix) == "" {
+		return fmt.Errorf("mqtt: sensor entity suffix is required")
+	}
+
+	p.mu.Lock()
+	replaced := false
+	for i := range p.dynamicSensors {
+		if p.dynamicSensors[i].EntitySuffix == sensor.EntitySuffix {
+			p.dynamicSensors[i] = sensor
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		p.dynamicSensors = append(p.dynamicSensors, sensor)
+	}
+	p.mu.Unlock()
+
+	cm := p.getCM()
+	if cm == nil {
+		return fmt.Errorf("mqtt publisher not connected")
+	}
+	p.publishSensorDiscovery(ctx, cm, sensor.EntitySuffix, sensor.Config)
+	return nil
+}
+
 // Device returns the HA device info shared across all sensors published
 // by this publisher instance. Useful for callers building [DynamicSensor]
 // configs that reference the same HA device.
