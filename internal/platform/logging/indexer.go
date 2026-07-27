@@ -486,18 +486,15 @@ func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, er
 		return 0, nil
 	}
 
-	// Build placeholders for the IN clause.
-	placeholders := make([]string, len(pruneLevels))
 	args := make([]any, 0, len(pruneLevels)+1)
 	args = append(args, cutoff)
-	for i, l := range pruneLevels {
-		placeholders[i] = "?"
+	for _, l := range pruneLevels {
 		args = append(args, l)
 	}
 
 	query := fmt.Sprintf(
 		"DELETE FROM log_entries WHERE timestamp < ? AND level IN (%s)",
-		strings.Join(placeholders, ", "),
+		database.Placeholders(len(pruneLevels)),
 	)
 
 	res, err := db.Exec(query, args...)
@@ -645,12 +642,10 @@ func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
 	if params.Level != "" {
 		levels := levelsAtOrAbove(params.Level)
 		if len(levels) > 0 {
-			placeholders := make([]string, len(levels))
-			for i, l := range levels {
-				placeholders[i] = "?"
+			for _, l := range levels {
 				args = append(args, l)
 			}
-			query += " AND level IN (" + strings.Join(placeholders, ", ") + ")"
+			query += " AND level IN (" + database.Placeholders(len(levels)) + ")"
 		}
 	}
 	if !params.Since.IsZero() {

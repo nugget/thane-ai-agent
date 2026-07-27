@@ -115,7 +115,7 @@ func (s *SQLiteStore) conversationFilters(q ConversationQuery) convFilters {
 	// Membership group: ids OR kind-prefixes, OR'd together then AND'd with the rest.
 	var member []string
 	if len(q.IDs) > 0 {
-		member = append(member, "c.id IN ("+convPlaceholders(len(q.IDs))+")")
+		member = append(member, "c.id IN ("+database.Placeholders(len(q.IDs))+")")
 		for _, id := range q.IDs {
 			f.innerArgs = append(f.innerArgs, id)
 		}
@@ -382,13 +382,6 @@ func (s *SQLiteStore) countConversations(f convFilters) (int, error) {
 		return 0, fmt.Errorf("count conversations: %w", err)
 	}
 	return total, nil
-}
-
-func convPlaceholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat("?,", n-1) + "?"
 }
 
 // escapeLikePattern escapes the LIKE metacharacters %, _, and the escape
