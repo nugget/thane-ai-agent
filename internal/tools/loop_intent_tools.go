@@ -64,6 +64,9 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 		return
 	}
 	r.loopIntentDeps = deps
+
+	r.fallbackSharedLoopDeps(deps.Registry, deps.CommitSpec)
+
 	r.registerThaneLoopCreate()
 }
 

@@ -334,18 +334,16 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 // instance's own operation, which replace may have diverged from), or the
 // result reads as if the new spec is live.
 func (r *Registry) commitAndLaunchLoop(ctx context.Context, spec looppkg.Spec) (result looppkg.LaunchResult, reused *looppkg.Loop, err error) {
-	deps := r.loopIntentDeps
-	prior := r.runningLoopByName(spec.Name)
-	updatedAt := time.Now().UTC()
-	if err := commitSpecThroughChokepoint(ctx, deps.CommitSpec, deps.Registry, spec, updatedAt); err != nil {
+	stale, err := r.persistLoopSpec(ctx, spec)
+	if err != nil {
 		return looppkg.LaunchResult{}, nil, err
 	}
-	res, err := deps.LaunchDefinition(ctx, spec.Name, looppkg.Launch{})
+	res, err := r.loopIntentDeps.LaunchDefinition(ctx, spec.Name, looppkg.Launch{})
 	if err != nil {
 		return looppkg.LaunchResult{}, nil, fmt.Errorf("launch loop %q: %w", spec.Name, err)
 	}
-	if prior != nil && res.LoopID == prior.ID() {
-		return res, prior, nil
+	if stale != nil && res.LoopID == stale.ID() {
+		return res, stale, nil
 	}
 	return res, nil, nil
 }
