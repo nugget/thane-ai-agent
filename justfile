@@ -680,6 +680,7 @@ release-github-upload version target_commit="" release_kind="auto":
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+    notes_path="docs/releases/${tag}.md"
     target_commit="{{target_commit}}"
     release_kind="{{release_kind}}"
     release_exists=0
@@ -699,6 +700,15 @@ release-github-upload version target_commit="" release_kind="auto":
     just --quiet release-github-check "$version"
     export GH_TOKEN="${THANE_GH_TOKEN}"
 
+    test -f "$notes_path" || {
+        echo "Release notes must exist in the repository before publication: $notes_path" >&2
+        exit 1
+    }
+    test -s "$notes_path" || {
+        echo "Release notes file is empty: $notes_path" >&2
+        exit 1
+    }
+
     case "$release_kind" in
         auto)
             if printf '%s' "$version" | grep -q -- '-'; then
@@ -717,7 +727,7 @@ release-github-upload version target_commit="" release_kind="auto":
             ;;
     esac
 
-    create_args=("${tag}" --title "${tag}" --generate-notes)
+    create_args=("${tag}" --title "${tag}" --notes-file "${notes_path}")
     if [ "$prerelease" -eq 1 ]; then
         create_args+=(--prerelease)
         create_args+=(--latest=false)

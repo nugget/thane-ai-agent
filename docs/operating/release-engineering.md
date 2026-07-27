@@ -16,6 +16,12 @@ tool output stream through in real time.
 Use this when you are cutting a real release for GitHub, the macOS companion
 app, and manual operator installs.
 
+Author and commit the release body first at
+`docs/releases/v<version>.md`. The repository copy is the source of truth:
+publication passes that file to GitHub unchanged, and refuses to create a
+release when it is missing or empty. Use the exact tag as the filename,
+including any prerelease suffix.
+
 ```bash
 just release-github 0.9.0
 just release-github 0.9.0 prerelease
@@ -31,7 +37,8 @@ What it does:
 - signs, notarizes, and staples the macOS `.pkg` artifacts
 - writes checksums
 - smoke-tests the release container image locally
-- creates or updates the GitHub release with either release or prerelease state
+- creates or updates the GitHub release with either release or prerelease state,
+  using the committed `docs/releases/v<version>.md` body
 
 Required environment for this path:
 

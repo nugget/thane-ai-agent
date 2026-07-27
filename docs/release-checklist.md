@@ -183,6 +183,11 @@ same fix after a release ships is migration work.
 
 Tree is clean — verify it builds.
 
+- [ ] **Release notes committed** — author the complete release body at
+      `docs/releases/v<version>.md`, using the exact intended tag as the
+      filename. The repository file is the publication source;
+      `release-github` rejects missing or empty notes rather than generating a
+      GitHub-only body.
 - [ ] Release candidate identity recorded before validation: intended
       version, build suffix, commit SHA, branch, and target host
 - [ ] `just ci`
@@ -228,6 +233,12 @@ the commit tells the truth, and hand off.
       produces reports the intended version. This needs the notarized
       output and the operator's credentials, so it can't be done from an
       AI-assisted run — it's a handoff, not a step you execute here.
+- [ ] **Published metadata archived** — in a normal, present-day follow-up
+      commit, add the release to `docs/releases/README.md` and append its live
+      GitHub metadata and archived-file SHA-256 to
+      `docs/releases/manifest.json`. Capture the timestamps and asset digests
+      only after publication; do not guess them in the release commit or
+      rewrite Git dates afterward.
 - [ ] **Manual breakpoint only when you mean it** — if the release needs
       to pause between build and publish, use `just prepare-release
       <version>` then `just publish-release <version>
