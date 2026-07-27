@@ -259,18 +259,13 @@ func (s *Store) GetBySubjects(subjects []string) ([]*Fact, error) {
 	}
 
 	// Build query with IN clause for json_each matching.
-	placeholders := make([]string, len(subjects))
-	args := make([]any, len(subjects))
-	for i, sub := range subjects {
-		placeholders[i] = "?"
-		args[i] = sub
-	}
+	placeholders, args := database.InList(subjects)
 
 	// updated_at is stored at second precision, so multiple facts set
 	// in a tight loop tie. Tiebreak on key ASC for deterministic order
 	// across SQLite plans (FTS5 vs LIKE fallback) and test stability.
 	query := `SELECT ` + factColumns + ` FROM facts WHERE ` + activeFilter + ` AND subjects IS NOT NULL AND EXISTS (
-		SELECT 1 FROM json_each(subjects) WHERE value IN (` + strings.Join(placeholders, ",") + `)
+		SELECT 1 FROM json_each(subjects) WHERE value IN (` + placeholders + `)
 	) ORDER BY updated_at DESC, key ASC`
 
 	rows, err := s.db.Query(query, args...)

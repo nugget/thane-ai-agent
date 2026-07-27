@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -594,18 +593,16 @@ func (s *SQLiteStore) ApplyCompaction(conversationID string, compactedIDs []stri
 	defer func() { _ = tx.Rollback() }()
 
 	if len(compactedIDs) > 0 {
-		placeholders := make([]string, len(compactedIDs))
 		args := make([]any, 0, len(compactedIDs)+1)
 		args = append(args, conversationID)
-		for i, id := range compactedIDs {
-			placeholders[i] = "?"
+		for _, id := range compactedIDs {
 			args = append(args, id)
 		}
 		if _, err := tx.Exec(fmt.Sprintf(`
 			UPDATE messages
 			SET status = 'compacted'
 			WHERE conversation_id = ? AND id IN (%s)
-		`, strings.Join(placeholders, ",")), args...); err != nil {
+		`, database.Placeholders(len(compactedIDs))), args...); err != nil {
 			return fmt.Errorf("mark compacted: %w", err)
 		}
 	}

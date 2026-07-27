@@ -180,12 +180,10 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 	// for, which is not true if its rows are still fetched, decoded, and
 	// scored before being discarded.
 	if excluded := s.searchExcludedRoots(q.Root); len(excluded) > 0 {
-		placeholders := make([]string, len(excluded))
-		for i, root := range excluded {
-			placeholders[i] = "?"
+		for _, root := range excluded {
 			args = append(args, root)
 		}
-		where = append(where, `root NOT IN (`+strings.Join(placeholders, ", ")+`)`)
+		where = append(where, `root NOT IN (`+database.Placeholders(len(excluded))+`)`)
 	}
 	if q.Query != "" {
 		like := "%" + q.Query + "%"
