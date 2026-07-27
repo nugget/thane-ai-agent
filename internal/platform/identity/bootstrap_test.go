@@ -31,7 +31,7 @@ func TestBootstrapCoreCreatesSignedBirthCommit(t *testing.T) {
 	clearUmask(t)
 
 	coreDir := filepath.Join(t.TempDir(), "core")
-	result, err := BootstrapCore(t.Context(), coreDir, "pocket", nil)
+	result, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, nil)
 	if err != nil {
 		t.Fatalf("BootstrapCore: %v", err)
 	}
@@ -113,10 +113,10 @@ func TestBootstrapCoreSkipsCompleteIdentity(t *testing.T) {
 	requireGit(t)
 
 	coreDir := filepath.Join(t.TempDir(), "core")
-	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil); err != nil {
+	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, nil); err != nil {
 		t.Fatalf("first BootstrapCore: %v", err)
 	}
-	result, err := BootstrapCore(t.Context(), coreDir, "pocket", nil)
+	result, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, nil)
 	if err != nil {
 		t.Fatalf("second BootstrapCore: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBootstrapCoreRejectsPartialIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil); err == nil {
+	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, nil); err == nil {
 		t.Fatal("BootstrapCore partial identity returned nil, want error")
 	}
 }
@@ -148,7 +148,7 @@ func TestBootstrapCoreRollsBackFailedBirthCommit(t *testing.T) {
 	coreDir := filepath.Join(t.TempDir(), "core")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := BootstrapCore(ctx, coreDir, "pocket", nil); err == nil {
+	if _, err := BootstrapCore(ctx, coreDir, "pocket", nil, nil); err == nil {
 		t.Fatal("BootstrapCore with canceled context returned nil, want error")
 	}
 
@@ -167,7 +167,7 @@ func TestBootstrapCoreRollsBackFailedBirthCommit(t *testing.T) {
 		}
 	}
 
-	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil); err != nil {
+	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, nil); err != nil {
 		t.Fatalf("BootstrapCore after rollback: %v", err)
 	}
 }

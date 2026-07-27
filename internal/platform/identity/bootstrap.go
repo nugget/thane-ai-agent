@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
+	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,13 +39,45 @@ type BootstrapResult struct {
 	CoreDir               string
 	SigningKeyFingerprint string
 	ChannelCAFingerprint  string
+	// SelfSigned reports that core's only seed signer is the instance's own
+	// agent key, so nothing outside the instance attests to it and the agent
+	// can re-establish the root holding its config.
+	SelfSigned bool
+	// OperatorPrincipal names the operator key core was anchored to, empty
+	// when SelfSigned.
+	OperatorPrincipal string
+}
+
+// coreTrustSurface renders core's in-tree trust file.
+//
+// The operator is listed alongside the agent rather than instead of it: the
+// seed set decides who may establish the root, while this file decides who may
+// sign its contents, and the agent has to keep writing ego.md and
+// metacognitive.md after an operator founds the root. Keeping the two distinct
+// is what makes the anchored shape usable rather than merely strict.
+func coreTrustSurface(agentPublicKey string, operator *OperatorSigner) (string, error) {
+	var operators []provenance.TrustedSigner
+	if operator != nil {
+		operators = append(operators, provenance.TrustedSigner{
+			Principal: operator.Principal,
+			PublicKey: operator.PublicKey,
+		})
+	}
+	return provenance.RenderAllowedSigners(agentPublicKey, operators)
+}
+
+func operatorPrincipal(operator *OperatorSigner) string {
+	if operator == nil {
+		return ""
+	}
+	return operator.Principal
 }
 
 // BootstrapCore initializes the core trust root for a Thane instance.
 // Private key material is written under core/ with 0600 permissions and
 // ignored by git. Public key material, the channel CA certificate, and
 // core/config.yaml are committed together as the signed birth commit.
-func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *slog.Logger) (*BootstrapResult, error) {
+func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *OperatorSigner, logger *slog.Logger) (*BootstrapResult, error) {
 	absCoreDir, err := filepath.Abs(coreDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve core dir: %w", err)
@@ -95,10 +128,18 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		return nil, err
 	}
 
+	// The birth commit is signed by whoever seeds the root, which is the whole
+	// point of the operator key: a seed set naming the operator while the agent
+	// signs the birth produces a root admission refuses, so the key that will
+	// be declared has to be the key that founds it.
+	birthKey := filepath.Join(absCoreDir, SigningPrivateKeyFile)
+	if operator != nil {
+		birthKey = operator.PrivateKeyPath
+	}
 	signed, err := checkout.OpenSigned(ctx, checkout.SignedSpec{
 		Name:            "core.identity",
 		WorktreePath:    absCoreDir,
-		SigningKeyPath:  filepath.Join(absCoreDir, SigningPrivateKeyFile),
+		SigningKeyPath:  birthKey,
 		SkipBirthCommit: true,
 		Logger:          logger.With("component", "core_identity_checkout"),
 	})
@@ -106,14 +147,18 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		return nil, fmt.Errorf("open core identity checkout: %w", err)
 	}
 
-	policy, err := renderCoreConfig(instanceName, now, signing, channelCA)
+	trustSurface, err := coreTrustSurface(signing.Public, operator)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := renderCoreConfig(instanceName, now, signing, channelCA, operator)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := signed.Store.WriteFiles(ctx, map[string]string{
 		".gitignore":         coreGitIgnore,
-		".allowed_signers":   fmt.Sprintf("thane@provenance.local %s\n", strings.TrimSpace(signing.Public)),
+		".allowed_signers":   trustSurface,
 		SigningPublicKeyFile: signing.Public,
 		ChannelCACertFile:    string(channelCA.Certificate),
 		CoreConfigFile:       string(policy),
@@ -127,6 +172,8 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		CoreDir:               absCoreDir,
 		SigningKeyFingerprint: signing.Fingerprint,
 		ChannelCAFingerprint:  channelCA.Fingerprint,
+		SelfSigned:            operator == nil,
+		OperatorPrincipal:     operatorPrincipal(operator),
 	}, nil
 }
 
@@ -209,12 +256,13 @@ func writePrivateFile(path string, data []byte) error {
 }
 
 type coreConfig struct {
-	Version     int              `yaml:"version"`
-	GeneratedAt string           `yaml:"generated_at"`
-	Identity    identityPolicy   `yaml:"identity"`
-	Trust       trustPolicy      `yaml:"trust"`
-	Delegation  delegationPolicy `yaml:"delegation"`
-	Channels    channelPolicy    `yaml:"channels"`
+	Version     int                       `yaml:"version"`
+	GeneratedAt string                    `yaml:"generated_at"`
+	Identity    identityPolicy            `yaml:"identity"`
+	Trust       trustPolicy               `yaml:"trust"`
+	Delegation  delegationPolicy          `yaml:"delegation"`
+	Channels    channelPolicy             `yaml:"channels"`
+	Roots       map[string]coreRootPolicy `yaml:"roots,omitempty"`
 }
 
 type identityPolicy struct {
@@ -253,8 +301,44 @@ type channelPolicy struct {
 	AllowedKeyTypes []string `yaml:"allowed_key_types"`
 }
 
-func renderCoreConfig(instanceName string, generatedAt time.Time, signing *SigningKeyPair, ca *CertificateAuthority) ([]byte, error) {
+// coreRootPolicy carries the seed declaration for core in the generated
+// config. Only seed_signers is emitted: everything else about core's policy is
+// the operator's to author, but the seed set has to exist from birth or
+// admission has nothing to judge the root against.
+type coreRootPolicy struct {
+	SeedSigners []coreSeedSigner `yaml:"seed_signers,omitempty"`
+}
+
+type coreSeedSigner struct {
+	Principal string `yaml:"principal"`
+	Key       string `yaml:"key"`
+	Label     string `yaml:"label,omitempty"`
+}
+
+// coreSeedDeclaration names who may establish core.
+//
+// An anchored core declares the operator alone, which is what makes the agent
+// unable to found or re-found the root holding its own config. A self-signed
+// core declares the agent, because something has to be declared — a root with
+// no seed set is governed by nothing, which is the state this exists to end.
+func coreSeedDeclaration(signing *SigningKeyPair, operator *OperatorSigner) coreRootPolicy {
+	if operator != nil {
+		return coreRootPolicy{SeedSigners: []coreSeedSigner{{
+			Principal: operator.Principal,
+			Key:       strings.TrimSpace(operator.PublicKey),
+			Label:     "operator",
+		}}}
+	}
+	return coreRootPolicy{SeedSigners: []coreSeedSigner{{
+		Principal: provenance.AgentPrincipal,
+		Key:       strings.TrimSpace(signing.Public),
+		Label:     "self-signed",
+	}}}
+}
+
+func renderCoreConfig(instanceName string, generatedAt time.Time, signing *SigningKeyPair, ca *CertificateAuthority, operator *OperatorSigner) ([]byte, error) {
 	cfg := coreConfig{
+		Roots:       map[string]coreRootPolicy{"core": coreSeedDeclaration(signing, operator)},
 		Version:     1,
 		GeneratedAt: generatedAt.Format(time.RFC3339),
 		Identity: identityPolicy{

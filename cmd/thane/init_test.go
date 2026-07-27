@@ -31,7 +31,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("runInit failed: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestRunInit_ArchiveBootstrapIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("first runInit: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestRunInit_ArchiveBootstrapIdempotent(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("second runInit: %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 	var buf bytes.Buffer
 
 	// First run: create everything.
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("first runInit failed: %v", err)
 	}
 
@@ -228,7 +228,7 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 
 	// Second run: should skip existing files.
 	buf.Reset()
-	if err := runInit(&buf, dir); err != nil {
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
 		t.Fatalf("second runInit failed: %v", err)
 	}
 
@@ -344,5 +344,23 @@ func TestWriteIfMissing_CreateError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "create") {
 		t.Errorf("error = %q, want it to mention 'create'", err)
+	}
+}
+
+// TestInitFlagErrorsGoToStderr holds init to run()'s contract: terminal output
+// belongs on stderr. Usage text mixed into stdout would interleave with the
+// progress report a caller may be parsing, and would do it precisely when
+// something already went wrong.
+func TestInitFlagErrorsGoToStderr(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	if err := runInitCommand(&stdout, &stderr, []string{"-no-such-flag"}); err == nil {
+		t.Fatal("an unknown flag should fail")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("flag failure wrote to stdout:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no-such-flag") {
+		t.Fatalf("stderr should carry the flag failure, got:\n%s", stderr.String())
 	}
 }
