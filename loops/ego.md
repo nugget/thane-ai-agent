@@ -9,6 +9,7 @@ tags: [loops]
 
 ```yaml
 name: ego
+parent_name: cognition
 enabled: true
 profile:
     quality_floor: 5

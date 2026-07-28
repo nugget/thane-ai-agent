@@ -486,3 +486,97 @@ func TestSecondYAMLDocumentInTheSpecBlockIsRefused(t *testing.T) {
 		t.Errorf("error = %v, want it to explain the stray separator", err)
 	}
 }
+
+// TestCoreDefinitionKeepsItsDeclaredParent is what makes the parent a
+// document field rather than a Go assignment. Nothing adds a parent
+// after the spec is built any more, so if the document's value did not
+// survive into the base definitions, ego would boot at the graph root
+// with nothing saying so — which is exactly the failure the assignment
+// used to hide.
+//
+// The container it names is appended after it, and that is fine: startup
+// topologically orders containers before services, so position in this
+// slice does not decide parenting.
+func TestCoreDefinitionKeepsItsDeclaredParent(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{
+		"ego.md": strings.NewReplacer(
+			"name: ranch_watch", "name: ego\nparent_name: "+cognitionContainerName,
+		).Replace(minimalCoreLoop),
+	})
+	app := &App{cfg: &config.Config{
+		Paths: map[string]string{"core": core},
+		Ego:   testServiceLoopConfig(),
+	}}
+
+	specs, err := app.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+	var ego looppkg.Spec
+	container := false
+	for _, spec := range specs {
+		switch spec.Name {
+		case "ego":
+			ego = spec
+		case cognitionContainerName:
+			container = true
+		}
+	}
+	if ego.ParentName != cognitionContainerName {
+		t.Errorf("parent_name = %q, want the document's %q", ego.ParentName, cognitionContainerName)
+	}
+	if !container {
+		t.Errorf("%q is absent, so the declared parent resolves to nothing", cognitionContainerName)
+	}
+}
+
+// TestConfigDisabledDocumentLoopStillGetsItsContainer covers the gap
+// declaring parent_name opened.
+//
+// A definition document is authoritative whether or not config enables
+// its loop, but the container was gated on config enablement alone. So a
+// loop disabled in config and defined by a document named a parent that
+// was never built — and an unresolvable parent_name is dropped with a
+// warning and default-parented to the graph root, which is the silent
+// re-parenting the declared field exists to prevent.
+func TestConfigDisabledDocumentLoopStillGetsItsContainer(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{
+		"metacognitive.md": strings.NewReplacer(
+			"name: ranch_watch", "name: metacognitive\nparent_name: "+cognitionContainerName,
+		).Replace(minimalCoreLoop),
+	})
+	// Every core service loop disabled: the document is the only reason
+	// this loop exists at all.
+	disabled := testServiceLoopConfig()
+	disabled.Enabled = false
+	app := &App{cfg: &config.Config{
+		Paths:         map[string]string{"core": core},
+		Metacognitive: disabled,
+		Ego:           disabled,
+		Archivist:     disabled,
+	}}
+
+	specs, err := app.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+	var loop looppkg.Spec
+	container := false
+	for _, spec := range specs {
+		switch spec.Name {
+		case "metacognitive":
+			loop = spec
+		case cognitionContainerName:
+			container = true
+		}
+	}
+	if loop.Name == "" {
+		t.Fatal("the document defines the loop, so it must be registered even with config disabled")
+	}
+	if loop.ParentName != cognitionContainerName {
+		t.Fatalf("parent_name = %q, want %q", loop.ParentName, cognitionContainerName)
+	}
+	if !container {
+		t.Errorf("%q is absent, so the declared parent resolves to nothing and the loop silently lands at the root", cognitionContainerName)
+	}
+}
