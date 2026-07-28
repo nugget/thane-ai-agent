@@ -3,9 +3,11 @@ package identity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -227,7 +229,7 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 	if err != nil {
 		return evidence, fmt.Errorf("identity evidence: inspect core worktree: %w", err)
 	}
-	trustHistory, err := gitScalar(ctx, absCore, "log", "--full-history", "--format=%H", "--", provenance.TrustFileName)
+	trustChangeCount, err := trustFileChangeCount(ctx, absCore)
 	if err != nil {
 		return evidence, fmt.Errorf("identity evidence: inspect trust-file history: %w", err)
 	}
@@ -279,7 +281,7 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 			Head: HeadEvidence{
 				Commit:               GitObjectID{Algorithm: objectFormat, OID: headCommit},
 				WorktreeClean:        clean,
-				TrustFileChangeCount: len(nonEmptyLines(trustHistory)),
+				TrustFileChangeCount: trustChangeCount,
 			},
 			Verification: VerificationEvidence{
 				Admission: admission,
@@ -374,11 +376,28 @@ func gitBlob(ctx context.Context, repo, commit, name string) ([]byte, error) {
 }
 
 func coreWorktreeClean(ctx context.Context, repo string) (bool, error) {
-	status, err := gitScalar(ctx, repo, "status", "--porcelain", "--untracked-files=no")
-	if err != nil {
-		return false, err
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "diff", "--quiet", "HEAD", "--")
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
 	}
-	return status == "", nil
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git diff --quiet HEAD: %w", err)
+}
+
+func trustFileChangeCount(ctx context.Context, repo string) (int, error) {
+	count, err := gitScalar(ctx, repo, "rev-list", "--count", "--full-history", "HEAD", "--", provenance.TrustFileName)
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.Atoi(count)
+	if err != nil {
+		return 0, fmt.Errorf("parse git rev-list count %q: %w", count, err)
+	}
+	return value, nil
 }
 
 func nonEmptyLines(value string) []string {

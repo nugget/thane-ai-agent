@@ -1325,11 +1325,13 @@ components:
         instance:
           type: object
           description: Founding public identity material for this Thane.
-          $ref: "#/components/schemas/ThaneIdentity"
+          allOf:
+            - $ref: "#/components/schemas/ThaneIdentity"
         core:
           type: object
           description: Birth, active revision, and local verification posture.
-          $ref: "#/components/schemas/CoreIdentityEvidence"
+          allOf:
+            - $ref: "#/components/schemas/CoreIdentityEvidence"
       example:
         schema_version: 1
         observed_at: "2026-07-28T19:22:31Z"
@@ -1369,11 +1371,13 @@ components:
         identity_key:
           type: object
           description: Founding Ed25519 signing-key identity.
-          $ref: "#/components/schemas/PublicIdentityMaterial"
+          allOf:
+            - $ref: "#/components/schemas/PublicIdentityMaterial"
         channel_ca:
           type: object
           description: Founding X.509 channel certificate-authority identity.
-          $ref: "#/components/schemas/PublicIdentityMaterial"
+          allOf:
+            - $ref: "#/components/schemas/PublicIdentityMaterial"
 
     PublicIdentityMaterial:
       type: object
@@ -1397,15 +1401,18 @@ components:
         birth:
           type: object
           description: Founding commit and its asserted chronology.
-          $ref: "#/components/schemas/CoreBirthEvidence"
+          allOf:
+            - $ref: "#/components/schemas/CoreBirthEvidence"
         head:
           type: object
           description: Active core revision and worktree posture.
-          $ref: "#/components/schemas/CoreHeadEvidence"
+          allOf:
+            - $ref: "#/components/schemas/CoreHeadEvidence"
         verification:
           type: object
           description: Local admission and active-tree checks.
-          $ref: "#/components/schemas/CoreVerificationEvidence"
+          allOf:
+            - $ref: "#/components/schemas/CoreVerificationEvidence"
 
     CoreBirthEvidence:
       type: object
@@ -1415,7 +1422,8 @@ components:
         commit:
           type: object
           description: Algorithm-qualified object ID of core's birth commit.
-          $ref: "#/components/schemas/GitObjectID"
+          allOf:
+            - $ref: "#/components/schemas/GitObjectID"
         asserted_at:
           type: string
           format: date-time
@@ -1440,7 +1448,8 @@ components:
         commit:
           type: object
           description: Algorithm-qualified object ID of the active core HEAD.
-          $ref: "#/components/schemas/GitObjectID"
+          allOf:
+            - $ref: "#/components/schemas/GitObjectID"
         worktree_clean:
           type: boolean
           description: Whether tracked core content is clean against HEAD.

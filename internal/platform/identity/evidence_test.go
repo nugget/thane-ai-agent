@@ -56,6 +56,9 @@ func TestObserveCoreIdentityEvidence(t *testing.T) {
 			if got.Core.Verification.Head.Status != EvidenceVerified || !got.Core.Head.WorktreeClean {
 				t.Errorf("head evidence = %+v / %+v, want verified clean head", got.Core.Head, got.Core.Verification.Head)
 			}
+			if got.Core.Head.TrustFileChangeCount != 1 {
+				t.Errorf("trust-file change count = %d, want 1", got.Core.Head.TrustFileChangeCount)
+			}
 		})
 	}
 }
