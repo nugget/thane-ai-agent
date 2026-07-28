@@ -356,3 +356,122 @@ func TestFromDefinition_RunningTakesLiveEventDrivenAndState(t *testing.T) {
 		t.Errorf("a stored definition must have nil state, got %v", stored.State)
 	}
 }
+
+// TestLoopViewResolver_FromStatus_CadenceSelfKnowledge covers the row a
+// running loop reads about itself each iteration (#1313): the envelope it
+// may choose within, the sleep it just came out of, and how often it has
+// actually been running.
+func TestLoopViewResolver_FromStatus_CadenceSelfKnowledge(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	v := r.FromStatus(Status{
+		ID:           "lp_meta",
+		Name:         "metacognitive",
+		State:        State("processing"),
+		SleptFor:     4 * time.Minute,
+		SleptPlanned: 30 * time.Minute,
+		WakesLast24h: 47,
+		Config: Config{
+			Operation:    OperationService,
+			SleepMin:     15 * time.Minute,
+			SleepMax:     time.Hour,
+			SleepDefault: 30 * time.Minute,
+			Jitter:       Float64Ptr(0.2),
+		},
+	})
+
+	if v.SleepEnvelope == nil {
+		t.Fatal("a timer-driven service loop must carry its envelope")
+	}
+	if v.SleepEnvelope.Min != "15m" || v.SleepEnvelope.Max != "1h" || v.SleepEnvelope.Default != "30m" {
+		t.Errorf("envelope = %#v, want 15m/1h/30m", v.SleepEnvelope)
+	}
+	// The two sleep durations disagree, which is how a loop distinguishes
+	// "a notification woke me" from "my cadence was overridden".
+	if v.LastSleep == nil || *v.LastSleep != "4m" {
+		t.Errorf("LastSleep = %v, want 4m", v.LastSleep)
+	}
+	if v.LastSleepPlanned == nil || *v.LastSleepPlanned != "30m" {
+		t.Errorf("LastSleepPlanned = %v, want 30m", v.LastSleepPlanned)
+	}
+	if v.WakesLast24h == nil || *v.WakesLast24h != 47 {
+		t.Errorf("WakesLast24h = %v, want 47", v.WakesLast24h)
+	}
+}
+
+// TestLoopViewResolver_FromStatus_SupervisorRecencyInBothUnits pins the
+// pair: turns-back answers "has my recent work been reviewed", time-ago
+// answers "how long since" — different questions on a loop whose interval
+// keeps changing.
+func TestLoopViewResolver_FromStatus_SupervisorRecencyInBothUnits(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	v := r.FromStatus(Status{
+		ID: "lp_meta", Name: "metacognitive", State: State("processing"),
+		Iterations:            412,
+		LastSupervisorIter:    403,
+		LastSupervisorTrigger: SupervisorTrigger("random"),
+		LastSupervisorAt:      now.Add(-4*time.Hour - 12*time.Minute),
+		Config:                Config{Operation: OperationService},
+	})
+	if v.SupervisorItersAgo == nil || *v.SupervisorItersAgo != 9 {
+		t.Errorf("SupervisorItersAgo = %v, want 9", v.SupervisorItersAgo)
+	}
+	if v.LastSupervisorDelta == nil || *v.LastSupervisorDelta != "-4h12m" {
+		t.Errorf("LastSupervisorDelta = %v, want -4h12m", v.LastSupervisorDelta)
+	}
+}
+
+// TestDefinitionViewResolver_FromDefinition_DeclaredEnvelope keeps the
+// envelope readable before a definition ever runs, so an operator (or a
+// model) reading the corpus sees the cadence a loop would run at.
+func TestDefinitionViewResolver_FromDefinition_DeclaredEnvelope(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	r := NewDefinitionViewResolver(nil, now)
+
+	v := r.FromDefinition(DefinitionSnapshot{
+		Name: "archivist",
+		Spec: Spec{
+			Name: "archivist", Operation: OperationService,
+			SleepMin: 15 * time.Minute, SleepMax: 12 * time.Hour, SleepDefault: time.Hour,
+		},
+	}, DefinitionEligibilityStatus{Eligible: true}, nil)
+
+	if v.SleepEnvelope == nil {
+		t.Fatal("a stored service definition should show the envelope it would run under")
+	}
+	if v.SleepEnvelope.Min != "15m" || v.SleepEnvelope.Max != "12h" || v.SleepEnvelope.Default != "1h" {
+		t.Errorf("envelope = %#v, want 15m/12h/1h", v.SleepEnvelope)
+	}
+}
+
+// TestDefinitionViewResolver_FromDefinition_LiveEnvelopeWins is the
+// retune case: once a definition is running, the envelope the loop is
+// actually clamped by is the live one, not what the stored spec declared.
+func TestDefinitionViewResolver_FromDefinition_LiveEnvelopeWins(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	r := NewDefinitionViewResolver(nil, now)
+
+	v := r.FromDefinition(DefinitionSnapshot{
+		Name: "archivist",
+		Spec: Spec{
+			Name: "archivist", Operation: OperationService,
+			SleepMin: 15 * time.Minute, SleepMax: 12 * time.Hour, SleepDefault: time.Hour,
+		},
+	}, DefinitionEligibilityStatus{Eligible: true}, &Status{
+		ID: "lp_arch", Name: "archivist", State: State("sleeping"),
+		Config: Config{
+			Operation: OperationService,
+			SleepMin:  time.Hour, SleepMax: 24 * time.Hour, SleepDefault: 6 * time.Hour,
+		},
+	})
+
+	if v.SleepEnvelope == nil {
+		t.Fatal("a running definition should still carry an envelope")
+	}
+	if v.SleepEnvelope.Min != "1h" || v.SleepEnvelope.Max != "24h" || v.SleepEnvelope.Default != "6h" {
+		t.Errorf("envelope = %#v, want the live 1h/24h/6h, not the stored spec's", v.SleepEnvelope)
+	}
+}

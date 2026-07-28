@@ -227,6 +227,29 @@ type Loop struct {
 	sleepUntil   time.Time
 	currentSleep time.Duration
 
+	// lastSleptFor is how long the most recent sleep actually lasted and
+	// lastSleptPlanned is what it was scheduled for. They differ when a
+	// notification cut the sleep short, which is exactly the case a loop
+	// reading its own rhythm must not mistake for its chosen cadence
+	// being ignored. Set in [Loop.sleep] on wake; both zero before the
+	// first sleep and for event-driven loops.
+	lastSleptFor     time.Duration
+	lastSleptPlanned time.Duration
+
+	// wakeTimes is the trailing-24h record of iteration start instants,
+	// oldest first. It answers "how often have I actually been running"
+	// — a number a self-pacing loop needs and cannot derive from a
+	// lifetime iteration count, because the interval it chose has been
+	// changing the whole time. Pruned on append; see maxWakeHistory for
+	// what a sub-minute poller does to it.
+	wakeTimes []time.Time
+
+	// lastSupervisorAt is when the most recent successful supervisor turn
+	// ran, the wall-clock companion to lastSupervisorIter. Iterations-ago
+	// is meaningless as a recency measure on a loop whose interval keeps
+	// changing; this is the half that stays comparable.
+	lastSupervisorAt time.Time
+
 	// currentConvID is the conversation ID of the in-flight iteration.
 	// Set at the start of each iteration, cleared after. Tool handlers
 	// read it via [Loop.CurrentConvID].
@@ -722,6 +745,9 @@ func (l *Loop) Status() Status {
 		LastWakeAt:            l.lastWakeAt,
 		SleepUntil:            l.sleepUntil,
 		CurrentSleep:          l.currentSleep,
+		SleptFor:              l.lastSleptFor,
+		SleptPlanned:          l.lastSleptPlanned,
+		WakesLast24h:          l.wakesInWindowLocked(time.Now()),
 		Iterations:            l.iterations,
 		Attempts:              l.attempts,
 		TotalInputTokens:      l.totalInputTokens,
@@ -736,6 +762,7 @@ func (l *Loop) Status() Status {
 		LLMContext:            llmCtxCopy,
 		LastSupervisorIter:    l.lastSupervisorIter,
 		LastSupervisorTrigger: l.lastSupervisorTrigger,
+		LastSupervisorAt:      l.lastSupervisorAt,
 		HandlerOnly:           l.config.Handler != nil,
 		EventDriven:           l.isEventDriven(),
 		PendingRetune:         l.pendingRetune != nil,
@@ -1474,6 +1501,12 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		iterStartTime := time.Now()
+		// Recorded before dispatch, unlike lastWakeAt below, so the turn
+		// being built can count itself. A no-op iteration still consumed a
+		// wake, so this does not share lastWakeAt's no-op skip.
+		l.mu.Lock()
+		l.recordWakeLocked(iterStartTime)
+		l.mu.Unlock()
 
 		// Dispatch: Handler runs directly; otherwise build an agent
 		// turn and let the loop runtime execute it.
@@ -1768,6 +1801,7 @@ func (l *Loop) run(ctx context.Context) {
 				if isSupervisor {
 					l.lastSupervisorIter = l.iterations
 					l.lastSupervisorTrigger = supervisorTrigger
+					l.lastSupervisorAt = time.Now()
 				}
 				snap.Number = l.iterations
 				l.mu.Unlock()
@@ -2213,6 +2247,13 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	req.OnProgress = composeProgressFuncs(l.makeProgressFunc(), req.OnProgress, l.requestOverride.OnProgress)
 	req.InitialTags = mergeUniqueStrings(configuredInitialTags, l.activatedTags)
 	req.RuntimeTools = mergeRuntimeTools(l.config.RuntimeTools, req.RuntimeTools)
+	// Built here rather than at hydration so the advertised bounds are
+	// this iteration's: a promoted retune moves the envelope under a
+	// running loop, and a description frozen at launch would go on naming
+	// the range the loop is no longer clamped by.
+	if sleepTool, ok := l.sleepControlRuntimeTool(); ok {
+		req.RuntimeTools = append(req.RuntimeTools, sleepTool)
+	}
 	req.FallbackContent = firstNonEmpty(l.requestOverride.FallbackContent, req.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent)
 	req.MaxIterations = firstPositiveInt(l.requestOverride.MaxIterations, req.MaxIterations)
 	req.MaxOutputTokens = firstPositiveInt(l.requestOverride.MaxOutputTokens, req.MaxOutputTokens)
