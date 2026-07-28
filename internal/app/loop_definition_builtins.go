@@ -58,13 +58,15 @@ func mediaServicesEnabled(cfg *config.Config) bool {
 // builtInContainerDefinitionSpecs returns the built-in grouping containers,
 // each gated so an empty container never appears: cognition when any core
 // cognition loop is enabled, home-assistant when HA or MQTT is configured.
-func builtInContainerDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
+// declared is the set of loop names an operator or the core root has
+// already defined, so a container's gate can match its members'.
+func builtInContainerDefinitionSpecs(cfg *config.Config, declared map[string]struct{}) []looppkg.Spec {
 	if cfg == nil {
 		return nil
 	}
 	var specs []looppkg.Spec
 
-	if cfg.Metacognitive.Enabled || cfg.Ego.Enabled || cfg.Archivist.Enabled {
+	if anyCoreServiceLoopWanted(cfg, declared) {
 		specs = append(specs, containerSpec(cognitionContainerName,
 			"Core cognition loops: reflection, identity, and memory."))
 	}
@@ -78,6 +80,33 @@ func builtInContainerDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	return specs
+}
+
+// anyCoreServiceLoopWanted reports whether any core service loop will be
+// registered: enabled in config, or defined by a document in the core
+// root. It is the gate for their container, and it has to be exactly the
+// condition buildLoopDefinitionBaseSpecs applies to the members.
+//
+// Config enablement alone was wrong, and became reachable once the
+// documents started declaring parent_name. A definition document is
+// authoritative whether or not config enables its loop, so a
+// config-disabled, document-defined loop named a container that was
+// never built — and an unresolvable parent is dropped with a warning and
+// default-parented to the graph root, which is the silent re-parenting
+// the declared field exists to prevent, arriving through another door.
+//
+// Derived from coreServiceLoops rather than naming the three, so a
+// fourth core loop is covered by existing.
+func anyCoreServiceLoopWanted(cfg *config.Config, declared map[string]struct{}) bool {
+	for _, reg := range coreServiceLoops {
+		if reg.ConfigEnabled(cfg) {
+			return true
+		}
+		if _, ok := declared[reg.Name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // containerSpec builds an inert grouping-container definition under core.
