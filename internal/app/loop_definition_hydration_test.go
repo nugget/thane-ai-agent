@@ -365,16 +365,16 @@ func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
 		return m
 	}
 
-	bare := names(builtInContainerDefinitionSpecs(&config.Config{}))
+	bare := names(builtInContainerDefinitionSpecsForTest(&config.Config{}))
 	if len(bare) != 0 {
 		t.Errorf("bare config seeded a gated container, want none: %v", bare)
 	}
 
-	if cog := names(builtInContainerDefinitionSpecs(coreServiceTestConfig())); !cog[cognitionContainerName] {
+	if cog := names(builtInContainerDefinitionSpecsForTest(coreServiceTestConfig())); !cog[cognitionContainerName] {
 		t.Error("cognition container missing when core loops enabled")
 	}
 
-	ha := names(builtInContainerDefinitionSpecs(&config.Config{
+	ha := names(builtInContainerDefinitionSpecsForTest(&config.Config{
 		MQTT: config.MQTTConfig{Broker: "mqtt://b:1883", DeviceName: "d"},
 	}))
 	if !ha[homeAssistantContainerName] {
@@ -383,7 +383,7 @@ func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
 
 	// The pollers container appears when any of its members is enabled (media
 	// is the simplest gate — a positive feed-check interval, no Configured()).
-	pol := names(builtInContainerDefinitionSpecs(&config.Config{
+	pol := names(builtInContainerDefinitionSpecsForTest(&config.Config{
 		Media: config.MediaConfig{FeedCheckInterval: 600},
 	}))
 	if !pol[pollersContainerName] {
@@ -511,4 +511,10 @@ func TestHydrateLoopDefinitionSpec_HAStateWatcher(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("handled = %d, want 1", handled)
 	}
+}
+
+// builtInContainerDefinitionSpecsForTest covers the cases that care only
+// about config, leaving the declared set empty.
+func builtInContainerDefinitionSpecsForTest(cfg *config.Config) []looppkg.Spec {
+	return builtInContainerDefinitionSpecs(cfg, nil)
 }

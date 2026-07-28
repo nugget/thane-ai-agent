@@ -529,3 +529,54 @@ func TestCoreDefinitionKeepsItsDeclaredParent(t *testing.T) {
 		t.Errorf("%q is absent, so the declared parent resolves to nothing", cognitionContainerName)
 	}
 }
+
+// TestConfigDisabledDocumentLoopStillGetsItsContainer covers the gap
+// declaring parent_name opened.
+//
+// A definition document is authoritative whether or not config enables
+// its loop, but the container was gated on config enablement alone. So a
+// loop disabled in config and defined by a document named a parent that
+// was never built — and an unresolvable parent_name is dropped with a
+// warning and default-parented to the graph root, which is the silent
+// re-parenting the declared field exists to prevent.
+func TestConfigDisabledDocumentLoopStillGetsItsContainer(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{
+		"metacognitive.md": strings.NewReplacer(
+			"name: ranch_watch", "name: metacognitive\nparent_name: "+cognitionContainerName,
+		).Replace(minimalCoreLoop),
+	})
+	// Every core service loop disabled: the document is the only reason
+	// this loop exists at all.
+	disabled := testServiceLoopConfig()
+	disabled.Enabled = false
+	app := &App{cfg: &config.Config{
+		Paths:         map[string]string{"core": core},
+		Metacognitive: disabled,
+		Ego:           disabled,
+		Archivist:     disabled,
+	}}
+
+	specs, err := app.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+	var loop looppkg.Spec
+	container := false
+	for _, spec := range specs {
+		switch spec.Name {
+		case "metacognitive":
+			loop = spec
+		case cognitionContainerName:
+			container = true
+		}
+	}
+	if loop.Name == "" {
+		t.Fatal("the document defines the loop, so it must be registered even with config disabled")
+	}
+	if loop.ParentName != cognitionContainerName {
+		t.Fatalf("parent_name = %q, want %q", loop.ParentName, cognitionContainerName)
+	}
+	if !container {
+		t.Errorf("%q is absent, so the declared parent resolves to nothing and the loop silently lands at the root", cognitionContainerName)
+	}
+}

@@ -30,7 +30,7 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 	}
 	// Grouping containers first, so member loops resolve their ParentName to
 	// a container that's already registered.
-	for _, spec := range builtInContainerDefinitionSpecs(a.cfg) {
+	for _, spec := range builtInContainerDefinitionSpecs(a.cfg, seen) {
 		baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
 	}
 	for _, spec := range builtInServiceDefinitionSpecs(a.cfg) {
