@@ -7,20 +7,47 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/router"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"gopkg.in/yaml.v3"
 )
 
 // coreLoopsDirName is the subdirectory of the core document root holding
-// operator-authored loop definitions, one spec per YAML file.
+// operator-authored loop definitions, one loop per markdown document.
 const coreLoopsDirName = "loops"
+
+// Reserved section headings in a loop definition document.
+//
+// A definition is a markdown document because that is what the rest of
+// this corpus already is: talents, dossiers, and every managed document
+// take this shape, core is already a document root, and an agent tuning
+// its own prompt should reach for the document tools it already has
+// rather than a format invented for this one job.
+//
+// The spec rides a fenced yaml block under its own heading rather than
+// in frontmatter, for two reasons. The document layer flattens
+// frontmatter to map[string][]string, so nested fields — an output's
+// facets, a profile, a subscription list — would survive on disk and be
+// quietly mangled by anything that wrote frontmatter back. And a fence
+// that gets clobbered fails to parse, naming its file, where flattened
+// frontmatter yields a spec that parses and is wrong. Loud beats silent
+// when the thing at stake is how a loop thinks.
+//
+// The heading is what makes the fence unambiguous: a prompt may
+// legitimately contain a yaml example — the archivist's teaches
+// structure — and only the fence under this heading is read.
+const (
+	coreLoopSpecHeading       = "Spec"
+	coreLoopTaskHeading       = "Task"
+	coreLoopSupervisorHeading = "Supervisor Review"
+)
 
 // excludeToolsDirectHumanEgress expands to every direct human-egress
 // tool name at load.
 //
 // The list is decided in Go — a tool becomes human-egress by what it
-// does, not by an operator remembering to add it — so a YAML file that
+// does, not by an author remembering to add it — so a definition that
 // spelled the names out would be a copy that goes stale the first time
 // one is added. The token says the intent instead, which is also what a
 // reader of the spec needs to know.
@@ -32,15 +59,13 @@ const coreLoopsDirName = "loops"
 // an ordinary plain scalar, and no tool name contains one.
 const excludeToolsDirectHumanEgress = "group:direct_human_egress"
 
-// loadCoreLoopDefinitions reads every loop definition declared under
-// <core>/loops.
+// loadCoreLoopDefinitions reads every loop definition under <core>/loops.
 //
 // These are authoritative. A core-defined loop is part of the signed
-// root the agent boots from, so the file is the definition: it wins over
-// the built-in spec of the same name, and it is re-read every boot
-// rather than seeded once. An operator editing the YAML and restarting
-// is the supported way to change one, and a runtime edit that the file
-// does not agree with does not survive.
+// root the agent boots from, so the document is the definition: it wins
+// over the built-in spec of the same name, and it is re-read every boot
+// rather than seeded once. An operator or agent edits the document and
+// restarts.
 //
 // A missing directory is not an error — an install with no core-defined
 // loops is ordinary — but a file that is present and unreadable is,
@@ -60,13 +85,10 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			continue
 		}
-		switch strings.ToLower(filepath.Ext(entry.Name())) {
-		case ".yaml", ".yml":
-			names = append(names, entry.Name())
-		}
+		names = append(names, entry.Name())
 	}
 	// Sorted so the definition order a boot produces is a property of the
 	// directory rather than of the filesystem's enumeration order.
@@ -75,13 +97,12 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 	specs := make([]looppkg.Spec, 0, len(names))
 	seen := make(map[string]string, len(names))
 	for _, name := range names {
-		path := filepath.Join(dir, name)
-		spec, err := decodeCoreLoopDefinition(path)
+		spec, err := decodeCoreLoopDefinition(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
 		if other, dup := seen[spec.Name]; dup {
-			return nil, fmt.Errorf("%s and %s both define the loop %q; one file is one loop", other, name, spec.Name)
+			return nil, fmt.Errorf("%s and %s both define the loop %q; one document is one loop", other, name, spec.Name)
 		}
 		seen[spec.Name] = name
 		specs = append(specs, spec)
@@ -89,31 +110,133 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 	return specs, nil
 }
 
-// decodeCoreLoopDefinition reads one spec file, refusing anything it
-// cannot fully account for.
-//
-// KnownFields is on because a misspelled key in a definition file is
-// otherwise invisible: the loop boots, the setting the operator wrote
-// does nothing, and the only evidence is behaviour that never changes.
+// decodeCoreLoopDefinition reads one definition document.
 func decodeCoreLoopDefinition(path string) (looppkg.Spec, error) {
-	file, err := os.Open(path)
+	file := filepath.Base(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return looppkg.Spec{}, fmt.Errorf("open %s: %w", path, err)
+		return looppkg.Spec{}, fmt.Errorf("read %s: %w", file, err)
 	}
-	defer func() { _ = file.Close() }()
 
-	decoder := yaml.NewDecoder(file)
-	decoder.KnownFields(true)
-	var spec looppkg.Spec
-	if err := decoder.Decode(&spec); err != nil {
-		return looppkg.Spec{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	sections := splitCoreLoopSections(string(raw))
+	specBlock, ok := sections[coreLoopSpecHeading]
+	if !ok {
+		return looppkg.Spec{}, fmt.Errorf("%s: no %q section; a loop definition carries its spec in a yaml block under that heading", file, "## "+coreLoopSpecHeading)
+	}
+	specYAML, ok := unfenceYAML(specBlock)
+	if !ok {
+		return looppkg.Spec{}, fmt.Errorf("%s: the %q section is not a single ```yaml block; the spec is fenced so prose and machine-readable content stay distinguishable", file, "## "+coreLoopSpecHeading)
+	}
+
+	spec, err := decodeCoreLoopSpecYAML(specYAML, file)
+	if err != nil {
+		return looppkg.Spec{}, err
+	}
+	if err := adoptCoreLoopProse(&spec, sections, file); err != nil {
+		return looppkg.Spec{}, err
 	}
 
 	spec.ExcludeTools = expandExcludeToolTokens(spec.ExcludeTools)
 	if err := spec.ValidatePersistable(); err != nil {
-		return looppkg.Spec{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
+		return looppkg.Spec{}, fmt.Errorf("%s: %w", file, err)
 	}
 	return spec, nil
+}
+
+// adoptCoreLoopProse moves the document's prose sections onto the spec.
+//
+// Declaring one in both places is refused rather than resolved: a silent
+// precedence rule means an author edits the prompt they can read and the
+// loop keeps running the one they cannot.
+func adoptCoreLoopProse(spec *looppkg.Spec, sections map[string]string, file string) error {
+	if task := strings.TrimSpace(sections[coreLoopTaskHeading]); task != "" {
+		if strings.TrimSpace(spec.Task) != "" {
+			return fmt.Errorf("%s: task is set in the spec block and in a %q section; declare it once — the section is the one meant for prose", file, "## "+coreLoopTaskHeading)
+		}
+		spec.Task = task
+	}
+	if instructions := strings.TrimSpace(sections[coreLoopSupervisorHeading]); instructions != "" {
+		// A definition may declare the section without declaring a
+		// supervisor_profile at all, which is the ordinary case: the
+		// overlay exists to carry these instructions.
+		if spec.SupervisorProfile == nil {
+			spec.SupervisorProfile = &router.LoopProfile{}
+		}
+		if strings.TrimSpace(spec.SupervisorProfile.Instructions) != "" {
+			return fmt.Errorf("%s: supervisor instructions are set in the spec block and in a %q section; declare them once — the section is the one meant for prose", file, "## "+coreLoopSupervisorHeading)
+		}
+		spec.SupervisorProfile.Instructions = instructions
+	}
+	return nil
+}
+
+// decodeCoreLoopSpecYAML decodes the fenced spec, refusing anything it
+// cannot fully account for.
+//
+// KnownFields is on because a misspelled key is otherwise invisible: the
+// loop boots, the setting its author wrote does nothing, and the only
+// evidence is behaviour that never changes.
+func decodeCoreLoopSpecYAML(specYAML, file string) (looppkg.Spec, error) {
+	decoder := yaml.NewDecoder(strings.NewReader(specYAML))
+	decoder.KnownFields(true)
+	var spec looppkg.Spec
+	if err := decoder.Decode(&spec); err != nil {
+		return looppkg.Spec{}, fmt.Errorf("%s: %w", file, err)
+	}
+	return spec, nil
+}
+
+// splitCoreLoopSections collects the document's top-level sections by
+// heading. Anything before the first heading — frontmatter, a title, a
+// lead paragraph — is not a section and is ignored, which is what lets
+// these be ordinary documents carrying ordinary metadata.
+//
+// Only "## " delimits. A deeper heading inside a prompt is that prompt's
+// own structure, and prompts have plenty of it.
+func splitCoreLoopSections(raw string) map[string]string {
+	sections := make(map[string]string, 3)
+	current := ""
+	var lines []string
+	flush := func() {
+		if current != "" {
+			sections[current] = strings.TrimSpace(strings.Join(lines, "\n"))
+		}
+		lines = nil
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		if heading, ok := strings.CutPrefix(strings.TrimSpace(line), "## "); ok {
+			flush()
+			current = strings.TrimSpace(heading)
+			continue
+		}
+		if current != "" {
+			lines = append(lines, line)
+		}
+	}
+	flush()
+	return sections
+}
+
+// unfenceYAML unwraps a fenced block, reporting whether the section was
+// one. A value carrying an interior close is refused: unwrapping it
+// would splice two blocks into one.
+func unfenceYAML(section string) (string, bool) {
+	trimmed := strings.TrimSpace(section)
+	opener := ""
+	for _, candidate := range []string{"```yaml", "```yml", "```"} {
+		if strings.HasPrefix(trimmed, candidate) {
+			opener = candidate
+			break
+		}
+	}
+	if opener == "" || !strings.HasSuffix(trimmed, "```") {
+		return "", false
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(trimmed, opener), "```")
+	if strings.Contains(inner, "```") {
+		return "", false
+	}
+	return inner, true
 }
 
 // expandExcludeToolTokens replaces symbolic exclusions with the names

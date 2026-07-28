@@ -29,18 +29,29 @@ func writeCoreLoop(t *testing.T, files map[string]string) string {
 	return core
 }
 
-const minimalCoreLoop = `name: ranch_watch
-enabled: true
-task: Watch the ranch.
-intent: Keep ranch conditions legible.
-operation: service
-completion: none
-sleep_min: 15m
-sleep_max: 12h
-`
+// minimalCoreLoop is a definition document in the shape an operator or
+// agent authors: ordinary frontmatter, the spec in a fenced block under
+// its heading, the prompt as prose.
+const minimalCoreLoop = "---\n" +
+	"title: Ranch Watch\n" +
+	"tags: [loops]\n" +
+	"---\n\n" +
+	"# Ranch Watch\n\n" +
+	"## Spec\n\n" +
+	"```yaml\n" +
+	"name: ranch_watch\n" +
+	"enabled: true\n" +
+	"intent: Keep ranch conditions legible.\n" +
+	"operation: service\n" +
+	"completion: none\n" +
+	"sleep_min: 15m\n" +
+	"sleep_max: 12h\n" +
+	"```\n\n" +
+	"## Task\n\n" +
+	"Watch the ranch.\n"
 
 func TestCoreLoopDefinitionsLoadFromYAML(t *testing.T) {
-	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.yaml": minimalCoreLoop}))
+	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": minimalCoreLoop}))
 	if err != nil {
 		t.Fatalf("loadCoreLoopDefinitions: %v", err)
 	}
@@ -76,13 +87,13 @@ func TestMissingCoreLoopsDirectoryIsNotAnError(t *testing.T) {
 // changes.
 func TestMisspelledKeyIsRefused(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
-		"ranch.yaml": minimalCoreLoop + "sleep_maximum: 4h\n",
+		"ranch.md": strings.Replace(minimalCoreLoop, "sleep_max: 12h", "sleep_max: 12h\nsleep_maximum: 4h", 1),
 	})
 	_, err := loadCoreLoopDefinitions(core)
 	if err == nil {
 		t.Fatal("loadCoreLoopDefinitions error = nil for an unknown key")
 	}
-	for _, want := range []string{"ranch.yaml", "sleep_maximum"} {
+	for _, want := range []string{"ranch.md", "sleep_maximum"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to mention %q", err, want)
 		}
@@ -93,28 +104,28 @@ func TestInvalidCoreLoopNamesItsFile(t *testing.T) {
 	// One bad file among several has to be identifiable, or an operator
 	// is left bisecting a directory.
 	core := writeCoreLoop(t, map[string]string{
-		"good.yaml": minimalCoreLoop,
-		"bad.yaml":  "name: broken\nenabled: true\ntask: Do a thing.\noperation: nonsense\n",
+		"good.md": minimalCoreLoop,
+		"bad.md":  strings.Replace(minimalCoreLoop, "operation: service", "operation: nonsense", 1),
 	})
 	_, err := loadCoreLoopDefinitions(core)
 	if err == nil {
 		t.Fatal("loadCoreLoopDefinitions error = nil for an invalid spec")
 	}
-	if !strings.Contains(err.Error(), "bad.yaml") {
+	if !strings.Contains(err.Error(), "bad.md") {
 		t.Errorf("error = %v, want it to name the offending file", err)
 	}
 }
 
 func TestTwoFilesCannotDefineTheSameLoop(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
-		"a.yaml": minimalCoreLoop,
-		"b.yaml": minimalCoreLoop,
+		"a.md": minimalCoreLoop,
+		"b.md": minimalCoreLoop,
 	})
 	_, err := loadCoreLoopDefinitions(core)
 	if err == nil {
 		t.Fatal("loadCoreLoopDefinitions error = nil for a duplicate loop name")
 	}
-	for _, want := range []string{"a.yaml", "b.yaml", "ranch_watch"} {
+	for _, want := range []string{"a.md", "b.md", "ranch_watch"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to mention %q", err, want)
 		}
@@ -127,7 +138,7 @@ func TestTwoFilesCannotDefineTheSameLoop(t *testing.T) {
 // added.
 func TestDirectHumanEgressTokenExpands(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
-		"ranch.yaml": minimalCoreLoop + "exclude_tools:\n  - exec\n  - " + excludeToolsDirectHumanEgress + "\n",
+		"ranch.md": strings.Replace(minimalCoreLoop, "sleep_max: 12h", "sleep_max: 12h\nexclude_tools:\n  - exec\n  - "+excludeToolsDirectHumanEgress, 1),
 	})
 	specs, err := loadCoreLoopDefinitions(core)
 	if err != nil {
@@ -190,7 +201,7 @@ func TestExcludeTokenNeedsNoQuoting(t *testing.T) {
 	}
 	// Written bare, exactly as an operator would.
 	core := writeCoreLoop(t, map[string]string{
-		"ranch.yaml": minimalCoreLoop + "exclude_tools:\n  - " + excludeToolsDirectHumanEgress + "\n",
+		"ranch.md": strings.Replace(minimalCoreLoop, "sleep_max: 12h", "sleep_max: 12h\nexclude_tools:\n  - "+excludeToolsDirectHumanEgress, 1),
 	})
 	if _, err := loadCoreLoopDefinitions(core); err != nil {
 		t.Fatalf("an unquoted token did not parse: %v", err)
@@ -203,15 +214,12 @@ func TestExcludeTokenNeedsNoQuoting(t *testing.T) {
 // edits the file and restarts gets what the file says.
 func TestCoreDefinitionWinsOverTheBuiltIn(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
-		"ego.yaml": `name: ego
-enabled: true
-intent: Overridden by the operator.
-task: Reflect, but differently.
-operation: service
-completion: none
-sleep_min: 1h
-sleep_max: 6h
-`,
+		"ego.md": strings.NewReplacer(
+			"name: ranch_watch", "name: ego",
+			"intent: Keep ranch conditions legible.", "intent: Overridden by the operator.",
+			"sleep_min: 15m", "sleep_min: 1h",
+			"Watch the ranch.", "Reflect, but differently.",
+		).Replace(minimalCoreLoop),
 	})
 	app := &App{cfg: &config.Config{
 		Paths: map[string]string{"core": core},
@@ -275,5 +283,106 @@ func testServiceLoopConfig() config.ServiceLoopConfig {
 		MinSleep:     "15m",
 		MaxSleep:     "12h",
 		DefaultSleep: "1h",
+	}
+}
+
+// TestProseSectionsBecomeThePrompts is the point of the format: the
+// prompt is markdown in a markdown document, not a string escaped into a
+// data structure.
+func TestProseSectionsBecomeThePrompts(t *testing.T) {
+	doc := strings.Replace(minimalCoreLoop,
+		"## Task\n\nWatch the ranch.\n",
+		"## Task\n\nWatch the ranch.\n\n### What to look at\n\nThe things that matter.\n\n## Supervisor Review\n\nReview it harder.\n", 1)
+	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err != nil {
+		t.Fatalf("loadCoreLoopDefinitions: %v", err)
+	}
+	spec := specs[0]
+	// A deeper heading inside a prompt is that prompt's own structure.
+	if !strings.Contains(spec.Task, "### What to look at") {
+		t.Errorf("task lost its subsection: %q", spec.Task)
+	}
+	if strings.Contains(spec.Task, "Review it harder") {
+		t.Errorf("task swallowed the next section: %q", spec.Task)
+	}
+	if spec.SupervisorProfile.Instructions != "Review it harder." {
+		t.Errorf("supervisor instructions = %q", spec.SupervisorProfile.Instructions)
+	}
+}
+
+// TestYAMLExampleInAProseSectionIsNotTheSpec is why the fence needs a
+// heading. Prompts teach structure, so one may legitimately contain a
+// yaml block; only the one under "## Spec" is the definition.
+func TestYAMLExampleInAProseSectionIsNotTheSpec(t *testing.T) {
+	doc := strings.Replace(minimalCoreLoop,
+		"Watch the ranch.\n",
+		"Watch the ranch. Publish like this:\n\n```yaml\nname: not_the_spec\noperation: nonsense\n```\n", 1)
+	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err != nil {
+		t.Fatalf("an example block in prose broke the load: %v", err)
+	}
+	if specs[0].Name != "ranch_watch" {
+		t.Fatalf("name = %q, want the spec section's — an example was read as the definition", specs[0].Name)
+	}
+	if !strings.Contains(specs[0].Task, "name: not_the_spec") {
+		t.Errorf("the example was stripped out of the prompt: %q", specs[0].Task)
+	}
+}
+
+func TestMissingOrUnfencedSpecSectionIsRefused(t *testing.T) {
+	tests := []struct {
+		name    string
+		doc     string
+		wantErr string
+	}{
+		{
+			name:    "no spec section",
+			doc:     "---\ntitle: X\n---\n\n## Task\n\nDo a thing.\n",
+			wantErr: "no \"## Spec\" section",
+		},
+		{
+			name:    "spec section is prose",
+			doc:     strings.Replace(minimalCoreLoop, "```yaml\nname: ranch_watch", "name: ranch_watch", 1),
+			wantErr: "not a single ```yaml block",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": tt.doc}))
+			if err == nil {
+				t.Fatalf("loadCoreLoopDefinitions error = nil, want %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want it to mention %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestTaskDeclaredTwiceIsRefused: a silent precedence rule means an
+// author edits the prompt they can read and the loop keeps running the
+// one they cannot.
+func TestTaskDeclaredTwiceIsRefused(t *testing.T) {
+	doc := strings.Replace(minimalCoreLoop, "sleep_max: 12h", "sleep_max: 12h\ntask: The hidden one.", 1)
+	_, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err == nil {
+		t.Fatal("loadCoreLoopDefinitions error = nil for a task declared in both places")
+	}
+	if !strings.Contains(err.Error(), "declare it once") {
+		t.Errorf("error = %v, want it to say to declare it once", err)
+	}
+}
+
+// TestSpecInFrontmatterIsIgnored guards the choice itself: frontmatter
+// is ordinary document metadata here, so a spec key there must not be
+// read as part of the definition.
+func TestSpecInFrontmatterIsIgnored(t *testing.T) {
+	doc := strings.Replace(minimalCoreLoop, "tags: [loops]", "tags: [loops]\nsleep_min: 99h", 1)
+	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err != nil {
+		t.Fatalf("loadCoreLoopDefinitions: %v", err)
+	}
+	if specs[0].SleepMin != 15*time.Minute {
+		t.Errorf("sleep_min = %v, want the spec block's 15m — frontmatter is document metadata, not spec", specs[0].SleepMin)
 	}
 }
