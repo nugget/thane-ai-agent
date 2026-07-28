@@ -370,6 +370,12 @@ request and access chatter can be retained on disk without polluting live logs.
 `logs.db` remains the query/index layer, but the dataset files are the primary
 filesystem record.
 
+For live production monitoring, `just alerts ~/Thane WARN 2` follows new
+warnings and errors from `logs.db` across all datasets. Use `ERROR` instead of
+`WARN` to suppress warnings. The output is newline-delimited compact JSON and
+can be piped through `grep` or `jq`.
+
+
 ## MCP Servers
 
 ```yaml

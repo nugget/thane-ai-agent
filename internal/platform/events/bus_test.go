@@ -95,6 +95,9 @@ func TestDropOnFull(t *testing.T) {
 	default:
 		// Correct — channel is empty.
 	}
+	if got := b.DroppedCount(); got != 1 {
+		t.Errorf("DroppedCount = %d, want 1", got)
+	}
 }
 
 func TestUnsubscribeClosesChannel(t *testing.T) {

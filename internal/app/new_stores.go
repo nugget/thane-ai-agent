@@ -44,15 +44,18 @@ func (a *App) initStores(s *newState) error {
 	}
 
 	// --- Event bus ---
-	// Process-wide publish/subscribe for operational observability.
-	// Components publish structured events; the dashboard WebSocket
-	// handler (and future metrics/alerting consumers) subscribe.
-	// Zero cost when nobody subscribes.
-	eventBus := events.New()
-	a.eventBus = eventBus
+	// The bus is created before initLogging so WARN/ERROR records can be
+	// promoted from the logger from the first configured log line onward.
+	// Components and dashboard consumers share that same process-wide bus.
+	eventBus := a.eventBus
+	if eventBus == nil {
+		eventBus = events.New()
+		a.eventBus = eventBus
+	}
 
 	a.initMessageInfrastructure(logger)
 	a.initDatasetSinks()
+	a.initEventDropMonitor()
 
 	// --- Loop registry ---
 	// Tracks all persistent background loops (metacognitive, pollers,

@@ -309,6 +309,9 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 	for _, s := range specs {
 		byName[s.Name] = s
 	}
+	if got := byName[emailcfg.DefaultHandlerLoopName].Profile.DelegationGating; got != "disabled" {
+		t.Errorf("email handler delegation_gating = %q, want disabled so its email_* task contract matches its effective tool surface", got)
+	}
 
 	// Containers exist and are inert grouping containers.
 	for _, name := range []string{cognitionContainerName, homeAssistantContainerName, pollersContainerName} {

@@ -465,6 +465,78 @@ logs workdir="./Thane":
         fi
     done
 
+# Follow operator-significant records directly from the structured SQLite
+# index. Unlike `just logs`, this spans both request and event datasets, so
+# agent/iterate warnings cannot disappear merely because they were routed to
+# the request stream. Output is one compact JSON object per record and remains
+# grep/jq-friendly.
+[doc("Follow production warnings and errors from logs.db (level: WARN or ERROR)")]
+[group('operations')]
+alerts workdir="./Thane" level="WARN" interval="2":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v sqlite3 >/dev/null || { echo "sqlite3 is required" >&2; exit 1; }
+    db="{{workdir}}/archive/logs.db"
+    level="$(printf '%s' "{{level}}" | tr '[:lower:]' '[:upper:]')"
+    case "$level" in
+        WARN) levels="'WARN','ERROR'" ;;
+        ERROR) levels="'ERROR'" ;;
+        *) echo "level must be WARN or ERROR" >&2; exit 2 ;;
+    esac
+    interval="{{interval}}"
+    echo "Following $level+ records from $db (Ctrl-C to stop)..." >&2
+    last_id=""
+    while true; do
+        if [ ! -f "$db" ]; then
+            sleep "$interval"
+            continue
+        fi
+        if [ -z "$last_id" ]; then
+            last_id="$(sqlite3 -batch -noheader "$db" 'SELECT COALESCE(MAX(id), 0) FROM log_entries;' 2>/dev/null || true)"
+            case "$last_id" in
+                ''|*[!0-9]*)
+                    last_id=""
+                    sleep "$interval"
+                    continue
+                    ;;
+            esac
+        fi
+        upper_id="$(sqlite3 -batch -noheader "$db" 'SELECT COALESCE(MAX(id), 0) FROM log_entries;' 2>/dev/null || true)"
+        case "$upper_id" in
+            ''|*[!0-9]*)
+                sleep "$interval"
+                continue
+                ;;
+        esac
+        rows="$(sqlite3 -batch -noheader "$db" "
+            SELECT json_object(
+                'id', id,
+                'ts', timestamp,
+                'level', level,
+                'msg', msg,
+                'component', COALESCE(json_extract(attrs, '\$.component'), ''),
+                'subsystem', COALESCE(subsystem, ''),
+                'loop_name', COALESCE(loop_name, ''),
+                'request_id', COALESCE(request_id, ''),
+                'source', CASE
+                    WHEN source_file IS NULL OR source_file = '' THEN ''
+                    ELSE source_file || ':' || source_line
+                END
+            )
+            FROM log_entries
+            WHERE id > $last_id AND id <= $upper_id AND level IN ($levels)
+            ORDER BY id;
+        " 2>/dev/null || true)"
+        if [ -n "$rows" ]; then
+            printf '%s\n' "$rows"
+        fi
+        # Advance through every row in this bounded snapshot, including
+        # INFO/DEBUG, so the next poll never rescans an ever-growing range.
+        # Rows inserted after upper_id are intentionally left for next time.
+        last_id="$upper_id"
+        sleep "$interval"
+    done
+
 # --- Release ---
 # Operator entry points: release-github (full path), prepare-release +
 # publish-release (manual breakpoint), build-macos-pkg, release-build-snapshot.

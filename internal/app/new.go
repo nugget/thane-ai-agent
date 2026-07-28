@@ -14,6 +14,7 @@ import (
 	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
@@ -81,6 +82,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		modelRuntime:          modelRuntime,
 		modelRegistry:         modelRegistry,
 		modelCatalog:          modelCatalog,
+		eventBus:              events.New(),
 	}
 
 	// Augment PATH before any exec.LookPath calls (tool registration,
