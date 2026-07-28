@@ -63,6 +63,19 @@ func TestEventHandlerPropagatesGroups(t *testing.T) {
 	}
 }
 
+func TestEventHandlerPreservesPromotedKind(t *testing.T) {
+	bus := events.New()
+	ch := bus.Subscribe(1)
+	t.Cleanup(func() { bus.Unsubscribe(ch) })
+	logger := slog.New(NewEventHandler(slog.NewTextHandler(&bytes.Buffer{}, nil), bus))
+
+	logger.Warn("request exhausted", "kind", "request_complete")
+	event := <-ch
+	if event.Data["kind"] != "request_complete" {
+		t.Fatalf("kind = %#v, want request_complete", event.Data["kind"])
+	}
+}
+
 func TestEventHandlerPublishesWarningWhenInnerSinkFails(t *testing.T) {
 	bus := events.New()
 	ch := bus.Subscribe(1)
@@ -112,6 +125,19 @@ func TestEventHandlerBoundsPublishedProjection(t *testing.T) {
 	}
 	if attrCount != maxEventAttrs {
 		t.Fatalf("published attrs = %d, want %d", attrCount, maxEventAttrs)
+	}
+}
+
+func TestTruncateEventStringPreservesUTF8Boundaries(t *testing.T) {
+	got, truncated := truncateEventString("a🙂界z", 3)
+	if !truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if got != "a🙂界…" {
+		t.Fatalf("got %q, want %q", got, "a🙂界…")
+	}
+	if got, truncated := truncateEventString("a🙂界", 3); truncated || got != "a🙂界" {
+		t.Fatalf("exact-boundary result = %q, %v", got, truncated)
 	}
 }
 

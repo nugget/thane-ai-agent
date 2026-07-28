@@ -501,6 +501,13 @@ alerts workdir="./Thane" level="WARN" interval="2":
                     ;;
             esac
         fi
+        upper_id="$(sqlite3 -batch -noheader "$db" 'SELECT COALESCE(MAX(id), 0) FROM log_entries;' 2>/dev/null || true)"
+        case "$upper_id" in
+            ''|*[!0-9]*)
+                sleep "$interval"
+                continue
+                ;;
+        esac
         rows="$(sqlite3 -batch -noheader "$db" "
             SELECT json_object(
                 'id', id,
@@ -517,14 +524,16 @@ alerts workdir="./Thane" level="WARN" interval="2":
                 END
             )
             FROM log_entries
-            WHERE id > $last_id AND level IN ($levels)
+            WHERE id > $last_id AND id <= $upper_id AND level IN ($levels)
             ORDER BY id;
         " 2>/dev/null || true)"
         if [ -n "$rows" ]; then
             printf '%s\n' "$rows"
-            newest="$(sqlite3 -batch -noheader "$db" "SELECT COALESCE(MAX(id), $last_id) FROM log_entries WHERE id > $last_id AND level IN ($levels);" 2>/dev/null || true)"
-            case "$newest" in ''|*[!0-9]*) ;; *) last_id="$newest" ;; esac
         fi
+        # Advance through every row in this bounded snapshot, including
+        # INFO/DEBUG, so the next poll never rescans an ever-growing range.
+        # Rows inserted after upper_id are intentionally left for next time.
+        last_id="$upper_id"
         sleep "$interval"
     done
 

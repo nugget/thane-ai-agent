@@ -99,6 +99,7 @@ func (h *EventHandler) Handle(ctx context.Context, record slog.Record) error {
 	putString("loop_name", projection.LoopName)
 	putString("subsystem", projection.Subsystem)
 	putString("component", projection.Component)
+	putString("kind", projection.Kind)
 	if truncated {
 		data["truncated"] = true
 	}
@@ -128,11 +129,14 @@ func boundEventValue(value any) (any, bool) {
 }
 
 func truncateEventString(value string, maxRunes int) (string, bool) {
-	runes := []rune(value)
-	if len(runes) <= maxRunes {
-		return value, false
+	count := 0
+	for byteIndex := range value {
+		if count == maxRunes {
+			return value[:byteIndex] + "…", true
+		}
+		count++
 	}
-	return string(runes[:maxRunes]) + "…", true
+	return value, false
 }
 
 // WithAttrs returns a derived handler carrying attrs to both sinks.
