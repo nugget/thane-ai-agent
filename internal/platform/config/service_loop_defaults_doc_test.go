@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+// docDefaultsPattern matches a documented service-loop sleep envelope in
+// a config.go doc comment.
+var docDefaultsPattern = regexp.MustCompile(`Defaults: min_sleep (\S+), max_sleep (\S+), default_sleep (\S+?),`)
+
 // TestDocumentedServiceLoopDefaultsMatchTheApplied guards a lie that is
 // easy to tell and expensive to find.
 //
@@ -30,13 +34,22 @@ func TestDocumentedServiceLoopDefaultsMatchTheApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read config.go: %v", err)
 	}
-	text := string(source)
+	// Every "Defaults:" line in the file, not just the first match per
+	// loop. config.go carries these twice per loop — once on the Config
+	// field and once on the type alias — so a check that only asks
+	// whether the right string appears somewhere is satisfied by the copy
+	// that did not drift, while the one that did goes on lying.
+	documented := docDefaultsPattern.FindAllStringSubmatch(
+		regexp.MustCompile(`\s+`).ReplaceAllString(strings.ReplaceAll(string(source), "//", " "), " "), -1)
+	if len(documented) == 0 {
+		t.Fatal("no documented service-loop defaults found; this guard is not looking at anything")
+	}
 
 	// The example config is a third copy of these numbers, and the one an
 	// operator actually reads: config.example.yaml renders it verbatim.
 	example := ExampleConfig()
 
-	for _, tt := range []struct {
+	loops := []struct {
 		name    string
 		cfg     ServiceLoopConfig
 		example ServiceLoopConfig
@@ -44,15 +57,29 @@ func TestDocumentedServiceLoopDefaultsMatchTheApplied(t *testing.T) {
 		{"metacognitive", applied.Metacognitive, example.Metacognitive},
 		{"ego", applied.Ego, example.Ego},
 		{"archivist", applied.Archivist, example.Archivist},
-	} {
+	}
+
+	// Every documented triple must be some loop's real defaults. This is
+	// the half that catches a drifted copy rather than a missing one.
+	valid := make(map[string]string, len(loops))
+	for _, l := range loops {
+		valid[fmt.Sprintf("%s|%s|%s", l.cfg.MinSleep, l.cfg.MaxSleep, l.cfg.DefaultSleep)] = l.name
+	}
+	seen := make(map[string]int, len(loops))
+	for _, m := range documented {
+		key := fmt.Sprintf("%s|%s|%s", m[1], m[2], m[3])
+		name, ok := valid[key]
+		if !ok {
+			t.Errorf("a doc comment states defaults min_sleep %s, max_sleep %s, default_sleep %s, which is no loop's applied value; a copy has drifted", m[1], m[2], m[3])
+			continue
+		}
+		seen[name]++
+	}
+
+	for _, tt := range loops {
 		t.Run(tt.name, func(t *testing.T) {
-			want := fmt.Sprintf("Defaults: min_sleep %s, max_sleep %s, default_sleep %s",
-				tt.cfg.MinSleep, tt.cfg.MaxSleep, tt.cfg.DefaultSleep)
-			// Comments wrap, so compare on collapsed whitespace with the
-			// comment markers removed.
-			flat := regexp.MustCompile(`\s+`).ReplaceAllString(strings.ReplaceAll(text, "//", " "), " ")
-			if strings.Count(flat, want) == 0 {
-				t.Errorf("no doc comment states %q for %s; the documented defaults have drifted from applyDefaults", want, tt.name)
+			if seen[tt.name] == 0 {
+				t.Errorf("no doc comment states the applied defaults for %s (min_sleep %s, max_sleep %s, default_sleep %s)", tt.name, tt.cfg.MinSleep, tt.cfg.MaxSleep, tt.cfg.DefaultSleep)
 			}
 			for _, field := range []struct{ name, got, expect string }{
 				{"min_sleep", tt.example.MinSleep, tt.cfg.MinSleep},
