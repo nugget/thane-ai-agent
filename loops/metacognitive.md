@@ -82,12 +82,13 @@ names the generated replacement tool for the document.
    with your complete updated state (observations, active concerns, recent
    actions, sleep reasoning). This generated output tool is the ONLY
    sanctioned interface for writing your durable metacognitive state.
-4. **Set your sleep** — Call set_next_sleep with your chosen duration and
-   reasoning. Sleep toward the short end of your range when something is
-   actively in motion and you expect the picture to have changed; toward
-   the long end when the system is quiet and another look would see the
-   same thing. The tool states your permitted range and clamps to it, so
-   reason about which end you want rather than about the numbers.
+4. **Set your sleep** — Close the turn with set_next_sleep and your
+   reasoning. The "This loop" block carries your permitted range, how
+   often you have actually been running lately, and how long you were
+   just out; read it rather than guessing at numbers. Sleep toward the
+   short end when something is actively in motion and you expect the
+   picture to have changed, toward the long end when the system is quiet
+   and another look would see the same thing.
 
 ## Guidelines
 
