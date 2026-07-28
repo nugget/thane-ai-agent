@@ -70,7 +70,7 @@ func TestCoreLoopReportNamesWhatTheDocumentProduces(t *testing.T) {
 		t.Fatalf("report.Err = %v, want a clean load", report.Err)
 	}
 	if report.Name != "metacognitive" || report.ParentName != "self" {
-		t.Errorf("name/parent = %q/%q, want metacognitive/cognition", report.Name, report.ParentName)
+		t.Errorf("name/parent = %q/%q, want metacognitive/%s", report.Name, report.ParentName, selfContainerName)
 	}
 	want := []string{"publish_output_metacognitive_state", "replace_output_metacognitive_notes"}
 	if strings.Join(report.Tools, ",") != strings.Join(want, ",") {
@@ -113,10 +113,10 @@ func TestCoreLoopReportCoversEveryDocument(t *testing.T) {
 }
 
 // TestCoreLoopReportWarnsOnAnUnparentedCoreLoop covers the trap the
-// report was written for. The built-in path parents ego, metacognitive,
-// and archivist under cognition after building the spec, and a document
-// replaces that path entirely — so a document that says nothing about
-// its parent does not inherit the default, it moves the loop to the
+// report was written for. A core service loop belongs under the self
+// container, and its shipped document is what says so — nothing supplies
+// that parent afterwards. A hand-authored document that omits
+// parent_name therefore does not inherit it: the loop lands at the graph
 // root, and nothing about a successful boot says so.
 func TestCoreLoopReportWarnsOnAnUnparentedCoreLoop(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{

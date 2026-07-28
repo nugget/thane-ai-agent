@@ -3572,6 +3572,12 @@ func (c *Config) CoreRoot() string {
 	return filepath.Join(c.Workspace.Path, "core")
 }
 
+// isDerivedRootName reports whether a root takes its path from the
+// workspace rather than from roots:.
+func isDerivedRootName(name string) bool {
+	return name == CoreRootName || name == SelfRootName
+}
+
 // SelfRoot returns the fixed document root holding what Thane writes
 // about itself, derived from [Workspace.Path] exactly as [CoreRoot] is.
 // When workspace.path is unset, SelfRoot returns the empty string.
@@ -3589,12 +3595,6 @@ func (c *Config) CoreRoot() string {
 // service loops write here on every install, so a root an operator had
 // to remember to declare would leave a fresh install with nowhere for
 // those outputs to land.
-// isDerivedRootName reports whether a root takes its path from the
-// workspace rather than from roots:.
-func isDerivedRootName(name string) bool {
-	return name == CoreRootName || name == SelfRootName
-}
-
 func (c *Config) SelfRoot() string {
 	if strings.TrimSpace(c.Workspace.Path) == "" {
 		return ""

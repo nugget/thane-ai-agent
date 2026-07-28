@@ -434,9 +434,14 @@ it moves when the operator moves it.
 
 `self` is what Thane makes of that — its self-concept, its running
 observations, its memory of its own work. The core service loops maintain it:
-`self:ego.md`, `self:metacognitive.md`, `self:archivist.md`. It wants the same
+`self:metacognitive.md` and `self:archivist.md` today. It wants the same
 integrity treatment as `core` — signed history, admission, verification — under
 its own signer set, because the agent is its author.
+
+`core:ego.md` has not moved yet. The ego loop writes it and the interactive
+agent injects it, but that injection reads through a provenance store scoped to
+`core` rather than through a path, so relocating it is a rewiring rather than a
+change of reference.
 
 Both are derived rather than declared because the core service loops write
 `self` on every install. A root an operator had to remember to declare would
