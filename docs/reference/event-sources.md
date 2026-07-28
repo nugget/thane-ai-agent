@@ -79,7 +79,7 @@ Cron-style scheduling stored in SQLite. Each task defines:
 
 Custom tasks can be created via the `task_schedule` tool. Built-in
 recurring work runs as service loop definitions instead — for
-example, the `ego` loop maintains `core/ego.md` with bounded voluntary
+example, the `ego` loop maintains `self/ego.md` with bounded voluntary
 sleep and supervisor randomization, and the `email-poller` loop drives
 IMAP polling.
 

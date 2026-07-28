@@ -91,8 +91,12 @@ func TestDefinitionSpec_Outputs(t *testing.T) {
 		t.Fatalf("Outputs len = %d, want 1", len(spec.Outputs))
 	}
 	out := spec.Outputs[0]
-	if out.Ref != "core:ego.md" {
-		t.Errorf("Outputs[0].Ref = %q, want core:ego.md", out.Ref)
+	// self, not core: ego.md is what Thane has made of what the operator
+	// declared, so it is written under the agent's own signer policy. The
+	// interactive agent's injection resolves the same root, and the two have
+	// to agree or the loop writes where nothing reads.
+	if out.Ref != "self:ego.md" {
+		t.Errorf("Outputs[0].Ref = %q, want self:ego.md", out.Ref)
 	}
 	if out.Type != loop.OutputTypeMaintainedDocument {
 		t.Errorf("Outputs[0].Type = %q, want maintained_document", out.Type)

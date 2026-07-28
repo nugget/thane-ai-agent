@@ -32,11 +32,10 @@ const (
 //
 // selfContainerName deliberately matches [config.SelfRootName]. The
 // loops in this container are the loops whose subject is Thane itself,
-// and the self root is where that writing is headed: metacognitive and
-// archivist write it today, ego still writes core:ego.md until its
-// provenance-backed injection is rewired (#1318). One name covers one
-// idea — a reader seeing `parent: self` beside an output ref of
-// `self:metacognitive.md` is looking at two views of the same thing.
+// and the self root is where all three of them write: metacognitive,
+// archivist, and ego. One name covers one idea — a reader seeing
+// `parent: self` beside an output ref of `self:metacognitive.md` is
+// looking at two views of the same thing.
 // They stay separate constants because a loop container and a document
 // root are different namespaces, and renaming one should not silently
 // rename the other.

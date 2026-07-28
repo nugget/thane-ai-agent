@@ -1,5 +1,5 @@
 // Package ego implements the self-reflection loop that maintains
-// core/ego.md. It runs as a service loop: each iteration is a fresh
+// self/ego.md. It runs as a service loop: each iteration is a fresh
 // conversation with bounded voluntary sleep, supervisor randomization
 // for periodic frontier review, and a declared maintained-document
 // output that pins ego.md to the loop.
@@ -97,7 +97,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 			{
 				Name:    "ego_state",
 				Type:    loop.OutputTypeMaintainedDocument,
-				Ref:     "core:ego.md",
+				Ref:     "self:ego.md",
 				Mode:    loop.OutputModeReplace,
 				Purpose: "Self-reflection written by the ego loop, for the agent: how the agent's thinking is evolving, behavioral patterns it notices in itself, observations about its relationships, genuine open questions, and honest self-assessment. Read every turn via the agent's core context. NOT a task list, status report, or operational notes.",
 			},

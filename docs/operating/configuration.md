@@ -298,9 +298,10 @@ talents_dir: ~/Thane/talents
 
 See [Context Layers](../understanding/context-layers.md) for how these
 fit into the system prompt. The workspace derives the protected
-`core` root; `core/axioms.md`, `core/persona.md`, `core/ego.md`, and
+`core` and `self` roots; `core/axioms.md`, `core/persona.md`, and
 `core/mission.md` are picked up by the runtime without a separate
-inject-file list.
+inject-file list, as is `self/ego.md` — what Thane has made of them,
+read beside them but written under the agent's own signer policy.
 
 ## Scheduler
 

@@ -59,7 +59,7 @@ only when those tags are active.
 **Purpose:** Knowledge — what the agent *knows*.
 
 Core context publishes curated reference material such as
-`core/mission.md`, `core/ego.md`, and supplemental configured context
+`core/mission.md`, `self/ego.md`, and supplemental configured context
 files as stable prompt sections. These files are read fresh each turn,
 verified when managed-root policy applies, capped with explicit
 truncation markers, and suppressed for task-focused delegate runs.
