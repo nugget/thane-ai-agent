@@ -79,6 +79,7 @@ type Server struct {
 	memoryStore                        *memory.SQLiteStore
 	archiveStore                       *memory.ArchiveStore
 	healthDeps                         HealthStatusFunc
+	identityEvidence                   IdentityEvidenceReader
 	unverified                         bool
 	tokenObserver                      TokenObserver
 	eventBus                           *events.Bus
@@ -452,6 +453,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /v1/system", s.handleSystem)
 	mux.HandleFunc("GET /v1/system/logs", s.handleSystemLogs)
+	mux.HandleFunc("GET /v1/identity", s.handleIdentity)
 
 	// Telemetry — consolidated router, tool, and usage analytics
 	mux.HandleFunc("GET /v1/telemetry/router", s.handleRouterTelemetry)

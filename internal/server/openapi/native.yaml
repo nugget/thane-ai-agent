@@ -30,7 +30,8 @@ info:
       `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
       `archive:read`,
       `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
-      `telemetry:read`, `contacts:read`, `contacts:write`, `system:read`.
+      `telemetry:read`, `contacts:read`, `contacts:write`, `identity:read`,
+      `system:read`.
     - **Roles** bundle scopes: `observer` (all `:read`), `operator`
       (observer + `definitions:write`, `sessions:write`, `checkpoints:write`),
       `admin` (everything, incl. `models:admin`, `contacts:write`).
@@ -81,6 +82,8 @@ tags:
     description: Address book (also synced via CardDAV on a separate surface).
   - name: System
     description: Health, version, and process logs.
+  - name: Identity
+    description: Durable instance identity and core provenance evidence.
   - name: Realtime
     description: WebSocket channel for first-party live interaction.
 
@@ -102,9 +105,35 @@ x-tagGroups:
   - name: Integrations & Data
     tags: [Contacts]
   - name: Runtime
-    tags: [System, Realtime]
+    tags: [Identity, System, Realtime]
 
 paths:
+  # --------------------------------------------------------------- Identity
+  /v1/identity:
+    get:
+      tags: [Identity]
+      operationId: getIdentity
+      summary: Core-backed instance identity and provenance evidence
+      description: |
+        Returns the founding public identity material and a live local
+        verification snapshot for this instance's core root. This is evidence
+        for clients to pin and evaluate, not a remote trust verdict.
+
+        `birth.asserted_at` is a claim covered by the signed birth commit. It
+        is not an independently witnessed timestamp.
+      x-thane-scope: identity:read
+      responses:
+        "200":
+          description: Identity evidence snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityEvidence" }
+        "503":
+          description: Core identity evidence is not configured or cannot be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ----------------------------------------------------------------- System
   /health:
     get:
@@ -1276,6 +1305,191 @@ components:
         attrs: '{"input_tokens":9123,"output_tokens":2048}'
         source_file: internal/runtime/loop/loop.go
         source_line: 412
+
+    IdentityEvidence:
+      type: object
+      description: |
+        Core-backed identity evidence reported by this instance. Verification
+        statuses describe local checks; they do not require a remote client to
+        trust the subject's conclusions.
+      required: [schema_version, observed_at, instance, core]
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          description: Wire-schema version for forward-compatible identity consumers.
+        observed_at:
+          type: string
+          format: date-time
+          description: Time at which the live verification snapshot was produced.
+        instance:
+          type: object
+          description: Founding public identity material for this Thane.
+          $ref: "#/components/schemas/ThaneIdentity"
+        core:
+          type: object
+          description: Birth, active revision, and local verification posture.
+          $ref: "#/components/schemas/CoreIdentityEvidence"
+      example:
+        schema_version: 1
+        observed_at: "2026-07-28T19:22:31Z"
+        instance:
+          id: "thane:ed25519:SHA256:8N6XQdQfeJrVxZ5xI3a2S9Ozb5Nss4J2t7zJ1lKfJNo"
+          name: pocket
+          identity_key: { algorithm: ed25519, fingerprint: "SHA256:8N6XQdQfeJrVxZ5xI3a2S9Ozb5Nss4J2t7zJ1lKfJNo" }
+          channel_ca: { algorithm: x509-ed25519, fingerprint: "SHA256:q2QHfRjP9xjV8nL4Dzg0zz1IxF5XHFM9TPrWHhsLqXQ" }
+        core:
+          birth:
+            commit: { algorithm: sha1, oid: "0123456789abcdef0123456789abcdef01234567" }
+            asserted_at: "2026-07-01T12:00:00Z"
+            time_assurance: signed_claim
+            anchor: operator
+          head:
+            commit: { algorithm: sha1, oid: "fedcba9876543210fedcba9876543210fedcba98" }
+            worktree_clean: true
+            trust_file_change_count: 1
+          verification:
+            admission: { status: verified, detail: "single birth and trust-file history satisfy the declared seed policy" }
+            head: { status: verified, detail: "current core tree is clean and covered by a trusted signed HEAD" }
+
+    ThaneIdentity:
+      type: object
+      description: Stable identity derived from public material in core's birth commit.
+      required: [id, name, identity_key, channel_ca]
+      properties:
+        id:
+          type: string
+          description: Stable identifier derived from the founding Ed25519 public key.
+          pattern: "^thane:ed25519:SHA256:"
+          example: "thane:ed25519:SHA256:8N6XQdQfeJrVxZ5xI3a2S9Ozb5Nss4J2t7zJ1lKfJNo"
+        name:
+          type: string
+          description: Instance name asserted in the signed birth policy.
+          example: pocket
+        identity_key:
+          type: object
+          description: Founding Ed25519 signing-key identity.
+          $ref: "#/components/schemas/PublicIdentityMaterial"
+        channel_ca:
+          type: object
+          description: Founding X.509 channel certificate-authority identity.
+          $ref: "#/components/schemas/PublicIdentityMaterial"
+
+    PublicIdentityMaterial:
+      type: object
+      description: Algorithm and fingerprint for one committed public key or certificate.
+      required: [algorithm, fingerprint]
+      properties:
+        algorithm:
+          type: string
+          description: Cryptographic key or certificate algorithm.
+          example: ed25519
+        fingerprint:
+          type: string
+          description: SHA-256 fingerprint recomputed from committed birth material.
+          pattern: "^SHA256:"
+
+    CoreIdentityEvidence:
+      type: object
+      description: Birth, active revision, and verification evidence for core.
+      required: [birth, head, verification]
+      properties:
+        birth:
+          type: object
+          description: Founding commit and its asserted chronology.
+          $ref: "#/components/schemas/CoreBirthEvidence"
+        head:
+          type: object
+          description: Active core revision and worktree posture.
+          $ref: "#/components/schemas/CoreHeadEvidence"
+        verification:
+          type: object
+          description: Local admission and active-tree checks.
+          $ref: "#/components/schemas/CoreVerificationEvidence"
+
+    CoreBirthEvidence:
+      type: object
+      description: The single signed parentless commit from which core descends.
+      required: [commit, asserted_at, time_assurance, anchor]
+      properties:
+        commit:
+          type: object
+          description: Algorithm-qualified object ID of core's birth commit.
+          $ref: "#/components/schemas/GitObjectID"
+        asserted_at:
+          type: string
+          format: date-time
+          description: Time claimed by and covered by the signed birth commit.
+        time_assurance:
+          type: string
+          const: signed_claim
+          description: The time is signed locally but has no external timestamp witness.
+        anchor:
+          type: string
+          enum: [operator, self_signed, unknown]
+          description: |
+            Structural founding posture. `operator` means the seed set is not
+            solely the founding agent key; it does not reveal the operator's
+            principal or establish their real-world identity.
+
+    CoreHeadEvidence:
+      type: object
+      description: The active core revision and its local worktree posture.
+      required: [commit, worktree_clean, trust_file_change_count]
+      properties:
+        commit:
+          type: object
+          description: Algorithm-qualified object ID of the active core HEAD.
+          $ref: "#/components/schemas/GitObjectID"
+        worktree_clean:
+          type: boolean
+          description: Whether tracked core content is clean against HEAD.
+        trust_file_change_count:
+          type: integer
+          minimum: 0
+          description: Number of commits that created or changed core's trust file.
+
+    GitObjectID:
+      type: object
+      description: Git object identifier paired with its repository hash algorithm.
+      required: [algorithm, oid]
+      properties:
+        algorithm:
+          type: string
+          enum: [sha1, sha256]
+          description: Object-hash algorithm used by the Git repository.
+        oid:
+          type: string
+          description: Full Git object identifier.
+
+    CoreVerificationEvidence:
+      type: object
+      description: Separate results for founding admission and the active core tree.
+      required: [admission, head]
+      properties:
+        admission:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/IdentityVerificationCheck"
+          description: Verification of the single birth and trust-file history against declared seeds.
+        head:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/IdentityVerificationCheck"
+          description: Verification that the active tree is clean and covered by trusted signed HEAD.
+
+    IdentityVerificationCheck:
+      type: object
+      description: Result of one bounded local identity or provenance check.
+      required: [status, detail]
+      properties:
+        status:
+          type: string
+          enum: [verified, failed]
+          description: Whether the local check's stated invariant holds.
+        detail:
+          type: string
+          description: Bounded explanation that does not expose local paths or signer principals.
 
     SystemStatus:
       type: object

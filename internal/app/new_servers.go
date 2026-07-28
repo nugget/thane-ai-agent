@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
@@ -68,6 +69,9 @@ func (a *App) initServers(s *newState) error {
 		server.UseScheduler(a.sched)
 	}
 	server.UseCapabilitySurface(a.capSurfaceGetter())
+	server.UseIdentityEvidence(func(ctx context.Context) (identity.Evidence, error) {
+		return identity.Observe(ctx, cfg.CoreRoot(), CoreSeedSigners(cfg))
+	})
 	if a.indexDB != nil {
 		server.UseLogQuerier(&logQueryAdapter{db: a.indexDB})
 	}
