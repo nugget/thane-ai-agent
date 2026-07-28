@@ -55,6 +55,14 @@ const DefaultWorkspace = "~/Thane"
 // ConfigFileName is the fixed name of the runtime config inside core.
 const ConfigFileName = "config.yaml"
 
+// CoreRootName and SelfRootName are the two document roots whose paths
+// are derived from the workspace rather than declared. Both may be named
+// in roots: to set policy, and neither takes a path from there.
+const (
+	CoreRootName = "core"
+	SelfRootName = "self"
+)
+
 // legacyConfigLocations are the paths Thane searched before the config
 // moved inside the trust boundary. They are no longer loaded; they are
 // probed only so a failure to find the real config can say where the old
@@ -2671,17 +2679,17 @@ func (c *Config) normalizeRoots() error {
 			}
 			seen[trimmed] = name
 			pathValue := strings.TrimSpace(entry.Path)
-			// core: is reserved — its path is always derived from
-			// workspace.path. Allow declaring it in roots: solely
-			// to set policy; ignore any path that was provided.
-			if trimmed == "core" {
+			// core: and self: are reserved — their paths are always
+			// derived from workspace.path. Allow declaring either in
+			// roots: solely to set policy; ignore any path provided.
+			if isDerivedRootName(trimmed) {
 				if pathValue != "" && !entryHasPolicy(entry) {
-					slog.Default().Warn("config: roots.core path is ignored (core derives from workspace.path); declare core: only when setting policy",
-						"path", entry.Path)
+					slog.Default().Warn("config: derived root path is ignored (it comes from workspace.path); declare this root only when setting policy",
+						"root", trimmed, "path", entry.Path)
 				}
 			} else {
 				if pathValue == "" {
-					return fmt.Errorf("config: roots.%s.path must be set for non-core roots", trimmed)
+					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName)
 				}
 				c.Paths[trimmed] = entry.Path
 			}
@@ -3562,6 +3570,36 @@ func (c *Config) CoreRoot() string {
 		return ""
 	}
 	return filepath.Join(c.Workspace.Path, "core")
+}
+
+// isDerivedRootName reports whether a root takes its path from the
+// workspace rather than from roots:.
+func isDerivedRootName(name string) bool {
+	return name == CoreRootName || name == SelfRootName
+}
+
+// SelfRoot returns the fixed document root holding what Thane writes
+// about itself, derived from [Workspace.Path] exactly as [CoreRoot] is.
+// When workspace.path is unset, SelfRoot returns the empty string.
+//
+// It is a sibling of core rather than a directory inside it because the
+// two answer to different authorities. core is what an operator declares
+// Thane to be and what constrains it — identity, config, talents, loop
+// definitions — and an install should be able to hold every commit in it
+// to an operator signature. self is what Thane makes of that: its
+// self-concept, its running observations, its memory of its own work.
+// Both want signed history; only one wants the operator as its only
+// author, and a root is the unit that policy attaches to.
+//
+// Derived rather than declared, for the same reason core is. The core
+// service loops write here on every install, so a root an operator had
+// to remember to declare would leave a fresh install with nowhere for
+// those outputs to land.
+func (c *Config) SelfRoot() string {
+	if strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.Workspace.Path, SelfRootName)
 }
 
 // CoreFile returns the absolute-or-relative path to a named file in the

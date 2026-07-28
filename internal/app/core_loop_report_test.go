@@ -18,7 +18,7 @@ const facetedCoreLoop = "# Metacognitive\n\n" +
 	"## Spec\n\n" +
 	"```yaml\n" +
 	"name: metacognitive\n" +
-	"parent_name: cognition\n" +
+	"parent_name: self\n" +
 	"enabled: true\n" +
 	"operation: service\n" +
 	"sleep_min: 15m\n" +
@@ -69,8 +69,8 @@ func TestCoreLoopReportNamesWhatTheDocumentProduces(t *testing.T) {
 	if !report.OK() {
 		t.Fatalf("report.Err = %v, want a clean load", report.Err)
 	}
-	if report.Name != "metacognitive" || report.ParentName != "cognition" {
-		t.Errorf("name/parent = %q/%q, want metacognitive/cognition", report.Name, report.ParentName)
+	if report.Name != "metacognitive" || report.ParentName != "self" {
+		t.Errorf("name/parent = %q/%q, want metacognitive/%s", report.Name, report.ParentName, selfContainerName)
 	}
 	want := []string{"publish_output_metacognitive_state", "replace_output_metacognitive_notes"}
 	if strings.Join(report.Tools, ",") != strings.Join(want, ",") {
@@ -113,14 +113,14 @@ func TestCoreLoopReportCoversEveryDocument(t *testing.T) {
 }
 
 // TestCoreLoopReportWarnsOnAnUnparentedCoreLoop covers the trap the
-// report was written for. The built-in path parents ego, metacognitive,
-// and archivist under cognition after building the spec, and a document
-// replaces that path entirely — so a document that says nothing about
-// its parent does not inherit the default, it moves the loop to the
+// report was written for. A core service loop belongs under the self
+// container, and its shipped document is what says so — nothing supplies
+// that parent afterwards. A hand-authored document that omits
+// parent_name therefore does not inherit it: the loop lands at the graph
 // root, and nothing about a successful boot says so.
 func TestCoreLoopReportWarnsOnAnUnparentedCoreLoop(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
-		"metacognitive.md": strings.Replace(facetedCoreLoop, "parent_name: cognition\n", "", 1),
+		"metacognitive.md": strings.Replace(facetedCoreLoop, "parent_name: self\n", "", 1),
 	})
 
 	report := findCoreLoopReport(t, CheckCoreLoopDefinitions(coreLoopConfig(core)), "metacognitive.md")
@@ -130,7 +130,7 @@ func TestCoreLoopReportWarnsOnAnUnparentedCoreLoop(t *testing.T) {
 	if len(report.Warnings) == 0 {
 		t.Fatal("an unparented core service loop produced no warning")
 	}
-	if !strings.Contains(report.Warnings[0], cognitionContainerName) {
+	if !strings.Contains(report.Warnings[0], selfContainerName) {
 		t.Errorf("warning = %q, want it to name the parent that was not inherited", report.Warnings[0])
 	}
 }
@@ -251,5 +251,57 @@ func TestCoreLoopReportRefusesASymlinkTheLoaderRefuses(t *testing.T) {
 	}
 	if !strings.Contains(report.Error, "not a regular file") {
 		t.Errorf("error = %q, want the loader's own refusal", report.Error)
+	}
+}
+
+// TestCoreLoopReportFlagsAParentNothingWillCreate is the rename trap. A
+// document authored against one release's container names keeps parsing
+// forever; the only thing that breaks is where the loop hangs, and the
+// only runtime sign is a log line as the parent is dropped. The report
+// warns — advisory, because an overlay container by that name may exist
+// in the database where this check cannot see.
+func TestCoreLoopReportFlagsAParentNothingWillCreate(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{
+		"metacognitive.md": strings.Replace(facetedCoreLoop, "parent_name: self\n", "parent_name: cognition\n", 1),
+	})
+
+	report := findCoreLoopReport(t, CheckCoreLoopDefinitions(coreLoopConfig(core)), "metacognitive.md")
+	if !report.OK() {
+		t.Fatalf("report.Err = %v; the document is valid, the parent just resolves to nothing", report.Err)
+	}
+	found := false
+	for _, warning := range report.Warnings {
+		if strings.Contains(warning, "cognition") && strings.Contains(warning, "graph root") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want one naming the unresolvable parent", report.Warnings)
+	}
+}
+
+// TestCoreLoopReportResolvesAParentDefinedLaterInSortOrder pins the
+// second pass. "aaa" names a parent that "zzz" defines, so a
+// single-pass check running in sort order would flag a parent that
+// resolves fine.
+func TestCoreLoopReportResolvesAParentDefinedLaterInSortOrder(t *testing.T) {
+	member := strings.NewReplacer(
+		"name: ranch_watch", "name: ranch_watch\nparent_name: watch_tower",
+	).Replace(minimalCoreLoop)
+	// A container carries no task and no sleep envelope, so it is
+	// authored from scratch rather than derived from the service fixture.
+	container := "# Watch Tower\n\n## Spec\n\n```yaml\n" +
+		"name: watch_tower\nenabled: true\nintent: Group the ranch loops.\noperation: container\n" +
+		"```\n"
+	core := writeCoreLoop(t, map[string]string{
+		"aaa_member.md":    member,
+		"zzz_container.md": container,
+	})
+
+	report := findCoreLoopReport(t, CheckCoreLoopDefinitions(coreLoopConfig(core)), "aaa_member.md")
+	for _, warning := range report.Warnings {
+		if strings.Contains(warning, "watch_tower") {
+			t.Errorf("warning = %q; the parent is defined in this directory, one file later in sort order", warning)
+		}
 	}
 }

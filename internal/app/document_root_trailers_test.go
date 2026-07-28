@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -66,7 +67,7 @@ func TestWithTurnProvenance(t *testing.T) {
 		},
 		{
 			name:    "core does not restate its own parent commit",
-			writer:  &documentRootProvenanceWriter{root: coreDocumentRoot, corePath: t.TempDir()},
+			writer:  &documentRootProvenanceWriter{root: config.CoreRootName, corePath: t.TempDir()},
 			ctx:     fullTurn,
 			message: "doc_write core:axioms.md",
 			absent:  []string{documents.TrailerCoreHead},

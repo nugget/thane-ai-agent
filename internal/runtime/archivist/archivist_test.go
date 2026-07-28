@@ -91,8 +91,8 @@ func TestDefinitionSpec_Outputs(t *testing.T) {
 		t.Fatalf("Outputs len = %d, want 1", len(spec.Outputs))
 	}
 	out := spec.Outputs[0]
-	if out.Ref != "core:archivist.md" {
-		t.Errorf("Outputs[0].Ref = %q, want core:archivist.md", out.Ref)
+	if out.Ref != "self:archivist.md" {
+		t.Errorf("Outputs[0].Ref = %q, want self:archivist.md", out.Ref)
 	}
 	if out.Type != loop.OutputTypeMaintainedDocument {
 		t.Errorf("Outputs[0].Type = %q, want maintained_document", out.Type)

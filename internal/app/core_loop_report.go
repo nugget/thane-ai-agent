@@ -169,7 +169,43 @@ func CheckCoreLoopDefinitions(cfg *config.Config) []CoreLoopDefinition {
 		result.Warnings = append(result.Warnings, coreLoopDefinitionWarnings(spec)...)
 		results = append(results, result)
 	}
+	// A second pass, because a parent can be defined by a later file than
+	// the loop that names it: only once every document has parsed does
+	// the report know what a declared parent_name can resolve to.
+	for i := range results {
+		if warning := unresolvableParentWarning(results[i], definedIn); warning != "" {
+			results[i].Warnings = append(results[i].Warnings, warning)
+		}
+	}
 	return results
+}
+
+// unresolvableParentWarning flags a parent_name that nothing this report
+// can see will create: not a built-in container, not another document in
+// the directory. It is advisory rather than fatal because the report
+// cannot see overlay definitions — an operator may legitimately parent a
+// loop under a container that lives in the database — but a name that
+// resolves to nothing at launch is dropped with only a runtime log line,
+// and the loop lands at the graph root.
+//
+// The concrete failure this catches is a rename: a document authored
+// against one release's container names keeps working forever except for
+// where it hangs, which is precisely the silent re-parenting the
+// parent_name field was added to prevent.
+func unresolvableParentWarning(result CoreLoopDefinition, definedIn map[string]string) string {
+	parent := strings.TrimSpace(result.ParentName)
+	if parent == "" || !result.OK() {
+		return ""
+	}
+	for _, builtin := range []string{selfContainerName, homeAssistantContainerName, pollersContainerName} {
+		if parent == builtin {
+			return ""
+		}
+	}
+	if _, definedHere := definedIn[parent]; definedHere {
+		return ""
+	}
+	return "parent_name " + parent + " is not a built-in container and no document in this directory defines it; unless a runtime-defined (overlay) container by that name exists, the parent will not resolve and this loop will land at the graph root"
 }
 
 // coreLoopDefinitionWarnings collects the advisory findings for one
@@ -185,7 +221,7 @@ func coreLoopDefinitionWarnings(spec looppkg.Spec) []string {
 		// parent does not inherit the default, it lands at the root.
 		// Silent re-parenting empties the container an operator can see
 		// and gives no sign why.
-		warnings = append(warnings, "declares no parent_name, so this core service loop will hang at the graph root rather than under "+cognitionContainerName+"; a definition document does not inherit the built-in parent")
+		warnings = append(warnings, "declares no parent_name, so this core service loop will hang at the graph root rather than under "+selfContainerName+"; a definition document does not inherit the built-in parent")
 	}
 	for _, warning := range looppkg.BuildDefinitionWarnings(spec) {
 		warnings = append(warnings, warning.Message)

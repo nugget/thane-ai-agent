@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -62,7 +63,7 @@ func (w *documentRootProvenanceWriter) withTurnProvenance(ctx context.Context, m
 // empty when core has no history or cannot be read — this is enrichment, and
 // failing to read it must never fail the write that carries it.
 func (w *documentRootProvenanceWriter) coreHeadAt(ctx context.Context) string {
-	if w == nil || w.corePath == "" || w.root == coreDocumentRoot {
+	if w == nil || w.corePath == "" || w.root == config.CoreRootName {
 		return ""
 	}
 	head, err := provenance.HeadCommit(ctx, w.corePath)

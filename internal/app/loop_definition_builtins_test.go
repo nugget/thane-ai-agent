@@ -8,9 +8,9 @@ import "testing"
 // (non-actionable) deprecation warning and lose their intent once the #1106
 // one-release fallback is removed.
 func TestContainerSpec_IntentIsFirstClass(t *testing.T) {
-	spec := containerSpec("cognition", "Core cognition loops.")
+	spec := containerSpec("self", "The loops that attend to Thane itself.")
 
-	if spec.Intent != "Core cognition loops." {
+	if spec.Intent != "The loops that attend to Thane itself." {
 		t.Errorf("containerSpec Intent = %q, want it on the first-class field", spec.Intent)
 	}
 	if _, ok := spec.Metadata["intent"]; ok {

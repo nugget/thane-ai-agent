@@ -388,7 +388,7 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	return &documentRootProvenanceWriter{
 		checkout: signed,
 		root:     root,
-		corePath: coreRootPath(a.cfg.Workspace.Path),
+		corePath: a.cfg.CoreRoot(),
 	}, nil
 }
 

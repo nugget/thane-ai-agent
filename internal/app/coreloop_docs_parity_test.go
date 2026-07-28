@@ -139,8 +139,8 @@ func TestBuiltInSpecsNowComeFromTheShippedDocuments(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decodeCoreLoopDefinition: %v", err)
 			}
-			if got.ParentName != cognitionContainerName {
-				t.Errorf("parent_name = %q, want %q from the document itself — nothing assigns it afterwards", got.ParentName, cognitionContainerName)
+			if got.ParentName != selfContainerName {
+				t.Errorf("parent_name = %q, want %q from the document itself — nothing assigns it afterwards", got.ParentName, selfContainerName)
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("the booted spec is not the shipped document's:\ngot  %#v\nwant %#v", got, want)

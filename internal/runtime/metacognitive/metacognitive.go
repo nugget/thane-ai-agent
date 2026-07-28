@@ -109,7 +109,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 			{
 				Name:    "metacognitive_state",
 				Type:    loop.OutputTypeMaintainedDocument,
-				Ref:     "core:metacognitive.md",
+				Ref:     "self:metacognitive.md",
 				Mode:    loop.OutputModeReplace,
 				Purpose: "Current metacognitive state: active concerns, recent observations, actions taken, and sleep reasoning that should persist across fresh loop iterations.",
 			},

@@ -9,7 +9,7 @@ tags: [loops]
 
 ```yaml
 name: archivist
-parent_name: cognition
+parent_name: self
 enabled: true
 profile:
     quality_floor: 5
@@ -22,7 +22,7 @@ completion: none
 outputs:
     - name: archivist_state
       type: maintained_document
-      ref: core:archivist.md
+      ref: self:archivist.md
       mode: replace
       purpose: 'Archivist working state written by the archivist loop, for the archivist. Tracks: the subjects worked this pass, dossier pointers (which dossiers exist and where), and notes from the last few iterations. Read each turn so the archivist picks up where it left off. The durable work queue (not this file) holds pending subjects. NOT a public-facing document; the dossiers themselves are the model-facing output.'
 tags:
@@ -92,9 +92,9 @@ dossiers when something jogs a memory of that subject.
 ## Your Durable Output
 
 Your working state is injected in the "Declared Durable Outputs" block.
-That block shows core:archivist.md when it exists and names the
-generated replacement tool for the document. It holds dossier pointers
-and notes — NOT the work queue (the durable queue holds that).
+It names the document you maintain and the generated tool that writes it.
+That document holds dossier pointers and notes — NOT the work queue (the
+durable queue holds that).
 
 ## What To Do This Iteration
 

@@ -29,8 +29,19 @@ const (
 // members that are themselves base definitions (dynamically-spawned members,
 // e.g. channel loops, need a different mechanism — they spawn before the
 // definition-driven containers are live).
+//
+// selfContainerName deliberately matches [config.SelfRootName]. The
+// loops in this container are the loops whose subject is Thane itself,
+// and the self root is where that writing is headed: metacognitive and
+// archivist write it today, ego still writes core:ego.md until its
+// provenance-backed injection is rewired (#1318). One name covers one
+// idea — a reader seeing `parent: self` beside an output ref of
+// `self:metacognitive.md` is looking at two views of the same thing.
+// They stay separate constants because a loop container and a document
+// root are different namespaces, and renaming one should not silently
+// rename the other.
 const (
-	cognitionContainerName     = "cognition"
+	selfContainerName          = "self"
 	homeAssistantContainerName = "home-assistant"
 	pollersContainerName       = "pollers"
 )
@@ -56,10 +67,10 @@ func mediaServicesEnabled(cfg *config.Config) bool {
 }
 
 // builtInContainerDefinitionSpecs returns the built-in grouping containers,
-// each gated so an empty container never appears: cognition when any core
-// cognition loop is enabled, home-assistant when HA or MQTT is configured.
-// declared is the set of loop names an operator or the core root has
-// already defined, so a container's gate can match its members'.
+// each gated so an empty container never appears: self when any core
+// service loop is enabled or declared, home-assistant when HA or MQTT is
+// configured. declared is the set of loop names an operator or the core
+// root has already defined, so a container's gate can match its members'.
 func builtInContainerDefinitionSpecs(cfg *config.Config, declared map[string]struct{}) []looppkg.Spec {
 	if cfg == nil {
 		return nil
@@ -67,8 +78,8 @@ func builtInContainerDefinitionSpecs(cfg *config.Config, declared map[string]str
 	var specs []looppkg.Spec
 
 	if anyCoreServiceLoopWanted(cfg, declared) {
-		specs = append(specs, containerSpec(cognitionContainerName,
-			"Core cognition loops: reflection, identity, and memory."))
+		specs = append(specs, containerSpec(selfContainerName,
+			"The loops that attend to Thane itself: reflection, identity, and memory."))
 	}
 	if cfg.HomeAssistant.Configured() || cfg.MQTT.Configured() {
 		specs = append(specs, containerSpec(homeAssistantContainerName,

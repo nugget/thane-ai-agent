@@ -9,7 +9,7 @@ tags: [loops]
 
 ```yaml
 name: metacognitive
-parent_name: cognition
+parent_name: self
 enabled: true
 profile:
     quality_floor: 3
@@ -22,7 +22,7 @@ completion: none
 outputs:
     - name: metacognitive_state
       type: maintained_document
-      ref: core:metacognitive.md
+      ref: self:metacognitive.md
       mode: replace
       purpose: 'Current metacognitive state: active concerns, recent observations, actions taken, and sleep reasoning that should persist across fresh loop iterations.'
 tags:
@@ -70,8 +70,8 @@ observe, and adapts your own wake cycle.
 ## Your Durable Output
 
 Your current durable output contract is injected in the "Declared Durable
-Outputs" block. That block shows core:metacognitive.md when it exists and
-names the generated replacement tool for the document.
+Outputs" block. It names the document you maintain and the generated tool
+that writes it.
 
 ## What To Do This Iteration
 
