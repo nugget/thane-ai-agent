@@ -414,13 +414,33 @@ of truth. The generated tools still write through document roots. That
 keeps path resolution, indexing, provenance, and root-level integrity
 policy in one subsystem.
 
-## Special Case: `core`
+## Special Case: the Derived Roots, `core` and `self`
 
-The `core:` root is reserved.
+Two roots are reserved. Both come from the workspace — `{workspace.path}/core`
+and `{workspace.path}/self` — and neither takes a path from `roots:`. You may
+still name either one there to set policy; a path given alongside policy is
+ignored.
 
-It always comes from `{workspace.path}/core` and is not configured
-manually in `paths:`. That is where Thane's always-on identity and core
-reference files live.
+They are two roots rather than one because they answer to different
+authorities, and that difference is the whole point of the split.
+
+`core` is what an operator declares Thane to be, and what constrains it:
+axioms, persona, mission, the runtime config, talents, and loop definitions.
+Nothing an agent writes belongs in it. That is what lets an install narrow
+`core`'s signers to the operator alone and set `authoring: read_only` on it —
+the posture we recommend, and the only way to shield `config.yaml` from
+agent editing. It is also what makes `core`'s HEAD worth reading as evidence:
+it moves when the operator moves it.
+
+`self` is what Thane makes of that — its self-concept, its running
+observations, its memory of its own work. The core service loops maintain it:
+`self:ego.md`, `self:metacognitive.md`, `self:archivist.md`. It wants the same
+integrity treatment as `core` — signed history, admission, verification — under
+its own signer set, because the agent is its author.
+
+Both are derived rather than declared because the core service loops write
+`self` on every install. A root an operator had to remember to declare would
+leave a fresh install with nowhere for those documents to land.
 
 ## The Human-Level Rule
 

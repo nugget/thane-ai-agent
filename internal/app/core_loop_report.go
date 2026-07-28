@@ -185,7 +185,7 @@ func coreLoopDefinitionWarnings(spec looppkg.Spec) []string {
 		// parent does not inherit the default, it lands at the root.
 		// Silent re-parenting empties the container an operator can see
 		// and gives no sign why.
-		warnings = append(warnings, "declares no parent_name, so this core service loop will hang at the graph root rather than under "+cognitionContainerName+"; a definition document does not inherit the built-in parent")
+		warnings = append(warnings, "declares no parent_name, so this core service loop will hang at the graph root rather than under "+selfContainerName+"; a definition document does not inherit the built-in parent")
 	}
 	for _, warning := range looppkg.BuildDefinitionWarnings(spec) {
 		warnings = append(warnings, warning.Message)

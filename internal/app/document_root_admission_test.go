@@ -2,6 +2,7 @@ package app
 
 import (
 	"log/slog"
+	"path/filepath"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -233,5 +234,39 @@ func TestRootAdmissionCoversTheReservedCoreRoot(t *testing.T) {
 	results = CheckRootAdmission(t.Context(), stranger)
 	if len(results) != 1 || results[0].Admitted() {
 		t.Fatalf("validate should report core unadmitted, got %+v", results)
+	}
+}
+
+// TestSelfRootIsDerivedLikeCore pins what makes self usable by a shipped
+// document. The core loops write self: on every install, so the root has
+// to exist without an operator declaring it — and its path has to come
+// from the workspace, not from roots:, or two installs could disagree
+// about where self:metacognitive.md is while running the same document.
+func TestSelfRootIsDerivedLikeCore(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{Workspace: config.WorkspaceConfig{Path: workspace}}
+
+	paths := documentRootPaths(cfg, nil)
+	if got, want := paths[config.SelfRootName], filepath.Join(workspace, "self"); got != want {
+		t.Errorf("self root = %q, want %q", got, want)
+	}
+	if got, want := paths[config.CoreRootName], filepath.Join(workspace, "core"); got != want {
+		t.Errorf("core root = %q, want %q", got, want)
+	}
+}
+
+// TestSelfRootIgnoresAConfiguredPath mirrors core's rule. A derived root
+// whose path could also be declared would let roots: and workspace.path
+// disagree, and the shipped documents name self: with no way to ask
+// which one won.
+func TestSelfRootIgnoresAConfiguredPath(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Workspace: config.WorkspaceConfig{Path: workspace},
+		Paths:     map[string]string{config.SelfRootName: "/somewhere/else"},
+	}
+
+	if got, want := documentRootPaths(cfg, nil)[config.SelfRootName], filepath.Join(workspace, "self"); got != want {
+		t.Errorf("self root = %q, want the derived %q; a configured path must not win", got, want)
 	}
 }

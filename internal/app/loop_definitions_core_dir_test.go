@@ -500,7 +500,7 @@ func TestSecondYAMLDocumentInTheSpecBlockIsRefused(t *testing.T) {
 func TestCoreDefinitionKeepsItsDeclaredParent(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
 		"ego.md": strings.NewReplacer(
-			"name: ranch_watch", "name: ego\nparent_name: "+cognitionContainerName,
+			"name: ranch_watch", "name: ego\nparent_name: "+selfContainerName,
 		).Replace(minimalCoreLoop),
 	})
 	app := &App{cfg: &config.Config{
@@ -518,15 +518,15 @@ func TestCoreDefinitionKeepsItsDeclaredParent(t *testing.T) {
 		switch spec.Name {
 		case "ego":
 			ego = spec
-		case cognitionContainerName:
+		case selfContainerName:
 			container = true
 		}
 	}
-	if ego.ParentName != cognitionContainerName {
-		t.Errorf("parent_name = %q, want the document's %q", ego.ParentName, cognitionContainerName)
+	if ego.ParentName != selfContainerName {
+		t.Errorf("parent_name = %q, want the document's %q", ego.ParentName, selfContainerName)
 	}
 	if !container {
-		t.Errorf("%q is absent, so the declared parent resolves to nothing", cognitionContainerName)
+		t.Errorf("%q is absent, so the declared parent resolves to nothing", selfContainerName)
 	}
 }
 
@@ -542,7 +542,7 @@ func TestCoreDefinitionKeepsItsDeclaredParent(t *testing.T) {
 func TestConfigDisabledDocumentLoopStillGetsItsContainer(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
 		"metacognitive.md": strings.NewReplacer(
-			"name: ranch_watch", "name: metacognitive\nparent_name: "+cognitionContainerName,
+			"name: ranch_watch", "name: metacognitive\nparent_name: "+selfContainerName,
 		).Replace(minimalCoreLoop),
 	})
 	// Every core service loop disabled: the document is the only reason
@@ -566,17 +566,17 @@ func TestConfigDisabledDocumentLoopStillGetsItsContainer(t *testing.T) {
 		switch spec.Name {
 		case "metacognitive":
 			loop = spec
-		case cognitionContainerName:
+		case selfContainerName:
 			container = true
 		}
 	}
 	if loop.Name == "" {
 		t.Fatal("the document defines the loop, so it must be registered even with config disabled")
 	}
-	if loop.ParentName != cognitionContainerName {
-		t.Fatalf("parent_name = %q, want %q", loop.ParentName, cognitionContainerName)
+	if loop.ParentName != selfContainerName {
+		t.Fatalf("parent_name = %q, want %q", loop.ParentName, selfContainerName)
 	}
 	if !container {
-		t.Errorf("%q is absent, so the declared parent resolves to nothing and the loop silently lands at the root", cognitionContainerName)
+		t.Errorf("%q is absent, so the declared parent resolves to nothing and the loop silently lands at the root", selfContainerName)
 	}
 }

@@ -12,8 +12,8 @@ observe, and adapts your own wake cycle.
 ## Your Durable Output
 
 Your current durable output contract is injected in the "Declared Durable
-Outputs" block. That block shows core:metacognitive.md when it exists and
-names the generated replacement tool for the document.
+Outputs" block. It names the document you maintain and the generated tool
+that writes it.
 
 ## What To Do This Iteration
 

@@ -18,7 +18,7 @@ const facetedCoreLoop = "# Metacognitive\n\n" +
 	"## Spec\n\n" +
 	"```yaml\n" +
 	"name: metacognitive\n" +
-	"parent_name: cognition\n" +
+	"parent_name: self\n" +
 	"enabled: true\n" +
 	"operation: service\n" +
 	"sleep_min: 15m\n" +
@@ -69,7 +69,7 @@ func TestCoreLoopReportNamesWhatTheDocumentProduces(t *testing.T) {
 	if !report.OK() {
 		t.Fatalf("report.Err = %v, want a clean load", report.Err)
 	}
-	if report.Name != "metacognitive" || report.ParentName != "cognition" {
+	if report.Name != "metacognitive" || report.ParentName != "self" {
 		t.Errorf("name/parent = %q/%q, want metacognitive/cognition", report.Name, report.ParentName)
 	}
 	want := []string{"publish_output_metacognitive_state", "replace_output_metacognitive_notes"}
@@ -120,7 +120,7 @@ func TestCoreLoopReportCoversEveryDocument(t *testing.T) {
 // root, and nothing about a successful boot says so.
 func TestCoreLoopReportWarnsOnAnUnparentedCoreLoop(t *testing.T) {
 	core := writeCoreLoop(t, map[string]string{
-		"metacognitive.md": strings.Replace(facetedCoreLoop, "parent_name: cognition\n", "", 1),
+		"metacognitive.md": strings.Replace(facetedCoreLoop, "parent_name: self\n", "", 1),
 	})
 
 	report := findCoreLoopReport(t, CheckCoreLoopDefinitions(coreLoopConfig(core)), "metacognitive.md")
@@ -130,7 +130,7 @@ func TestCoreLoopReportWarnsOnAnUnparentedCoreLoop(t *testing.T) {
 	if len(report.Warnings) == 0 {
 		t.Fatal("an unparented core service loop produced no warning")
 	}
-	if !strings.Contains(report.Warnings[0], cognitionContainerName) {
+	if !strings.Contains(report.Warnings[0], selfContainerName) {
 		t.Errorf("warning = %q, want it to name the parent that was not inherited", report.Warnings[0])
 	}
 }

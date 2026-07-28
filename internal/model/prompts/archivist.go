@@ -28,9 +28,9 @@ dossiers when something jogs a memory of that subject.
 ## Your Durable Output
 
 Your working state is injected in the "Declared Durable Outputs" block.
-That block shows core:archivist.md when it exists and names the
-generated replacement tool for the document. It holds dossier pointers
-and notes — NOT the work queue (the durable queue holds that).
+It names the document you maintain and the generated tool that writes it.
+That document holds dossier pointers and notes — NOT the work queue (the
+durable queue holds that).
 
 ## What To Do This Iteration
 

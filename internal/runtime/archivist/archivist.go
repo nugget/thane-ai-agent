@@ -124,7 +124,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 			{
 				Name: "archivist_state",
 				Type: loop.OutputTypeMaintainedDocument,
-				Ref:  "core:archivist.md",
+				Ref:  "self:archivist.md",
 				Mode: loop.OutputModeReplace,
 				Purpose: "Archivist working state written by the archivist loop, for the archivist. Tracks: " +
 					"the subjects worked this pass, dossier pointers (which dossiers exist and where), " +
