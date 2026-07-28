@@ -57,8 +57,10 @@ func TestCoreLoopDocsMatchTheGoSpecs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decodeCoreLoopDefinition: %v", err)
 			}
-			// ParentName is applied by the caller, not carried by either
-			// source, so it is not part of what the document owns.
+			// The document carries parent_name and the Go builder never
+			// did, so this one field is expected to differ. It is checked
+			// against the boot path in
+			// TestBuiltInSpecsNowComeFromTheShippedDocuments instead.
 			got.ParentName = tt.want.ParentName
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("document and Go spec disagree.\nfrom document: %#v\nfrom Go:       %#v", got, tt.want)
@@ -137,8 +139,9 @@ func TestBuiltInSpecsNowComeFromTheShippedDocuments(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decodeCoreLoopDefinition: %v", err)
 			}
-			// ParentName is applied by the caller after the spec is built.
-			want.ParentName = got.ParentName
+			if got.ParentName != cognitionContainerName {
+				t.Errorf("parent_name = %q, want %q from the document itself — nothing assigns it afterwards", got.ParentName, cognitionContainerName)
+			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("the booted spec is not the shipped document's:\ngot  %#v\nwant %#v", got, want)
 			}

@@ -56,9 +56,11 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s definition: %w", reg.Name, err)
 			}
-			// The core cognition loops (ego, metacognitive, archivist) live
-			// under the cognition container.
-			spec.ParentName = cognitionContainerName
+			// Parent comes from the document, like everything else about
+			// these loops. It used to be assigned here, which meant a
+			// definition read from core skipped this line and silently
+			// landed at the graph root — the document owned every field
+			// but the one saying where the loop belongs.
 			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
 		}
 	}

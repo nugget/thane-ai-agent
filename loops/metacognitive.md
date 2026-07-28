@@ -9,6 +9,7 @@ tags: [loops]
 
 ```yaml
 name: metacognitive
+parent_name: cognition
 enabled: true
 profile:
     quality_floor: 3

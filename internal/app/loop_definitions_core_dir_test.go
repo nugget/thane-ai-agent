@@ -486,3 +486,46 @@ func TestSecondYAMLDocumentInTheSpecBlockIsRefused(t *testing.T) {
 		t.Errorf("error = %v, want it to explain the stray separator", err)
 	}
 }
+
+// TestCoreDefinitionKeepsItsDeclaredParent is what makes the parent a
+// document field rather than a Go assignment. Nothing adds a parent
+// after the spec is built any more, so if the document's value did not
+// survive into the base definitions, ego would boot at the graph root
+// with nothing saying so — which is exactly the failure the assignment
+// used to hide.
+//
+// The container it names is appended after it, and that is fine: startup
+// topologically orders containers before services, so position in this
+// slice does not decide parenting.
+func TestCoreDefinitionKeepsItsDeclaredParent(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{
+		"ego.md": strings.NewReplacer(
+			"name: ranch_watch", "name: ego\nparent_name: "+cognitionContainerName,
+		).Replace(minimalCoreLoop),
+	})
+	app := &App{cfg: &config.Config{
+		Paths: map[string]string{"core": core},
+		Ego:   testServiceLoopConfig(),
+	}}
+
+	specs, err := app.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+	var ego looppkg.Spec
+	container := false
+	for _, spec := range specs {
+		switch spec.Name {
+		case "ego":
+			ego = spec
+		case cognitionContainerName:
+			container = true
+		}
+	}
+	if ego.ParentName != cognitionContainerName {
+		t.Errorf("parent_name = %q, want the document's %q", ego.ParentName, cognitionContainerName)
+	}
+	if !container {
+		t.Errorf("%q is absent, so the declared parent resolves to nothing", cognitionContainerName)
+	}
+}

@@ -9,6 +9,7 @@ tags: [loops]
 
 ```yaml
 name: archivist
+parent_name: cognition
 enabled: true
 profile:
     quality_floor: 5
