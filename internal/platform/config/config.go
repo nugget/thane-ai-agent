@@ -2683,7 +2683,7 @@ func (c *Config) normalizeRoots() error {
 			// core: and self: are reserved — their paths are always
 			// derived from workspace.path. Allow declaring either in
 			// roots: solely to set policy; ignore any path provided.
-			if isDerivedRootName(trimmed) {
+			if IsDerivedRootName(trimmed) {
 				if pathValue != "" && !entryHasPolicy(entry) {
 					slog.Default().Warn("config: derived root path is ignored (it comes from workspace.path); declare this root only when setting policy",
 						"root", trimmed, "path", entry.Path)
@@ -3573,9 +3573,14 @@ func (c *Config) CoreRoot() string {
 	return filepath.Join(c.Workspace.Path, "core")
 }
 
-// isDerivedRootName reports whether a root takes its path from the
+// IsDerivedRootName reports whether a root takes its path from the
 // workspace rather than from roots:.
-func isDerivedRootName(name string) bool {
+//
+// The derived roots are load-bearing in a way declared roots are not: the
+// instance's own configuration lives in one and its core service loops write
+// the other on every install. Callers that need to treat "this root is missing"
+// as a problem rather than a preference use this to tell the two apart.
+func IsDerivedRootName(name string) bool {
 	return name == CoreRootName || name == SelfRootName
 }
 
