@@ -51,15 +51,7 @@ exclude_tools:
     - thane_now
     - thane_assign
     - thane_loop_create
-    - email_reply
-    - email_send
-    - ha_notify
-    - request_human_decision
-    - request_human_escalation
-    - send_notification
-    - send_reaction
-    - signal_send_message
-    - signal_send_reaction
+    - group:direct_human_egress
 sleep_min: 15m0s
 sleep_max: 12h0m0s
 sleep_default: 1h0m0s

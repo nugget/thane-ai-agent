@@ -44,15 +44,7 @@ exclude_tools:
     - tag_activate
     - tag_deactivate
     - thane_loop_create
-    - email_reply
-    - email_send
-    - ha_notify
-    - request_human_decision
-    - request_human_escalation
-    - send_notification
-    - send_reaction
-    - signal_send_message
-    - signal_send_reaction
+    - group:direct_human_egress
 sleep_min: 30m0s
 sleep_max: 24h0m0s
 sleep_default: 6h0m0s
