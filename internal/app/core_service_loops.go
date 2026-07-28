@@ -21,11 +21,12 @@ import (
 //
 // The closures intentionally operate on *App: each loop's config has a
 // distinct type (ego.Config vs metacognitive.Config vs archivist.Config),
-// so the descriptor can't hold a typed pointer. Instead ParseAndCache
-// writes the typed cache field (a.egoCfg, etc.) and the later closures
-// read it back. Metacognitive's extra hydration input (Opts with the
-// resolved state-file path) is absorbed by its Hydrate closure, keeping
-// the dispatcher uniform across all three.
+// so the descriptor can't hold a typed pointer. ParseAndCache writes the
+// typed cache field (a.egoCfg, etc.) and Hydrate reads it back.
+//
+// DefinitionSpec no longer reads that cache: the definition comes from
+// the shipped document. What remains config-shaped is enablement and the
+// runtime hooks Hydrate attaches, which is why ParseAndCache still runs.
 type coreServiceRegistration struct {
 	// Name is the durable loop definition name, matched against
 	// spec.Name during hydration and used to dedupe against
@@ -41,12 +42,11 @@ type coreServiceRegistration struct {
 	// typed result on the App for later DefinitionSpec/Hydrate reads.
 	ParseAndCache func(*App, *config.Config) error
 
-	// DefinitionSpec builds the persistable loop definition from the
-	// cached config. Only called after ParseAndCache has run.
-	// DefinitionSpec returns the shipped definition for this loop. It
-	// returns an error because the definition is now a document read at
-	// runtime rather than a value built in code, and a malformed one must
-	// stop the boot rather than yield a loop with no prompt.
+	// DefinitionSpec returns the loop's shipped definition, read from
+	// the document embedded at build time rather than built from the
+	// cached config. It returns an error because a definition parsed at
+	// runtime can be malformed in ways a compiled value cannot, and that
+	// has to stop the boot rather than yield a loop with no prompt.
 	DefinitionSpec func(*App) (looppkg.Spec, error)
 
 	// Hydrate attaches runtime-only hooks (task builder, post-iterate,
