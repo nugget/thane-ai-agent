@@ -164,7 +164,7 @@ func TestSpec_DeclarativePrompt(t *testing.T) {
 	if strings.Contains(spec.Task, "Supervisor Review") {
 		t.Error("base Task should not include the supervisor section")
 	}
-	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "Supervisor Review") {
+	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "critically evaluate") {
 		t.Error("supervisor-turn prefix should live in SupervisorProfile.Instructions")
 	}
 }

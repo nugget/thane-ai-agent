@@ -407,9 +407,9 @@ func ExampleConfig() *Config {
 
 		Metacognitive: MetacognitiveConfig{
 			Enabled:               false,
-			MinSleep:              "2m",
-			MaxSleep:              "30m",
-			DefaultSleep:          "10m",
+			MinSleep:              "15m",
+			MaxSleep:              "60m",
+			DefaultSleep:          "30m",
 			Jitter:                floatPtr(0.2),
 			SupervisorProbability: floatPtr(0.1),
 			Router:                RouterConfig{QualityFloor: 3},

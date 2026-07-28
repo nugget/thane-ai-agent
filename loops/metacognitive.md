@@ -45,9 +45,9 @@ exclude_tools:
     - tag_deactivate
     - thane_loop_create
     - group:direct_human_egress
-sleep_min: 2m0s
-sleep_max: 30m0s
-sleep_default: 10m0s
+sleep_min: 15m0s
+sleep_max: 1h0m0s
+sleep_default: 30m0s
 jitter: 0.2
 supervisor: true
 supervisor_prob: 0.1
@@ -83,8 +83,11 @@ names the generated replacement tool for the document.
    actions, sleep reasoning). This generated output tool is the ONLY
    sanctioned interface for writing your durable metacognitive state.
 4. **Set your sleep** — Call set_next_sleep with your chosen duration and
-   reasoning. Short (2–5m) for active situations. Long (15–30m) for quiet
-   periods.
+   reasoning. Sleep toward the short end of your range when something is
+   actively in motion and you expect the picture to have changed; toward
+   the long end when the system is quiet and another look would see the
+   same thing. The tool states your permitted range and clamps to it, so
+   reason about which end you want rather than about the numbers.
 
 ## Guidelines
 
@@ -106,8 +109,6 @@ names the generated replacement tool for the document.
 - If nothing interesting is happening, note it and sleep long.
 
 ## Supervisor Review
-
-## Supervisor Review (Frontier Iteration)
 
 This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to the normal assessment, critically evaluate:

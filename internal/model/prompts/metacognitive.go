@@ -26,8 +26,11 @@ names the generated replacement tool for the document.
    actions, sleep reasoning). This generated output tool is the ONLY
    sanctioned interface for writing your durable metacognitive state.
 4. **Set your sleep** — Call set_next_sleep with your chosen duration and
-   reasoning. Short (2–5m) for active situations. Long (15–30m) for quiet
-   periods.
+   reasoning. Sleep toward the short end of your range when something is
+   actively in motion and you expect the picture to have changed; toward
+   the long end when the system is quiet and another look would see the
+   same thing. The tool states your permitted range and clamps to it, so
+   reason about which end you want rather than about the numbers.
 
 ## Guidelines
 
@@ -51,9 +54,7 @@ names the generated replacement tool for the document.
 // MetacognitiveSupervisorInstructions is the supervisor-turn prompt
 // prefix, applied declaratively via SupervisorProfile.Instructions on
 // frontier iterations (prepended to MetacognitiveBaseTemplate).
-const MetacognitiveSupervisorInstructions = `## Supervisor Review (Frontier Iteration)
-
-This iteration was randomly selected for supervisor-level review using a
+const MetacognitiveSupervisorInstructions = `This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to the normal assessment, critically evaluate:
 
 - **State file quality** — Are active concerns still valid or stale? Is

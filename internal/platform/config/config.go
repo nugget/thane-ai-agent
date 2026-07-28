@@ -425,7 +425,7 @@ type Config struct {
 	// Metacognitive configures the perpetual metacognitive attention loop.
 	// When enabled, a background goroutine monitors the environment,
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
-	// Defaults: min_sleep 2m, max_sleep 30m, default_sleep 10m, jitter 0.2,
+	// Defaults: min_sleep 15m, max_sleep 60m, default_sleep 30m, jitter 0.2,
 	// supervisor_probability 0.1, router.quality_floor 3 (supervisor 8).
 	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
 
@@ -2261,8 +2261,8 @@ type ServiceLoopConfig struct {
 // MetacognitiveConfig configures the self-regulating metacognitive loop.
 // The loop runs perpetually in a background goroutine, using LLM calls to
 // reason about the environment and self-determine its sleep duration
-// between iterations. See issue #319. Defaults: min_sleep 2m, max_sleep
-// 30m, default_sleep 10m, jitter 0.2, supervisor_probability 0.1,
+// between iterations. See issue #319. Defaults: min_sleep 15m, max_sleep
+// 60m, default_sleep 30m, jitter 0.2, supervisor_probability 0.1,
 // router.quality_floor 3 (supervisor 8).
 type MetacognitiveConfig = ServiceLoopConfig
 
@@ -2926,17 +2926,24 @@ func (c *Config) applyDefaults() {
 
 	// Core service-loop defaults. The three loops share one config shape
 	// ([ServiceLoopConfig]); only their default sleep envelope, supervisor
-	// odds, and routing floors differ. The archivist envelope is wider than
-	// metacog (which runs minutes apart) and narrower than ego (which runs
-	// hours apart): a one-hour default cadence gives the corpus time to
-	// accumulate new evidence between passes without going stale.
+	// odds, and routing floors differ.
+	//
+	// The envelopes widen with the timescale each loop reasons over.
+	// Metacognition watches in-flight behaviour, so it is the tightest —
+	// but tens of minutes rather than the couple of minutes it once
+	// defaulted to, which woke it far more often than it had new
+	// behaviour to observe and spent supervisor turns on the repetition.
+	// These match what the reference install converged on in practice.
+	// The archivist sits between: an hour gives the corpus time to
+	// accumulate new evidence between passes without going stale. Ego
+	// reasons in hours to days.
 	for _, d := range []struct {
 		cfg                              *ServiceLoopConfig
 		minSleep, maxSleep, defaultSleep string
 		jitter, supervisorProb           float64
 		floor, supervisorFloor           int
 	}{
-		{&c.Metacognitive, "2m", "30m", "10m", 0.2, 0.1, 3, 8},
+		{&c.Metacognitive, "15m", "60m", "30m", 0.2, 0.1, 3, 8},
 		{&c.Ego, "30m", "24h", "6h", 0.2, 0.2, 5, 8},
 		{&c.Archivist, "15m", "12h", "1h", 0.2, 0.1, 5, 8},
 	} {
