@@ -176,7 +176,7 @@ a frontier model to catch blind spots.
 
 ### Ego Loop
 
-A long-cycle self-reflection loop that maintains `core/ego.md` — the
+A long-cycle self-reflection loop that maintains `self/ego.md` — the
 agent's own evolving notes on how its thinking is changing, what
 patterns it observes in itself, and honest self-assessment. Runs as a
 service loop with bounded voluntary sleep, supervisor randomization,

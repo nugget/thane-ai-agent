@@ -3616,6 +3616,20 @@ func (c *Config) CoreFile(name string) string {
 	return filepath.Join(root, name)
 }
 
+// SelfFile returns the absolute-or-relative path to a named file in the
+// fixed self document root. When workspace.path is unset, SelfFile returns
+// the empty string.
+func (c *Config) SelfFile(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	root := c.SelfRoot()
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, name)
+}
+
 func (c *Config) validateLoops() error {
 	if c.Loops.MaxRunning < 0 {
 		return fmt.Errorf("loops.max_running must be >= 0, got %d", c.Loops.MaxRunning)
