@@ -101,6 +101,43 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 	return out
 }
 
+// missingDerivedRoot reports a derived root that does not exist on disk.
+//
+// For a declared root, silence is right: validate creates nothing, and serve
+// bootstraps a missing signing root and births it, so calling it unadmitted
+// would be a false alarm about a root that does not exist to judge.
+//
+// That reasoning does not carry to core and self. Serve signs the birth commit
+// it creates with the root's own signing key, and admission then demands that
+// commit be signed by a declared seed signer. Where the two differ — the common
+// case for a derived root, whose seed signers name the operator while its
+// signing key is the agent's — the bootstrap is guaranteed to produce a root
+// serve immediately refuses. Staying quiet there does not avoid a false alarm;
+// it withholds the true one, and leaves `thane validate && thane serve`
+// reporting ready for an instance that cannot start.
+//
+// The operator's alternative is worse still: noticing a root's absence from a
+// list of the roots that are present.
+func missingDerivedRoot(cfg *config.Config, root string, mode documents.VerificationMode) (RootAdmission, bool) {
+	if !config.IsDerivedRootName(root) {
+		return RootAdmission{}, false
+	}
+	path := cfg.CoreRoot()
+	if root == config.SelfRootName {
+		path = cfg.SelfRoot()
+	}
+	return RootAdmission{
+		Root:       root,
+		RepoPath:   path,
+		Mode:       mode,
+		Applicable: true,
+		Err: fmt.Errorf("%s does not exist at %s, and it is derived from the workspace rather than declared, so there is no path to correct. "+
+			"serve would create it and sign its birth commit with roots.%s.git.signing_key, which admission then refuses unless that key is one of roots.%s.seed_signers. "+
+			"fix: restore it from its remote with `git clone <roots.%s.git.remote.url> %s`, or establish it with `thane init` when this is a new instance",
+			root, path, root, root, root, path),
+	}, true
+}
+
 // RootAdmission is one root's admission outcome.
 type RootAdmission struct {
 	// Root is the configured root name, without its trailing colon.
@@ -194,10 +231,13 @@ func (a *App) verifyRootAdmission(root, rootPath string, rootCfg config.Document
 // (buildDocumentRoots), the same policy derivation
 // (documentRootPolicyFromConfig), the same predicate (admissionSeeds), and the
 // same check (checkRootAdmission). The one deliberate difference is that
-// validate never creates anything, so a signing root whose directory does not
-// exist yet is absent from the enumeration rather than bootstrapped — serve
-// would create and birth-commit it, so reporting it as unadmitted would be a
-// false alarm about a root that does not exist to judge.
+// validate never creates anything, so a declared signing root whose directory
+// does not exist yet is absent from the enumeration rather than bootstrapped —
+// serve would create and birth-commit it, so reporting it as unadmitted would
+// be a false alarm about a root that does not exist to judge.
+//
+// core and self are the exception, for the reason [missingDerivedRoot] gives:
+// the bootstrap serve would perform is the very thing admission then refuses.
 func CheckRootAdmission(ctx context.Context, cfg *config.Config) []RootAdmission {
 	if cfg == nil || len(cfg.DocRoots) == 0 {
 		return nil
@@ -217,6 +257,9 @@ func CheckRootAdmission(ctx context.Context, cfg *config.Config) []RootAdmission
 		}
 		rootPath, ok := documentRoots[root]
 		if !ok {
+			if missing, reportable := missingDerivedRoot(cfg, root, mode); reportable {
+				out = append(out, missing)
+			}
 			continue
 		}
 		out = append(out, checkRootAdmission(ctx, root, rootPath, rootCfg, mode, resolver))
