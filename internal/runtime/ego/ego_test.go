@@ -135,8 +135,11 @@ func TestSpec_DeclarativePrompt(t *testing.T) {
 	if strings.Contains(spec.Task, "Supervisor Review") {
 		t.Error("base Task should not include the supervisor section")
 	}
-	// The supervisor-turn prefix is the declarative SupervisorProfile.Instructions.
-	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "Supervisor Review") {
+	// The supervisor-turn prefix is the declarative
+	// SupervisorProfile.Instructions. It is asserted on its content
+	// rather than on a "Supervisor Review" heading: that heading is the
+	// definition document's section, and the instructions are its body.
+	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "critically evaluate") {
 		t.Error("supervisor-turn prefix should live in SupervisorProfile.Instructions")
 	}
 }

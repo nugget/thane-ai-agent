@@ -24,7 +24,7 @@ func TestMetacognitiveBaseTemplate(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
-		"Supervisor Review",         // supervisor content lives in the instructions const
+		"critically evaluate",       // supervisor content lives in the instructions const
 		"file_write",                // file tools are excluded
 		"append_ego_observation",    // removed in #575
 		"Read it carefully",         // ambiguous phrasing, removed
@@ -40,8 +40,10 @@ func TestMetacognitiveBaseTemplate(t *testing.T) {
 func TestMetacognitiveSupervisorInstructions(t *testing.T) {
 	got := MetacognitiveSupervisorInstructions
 
+	// "## Supervisor Review" is the definition document's section
+	// heading, not part of this body.
 	for _, phrase := range []string{
-		"Supervisor Review",
+		"critically evaluate",
 		"Blind spots",
 		"Drift detection",
 	} {

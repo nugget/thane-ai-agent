@@ -34,8 +34,11 @@ func TestEgoBaseTemplate(t *testing.T) {
 func TestEgoSupervisorInstructions(t *testing.T) {
 	got := EgoSupervisorInstructions
 
-	if !strings.Contains(got, "Supervisor Review") {
-		t.Error("supervisor instructions should include the supervisor review section")
+	// The "## Supervisor Review" heading is the definition document's
+	// section, not part of this text — the constant is that section's
+	// body. Asserting on the heading would re-couple them.
+	if !strings.Contains(got, "critically evaluate") {
+		t.Error("supervisor instructions should ask for a critical pass")
 	}
 	// Applied as a prepended prompt prefix via SupervisorProfile.Instructions,
 	// so unlike the old appended augmentation it must carry no surrounding
