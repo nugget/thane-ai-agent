@@ -46,10 +46,10 @@ default:
 
 # Copy default files into embeddable positions for go:embed, and
 # regenerate examples/config.example.yaml from internal/platform/config.
-[doc("Regenerate go:embed inputs (talents, persona) and config.example.yaml")]
+[doc("Regenerate go:embed inputs (talents, core loops, persona) and config.example.yaml")]
 [group('build')]
 generate:
-    go generate ./internal/model/talents/ ./cmd/thane/
+    go generate ./internal/model/talents/ ./internal/app/coreloops/ ./cmd/thane/
     go generate ./internal/platform/config/...
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)

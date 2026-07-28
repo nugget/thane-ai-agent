@@ -43,7 +43,11 @@ type coreServiceRegistration struct {
 
 	// DefinitionSpec builds the persistable loop definition from the
 	// cached config. Only called after ParseAndCache has run.
-	DefinitionSpec func(*App) looppkg.Spec
+	// DefinitionSpec returns the shipped definition for this loop. It
+	// returns an error because the definition is now a document read at
+	// runtime rather than a value built in code, and a malformed one must
+	// stop the boot rather than yield a loop with no prompt.
+	DefinitionSpec func(*App) (looppkg.Spec, error)
 
 	// Hydrate attaches runtime-only hooks (task builder, post-iterate,
 	// etc.) to a stored definition spec. Returns an error when the
@@ -82,8 +86,8 @@ var metacognitiveRegistration = coreServiceRegistration{
 		a.metacogCfg = &cfg
 		return nil
 	},
-	DefinitionSpec: func(a *App) looppkg.Spec {
-		return metacognitive.DefinitionSpec(*a.metacogCfg)
+	DefinitionSpec: func(a *App) (looppkg.Spec, error) {
+		return embeddedCoreLoopSpec(metacognitive.DefinitionName)
 	},
 	Hydrate: func(a *App, spec looppkg.Spec) (looppkg.Spec, error) {
 		if a.metacogCfg == nil {
@@ -104,8 +108,8 @@ var egoRegistration = coreServiceRegistration{
 		a.egoCfg = &cfg
 		return nil
 	},
-	DefinitionSpec: func(a *App) looppkg.Spec {
-		return ego.DefinitionSpec(*a.egoCfg)
+	DefinitionSpec: func(a *App) (looppkg.Spec, error) {
+		return embeddedCoreLoopSpec(ego.DefinitionName)
 	},
 	Hydrate: func(a *App, spec looppkg.Spec) (looppkg.Spec, error) {
 		if a.egoCfg == nil {
@@ -126,8 +130,8 @@ var archivistRegistration = coreServiceRegistration{
 		a.archivistCfg = &cfg
 		return nil
 	},
-	DefinitionSpec: func(a *App) looppkg.Spec {
-		return archivist.DefinitionSpec(*a.archivistCfg)
+	DefinitionSpec: func(a *App) (looppkg.Spec, error) {
+		return embeddedCoreLoopSpec(archivist.DefinitionName)
 	},
 	Hydrate: func(a *App, spec looppkg.Spec) (looppkg.Spec, error) {
 		if a.archivistCfg == nil {

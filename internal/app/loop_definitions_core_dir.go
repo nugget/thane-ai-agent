@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/app/coreloops"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -132,7 +133,15 @@ func decodeCoreLoopDefinition(path string) (looppkg.Spec, error) {
 		return looppkg.Spec{}, fmt.Errorf("read %s: %w", file, err)
 	}
 
-	sections := splitCoreLoopSections(string(raw))
+	return parseCoreLoopDocument(string(raw), file)
+}
+
+// parseCoreLoopDocument turns one definition document into a spec. It is
+// shared by the on-disk loader and the embedded defaults so a shipped
+// document and an operator's override are held to exactly the same
+// contract.
+func parseCoreLoopDocument(raw, file string) (looppkg.Spec, error) {
+	sections := splitCoreLoopSections(raw)
 	specBlock, ok := sections[coreLoopSpecHeading]
 	if !ok {
 		return looppkg.Spec{}, fmt.Errorf("%s: no %q section; a loop definition carries its spec in a yaml block under that heading", file, "## "+coreLoopSpecHeading)
@@ -323,4 +332,24 @@ func expandExcludeToolTokens(excludes []string) []string {
 		add(exclude)
 	}
 	return out
+}
+
+// embeddedCoreLoopSpec returns the shipped definition for a core service
+// loop.
+//
+// This is the built-in default, and it is a document rather than a Go
+// function so that what ships and what an operator overrides are the
+// same artifact in the same format. A missing or invalid embedded
+// document is a build-time mistake reaching runtime, so it fails loudly
+// rather than degrading to a loop with no prompt.
+func embeddedCoreLoopSpec(name string) (looppkg.Spec, error) {
+	raw, err := coreloops.Documents.ReadFile("defaults/" + name + ".md")
+	if err != nil {
+		return looppkg.Spec{}, fmt.Errorf("no shipped definition document for core loop %q: %w", name, err)
+	}
+	spec, err := parseCoreLoopDocument(string(raw), name+".md")
+	if err != nil {
+		return looppkg.Spec{}, err
+	}
+	return spec, nil
 }
