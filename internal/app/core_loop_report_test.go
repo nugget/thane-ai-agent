@@ -2,6 +2,8 @@ package app
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -196,5 +198,58 @@ func TestMalformedDefinitionIsAuthoringNotEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "broken.md") {
 		t.Errorf("err = %v, want the file named", err)
+	}
+}
+
+// TestCoreLoopReportSurfacesAnUnreadableDirectory covers the gap between
+// "no loops here" and "cannot tell". The loader refuses to boot over a
+// directory it cannot read; a report that returned nothing for the same
+// condition would certify an instance about to be rejected, which is the
+// exact drift this check exists to close.
+func TestCoreLoopReportSurfacesAnUnreadableDirectory(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{"metacognitive.md": facetedCoreLoop})
+	dir := filepath.Join(core, coreLoopsDirName)
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Skipf("cannot remove read permission: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("directory is still readable (running as root?)")
+	}
+
+	if _, err := loadCoreLoopDefinitions(core); err == nil {
+		t.Fatal("loadCoreLoopDefinitions accepted an unreadable directory")
+	}
+	reports := CheckCoreLoopDefinitions(coreLoopConfig(core))
+	if len(reports) != 1 || reports[0].OK() {
+		t.Fatalf("reports = %#v, want one failure for the unreadable directory", reports)
+	}
+}
+
+// TestCoreLoopReportRefusesASymlinkTheLoaderRefuses mirrors the loader's
+// regular-file rule. A symlink here reads content from outside the
+// signed root while looking like part of it, which is the one thing a
+// definition living in core is meant to rule out — so the check that
+// runs before a boot has to refuse exactly what the boot refuses.
+func TestCoreLoopReportRefusesASymlinkTheLoaderRefuses(t *testing.T) {
+	core := writeCoreLoop(t, map[string]string{"metacognitive.md": facetedCoreLoop})
+	outside := filepath.Join(t.TempDir(), "elsewhere.md")
+	if err := os.WriteFile(outside, []byte(facetedCoreLoop), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	link := filepath.Join(core, coreLoopsDirName, "smuggled.md")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	if _, err := loadCoreLoopDefinitions(core); err == nil {
+		t.Fatal("loadCoreLoopDefinitions accepted a symlinked definition")
+	}
+	report := findCoreLoopReport(t, CheckCoreLoopDefinitions(coreLoopConfig(core)), "smuggled.md")
+	if report.OK() {
+		t.Fatal("the report certifies a symlink the loader refuses")
+	}
+	if !strings.Contains(report.Error, "not a regular file") {
+		t.Errorf("error = %q, want the loader's own refusal", report.Error)
 	}
 }

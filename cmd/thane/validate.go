@@ -385,10 +385,17 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 
 // indentBlock prefixes every line of s, so a multi-line error stays
 // visibly part of the entry it belongs to.
+//
+// It prefixes and nothing else. An earlier version trimmed each line
+// first, which is the same mistake as trimming porcelain output: a yaml
+// decode error indents its own detail lines under the message they
+// belong to, and flattening that throws away structure the error author
+// put there deliberately. Only the trailing newline goes, and only so
+// the caller's own newline does not double.
 func indentBlock(s, prefix string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	for i, line := range lines {
-		lines[i] = prefix + strings.TrimSpace(line)
+		lines[i] = prefix + line
 	}
 	return strings.Join(lines, "\n")
 }

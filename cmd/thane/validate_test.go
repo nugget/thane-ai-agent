@@ -416,3 +416,15 @@ func TestRunValidate_ReportsCoreLoopDefinitions(t *testing.T) {
 		t.Fatalf("report should name the loop the document defines:\n%s", out)
 	}
 }
+
+// TestIndentBlockPreservesInteriorStructure guards against re-trimming.
+// A yaml decode error indents its detail lines under the message they
+// belong to; flattening them discards structure the error author put
+// there, which is the same mistake as trimming porcelain columns.
+func TestIndentBlockPreservesInteriorStructure(t *testing.T) {
+	got := indentBlock("yaml: unmarshal errors:\n  line 40: field sleep_mim not found\n", "      ")
+	want := "      yaml: unmarshal errors:\n        line 40: field sleep_mim not found"
+	if got != want {
+		t.Errorf("indentBlock() =\n%q\nwant\n%q", got, want)
+	}
+}

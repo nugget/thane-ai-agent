@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,6 +69,13 @@ type CoreLoopDefinition struct {
 // OK reports whether this document would load at boot.
 func (d CoreLoopDefinition) OK() bool { return d.Err == nil }
 
+// newFailedCoreLoopReport builds an entry for something that never got
+// as far as parsing. Err and Error carry the same value: one is what
+// callers branch on, the other is what the JSON report renders.
+func newFailedCoreLoopReport(file string, err error) CoreLoopDefinition {
+	return CoreLoopDefinition{File: file, Err: err, Error: err.Error()}
+}
+
 // CheckCoreLoopDefinitions reads every definition document under
 // <core>/loops and reports what each one would produce.
 //
@@ -101,15 +109,31 @@ func CheckCoreLoopDefinitions(cfg *config.Config) []CoreLoopDefinition {
 	dir = filepath.Join(dir, coreLoopsDirName)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		// A missing directory is ordinary and reports nothing. Anything
+		// else — unreadable, a permissions problem, a broken mount — is
+		// a finding: the loader refuses to boot over it, so a pre-flight
+		// check that stayed silent would certify a directory serve
+		// cannot read.
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return []CoreLoopDefinition{newFailedCoreLoopReport(coreLoopsDirName, fmt.Errorf("read %s: %w", dir, err))}
 	}
 
 	names := make([]string, 0, len(entries))
+	// Recorded rather than skipped. The loader refuses a symlink here —
+	// it would read content from outside the signed root while looking
+	// like part of it — so passing over one would let this check
+	// certify a directory serve is about to reject.
+	irregular := make(map[string]os.FileMode, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			continue
 		}
 		names = append(names, entry.Name())
+		if !entry.Type().IsRegular() {
+			irregular[entry.Name()] = entry.Type()
+		}
 	}
 	sort.Strings(names)
 
@@ -119,6 +143,10 @@ func CheckCoreLoopDefinitions(cfg *config.Config) []CoreLoopDefinition {
 
 	results := make([]CoreLoopDefinition, 0, len(names))
 	for _, name := range names {
+		if mode, bad := irregular[name]; bad {
+			results = append(results, newFailedCoreLoopReport(name, errNotRegularCoreLoopFile(filepath.Join(dir, name), mode)))
+			continue
+		}
 		result := CoreLoopDefinition{File: name}
 		spec, err := decodeCoreLoopDefinition(filepath.Join(dir, name))
 		if err != nil {
