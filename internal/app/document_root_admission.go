@@ -126,15 +126,25 @@ func missingDerivedRoot(cfg *config.Config, root string, mode documents.Verifica
 	if root == config.SelfRootName {
 		path = cfg.SelfRoot()
 	}
+	// RepoPath stays empty: it reports the repository admission judged, and
+	// admission never ran here. Naming a directory that does not exist would
+	// tell a script reading validate --json that there was a repo to inspect.
+	// The path belongs in the error, where it reads as the thing that is
+	// absent rather than the thing that was checked.
+	//
+	// The config keys are named without a top-level prefix on purpose. This
+	// check is driven by cfg.DocRoots, which is populated from either the
+	// current roots: shape or the legacy doc_roots: one, and an operator on
+	// the legacy shape searching for "roots.self" finds nothing. Naming the
+	// fields is accurate under both.
 	return RootAdmission{
 		Root:       root,
-		RepoPath:   path,
 		Mode:       mode,
 		Applicable: true,
 		Err: fmt.Errorf("%s does not exist at %s, and it is derived from the workspace rather than declared, so there is no path to correct. "+
-			"serve would create it and sign its birth commit with roots.%s.git.signing_key, which admission then refuses unless that key is one of roots.%s.seed_signers. "+
-			"fix: restore it from its remote with `git clone <roots.%s.git.remote.url> %s`, or establish it with `thane init` when this is a new instance",
-			root, path, root, root, root, path),
+			"serve would create it and sign its birth commit with this root's git.signing_key, which admission then refuses unless that key is one of its seed_signers. "+
+			"fix: restore it from its remote with `git clone <the root's git.remote.url> %s`, or establish it with `thane init` when this is a new instance",
+			root, path, path),
 	}, true
 }
 

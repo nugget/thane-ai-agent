@@ -67,6 +67,18 @@ func TestCheckRootAdmissionReportsMissingDerivedRoots(t *testing.T) {
 			if !strings.Contains(got.Err.Error(), "git clone") || !strings.Contains(got.Err.Error(), "thane init") {
 				t.Errorf("error should teach both recovery paths, got: %v", got.Err)
 			}
+			// RepoPath reports the repository admission judged, and admission
+			// never ran. Populating it with a directory that does not exist
+			// would tell a script reading validate --json otherwise.
+			if got.RepoPath != "" {
+				t.Errorf("RepoPath = %q, want empty for a root that was never judged", got.RepoPath)
+			}
+			// cfg.DocRoots is fed by either the current roots: shape or the
+			// legacy doc_roots: one, so a fully-qualified key would be wrong
+			// for half of readers.
+			if strings.Contains(got.Err.Error(), "roots."+root) {
+				t.Errorf("error should name config fields without a top-level prefix, got: %v", got.Err)
+			}
 		})
 	}
 }
