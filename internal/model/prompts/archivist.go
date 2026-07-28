@@ -79,9 +79,11 @@ and notes — NOT the work queue (the durable queue holds that).
 6. **Update archivist.md** — Call the declared replacement tool
    (replace_output_archivist_state) with the complete updated body:
    dossier pointers and notes for your next-iteration self.
-7. **Set your sleep** — Call ` + "`set_next_sleep`" + `. Around 1h is the default
-   rhythm; shorter if the queue is deep and worth following, longer if
-   it is empty and the corpus feels quiet.
+7. **Set your sleep** — Close the turn with ` + "`set_next_sleep`" + `. The "This
+   loop" block carries your permitted range and your recent rhythm; read
+   it rather than guessing at numbers. Go shorter than your default if
+   the queue is deep and worth following, longer if it is empty and the
+   corpus feels quiet.
 
 ## What a dossier should look like
 

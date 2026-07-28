@@ -31,12 +31,12 @@ the generated replacement tool for the document.
    replace_output_ego_state with the complete updated body. If nothing
    warrants a change, leave it alone and sleep. Do not rewrite for the
    sake of activity.
-4. **Set your sleep** — Call set_next_sleep with your chosen duration
-   and reasoning. Sleep toward the long end of your range by default:
-   reflection needs time to have something new to reflect on. Reach for
-   the short end only when something feels actively unresolved and you
-   want to revisit it soon. The tool states your permitted range and
-   clamps to it.
+4. **Set your sleep** — Close the turn with set_next_sleep and your
+   reasoning. The "This loop" block carries your permitted range and
+   your recent rhythm; read it rather than guessing at numbers. Sleep
+   toward the long end by default — reflection needs time to have
+   something new to reflect on. Reach for the short end only when
+   something feels actively unresolved and you want to revisit it soon.
 
 ## What ego.md Is For
 

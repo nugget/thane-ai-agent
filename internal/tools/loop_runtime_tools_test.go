@@ -236,15 +236,13 @@ func TestSetNextSleepForCurrentServiceLoop(t *testing.T) {
 	}
 
 	var got struct {
-		Status       string `json:"status"`
-		LoopName     string `json:"loop_name"`
-		Requested    string `json:"requested"`
-		Applied      string `json:"applied"`
-		Clamped      bool   `json:"clamped"`
-		SleepMin     string `json:"sleep_min"`
-		SleepMax     string `json:"sleep_max"`
-		SleepDefault string `json:"sleep_default"`
-		Reason       string `json:"reason"`
+		Status        string                 `json:"status"`
+		LoopName      string                 `json:"loop_name"`
+		Requested     string                 `json:"requested"`
+		Applied       string                 `json:"applied"`
+		Clamped       bool                   `json:"clamped"`
+		SleepEnvelope *looppkg.SleepEnvelope `json:"sleep_envelope"`
+		Reason        string                 `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal set_next_sleep: %v", err)
@@ -252,11 +250,16 @@ func TestSetNextSleepForCurrentServiceLoop(t *testing.T) {
 	if got.Status != "ok" || got.LoopName != "battery_watch" {
 		t.Fatalf("response = %#v", got)
 	}
-	if got.Requested != "5m" || got.Applied != "5m0s" || got.Clamped {
-		t.Fatalf("sleep response = %#v, want requested=5m applied=5m0s clamped=false", got)
+	if got.Requested != "5m" || got.Applied != "5m" || got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=5m applied=5m clamped=false", got)
 	}
-	if got.SleepMin != "2m0s" || got.SleepMax != "30m0s" || got.SleepDefault != "10m0s" {
-		t.Fatalf("bounds = %#v, want 2m/30m/10m", got)
+	// The envelope rides back in the same shape the canonical row and the
+	// self-context block carry, so a loop reads one fact one way.
+	if got.SleepEnvelope == nil {
+		t.Fatal("sleep_envelope missing; the result is what tells a clamped caller what it was clamped to")
+	}
+	if got.SleepEnvelope.Min != "2m" || got.SleepEnvelope.Max != "30m" || got.SleepEnvelope.Default != "10m" {
+		t.Fatalf("envelope = %#v, want 2m/30m/10m", got.SleepEnvelope)
 	}
 	if got.Reason != "quiet monitoring interval" {
 		t.Fatalf("reason = %q, want quiet monitoring interval", got.Reason)
@@ -286,8 +289,8 @@ func TestSetNextSleepClampsNumericMinutes(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal set_next_sleep: %v", err)
 	}
-	if got.Requested != "1m" || got.Applied != "2m0s" || !got.Clamped {
-		t.Fatalf("sleep response = %#v, want requested=1m applied=2m0s clamped=true", got)
+	if got.Requested != "1m" || got.Applied != "2m" || !got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=1m applied=2m clamped=true", got)
 	}
 }
 
@@ -314,8 +317,8 @@ func TestSetNextSleepAcceptsLargeFloatMinutesWithoutScientificNotation(t *testin
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal set_next_sleep: %v", err)
 	}
-	if got.Requested != "1000000m" || got.Applied != "30m0s" || !got.Clamped {
-		t.Fatalf("sleep response = %#v, want requested=1000000m applied=30m0s clamped=true", got)
+	if got.Requested != "1000000m" || got.Applied != "30m" || !got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=1000000m applied=30m clamped=true", got)
 	}
 }
 

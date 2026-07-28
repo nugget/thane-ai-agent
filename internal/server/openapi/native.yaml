@@ -1516,6 +1516,37 @@ components:
         current_sleep_duration:
           type: [string, "null"]
           description: Unsigned-second self-paced sleep interval honored this cycle (e.g. "5940s").
+        sleep_envelope:
+          type: [object, "null"]
+          description: |
+            The cadence a self-pacing loop may choose within — the bounds
+            set_next_sleep clamps to, the interval used when it chooses
+            nothing, and the randomization applied on top. Configuration
+            rather than telemetry, so it is present on a stored definition
+            as well as a running loop; null on anything with no periodic
+            timer (containers, event-driven loops, one-shot tasks).
+            Durations are Go duration literals ("15m", "24h") rather than
+            the row's seconds convention, because they are knob values the
+            caller passes back verbatim rather than clock readings.
+          properties:
+            min: { type: string, description: Shortest sleep this loop may request. }
+            max: { type: string, description: Longest sleep this loop may request. }
+            default: { type: string, description: Interval used when an iteration ends without choosing one. }
+            jitter:
+              type: number
+              description: Fraction of the chosen sleep the runtime randomizes by, in either direction (0.2 = ±20%). Omitted when jitter is off.
+        last_sleep:
+          type: [string, "null"]
+          description: How long the most recent sleep actually lasted (e.g. "28m"); shorter than last_sleep_planned when a notification cut it short. Null before the first sleep and on event-driven loops.
+        last_sleep_planned:
+          type: [string, "null"]
+          description: How long that sleep was scheduled for. Equal to last_sleep on an ordinary wake.
+        wakes_last_24h:
+          type: [integer, "null"]
+          description: Iterations begun in the trailing day, counting the one in flight — the cadence actually achieved, as against the permitted one in sleep_envelope.
+        last_supervisor_delta:
+          type: [string, "null"]
+          description: Signed-second delta to the most recent supervisor review (e.g. "-15120s"); null when none has run. The wall-clock companion to supervisor_iters_ago, which counts turns rather than time.
         context_fill_pct:
           type: [integer, "null"]
           description: Last input tokens as a percentage of the context window; null for handler-only loops.

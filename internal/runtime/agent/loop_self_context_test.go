@@ -25,8 +25,15 @@ func TestLoopSelfContextProvider_RendersCurrentLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
-	if !strings.Contains(out, "### This loop") || !strings.Contains(out, "ego · service") {
-		t.Errorf("expected the ego loop's self-context block, got %q", out)
+	// Heading for the section boundary, JSON for the state — the shape
+	// docs/model-facing-context.md prescribes. The loop package owns the
+	// payload's contents; this only checks the provider wired the right
+	// loop's block through.
+	if !strings.Contains(out, "### This loop") || !strings.Contains(out, "```json") {
+		t.Errorf("expected a self-context block with a JSON payload, got %q", out)
+	}
+	if !strings.Contains(out, `"name": "ego"`) || !strings.Contains(out, `"operation": "service"`) {
+		t.Errorf("expected the ego loop's state, got %q", out)
 	}
 
 	// No loop_id in context (e.g. a delegate or ad-hoc turn) → empty, not an error.
