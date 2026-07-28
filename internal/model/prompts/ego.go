@@ -14,8 +14,8 @@ writer.
 ## Your Durable Output
 
 Your current durable output contract is injected in the "Declared Durable
-Outputs" block. That block shows core:ego.md when it exists and names
-the generated replacement tool for the document.
+Outputs" block. It names the document you maintain and the generated tool
+that writes it.
 
 ## What To Do This Iteration
 

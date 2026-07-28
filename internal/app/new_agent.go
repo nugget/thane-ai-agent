@@ -52,15 +52,23 @@ func (a *App) initAgentLoop(s *newState) error {
 	}
 	s.resolver = resolver
 
-	// Resolve fixed core prompt files if a workspace is configured. The
-	// core context provider reads them fresh on every turn, so paths are
-	// enough at startup.
+	// Resolve the fixed prompt files if a workspace is configured. The core
+	// context provider reads them fresh on every turn, so paths are enough at
+	// startup.
+	//
+	// ego.md reads from self, not core, and is the one file here that does.
+	// Axioms, persona, and mission are what the operator declares Thane to be;
+	// ego.md is what Thane has made of that, so it is written by a loop and
+	// lives under the agent's own signer policy. It is injected beside them
+	// because that is where it is useful to read, not because it shares their
+	// authority — and the injection has to follow the document, or the ego loop
+	// writes into a root nothing reads back.
 	var axiomsFile, personaFile, missionFile, egoFile string
 	if cfg.Workspace.Path != "" {
 		axiomsFile = resolvePath(coreFilePath(cfg.Workspace.Path, "axioms.md"), nil)
 		personaFile = resolvePath(coreFilePath(cfg.Workspace.Path, "persona.md"), nil)
 		missionFile = resolvePath(coreFilePath(cfg.Workspace.Path, "mission.md"), nil)
-		egoFile = resolvePath(coreFilePath(cfg.Workspace.Path, "ego.md"), nil)
+		egoFile = resolvePath(selfFilePath(cfg.Workspace.Path, "ego.md"), nil)
 	}
 
 	s.resolvedCorePromptFiles = corePromptFilesForStartupVerification(logger, axiomsFile, personaFile, missionFile, egoFile)

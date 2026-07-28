@@ -22,7 +22,7 @@ completion: none
 outputs:
     - name: ego_state
       type: maintained_document
-      ref: core:ego.md
+      ref: self:ego.md
       mode: replace
       purpose: 'Self-reflection written by the ego loop, for the agent: how the agent''s thinking is evolving, behavioral patterns it notices in itself, observations about its relationships, genuine open questions, and honest self-assessment. Read every turn via the agent''s core context. NOT a task list, status report, or operational notes.'
 tags:
@@ -71,8 +71,8 @@ writer.
 ## Your Durable Output
 
 Your current durable output contract is injected in the "Declared Durable
-Outputs" block. That block shows core:ego.md when it exists and names
-the generated replacement tool for the document.
+Outputs" block. It names the document you maintain and the generated tool
+that writes it.
 
 ## What To Do This Iteration
 

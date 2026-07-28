@@ -243,10 +243,11 @@ type Config struct {
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
 
 	// Workspace configures the agent's sandboxed file system access.
-	// The workspace root is also the anchor for Thane's fixed core
-	// document root at {workspace.path}/core, which holds canonical
-	// always-on files at stable locations such as axioms.md, persona.md,
-	// ego.md, mission.md, and metacognitive.md.
+	// The workspace root is also the anchor for Thane's two derived
+	// document roots. {workspace.path}/core holds what the operator
+	// declares Thane to be — axioms.md, persona.md, mission.md — and
+	// {workspace.path}/self holds what Thane has made of that, written
+	// by the core service loops: ego.md, metacognitive.md, archivist.md.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Roots is the unified document-root config. Each entry names one
@@ -438,7 +439,7 @@ type Config struct {
 	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
 
 	// Ego configures the self-reflection loop. When enabled, a long-cycle
-	// service loop maintains core/ego.md via a declared maintained-document
+	// service loop maintains self/ego.md via a declared maintained-document
 	// output, with supervisor randomization for periodic frontier review.
 	// Defaults: min_sleep 30m, max_sleep 24h, default_sleep 6h, jitter 0.2,
 	// supervisor_probability 0.2, router.quality_floor 5 (supervisor 8).
@@ -2276,7 +2277,7 @@ type MetacognitiveConfig = ServiceLoopConfig
 
 // EgoConfig configures the self-reflection ego loop. The loop runs as a
 // service loop: bounded voluntary sleep, supervisor randomization, and a
-// declared maintained-document output at core/ego.md. Replaces the legacy
+// declared maintained-document output at self/ego.md. Replaces the legacy
 // periodic_reflection scheduled task. Defaults: min_sleep 30m, max_sleep
 // 24h, default_sleep 6h, jitter 0.2, supervisor_probability 0.2,
 // router.quality_floor 5 (supervisor 8).
@@ -3610,6 +3611,20 @@ func (c *Config) CoreFile(name string) string {
 		return ""
 	}
 	root := c.CoreRoot()
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, name)
+}
+
+// SelfFile returns the absolute-or-relative path to a named file in the
+// fixed self document root. When workspace.path is unset, SelfFile returns
+// the empty string.
+func (c *Config) SelfFile(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	root := c.SelfRoot()
 	if root == "" {
 		return ""
 	}
