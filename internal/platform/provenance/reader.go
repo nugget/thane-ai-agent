@@ -53,6 +53,12 @@ type Revision struct {
 	Timestamp time.Time
 	// Message is the commit subject.
 	Message string
+	// Trailers are the commit message's git trailers, keyed by trailer name.
+	// Writes made through a document root carry the turn that produced them
+	// here — the model, loop, session, and request — so a reader can attribute
+	// a revision without joining against the conversation store. Nil when the
+	// commit carries none.
+	Trailers map[string]string
 	// Signer describes who signed this revision, populated only when
 	// [RevisionOptions.WithSigners] is set; nil otherwise.
 	Signer *CommitSigner
@@ -217,7 +223,7 @@ func describeRevision(ctx context.Context, repoPath, filename, commit, selector 
 	if commit == "" {
 		return Revision{}, fmt.Errorf("no revision of %s at or before %q", filename, selector)
 	}
-	meta, err := runGitText(ctx, repoPath, "log", "-1", "--format=%H%x00%aI%x00%s", commit)
+	meta, err := runGitText(ctx, repoPath, "log", "-1", "--format=%H%x00%aI%x00%s%x00"+trailerFormat, commit)
 	if err != nil {
 		return Revision{}, fmt.Errorf("describe revision %s: %w", shorten(commit), err)
 	}
@@ -352,7 +358,7 @@ func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename s
 	// Fold signature attribution into the same log call when requested, so a
 	// page costs one git invocation rather than one verify per revision.
 	// Fetch one extra entry to detect whether an older page exists.
-	format := "%H%x00%aI%x00%s"
+	format := "%H%x00%aI%x00%s%x00" + trailerFormat
 	logArgs := func() []string {
 		return []string{"log", "--format=" + format, fmt.Sprintf("-n%d", limit+1), "--end-of-options", start, "--", filename}
 	}
@@ -401,34 +407,6 @@ func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename s
 		page.Revisions = append(page.Revisions, revs[i])
 	}
 	return page, nil
-}
-
-// parseRevisionLine parses a log line "hash\x00RFC3339\x00subject", optionally
-// followed by "\x00%G?\x00%GS\x00%GF" when withSigner is set.
-func parseRevisionLine(line string, withSigner bool) (Revision, error) {
-	fields := 3
-	if withSigner {
-		fields = 6
-	}
-	parts := strings.SplitN(line, "\x00", fields)
-	if len(parts) < 3 {
-		return Revision{}, fmt.Errorf("malformed revision line %q", line)
-	}
-	t, err := time.Parse(time.RFC3339, parts[1])
-	if err != nil {
-		return Revision{}, fmt.Errorf("parse revision timestamp %q: %w", parts[1], err)
-	}
-	rev := Revision{
-		Commit:    parts[0],
-		Short:     shorten(parts[0]),
-		Timestamp: t,
-		Message:   parts[2],
-	}
-	if withSigner && len(parts) == 6 {
-		cs := parseCommitSigner(parts[3], parts[4], parts[5])
-		rev.Signer = &cs
-	}
-	return rev, nil
 }
 
 func shorten(hash string) string {
