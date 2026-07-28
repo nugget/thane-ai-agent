@@ -60,7 +60,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_history",
-		Description:          "List the revision history of one managed document by semantic ref like `kb:network/vlans.md`, newest first. Only git-backed roots have history — `doc_roots` reports `revisions: true` for those. Each revision has a short `rev` hash (feed it to `doc_diff`/`doc_at`), an `index` (0 is newest), an `age` delta plus absolute `timestamp`, the commit message, and a `signer` (`verified`, `principal`, `kind`: agent or operator). Paginate older by passing `before` set to the returned `next_before`.",
+		Description:          "List the revision history of one managed document by semantic ref like `kb:network/vlans.md`, newest first. Only git-backed roots have history — `doc_roots` reports `revisions: true` for those. Each revision has a short `rev` hash (feed it to `doc_diff`/`doc_at`), an `index` (0 is newest), an `age` delta plus absolute `timestamp`, the commit message, and a `signer` (`verified`, `principal`, `kind`: agent or operator). Revisions written by a loop also carry `authored_by`: the `model` that composed them, plus `loop_id`, `conversation`, `session`, `request`, `tool_call`, `iteration`, and `core_head` — the core root's commit at the time, which pins the axioms, persona, mission, and talents that revision was written under. A revision with no `authored_by` was not written by a loop. Paginate older by passing `before` set to the returned `next_before`.",
 		ContentResolveExempt: []string{"ref", "before"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -113,7 +113,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_at",
-		Description:          "Recall one managed document's content as of a past revision. `rev` accepts a `rev` hash from `doc_history`, `HEAD`/`latest` (default), an RFC3339 timestamp, or a delta like `-7d`. Returns the frontmatter, outline, and body as of that revision, plus `verify_status` and the `signer`. When the revision is not trusted, the content is returned under `unverified_body` instead of `body`.",
+		Description:          "Recall one managed document's content as of a past revision. `rev` accepts a `rev` hash from `doc_history`, `HEAD`/`latest` (default), an RFC3339 timestamp, or a delta like `-7d`. Returns the frontmatter, outline, and body as of that revision, plus `verify_status` and the `signer`. When the revision was written by a loop, `authored_by` names the `model` that composed it and the `core_head` it was written under, so you can recall what you thought alongside what you were at the time. When the revision is not trusted, the content is returned under `unverified_body` instead of `body`.",
 		ContentResolveExempt: []string{"ref", "rev"},
 		Parameters: map[string]any{
 			"type": "object",
