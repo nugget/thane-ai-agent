@@ -44,22 +44,23 @@ func resolveRootPaths(root, rootPath string, gitCfg config.DocumentRootGitConfig
 }
 
 // documentRootPaths returns the path prefixes for this instance's document
-// roots, with the reserved core root forced to the location derived from
-// workspace.path.
+// roots, with the reserved derived roots — core and self — forced to the
+// locations derived from workspace.path.
 //
-// core is what makes this worth centralizing. It carries policy under
-// roots.core but never a path, so it is simply absent from cfg.Paths as
-// loaded and appears only once derived. Any caller that enumerates roots
-// without this step silently omits it — which for a per-root check means
-// reporting on every root except the one holding the config that decides what
-// the instance trusts. Boot derives core before building its resolver;
-// anything that wants boot's answer has to derive it the same way, which is
-// why this is a function rather than a step each caller remembers.
+// The derived roots are what make this worth centralizing. They carry
+// policy under roots.core / roots.self but never a path, so they are
+// simply absent from cfg.Paths as loaded and appear only once derived.
+// Any caller that enumerates roots without this step silently omits them
+// — which for a per-root check means reporting on every root except the
+// one holding the config that decides what the instance trusts. Boot
+// derives them before building its resolver; anything that wants boot's
+// answer has to derive them the same way, which is why this is a
+// function rather than a step each caller remembers.
 //
-// The returned map is a copy. Creating the core directory is left to the
+// The returned map is a copy. Creating the directories is left to the
 // caller, so read-only callers stay read-only.
 func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]string {
-	out := make(map[string]string, len(cfg.Paths)+1)
+	out := make(map[string]string, len(cfg.Paths)+2)
 	for name, path := range cfg.Paths {
 		out[name] = path
 	}
@@ -67,11 +68,17 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 		return out
 	}
 	// Both derived roots get the same treatment, so adding one is an
-	// entry here rather than a second copy of this loop.
-	for rootName, derived := range map[string]string{
-		config.CoreRootName: cfg.CoreRoot(),
-		config.SelfRootName: cfg.SelfRoot(),
+	// entry here rather than a second copy of this loop. A slice, not a
+	// map: iteration order decides log order, and a diagnostic that
+	// shuffles between runs reads as two different problems.
+	for _, derivedRoot := range []struct {
+		name string
+		path string
+	}{
+		{config.CoreRootName, cfg.CoreRoot()},
+		{config.SelfRootName, cfg.SelfRoot()},
 	} {
+		rootName, derived := derivedRoot.name, derivedRoot.path
 		if derived == "" {
 			continue
 		}
