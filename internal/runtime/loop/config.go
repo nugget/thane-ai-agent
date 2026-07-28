@@ -462,6 +462,9 @@ type IterationResult struct {
 	RequestID string
 	// Model is the LLM model used for this iteration.
 	Model string
+	// FinishReason is the agent runner's terminal reason. Values other than
+	// "stop" expose semantic exhaustion such as illegal_tool or token_budget.
+	FinishReason string
 	// InputTokens is the number of input tokens consumed.
 	InputTokens int
 	// OutputTokens is the number of output tokens produced.
@@ -511,6 +514,8 @@ type IterationSnapshot struct {
 	RequestID string `json:"request_id,omitempty"`
 	// Model is the LLM model used.
 	Model string `json:"model,omitempty"`
+	// FinishReason is the runner terminal reason for this iteration.
+	FinishReason string `json:"finish_reason,omitempty"`
 	// InputTokens consumed by this iteration.
 	InputTokens int `json:"input_tokens,omitempty"`
 	// OutputTokens produced by this iteration.

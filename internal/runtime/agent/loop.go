@@ -1541,6 +1541,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Warn("request complete", append(attrs, "error", err.Error())...)
 			return
 		}
+		if resp != nil && resp.Exhausted {
+			// Exhaustion is a semantic failure even when the engine returned a
+			// syntactically valid fallback response. Keep the ordinary
+			// response path, but put the outcome on the operator/agent
+			// attention surface instead of hiding it in INFO telemetry.
+			log.Warn("request exhausted", attrs...)
+			return
+		}
 		log.Info("request complete", attrs...)
 	}()
 

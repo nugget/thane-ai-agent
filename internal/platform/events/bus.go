@@ -7,6 +7,7 @@ package events
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,6 +27,9 @@ const (
 	SourceScheduler = "scheduler"
 	// SourceLoop identifies events from persistent loop goroutines.
 	SourceLoop = "loop"
+	// SourceLog identifies warning and error records promoted from the
+	// structured logger for live operator and agent observability.
+	SourceLog = "log"
 )
 
 // Kind constants describe the type of event within a source.
@@ -151,6 +155,11 @@ const (
 	// mailbox_items) and do not emit this. Data: loop_id, loop_name,
 	// conversation_id (the in-flight turn's), item_id, pending_items.
 	KindLoopMailboxArrival = "loop_mailbox_arrival"
+
+	// KindLogRecord signals an operator-significant structured log record.
+	// Data: level, message, source_file, source_line, plus the record's
+	// structured attributes.
+	KindLogRecord = "log_record"
 )
 
 // Event represents a single operational event published by a component.
@@ -176,6 +185,7 @@ type Bus struct {
 	// Unsubscribe to accept <-chan Event (the caller's view) without
 	// an illegal type conversion.
 	recvToSend map[<-chan Event]chan Event
+	dropped    atomic.Uint64
 }
 
 // New creates a new event bus ready for use.
@@ -200,8 +210,19 @@ func (b *Bus) Publish(e Event) {
 		case ch <- e:
 		default:
 			// Subscriber is full — drop the event rather than block.
+			b.dropped.Add(1)
 		}
 	}
+}
+
+// DroppedCount returns the cumulative number of subscriber deliveries dropped
+// because a subscriber buffer was full. One published event can increment the
+// count more than once when multiple subscribers are slow.
+func (b *Bus) DroppedCount() uint64 {
+	if b == nil {
+		return 0
+	}
+	return b.dropped.Load()
 }
 
 // Subscribe returns a channel that receives published events. The

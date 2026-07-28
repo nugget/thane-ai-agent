@@ -1773,6 +1773,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.mu.Unlock()
 
 				snap.Model = result.Model
+				snap.FinishReason = result.FinishReason
 				snap.RequestID = result.RequestID
 				snap.InputTokens = result.InputTokens
 				snap.OutputTokens = result.OutputTokens
@@ -1817,6 +1818,7 @@ func (l *Loop) run(ctx context.Context) {
 					"loop_id":         l.id,
 					"loop_name":       l.config.Name,
 					"model":           result.Model,
+					"finish_reason":   result.FinishReason,
 					"request_id":      result.RequestID,
 					"input_tokens":    result.InputTokens,
 					"output_tokens":   result.OutputTokens,
@@ -1877,6 +1879,7 @@ func (l *Loop) run(ctx context.Context) {
 				postResult := IterationResult{
 					ConvID:         convID,
 					Model:          result.Model,
+					FinishReason:   result.FinishReason,
 					InputTokens:    result.InputTokens,
 					OutputTokens:   result.OutputTokens,
 					ToolsUsed:      result.ToolsUsed,
@@ -2247,6 +2250,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 	return &IterationResult{
 		ConvID:             req.ConversationID,
 		Model:              resp.Model,
+		FinishReason:       resp.FinishReason,
 		InputTokens:        resp.InputTokens,
 		OutputTokens:       resp.OutputTokens,
 		ContextWindow:      resp.ContextWindow,

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -58,12 +59,15 @@ type IndexHandler struct {
 // All handlers derived from the same root via WithAttrs/WithGroup
 // share a single indexShared.
 type indexShared struct {
-	db     *sql.DB
-	ch     chan indexEntry
-	done   chan struct{}
-	mu     sync.RWMutex // serializes Handle sends with Close
-	closed bool         // true after Close; protected by mu
-	once   sync.Once    // guards Close
+	db          *sql.DB
+	ch          chan indexEntry
+	done        chan struct{}
+	report      slog.Handler
+	mu          sync.RWMutex // serializes Handle sends with Close
+	closed      bool         // true after Close; protected by mu
+	once        sync.Once    // guards Close
+	dropped     atomic.Uint64
+	writeErrors atomic.Uint64
 }
 
 // indexEntry is the set of fields written to SQLite for one log record.
@@ -95,9 +99,10 @@ const indexBufSize = 4096
 // pending entries and release the background goroutine.
 func NewIndexHandler(inner slog.Handler, db *sql.DB) *IndexHandler {
 	s := &indexShared{
-		db:   db,
-		ch:   make(chan indexEntry, indexBufSize),
-		done: make(chan struct{}),
+		db:     db,
+		ch:     make(chan indexEntry, indexBufSize),
+		done:   make(chan struct{}),
+		report: inner,
 	}
 	h := &IndexHandler{
 		inner:  inner,
@@ -115,10 +120,10 @@ func (h *IndexHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // Handle delegates to the wrapped handler and then asynchronously
 // indexes the record into SQLite.
 func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
-	// Delegate to the wrapped handler first (raw log output).
-	if err := h.inner.Handle(ctx, r); err != nil {
-		return err
-	}
+	// Delegate to the wrapped handler first (raw log output), but keep the
+	// index sink independent. One failed dataset write must not erase the
+	// queryable copy of the same record.
+	innerErr := h.inner.Handle(ctx, r)
 
 	// Build the index entry. Normalize the level string so custom
 	// levels (e.g., LevelTrace = -8) are stored as "TRACE" rather
@@ -170,11 +175,36 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		select {
 		case h.shared.ch <- entry:
 		default:
+			count := h.shared.dropped.Add(1)
+			h.shared.reportFailure("log index queue full; record not indexed",
+				count, "dropped_records", nil)
 		}
 	}
 	h.shared.mu.RUnlock()
 
-	return nil
+	return innerErr
+}
+
+// IndexStats reports loss in the query index. The append-only datasets and
+// stdout are independent sinks, so non-zero values mean query completeness
+// degraded rather than that the original log record disappeared everywhere.
+type IndexStats struct {
+	// DroppedRecords is the number of records rejected because the async
+	// index queue was full.
+	DroppedRecords uint64 `json:"dropped_records"`
+	// WriteErrors is the number of SQLite prepare or insert failures.
+	WriteErrors uint64 `json:"write_errors"`
+}
+
+// Stats returns a lock-free snapshot of index loss counters.
+func (h *IndexHandler) Stats() IndexStats {
+	if h == nil || h.shared == nil {
+		return IndexStats{}
+	}
+	return IndexStats{
+		DroppedRecords: h.shared.dropped.Load(),
+		WriteErrors:    h.shared.writeErrors.Load(),
+	}
 }
 
 // WithAttrs returns a new handler with the given attributes pre-set.
@@ -320,14 +350,15 @@ func (h *IndexHandler) drain() {
 
 	stmt, err := h.shared.db.Prepare(insertSQL)
 	if err != nil {
-		// If we can't prepare the statement, there's nothing useful we
-		// can do. Log entries will be silently dropped.
+		count := h.shared.writeErrors.Add(1)
+		h.shared.reportFailure("log index writer failed to prepare; indexing stopped",
+			count, "write_errors", err)
 		return
 	}
 	defer stmt.Close()
 
 	for e := range h.shared.ch {
-		_, _ = stmt.Exec(
+		if _, err := stmt.Exec(
 			e.Timestamp.UTC().Format(time.RFC3339Nano),
 			e.Level,
 			e.Msg,
@@ -342,8 +373,31 @@ func (h *IndexHandler) drain() {
 			nullString(e.SourceFile),
 			nullInt(e.SourceLine),
 			nullString(e.Attrs),
-		)
+		); err != nil {
+			count := h.shared.writeErrors.Add(1)
+			h.shared.reportFailure("log index write failed; record not indexed",
+				count, "write_errors", err)
+		}
 	}
+}
+
+// reportFailure bypasses IndexHandler and writes directly to its wrapped
+// handler, avoiding recursive attempts to index the warning about index loss.
+// Reports are emitted on the first occurrence and powers of two thereafter so
+// a broken SQLite sink remains visible without producing a second log storm.
+func (s *indexShared) reportFailure(message string, count uint64, countKey string, err error) {
+	if s.report == nil || (count != 1 && count&(count-1) != 0) {
+		return
+	}
+	record := slog.NewRecord(time.Now(), slog.LevelWarn, message, 0)
+	record.AddAttrs(
+		slog.String("component", "logging_index"),
+		slog.Uint64(countKey, count),
+	)
+	if err != nil {
+		record.AddAttrs(slog.Any("error", err))
+	}
+	_ = s.report.Handle(context.Background(), record)
 }
 
 // classifyAttr routes a single attribute to either a promoted column

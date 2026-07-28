@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -61,6 +62,26 @@ func TestIndexHandler_BasicWrite(t *testing.T) {
 	}
 	if !reqID.Valid || reqID.String != "r_abc123" {
 		t.Errorf("request_id = %v, want %q", reqID, "r_abc123")
+	}
+}
+
+func TestIndexHandlerWritesWhenInnerSinkFails(t *testing.T) {
+	db := openTestDB(t)
+	wantErr := fmt.Errorf("dataset unavailable")
+	h := NewIndexHandler(errorHandler{err: wantErr}, db)
+	record := slog.NewRecord(time.Now(), slog.LevelWarn, "retention degraded", 0)
+
+	if err := h.Handle(context.Background(), record); err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("Handle error = %v, want %v", err, wantErr)
+	}
+	h.Close()
+
+	var message string
+	if err := db.QueryRow(`SELECT msg FROM log_entries LIMIT 1`).Scan(&message); err != nil {
+		t.Fatal(err)
+	}
+	if message != "retention degraded" {
+		t.Fatalf("indexed message = %q", message)
 	}
 }
 
@@ -263,6 +284,33 @@ func TestIndexHandler_Enabled(t *testing.T) {
 	}
 	if !h.Enabled(context.Background(), slog.LevelError) {
 		t.Error("should be enabled for ERROR when inner is WARN")
+	}
+}
+
+func TestIndexHandler_ReportFailureBypassesIndexAndThrottles(t *testing.T) {
+	var output bytes.Buffer
+	shared := &indexShared{
+		report: slog.NewJSONHandler(&output, nil),
+	}
+
+	shared.reportFailure("log index write failed; record not indexed", 1, "write_errors", fmt.Errorf("disk full"))
+	first := output.String()
+	if first == "" {
+		t.Fatal("first failure was not reported")
+	}
+	if !bytes.Contains(output.Bytes(), []byte(`"component":"logging_index"`)) ||
+		!bytes.Contains(output.Bytes(), []byte(`"write_errors":1`)) ||
+		!bytes.Contains(output.Bytes(), []byte(`"error":"disk full"`)) {
+		t.Fatalf("warning = %s", output.String())
+	}
+
+	shared.reportFailure("log index write failed; record not indexed", 3, "write_errors", fmt.Errorf("disk full"))
+	if output.String() != first {
+		t.Fatal("non-power-of-two failure should be throttled")
+	}
+	shared.reportFailure("log index write failed; record not indexed", 4, "write_errors", fmt.Errorf("disk full"))
+	if output.String() == first {
+		t.Fatal("power-of-two failure should be reported")
 	}
 }
 

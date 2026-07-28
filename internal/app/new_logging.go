@@ -55,6 +55,7 @@ func (a *App) initLogging(augmentedDirs []string) error {
 		RequestsEnabled: cfg.Logging.DatasetEnabled(logging.DatasetRequests),
 		AccessEnabled:   cfg.Logging.DatasetEnabled(logging.DatasetAccess),
 	})
+	handler = logging.NewEventHandler(handler, a.eventBus)
 
 	// Open the SQLite log index alongside the structured dataset root.
 	// If filesystem logging is disabled (no logRoot) or the DB fails to

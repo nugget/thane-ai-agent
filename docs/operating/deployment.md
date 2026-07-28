@@ -18,6 +18,17 @@ just install                  # -> ~/Thane/bin/thane
 just service-install          # -> ~/Library/LaunchAgents/info.nugget.thane.plist
 launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist
 just logs                     # Tail the latest ~/Thane/archive/sources/thane/events/... JSONL segment
+just alerts ~/Thane WARN 2    # Follow new WARN+ records across every structured log dataset
+```
+
+`just logs` is the broad operational event stream. `just alerts` reads the
+structured SQLite index and follows only new warnings and errors, including
+agent-request records that live in the requests dataset rather than events.
+It emits one compact JSON object per line, so ordinary filters compose cleanly:
+
+```bash
+just alerts ~/Thane WARN 2 | grep 'illegal tool call'
+just alerts ~/Thane ERROR 2 | jq .
 ```
 
 ### macOS Local Network Permission

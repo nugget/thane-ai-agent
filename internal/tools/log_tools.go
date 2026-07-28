@@ -66,7 +66,7 @@ func (r *Registry) registerLogsQuery() {
 				},
 				"subsystem": map[string]any{
 					"type":        "string",
-					"enum":        []string{"agent", "delegate", "metacog", "scheduler", "api"},
+					"enum":        []string{"agent", "delegate", "signal", "metacog", "scheduler", "loop", "api"},
 					"description": "Filter by subsystem.",
 				},
 				"tool": map[string]any{

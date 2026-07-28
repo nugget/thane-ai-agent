@@ -159,10 +159,11 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			// get filtered out.
 			Tags: []string{"email"},
 			Profile: router.LoopProfile{
-				Mission:      "email_triage",
-				LocalOnly:    "false",
-				QualityFloor: 5,
-				ExtraHints:   map[string]string{"source": "email_poll"},
+				Mission:          "email_triage",
+				LocalOnly:        "false",
+				QualityFloor:     5,
+				DelegationGating: "disabled",
+				ExtraHints:       map[string]string{"source": "email_poll"},
 			},
 			Metadata: map[string]string{
 				"subsystem": "email",

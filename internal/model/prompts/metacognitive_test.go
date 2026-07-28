@@ -18,6 +18,8 @@ func TestMetacognitiveBaseTemplate(t *testing.T) {
 		"sanctioned interface",
 		"how recently metacognitive.md was",
 		"Do not copy raw sensor timestamps",
+		"Production WARN/ERROR wakes",
+		"use logs_query",
 	} {
 		if !strings.Contains(got, phrase) {
 			t.Errorf("base template missing expected phrase %q", phrase)
