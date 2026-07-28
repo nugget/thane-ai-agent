@@ -314,7 +314,7 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 	}
 
 	// Containers exist and are inert grouping containers.
-	for _, name := range []string{cognitionContainerName, homeAssistantContainerName, pollersContainerName} {
+	for _, name := range []string{selfContainerName, homeAssistantContainerName, pollersContainerName} {
 		s, ok := byName[name]
 		if !ok {
 			t.Errorf("grouping container %q missing from base specs", name)
@@ -342,7 +342,7 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 		}
 	}
 
-	assertNested(cognitionContainerName, ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName)
+	assertNested(selfContainerName, ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName)
 	assertNested(homeAssistantContainerName, haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, mqtt.DefaultHandlerLoopName)
 	// The four pollers and the two triage handlers that used to hang off core.
 	assertNested(pollersContainerName,
@@ -370,7 +370,7 @@ func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
 		t.Errorf("bare config seeded a gated container, want none: %v", bare)
 	}
 
-	if cog := names(builtInContainerDefinitionSpecsForTest(coreServiceTestConfig())); !cog[cognitionContainerName] {
+	if cog := names(builtInContainerDefinitionSpecsForTest(coreServiceTestConfig())); !cog[selfContainerName] {
 		t.Error("cognition container missing when core loops enabled")
 	}
 

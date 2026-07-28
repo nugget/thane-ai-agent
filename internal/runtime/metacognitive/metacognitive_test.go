@@ -117,8 +117,8 @@ func TestHydratedSpec(t *testing.T) {
 	if spec.Outputs[0].Name != "metacognitive_state" {
 		t.Errorf("Outputs[0].Name = %q, want metacognitive_state", spec.Outputs[0].Name)
 	}
-	if spec.Outputs[0].Ref != "core:metacognitive.md" {
-		t.Errorf("Outputs[0].Ref = %q, want core:metacognitive.md", spec.Outputs[0].Ref)
+	if spec.Outputs[0].Ref != "self:metacognitive.md" {
+		t.Errorf("Outputs[0].Ref = %q, want self:metacognitive.md", spec.Outputs[0].Ref)
 	}
 }
 

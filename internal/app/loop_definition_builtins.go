@@ -29,8 +29,15 @@ const (
 // members that are themselves base definitions (dynamically-spawned members,
 // e.g. channel loops, need a different mechanism — they spawn before the
 // definition-driven containers are live).
+// selfContainerName deliberately matches [config.SelfRootName]. The
+// loops in this container are exactly the loops that write that document
+// root, so one name covers one idea: a reader seeing `parent: self`
+// beside an output ref of `self:metacognitive.md` is looking at two
+// views of the same thing. They stay separate constants because a loop
+// container and a document root are different namespaces, and renaming
+// one should not silently rename the other.
 const (
-	cognitionContainerName     = "cognition"
+	selfContainerName          = "self"
 	homeAssistantContainerName = "home-assistant"
 	pollersContainerName       = "pollers"
 )
@@ -67,8 +74,8 @@ func builtInContainerDefinitionSpecs(cfg *config.Config, declared map[string]str
 	var specs []looppkg.Spec
 
 	if anyCoreServiceLoopWanted(cfg, declared) {
-		specs = append(specs, containerSpec(cognitionContainerName,
-			"Core cognition loops: reflection, identity, and memory."))
+		specs = append(specs, containerSpec(selfContainerName,
+			"The loops that attend to Thane itself: reflection, identity, and memory. They maintain the self document root."))
 	}
 	if cfg.HomeAssistant.Configured() || cfg.MQTT.Configured() {
 		specs = append(specs, containerSpec(homeAssistantContainerName,

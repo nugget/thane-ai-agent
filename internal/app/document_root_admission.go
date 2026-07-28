@@ -63,27 +63,34 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 	for name, path := range cfg.Paths {
 		out[name] = path
 	}
-	derivedCore := ""
-	if cfg.Workspace.Path != "" {
-		derivedCore = coreRootPath(cfg.Workspace.Path)
-	}
-	if derivedCore == "" {
+	if cfg.Workspace.Path == "" {
 		return out
 	}
-	for name, path := range out {
-		if strings.TrimSuffix(name, ":") != "core" {
+	// Both derived roots get the same treatment, so adding one is an
+	// entry here rather than a second copy of this loop.
+	for rootName, derived := range map[string]string{
+		config.CoreRootName: cfg.CoreRoot(),
+		config.SelfRootName: cfg.SelfRoot(),
+	} {
+		if derived == "" {
 			continue
 		}
-		if strings.TrimSpace(path) != derivedCore && logger != nil {
-			logger.Info("ignoring configured core path; core root is derived from workspace.path",
-				"configured_key", name,
-				"configured_path", path,
-				"derived_path", derivedCore,
-			)
+		for name, path := range out {
+			if strings.TrimSuffix(name, ":") != rootName {
+				continue
+			}
+			if strings.TrimSpace(path) != derived && logger != nil {
+				logger.Info("ignoring configured root path; this root is derived from workspace.path",
+					"root", rootName,
+					"configured_key", name,
+					"configured_path", path,
+					"derived_path", derived,
+				)
+			}
+			delete(out, name)
 		}
-		delete(out, name)
+		out[rootName] = derived
 	}
-	out["core"] = derivedCore
 	return out
 }
 
