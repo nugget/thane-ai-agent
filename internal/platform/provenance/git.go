@@ -383,6 +383,11 @@ func (s *Store) gitWithEnv(ctx context.Context, env []string, stdin *bytes.Reade
 // error when the path is not a git repository or carries no commits yet, so a
 // caller recording HEAD as context can distinguish "no history" from a hash.
 func HeadCommit(ctx context.Context, repoPath string) (string, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, gitTimeout)
+		defer cancel()
+	}
 	out, err := runGitText(ctx, repoPath, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("resolve HEAD of %s: %w", repoPath, err)
