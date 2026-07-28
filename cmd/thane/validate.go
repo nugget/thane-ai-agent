@@ -205,25 +205,12 @@ func writeAdmissionText(w io.Writer, results []app.RootAdmission) {
 			// because it will not.
 			marker = "!"
 		}
-		fmt.Fprintf(w, "  %s %s (%s)\n%s\n", marker, result.Root, result.Mode, indentDetail(result.Err.Error()))
+		// Reasons here are not always one line: anything wrapping a git failure
+		// carries git's stderr, which is an error followed by usage advice, and
+		// printed raw those continuation lines start at column zero — losing the
+		// shape that says which root a reason belongs to.
+		fmt.Fprintf(w, "  %s %s (%s)\n%s\n", marker, result.Root, result.Mode, indentBlock(result.Err.Error(), "      "))
 	}
-}
-
-// indentDetail renders a failure reason under a report entry, holding every
-// line at the entry's indent.
-//
-// Reasons that reach here are not always one line. Anything wrapping a git
-// failure carries git's stderr, which is often an error followed by usage
-// advice, and printed raw those continuation lines start at column zero — so
-// the report loses the shape that tells a reader which root each reason
-// belongs to, exactly when they are scanning it to find out what broke.
-func indentDetail(detail string) string {
-	const indent = "      "
-	lines := strings.Split(strings.TrimRight(detail, "\n"), "\n")
-	for i, line := range lines {
-		lines[i] = indent + strings.TrimRight(line, " \t")
-	}
-	return strings.Join(lines, "\n")
 }
 
 // integrityError converts a failing report into the error that makes

@@ -462,3 +462,19 @@ func TestAdmissionReportIndentsEveryLineOfAReason(t *testing.T) {
 		t.Error("continuation lines were lost rather than indented")
 	}
 }
+
+// A reason that indents its own detail — a yaml decode error nesting lines
+// under the message they belong to — must keep that structure. Prefixing adds
+// depth; it must not flatten what the error's author put there.
+func TestAdmissionReportPreservesAReasonsOwnIndentation(t *testing.T) {
+	nested := errors.New("parse config: yaml: unmarshal errors:\n  line 12: cannot unmarshal !!str into int\n  line 19: field roots not found")
+
+	var buf bytes.Buffer
+	writeAdmissionText(&buf, []app.RootAdmission{
+		{Root: "core", Mode: documents.VerificationRequired, Applicable: true, Err: nested},
+	})
+
+	if !strings.Contains(buf.String(), "        line 12: cannot unmarshal") {
+		t.Errorf("the reason's own two-space nesting was flattened:\n%s", buf.String())
+	}
+}
