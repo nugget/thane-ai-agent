@@ -313,3 +313,106 @@ func TestAdmissionReporting(t *testing.T) {
 		})
 	}
 }
+
+// TestCoreLoopReporting covers the mapping from what a definition
+// document did to what an operator sees and what the exit code says.
+// The parsing itself is tested against the real loader in internal/app;
+// what matters here is that a document which will not load stops
+// `validate && serve` while a document that merely hangs in the wrong
+// place does not — since that is exactly how serve treats them.
+func TestCoreLoopReporting(t *testing.T) {
+	broken := errors.New("metacognitive.md: field not_a_field not found in type loop.Spec")
+
+	tests := []struct {
+		name        string
+		definitions []app.CoreLoopDefinition
+		wantErr     bool
+		wantOut     []string
+	}{
+		{
+			name: "loadable documents report their generated tools",
+			definitions: []app.CoreLoopDefinition{{
+				File:       "metacognitive.md",
+				Name:       "metacognitive",
+				ParentName: "cognition",
+				Tools:      []string{"publish_output_metacognitive_state"},
+			}},
+			wantOut: []string{"✓ Core loop definitions: 1", "metacognitive → cognition", "publish_output_metacognitive_state"},
+		},
+		{
+			name: "a document that will not load fails the guard",
+			definitions: []app.CoreLoopDefinition{{
+				File:  "metacognitive.md",
+				Err:   broken,
+				Error: broken.Error(),
+			}},
+			wantErr: true,
+			wantOut: []string{"✗ Core loop definitions: 1 of 1 failed", "not_a_field"},
+		},
+		{
+			name: "a warning is printed but certifies",
+			definitions: []app.CoreLoopDefinition{{
+				File:     "metacognitive.md",
+				Name:     "metacognitive",
+				Warnings: []string{"declares no parent_name, so this core service loop will hang at the graph root"},
+			}},
+			wantOut: []string{"metacognitive → (root)", "! declares no parent_name"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			writeCoreLoopText(&buf, tt.definitions)
+			err := coreLoopError(tt.definitions)
+
+			switch {
+			case tt.wantErr && err == nil:
+				t.Fatal("a document that will not load must fail validate; serve refuses over it")
+			case tt.wantErr && exitCodeFor(err) != ExitTerminal:
+				t.Fatalf("exit code = %d, want %d — editing the document is the only fix", exitCodeFor(err), ExitTerminal)
+			case !tt.wantErr && err != nil:
+				t.Fatalf("coreLoopError = %v, want nil", err)
+			}
+			for _, want := range tt.wantOut {
+				if !strings.Contains(buf.String(), want) {
+					t.Errorf("output missing %q:\n%s", want, buf.String())
+				}
+			}
+		})
+	}
+}
+
+// TestRunValidate_ReportsCoreLoopDefinitions is the end-to-end half:
+// a definition document in the workspace's core root reaches the report
+// without the operator naming it. This is the check that was missing —
+// before it, a malformed document was discovered by a boot on the host
+// it was installed to.
+func TestRunValidate_ReportsCoreLoopDefinitions(t *testing.T) {
+	workspace := t.TempDir()
+	loopsDir := filepath.Join(workspace, "core", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "core", "config.yaml"), []byte(minimalValidConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	document := "# Ranch\n\n## Spec\n\n```yaml\nname: ranch_watch\nenabled: true\noperation: service\nsleep_min: 15m\nsleep_max: 12h\nsleep_default: 1h\njitter: 0.2\n```\n\n## Task\n\nWatch.\n"
+	if err := os.WriteFile(filepath.Join(loopsDir, "ranch.md"), []byte(document), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	// core is not a git repository here, so integrity fails and validate
+	// returns that error first. The loop report is still printed, which
+	// is what this asserts: sections report independently.
+	_ = runValidate(&buf, "", workspace, "text")
+
+	out := buf.String()
+	if !strings.Contains(out, "Core loop definitions") {
+		t.Fatalf("a workspace instance with core/loops should get a definition report:\n%s", out)
+	}
+	if !strings.Contains(out, "ranch_watch") {
+		t.Fatalf("report should name the loop the document defines:\n%s", out)
+	}
+}
