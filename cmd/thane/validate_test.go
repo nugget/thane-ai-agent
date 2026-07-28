@@ -428,3 +428,37 @@ func TestIndentBlockPreservesInteriorStructure(t *testing.T) {
 		t.Errorf("indentBlock() =\n%q\nwant\n%q", got, want)
 	}
 }
+
+// A reason wrapping a git failure carries git's stderr, which is often an
+// error line followed by usage advice. Printed raw, those continuation lines
+// start at column zero and the report loses the indentation that tells a reader
+// which root each reason belongs to — precisely when they are scanning it to
+// find out what broke.
+func TestAdmissionReportIndentsEveryLineOfAReason(t *testing.T) {
+	multiline := errors.New("list root commits of /w/core: fatal: ambiguous argument 'HEAD': both revision and filename\n" +
+		"Use '--' to separate paths from revisions, like this:\n" +
+		"'git <command> [<revision>...] -- [<file>...]': exit status 128")
+
+	var buf bytes.Buffer
+	writeAdmissionText(&buf, []app.RootAdmission{
+		{Root: "core", Mode: documents.VerificationRequired, Applicable: true, Err: multiline},
+		{Root: "kb", Mode: documents.VerificationRequired, Applicable: true},
+	})
+
+	// The section header sits at column zero by design; everything under it
+	// belongs to a root and must stay indented beneath one.
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "  ") {
+			t.Errorf("line escapes the report's indentation: %q", line)
+		}
+	}
+	// The detail must still be present in full — indenting it is not a licence
+	// to drop the part that says what to do.
+	if !strings.Contains(buf.String(), "Use '--' to separate paths from revisions") {
+		t.Error("continuation lines were lost rather than indented")
+	}
+}
