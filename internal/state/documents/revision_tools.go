@@ -174,6 +174,7 @@ func (t *Tools) At(ctx context.Context, args AtArgs) (string, error) {
 	parsed := parseMarkdownDocumentParts(relPath, meta, body)
 	now := nowUTC()
 	rev := content.Revision
+	revAuthored, revTrailers := splitRevisionTrailers(rev.Trailers)
 	out := modelRevisionAt{
 		Ref:          args.Ref,
 		Rev:          rev.Short,
@@ -182,6 +183,8 @@ func (t *Tools) At(ctx context.Context, args AtArgs) (string, error) {
 		Age:          promptfmt.FormatDeltaOnly(rev.Timestamp, now),
 		VerifyStatus: revisionVerifyStatus(rev.Signer),
 		Signer:       toModelRevisionSigner(rev.Signer),
+		AuthoredBy:   revAuthored,
+		Trailers:     revTrailers,
 		Title:        parsed.Title,
 		Frontmatter:  modelFrontmatter(parsed.Frontmatter, now),
 		Outline:      parsed.Sections,
@@ -197,12 +200,34 @@ func (t *Tools) At(ctx context.Context, args AtArgs) (string, error) {
 }
 
 type modelRevision struct {
-	Rev       string               `json:"rev"`
-	Index     int                  `json:"index"`
-	Timestamp string               `json:"timestamp"`
-	Age       string               `json:"age,omitempty"`
-	Message   string               `json:"message,omitempty"`
-	Signer    *modelRevisionSigner `json:"signer,omitempty"`
+	Rev        string                   `json:"rev"`
+	Index      int                      `json:"index"`
+	Timestamp  string                   `json:"timestamp"`
+	Age        string                   `json:"age,omitempty"`
+	Message    string                   `json:"message,omitempty"`
+	Signer     *modelRevisionSigner     `json:"signer,omitempty"`
+	AuthoredBy *modelRevisionAuthorship `json:"authored_by,omitempty"`
+	Trailers   map[string]string        `json:"trailers,omitempty"`
+}
+
+// modelRevisionAuthorship names the turn that produced a revision. Absent when
+// the revision was not written by a loop — a hand-authored commit carries no
+// authorship, and that absence is worth reading rather than hiding.
+//
+// The signer says which key vouched for a revision; this says which mind
+// composed it. They answer different questions and a root that reports both is
+// materially better evidence than one reporting either alone.
+type modelRevisionAuthorship struct {
+	Model        string `json:"model,omitempty"`
+	LoopID       string `json:"loop_id,omitempty"`
+	Conversation string `json:"conversation,omitempty"`
+	Session      string `json:"session,omitempty"`
+	Request      string `json:"request,omitempty"`
+	ToolCall     string `json:"tool_call,omitempty"`
+	Iteration    string `json:"iteration,omitempty"`
+	// CoreHead pins the core root's commit at the time of the write, so this
+	// revision can be read beside the identity and talents that produced it.
+	CoreHead string `json:"core_head,omitempty"`
 }
 
 type modelRevisionSigner struct {
@@ -231,29 +256,74 @@ type modelDiff struct {
 }
 
 type modelRevisionAt struct {
-	Ref            string               `json:"ref"`
-	Rev            string               `json:"rev"`
-	Index          int                  `json:"index"`
-	Timestamp      string               `json:"timestamp"`
-	Age            string               `json:"age,omitempty"`
-	VerifyStatus   string               `json:"verify_status"`
-	Signer         *modelRevisionSigner `json:"signer,omitempty"`
-	Title          string               `json:"title,omitempty"`
-	Frontmatter    map[string][]string  `json:"frontmatter,omitempty"`
-	Outline        []Section            `json:"outline,omitempty"`
-	Body           string               `json:"body,omitempty"`
-	UnverifiedBody string               `json:"unverified_body,omitempty"`
+	Ref            string                   `json:"ref"`
+	Rev            string                   `json:"rev"`
+	Index          int                      `json:"index"`
+	Timestamp      string                   `json:"timestamp"`
+	Age            string                   `json:"age,omitempty"`
+	VerifyStatus   string                   `json:"verify_status"`
+	Signer         *modelRevisionSigner     `json:"signer,omitempty"`
+	AuthoredBy     *modelRevisionAuthorship `json:"authored_by,omitempty"`
+	Trailers       map[string]string        `json:"trailers,omitempty"`
+	Title          string                   `json:"title,omitempty"`
+	Frontmatter    map[string][]string      `json:"frontmatter,omitempty"`
+	Outline        []Section                `json:"outline,omitempty"`
+	Body           string                   `json:"body,omitempty"`
+	UnverifiedBody string                   `json:"unverified_body,omitempty"`
 }
 
 func toModelRevision(r RevisionRef, now time.Time) modelRevision {
+	authored, rest := splitRevisionTrailers(r.Trailers)
 	return modelRevision{
-		Rev:       r.Short,
-		Index:     r.Index,
-		Timestamp: r.Timestamp.UTC().Format(time.RFC3339),
-		Age:       promptfmt.FormatDeltaOnly(r.Timestamp, now),
-		Message:   r.Message,
-		Signer:    toModelRevisionSigner(r.Signer),
+		Rev:        r.Short,
+		Index:      r.Index,
+		Timestamp:  r.Timestamp.UTC().Format(time.RFC3339),
+		Age:        promptfmt.FormatDeltaOnly(r.Timestamp, now),
+		Message:    r.Message,
+		Signer:     toModelRevisionSigner(r.Signer),
+		AuthoredBy: authored,
+		Trailers:   rest,
 	}
+}
+
+// splitRevisionTrailers promotes the trailers Thane writes into a named
+// authorship block and returns whatever else the commit carried unchanged.
+// Nothing is dropped: a reconstructed history or an operator's own convention
+// puts trailers here that this build has never heard of, and silently eating
+// them would make the tool a worse witness than plain `git log`.
+func splitRevisionTrailers(trailers map[string]string) (*modelRevisionAuthorship, map[string]string) {
+	if len(trailers) == 0 {
+		return nil, nil
+	}
+	authored := modelRevisionAuthorship{
+		Model:        trailers[TrailerModel],
+		LoopID:       trailers[TrailerLoopID],
+		Conversation: trailers[TrailerConversation],
+		Session:      trailers[TrailerSession],
+		Request:      trailers[TrailerRequest],
+		ToolCall:     trailers[TrailerToolCall],
+		Iteration:    trailers[TrailerIteration],
+		CoreHead:     trailers[TrailerCoreHead],
+	}
+	promoted := map[string]bool{
+		TrailerModel: true, TrailerLoopID: true, TrailerConversation: true,
+		TrailerSession: true, TrailerRequest: true, TrailerToolCall: true,
+		TrailerIteration: true, TrailerCoreHead: true,
+	}
+	var rest map[string]string
+	for key, value := range trailers {
+		if promoted[key] {
+			continue
+		}
+		if rest == nil {
+			rest = make(map[string]string)
+		}
+		rest[key] = value
+	}
+	if authored == (modelRevisionAuthorship{}) {
+		return nil, rest
+	}
+	return &authored, rest
 }
 
 func toModelRevisionSigner(s *RevisionSigner) *modelRevisionSigner {

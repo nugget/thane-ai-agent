@@ -378,3 +378,18 @@ func (s *Store) gitWithEnv(ctx context.Context, env []string, stdin *bytes.Reade
 
 	return nil
 }
+
+// HeadCommit reports the full commit hash at repoPath's HEAD. It returns an
+// error when the path is not a git repository or carries no commits yet, so a
+// caller recording HEAD as context can distinguish "no history" from a hash.
+func HeadCommit(ctx context.Context, repoPath string) (string, error) {
+	out, err := runGitText(ctx, repoPath, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD of %s: %w", repoPath, err)
+	}
+	head := strings.TrimSpace(out)
+	if head == "" {
+		return "", fmt.Errorf("resolve HEAD of %s: no commits", repoPath)
+	}
+	return head, nil
+}
