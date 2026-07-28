@@ -154,9 +154,7 @@ generating plausible-sounding text.
 // ArchivistSupervisorInstructions is the supervisor-turn prompt prefix,
 // applied declaratively via SupervisorProfile.Instructions on frontier
 // iterations (prepended to ArchivistBaseTemplate).
-const ArchivistSupervisorInstructions = `## Supervisor Review (Frontier Iteration)
-
-This iteration was randomly selected for supervisor-level review using a
+const ArchivistSupervisorInstructions = `This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to the normal pass, critically evaluate:
 
 - **Evidence discipline** — Are the dossiers you've authored really

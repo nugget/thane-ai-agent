@@ -216,8 +216,6 @@ generating plausible-sounding text.
 
 ## Supervisor Review
 
-## Supervisor Review (Frontier Iteration)
-
 This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to the normal pass, critically evaluate:
 

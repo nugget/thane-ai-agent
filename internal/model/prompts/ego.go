@@ -32,9 +32,11 @@ the generated replacement tool for the document.
    warrants a change, leave it alone and sleep. Do not rewrite for the
    sake of activity.
 4. **Set your sleep** — Call set_next_sleep with your chosen duration
-   and reasoning. Long sleeps (12–24h) for quiet stretches. Short
-   sleeps (1–2h) only when something feels actively unresolved and you
-   want to revisit it soon.
+   and reasoning. Sleep toward the long end of your range by default:
+   reflection needs time to have something new to reflect on. Reach for
+   the short end only when something feels actively unresolved and you
+   want to revisit it soon. The tool states your permitted range and
+   clamps to it.
 
 ## What ego.md Is For
 
@@ -75,9 +77,7 @@ If it reads like something you'd put in a ticket, it doesn't belong here.
 // EgoSupervisorInstructions is the supervisor-turn prompt prefix, applied
 // declaratively via SupervisorProfile.Instructions on frontier iterations
 // (prepended to EgoBaseTemplate by the loop runtime).
-const EgoSupervisorInstructions = `## Supervisor Review (Frontier Iteration)
-
-This iteration was randomly selected for supervisor-level review using a
+const EgoSupervisorInstructions = `This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to normal reflection, critically evaluate:
 
 - **Document quality** — Is ego.md still substantive self-reflection, or
