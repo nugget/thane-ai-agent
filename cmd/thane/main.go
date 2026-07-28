@@ -545,6 +545,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err != nil {
 		stopSignals()
 		cancel()
+		// A failure in the authored content of the core root — a loop
+		// definition that does not parse — is not resolved by starting
+		// again. Marking it terminal stops the supervisor rather than
+		// letting it re-read the same document until someone notices.
+		var authoring *app.CoreAuthoringError
+		if errors.As(err, &authoring) {
+			return terminal(err)
+		}
 		return err
 	}
 	// LIFO ordering: cancel fires first (stops goroutines), then Close

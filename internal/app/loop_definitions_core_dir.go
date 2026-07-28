@@ -97,7 +97,7 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 		// out. Refused loudly rather than skipped: a definition silently
 		// absent is how a loop stops existing without anyone noticing.
 		if !entry.Type().IsRegular() {
-			return nil, fmt.Errorf("%s is not a regular file (%s); a loop definition must be a file in the signed root, not a link to content outside it", filepath.Join(dir, entry.Name()), entry.Type())
+			return nil, errNotRegularCoreLoopFile(filepath.Join(dir, entry.Name()), entry.Type())
 		}
 		names = append(names, entry.Name())
 	}
@@ -123,6 +123,15 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 		specs = append(specs, spec)
 	}
 	return specs, nil
+}
+
+// errNotRegularCoreLoopFile is the refusal both the loader and the
+// pre-flight report raise for a symlink or device node among the
+// definitions. Shared rather than written twice: the report exists to
+// predict what the loader will do, and two copies of a rule are two
+// rules the moment one of them is edited.
+func errNotRegularCoreLoopFile(path string, mode os.FileMode) error {
+	return fmt.Errorf("%s is not a regular file (%s); a loop definition must be a file in the signed root, not a link to content outside it", path, mode)
 }
 
 // decodeCoreLoopDefinition reads one definition document.

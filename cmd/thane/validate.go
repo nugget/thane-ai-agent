@@ -40,20 +40,22 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 	// Admission needs a loaded config to know which roots exist and whose
 	// signatures may establish them, so it only runs once the config parses.
 	var admission []app.RootAdmission
+	var coreLoops []app.CoreLoopDefinition
 	if loadErr == nil {
 		admission = app.CheckRootAdmission(context.Background(), cfg)
+		coreLoops = app.CheckCoreLoopDefinitions(cfg)
 	}
 	if outputFmt == "json" {
 		// Always emit JSON to stdout, even on failure — scripts may
 		// want the structured error. The error is still returned so
 		// the exit code reflects validity.
-		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity, admission); err != nil {
+		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity, admission, coreLoops); err != nil {
 			return err
 		}
 		if loadErr != nil {
 			return terminal(loadErr)
 		}
-		return firstError(integrityError(integrity), admissionError(admission))
+		return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops))
 	}
 	if loadErr != nil {
 		// Config could not load, but the integrity report is often the
@@ -74,7 +76,68 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		fmt.Fprintln(w)
 		writeAdmissionText(w, admission)
 	}
-	return firstError(integrityError(integrity), admissionError(admission))
+	if len(coreLoops) > 0 {
+		fmt.Fprintln(w)
+		writeCoreLoopText(w, coreLoops)
+	}
+	return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops))
+}
+
+// coreLoopError converts a definition document that will not parse into
+// the error that stops `thane validate && thane serve`.
+//
+// Warnings deliberately do not produce one. A loop that hangs in the
+// wrong place still runs, and a check that refuses to certify a working
+// instance is one an operator learns to skip.
+func coreLoopError(definitions []app.CoreLoopDefinition) error {
+	var bad []string
+	for _, definition := range definitions {
+		if !definition.OK() {
+			bad = append(bad, definition.File)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return terminal(fmt.Errorf("core loop definitions failed to load: %s (see the report above; thane serve will refuse to start)",
+		strings.Join(bad, ", ")))
+}
+
+// writeCoreLoopText prints the per-document report. A failing document
+// prints its whole parse error: these errors already name the file and
+// the field, and that detail is the entire repair.
+func writeCoreLoopText(w io.Writer, definitions []app.CoreLoopDefinition) {
+	failed := 0
+	for _, definition := range definitions {
+		if !definition.OK() {
+			failed++
+		}
+	}
+	if failed == 0 {
+		fmt.Fprintf(w, "✓ Core loop definitions: %d\n", len(definitions))
+	} else {
+		fmt.Fprintf(w, "✗ Core loop definitions: %d of %d failed to load\n", failed, len(definitions))
+	}
+	for _, definition := range definitions {
+		if !definition.OK() {
+			// Indented as a block: a yaml decode error runs to several
+			// lines, and unindented continuations read as a new section
+			// rather than as the rest of this file's failure.
+			fmt.Fprintf(w, "  ✗ %s\n%s\n", definition.File, indentBlock(definition.Err.Error(), "      "))
+			continue
+		}
+		parent := definition.ParentName
+		if parent == "" {
+			parent = "(root)"
+		}
+		fmt.Fprintf(w, "  ✓ %-24s %s → %s\n", definition.File, definition.Name, parent)
+		if len(definition.Tools) > 0 {
+			fmt.Fprintf(w, "      tools: %s\n", strings.Join(definition.Tools, ", "))
+		}
+		for _, warning := range definition.Warnings {
+			fmt.Fprintf(w, "      ! %s\n", warning)
+		}
+	}
 }
 
 // firstError returns the first non-nil error, so validate reports every
@@ -256,7 +319,7 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 
 // writeValidateJSON emits the structured validation report. cfg may be
 // nil when load failed; loadErr is non-nil when validation failed.
-func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report, admission []app.RootAdmission) error {
+func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report, admission []app.RootAdmission, coreLoops []app.CoreLoopDefinition) error {
 	type rootAdmissionJSON struct {
 		Root     string `json:"root"`
 		RepoPath string `json:"repo_path,omitempty"`
@@ -283,17 +346,19 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 	// for scripts piping into jq — even discovery-failure cases get
 	// a path field, possibly empty.
 	result := struct {
-		Path      string                `json:"path"`
-		Valid     bool                  `json:"valid"`
-		Error     string                `json:"error,omitempty"`
-		Summary   map[string]any        `json:"summary,omitempty"`
-		Integrity *coreintegrity.Report `json:"integrity,omitempty"`
-		Roots     []rootAdmissionJSON   `json:"root_admission,omitempty"`
+		Path      string                   `json:"path"`
+		Valid     bool                     `json:"valid"`
+		Error     string                   `json:"error,omitempty"`
+		Summary   map[string]any           `json:"summary,omitempty"`
+		Integrity *coreintegrity.Report    `json:"integrity,omitempty"`
+		Roots     []rootAdmissionJSON      `json:"root_admission,omitempty"`
+		CoreLoops []app.CoreLoopDefinition `json:"core_loop_definitions,omitempty"`
 	}{
 		Path:      cfgPath,
 		Valid:     loadErr == nil,
 		Integrity: integrity,
 		Roots:     roots,
+		CoreLoops: coreLoops,
 	}
 	if loadErr != nil {
 		result.Error = loadErr.Error()
@@ -316,4 +381,21 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
+}
+
+// indentBlock prefixes every line of s, so a multi-line error stays
+// visibly part of the entry it belongs to.
+//
+// It prefixes and nothing else. An earlier version trimmed each line
+// first, which is the same mistake as trimming porcelain output: a yaml
+// decode error indents its own detail lines under the message they
+// belong to, and flattening that throws away structure the error author
+// put there deliberately. Only the trailing newline goes, and only so
+// the caller's own newline does not double.
+func indentBlock(s, prefix string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }

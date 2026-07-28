@@ -15,9 +15,13 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 	// appends only what is not already declared, so a definition living
 	// in the signed core root takes precedence over the same-named
 	// built-in without needing a rule of its own.
+	// Wrapped as authored content: a definition that does not parse is
+	// fixed by editing the document, never by starting again, so the CLI
+	// exits terminally instead of leaving a supervisor to retry the same
+	// bytes forever.
 	coreDefinitions, err := loadCoreLoopDefinitions(a.cfg.Paths["core"])
 	if err != nil {
-		return nil, fmt.Errorf("core loop definitions: %w", err)
+		return nil, coreAuthoring(fmt.Errorf("core loop definitions: %w", err))
 	}
 	baseDefinitions := append(coreDefinitions, a.cfg.Loops.Definitions...)
 	seen := make(map[string]struct{}, len(baseDefinitions))

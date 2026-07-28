@@ -200,7 +200,15 @@ func (c checker) git(args ...string) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	// Only the trailing newline git appends, never leading whitespace.
+	// In `status --porcelain` the first two characters are the staged and
+	// unstaged columns, so a leading space is data: " M path" is modified
+	// in the working tree and "M  path" is staged. Trimming it turned the
+	// first entry of every dirty report into a claim about the index that
+	// was not true, and did it to exactly one line, so the only symptom
+	// was a column that did not line up. Callers wanting a scalar trim
+	// their own value.
+	return strings.TrimRight(string(out), "\n"), nil
 }
 
 func (c checker) coreDirectory(r *Report) bool {
@@ -326,7 +334,7 @@ func (c checker) configTracked(r *Report, headOK bool) bool {
 	}
 	if _, err := c.git("cat-file", "-e", "HEAD:"+c.configName); err != nil {
 		r.Checks = append(r.Checks, Check{Name: "config_committed", Status: StatusFail,
-			Detail: c.configName + " is not committed in core, so the running config has no change history",
+			Detail: c.configName + " is not committed in core, so the config on disk has no change history",
 			Fix:    "git -C " + c.core + " add " + c.configName + " && git -C " + c.core + " commit -S -m 'adopt runtime config into core'"})
 		return false
 	}
@@ -349,8 +357,13 @@ func (c checker) coreClean(r *Report, headOK bool) {
 		return
 	}
 	if out != "" {
+		// "on disk" rather than "running": this package serves both the
+		// boot gate, where something is about to run, and `thane
+		// validate`, where nothing is. A detail that assumes a live
+		// process is false for half its readers, and it is false exactly
+		// when an operator is checking a host before starting it.
 		r.Checks = append(r.Checks, Check{Name: "core_clean", Status: StatusFail,
-			Detail: "core has uncommitted changes to tracked files, so what is running differs from what is signed:\n" + indent(out),
+			Detail: "core has uncommitted changes to tracked files, so what is on disk differs from what is signed:\n" + indent(out),
 			Fix:    "review with: git -C " + c.core + " diff, then commit them: git -C " + c.core + " commit -aS -m 'core update'"})
 		return
 	}
@@ -358,7 +371,7 @@ func (c checker) coreClean(r *Report, headOK bool) {
 		Detail: "no uncommitted changes to tracked files"})
 }
 
-// configSigned verifies that the running config is covered by a commit
+// configSigned verifies that the config in core is covered by a commit
 // signed by a key the instance trusts. This is the check the others
 // exist to make meaningful: history without signatures records what
 // changed but not who was entitled to change it.
@@ -378,7 +391,7 @@ func (c checker) configSigned(r *Report, configOK bool) {
 
 	if status, err := c.git("status", "--porcelain", "--", c.configName); err == nil && strings.TrimSpace(status) != "" {
 		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
-			Detail: c.configName + " has uncommitted changes, so the running config is not the one any signature covers",
+			Detail: c.configName + " has uncommitted changes, so the config on disk is not the one any signature covers",
 			Fix:    "git -C " + c.core + " add " + c.configName + " && git -C " + c.core + " commit -S -m 'update runtime config'"})
 		return
 	}
