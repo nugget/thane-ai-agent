@@ -48,7 +48,10 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 			return nil, fmt.Errorf("%s config: %w", reg.Name, err)
 		}
 		if enabled && !hasDefinition {
-			spec := reg.DefinitionSpec(a)
+			spec, err := reg.DefinitionSpec(a)
+			if err != nil {
+				return nil, fmt.Errorf("%s definition: %w", reg.Name, err)
+			}
 			// The core cognition loops (ego, metacognitive, archivist) live
 			// under the cognition container.
 			spec.ParentName = cognitionContainerName
