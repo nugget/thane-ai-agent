@@ -1396,16 +1396,23 @@ components:
     CoreIdentityEvidence:
       type: object
       description: Birth, active revision, and verification evidence for core.
-      required: [birth, head, verification]
+      required: [birth, current_commit, head, verification]
       properties:
         birth:
           type: object
           description: Founding commit and its asserted chronology.
           allOf:
             - $ref: "#/components/schemas/CoreBirthEvidence"
+        current_commit:
+          type: object
+          description: |
+            Algorithm-qualified object ID of the active core commit. This is
+            the canonical forensic anchor for the core state being reported.
+          allOf:
+            - $ref: "#/components/schemas/GitObjectID"
         head:
           type: object
-          description: Active core revision and worktree posture.
+          description: Active core worktree posture.
           allOf:
             - $ref: "#/components/schemas/CoreHeadEvidence"
         verification:
@@ -1442,14 +1449,9 @@ components:
 
     CoreHeadEvidence:
       type: object
-      description: The active core revision and its local worktree posture.
-      required: [commit, worktree_clean, trust_file_change_count]
+      description: The active core worktree posture.
+      required: [worktree_clean, trust_file_change_count]
       properties:
-        commit:
-          type: object
-          description: Algorithm-qualified object ID of the active core HEAD.
-          allOf:
-            - $ref: "#/components/schemas/GitObjectID"
         worktree_clean:
           type: boolean
           description: Whether tracked core content is clean against HEAD.

@@ -68,7 +68,9 @@ type PublicKeyEvidence struct {
 type CoreEvidence struct {
 	// Birth identifies the signed parentless commit.
 	Birth BirthEvidence `json:"birth"`
-	// Head identifies the active revision and worktree posture.
+	// CurrentCommit is the active core revision and its forensic anchor.
+	CurrentCommit GitObjectID `json:"current_commit"`
+	// Head identifies the active worktree posture.
 	Head HeadEvidence `json:"head"`
 	// Verification reports birth admission and active-tree checks separately.
 	Verification VerificationEvidence `json:"verification"`
@@ -95,10 +97,8 @@ type BirthEvidence struct {
 	Anchor string `json:"anchor"`
 }
 
-// HeadEvidence identifies the active core revision and its worktree posture.
+// HeadEvidence describes the active core worktree posture.
 type HeadEvidence struct {
-	// Commit is the active core HEAD.
-	Commit GitObjectID `json:"commit"`
 	// WorktreeClean reports whether tracked core content matches HEAD.
 	WorktreeClean bool `json:"worktree_clean"`
 	// TrustFileChangeCount is the number of commits that touched the trust file.
@@ -278,8 +278,8 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 				TimeAssurance: "signed_claim",
 				Anchor:        anchorKind(publicKey, seeds),
 			},
+			CurrentCommit: GitObjectID{Algorithm: objectFormat, OID: headCommit},
 			Head: HeadEvidence{
-				Commit:               GitObjectID{Algorithm: objectFormat, OID: headCommit},
 				WorktreeClean:        clean,
 				TrustFileChangeCount: trustChangeCount,
 			},

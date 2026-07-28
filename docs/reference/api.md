@@ -34,8 +34,10 @@ not issue a remote trust verdict. Its stable instance ID and fingerprints are
 recomputed from public material committed in core's single birth commit.
 `core.birth.asserted_at` is the time claimed by that signed commit, with
 `time_assurance: signed_claim`; it is not an independently witnessed
-timestamp. The endpoint never returns private key material, local filesystem
-paths, signer principals, or the contents of `.allowed_signers`.
+timestamp. `core.current_commit` is the algorithm-qualified commit ID of the
+active core document root and is the canonical forensic anchor for the state
+being reported. The endpoint never returns private key material, local
+filesystem paths, signer principals, or the contents of `.allowed_signers`.
 
 ### Router, Registry, and History
 

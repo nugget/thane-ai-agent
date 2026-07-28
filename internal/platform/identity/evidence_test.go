@@ -50,6 +50,9 @@ func TestObserveCoreIdentityEvidence(t *testing.T) {
 			if got.Core.Birth.Commit.Algorithm != "sha1" || got.Core.Birth.Commit.OID == "" {
 				t.Errorf("birth commit = %+v, want algorithm-qualified oid", got.Core.Birth.Commit)
 			}
+			if got.Core.CurrentCommit.Algorithm != "sha1" || got.Core.CurrentCommit.OID != strings.TrimSpace(gitOutput(t, coreDir, "rev-parse", "HEAD")) {
+				t.Errorf("current commit = %+v, want active core HEAD", got.Core.CurrentCommit)
+			}
 			if got.Core.Verification.Admission.Status != EvidenceVerified {
 				t.Errorf("admission = %+v, want verified", got.Core.Verification.Admission)
 			}
