@@ -1,5 +1,5 @@
 // Package ego implements the self-reflection loop that maintains
-// core/ego.md. It runs as a service loop: each iteration is a fresh
+// self/ego.md. It runs as a service loop: each iteration is a fresh
 // conversation with bounded voluntary sleep, supervisor randomization
 // for periodic frontier review, and a declared maintained-document
 // output that pins ego.md to the loop.
