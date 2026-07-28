@@ -79,6 +79,8 @@ complete onboarding guide for Home Assistant users.
 ## Project
 
 - **[History](history.md)** — Timeline from first commit to v0.9.0
+- **[Release Notes](releases/README.md)** — Durable, provenance-tracked
+  archive of every published release and prerelease
 - **[Contributing](../CONTRIBUTING.md)** — Development workflow and
   guidelines
 - **[Release Checklist](release-checklist.md)** — Version bump process
