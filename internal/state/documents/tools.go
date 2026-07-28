@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -99,6 +100,24 @@ func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
 		return "", err
 	}
 	return marshalToolResult(toModelDocumentRecord(doc, nowUTC()))
+}
+
+// Record returns one document as stored, for a caller that needs to
+// shape its own result rather than take the standard read payload.
+//
+// It exists for the facet-level read: choosing a projection means
+// parsing the body against the loop-output contract, which this package
+// deliberately knows nothing about. Exposing the record lets the layer
+// that does know do the work, instead of this one growing a second
+// understanding of what a document's sections mean.
+func (t *Tools) Record(ctx context.Context, ref string) (*DocumentRecord, error) {
+	if t == nil || t.store == nil {
+		return nil, fmt.Errorf("document index not configured")
+	}
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("ref is required")
+	}
+	return t.store.Read(ctx, ref)
 }
 
 // Roots returns summaries of the indexed document roots.
@@ -422,4 +441,21 @@ func clampPositiveLimit(limit int, def int, max int) int {
 		return max
 	}
 	return limit
+}
+
+// MaxToolResultBytes is the size ceiling every document tool result is
+// held to, exported so a caller shaping its own result can decide what
+// to do before it hits the cap rather than after.
+const MaxToolResultBytes = maxToolResultBytes
+
+// MarshalToolResult renders a document tool result under the same size
+// cap every other document tool applies, replacing an oversized payload
+// with a truncation envelope that says so.
+//
+// Exported for the facet-level read, which builds its own result shape
+// but must not thereby opt out of the ceiling: a caller cannot tell
+// which document tool it called from how big the answer is allowed to
+// be, so there is one answer.
+func MarshalToolResult(v any) (string, error) {
+	return marshalToolResult(v)
 }
