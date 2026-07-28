@@ -495,3 +495,61 @@ func TestConfigSignedFallsBackToSeedSigners(t *testing.T) {
 		t.Fatalf("config_signed = %s (%s), want pass: a declared seed signer must keep its authority over core", got.Status, got.Detail)
 	}
 }
+
+// TestCoreCleanPreservesPorcelainStatusColumns guards a report that
+// misstated the thing it exists to report.
+//
+// `git status --porcelain` puts the staged state in column one and the
+// working-tree state in column two, so " M path" is an unstaged edit and
+// "M  path" is a staged one. The output was trimmed as a whole, which
+// removed the leading space of the first entry only — turning one file
+// per report into a claim about the index that was not true, while every
+// other entry stayed correct. A misaligned column was the only symptom.
+func TestCoreCleanPreservesPorcelainStatusColumns(t *testing.T) {
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(core, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Two tracked files so the report has a first entry and a second one
+	// to compare it against; the bug was invisible with only one.
+	first := filepath.Join(core, "aaa.md")
+	second := filepath.Join(core, "bbb.md")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	gitCommitAll(t, core, "core baseline")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	got := checkByName(t, run(t, workspace), "core_clean")
+	if got.Status != StatusFail {
+		t.Fatalf("edited tracked files must fail core_clean: %+v", got)
+	}
+	// Both files are unstaged, so both must carry the identical
+	// two-column prefix. Compared after stripping the report's own
+	// indent, because a Contains check would match the trimmed line
+	// against the indent's trailing space and pass either way.
+	const reportIndent = "      "
+	lines := strings.Split(got.Detail, "\n")[1:]
+	if len(lines) != 2 {
+		t.Fatalf("expected one line per edited file, got:\n%s", got.Detail)
+	}
+	for _, line := range lines {
+		entry, ok := strings.CutPrefix(line, reportIndent)
+		if !ok {
+			t.Fatalf("line is not indented into the report: %q", line)
+		}
+		if !strings.HasPrefix(entry, " M ") {
+			t.Errorf("entry = %q, want the porcelain unstaged prefix %q; a trimmed leading column reports a working-tree edit as staged", entry, " M ")
+		}
+	}
+}

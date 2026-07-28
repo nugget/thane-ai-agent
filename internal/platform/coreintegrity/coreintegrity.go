@@ -200,7 +200,15 @@ func (c checker) git(args ...string) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	// Only the trailing newline git appends, never leading whitespace.
+	// In `status --porcelain` the first two characters are the staged and
+	// unstaged columns, so a leading space is data: " M path" is modified
+	// in the working tree and "M  path" is staged. Trimming it turned the
+	// first entry of every dirty report into a claim about the index that
+	// was not true, and did it to exactly one line, so the only symptom
+	// was a column that did not line up. Callers wanting a scalar trim
+	// their own value.
+	return strings.TrimRight(string(out), "\n"), nil
 }
 
 func (c checker) coreDirectory(r *Report) bool {
