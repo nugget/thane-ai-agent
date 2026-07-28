@@ -19,6 +19,7 @@ const loopIDKey contextKey = "loop_id"
 const channelBindingKey contextKey = "channel_binding"
 const inheritableCapabilityTagsKey contextKey = "inheritable_capability_tags"
 const requestIDKey contextKey = "request_id"
+const modelKey contextKey = "model"
 
 // WithConversationID adds the conversation ID to the context.
 func WithConversationID(ctx context.Context, id string) context.Context {
@@ -46,6 +47,27 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 func RequestIDFromContext(ctx context.Context) string {
 	if id, ok := ctx.Value(requestIDKey).(string); ok {
 		return id
+	}
+	return ""
+}
+
+// WithModel adds the model serving the current iteration to the context, so a
+// tool can record which model authored a side effect. A document root commits
+// this alongside the write: which mind held a thought is a fact about that
+// thought, and it is only knowable here.
+func WithModel(ctx context.Context, model string) context.Context {
+	if model == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, modelKey, model)
+}
+
+// ModelFromContext extracts the model serving the current iteration, or "" when
+// none is set (e.g. outside a model turn). The model can change between
+// iterations of one turn, so this reflects the iteration, not the request.
+func ModelFromContext(ctx context.Context) string {
+	if model, ok := ctx.Value(modelKey).(string); ok {
+		return model
 	}
 	return ""
 }

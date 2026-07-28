@@ -106,6 +106,7 @@ func revisionRefFromProvenance(rev provenance.Revision) documents.RevisionRef {
 		Index:     rev.Index,
 		Timestamp: rev.Timestamp,
 		Message:   rev.Message,
+		Trailers:  rev.Trailers,
 	}
 	if rev.Signer != nil {
 		s := revisionSignerFromProvenance(*rev.Signer)

@@ -18,6 +18,13 @@ import (
 
 type documentRootProvenanceWriter struct {
 	checkout *checkout.Signed
+	// root is the document root's configured name, used to suppress the core
+	// HEAD trailer on core's own writes, where it would only restate the
+	// parent commit git already records.
+	root string
+	// corePath is the core root's repository, read at write time to record
+	// which identity snapshot was in force. Empty disables the trailer.
+	corePath string
 }
 
 type documentRootProvenanceVerifier struct {
@@ -30,7 +37,7 @@ func (w *documentRootProvenanceWriter) Write(ctx context.Context, filename, cont
 	if err != nil {
 		return err
 	}
-	return store.Write(ctx, w.storeFilename(filename), content, message)
+	return store.Write(ctx, w.storeFilename(filename), content, w.withTurnProvenance(ctx, message))
 }
 
 func (w *documentRootProvenanceWriter) Delete(ctx context.Context, filename, message string) error {
@@ -38,7 +45,7 @@ func (w *documentRootProvenanceWriter) Delete(ctx context.Context, filename, mes
 	if err != nil {
 		return err
 	}
-	return store.Delete(ctx, w.storeFilename(filename), message)
+	return store.Delete(ctx, w.storeFilename(filename), w.withTurnProvenance(ctx, message))
 }
 
 func (w *documentRootProvenanceWriter) storeFilename(filename string) string {
@@ -378,7 +385,11 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 		"repo", signed.Store.Path(),
 		"prefix", signed.Prefix,
 	)
-	return &documentRootProvenanceWriter{checkout: signed}, nil
+	return &documentRootProvenanceWriter{
+		checkout: signed,
+		root:     root,
+		corePath: coreRootPath(a.cfg.Workspace.Path),
+	}, nil
 }
 
 func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, rootCfg config.DocumentRootConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
