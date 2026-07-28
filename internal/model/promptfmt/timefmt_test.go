@@ -269,3 +269,55 @@ func TestParseTimeOrDelta(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want string
+	}{
+		{"seconds", 30 * time.Second, "30s"},
+		{"whole minutes drop the seconds term", 15 * time.Minute, "15m"},
+		{"whole hours drop both lower terms", time.Hour, "1h"},
+		{"mixed hours and minutes", 90 * time.Minute, "1h30m"},
+		{"mixed minutes and seconds", 90 * time.Second, "1m30s"},
+		{"a day stays in hours so it parses back", 24 * time.Hour, "24h"},
+		{"all three terms", time.Hour + 2*time.Minute + 3*time.Second, "1h2m3s"},
+		{"sub-second keeps its own unit", 400 * time.Millisecond, "400ms"},
+		{"sub-second negative", -400 * time.Millisecond, "-400ms"},
+		{"a mixed magnitude still truncates sub-second noise", time.Minute + 400*time.Millisecond, "1m"},
+		{"zero renders parseably", 0, "0s"},
+		{"negative keeps its sign", -90 * time.Minute, "-1h30m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FormatDuration(tt.in); got != tt.want {
+				t.Errorf("FormatDuration(%v) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatDurationRoundTripsThroughParseDuration is the property that
+// makes this safe to put in a tool schema: whatever a model reads as its
+// permitted range, it can pass straight back as an argument. A day term
+// ("1d", which formatDeltaMagnitude would reach for) would break this —
+// time.ParseDuration does not accept one.
+func TestFormatDurationRoundTripsThroughParseDuration(t *testing.T) {
+	for _, d := range []time.Duration{
+		30 * time.Second, 15 * time.Minute, time.Hour, 90 * time.Minute,
+		12 * time.Hour, 24 * time.Hour, 7 * 24 * time.Hour,
+		time.Millisecond, 400 * time.Millisecond,
+		time.Hour + 2*time.Minute + 3*time.Second,
+	} {
+		s := FormatDuration(d)
+		back, err := time.ParseDuration(s)
+		if err != nil {
+			t.Errorf("FormatDuration(%v) = %q, which time.ParseDuration rejects: %v", d, s, err)
+			continue
+		}
+		if back != d {
+			t.Errorf("round trip of %v via %q came back as %v", d, s, back)
+		}
+	}
+}

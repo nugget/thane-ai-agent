@@ -65,6 +65,47 @@ func formatDeltaMagnitude(secs int64) string {
 	}
 }
 
+// FormatDuration renders a duration as a compact Go duration literal:
+// "30s", "15m", "1h", "1h30m", "24h". Zero-valued terms are dropped, so
+// nothing reads "1h0m0s" the way [time.Duration.String] would.
+//
+// Unlike [FormatDeltaOnly] this is for configured intervals rather than
+// offsets from now, so it carries no sign and never reaches for a day
+// term: every value it emits parses back through [time.ParseDuration],
+// which is what tool parameters that take a duration accept. A duration
+// the model reads here can be passed straight back verbatim.
+//
+// A magnitude below one second falls through to [time.Duration.String],
+// which already renders those compactly ("400ms") and stays parseable.
+// Rounding them to "0s" instead would report a real interval as no
+// interval at all — and the values this formats are bounds a caller is
+// meant to choose within, so a zero there is worse than untidy.
+func FormatDuration(d time.Duration) string {
+	if d != 0 && d > -time.Second && d < time.Second {
+		return d.String()
+	}
+	d = d.Truncate(time.Second)
+	var b strings.Builder
+	if d < 0 {
+		b.WriteByte('-')
+		d = -d
+	}
+	h, m, s := d/time.Hour, (d%time.Hour)/time.Minute, (d%time.Minute)/time.Second
+	if h > 0 {
+		fmt.Fprintf(&b, "%dh", h)
+	}
+	if m > 0 {
+		fmt.Fprintf(&b, "%dm", m)
+	}
+	// The seconds term is unconditional only when nothing else was
+	// written, so a whole-minute duration stays "15m" while a zero one
+	// still renders a parseable "0s" instead of the empty string.
+	if s > 0 || (h == 0 && m == 0) {
+		fmt.Fprintf(&b, "%ds", s)
+	}
+	return b.String()
+}
+
 // deltaUnits maps the single-character suffix of a signed-offset term
 // to its duration. All five units are accepted on input; output uses
 // s, m, h, and d (see [formatDeltaMagnitude]).
