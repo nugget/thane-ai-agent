@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,6 +90,14 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			continue
 		}
+		// Regular files only. A symlink here would read content from
+		// outside the signed root while looking like part of it, which is
+		// the one thing a definition living in core is supposed to rule
+		// out. Refused loudly rather than skipped: a definition silently
+		// absent is how a loop stops existing without anyone noticing.
+		if !entry.Type().IsRegular() {
+			return nil, fmt.Errorf("%s is not a regular file (%s); a loop definition must be a file in the signed root, not a link to content outside it", filepath.Join(dir, entry.Name()), entry.Type())
+		}
 		names = append(names, entry.Name())
 	}
 	// Sorted so the definition order a boot produces is a property of the
@@ -101,10 +111,14 @@ func loadCoreLoopDefinitions(corePath string) ([]looppkg.Spec, error) {
 		if err != nil {
 			return nil, err
 		}
-		if other, dup := seen[spec.Name]; dup {
-			return nil, fmt.Errorf("%s and %s both define the loop %q; one document is one loop", other, name, spec.Name)
+		// Keyed on the trimmed name because that is what everything
+		// downstream keys on: "ego" and "ego " are two entries here and
+		// one loop by the time they reach the registry.
+		key := strings.TrimSpace(spec.Name)
+		if other, dup := seen[key]; dup {
+			return nil, fmt.Errorf("%s and %s both define the loop %q; one document is one loop", other, name, key)
 		}
-		seen[spec.Name] = name
+		seen[key] = name
 		specs = append(specs, spec)
 	}
 	return specs, nil
@@ -183,19 +197,37 @@ func decodeCoreLoopSpecYAML(specYAML, file string) (looppkg.Spec, error) {
 	if err := decoder.Decode(&spec); err != nil {
 		return looppkg.Spec{}, fmt.Errorf("%s: %w", file, err)
 	}
+	// A stray "---" inside the fence starts a second YAML document, and
+	// everything after it would be dropped without a word. That is the
+	// same silence KnownFields exists to prevent, so it is refused the
+	// same way.
+	var extra looppkg.Spec
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return looppkg.Spec{}, fmt.Errorf("%s: the spec block holds more than one yaml document; a stray \"---\" splits it, and everything after the first document would be ignored", file)
+	}
 	return spec, nil
 }
 
-// splitCoreLoopSections collects the document's top-level sections by
-// heading. Anything before the first heading — frontmatter, a title, a
-// lead paragraph — is not a section and is ignored, which is what lets
-// these be ordinary documents carrying ordinary metadata.
+// splitCoreLoopSections collects the document's reserved sections.
+// Anything before the first one — frontmatter, a title, a lead paragraph
+// — is not a section and is ignored, which is what lets these be
+// ordinary documents carrying ordinary metadata.
 //
-// Only "## " delimits. A deeper heading inside a prompt is that prompt's
-// own structure, and prompts have plenty of it.
+// Only an H2 whose text is exactly a reserved name delimits. A prompt is
+// a document in its own right and uses H2 freely: the three being ported
+// carry seventeen between them, "## Guidelines" and "## What To Do This
+// Iteration" among them. Treating every "## " as a boundary would shred
+// each prompt into fragments at load, so the rule is the one the facet
+// contract already uses — a heading is structure only if the contract
+// named it, and everything else is content.
+//
+// Fenced blocks are skipped for the same reason at one remove: a prompt
+// may quote a markdown example, and a "## Spec" line inside it is a
+// quotation rather than a section.
 func splitCoreLoopSections(raw string) map[string]string {
 	sections := make(map[string]string, 3)
 	current := ""
+	fenced := false
 	var lines []string
 	flush := func() {
 		if current != "" {
@@ -204,10 +236,16 @@ func splitCoreLoopSections(raw string) map[string]string {
 		lines = nil
 	}
 	for _, line := range strings.Split(raw, "\n") {
-		if heading, ok := strings.CutPrefix(strings.TrimSpace(line), "## "); ok {
-			flush()
-			current = strings.TrimSpace(heading)
-			continue
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			fenced = !fenced
+		}
+		if !fenced {
+			if heading, ok := reservedCoreLoopHeading(trimmed); ok {
+				flush()
+				current = heading
+				continue
+			}
 		}
 		if current != "" {
 			lines = append(lines, line)
@@ -215,6 +253,23 @@ func splitCoreLoopSections(raw string) map[string]string {
 	}
 	flush()
 	return sections
+}
+
+// reservedCoreLoopHeading reports the section a line opens, if the line
+// is an H2 naming one. Matching is case-insensitive because an author
+// hand-writing the document should not have to match our capitalization.
+func reservedCoreLoopHeading(trimmed string) (string, bool) {
+	text, ok := strings.CutPrefix(trimmed, "## ")
+	if !ok {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	for _, heading := range []string{coreLoopSpecHeading, coreLoopTaskHeading, coreLoopSupervisorHeading} {
+		if strings.EqualFold(text, heading) {
+			return heading, true
+		}
+	}
+	return "", false
 }
 
 // unfenceYAML unwraps a fenced block, reporting whether the section was

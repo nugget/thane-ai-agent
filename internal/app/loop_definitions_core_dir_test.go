@@ -249,7 +249,7 @@ func TestCoreDefinitionWinsOverTheBuiltIn(t *testing.T) {
 }
 
 // TestBuiltInStillAppliesWithoutAFile is the other half: the override is
-// opt-in per loop, so an install with no ego.yaml still gets an ego.
+// opt-in per loop, so an install with no ego.md still gets an ego.
 func TestBuiltInStillAppliesWithoutAFile(t *testing.T) {
 	app := &App{cfg: &config.Config{
 		Paths: map[string]string{"core": t.TempDir()},
@@ -384,5 +384,105 @@ func TestSpecInFrontmatterIsIgnored(t *testing.T) {
 	}
 	if specs[0].SleepMin != 15*time.Minute {
 		t.Errorf("sleep_min = %v, want the spec block's 15m — frontmatter is document metadata, not spec", specs[0].SleepMin)
+	}
+}
+
+// TestRealPromptHeadingsSurvive is the case that would have broken the
+// port. The three prompts being moved carry seventeen H2 headings
+// between them, so a splitter that treated every "## " as a boundary
+// would shred each one into fragments at load.
+func TestRealPromptHeadingsSurvive(t *testing.T) {
+	prompt := strings.Join([]string{
+		"Ego loop iteration.",
+		"",
+		"## Your Durable Output",
+		"",
+		"Your contract is injected above.",
+		"",
+		"## What To Do This Iteration",
+		"",
+		"1. Read your current ego.md",
+		"2. Reflect honestly",
+		"",
+		"## Guidelines",
+		"",
+		"Quality of thought matters more than coverage.",
+	}, "\n")
+	doc := strings.Replace(minimalCoreLoop, "Watch the ranch.\n", prompt+"\n", 1)
+
+	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err != nil {
+		t.Fatalf("loadCoreLoopDefinitions: %v", err)
+	}
+	if specs[0].Task != prompt {
+		t.Fatalf("the prompt was shredded at its own headings:\n got %q\nwant %q", specs[0].Task, prompt)
+	}
+}
+
+// TestReservedHeadingInsideAFenceIsQuoted covers a prompt that teaches
+// this very format — a plausible thing for these prompts to do.
+func TestReservedHeadingInsideAFenceIsQuoted(t *testing.T) {
+	prompt := "Write a definition like this:\n\n```markdown\n## Spec\n\nname: example\n\n## Task\n\nDo the thing.\n```\n\nThen restart."
+	doc := strings.Replace(minimalCoreLoop, "Watch the ranch.\n", prompt+"\n", 1)
+
+	specs, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err != nil {
+		t.Fatalf("loadCoreLoopDefinitions: %v", err)
+	}
+	if specs[0].Name != "ranch_watch" {
+		t.Errorf("name = %q — a quoted heading was read as a section", specs[0].Name)
+	}
+	if !strings.Contains(specs[0].Task, "## Task") || !strings.Contains(specs[0].Task, "Then restart.") {
+		t.Errorf("the quoted example did not survive intact: %q", specs[0].Task)
+	}
+}
+
+func TestSymlinkedDefinitionIsRefused(t *testing.T) {
+	// A symlink reads content from outside the signed root while looking
+	// like part of it, which is the one thing a core definition rules out.
+	core := writeCoreLoop(t, map[string]string{"ranch.md": minimalCoreLoop})
+	outside := filepath.Join(t.TempDir(), "elsewhere.md")
+	if err := os.WriteFile(outside, []byte(minimalCoreLoop), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	link := filepath.Join(core, coreLoopsDirName, "sneaky.md")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err := loadCoreLoopDefinitions(core)
+	if err == nil {
+		t.Fatal("loadCoreLoopDefinitions error = nil for a symlinked definition")
+	}
+	if !strings.Contains(err.Error(), "sneaky.md") || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("error = %v, want it to name the entry and why it was refused", err)
+	}
+}
+
+func TestDuplicateNamesAreComparedTrimmed(t *testing.T) {
+	// "ego" and "ego " are two entries here and one loop downstream.
+	padded := strings.Replace(minimalCoreLoop, "name: ranch_watch", `name: "ranch_watch "`, 1)
+	_, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{
+		"a.md": minimalCoreLoop,
+		"b.md": padded,
+	}))
+	if err == nil {
+		t.Fatal("loadCoreLoopDefinitions error = nil for names differing only in whitespace")
+	}
+	if !strings.Contains(err.Error(), "both define the loop") {
+		t.Errorf("error = %v, want the duplicate-loop error", err)
+	}
+}
+
+func TestSecondYAMLDocumentInTheSpecBlockIsRefused(t *testing.T) {
+	// A stray "---" starts a second document; everything after it would
+	// be dropped without a word.
+	doc := strings.Replace(minimalCoreLoop, "sleep_max: 12h", "sleep_max: 12h\n---\nname: ignored", 1)
+	_, err := loadCoreLoopDefinitions(writeCoreLoop(t, map[string]string{"ranch.md": doc}))
+	if err == nil {
+		t.Fatal("loadCoreLoopDefinitions error = nil for a two-document spec block")
+	}
+	if !strings.Contains(err.Error(), "more than one yaml document") {
+		t.Errorf("error = %v, want it to explain the stray separator", err)
 	}
 }
