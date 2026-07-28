@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -43,15 +42,19 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			"required": []string{"ref"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			// Normalized once: both paths must agree on what an empty ref
+			// is, or the same argument is valid or not depending on
+			// whether a level came with it.
 			ref, _ := args["ref"].(string)
+			ref = strings.TrimSpace(ref)
 			if ref == "" {
 				return "", fmt.Errorf("ref is required")
 			}
 			level, _ := args["level"].(string)
-			if strings.TrimSpace(level) == "" {
+			if level = strings.TrimSpace(level); level == "" {
 				return dt.Read(ctx, documents.RefArgs{Ref: ref})
 			}
-			return readDocumentFacet(ctx, dt, ref, strings.TrimSpace(level))
+			return readDocumentFacet(ctx, dt, ref, level)
 		},
 	})
 
@@ -453,13 +456,28 @@ func readDocumentFacet(ctx context.Context, dt *documents.Tools, ref, level stri
 		return marshalDocumentToolResult(result)
 	}
 	result["content"] = content
+
+	// full is the one facet with no budget, so it is the one that can
+	// outgrow the tool-result ceiling. When it does and the document
+	// publishes something cheaper, saying so beats handing back a
+	// byte-truncated document: choosing a level is the remedy this tool
+	// exists to offer, and the generic envelope would instead advise
+	// picking a section — the structure a level read deliberately hides.
+	if len(content) > documents.MaxToolResultBytes && len(available) > 1 {
+		cheaper := available[:len(available)-1]
+		result["content"] = ""
+		result["truncated"] = true
+		result["bytes_total"] = len(content)
+		result["note"] = fmt.Sprintf(
+			"full is %d bytes, past the %d-byte tool-result ceiling. Read it at %s instead, or use doc_outline and doc_section to take the part you need.",
+			len(content), documents.MaxToolResultBytes, strings.Join(cheaper, ", "),
+		)
+	}
 	return marshalDocumentToolResult(result)
 }
 
+// marshalDocumentToolResult renders a facet read under the same ceiling
+// every other document tool result is held to.
 func marshalDocumentToolResult(result map[string]any) (string, error) {
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal document read: %w", err)
-	}
-	return string(data), nil
+	return documents.MarshalToolResult(result)
 }

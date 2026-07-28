@@ -442,3 +442,20 @@ func clampPositiveLimit(limit int, def int, max int) int {
 	}
 	return limit
 }
+
+// MaxToolResultBytes is the size ceiling every document tool result is
+// held to, exported so a caller shaping its own result can decide what
+// to do before it hits the cap rather than after.
+const MaxToolResultBytes = maxToolResultBytes
+
+// MarshalToolResult renders a document tool result under the same size
+// cap every other document tool applies, replacing an oversized payload
+// with a truncation envelope that says so.
+//
+// Exported for the facet-level read, which builds its own result shape
+// but must not thereby opt out of the ceiling: a caller cannot tell
+// which document tool it called from how big the answer is allowed to
+// be, so there is one answer.
+func MarshalToolResult(v any) (string, error) {
+	return marshalToolResult(v)
+}

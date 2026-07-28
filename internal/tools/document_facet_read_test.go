@@ -173,7 +173,31 @@ func newFacetTestDocumentTools(t *testing.T) *documents.Tools {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	body := facetedBody(t)
+	return seedDocumentTools(t, store, facetedBody(t))
+}
+
+// newSeededDocumentTools is the same surface holding a caller-supplied
+// body, for tests about size rather than about content.
+func newSeededDocumentTools(t *testing.T, body string) *documents.Tools {
+	t.Helper()
+	coreDir := filepath.Join(t.TempDir(), "core")
+	if err := mkdirAllForTest(coreDir); err != nil {
+		t.Fatalf("mkdir core: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := documents.NewStore(db, map[string]string{"core": coreDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	return seedDocumentTools(t, store, body)
+}
+
+func seedDocumentTools(t *testing.T, store *documents.Store, body string) *documents.Tools {
+	t.Helper()
 	if _, err := store.Write(t.Context(), documents.WriteArgs{Ref: "core:office.md", Body: &body}); err != nil {
 		t.Fatalf("seed document: %v", err)
 	}
@@ -227,6 +251,97 @@ func TestDocReadAtAnUndeclaredLevelSaysWhatIsThere(t *testing.T) {
 	for _, want := range []string{"status_line", "digest"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note = %q, want it to name the %q level as available", note, want)
+		}
+	}
+}
+
+// TestOversizeFullReadPointsAtACheaperLevel covers the one facet with no
+// budget of its own. When full outgrows the tool-result ceiling, the
+// useful answer is the ladder it already has — not a byte-truncated
+// document, and not the generic advice to pick a section, which is the
+// structure a level read exists to hide.
+func TestOversizeFullReadPointsAtACheaperLevel(t *testing.T) {
+	out := looppkg.OutputSpec{
+		Name: "office status", Type: looppkg.OutputTypeMaintainedDocument, Ref: "core:office.md",
+		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}, {Name: looppkg.OutputFacetDigest}},
+	}
+	body := out.RenderFacetDocument(looppkg.FacetPayload{
+		StatusLine: "Printer online; 2 packages waiting.",
+		Digest:     "Two deliveries arrived and both need signing.",
+		Full:       "# Office\n\n" + strings.Repeat("Every delivery, in detail. ", 2000),
+	})
+
+	dt := newSeededDocumentTools(t, body)
+	raw, err := readDocumentFacet(t.Context(), dt, "core:office.md", "full")
+	if err != nil {
+		t.Fatalf("readDocumentFacet: %v", err)
+	}
+	result := decodeFacetRead(t, raw)
+
+	if result["truncated"] != true {
+		t.Fatalf("an oversized full read was not reported as truncated: %v", result)
+	}
+	note, _ := result["note"].(string)
+	for _, want := range []string{"status_line", "digest"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note = %q, want it to offer the %q level", note, want)
+		}
+	}
+	if strings.Contains(note, "full") && strings.Contains(note, "Read it at full") {
+		t.Errorf("note offers full as its own remedy: %q", note)
+	}
+	// Held to the same ceiling as every other document tool result.
+	if len(raw) > documents.MaxToolResultBytes {
+		t.Errorf("result is %d bytes, past the %d-byte ceiling", len(raw), documents.MaxToolResultBytes)
+	}
+}
+
+// TestCheaperLevelsStillReadableOnAnOversizeDocument is the other half:
+// the ladder has to actually work on the document the note points at.
+func TestCheaperLevelsStillReadableOnAnOversizeDocument(t *testing.T) {
+	out := looppkg.OutputSpec{
+		Name: "office status", Type: looppkg.OutputTypeMaintainedDocument, Ref: "core:office.md",
+		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}},
+	}
+	body := out.RenderFacetDocument(looppkg.FacetPayload{
+		StatusLine: "Printer online; 2 packages waiting.",
+		Full:       strings.Repeat("Detail. ", 4000),
+	})
+
+	raw, err := readDocumentFacet(t.Context(), newSeededDocumentTools(t, body), "core:office.md", "status_line")
+	if err != nil {
+		t.Fatalf("readDocumentFacet: %v", err)
+	}
+	if got := decodeFacetRead(t, raw)["content"]; got != "Printer online; 2 packages waiting." {
+		t.Errorf("content = %v, want the status line", got)
+	}
+}
+
+func TestRefIsNormalizedTheSameWithAndWithoutALevel(t *testing.T) {
+	// A whitespace-only ref is empty either way; the level must not
+	// decide whether the same argument is valid.
+	r := NewEmptyRegistry()
+	RegisterDocumentTools(r, newFacetTestDocumentTools(t))
+	tool := r.Get("doc_read")
+	if tool == nil {
+		t.Fatal("doc_read is not registered")
+	}
+	for _, args := range []map[string]any{
+		{"ref": "   "},
+		{"ref": "   ", "level": "status_line"},
+	} {
+		if _, err := tool.Handler(t.Context(), args); err == nil || !strings.Contains(err.Error(), "ref is required") {
+			t.Errorf("Handler(%v) error = %v, want \"ref is required\"", args, err)
+		}
+	}
+
+	// And a padded real ref resolves on both paths rather than on one.
+	for _, args := range []map[string]any{
+		{"ref": " core:office.md "},
+		{"ref": " core:office.md ", "level": "status_line"},
+	} {
+		if _, err := tool.Handler(t.Context(), args); err != nil {
+			t.Errorf("Handler(%v) error = %v, want the padded ref to resolve", args, err)
 		}
 	}
 }
