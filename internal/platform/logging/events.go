@@ -2,9 +2,18 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"sort"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
+)
+
+const (
+	maxEventAttrs        = 16
+	maxEventMessageRunes = 2048
+	maxEventStringRunes  = 1024
+	maxEventValueBytes   = 1024
 )
 
 // EventHandler publishes WARN and ERROR records to the operational event bus
@@ -42,36 +51,56 @@ func (h *EventHandler) Handle(ctx context.Context, record slog.Record) error {
 		preAttrs: h.preAttrs,
 		groups:   h.groups,
 	}).projectRecord(record)
-	data := make(map[string]any, len(projection.Attrs)+4)
+	data := make(map[string]any, min(len(projection.Attrs), maxEventAttrs)+5)
 	data["level"] = projection.Severity
-	data["message"] = projection.Message
+	message, truncated := truncateEventString(projection.Message, maxEventMessageRunes)
+	data["message"] = message
+	putString := func(key, value string) {
+		if value == "" {
+			return
+		}
+		bounded, clipped := truncateEventString(value, maxEventStringRunes)
+		data[key] = bounded
+		truncated = truncated || clipped
+	}
 	if projection.SourceFile != "" {
-		data["source_file"] = projection.SourceFile
+		putString("source_file", projection.SourceFile)
 		data["source_line"] = projection.SourceLine
 	}
-	for key, value := range projection.Attrs {
+	keys := make([]string, 0, len(projection.Attrs))
+	seen := make(map[string]bool, len(projection.Attrs))
+	for _, key := range []string{"error", "tool", "model", "reason"} {
+		if _, ok := projection.Attrs[key]; ok {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	var remaining []string
+	for key := range projection.Attrs {
+		if !seen[key] {
+			remaining = append(remaining, key)
+		}
+	}
+	sort.Strings(remaining)
+	keys = append(keys, remaining...)
+	if len(keys) > maxEventAttrs {
+		keys = keys[:maxEventAttrs]
+		truncated = true
+	}
+	for _, key := range keys {
+		value, clipped := boundEventValue(projection.Attrs[key])
 		data[key] = value
+		truncated = truncated || clipped
 	}
-	if projection.RequestID != "" {
-		data["request_id"] = projection.RequestID
-	}
-	if projection.SessionID != "" {
-		data["session_id"] = projection.SessionID
-	}
-	if projection.ConversationID != "" {
-		data["conversation_id"] = projection.ConversationID
-	}
-	if projection.LoopID != "" {
-		data["loop_id"] = projection.LoopID
-	}
-	if projection.LoopName != "" {
-		data["loop_name"] = projection.LoopName
-	}
-	if projection.Subsystem != "" {
-		data["subsystem"] = projection.Subsystem
-	}
-	if projection.Component != "" {
-		data["component"] = projection.Component
+	putString("request_id", projection.RequestID)
+	putString("session_id", projection.SessionID)
+	putString("conversation_id", projection.ConversationID)
+	putString("loop_id", projection.LoopID)
+	putString("loop_name", projection.LoopName)
+	putString("subsystem", projection.Subsystem)
+	putString("component", projection.Component)
+	if truncated {
+		data["truncated"] = true
 	}
 
 	h.bus.Publish(events.Event{
@@ -81,6 +110,29 @@ func (h *EventHandler) Handle(ctx context.Context, record slog.Record) error {
 		Data:      data,
 	})
 	return innerErr
+}
+
+func boundEventValue(value any) (any, bool) {
+	if text, ok := value.(string); ok {
+		return truncateEventString(text, maxEventStringRunes)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "<unrenderable>", true
+	}
+	if len(encoded) <= maxEventValueBytes {
+		return value, false
+	}
+	preview, _ := truncateEventString(string(encoded), maxEventStringRunes)
+	return preview, true
+}
+
+func truncateEventString(value string, maxRunes int) (string, bool) {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value, false
+	}
+	return string(runes[:maxRunes]) + "…", true
 }
 
 // WithAttrs returns a derived handler carrying attrs to both sinks.

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,41 @@ func TestEventHandlerPublishesWarningWhenInnerSinkFails(t *testing.T) {
 	event := <-ch
 	if event.Data["message"] != "retention degraded" {
 		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestEventHandlerBoundsPublishedProjection(t *testing.T) {
+	bus := events.New()
+	ch := bus.Subscribe(1)
+	t.Cleanup(func() { bus.Unsubscribe(ch) })
+	logger := slog.New(NewEventHandler(slog.NewTextHandler(&bytes.Buffer{}, nil), bus))
+
+	args := make([]any, 0, (maxEventAttrs+2)*2)
+	for i := range maxEventAttrs + 2 {
+		args = append(args, fmt.Sprintf("key_%02d", i), strings.Repeat("x", maxEventStringRunes+10))
+	}
+	logger.Warn(strings.Repeat("m", maxEventMessageRunes+10), args...)
+
+	event := <-ch
+	if event.Data["truncated"] != true {
+		t.Fatalf("truncated = %#v, want true", event.Data["truncated"])
+	}
+	message, _ := event.Data["message"].(string)
+	if got := len([]rune(message)); got != maxEventMessageRunes+1 {
+		t.Fatalf("message runes = %d, want %d including ellipsis", got, maxEventMessageRunes+1)
+	}
+	attrCount := 0
+	for key, value := range event.Data {
+		if strings.HasPrefix(key, "key_") {
+			attrCount++
+			text, _ := value.(string)
+			if got := len([]rune(text)); got > maxEventStringRunes+1 {
+				t.Fatalf("%s runes = %d, exceeds cap", key, got)
+			}
+		}
+	}
+	if attrCount != maxEventAttrs {
+		t.Fatalf("published attrs = %d, want %d", attrCount, maxEventAttrs)
 	}
 }
 

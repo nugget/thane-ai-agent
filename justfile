@@ -493,10 +493,13 @@ alerts workdir="./Thane" level="WARN" interval="2":
         fi
         if [ -z "$last_id" ]; then
             last_id="$(sqlite3 -batch -noheader "$db" 'SELECT COALESCE(MAX(id), 0) FROM log_entries;' 2>/dev/null || true)"
-            if [ -z "$last_id" ]; then
-                sleep "$interval"
-                continue
-            fi
+            case "$last_id" in
+                ''|*[!0-9]*)
+                    last_id=""
+                    sleep "$interval"
+                    continue
+                    ;;
+            esac
         fi
         rows="$(sqlite3 -batch -noheader "$db" "
             SELECT json_object(
