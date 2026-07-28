@@ -63,6 +63,23 @@ type LoopView struct {
 	NextWakeDelta        *string `json:"next_wake_delta"`
 	CurrentSleepDuration *string `json:"current_sleep_duration"`
 	PolicyUpdatedDelta   *string `json:"policy_updated_delta"`
+	// SleepEnvelope is the cadence this loop is allowed to choose within.
+	// It is configuration rather than telemetry, so it is present on a
+	// stored definition as well as a live loop; null on anything with no
+	// periodic timer.
+	SleepEnvelope *SleepEnvelope `json:"sleep_envelope"`
+	// LastSleep is how long the most recent sleep actually lasted and
+	// LastSleepPlanned is what it was scheduled for, both as Go duration
+	// literals. Equal on an ordinary wake; LastSleep is the shorter of
+	// the two when a notification cut the sleep short, which is how a
+	// loop tells "something wanted me" from "my cadence was overridden".
+	// Null before the first sleep and on event-driven loops.
+	LastSleep        *string `json:"last_sleep"`
+	LastSleepPlanned *string `json:"last_sleep_planned"`
+	// WakesLast24h is how many iterations began in the trailing day,
+	// counting the one in flight — the cadence actually achieved, as
+	// against the SleepEnvelope's permitted one.
+	WakesLast24h *int `json:"wakes_last_24h"`
 
 	// ---- economics (%CPU / %MEM / TIME) ----
 	Iterations        *int `json:"iterations"`
@@ -83,6 +100,10 @@ type LoopView struct {
 	LastSupervisorIter    *int     `json:"last_supervisor_iter"`
 	LastSupervisorTrigger *string  `json:"last_supervisor_trigger"`
 	SupervisorItersAgo    *int     `json:"supervisor_iters_ago"`
+	// LastSupervisorDelta is how long ago that review ran. Iterations-ago
+	// counts turns, which is not the same span twice on a loop that
+	// re-chooses its interval every time.
+	LastSupervisorDelta *string `json:"last_supervisor_delta"`
 
 	// ---- inheritance + provenance (live-only; [] when running-and-empty,
 	// null when not running) ----
@@ -91,6 +112,71 @@ type LoopView struct {
 	EffectiveExcludeTools     []EffectiveExcludeTool     `json:"effective_exclude_tools"`
 	EffectiveRoutingFactors   []EffectiveRoutingFactor   `json:"effective_routing_factors"`
 	EffectiveDelegationGating *EffectiveDelegationGating `json:"effective_delegation_gating"`
+}
+
+// SleepEnvelope is the range a self-pacing loop chooses its next sleep
+// within: the bounds [Loop.SetNextSleep] clamps to, the interval the
+// runtime falls back to when the loop asks for nothing, and the
+// randomization applied on top of whatever it does choose.
+//
+// A loop that cannot see this is choosing a cadence blind and learns its
+// bounds only by being corrected — the gap #1313 closes. It rides the
+// canonical row so every surface that shows a loop shows its envelope:
+// loop_status for an operator, the self-context block for the loop
+// itself, and the loop-scoped set_next_sleep advertisement.
+//
+// Durations are Go duration literals ("15m", "1h30m", "24h") rather than
+// the row's signed-seconds convention. That convention exists for clock
+// readings, to spare the model timestamp arithmetic; these are knob
+// values, and what appears here is exactly what set_next_sleep accepts
+// back, so the model round-trips the literal instead of converting it.
+type SleepEnvelope struct {
+	// Min and Max are the clamp. A request outside them is not rejected,
+	// it is silently moved to the nearest bound.
+	Min string `json:"min"`
+	Max string `json:"max"`
+	// Default is what the runtime sleeps when an iteration ends without
+	// choosing — not a recommendation, just the fallback.
+	Default string `json:"default"`
+	// Jitter is the fraction of the chosen sleep the runtime randomizes
+	// by, in either direction: at 0.2 a 30m sleep wakes somewhere in
+	// 24m–36m. It is why an observed wake rarely lands exactly on what
+	// was asked for. Omitted when jitter is off.
+	Jitter float64 `json:"jitter,omitempty"`
+}
+
+// newSleepEnvelope builds the envelope for a loop with a periodic timer,
+// or nil for one without. The gate matches set_next_sleep's own: only a
+// timer-driven service loop paces itself, so a container, an event-driven
+// loop, or a one-shot background task reports null rather than an
+// envelope it can neither use nor change.
+//
+// Zero fields take the runtime defaults, mirroring [Config.applyDefaults],
+// so a stored definition that declared no envelope still shows the one it
+// will actually run under instead of leaving the fallback implied.
+func newSleepEnvelope(operation string, eventDriven bool, min, max, def time.Duration, jitter *float64) *SleepEnvelope {
+	if operation != string(OperationService) || eventDriven {
+		return nil
+	}
+	if min == 0 {
+		min = DefaultSleepMin
+	}
+	if max == 0 {
+		max = DefaultSleepMax
+	}
+	if def == 0 {
+		def = DefaultSleepDefault
+	}
+	env := &SleepEnvelope{
+		Min:     promptfmt.FormatDuration(min),
+		Max:     promptfmt.FormatDuration(max),
+		Default: promptfmt.FormatDuration(def),
+		Jitter:  DefaultJitter,
+	}
+	if jitter != nil {
+		env.Jitter = *jitter
+	}
+	return env
 }
 
 // LoopPolicyInfo is the policy/eligibility slice a LoopView needs, keyed
@@ -249,6 +335,10 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	// FromStatus row exactly instead of re-deriving it from the spec operation.
 	v.EventDriven = s.EventDriven
 	v.PendingRetune = s.PendingRetune
+	// From the LIVE config, not the stored spec: a promoted retune moves
+	// the envelope under a running loop, and the row that told it what it
+	// may ask for has to be the one it is actually clamped by.
+	v.SleepEnvelope = newSleepEnvelope(v.Operation, v.EventDriven, s.Config.SleepMin, s.Config.SleepMax, s.Config.SleepDefault, s.Config.Jitter)
 
 	iterations := s.Iterations
 	attempts := s.Attempts
@@ -277,6 +367,16 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 		cs := fmt.Sprintf("%ds", int64(s.CurrentSleep/time.Second))
 		v.CurrentSleepDuration = &cs
 	}
+	// The sleep that just ended, which the in-flight turn can no longer
+	// read off SleepUntil/CurrentSleep — those are cleared on wake.
+	if s.SleptFor > 0 {
+		slept := promptfmt.FormatDuration(s.SleptFor)
+		planned := promptfmt.FormatDuration(s.SleptPlanned)
+		v.LastSleep = &slept
+		v.LastSleepPlanned = &planned
+	}
+	wakes := s.WakesLast24h
+	v.WakesLast24h = &wakes
 
 	// Token economics — left nil for handler-only loops, which run no LLM
 	// iterations and have no token metrics (a literal 0 would read as a real
@@ -317,6 +417,10 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 			ago = 0
 		}
 		v.SupervisorItersAgo = &ago
+		if !s.LastSupervisorAt.IsZero() {
+			d := promptfmt.FormatDeltaOnly(s.LastSupervisorAt, now)
+			v.LastSupervisorDelta = &d
+		}
 	}
 
 	// effective_* come straight off the Status — the registry populates them via
@@ -418,6 +522,10 @@ func (r DefinitionViewResolver) FromDefinition(snap DefinitionSnapshot, eligibil
 		prob := spec.SupervisorProb
 		v.SupervisorProb = &prob
 	}
+	// The declared envelope, so a stored-only definition still shows the
+	// cadence it would run at. applyLiveTelemetry replaces it with the
+	// live one below when the definition is running.
+	v.SleepEnvelope = newSleepEnvelope(v.Operation, v.EventDriven, spec.SleepMin, spec.SleepMax, spec.SleepDefault, spec.Jitter)
 
 	if live != nil {
 		applyLiveTelemetry(&v, *live, r.now)

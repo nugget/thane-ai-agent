@@ -401,6 +401,13 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 	l.mu.Unlock()
 	defer func() {
 		l.mu.Lock()
+		// Capture what the sleep actually came to before clearing the
+		// in-flight fields. A notification wake makes the elapsed time the
+		// honest answer to "how long was I out", and the planned duration
+		// read off l.currentSleep (not the d argument, which a mid-sleep
+		// retune supersedes) is what it was meant to be.
+		l.lastSleptFor = time.Since(start)
+		l.lastSleptPlanned = l.currentSleep
 		l.sleepUntil = time.Time{}
 		l.currentSleep = 0
 		l.mu.Unlock()

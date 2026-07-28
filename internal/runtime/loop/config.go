@@ -596,6 +596,18 @@ type Status struct {
 	// raw time.Duration (nanoseconds) never leaks into the HTTP /v1/loops
 	// JSON; [LoopView] emits the seconds form.
 	CurrentSleep time.Duration `json:"-"`
+	// SleptFor is how long the most recent completed sleep actually
+	// lasted; SleptPlanned is what it was scheduled for. They diverge
+	// when a notification cut the sleep short. Zero before the first
+	// sleep and on event-driven loops. Projection-only (`json:"-"`) —
+	// [LoopView] emits the model-facing duration strings.
+	SleptFor     time.Duration `json:"-"`
+	SleptPlanned time.Duration `json:"-"`
+	// WakesLast24h is how many iterations this loop has begun in the
+	// trailing 24 hours, including the one in flight. It is the achieved
+	// cadence, which a lifetime iteration count cannot stand in for on a
+	// loop that keeps changing its own interval.
+	WakesLast24h int `json:"wakes_last_24h,omitempty"`
 	// Iterations is the total number of completed (successful) iterations.
 	Iterations int `json:"iterations"`
 	// Attempts is the total number of iteration attempts (including failures).
@@ -646,6 +658,11 @@ type Status struct {
 	// ago" without scanning event logs. Drives self-pacing
 	// decisions.
 	LastSupervisorTrigger SupervisorTrigger `json:"last_supervisor_trigger,omitempty"`
+	// LastSupervisorAt is when that supervisor turn ran; zero when none
+	// has. Iterations-ago answers "how many turns back" but not "how long
+	// ago", and on a self-pacing loop those are different questions.
+	// Projection-only (`json:"-"`) — [LoopView] emits the delta string.
+	LastSupervisorAt time.Time `json:"-"`
 	// LLMContext holds enrichment data from the most recent
 	// loop_llm_start event (model, est_tokens, messages, tools,
 	// complexity, intent, reasoning). Only populated while the loop
