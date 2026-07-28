@@ -91,7 +91,7 @@ func defaultedServiceLoopConfig(t *testing.T) *config.Config {
 		jitter, supervisorProb           float64
 		floor, supervisorFloor           int
 	}{
-		{&cfg.Metacognitive, "2m", "30m", "10m", 0.2, 0.1, 3, 8},
+		{&cfg.Metacognitive, "15m", "60m", "30m", 0.2, 0.1, 3, 8},
 		{&cfg.Ego, "30m", "24h", "6h", 0.2, 0.2, 5, 8},
 		{&cfg.Archivist, "15m", "12h", "1h", 0.2, 0.1, 5, 8},
 	} {
