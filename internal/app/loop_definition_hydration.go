@@ -11,7 +11,15 @@ import (
 )
 
 func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
-	baseDefinitions := append([]looppkg.Spec(nil), a.cfg.Loops.Definitions...)
+	// Core-defined loops come first because first wins: everything below
+	// appends only what is not already declared, so a definition living
+	// in the signed core root takes precedence over the same-named
+	// built-in without needing a rule of its own.
+	coreDefinitions, err := loadCoreLoopDefinitions(a.cfg.Paths["core"])
+	if err != nil {
+		return nil, fmt.Errorf("core loop definitions: %w", err)
+	}
+	baseDefinitions := append(coreDefinitions, a.cfg.Loops.Definitions...)
 	seen := make(map[string]struct{}, len(baseDefinitions))
 	for _, def := range baseDefinitions {
 		seen[strings.TrimSpace(def.Name)] = struct{}{}
