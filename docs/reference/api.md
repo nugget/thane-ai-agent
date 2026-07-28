@@ -25,8 +25,19 @@ views). The OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/docs` | Interactive OpenAPI explorer (Scalar) for the API. |
 | `GET` | `/health` | Dependency health for service monitoring. |
 | `GET` | `/v1/version` | Build and runtime metadata. |
+| `GET` | `/v1/identity` | Core-backed instance identity, birth and HEAD revisions, anchor posture, and local provenance verification evidence. |
 | `GET` | `/v1/system` | Slim system rollup: status, dependency health, `uptime_seconds`, version. |
 | `GET` | `/v1/system/logs` | Structured process-log tail (bare array, newest first; `?level`, `?limit` default 50, max 200). |
+
+`GET /v1/identity` reports evidence for clients to pin and evaluate; it does
+not issue a remote trust verdict. Its stable instance ID and fingerprints are
+recomputed from public material committed in core's single birth commit.
+`core.birth.asserted_at` is the time claimed by that signed commit, with
+`time_assurance: signed_claim`; it is not an independently witnessed
+timestamp. `core.current_commit` is the algorithm-qualified commit ID of the
+active core document root and is the canonical forensic anchor for the state
+being reported. The endpoint never returns private key material, local
+filesystem paths, signer principals, or the contents of `.allowed_signers`.
 
 ### Router, Registry, and History
 
