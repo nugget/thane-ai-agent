@@ -140,15 +140,6 @@ func (a *App) initStores(s *newState) error {
 	}
 	a.loopQueue = loopQueue
 
-	// Promote production WARN/ERROR records into durable, debounced
-	// metacognitive attention. Subscription begins during initialization so
-	// startup warnings enter the same attention path as runtime warnings.
-	a.logAlertWakeFeeder = newLogAlertWakeFeeder(loopQueue, a.messageBus, a.eventBus, logger)
-	if a.logAlertWakeFeeder != nil {
-		go a.logAlertWakeFeeder.run(s.ctx)
-		a.onClose("log-alert-wake", a.logAlertWakeFeeder.close)
-	}
-
 	// --- Home Assistant client ---
 	// Optional but central. Without it, HA-related tools are unavailable
 	// and Thane operates as a general-purpose agent.

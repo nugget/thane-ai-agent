@@ -199,10 +199,6 @@ type App struct {
 	// absent. The loop-definition worker runs its boot sweep.
 	subWakeFeeder *subscriptionWakeFeeder
 
-	// Log alert wake feed: WARN/ERROR records are promoted onto the
-	// operational bus, durably coalesced, and delivered to metacognition.
-	logAlertWakeFeeder *logAlertWakeFeeder
-
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer
 

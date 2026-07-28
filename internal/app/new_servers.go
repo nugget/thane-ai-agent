@@ -653,9 +653,6 @@ func (a *App) initServers(s *newState) error {
 				a.subWakeFeeder.Rebuild()
 				a.subWakeFeeder.Sweep(ctx)
 			}
-			if a.logAlertWakeFeeder != nil {
-				a.logAlertWakeFeeder.Sweep(ctx)
-			}
 			// Now that the durable definition snapshot is registered,
 			// fail loud on any config-defined MQTT wake subscription
 			// that names a loop nobody actually registered. Runtime

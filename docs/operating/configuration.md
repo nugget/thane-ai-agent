@@ -375,13 +375,6 @@ warnings and errors from `logs.db` across all datasets. Use `ERROR` instead of
 `WARN` to suppress warnings. The output is newline-delimited compact JSON and
 can be piped through `grep` or `jq`.
 
-WARN and ERROR records are also promoted onto the operational event bus.
-Repeated records are fingerprint-coalesced through the durable loop queue and
-wake the metacognitive loop after a short debounce. The wake carries bounded
-correlation context; metacognition can use the core `logs_query` tool to inspect
-the surrounding request, loop, subsystem, or message pattern. Metacognition's
-own records remain queryable but do not self-wake, preventing recursive alert
-loops.
 
 ## MCP Servers
 
