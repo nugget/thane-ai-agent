@@ -2,6 +2,8 @@ package loop
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,9 +117,12 @@ type LoopView struct {
 }
 
 // SleepEnvelope is the range a self-pacing loop chooses its next sleep
-// within: the bounds [Loop.SetNextSleep] clamps to, the interval the
-// runtime falls back to when the loop asks for nothing, and the
-// randomization applied on top of whatever it does choose.
+// within: the bounds a requested sleep is clamped to by
+// [Loop.HandleSetNextSleep], the interval the runtime falls back to when
+// the loop asks for nothing, and the randomization applied on top of
+// whatever it does choose. The bounds hold however a duration arrives —
+// the run loop re-clamps before every sleep — so they describe the loop,
+// not just the tool call.
 //
 // A loop that cannot see this is choosing a cadence blind and learns its
 // bounds only by being corrected — the gap #1313 closes. It rides the
@@ -143,6 +148,19 @@ type SleepEnvelope struct {
 	// 24m–36m. It is why an observed wake rarely lands exactly on what
 	// was asked for. Omitted when jitter is off.
 	Jitter float64 `json:"jitter,omitempty"`
+}
+
+// JitterPercent renders [SleepEnvelope.Jitter] as a percentage, for the
+// prose surfaces that have to name it rather than emit the raw fraction.
+// It rounds to a tenth of a percent and drops a trailing zero, so an
+// ordinary 0.2 reads "20" and a deliberate 0.125 reads "12.5".
+//
+// The rounding is load-bearing, not cosmetic. Jitter is an operator-set
+// float, and int(j*100) truncates: 0.29 is held as slightly less than
+// 0.29, so it would advertise 28% and understate a bound the model is
+// reasoning against.
+func (e SleepEnvelope) JitterPercent() string {
+	return strconv.FormatFloat(math.Round(e.Jitter*1000)/10, 'f', -1, 64)
 }
 
 // newSleepEnvelope builds the envelope for a loop with a periodic timer,

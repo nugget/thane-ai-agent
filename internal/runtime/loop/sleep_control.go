@@ -61,7 +61,7 @@ func sleepControlDescription(env *SleepEnvelope) string {
 		env.Min, env.Max, env.Default,
 	)
 	if env.Jitter > 0 {
-		desc += fmt.Sprintf(" The runtime then randomizes the result by up to ±%d%%, so the wake lands near the chosen duration rather than exactly on it.", int(env.Jitter*100))
+		desc += fmt.Sprintf(" The runtime then randomizes the result by up to ±%s%%, so the wake lands near the chosen duration rather than exactly on it.", env.JitterPercent())
 	}
 	return desc
 }

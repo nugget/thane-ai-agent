@@ -299,3 +299,42 @@ func TestServiceLoopRecordsItsOwnRhythm(t *testing.T) {
 		t.Errorf("SleptPlanned = %v, want the duration that sleep was scheduled for", status.SleptPlanned)
 	}
 }
+
+// TestSleepEnvelopeJitterPercent covers the arithmetic the tool
+// description depends on. int(j*100) truncates, and the float64
+// representation of an ordinary config value makes that bite on whole
+// percentages too — 0.29 is held as slightly under 0.29 — so a naive
+// conversion would advertise a smaller spread than the runtime applies.
+func TestSleepEnvelopeJitterPercent(t *testing.T) {
+	tests := []struct {
+		jitter float64
+		want   string
+	}{
+		{0.2, "20"},
+		{0.1, "10"},
+		{0.29, "29"}, // truncation would say 28
+		{0.07, "7"},
+		{0.125, "12.5"}, // a real fraction survives
+		{0.333, "33.3"},
+		{1, "100"},
+		{0, "0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			env := SleepEnvelope{Jitter: tt.jitter}
+			if got := env.JitterPercent(); got != tt.want {
+				t.Errorf("JitterPercent(%v) = %q, want %q", tt.jitter, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSleepControlDescriptionStatesJitterExactly is the same property at
+// the surface that matters: what the model reads must be what the
+// runtime does.
+func TestSleepControlDescriptionStatesJitterExactly(t *testing.T) {
+	desc := sleepControlDescription(&SleepEnvelope{Min: "15m", Max: "1h", Default: "30m", Jitter: 0.29})
+	if !strings.Contains(desc, "±29%") {
+		t.Errorf("description should state the configured jitter exactly, got: %s", desc)
+	}
+}
