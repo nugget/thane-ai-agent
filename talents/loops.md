@@ -17,9 +17,11 @@ it: `replace_output_*` for a whole-document rewrite, or
 If a maintained output is marked `truncated` in Declared Durable
 Outputs, read the full document before replacing it.
 
-Declaring facets or working notes requires the full spec, so author those
-loops with `loop_definition_set` and start them with
-`loop_definition_launch`.
+`thane_loop_create` declares facets directly and derives the working
+notes itself; reach for `loop_definition_set` +
+`loop_definition_launch` only when a loop needs what the front door
+does not expose — several published documents, a facet's format, or
+notes placed somewhere specific.
 
 ## Who reads this output?
 
@@ -42,6 +44,12 @@ section headings; they are rendered for you. Each projection has a size
 budget, and an over-budget value is rejected rather than trimmed,
 because a clipped teaser reads as a fragment with no sign that anything
 is missing. Write to the budget rather than near it.
+
+A faceted document created through `thane_loop_create` arrives
+scaffolded: its section skeleton is pre-rendered with a placeholder
+under each heading, so the body a loop sees on its first wake is
+already the shape a correct publish produces. Fill the placeholders;
+do not invent structure around them.
 
 Declare `status_line` for any faceted output; add `teaser` when the
 output is something others search or link to, and `digest` when a

@@ -56,7 +56,12 @@ type facetSection struct {
 	Facet   OutputFacet
 	Field   FacetField
 	Heading string
-	value   func(*FacetPayload) *string
+	// scaffoldHint is the short phrase rendered under this section's
+	// heading in a pre-first-publish scaffold — a compressed cue of what
+	// belongs there, sized for a placeholder rather than for teaching
+	// (the publish tool's Guidance carries the full contract).
+	scaffoldHint string
+	value        func(*FacetPayload) *string
 }
 
 // facetSections is the single source of truth for the publish tool's
@@ -74,7 +79,8 @@ var facetSections = []facetSection{
 			SingleLine: true,
 			Guidance:   "One standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
 		},
-		value: func(p *FacetPayload) *string { return &p.StatusLine },
+		scaffoldHint: "one standalone line of what is true right now",
+		value:        func(p *FacetPayload) *string { return &p.StatusLine },
 	},
 	{
 		Facet:   OutputFacetTeaser,
@@ -84,7 +90,8 @@ var facetSections = []facetSection{
 			MaxRunes: teaserMaxRunes,
 			Guidance: "One short paragraph on why a reader would open this document right now. Surfaces as the snippet in search results and cross-references, so write the hook — the reason to look — rather than a compressed summary.",
 		},
-		value: func(p *FacetPayload) *string { return &p.Teaser },
+		scaffoldHint: "why a reader would open this document right now",
+		value:        func(p *FacetPayload) *string { return &p.Teaser },
 	},
 	{
 		Facet:   OutputFacetDigest,
@@ -94,7 +101,8 @@ var facetSections = []facetSection{
 			MaxRunes: digestMaxRunes,
 			Guidance: "A standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
 		},
-		value: func(p *FacetPayload) *string { return &p.Digest },
+		scaffoldHint: "a summary with enough substance to act on",
+		value:        func(p *FacetPayload) *string { return &p.Digest },
 	},
 	{
 		Heading: "Details",
@@ -102,7 +110,8 @@ var facetSections = []facetSection{
 			Key:      "full",
 			Guidance: "The complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
 		},
-		value: func(p *FacetPayload) *string { return &p.Full },
+		scaffoldHint: "the complete current state",
+		value:        func(p *FacetPayload) *string { return &p.Full },
 	},
 }
 
@@ -207,6 +216,39 @@ func (o OutputSpec) RenderFacetDocument(payload FacetPayload) string {
 		blocks = append(blocks, "## "+section.Heading+"\n\n"+value)
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+// RenderFacetScaffold renders the pre-first-publish body for a faceted
+// output: the same section skeleton [OutputSpec.RenderFacetDocument]
+// will produce, with an awaiting-first-cycle placeholder under each
+// heading. The first iteration sees this body in its Declared Durable
+// Outputs context, so the scaffold showing the exact shape a correct
+// publish produces is what stops that turn from inventing a structure
+// of its own. Rendering goes through the real renderer rather than a
+// copy so the scaffold cannot drift from the published form.
+func (o OutputSpec) RenderFacetScaffold() string {
+	var payload FacetPayload
+	for _, field := range o.FacetFields() {
+		section, ok := facetSectionByKey(field.Key)
+		if !ok {
+			continue
+		}
+		*section.value(&payload) = facetScaffoldPlaceholder(field, section.scaffoldHint)
+	}
+	return o.RenderFacetDocument(payload)
+}
+
+// facetScaffoldPlaceholder builds one section's placeholder. A json
+// facet gets a valid-JSON placeholder because its section renders
+// inside a json fence, where prose reads as damage.
+func facetScaffoldPlaceholder(field FacetField, hint string) string {
+	if field.Format == FacetFormatJSON {
+		return `{"awaiting_first_cycle": true}`
+	}
+	if field.MaxRunes > 0 {
+		return fmt.Sprintf("_(awaiting first cycle — %s, ≤%d characters)_", hint, field.MaxRunes)
+	}
+	return fmt.Sprintf("_(awaiting first cycle — %s)_", hint)
 }
 
 // ParseFacetDocument reads a rendered document body back into a payload.

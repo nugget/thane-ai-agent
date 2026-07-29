@@ -114,7 +114,7 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 						// reads this key off the document, so a rewrite that
 						// dropped it would quietly publish the loop's private
 						// thinking.
-						Frontmatter: loopOutputAudienceFrontmatter(output),
+						Frontmatter: loopOutputFrontmatter(output),
 					})
 					if err != nil {
 						return "", err

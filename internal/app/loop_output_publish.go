@@ -9,15 +9,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
-// Frontmatter keys stamped on loop-managed documents. audience is the
-// document layer's projection gate (an internal document stays out of
-// search results and tagged-guidance injection); managed_by records
-// which generated tool owns the document's structure, so a later edit
-// arriving through a general document tool can be pointed back at the
-// owning interface instead of silently competing with it.
+// Frontmatter keys stamped on loop-managed documents. The contract
+// package owns the names (the create-time scaffold stamps the same
+// keys); see the [looppkg.OutputAudienceFrontmatterKey] doc for what
+// each key does.
 const (
-	loopOutputAudienceKey  = "audience"
-	loopOutputManagedByKey = "managed_by"
+	loopOutputAudienceKey  = looppkg.OutputAudienceFrontmatterKey
+	loopOutputManagedByKey = looppkg.OutputManagedByFrontmatterKey
 )
 
 // buildFacetPublishTool generates the publish interface for one faceted
@@ -70,12 +68,9 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 			}
 			body := output.RenderFacetDocument(payload)
 			result, err := store.Write(ctx, documents.WriteArgs{
-				Ref:  output.Ref,
-				Body: &body,
-				Frontmatter: map[string][]string{
-					loopOutputAudienceKey:  {string(output.EffectiveAudience())},
-					loopOutputManagedByKey: {output.ToolName()},
-				},
+				Ref:         output.Ref,
+				Body:        &body,
+				Frontmatter: loopOutputFrontmatter(output),
 			})
 			if err != nil {
 				return "", err
@@ -125,21 +120,22 @@ func writeLoopWorkingNotes(ctx context.Context, store *documents.Store, notes lo
 	return store.Write(ctx, documents.WriteArgs{
 		Ref:         notes.Ref,
 		Body:        &body,
-		Frontmatter: loopOutputAudienceFrontmatter(notes),
+		Frontmatter: loopOutputFrontmatter(notes),
 	})
 }
 
-// loopOutputAudienceFrontmatter returns the audience stamp for an
-// output's document, or nil when the output is published (the document
-// layer's default). Stamping internal is what makes an internal
-// declaration real: the exclusion in search and tagged-guidance
-// injection reads this key, not the loop spec.
-func loopOutputAudienceFrontmatter(output looppkg.OutputSpec) map[string][]string {
-	if output.EffectiveAudience() != looppkg.OutputAudienceInternal {
-		return nil
-	}
+// loopOutputFrontmatter returns the ownership stamp for an output's
+// document, applied on every write rather than only the first. Stamping
+// the audience is what makes an internal declaration real: the
+// exclusion in search and tagged-guidance injection reads this key off
+// the document, not the loop spec, so a rewrite that dropped it would
+// quietly publish the loop's private thinking. managed_by rides along
+// so an edit arriving through a general document tool can be pointed
+// back at the owning interface.
+func loopOutputFrontmatter(output looppkg.OutputSpec) map[string][]string {
 	return map[string][]string{
-		loopOutputAudienceKey: {string(looppkg.OutputAudienceInternal)},
+		loopOutputAudienceKey:  {string(output.EffectiveAudience())},
+		loopOutputManagedByKey: {output.ToolName()},
 	}
 }
 
