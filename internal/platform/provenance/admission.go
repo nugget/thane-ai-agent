@@ -188,8 +188,17 @@ func logSeedFloorUsed(logger *slog.Logger, repoPath, commit string) {
 // whose history is perfectly intact — the failure mode is not hypothetical,
 // since a repository owned by another user makes git refuse every command
 // with an error that has nothing to do with commits.
+//
+// The trailing "--" is load-bearing for the same reason. A document root is a
+// directory an agent writes files into, and a file named HEAD there makes the
+// revision ambiguous with a path — git then refuses with usage advice rather
+// than an answer, and this reports it as the fourth thing the distinctions
+// above exist to prevent: a root whose history is perfectly intact, refused
+// over a loose file beside it. The separator says everything before it is a
+// revision, which is the guard the read surface already applies to every
+// revision it passes.
 func rootCommits(ctx context.Context, repoPath string) ([]string, error) {
-	out, err := runGitText(ctx, repoPath, "rev-list", "--max-parents=0", "HEAD")
+	out, err := runGitText(ctx, repoPath, "rev-list", "--max-parents=0", "--end-of-options", "HEAD", "--")
 	if err == nil {
 		return nonEmptyLines(out), nil
 	}
@@ -201,7 +210,7 @@ func rootCommits(ctx context.Context, repoPath string) ([]string, error) {
 	case strings.TrimSpace(inside) != "true":
 		return nil, fmt.Errorf("%s is not a git work tree, so it has no history to admit", repoPath)
 	}
-	if _, headErr := runGitText(ctx, repoPath, "rev-parse", "--verify", "HEAD"); headErr != nil {
+	if _, headErr := runGitText(ctx, repoPath, "rev-parse", "--verify", "--end-of-options", "HEAD"); headErr != nil {
 		return nil, nil
 	}
 	return nil, fmt.Errorf("list root commits of %s: %w", repoPath, err)
