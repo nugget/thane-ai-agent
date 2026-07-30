@@ -42,11 +42,12 @@ hoc one does not.
 takes one output document, can declare its facets, and always gives the
 loop a private working-notes document alongside. Both documents are
 scaffolded before launch — a faceted one with the exact section
-skeleton its publish tool fills — and a document that already exists
-is preserved, never re-scaffolded. Pass `dry_run: true` to preview the
-derived spec without building anything. Reach for
-`loop_definition_set` when a loop needs more than one published document
-or a field the front door does not expose.
+skeleton its publish tool fills — and `output.initial` upgrades the
+scaffold to a real first publish authored from the survey you just
+did. A document that already exists is preserved, never re-scaffolded.
+Pass `dry_run: true` to preview the derived spec without building
+anything. Reach for `loop_definition_set` when a loop needs more than
+one published document or a field the front door does not expose.
 
 ## Where to go next
 

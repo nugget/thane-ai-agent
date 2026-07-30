@@ -376,3 +376,250 @@ func TestGuidedCreateFailsClosedOnUnreadableOutputDoc(t *testing.T) {
 		t.Errorf("error should name the ref, got: %v", err)
 	}
 }
+
+// seededArgs is curateArgs with a full-ladder facet declaration and a
+// complete output.initial seed.
+func seededArgs(initial map[string]any) map[string]any {
+	return curateArgs(map[string]any{
+		"facets":  []any{"status_line", "digest"},
+		"initial": initial,
+	})
+}
+
+// TestGuidedCreateSeedsFirstPublish pins the create-time seed: the
+// creating model has just surveyed the domain, and the loop inheriting
+// the document may run on a smaller model, so output.initial becomes a
+// real first publish — rendered through the same contract the publish
+// tool uses — instead of a placeholder skeleton.
+func TestGuidedCreateSeedsFirstPublish(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	out, err := rig.tool.Handler(ctx, seededArgs(map[string]any{
+		"status_line": "Closet 21.4°C, UPS on mains.",
+		"digest":      "Environment stable all afternoon; dehumidifier idle.",
+		"full":        "Temperature 21.4°C and steady. UPS on mains, full charge.",
+		"notes":       "Starting theory: the UPS fan dominates the noise floor.",
+	}))
+	if err != nil {
+		t.Fatalf("thane_loop_create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["document_state"] != "seeded" {
+		t.Errorf("document_state = %v, want seeded", result["document_state"])
+	}
+	if result["working_notes_state"] != "seeded" {
+		t.Errorf("working_notes_state = %v, want seeded", result["working_notes_state"])
+	}
+
+	doc, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read seeded doc: %v", err)
+	}
+	for _, want := range []string{
+		"## Status Line", "Closet 21.4°C, UPS on mains.",
+		"## Digest", "dehumidifier idle",
+		"## Details", "full charge",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("seeded document missing %q:\n%s", want, doc)
+		}
+	}
+	if strings.Contains(doc, "awaiting first cycle") {
+		t.Errorf("seeded document still carries placeholders:\n%s", doc)
+	}
+	notes, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet-notes.md"})
+	if err != nil {
+		t.Fatalf("read seeded notes: %v", err)
+	}
+	if !strings.Contains(notes, "UPS fan dominates") {
+		t.Errorf("notes seed missing:\n%s", notes)
+	}
+}
+
+// TestGuidedCreateSeedValidation pins that a seed passes the loop's own
+// publish contract — a seed the publish tool would refuse must not
+// become the document's first state, and the errors teach the same
+// corrections.
+func TestGuidedCreateSeedValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial map[string]any
+		wantErr string
+	}{
+		{
+			name: "missing declared facet",
+			initial: map[string]any{
+				"status_line": "One line.",
+				"full":        "Body.",
+			},
+			wantErr: "digest",
+		},
+		{
+			name: "over budget status line",
+			initial: map[string]any{
+				"status_line": strings.Repeat("x", 121),
+				"digest":      "Fine.",
+				"full":        "Fine.",
+			},
+			wantErr: "limit is 120",
+		},
+		{
+			name: "reserved heading inside content",
+			initial: map[string]any{
+				"status_line": "One line.",
+				"digest":      "Fine.",
+				"full":        "## Digest\n\nsmuggled section",
+			},
+			wantErr: "reserved section heading",
+		},
+		{
+			name:    "unknown key refused, not dropped",
+			initial: map[string]any{"summary": "nope"},
+			wantErr: "output.initial.summary",
+		},
+		{
+			name:    "teaser not declared by this output",
+			initial: map[string]any{"teaser": "undeclared"},
+			wantErr: "output.initial.teaser",
+		},
+		{
+			name:    "empty notes",
+			initial: map[string]any{"notes": "   "},
+			wantErr: "output.initial.notes is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rig := newCurateTestRig(t)
+			_, err := rig.tool.Handler(context.Background(), seededArgs(tt.initial))
+			if err == nil {
+				t.Fatal("invalid seed should refuse")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestGuidedCreateSeedNotesOnly pins the half-seed: a starting theory
+// without a first publish leaves the document on its placeholder
+// skeleton while the notes open with a belief to revise.
+func TestGuidedCreateSeedNotesOnly(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	out, err := rig.tool.Handler(ctx, seededArgs(map[string]any{
+		"notes": "Watch whether the light sensor earns its keep.",
+	}))
+	if err != nil {
+		t.Fatalf("thane_loop_create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["document_state"] != "scaffolded" {
+		t.Errorf("document_state = %v, want scaffolded", result["document_state"])
+	}
+	if result["working_notes_state"] != "seeded" {
+		t.Errorf("working_notes_state = %v, want seeded", result["working_notes_state"])
+	}
+	doc, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read doc: %v", err)
+	}
+	if !strings.Contains(doc, "awaiting first cycle") {
+		t.Errorf("notes-only seed should leave the document scaffold:\n%s", doc)
+	}
+}
+
+// TestGuidedCreateSeedUnfacetedTakesFullOnly pins the unfaceted shape:
+// the document's whole body rides the full key, and projection keys are
+// refused because this declaration publishes none.
+func TestGuidedCreateSeedUnfacetedTakesFullOnly(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	out, err := rig.tool.Handler(ctx, curateArgs(map[string]any{
+		"initial": map[string]any{"full": "# Closet\n\nFirst complete body."},
+	}))
+	if err != nil {
+		t.Fatalf("thane_loop_create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["document_state"] != "seeded" {
+		t.Errorf("document_state = %v, want seeded", result["document_state"])
+	}
+	doc, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read doc: %v", err)
+	}
+	if !strings.Contains(doc, "First complete body.") {
+		t.Errorf("unfaceted seed body missing:\n%s", doc)
+	}
+
+	rig2 := newCurateTestRig(t)
+	_, err = rig2.tool.Handler(ctx, curateArgs(map[string]any{
+		"initial": map[string]any{"status_line": "no ladder declared"},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "output.initial.status_line") {
+		t.Errorf("projection seed on an unfaceted output should refuse by key, got: %v", err)
+	}
+}
+
+// TestGuidedCreateSeedRefusesExistingDocument pins the conflict
+// direction: an existing document's accumulated state wins over
+// create-time content, and dropping the seed silently would leave the
+// caller believing content was published that never landed.
+func TestGuidedCreateSeedRefusesExistingDocument(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line", "digest"}})); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	args := seededArgs(map[string]any{
+		"status_line": "Fresh.",
+		"digest":      "Fresh.",
+		"full":        "Fresh.",
+	})
+	args["replace"] = true
+	_, err := rig.tool.Handler(ctx, args)
+	if err == nil {
+		t.Fatal("seed against an existing document should refuse")
+	}
+	if !strings.Contains(err.Error(), "current state wins") {
+		t.Errorf("error should explain the preserve-wins rule, got: %v", err)
+	}
+}
+
+// TestGuidedCreateSeedDryRunWritesNothing pins that a valid seed still
+// respects dry_run's whole reason to exist.
+func TestGuidedCreateSeedDryRunWritesNothing(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	args := seededArgs(map[string]any{
+		"status_line": "One line.",
+		"digest":      "Enough to act on.",
+		"full":        "Everything.",
+		"notes":       "A theory.",
+	})
+	args["dry_run"] = true
+	if _, err := rig.tool.Handler(ctx, args); err != nil {
+		t.Fatalf("dry run with seed: %v", err)
+	}
+	for _, ref := range []string{"kb:dashboards/closet.md", "kb:dashboards/closet-notes.md"} {
+		if _, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: ref}); err == nil {
+			t.Errorf("dry run wrote %s", ref)
+		}
+	}
+}

@@ -125,7 +125,12 @@ blind truncation of it.
 `thane_loop_create` builds this shape directly: declare the facets on
 its `output` argument and the working notes are derived for you, with
 both documents scaffolded before launch — the faceted one with the
-exact section skeleton its publish tool fills. The full spec below is
+exact section skeleton its publish tool fills. If you have just
+surveyed the domain, pass `output.initial` (the publish tool's
+arguments: the declared facets plus `full`, and `notes` for your
+starting theory) so the document opens on a real first publish in your
+voice rather than placeholders — the loop revises it from live state
+at its first wake. The full spec below is
 the same loop authored by hand, for when you need a field the front
 door does not expose (several published documents, a facet's format,
 notes placed somewhere specific). Lint first on that path —

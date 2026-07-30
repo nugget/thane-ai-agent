@@ -31,7 +31,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
 			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — give it an entity subscription with wake: true (wakes on that entity's changes), point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; without at least one trigger it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
-			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. A document that already exists is preserved rather than re-scaffolded (document_state / working_notes_state in the result report which happened). Omit output for a loop that acts without maintaining a document. " +
+			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. Better than the placeholder skeleton: output.initial authors the first publish at create time from the survey you just did (same arguments as the publish tool; see the parameter). A document that already exists is preserved rather than re-scaffolded or seeded (document_state / working_notes_state in the result report which happened). Omit output for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, facets when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
@@ -181,6 +181,14 @@ type executingLoopPlan struct {
 	entityCount int
 	envelope    sleepEnvelope
 	createdAt   time.Time
+
+	// seedDocument marks that output.initial carried a first publish for
+	// the maintained document; seedPayload holds it, already validated
+	// against the output's own facet contract. seedNotes is the initial
+	// working-notes body, empty when not seeded.
+	seedDocument bool
+	seedPayload  looppkg.FacetPayload
+	seedNotes    string
 }
 
 // planExecutingLoop derives the plan without writing anything. It reads
@@ -225,13 +233,16 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 	// managed OutputSpec + a curate-style task; otherwise the loop's per-iteration
 	// task is its intent.
 	var (
-		outputs     []looppkg.OutputSpec
-		outputSpec  looppkg.OutputSpec
-		documentRef string
-		title       string
-		hasOutput   bool
-		facets      []looppkg.FacetSpec
-		notesRef    string
+		outputs      []looppkg.OutputSpec
+		outputSpec   looppkg.OutputSpec
+		documentRef  string
+		title        string
+		hasOutput    bool
+		facets       []looppkg.FacetSpec
+		notesRef     string
+		seedDocument bool
+		seedPayload  looppkg.FacetPayload
+		seedNotes    string
 	)
 	if raw, ok := args["output"].(map[string]any); ok && raw != nil {
 		hasOutput = true
@@ -262,6 +273,11 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		notesSpec := buildWorkingNotesSpec(name, documentRef, intent)
 		outputs = append(outputs, notesSpec)
 		notesRef = notesSpec.Ref
+
+		seedPayload, seedNotes, seedDocument, err = parseOutputInitial(raw["initial"], outputSpec)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if _, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name); err != nil {
@@ -310,18 +326,108 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 	warnings := looppkg.BuildDefinitionWarnings(spec)
 
 	return &executingLoopPlan{
-		spec:        spec,
-		warnings:    warnings,
-		replace:     replace,
-		hasOutput:   hasOutput,
-		documentRef: documentRef,
-		title:       title,
-		outputTool:  outputSpec.ToolName(),
-		notesRef:    notesRef,
-		entityCount: len(entities),
-		envelope:    envelope,
-		createdAt:   now,
+		spec:         spec,
+		warnings:     warnings,
+		replace:      replace,
+		hasOutput:    hasOutput,
+		documentRef:  documentRef,
+		title:        title,
+		outputTool:   outputSpec.ToolName(),
+		notesRef:     notesRef,
+		entityCount:  len(entities),
+		envelope:     envelope,
+		createdAt:    now,
+		seedDocument: seedDocument,
+		seedPayload:  seedPayload,
+		seedNotes:    seedNotes,
 	}, nil
+}
+
+// parseOutputInitial reads output.initial — a first publish authored at
+// create time, in the same argument shape as the loop's generated
+// publish tool. The creating model has just surveyed the domain and the
+// loop inheriting the document may run on a smaller model, so the
+// content is worth capturing while that context exists; the contract
+// stays the loop's own (a faceted seed passes the full facet
+// validation, budgets and all), so a seed can never teach the first
+// wake a shape a correct publish would not produce.
+//
+// Unknown keys are refused rather than dropped — a seed key that
+// silently vanishes is content the author believes was published.
+func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.FacetPayload, notes string, seedsDocument bool, err error) {
+	if raw == nil {
+		return looppkg.FacetPayload{}, "", false, nil
+	}
+	initial, ok := raw.(map[string]any)
+	if !ok {
+		return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial must be an object with the publish tool's arguments, got %T", raw)
+	}
+	if len(initial) == 0 {
+		return looppkg.FacetPayload{}, "", false, nil
+	}
+
+	documentKeys := []string{"full"}
+	if output.HasFacets() {
+		documentKeys = documentKeys[:0]
+		for _, field := range output.FacetFields() {
+			documentKeys = append(documentKeys, field.Key)
+		}
+	}
+	allowed := map[string]bool{"notes": true}
+	for _, key := range documentKeys {
+		allowed[key] = true
+	}
+	for key := range initial {
+		if !allowed[key] {
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.%s is not part of this output's publish shape; this declaration takes %s, plus notes", key, strings.Join(documentKeys, ", "))
+		}
+	}
+
+	if rawNotes, present := initial["notes"]; present {
+		s, ok := rawNotes.(string)
+		if !ok {
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.notes must be a string, got %T", rawNotes)
+		}
+		if strings.TrimSpace(s) == "" {
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.notes is empty; pass the loop's starting thinking or omit the key")
+		}
+		notes = s
+	}
+
+	seedsDocument = false
+	for _, key := range documentKeys {
+		if _, present := initial[key]; present {
+			seedsDocument = true
+			break
+		}
+	}
+	if !seedsDocument {
+		return looppkg.FacetPayload{}, notes, false, nil
+	}
+
+	if output.HasFacets() {
+		payload, err = output.FacetPayloadFromArgs(initial)
+		if err != nil {
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %w", err)
+		}
+		// The whole declared ladder or nothing: a partial seed would
+		// publish projections describing different moments, exactly what
+		// the publish tool exists to prevent.
+		if err := output.ValidateFacetPayload(payload); err != nil {
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %w", err)
+		}
+		return payload, notes, true, nil
+	}
+
+	full, ok := initial["full"].(string)
+	if !ok {
+		return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.full must be a string, got %T", initial["full"])
+	}
+	if strings.TrimSpace(full) == "" {
+		return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.full is empty; pass the document's first complete body or omit the key")
+	}
+	payload.Full = full
+	return payload, notes, true, nil
 }
 
 func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any, name, intent string, op looppkg.Operation) (string, error) {
@@ -372,6 +478,13 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		if docExists && !replace {
 			return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
 		}
+		// A seed against an existing document is a conflict to surface, not
+		// resolve: the document's accumulated state wins over create-time
+		// content, and silently dropping the seed would leave the caller
+		// believing content was published that never landed anywhere.
+		if plan.seedDocument && docExists {
+			return "", fmt.Errorf("output document %q already exists, so its current state wins over output.initial — drop initial, or let the running loop republish through %s", documentRef, outputTool)
+		}
 		// The notes ref is derived rather than supplied, so a collision is
 		// something the caller never chose and would not expect: appending a
 		// loop's private reasoning onto an unrelated document is worse than
@@ -384,6 +497,9 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 			}
 			if notesExists && !replace {
 				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
+			}
+			if plan.seedNotes != "" && notesExists {
+				return "", fmt.Errorf("working-notes document %q already exists, so the loop's own thinking wins over output.initial.notes — drop the notes seed", plan.notesRef)
 			}
 		}
 
@@ -401,16 +517,28 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		// an iteration on the loop, and blowing away the state its
 		// predecessor accumulated would hand the next iteration a
 		// placeholder where its carried belief used to be. Only the
-		// ownership frontmatter is refreshed.
+		// ownership frontmatter is refreshed. A fresh document gets the
+		// seed when output.initial carried one — a real first publish,
+		// authored while the creating model still holds the survey that
+		// justified the loop — and the placeholder skeleton otherwise.
 		documentState, notesState = "scaffolded", "scaffolded"
 		writeArgs := documents.WriteArgs{
 			Ref:         documentRef,
 			Title:       title,
 			Frontmatter: frontmatter,
 		}
-		if docExists {
+		switch {
+		case docExists:
 			documentState = "preserved_existing"
-		} else {
+		case plan.seedDocument:
+			frontmatter["created"] = []string{now.Format(time.RFC3339)}
+			body := plan.seedPayload.Full
+			if outputSpec.HasFacets() {
+				body = outputSpec.RenderFacetDocument(plan.seedPayload)
+			}
+			writeArgs.Body = &body
+			documentState = "seeded"
+		default:
 			frontmatter["created"] = []string{now.Format(time.RFC3339)}
 			body := renderOutputScaffoldBody(outputSpec, title, intent)
 			writeArgs.Body = &body
@@ -430,9 +558,15 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 				Title:       title + " — Working Notes",
 				Frontmatter: notesFrontmatter,
 			}
-			if notesExists {
+			switch {
+			case notesExists:
 				notesState = "preserved_existing"
-			} else {
+			case plan.seedNotes != "":
+				notesFrontmatter["created"] = []string{now.Format(time.RFC3339)}
+				notesBody := plan.seedNotes
+				notesArgs.Body = &notesBody
+				notesState = "seeded"
+			default:
 				notesFrontmatter["created"] = []string{now.Format(time.RFC3339)}
 				notesBody := renderWorkingNotesScaffoldBody(name)
 				notesArgs.Body = &notesBody
@@ -687,6 +821,17 @@ func thaneLoopCreateSchema() map[string]any {
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
 						"description": "Publish condensed projections alongside the full body, so each consumer takes the length it can afford — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest. Declaring these swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per projection. Declare them whenever anything other than this loop will read the document.",
+					},
+					"initial": map[string]any{
+						"type":        "object",
+						"description": "Optional first publish, written at create time in the same argument shape as the loop's generated publish tool: one key per declared facet plus full (all together, same budgets — over-budget values are rejected with the limit named), or just full for an unfaceted document; notes seeds the private working notes with your starting theory. You have just surveyed this domain, and the loop inheriting the document may run on a smaller model — author the first publish from what you observed instead of leaving a placeholder; the loop revises from live state at its first wake. Refused when the document already exists.",
+						"properties": map[string]any{
+							"status_line": map[string]any{"type": "string"},
+							"teaser":      map[string]any{"type": "string"},
+							"digest":      map[string]any{"type": "string"},
+							"full":        map[string]any{"type": "string"},
+							"notes":       map[string]any{"type": "string"},
+						},
 					},
 				},
 				"required": []string{"document"},
