@@ -312,3 +312,84 @@ func TestHydrateLoopOutputsWithoutAgentLoop(t *testing.T) {
 		t.Errorf("no agent loop wired, so no native to re-expose; got %v", names)
 	}
 }
+
+// TestWrapOwnOutputDocRead pins the owner privilege and its exact
+// boundary: a whole-document read of the loop's own output returns in
+// full past the general 16 KiB cap, while a foreign ref and a
+// facet-level read fall through to the native handler untouched. The
+// cap the privilege replaces is a real one — the same read through the
+// standard path truncates — so this test builds a document that
+// actually exceeds it.
+func TestWrapOwnOutputDocRead(t *testing.T) {
+	store, _ := newLoopOutputDocumentStore(t)
+	docTools := documents.NewTools(store)
+
+	big := strings.Repeat("The office stays warm and the belief accumulates. ", 500) // ~25 KiB
+	if _, err := store.Write(context.Background(), documents.WriteArgs{
+		Ref:  "core:office.md",
+		Body: &big,
+	}); err != nil {
+		t.Fatalf("seed large document: %v", err)
+	}
+
+	nativeCalls := 0
+	runtimeTools := []looppkg.RuntimeTool{{
+		Name:        "doc_read",
+		Description: "native description.",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			nativeCalls++
+			return `{"native": true}`, nil
+		},
+	}}
+	outputs := []looppkg.OutputSpec{{
+		Name: "office",
+		Type: looppkg.OutputTypeMaintainedDocument,
+		Ref:  "core:office.md",
+	}}
+	wrapped := wrapOwnOutputDocRead(runtimeTools, docTools, outputs)
+
+	// Own ref, no level: full body under the raised budget.
+	got, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:office.md"})
+	if err != nil {
+		t.Fatalf("own-output read: %v", err)
+	}
+	if strings.Contains(got, `"truncated": true`) {
+		t.Fatalf("own-output read truncated under the privileged budget:\n%.300s", got)
+	}
+	if !strings.Contains(got, "the belief accumulates") {
+		t.Errorf("own-output read missing body content:\n%.300s", got)
+	}
+	if nativeCalls != 0 {
+		t.Errorf("own-output read went through the native capped path")
+	}
+
+	// The privilege replaces a real cap: the standard path truncates
+	// this same document.
+	capped, err := docTools.Read(context.Background(), documents.RefArgs{Ref: "core:office.md"})
+	if err != nil {
+		t.Fatalf("standard read: %v", err)
+	}
+	if !strings.Contains(capped, `"truncated": true`) {
+		t.Errorf("standard read did not truncate a >16KiB document; the privilege tests nothing:\n%.200s", capped)
+	}
+
+	// Foreign ref: native path.
+	if _, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:other.md"}); err != nil {
+		t.Fatalf("foreign read: %v", err)
+	}
+	if nativeCalls != 1 {
+		t.Errorf("foreign ref should use the native handler, calls = %d", nativeCalls)
+	}
+
+	// Own ref with level: native path (a projection never nears the cap).
+	if _, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:office.md", "level": "status_line"}); err != nil {
+		t.Fatalf("level read: %v", err)
+	}
+	if nativeCalls != 2 {
+		t.Errorf("level read should use the native handler, calls = %d", nativeCalls)
+	}
+
+	if !strings.Contains(wrapped[0].Description, "raised result budget") {
+		t.Errorf("wrapped description should teach the privilege: %q", wrapped[0].Description)
+	}
+}

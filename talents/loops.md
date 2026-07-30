@@ -21,12 +21,13 @@ the output tool overwrites the entire body.
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,
 `doc_at` — regardless of its tags: reading what you own, and the
-revision history behind it, is never gated. A document too large for
-one `doc_read` pages through `doc_outline` + `doc_section`.
-Yesterday's belief, when a value changed, what a publish actually
-altered — that record already exists; walk it instead of
-reconstructing it. Writes still go only through the generated output
-tool.
+revision history behind it, is never gated. `doc_read` on one of your
+own outputs returns the whole document even when it is large — one
+read, the full body you are about to replace; `doc_outline` +
+`doc_section` page through other large documents. Yesterday's belief,
+when a value changed, what a publish actually altered — that record
+already exists; walk it instead of reconstructing it. Writes still go
+only through the generated output tool.
 
 `thane_loop_create` declares facets directly and derives the working
 notes itself; reach for `loop_definition_set` +

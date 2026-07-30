@@ -57,7 +57,7 @@ func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 		}
 		outputs := cloneLoopOutputs(spec.Outputs)
 		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentStore, outputs)...)
-		spec.RuntimeTools = append(spec.RuntimeTools, a.ownOutputReadTools()...)
+		spec.RuntimeTools = append(spec.RuntimeTools, a.ownOutputReadTools(outputs)...)
 		spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
 			return renderLoopOutputContextWithNow(ctx, a.documentStore, outputs, time.Now())
 		}
@@ -76,6 +76,19 @@ func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 // prevent.
 var ownOutputReadToolNames = []string{"doc_read", "doc_outline", "doc_section", "doc_history", "doc_diff", "doc_at"}
 
+// ownOutputReadResultBytes is the serialization budget for a loop
+// reading its OWN declared output whole. The general doc_read cap
+// protects a casual reader from a giant document; the owning loop's
+// whole-document read is not casual — it is the mandatory input to a
+// whole-body rewrite, and a truncated result is never a valid end
+// state there (the loop would have to page and re-stitch, which is
+// where content gets dropped). 8× the general cap keeps document plus
+// rewrite inside a local model's context window; past this size the
+// document has outgrown single-document maintenance. Never unbounded:
+// a pathological document (the 32 MB frontmatter-amplification
+// incident) must truncate rather than annihilate the loop's context.
+const ownOutputReadResultBytes = 128 * 1024
+
 // ownOutputReadTools re-exposes the native read-side document tools as
 // loop runtime tools. A loop that owns a maintained document must be
 // able to read what it owns: its own task boilerplate says "read the
@@ -86,11 +99,49 @@ var ownOutputReadToolNames = []string{"doc_read", "doc_outline", "doc_section", 
 // natives are re-exposed verbatim — same names, same handlers — so the
 // vocabulary already frozen into stored specs and shipped teaching
 // becomes true, including for loops launched long before this existed.
-func (a *App) ownOutputReadTools() []looppkg.RuntimeTool {
+// doc_read alone is owner-aware: a whole-document read of one of this
+// loop's own outputs runs under [ownOutputReadResultBytes] instead of
+// the general cap.
+func (a *App) ownOutputReadTools(outputs []looppkg.OutputSpec) []looppkg.RuntimeTool {
 	if a == nil || a.loop == nil {
 		return nil
 	}
-	return reExposeNativeTools(a.loop.Tools(), ownOutputReadToolNames)
+	return wrapOwnOutputDocRead(reExposeNativeTools(a.loop.Tools(), ownOutputReadToolNames), a.documentTools, outputs)
+}
+
+// wrapOwnOutputDocRead makes the re-exposed doc_read owner-aware: a
+// whole-document read of one of the loop's own declared outputs is
+// served under the privileged budget, while foreign refs and
+// facet-level reads keep the native behavior (a level read returns one
+// projection and never nears the cap; a foreign document deserves the
+// same protection every other reader gets). The ref must match a
+// declared output exactly — a miss degrades to the capped native path,
+// never to an error.
+func wrapOwnOutputDocRead(runtimeTools []looppkg.RuntimeTool, docTools *documents.Tools, outputs []looppkg.OutputSpec) []looppkg.RuntimeTool {
+	if docTools == nil || len(outputs) == 0 {
+		return runtimeTools
+	}
+	ownRefs := make(map[string]bool, len(outputs))
+	for _, output := range outputs {
+		ownRefs[output.Ref] = true
+	}
+	for i := range runtimeTools {
+		if runtimeTools[i].Name != "doc_read" {
+			continue
+		}
+		native := runtimeTools[i].Handler
+		runtimeTools[i].Description += " Reading one of THIS loop's own declared outputs without level returns the whole document under a raised result budget — one read, the full body you are about to replace."
+		runtimeTools[i].Handler = func(ctx context.Context, args map[string]any) (string, error) {
+			ref, _ := args["ref"].(string)
+			ref = strings.TrimSpace(ref)
+			level, _ := args["level"].(string)
+			if ownRefs[ref] && strings.TrimSpace(level) == "" {
+				return docTools.ReadWithResultBudget(ctx, documents.RefArgs{Ref: ref}, ownOutputReadResultBytes)
+			}
+			return native(ctx, args)
+		}
+	}
+	return runtimeTools
 }
 
 // reExposeNativeTools copies named tools out of a registry into the
