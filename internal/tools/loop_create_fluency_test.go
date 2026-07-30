@@ -353,3 +353,26 @@ func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
 		t.Errorf("replace clobbered the working notes:\n%s", notes)
 	}
 }
+
+// TestGuidedCreateFailsClosedOnUnreadableOutputDoc pins the existence
+// probe's failure direction. The probe's answer decides between
+// scaffolding and preserving, so a read that fails for any reason
+// other than not-found — unknown root, provenance verification, IO —
+// must stop the create: misread as "absent", it would scaffold over
+// whatever is actually there.
+func TestGuidedCreateFailsClosedOnUnreadableOutputDoc(t *testing.T) {
+	rig := newCurateTestRig(t)
+	args := curateArgs(nil)
+	args["output"] = map[string]any{"document": "vault:dashboards/closet.md"}
+
+	_, err := rig.tool.Handler(context.Background(), args)
+	if err == nil {
+		t.Fatal("an unreadable output ref should refuse, not scaffold")
+	}
+	if !strings.Contains(err.Error(), "inspect output document") {
+		t.Errorf("error should name the failed probe, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "vault:dashboards/closet.md") {
+		t.Errorf("error should name the ref, got: %v", err)
+	}
+}

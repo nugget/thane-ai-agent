@@ -365,12 +365,12 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	if hasOutput {
 		outputSpec, notesSpec := declaredOutputSpecs(spec.Outputs)
 
-		docExists := false
-		if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil {
-			if !replace {
-				return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
-			}
-			docExists = true
+		docExists, err := declaredDocumentExists(ctx, deps.DocTools, documentRef)
+		if err != nil {
+			return "", err
+		}
+		if docExists && !replace {
+			return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
 		}
 		// The notes ref is derived rather than supplied, so a collision is
 		// something the caller never chose and would not expect: appending a
@@ -378,11 +378,12 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		// refusing to start.
 		notesExists := false
 		if plan.notesRef != "" {
-			if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: plan.notesRef}); readErr == nil {
-				if !replace {
-					return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
-				}
-				notesExists = true
+			notesExists, err = declaredDocumentExists(ctx, deps.DocTools, plan.notesRef)
+			if err != nil {
+				return "", err
+			}
+			if notesExists && !replace {
+				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
 			}
 		}
 
@@ -595,6 +596,24 @@ func parseLoopCreateMetadata(args map[string]any) (map[string]string, error) {
 		out[k] = s
 	}
 	return out, nil
+}
+
+// declaredDocumentExists probes whether a declared output document is
+// already present, distinguishing absence from a failed read. The
+// answer decides between scaffolding and preserving, so a read that
+// fails for any other reason — unknown root, provenance verification,
+// IO — must stop the create: misreading it as "absent" would scaffold
+// over whatever is actually there.
+func declaredDocumentExists(ctx context.Context, docTools *documents.Tools, ref string) (bool, error) {
+	_, err := docTools.Read(ctx, documents.RefArgs{Ref: ref})
+	switch {
+	case err == nil:
+		return true, nil
+	case documents.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("inspect output document %q: %w", ref, err)
+	}
 }
 
 // declaredOutputSpecs splits a created loop's outputs into the
