@@ -273,6 +273,7 @@ func (a *App) initStores(s *newState) error {
 		a.ha.SetWatcher(haWatcher)
 	}
 
+	a.resourceWatchers = make(map[string]*connwatch.Watcher, len(a.resourceHealthClients))
 	for _, res := range a.modelCatalog.Resources {
 		res := res
 		client, ok := a.resourceHealthClients[res.ID]
@@ -294,6 +295,7 @@ func (a *App) initStores(s *newState) error {
 			Logger:  logger.With("resource", res.ID, "provider", res.Provider),
 		})
 		c.AttachWatcher(resourceWatcher)
+		a.resourceWatchers[res.ID] = resourceWatcher
 	}
 
 	if a.modelRuntime != nil && a.modelRuntime.InventoryClientCount() > 0 {
@@ -345,6 +347,23 @@ func (a *App) initStores(s *newState) error {
 	routerCfg := a.modelRegistry.Catalog().RouterConfig(1000)
 	rtr := router.NewRouter(logger, routerCfg)
 	a.rtr = rtr
+
+	// Let scoring consult live resource health so routing steers away
+	// from runners connwatch already knows are down. Resources without a
+	// watcher (anthropic) and watchers that haven't completed their first
+	// probe yet report ready — unknown is optimistic, only a confirmed-
+	// down resource is penalized.
+	rtr.SetResourceReadiness(func(resourceID string) bool {
+		w, ok := a.resourceWatchers[resourceID]
+		if !ok || w == nil {
+			return true
+		}
+		if w.Status().LastCheck.IsZero() {
+			return true
+		}
+		return w.IsReady()
+	})
+
 	logger.Info("model router initialized",
 		"models", len(routerCfg.Models),
 		"default", routerCfg.DefaultModel,

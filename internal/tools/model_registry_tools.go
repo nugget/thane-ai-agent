@@ -201,7 +201,7 @@ func (r *Registry) registerModelRegistryTools() {
 
 	r.Register(&Tool{
 		Name:        "model_route_explain",
-		Description: "Explain how Thane would route a hypothetical request right now using the live registry, live learned experience, and live transient cooldown state. Returns the chosen deployment plus rejected candidates and reasons without mutating router stats or audit history.",
+		Description: "Explain how Thane would route a hypothetical request right now using the live registry, live learned experience, live transient cooldown state, and live resource reachability (deployments on runners the health layer reports down are heavily penalized — look for resource_unreachable_* in rules_matched). Returns the chosen deployment plus rejected candidates and reasons without mutating router stats or audit history.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

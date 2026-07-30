@@ -384,7 +384,7 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 		hints[router.FactorModelPreference] = w.config.ModelPreference
 	}
 
-	model, _ := w.router.Route(ctx, router.Request{
+	model, decision := w.router.Route(ctx, router.Request{
 		Query:          "session metadata generation",
 		Priority:       router.PriorityBackground,
 		RoutingFactors: hints,
@@ -408,8 +408,17 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 	prompt := prompts.MetadataPrompt(transcript)
 	msgs := []llm.Message{{Role: "user", Content: prompt}}
 
+	chatStart := time.Now()
 	resp, err := w.llmClient.Chat(ctx, model, msgs, nil)
 	if err != nil {
+		// Report the failure so the router can cool the resource and
+		// steer later sessions elsewhere. Without this, an unreachable
+		// runner gets re-selected for every session in the backlog.
+		if decision != nil {
+			w.router.RecordFailure(decision.RequestID,
+				time.Since(chatStart).Milliseconds(), 0,
+				router.ClassifyResourceFailure(err))
+		}
 		w.logger.Warn("failed to generate session metadata",
 			"session", ShortID(sess.ID),
 			"model", model,
@@ -419,6 +428,11 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 		// consumed router budget, and the caller should still
 		// rate-limit before the next session.
 		return true
+	}
+	if decision != nil {
+		w.router.RecordOutcome(decision.RequestID,
+			time.Since(chatStart).Milliseconds(),
+			resp.InputTokens+resp.OutputTokens, true)
 	}
 
 	meta, title, tags := parseMetadataResponse(resp.Message.Content, toolUsage, w.logger)

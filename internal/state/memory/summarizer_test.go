@@ -825,3 +825,105 @@ func TestWorker_ArchivistEnqueueFailureStillSummarizes(t *testing.T) {
 		t.Error("enqueue failure must not block metadata generation; expected an LLM call, got 0")
 	}
 }
+
+// unreachableLLMClient fails the way a dead runner does: a fast
+// connection-class error rather than an application-level one.
+type unreachableLLMClient struct {
+	calls atomic.Int64
+}
+
+func (m *unreachableLLMClient) Chat(_ context.Context, _ string, _ []llm.Message, _ []map[string]any) (*llm.ChatResponse, error) {
+	m.calls.Add(1)
+	return nil, fmt.Errorf("request failed: Post \"http://spark.example:11434/api/chat\": dial tcp: lookup spark.example: no such host")
+}
+
+func (m *unreachableLLMClient) ChatStream(ctx context.Context, model string, msgs []llm.Message, tools []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
+	return m.Chat(ctx, model, msgs, tools)
+}
+
+func (m *unreachableLLMClient) Ping(_ context.Context) error { return nil }
+
+// newResourceTestRouter is newTestRouter with a resource identity so
+// cooldown assertions have a resource to look up.
+func newResourceTestRouter() *router.Router {
+	return router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "test-model",
+		Models: []router.Model{
+			{
+				Name:       "test-model",
+				Provider:   "ollama",
+				ResourceID: "test-resource",
+				Quality:    5,
+				Speed:      8,
+				CostTier:   0,
+			},
+		},
+	})
+}
+
+// The summarizer must report Chat outcomes to the router: successes so
+// cooldowns clear, failures so an unreachable runner cools down instead
+// of being re-selected for every session in the backlog.
+func TestSummarizeSessionReportsRouterOutcomes(t *testing.T) {
+	cfg := SummarizerConfig{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+
+	t.Run("success records outcome", func(t *testing.T) {
+		store := newTestStore(t)
+		rtr := newResourceTestRouter()
+		sess := createUnsummarizedSession(t, store, "conv-outcome-ok")
+		w := NewSummarizerWorker(store, &mockLLMClient{}, rtr, slog.Default(), cfg)
+
+		w.summarizeSession(context.Background(), sess)
+
+		stats := rtr.GetStats()
+		if stats.SuccessCount != 1 {
+			t.Fatalf("SuccessCount = %d, want 1", stats.SuccessCount)
+		}
+		if stats.FailureCount != 0 {
+			t.Fatalf("FailureCount = %d, want 0", stats.FailureCount)
+		}
+	})
+
+	t.Run("connection failure records failure and cools resource", func(t *testing.T) {
+		store := newTestStore(t)
+		rtr := newResourceTestRouter()
+		sess := createUnsummarizedSession(t, store, "conv-outcome-down")
+		w := NewSummarizerWorker(store, &unreachableLLMClient{}, rtr, slog.Default(), cfg)
+
+		w.summarizeSession(context.Background(), sess)
+
+		stats := rtr.GetStats()
+		if stats.FailureCount != 1 {
+			t.Fatalf("FailureCount = %d, want 1", stats.FailureCount)
+		}
+		health, ok := stats.ResourceHealth["test-resource"]
+		if !ok {
+			t.Fatalf("resource not cooled after connection failure; ResourceHealth = %#v", stats.ResourceHealth)
+		}
+		if health.CooldownReason != router.CooldownReasonConnection {
+			t.Fatalf("CooldownReason = %q, want %q", health.CooldownReason, router.CooldownReasonConnection)
+		}
+	})
+
+	t.Run("application error records failure without cooldown", func(t *testing.T) {
+		store := newTestStore(t)
+		rtr := newResourceTestRouter()
+		sess := createUnsummarizedSession(t, store, "conv-outcome-apperr")
+		w := NewSummarizerWorker(store, &failingLLMClient{}, rtr, slog.Default(), cfg)
+
+		w.summarizeSession(context.Background(), sess)
+
+		stats := rtr.GetStats()
+		if stats.FailureCount != 1 {
+			t.Fatalf("FailureCount = %d, want 1", stats.FailureCount)
+		}
+		if len(stats.ResourceHealth) != 0 {
+			t.Fatalf("application-level failure must not cool resources; ResourceHealth = %#v", stats.ResourceHealth)
+		}
+	})
+}

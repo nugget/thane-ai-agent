@@ -1657,7 +1657,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		if err != nil {
 			// Record failed outcome
 			if l.router != nil && liteDecision != nil {
-				l.router.RecordFailure(liteDecision.RequestID, time.Since(startTime).Milliseconds(), 0, isTimeout(err))
+				l.router.RecordFailure(liteDecision.RequestID, time.Since(startTime).Milliseconds(), 0, router.ClassifyResourceFailure(err))
 			}
 			return nil, fmt.Errorf("lightweight completion: %w", err)
 		}
@@ -2446,7 +2446,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if err != nil {
 		if l.router != nil && routerDecision != nil {
 			latency := time.Since(startTime).Milliseconds()
-			l.router.RecordFailure(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), isTimeout(err))
+			l.router.RecordFailure(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), router.ClassifyResourceFailure(err))
 		}
 		return nil, err
 	}
