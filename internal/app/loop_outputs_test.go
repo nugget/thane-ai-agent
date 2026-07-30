@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
@@ -235,4 +237,78 @@ func newLoopOutputDocumentStore(t *testing.T) (*documents.Store, string) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	return store, coreDir
+}
+
+// TestReExposeNativeTools pins the read-side re-exposure contract: an
+// output-declaring loop gets the native read tools verbatim, a name the
+// registry doesn't carry degrades to absence rather than failing the
+// launch, and a tool without a handler is never re-exposed (the
+// compiled runtime layer would drop it silently later — skipping it
+// here keeps the surface honest at the seam that decided it).
+func TestReExposeNativeTools(t *testing.T) {
+	registry := tools.NewEmptyRegistry()
+	registry.Register(&tools.Tool{
+		Name:        "doc_read",
+		Description: "Read a managed document.",
+		Parameters:  map[string]any{"type": "object"},
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+	registry.Register(&tools.Tool{
+		Name:        "doc_history",
+		Description: "Revision history.",
+		Handler:     nil, // never re-exposed
+	})
+
+	got := reExposeNativeTools(registry, ownOutputReadToolNames)
+	if len(got) != 1 {
+		t.Fatalf("re-exposed %d tools, want exactly the one with a handler: %+v", len(got), got)
+	}
+	if got[0].Name != "doc_read" || got[0].Handler == nil {
+		t.Errorf("re-exposed tool = %+v, want doc_read with its handler", got[0])
+	}
+	if got[0].Description != "Read a managed document." {
+		t.Errorf("description = %q, want the native's verbatim", got[0].Description)
+	}
+
+	if extra := reExposeNativeTools(nil, ownOutputReadToolNames); extra != nil {
+		t.Errorf("nil registry should re-expose nothing, got %+v", extra)
+	}
+}
+
+// TestHydrateLoopOutputsWithoutAgentLoop pins the degradation path: an
+// App whose agent loop isn't wired (early boot, minimal tests) still
+// hydrates output tools — the read-side re-exposure is additive, never
+// a launch dependency.
+func TestHydrateLoopOutputsWithoutAgentLoop(t *testing.T) {
+	store, _ := newLoopOutputDocumentStore(t)
+	app := &App{documentStore: store}
+	spec := looppkg.Spec{
+		Name:      "reader",
+		Enabled:   true,
+		Task:      "curate",
+		Operation: looppkg.OperationService,
+		SleepMin:  time.Minute,
+		SleepMax:  time.Hour,
+		Outputs: []looppkg.OutputSpec{{
+			Name: "state",
+			Type: looppkg.OutputTypeMaintainedDocument,
+			Ref:  "core:state.md",
+		}},
+	}
+	hydrated, err := app.hydrateLoopOutputs(spec)
+	if err != nil {
+		t.Fatalf("hydrateLoopOutputs: %v", err)
+	}
+	names := make([]string, 0, len(hydrated.RuntimeTools))
+	for _, rt := range hydrated.RuntimeTools {
+		names = append(names, rt.Name)
+	}
+	if !slices.Contains(names, "replace_output_state") {
+		t.Errorf("output tool missing: %v", names)
+	}
+	if slices.Contains(names, "doc_read") {
+		t.Errorf("no agent loop wired, so no native to re-expose; got %v", names)
+	}
 }

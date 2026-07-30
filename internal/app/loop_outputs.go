@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 const (
@@ -56,11 +57,64 @@ func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 		}
 		outputs := cloneLoopOutputs(spec.Outputs)
 		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentStore, outputs)...)
+		spec.RuntimeTools = append(spec.RuntimeTools, a.ownOutputReadTools()...)
 		spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
 			return renderLoopOutputContextWithNow(ctx, a.documentStore, outputs, time.Now())
 		}
 	}
 	return a.hydrateLoopFocusTools(spec)
+}
+
+// ownOutputReadToolNames is the read-only document tool family every
+// output-declaring loop carries regardless of its tags: read the
+// current body, and walk the revision history behind it. The write-side
+// document tools stay tag-gated — a loop's writes belong to its
+// generated output tool, and a second write door is the two-doors
+// hazard managed_by exists to prevent.
+var ownOutputReadToolNames = []string{"doc_read", "doc_history", "doc_diff", "doc_at"}
+
+// ownOutputReadTools re-exposes the native read-side document tools as
+// loop runtime tools. A loop that owns a maintained document must be
+// able to read what it owns: its own task boilerplate says "read the
+// full document with doc_read" when the output context is truncated,
+// and the working-notes contract says revision history records what
+// changed — both were unfollowable for a loop whose tags don't include
+// `documents` (a [ha, awareness] curator has zero doc_* tools). The
+// natives are re-exposed verbatim — same names, same handlers — so the
+// vocabulary already frozen into stored specs and shipped teaching
+// becomes true, including for loops launched long before this existed.
+func (a *App) ownOutputReadTools() []looppkg.RuntimeTool {
+	if a == nil || a.loop == nil {
+		return nil
+	}
+	return reExposeNativeTools(a.loop.Tools(), ownOutputReadToolNames)
+}
+
+// reExposeNativeTools copies named tools out of a registry into the
+// runtime-tool shape hydration attaches to a spec, skipping names the
+// registry doesn't currently carry (a registry without document roots
+// registers no doc tools, and a missing read tool should degrade to
+// the pre-existing behavior rather than fail the launch).
+func reExposeNativeTools(registry *tools.Registry, names []string) []looppkg.RuntimeTool {
+	if registry == nil {
+		return nil
+	}
+	out := make([]looppkg.RuntimeTool, 0, len(names))
+	for _, name := range names {
+		native := registry.Get(name)
+		if native == nil || native.Handler == nil {
+			continue
+		}
+		out = append(out, looppkg.RuntimeTool{
+			Name:                 native.Name,
+			Description:          native.Description,
+			Parameters:           native.Parameters,
+			Handler:              native.Handler,
+			SkipContentResolve:   native.SkipContentResolve,
+			ContentResolveExempt: append([]string(nil), native.ContentResolveExempt...),
+		})
+	}
+	return out
 }
 
 func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) []looppkg.RuntimeTool {
