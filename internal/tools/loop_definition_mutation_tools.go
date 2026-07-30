@@ -83,6 +83,22 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 	// removes them transitively. No watchlist-store wipe needed —
 	// that path was for the old scope_tag indirection.
 
+	// Capture the live instance BEFORE the delete so the result can
+	// report what happened to it. Deleting a durable definition stops
+	// its running loop (reconcile below converges the registry), and a
+	// result silent about that half invites two failure modes at once:
+	// a model that believes delete is definition-layer bookkeeping and
+	// goes hunting for a second verb, and a model that reports a kill
+	// nobody can verify against the transcript.
+	var liveBefore looppkg.Status
+	wasRunning := false
+	if r.loopIntentDeps.LiveRegistry != nil {
+		if live := r.loopIntentDeps.LiveRegistry.GetByName(name); live != nil {
+			liveBefore = live.Status()
+			wasRunning = true
+		}
+	}
+
 	if r.deletePersistedLoopDefinition != nil {
 		if err := r.deletePersistedLoopDefinition(name); err != nil {
 			return "", fmt.Errorf("delete persisted loop definition: %w", err)
@@ -104,6 +120,33 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 		"status":     "ok",
 		"generation": view.Generation,
 		"name":       name,
+	}
+	// Report the live outcome as verified fact, not intent: re-check the
+	// registry after reconcile rather than assuming the stop landed.
+	switch {
+	case !wasRunning:
+		result["no_running_loop"] = true
+	case r.loopIntentDeps.LiveRegistry != nil && r.loopIntentDeps.LiveRegistry.GetByName(name) == nil:
+		result["running_loop_stopped"] = map[string]any{
+			"loop_id":    liveBefore.ID,
+			"iterations": liveBefore.Iterations,
+		}
+	default:
+		result["running_loop_still_live"] = map[string]any{
+			"loop_id": liveBefore.ID,
+			"note":    "the definition is deleted but this instance did not stop during reconcile; stop it with stop_loop and verify with loop_status",
+		}
+	}
+	// The loop's documents are not deleted with it — they may hold value
+	// the owner wants kept. Listing them makes that a decision instead
+	// of a surprise when they are found later, ownerless.
+	if len(existing.Spec.Outputs) > 0 {
+		refs := make([]string, 0, len(existing.Spec.Outputs))
+		for _, output := range existing.Spec.Outputs {
+			refs = append(refs, output.Ref)
+		}
+		result["declared_outputs_left_in_place"] = refs
+		result["outputs_note"] = "the loop's documents were NOT deleted; remove them with doc_delete if they should not outlive the loop"
 	}
 	// Cascade: a runtime MQTT wake subscription can target this loop and
 	// would be orphaned by the delete (it isn't part of the loop's spec).

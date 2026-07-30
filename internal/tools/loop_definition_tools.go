@@ -242,7 +242,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_delete",
-		Description: "Delete one dynamic loop definition from the persistent loops overlay. Config-owned definitions are immutable and cannot be deleted.",
+		Description: "Remove a durable loop: deletes the stored definition AND stops its running instance — one verb, both layers, with the result reporting the live outcome as verified fact (running_loop_stopped, or no_running_loop). The loop's declared output documents are NOT deleted; the result lists what was left in place so keeping or removing them is a deliberate decision (doc_delete if unwanted). Config-owned definitions are immutable and cannot be deleted. To stop a loop while keeping its definition, use loop_definition_set_policy state=paused instead.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
