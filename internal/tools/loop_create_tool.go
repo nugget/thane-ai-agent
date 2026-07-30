@@ -476,7 +476,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 			return "", err
 		}
 		if docExists && !replace {
-			return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
+			return "", fmt.Errorf("output document %q already exists; pass replace=true to replace the loop definition and adopt the document — its body is preserved, only its ownership frontmatter refreshes", documentRef)
 		}
 		// A seed against an existing document is a conflict to surface, not
 		// resolve: the document's accumulated state wins over create-time
@@ -496,7 +496,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 				return "", err
 			}
 			if notesExists && !replace {
-				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
+				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true to adopt it with its body preserved, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
 			}
 			if plan.seedNotes != "" && notesExists {
 				return "", fmt.Errorf("working-notes document %q already exists, so the loop's own thinking wins over output.initial.notes — drop the notes seed", plan.notesRef)
