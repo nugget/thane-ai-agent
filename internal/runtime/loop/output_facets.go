@@ -209,9 +209,16 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 	}
 	// The full projection is the document's substance and the only
 	// unbudgeted field above, so it alone can push the document past
-	// the size the owner is guaranteed to read back whole.
+	// the size the owner is guaranteed to read back whole. Checked
+	// first for the clean attribution, then the rendered document as a
+	// whole — the projections and their headings render into one body,
+	// and a full sitting exactly at the ceiling would put the composite
+	// over it.
 	if err := ValidateOutputBodySize(payload.Full); err != nil {
 		return fmt.Errorf("full: %w", err)
+	}
+	if err := ValidateOutputBodySize(o.RenderFacetDocument(payload)); err != nil {
+		return fmt.Errorf("the rendered document (every projection plus its headings): %w — full is the lever; the other projections are already budget-capped", err)
 	}
 	return nil
 }

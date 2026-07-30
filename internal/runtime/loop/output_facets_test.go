@@ -442,3 +442,22 @@ func TestValidateFacetPayloadRejectsOversizedFull(t *testing.T) {
 		t.Errorf("error should name full and teach the restructure: %v", err)
 	}
 }
+
+// TestValidateFacetPayloadRejectsOversizedComposite pins the boundary
+// the per-field check alone would miss: full inside the ceiling, but
+// the rendered document — projections plus headings — past it.
+func TestValidateFacetPayloadRejectsOversizedComposite(t *testing.T) {
+	output := facetedOutput(OutputFacetStatusLine, OutputFacetDigest)
+	payload := FacetPayload{
+		StatusLine: "One standalone line of current state.",
+		Digest:     strings.Repeat("d", 2000),
+		Full:       strings.Repeat("x", MaxOutputDocumentBytes-100),
+	}
+	err := output.ValidateFacetPayload(payload)
+	if err == nil {
+		t.Fatal("composite past the ceiling should refuse")
+	}
+	if !strings.Contains(err.Error(), "rendered document") || !strings.Contains(err.Error(), "full is the lever") {
+		t.Errorf("error should attribute the composite and name the lever: %v", err)
+	}
+}

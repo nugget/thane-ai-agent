@@ -422,7 +422,11 @@ func marshalToolResultBudget(v any, maxBytes int) (string, error) {
 		return "", fmt.Errorf("marshal document tool result: %w", err)
 	}
 	if len(data) > maxBytes {
-		preview := truncateUTF8Bytes(data, maxBytes-512)
+		// The envelope's own JSON costs ~512 bytes; a budget at or below
+		// that overhead yields an empty preview rather than a negative
+		// slice bound — the helper must not panic on a small budget a
+		// future caller passes.
+		preview := truncateUTF8Bytes(data, max(0, maxBytes-512))
 		data, err = json.MarshalIndent(map[string]any{
 			"truncated":   true,
 			"bytes_total": len(data),
