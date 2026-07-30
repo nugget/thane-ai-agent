@@ -213,3 +213,68 @@ func TestStopLoopWithoutDefinitionHasNoFlag(t *testing.T) {
 		t.Errorf("no definition exists; no flag should be raised: %v", result)
 	}
 }
+
+// TestLoopDefinitionDeleteUnverifiedWithoutLiveRegistry pins the honest
+// degradation: a runtime with no live registry cannot check whether an
+// instance existed, and must say the check could not run instead of
+// dressing an unchecked absence up as a verified no_running_loop.
+func TestLoopDefinitionDeleteUnverifiedWithoutLiveRegistry(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+	if err := deps.defs.Upsert(looppkg.Spec{
+		Name:       "unwired_watch",
+		Enabled:    true,
+		Task:       "Watch without a live registry.",
+		Operation:  looppkg.OperationService,
+		Completion: looppkg.CompletionNone,
+	}, time.Now()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	result := runDelete(t, deps, "unwired_watch")
+	if result["live_outcome_unverified"] != true {
+		t.Fatalf("nil live registry must report the live outcome as unverified: %v", result)
+	}
+	for _, forbidden := range []string{"no_running_loop", "running_loop_stopped", "running_loop_still_live"} {
+		if _, present := result[forbidden]; present {
+			t.Errorf("%s claims a verification that never ran: %v", forbidden, result)
+		}
+	}
+}
+
+// TestStopLoopTransientDefinitionHasNoFlag pins the durable gate on the
+// resurrection warning: the reconciler never relaunches a transient
+// operation (it launches on demand), so an active background_task
+// definition must not trigger the will_relaunch wolf-cry.
+func TestStopLoopTransientDefinitionHasNoFlag(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+	defs, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	if err := defs.Upsert(looppkg.Spec{
+		Name:       "mqtt_bridge",
+		Enabled:    true,
+		Task:       "Bridge MQTT events.",
+		Operation:  looppkg.OperationBackgroundTask,
+		Completion: looppkg.CompletionChannel,
+	}, time.Now()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	deps.reg.ConfigureLoopDefinitionTools(LoopDefinitionToolDeps{
+		Registry: defs,
+		View: func() *looppkg.DefinitionRegistryView {
+			return looppkg.BuildDefinitionRegistryView(defs.Snapshot(), nil)
+		},
+	})
+
+	out, err := deps.reg.Get("stop_loop").Handler(context.Background(), map[string]any{"name": "mqtt_bridge"})
+	if err != nil {
+		t.Fatalf("stop_loop: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := result["definition_active"]; present {
+		t.Errorf("transient definitions are never resurrected; no flag should be raised: %v", result)
+	}
+}

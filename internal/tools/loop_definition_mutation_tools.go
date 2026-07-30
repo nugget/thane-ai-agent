@@ -122,11 +122,16 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 		"name":       name,
 	}
 	// Report the live outcome as verified fact, not intent: re-check the
-	// registry after reconcile rather than assuming the stop landed.
+	// registry after reconcile rather than assuming the stop landed —
+	// and when no live registry is wired, say the check could not run
+	// rather than dressing an unchecked absence up as a verified one.
 	switch {
+	case r.loopIntentDeps.LiveRegistry == nil:
+		result["live_outcome_unverified"] = true
+		result["live_outcome_note"] = "no live loop registry is wired in this runtime, so whether a running instance existed could not be checked — verify with loop_status"
 	case !wasRunning:
 		result["no_running_loop"] = true
-	case r.loopIntentDeps.LiveRegistry != nil && r.loopIntentDeps.LiveRegistry.GetByName(name) == nil:
+	case r.loopIntentDeps.LiveRegistry.GetByName(name) == nil:
 		result["running_loop_stopped"] = map[string]any{
 			"loop_id":    liveBefore.ID,
 			"iterations": liveBefore.Iterations,

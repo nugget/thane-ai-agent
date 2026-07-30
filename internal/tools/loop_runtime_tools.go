@@ -362,7 +362,11 @@ func (r *Registry) handleStopLoop(_ context.Context, args map[string]any) (strin
 				if def.Name != status.Name {
 					continue
 				}
-				if def.PolicyState == looppkg.DefinitionPolicyStateActive {
+				// Only durable operations are converged toward "running"
+				// by the reconciler; a transient definition (background
+				// task, request_reply) is launched on demand and never
+				// resurrected, so warning there would cry wolf.
+				if def.PolicyState == looppkg.DefinitionPolicyStateActive && def.Spec.Operation.IsDurableDefinition() {
 					result["definition_active"] = true
 					result["will_relaunch"] = "this loop's durable definition is still active, so the reconciler will relaunch it (next boot, definition commit, or schedule transition) — use loop_definition_set_policy state=paused to keep it stopped, or loop_definition_delete to remove it"
 				}
