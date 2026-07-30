@@ -390,6 +390,33 @@ func buildCurateTask(intent, docRef, outputToolName string, faceted bool) string
 	return sb.String()
 }
 
+// renderOutputScaffoldBody returns the initial body for a declared
+// output document. A faceted output scaffolds the exact section
+// skeleton its publish tool will fill: the first iteration sees this
+// body in its Declared Durable Outputs context, and a scaffold shaped
+// like a correct publish is the strongest cue for the form that turn
+// should produce. An unfaceted maintained document has no
+// framework-owned structure, so its scaffold shows a reasonable
+// whole-body shape instead.
+func renderOutputScaffoldBody(output looppkg.OutputSpec, title, intent string) string {
+	if output.HasFacets() {
+		return output.RenderFacetScaffold()
+	}
+	return renderScaffoldBody(title, intent)
+}
+
+// renderWorkingNotesScaffoldBody returns the initial body for the
+// private working-notes document beside a declared output. One
+// orienting line, then a placeholder: the register belongs to the
+// notes tool descriptions, and a scaffold that lectured would be the
+// first thing every wake re-reads until the loop replaces it.
+func renderWorkingNotesScaffoldBody(loopName string) string {
+	return fmt.Sprintf(
+		"*Private working notes for the `%s` loop — current thinking, rewritten whole as it changes. No consumer surface reads this document.*\n\n_(awaiting first cycle)_\n",
+		loopName,
+	)
+}
+
 // renderScaffoldBody returns the initial markdown body for the output
 // document.
 func renderScaffoldBody(title, intent string) string {

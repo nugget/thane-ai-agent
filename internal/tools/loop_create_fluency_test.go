@@ -124,11 +124,11 @@ func TestGuidedCreateRefusesUnknownFacet(t *testing.T) {
 	}
 }
 
-// TestGuidedCreateTierInputShapes covers the two array forms a caller can
+// TestGuidedCreateFacetInputShapes covers the two array forms a caller can
 // present and the element that is neither. A non-string coerced to ""
 // would be reported as an empty facet name, which names the symptom
 // rather than the mistake.
-func TestGuidedCreateTierInputShapes(t *testing.T) {
+func TestGuidedCreateFacetInputShapes(t *testing.T) {
 	t.Run("[]string is accepted", func(t *testing.T) {
 		got, err := parseOutputFacets([]string{"status_line", "digest"})
 		if err != nil {
@@ -167,8 +167,8 @@ func TestGuidedCreateTierInputShapes(t *testing.T) {
 
 // TestGuidedCreateAlwaysDerivesNotes pins that the notes surface is not
 // a choice. An opt-in every caller should take is a default in the wrong
-// position, and the cost of an unused one is a single context-block line
-// — nothing is scaffolded until the loop writes to it.
+// position, and the cost of an unused one is a scaffolded stub and a
+// context-block line saying it exists.
 func TestGuidedCreateAlwaysDerivesNotes(t *testing.T) {
 	spec, result := dryRunSpec(t, curateArgs(nil))
 	if len(spec.Outputs) != 2 {
@@ -208,3 +208,171 @@ func TestGuidedCreateRefusesNotesCollision(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestGuidedCreateScaffoldsFacetSkeleton pins what the loop's first
+// iteration sees: a faceted output's scaffold is the exact section
+// skeleton its publish tool fills, stamped with the same ownership
+// frontmatter every later publish re-stamps. A scaffold shaped unlike a
+// published document would teach the first turn the wrong form.
+func TestGuidedCreateScaffoldsFacetSkeleton(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	args := curateArgs(map[string]any{"facets": []any{"status_line", "digest"}})
+	out, err := rig.tool.Handler(ctx, args)
+	if err != nil {
+		t.Fatalf("thane_loop_create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["document_state"] != "scaffolded" {
+		t.Errorf("document_state = %v, want scaffolded", result["document_state"])
+	}
+
+	doc, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read scaffold: %v", err)
+	}
+	for _, want := range []string{
+		"## Status Line", "## Digest", "## Details",
+		"awaiting first cycle",
+		`"audience"`, `"published"`,
+		`"managed_by"`, `"publish_output_closet_guardian"`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("faceted scaffold missing %q:\n%s", want, doc)
+		}
+	}
+	// Undeclared sections must not appear: a heading the publish tool
+	// will never fill reads as structure the loop should maintain.
+	if strings.Contains(doc, "## Teaser") {
+		t.Errorf("scaffold has undeclared Teaser section:\n%s", doc)
+	}
+	if strings.Contains(doc, "Current State") {
+		t.Errorf("faceted scaffold should not carry the unfaceted body shape:\n%s", doc)
+	}
+}
+
+// TestGuidedCreateScaffoldsWorkingNotes pins that the derived notes
+// document exists before the first cycle, marked internal from birth —
+// the audience gate reads the document, not the spec, so a notes doc
+// that only became internal on its first write would sit readable in
+// search until the loop got around to thinking.
+func TestGuidedCreateScaffoldsWorkingNotes(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	out, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line"}}))
+	if err != nil {
+		t.Fatalf("thane_loop_create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["working_notes_state"] != "scaffolded" {
+		t.Errorf("working_notes_state = %v, want scaffolded", result["working_notes_state"])
+	}
+
+	doc, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet-notes.md"})
+	if err != nil {
+		t.Fatalf("read notes scaffold: %v", err)
+	}
+	for _, want := range []string{
+		`"audience"`, `"internal"`,
+		`"managed_by"`, `"replace_output_closet_guardian_notes"`,
+		"loop_definition_name",
+		"awaiting first cycle",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("notes scaffold missing %q:\n%s", want, doc)
+		}
+	}
+}
+
+// TestGuidedCreateReplacePreservesDocuments pins the destructive edge of
+// replace=true. Re-creating a definition is an iteration on the loop,
+// not on its accumulated state: the maintained document carries the
+// loop's current belief and the notes carry its private thinking, and a
+// spec tweak that silently reset both to placeholders would destroy
+// exactly what the next iteration needs most.
+func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+
+	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line"}})); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	// The loop has "run": both documents now hold real state.
+	docBody := "## Status Line\n\nCloset nominal.\n\n## Details\n\nAccumulated belief."
+	notesBody := "Current theory: the UPS fan is the noise."
+	for ref, body := range map[string]string{
+		"kb:dashboards/closet.md":       docBody,
+		"kb:dashboards/closet-notes.md": notesBody,
+	} {
+		body := body
+		if _, err := rig.docTools.Write(ctx, documents.WriteArgs{Ref: ref, Body: &body}); err != nil {
+			t.Fatalf("simulate loop write to %s: %v", ref, err)
+		}
+	}
+
+	args := curateArgs(map[string]any{"facets": []any{"status_line"}})
+	args["replace"] = true
+	out, err := rig.tool.Handler(ctx, args)
+	if err != nil {
+		t.Fatalf("replace create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["document_state"] != "preserved_existing" {
+		t.Errorf("document_state = %v, want preserved_existing", result["document_state"])
+	}
+	if result["working_notes_state"] != "preserved_existing" {
+		t.Errorf("working_notes_state = %v, want preserved_existing", result["working_notes_state"])
+	}
+
+	doc, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read document after replace: %v", err)
+	}
+	if !strings.Contains(doc, "Accumulated belief.") {
+		t.Errorf("replace clobbered the maintained document:\n%s", doc)
+	}
+	if strings.Contains(doc, "awaiting first cycle") {
+		t.Errorf("replace re-scaffolded the maintained document:\n%s", doc)
+	}
+	notes, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet-notes.md"})
+	if err != nil {
+		t.Fatalf("read notes after replace: %v", err)
+	}
+	if !strings.Contains(notes, "UPS fan") {
+		t.Errorf("replace clobbered the working notes:\n%s", notes)
+	}
+}
+
+// TestGuidedCreateFailsClosedOnUnreadableOutputDoc pins the existence
+// probe's failure direction. The probe's answer decides between
+// scaffolding and preserving, so a read that fails for any reason
+// other than not-found — unknown root, provenance verification, IO —
+// must stop the create: misread as "absent", it would scaffold over
+// whatever is actually there.
+func TestGuidedCreateFailsClosedOnUnreadableOutputDoc(t *testing.T) {
+	rig := newCurateTestRig(t)
+	args := curateArgs(nil)
+	args["output"] = map[string]any{"document": "vault:dashboards/closet.md"}
+
+	_, err := rig.tool.Handler(context.Background(), args)
+	if err == nil {
+		t.Fatal("an unreadable output ref should refuse, not scaffold")
+	}
+	if !strings.Contains(err.Error(), "inspect output document") {
+		t.Errorf("error should name the failed probe, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "vault:dashboards/closet.md") {
+		t.Errorf("error should name the ref, got: %v", err)
+	}
+}

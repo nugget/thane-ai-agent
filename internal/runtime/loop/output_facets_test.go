@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -302,5 +303,104 @@ func TestValidateOutputsRejectsSecondWorkingNotes(t *testing.T) {
 	}
 	if err := spec.ValidatePersistable(); err != nil {
 		t.Fatalf("ValidatePersistable() with an internal journal alongside working notes: %v", err)
+	}
+}
+
+// TestRenderFacetScaffold pins the pre-first-publish body to the exact
+// shape a correct publish produces: the declared section skeleton in
+// ladder order, one placeholder per section. The first iteration reads
+// this body from its output context, so a scaffold shaped differently
+// from a published document would teach that turn the wrong form.
+func TestRenderFacetScaffold(t *testing.T) {
+	tests := []struct {
+		name         string
+		output       OutputSpec
+		wantHeadings []string
+		wantAbsent   []string
+	}{
+		{
+			name:         "every facet renders the whole ladder",
+			output:       facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest),
+			wantHeadings: []string{"## Status Line", "## Teaser", "## Digest", "## Details"},
+		},
+		{
+			name:         "status line only still scaffolds full",
+			output:       facetedOutput(OutputFacetStatusLine),
+			wantHeadings: []string{"## Status Line", "## Details"},
+			wantAbsent:   []string{"## Teaser", "## Digest"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.output.RenderFacetScaffold()
+			last := -1
+			for _, heading := range tt.wantHeadings {
+				idx := strings.Index(body, heading)
+				if idx < 0 {
+					t.Fatalf("scaffold missing %q:\n%s", heading, body)
+				}
+				if idx < last {
+					t.Fatalf("scaffold headings out of ladder order:\n%s", body)
+				}
+				last = idx
+			}
+			for _, heading := range tt.wantAbsent {
+				if strings.Contains(body, heading) {
+					t.Errorf("scaffold has undeclared section %q:\n%s", heading, body)
+				}
+			}
+			if !strings.Contains(body, "awaiting first cycle") {
+				t.Errorf("scaffold placeholders missing awaiting-first-cycle marker:\n%s", body)
+			}
+		})
+	}
+}
+
+// TestRenderFacetScaffoldRoundTrips confirms the scaffold parses back
+// through the same reader a published document does, with a placeholder
+// in every declared projection — a consumer asking for status_line
+// before the first cycle gets an honest placeholder, not an empty
+// string or a parse failure.
+func TestRenderFacetScaffoldRoundTrips(t *testing.T) {
+	output := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+	payload, found := ParseFacetSections(output.RenderFacetScaffold())
+	if !found {
+		t.Fatal("scaffold did not parse as a faceted document")
+	}
+	for key, value := range map[string]string{
+		"status_line": payload.StatusLine,
+		"teaser":      payload.Teaser,
+		"digest":      payload.Digest,
+		"full":        payload.Full,
+	} {
+		if !strings.Contains(value, "awaiting first cycle") {
+			t.Errorf("%s placeholder = %q, want awaiting-first-cycle text", key, value)
+		}
+	}
+	// Budgeted placeholders must respect their own budgets: a scaffold
+	// that overflows its facet would be rejected if republished.
+	if err := output.ValidateFacetPayload(payload); err != nil {
+		t.Errorf("scaffold payload fails its own contract: %v", err)
+	}
+}
+
+// TestRenderFacetScaffoldJSONFacet pins the json-format placeholder:
+// the section renders inside a json fence, so the placeholder must be
+// valid JSON rather than prose.
+func TestRenderFacetScaffoldJSONFacet(t *testing.T) {
+	output := OutputSpec{
+		Name:   "feed state",
+		Type:   OutputTypeMaintainedDocument,
+		Ref:    "core:feed.md",
+		Facets: []FacetSpec{{Name: OutputFacetStatusLine, Format: FacetFormatJSON}},
+	}
+	body := output.RenderFacetScaffold()
+	if !strings.Contains(body, "```json") {
+		t.Fatalf("json facet scaffold missing fence:\n%s", body)
+	}
+	payload := output.ParseFacetDocument(body)
+	if !json.Valid([]byte(payload.StatusLine)) {
+		t.Errorf("json facet placeholder is not valid JSON: %q", payload.StatusLine)
 	}
 }

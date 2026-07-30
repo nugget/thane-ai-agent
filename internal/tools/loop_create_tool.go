@@ -31,7 +31,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
 			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — give it an entity subscription with wake: true (wakes on that entity's changes), point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; without at least one trigger it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
-			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It is scaffolded with ownership frontmatter before launch, and comes with a private working-notes document for the loop's own thinking. Omit it for a loop that acts without maintaining a document. " +
+			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. A document that already exists is preserved rather than re-scaffolded (document_state / working_notes_state in the result report which happened). Omit output for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, facets when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
@@ -257,8 +257,8 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		// choice worth offering: a loop that publishes has reasoning that
 		// should not be published, and an opt-in that every caller should
 		// take is just a default in the wrong position. The cost of an
-		// unused one is a single context-block line saying it exists —
-		// nothing is scaffolded until the loop writes to it.
+		// unused one is a scaffolded stub and a context-block line saying
+		// it exists.
 		notesSpec := buildWorkingNotesSpec(name, documentRef, intent)
 		outputs = append(outputs, notesSpec)
 		notesRef = notesSpec.Ref
@@ -361,36 +361,85 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	entityCount, outputTool := plan.entityCount, plan.outputTool
 	parentName, tags := spec.ParentName, spec.Tags
 
+	var documentState, notesState string
 	if hasOutput {
-		if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil && !replace {
+		outputSpec, notesSpec := declaredOutputSpecs(spec.Outputs)
+
+		docExists, err := declaredDocumentExists(ctx, deps.DocTools, documentRef)
+		if err != nil {
+			return "", err
+		}
+		if docExists && !replace {
 			return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
 		}
 		// The notes ref is derived rather than supplied, so a collision is
 		// something the caller never chose and would not expect: appending a
 		// loop's private reasoning onto an unrelated document is worse than
 		// refusing to start.
-		if plan.notesRef != "" && !replace {
-			if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: plan.notesRef}); readErr == nil {
+		notesExists := false
+		if plan.notesRef != "" {
+			notesExists, err = declaredDocumentExists(ctx, deps.DocTools, plan.notesRef)
+			if err != nil {
+				return "", err
+			}
+			if notesExists && !replace {
 				return "", fmt.Errorf("derived working-notes document %q already exists; pass replace=true, or use loop_definition_set to place the notes elsewhere", plan.notesRef)
 			}
 		}
-		body := renderScaffoldBody(title, intent)
+
 		frontmatter := map[string][]string{
-			"loop_definition_name": {name},
-			"loop_intent":          {intent},
-			"created":              {now.Format(time.RFC3339)},
+			"loop_definition_name":                {name},
+			"loop_intent":                         {intent},
+			looppkg.OutputAudienceFrontmatterKey:  {string(outputSpec.EffectiveAudience())},
+			looppkg.OutputManagedByFrontmatterKey: {outputSpec.ToolName()},
 		}
 		if op == looppkg.OperationService {
 			frontmatter["sleep_min"] = []string{envelope.sleepMin.String()}
 			frontmatter["sleep_max"] = []string{envelope.sleepMax.String()}
 		}
-		if _, err := deps.DocTools.Write(ctx, documents.WriteArgs{
+		// An existing document keeps its body: a re-created definition is
+		// an iteration on the loop, and blowing away the state its
+		// predecessor accumulated would hand the next iteration a
+		// placeholder where its carried belief used to be. Only the
+		// ownership frontmatter is refreshed.
+		documentState, notesState = "scaffolded", "scaffolded"
+		writeArgs := documents.WriteArgs{
 			Ref:         documentRef,
 			Title:       title,
-			Body:        &body,
 			Frontmatter: frontmatter,
-		}); err != nil {
+		}
+		if docExists {
+			documentState = "preserved_existing"
+		} else {
+			frontmatter["created"] = []string{now.Format(time.RFC3339)}
+			body := renderOutputScaffoldBody(outputSpec, title, intent)
+			writeArgs.Body = &body
+		}
+		if _, err := deps.DocTools.Write(ctx, writeArgs); err != nil {
 			return "", fmt.Errorf("scaffold output document: %w", err)
+		}
+
+		if notesSpec != nil {
+			notesFrontmatter := map[string][]string{
+				"loop_definition_name":                {name},
+				looppkg.OutputAudienceFrontmatterKey:  {string(notesSpec.EffectiveAudience())},
+				looppkg.OutputManagedByFrontmatterKey: {notesSpec.ToolName()},
+			}
+			notesArgs := documents.WriteArgs{
+				Ref:         notesSpec.Ref,
+				Title:       title + " — Working Notes",
+				Frontmatter: notesFrontmatter,
+			}
+			if notesExists {
+				notesState = "preserved_existing"
+			} else {
+				notesFrontmatter["created"] = []string{now.Format(time.RFC3339)}
+				notesBody := renderWorkingNotesScaffoldBody(name)
+				notesArgs.Body = &notesBody
+			}
+			if _, err := deps.DocTools.Write(ctx, notesArgs); err != nil {
+				return "", fmt.Errorf("scaffold working-notes document: %w", err)
+			}
 		}
 	}
 
@@ -415,8 +464,10 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 	if hasOutput {
 		result["document_path"] = documentRef
 		result["output_tool"] = outputTool
+		result["document_state"] = documentState
 		if plan.notesRef != "" {
 			result["working_notes_document"] = plan.notesRef
+			result["working_notes_state"] = notesState
 		}
 		if len(spec.Outputs) > 0 && len(spec.Outputs[0].Facets) > 0 {
 			result["facets"] = spec.Outputs[0].Facets
@@ -545,6 +596,40 @@ func parseLoopCreateMetadata(args map[string]any) (map[string]string, error) {
 		out[k] = s
 	}
 	return out, nil
+}
+
+// declaredDocumentExists probes whether a declared output document is
+// already present, distinguishing absence from a failed read. The
+// answer decides between scaffolding and preserving, so a read that
+// fails for any other reason — unknown root, provenance verification,
+// IO — must stop the create: misreading it as "absent" would scaffold
+// over whatever is actually there.
+func declaredDocumentExists(ctx context.Context, docTools *documents.Tools, ref string) (bool, error) {
+	_, err := docTools.Read(ctx, documents.RefArgs{Ref: ref})
+	switch {
+	case err == nil:
+		return true, nil
+	case documents.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("inspect output document %q: %w", ref, err)
+	}
+}
+
+// declaredOutputSpecs splits a created loop's outputs into the
+// maintained document and its derived working notes, by type rather
+// than by position so the scaffold cannot silently bind to the wrong
+// declaration if the build order ever changes.
+func declaredOutputSpecs(outputs []looppkg.OutputSpec) (doc looppkg.OutputSpec, notes *looppkg.OutputSpec) {
+	for i := range outputs {
+		switch outputs[i].Type {
+		case looppkg.OutputTypeMaintainedDocument:
+			doc = outputs[i]
+		case looppkg.OutputTypeWorkingNotes:
+			notes = &outputs[i]
+		}
+	}
+	return doc, notes
 }
 
 // loopCreateExcludeTools layers operator-provided exclusions on top of the

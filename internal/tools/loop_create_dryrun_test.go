@@ -56,9 +56,12 @@ func TestThaneLoopCreateDryRunWritesNothing(t *testing.T) {
 			}
 		}
 	}
-	// Nothing scaffolded.
+	// Nothing scaffolded — the derived notes document included.
 	if _, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/dry-run-probe.md"}); err == nil {
 		t.Error("dry run scaffolded the output document")
+	}
+	if _, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/dry-run-probe-notes.md"}); err == nil {
+		t.Error("dry run scaffolded the working-notes document")
 	}
 
 	// The returned spec must be the real thing, not a summary: same shape

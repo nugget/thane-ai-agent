@@ -3,9 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -114,7 +112,7 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 						// reads this key off the document, so a rewrite that
 						// dropped it would quietly publish the loop's private
 						// thinking.
-						Frontmatter: loopOutputAudienceFrontmatter(output),
+						Frontmatter: loopOutputFrontmatter(output),
 					})
 					if err != nil {
 						return "", err
@@ -152,7 +150,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		}
 		doc, err := store.Read(ctx, output.Ref)
 		if err != nil {
-			if strings.Contains(err.Error(), "document not found") || errors.Is(err, os.ErrNotExist) {
+			if documents.IsNotFound(err) {
 				entry.Exists = false
 				payload.Outputs = append(payload.Outputs, entry)
 				continue

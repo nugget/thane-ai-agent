@@ -54,6 +54,23 @@ const (
 	OutputFacetDigest OutputFacet = "digest"
 )
 
+// Frontmatter keys stamped on loop-managed documents wherever one is
+// written — the create-time scaffold and every later output-tool write.
+// audience is the document layer's projection gate (an internal
+// document stays out of search results and tagged-guidance injection);
+// managed_by records which generated tool owns the document's
+// structure, so an edit arriving through a general document tool can be
+// pointed back at the owning interface instead of silently competing
+// with it.
+const (
+	// OutputAudienceFrontmatterKey carries the output's effective
+	// audience on the document itself.
+	OutputAudienceFrontmatterKey = "audience"
+	// OutputManagedByFrontmatterKey names the generated output tool
+	// that owns the document.
+	OutputManagedByFrontmatterKey = "managed_by"
+)
+
 // OutputAudience describes which surfaces may project an output's
 // content.
 type OutputAudience string

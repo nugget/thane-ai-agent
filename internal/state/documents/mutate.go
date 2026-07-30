@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,6 +84,21 @@ type MutationResult struct {
 	SizeBytes   int64    `json:"size_bytes"`
 	Section     string   `json:"section,omitempty"`
 	Window      string   `json:"window,omitempty"`
+}
+
+// IsNotFound reports whether err means the document does not exist, as
+// opposed to a read that failed — an unknown root, a provenance
+// verification failure, or an IO error. Callers probing for existence
+// must distinguish the two: treating a failed read as "absent" turns a
+// transient fault into a decision to overwrite whatever is actually
+// there. The match is on the error string because the not-found errors
+// in this package are minted as strings; this helper is the one place
+// that knows their shape.
+func IsNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "document not found")
 }
 
 func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {

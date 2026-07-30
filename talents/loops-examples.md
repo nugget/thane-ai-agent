@@ -73,10 +73,9 @@ believes. Two questions decide the rest:
 
 1. **Will anyone else consult this?** A loop whose value is being read
    by other turns, other loops, or an ambient surface should declare
-   `facets` so each reader takes the length it can afford. That needs the
-   full spec: author it with `loop_definition_set` and start it with
-   `loop_definition_launch`. A loop nobody reads but its owner can stay
-   untiered on the shorter front door.
+   `facets` so each reader takes the length it can afford.
+   `thane_loop_create` declares them directly on its `output` argument;
+   a loop nobody reads but its owner needs no facets at all.
 
 2. **Does the loop need to escalate decisions to you, or accept new
    focus when you adjust its scope?**
@@ -123,9 +122,15 @@ takes `digest`, and a reader who wants everything opens the document.
 Without facets every consumer pays for the whole document or gets a
 blind truncation of it.
 
-Facets need the full spec, so author this with `loop_definition_set` and
-start it with `loop_definition_launch`. Lint first — `loop_definition_lint`
-takes the same spec and catches mistakes before anything persists.
+`thane_loop_create` builds this shape directly: declare the facets on
+its `output` argument and the working notes are derived for you, with
+both documents scaffolded before launch — the faceted one with the
+exact section skeleton its publish tool fills. The full spec below is
+the same loop authored by hand, for when you need a field the front
+door does not expose (several published documents, a facet's format,
+notes placed somewhere specific). Lint first on that path —
+`loop_definition_lint` takes the same spec and catches mistakes before
+anything persists.
 
 ```json
 {
