@@ -57,7 +57,7 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				"properties": map[string]any{
 					"entity_id": map[string]any{
 						"type":        "string",
-						"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home), or a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn).",
+						"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home); a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn); or an organizational target — area:<area_id>, label:<label_id>, floor:<floor_id> — watching that group's current members, re-resolved live so membership follows the home. Organizational expansion honors HA visibility: hidden and diagnostic/config members stay out by default (the owner's curation in HA is the filter), so watching a whole area is safe without inspecting it first.",
 					},
 					"history": map[string]any{
 						"type":        "array",
@@ -101,6 +101,14 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					"wake_debounce_seconds": map[string]any{
 						"type":        "integer",
 						"description": "How long changes coalesce before waking (default a few seconds); the loop's cadence follows its twitchiest wake subscription.",
+					},
+					"include_hidden": map[string]any{
+						"type":        "boolean",
+						"description": "Widen an area/label/floor target's expansion to members the owner hid in Home Assistant — a deliberate forensic watch. Registry targets only; a concrete entity or glob you name is always watched.",
+					},
+					"include_diagnostic": map[string]any{
+						"type":        "boolean",
+						"description": "Widen an area/label/floor target's expansion to diagnostic/config-category members the default expansion leaves out. Registry targets only.",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -163,6 +171,11 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				if wakeDebounce < 0 {
 					return "", fmt.Errorf("wake_debounce_seconds must be >= 0")
 				}
+				includeHidden, _ := args["include_hidden"].(bool)
+				includeDiagnostic, _ := args["include_diagnostic"].(bool)
+				if (includeHidden || includeDiagnostic) && !awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+					return "", fmt.Errorf("include_hidden/include_diagnostic widen area/label/floor expansion only — a concrete entity or glob you name is always watched; drop the flag")
+				}
 				sub := looppkg.EntitySubscription{
 					EntityID:                 entityID,
 					History:                  history,
@@ -177,6 +190,8 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					TransitionsWindowSeconds: transitionsWindow,
 					Wake:                     wake,
 					WakeDebounceSeconds:      wakeDebounce,
+					IncludeHidden:            includeHidden,
+					IncludeDiagnostic:        includeDiagnostic,
 				}
 				if sub.Wake {
 					if sub.RequiresTag != "" {

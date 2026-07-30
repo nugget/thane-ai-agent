@@ -61,6 +61,13 @@ plus a transition timeline and counts of what was filtered out
 (disabled/hidden/diagnostic/config). Default-context entities only;
 pass `include_hidden` or `include_diagnostic` for a forensic pass.
 
+When the survey turns into sustained attention, the area itself is
+subscribable: `area:<area_id>` as a subscription target watches the
+same default-context members this tool shows (same visibility filter,
+same flags), re-resolved live as the room changes — so what you just
+surveyed is exactly what a loop will watch. See `awareness` for the
+subscription doors.
+
 ## Narrow to a device
 
 `ha_device` is the whole-device perception view — the native answer to

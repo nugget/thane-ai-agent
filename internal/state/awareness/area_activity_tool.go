@@ -51,7 +51,10 @@ func (a *AreaActivityTools) Tools() []*tools.Tool {
 				"(lights on, climate running, media playing), then recent changes within the lookback window, then ambient " +
 				"baseline sensors (temperature, humidity), then the rest (capped), plus a cross-entity timeline of discrete " +
 				"transitions newest-first and counts of what was filtered out (disabled/hidden/diagnostic/config). Add include " +
-				"for per-entity area/device/label/description/visibility metadata.",
+				"for per-entity area/device/label/description/visibility metadata. When the survey turns into sustained " +
+				"attention, the area itself is subscribable: area:<area_id> as a subscription target (watch_entity, " +
+				"add_entity_subscription, thane_loop_create.entities) watches the same default-context members shown here, " +
+				"re-resolved live as the room changes.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

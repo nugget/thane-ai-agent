@@ -98,6 +98,8 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 			TransitionsWindowSeconds: e.TransitionsWindowSeconds,
 			Wake:                     e.Wake,
 			WakeDebounceSeconds:      e.WakeDebounceSeconds,
+			IncludeHidden:            e.IncludeHidden,
+			IncludeDiagnostic:        e.IncludeDiagnostic,
 		})
 	}
 	return out
@@ -118,6 +120,8 @@ type curateEntity struct {
 	TransitionsWindowSeconds int
 	Wake                     bool
 	WakeDebounceSeconds      int
+	IncludeHidden            bool
+	IncludeDiagnostic        bool
 }
 
 // parseEntityList decodes an entity-subscription array into a typed
@@ -265,6 +269,26 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 				return nil, fmt.Errorf("%s[%d].wake_debounce_seconds: must be >= 0", fieldName, i)
 			}
 			ent.WakeDebounceSeconds = n
+		}
+		if rawIncludeHidden, present := obj["include_hidden"]; present && rawIncludeHidden != nil {
+			v, ok := rawIncludeHidden.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].include_hidden: must be a boolean, got %T", fieldName, i, rawIncludeHidden)
+			}
+			ent.IncludeHidden = v
+		}
+		if rawIncludeDiagnostic, present := obj["include_diagnostic"]; present && rawIncludeDiagnostic != nil {
+			v, ok := rawIncludeDiagnostic.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].include_diagnostic: must be a boolean, got %T", fieldName, i, rawIncludeDiagnostic)
+			}
+			ent.IncludeDiagnostic = v
+		}
+		// The salience flags widen registry-target expansion; a concrete
+		// entity or glob you name is always watched, so the flag there is
+		// a misunderstanding worth correcting rather than ignoring.
+		if (ent.IncludeHidden || ent.IncludeDiagnostic) && !homeassistant.IsRegistryTarget(ent.EntityID) {
+			return nil, fmt.Errorf("%s[%d]: include_hidden/include_diagnostic widen area/label/floor expansion only — a concrete entity or glob you name is always watched; drop the flag", fieldName, i)
 		}
 		if ent.Wake && ent.RequiresTag != "" {
 			return nil, fmt.Errorf("%s[%d]: wake cannot combine with requires_tag — waking must not follow tag state", fieldName, i)

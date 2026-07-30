@@ -365,6 +365,8 @@ type subscriptionOptionsWire struct {
 	TransitionsWindowSeconds int                                   `json:"transitions_window_seconds,omitempty"`
 	Wake                     bool                                  `json:"wake,omitempty"`
 	WakeDebounceSeconds      int                                   `json:"wake_debounce_seconds,omitempty"`
+	IncludeHidden            bool                                  `json:"include_hidden,omitempty"`
+	IncludeDiagnostic        bool                                  `json:"include_diagnostic,omitempty"`
 }
 
 func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) {
@@ -397,6 +399,8 @@ func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) 
 		TransitionsWindowSeconds: sub.TransitionsWindowSeconds,
 		Wake:                     sub.Wake,
 		WakeDebounceSeconds:      sub.WakeDebounceSeconds,
+		IncludeHidden:            sub.IncludeHidden,
+		IncludeDiagnostic:        sub.IncludeDiagnostic,
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
@@ -423,6 +427,8 @@ func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.Entity
 	sub.SelfOnly = wire.SelfOnly
 	sub.RequiresTag = strings.TrimSpace(wire.RequiresTag)
 	sub.Wake = wire.Wake
+	sub.IncludeHidden = wire.IncludeHidden
+	sub.IncludeDiagnostic = wire.IncludeDiagnostic
 	if wire.WakeDebounceSeconds > 0 {
 		sub.WakeDebounceSeconds = wire.WakeDebounceSeconds
 	}

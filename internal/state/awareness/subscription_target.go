@@ -148,9 +148,19 @@ func (m *membershipResolver) entityHasLabel(e *homeassistant.EntityRegistryEntry
 	return false
 }
 
-// members returns the sorted entity ids belonging to a registry target.
-func (m *membershipResolver) members(target SubscriptionTarget) []string {
+// members returns the sorted entity ids belonging to a registry target,
+// after the same salience filter the area and home snapshots apply:
+// disabled entities are always out, and hidden / diagnostic / config
+// entities are out unless the caller opts in. HA visibility is the
+// owner's curation of what the home presents, so an area/label/floor
+// subscription watching "the visible office" by default is honoring
+// that curation — and it is what makes subscribing a whole area safe
+// without inspecting its members first. Naming a hidden entity
+// concretely still watches it; the filter applies only to membership
+// this resolver infers.
+func (m *membershipResolver) members(target SubscriptionTarget, includeDiagnostic, includeHidden bool) []string {
 	var out []string
+	counts := areaFilterCounts{}
 	for id, e := range m.entitiesByID {
 		var match bool
 		switch target.Kind {
@@ -161,9 +171,13 @@ func (m *membershipResolver) members(target SubscriptionTarget) []string {
 		case TargetFloor:
 			match = m.areaToFloor[m.entityArea(e)] == target.Value && target.Value != ""
 		}
-		if match {
-			out = append(out, id)
+		if !match {
+			continue
 		}
+		if !keepAfterSalienceFilter(*e, includeDiagnostic, includeHidden, &counts) {
+			continue
+		}
+		out = append(out, id)
 	}
 	sort.Strings(out)
 	return out

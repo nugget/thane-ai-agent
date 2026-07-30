@@ -119,6 +119,23 @@ type EntitySubscription struct {
 	// slower ask here bounds only how fast THIS subscription's
 	// changes demand a wake.
 	WakeDebounceSeconds int `yaml:"wake_debounce_seconds,omitempty" json:"wake_debounce_seconds,omitempty"`
+
+	// IncludeHidden widens a registry target's expansion to members the
+	// owner has hidden in Home Assistant. Expansion honors HA
+	// visibility by default — hidden_by set means the owner curated the
+	// entity out of view — so this is the explicit door for a forensic
+	// watch. Meaningful only on area/label/floor targets: a concrete
+	// entity or glob you name is always watched, and the authoring
+	// doors refuse the flag there.
+	IncludeHidden bool `yaml:"include_hidden,omitempty" json:"include_hidden,omitempty"`
+
+	// IncludeDiagnostic widens a registry target's expansion to
+	// diagnostic- and config-category members (signal strengths,
+	// firmware toggles) that the default expansion leaves out for the
+	// same reason the area snapshot does: they are salient for
+	// forensics, noise for a watch. Registry targets only, like
+	// [EntitySubscription.IncludeHidden].
+	IncludeDiagnostic bool `yaml:"include_diagnostic,omitempty" json:"include_diagnostic,omitempty"`
 }
 
 // IsExpired reports whether this subscription's TTL has elapsed

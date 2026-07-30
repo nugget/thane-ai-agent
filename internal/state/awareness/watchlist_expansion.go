@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // previewSampleSize is how many member ids a target-expansion preview
@@ -32,8 +33,10 @@ type targetExpansion struct {
 // target is a concrete entity_id that is its own membership and needs no
 // preview. Membership is registry truth, not state-filtered: a member
 // that is momentarily stateless is still a real member, and "matches
-// zero" is exactly the typo signal worth surfacing.
-func previewTargetExpansion(registries *renderRegistries, target SubscriptionTarget) (*targetExpansion, error) {
+// zero" is exactly the typo signal worth surfacing. The preview applies
+// the subscription's own salience flags, so the count it advertises is
+// the count that will render.
+func previewTargetExpansion(registries *renderRegistries, target SubscriptionTarget, sub looppkg.EntitySubscription) (*targetExpansion, error) {
 	if registries == nil {
 		return nil, nil
 	}
@@ -44,7 +47,7 @@ func previewTargetExpansion(registries *renderRegistries, target SubscriptionTar
 		if err != nil {
 			return nil, err
 		}
-		members = resolver.members(target)
+		members = resolver.members(target, sub.IncludeDiagnostic, sub.IncludeHidden)
 	case TargetGlob:
 		entities, err := registries.entities()
 		if err != nil {

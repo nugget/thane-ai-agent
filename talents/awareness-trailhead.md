@@ -66,11 +66,19 @@ Mechanics that apply across all of the above:
   `label:<label_id>`, `floor:<floor_id>`. Prefer the organizational
   form when the intent is "watch the office," not "watch these specific
   sensors": membership re-resolves from the registry every turn, so it
-  follows the home as devices move. Subscribing to a glob or target
-  reports how many entities it matches right now, with a sample — a
-  zero-member expansion almost always means a typo'd id; fix it before
-  moving on. Registry targets are render-only (they cannot feed
-  capture or wake). Use `ha_registry_search` to find ids.
+  follows the home as devices move — and expansion honors HA
+  visibility, skipping hidden and diagnostic/config members, so the
+  owner's curation in HA is the filter and subscribing a whole area
+  needs no hesitation and no member-by-member inspection
+  (`include_hidden` / `include_diagnostic` widen it for a forensic
+  watch; a concrete id you name is always watched). Hand-enumerating a
+  room invites omissions an area target makes impossible; the pattern
+  for a room monitor is the area for coverage plus the few sharp
+  entities that carry `wake`, `transitions`, or `history`. Subscribing
+  to a glob or target reports how many entities it matches right now,
+  with a sample — a zero-member expansion almost always means a typo'd
+  id; fix it before moving on. Registry targets are render-only (they
+  cannot feed capture or wake). Use `ha_registry_search` to find ids.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read

@@ -143,6 +143,30 @@ func TestStore_UpsertRoundTripsUnifiedOptions(t *testing.T) {
 	}
 }
 
+func TestStore_UpsertRoundTripsSalienceFlags(t *testing.T) {
+	store := setupTestStore(t)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
+		EntityID:          "area:office",
+		IncludeHidden:     true,
+		IncludeDiagnostic: true,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	rows, err := store.ListOwner(OwnerCore)
+	if err != nil {
+		t.Fatalf("ListOwner: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if !rows[0].IncludeHidden {
+		t.Error("include_hidden lost in round trip")
+	}
+	if !rows[0].IncludeDiagnostic {
+		t.Error("include_diagnostic lost in round trip")
+	}
+}
+
 func TestStore_UpsertRejectsInvalidOptions(t *testing.T) {
 	store := setupTestStore(t)
 

@@ -62,7 +62,7 @@ func expandRegistryTargetSubscription(
 	}
 
 	matchedIDs := make([]string, 0)
-	for _, id := range resolver.members(target) {
+	for _, id := range resolver.members(target, sub.IncludeDiagnostic, sub.IncludeHidden) {
 		if _, skip := exclude[id]; skip {
 			continue
 		}
