@@ -67,11 +67,14 @@ func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 
 // ownOutputReadToolNames is the read-only document tool family every
 // output-declaring loop carries regardless of its tags: read the
-// current body, and walk the revision history behind it. The write-side
-// document tools stay tag-gated — a loop's writes belong to its
-// generated output tool, and a second write door is the two-doors
-// hazard managed_by exists to prevent.
-var ownOutputReadToolNames = []string{"doc_read", "doc_history", "doc_diff", "doc_at"}
+// current body, page through it when it outgrows a single result
+// (doc_read's own truncation envelope says "select a section" —
+// doc_outline and doc_section are what make that followable), and walk
+// the revision history behind it. The write-side document tools stay
+// tag-gated — a loop's writes belong to its generated output tool, and
+// a second write door is the two-doors hazard managed_by exists to
+// prevent.
+var ownOutputReadToolNames = []string{"doc_read", "doc_outline", "doc_section", "doc_history", "doc_diff", "doc_at"}
 
 // ownOutputReadTools re-exposes the native read-side document tools as
 // loop runtime tools. A loop that owns a maintained document must be
