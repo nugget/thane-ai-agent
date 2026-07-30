@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
@@ -235,4 +237,187 @@ func newLoopOutputDocumentStore(t *testing.T) (*documents.Store, string) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	return store, coreDir
+}
+
+// TestReExposeNativeTools pins the read-side re-exposure contract: an
+// output-declaring loop gets the native read tools verbatim, a name the
+// registry doesn't carry degrades to absence rather than failing the
+// launch, and a tool without a handler is never re-exposed (the
+// compiled runtime layer would drop it silently later — skipping it
+// here keeps the surface honest at the seam that decided it).
+func TestReExposeNativeTools(t *testing.T) {
+	registry := tools.NewEmptyRegistry()
+	registry.Register(&tools.Tool{
+		Name:        "doc_read",
+		Description: "Read a managed document.",
+		Parameters:  map[string]any{"type": "object"},
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+	registry.Register(&tools.Tool{
+		Name:        "doc_history",
+		Description: "Revision history.",
+		Handler:     nil, // never re-exposed
+	})
+
+	got := reExposeNativeTools(registry, ownOutputReadToolNames)
+	if len(got) != 1 {
+		t.Fatalf("re-exposed %d tools, want exactly the one with a handler: %+v", len(got), got)
+	}
+	if got[0].Name != "doc_read" || got[0].Handler == nil {
+		t.Errorf("re-exposed tool = %+v, want doc_read with its handler", got[0])
+	}
+	if got[0].Description != "Read a managed document." {
+		t.Errorf("description = %q, want the native's verbatim", got[0].Description)
+	}
+
+	if extra := reExposeNativeTools(nil, ownOutputReadToolNames); extra != nil {
+		t.Errorf("nil registry should re-expose nothing, got %+v", extra)
+	}
+}
+
+// TestHydrateLoopOutputsWithoutAgentLoop pins the degradation path: an
+// App whose agent loop isn't wired (early boot, minimal tests) still
+// hydrates output tools — the read-side re-exposure is additive, never
+// a launch dependency.
+func TestHydrateLoopOutputsWithoutAgentLoop(t *testing.T) {
+	store, _ := newLoopOutputDocumentStore(t)
+	app := &App{documentStore: store}
+	spec := looppkg.Spec{
+		Name:      "reader",
+		Enabled:   true,
+		Task:      "curate",
+		Operation: looppkg.OperationService,
+		SleepMin:  time.Minute,
+		SleepMax:  time.Hour,
+		Outputs: []looppkg.OutputSpec{{
+			Name: "state",
+			Type: looppkg.OutputTypeMaintainedDocument,
+			Ref:  "core:state.md",
+		}},
+	}
+	hydrated, err := app.hydrateLoopOutputs(spec)
+	if err != nil {
+		t.Fatalf("hydrateLoopOutputs: %v", err)
+	}
+	names := make([]string, 0, len(hydrated.RuntimeTools))
+	for _, rt := range hydrated.RuntimeTools {
+		names = append(names, rt.Name)
+	}
+	if !slices.Contains(names, "replace_output_state") {
+		t.Errorf("output tool missing: %v", names)
+	}
+	if slices.Contains(names, "doc_read") {
+		t.Errorf("no agent loop wired, so no native to re-expose; got %v", names)
+	}
+}
+
+// TestWrapOwnOutputDocRead pins the owner privilege and its exact
+// boundary: a whole-document read of the loop's own output returns in
+// full past the general 16 KiB cap, while a foreign ref and a
+// facet-level read fall through to the native handler untouched. The
+// cap the privilege replaces is a real one — the same read through the
+// standard path truncates — so this test builds a document that
+// actually exceeds it.
+func TestWrapOwnOutputDocRead(t *testing.T) {
+	store, _ := newLoopOutputDocumentStore(t)
+	docTools := documents.NewTools(store)
+
+	big := strings.Repeat("The office stays warm and the belief accumulates. ", 500) // ~25 KiB
+	if _, err := store.Write(context.Background(), documents.WriteArgs{
+		Ref:  "core:office.md",
+		Body: &big,
+	}); err != nil {
+		t.Fatalf("seed large document: %v", err)
+	}
+
+	nativeCalls := 0
+	runtimeTools := []looppkg.RuntimeTool{{
+		Name:        "doc_read",
+		Description: "native description.",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			nativeCalls++
+			return `{"native": true}`, nil
+		},
+	}}
+	outputs := []looppkg.OutputSpec{{
+		Name: "office",
+		Type: looppkg.OutputTypeMaintainedDocument,
+		Ref:  "core:office.md",
+	}}
+	wrapped := wrapOwnOutputDocRead(runtimeTools, docTools, outputs)
+
+	// Own ref, no level: full body under the raised budget.
+	got, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:office.md"})
+	if err != nil {
+		t.Fatalf("own-output read: %v", err)
+	}
+	if strings.Contains(got, `"truncated": true`) {
+		t.Fatalf("own-output read truncated under the privileged budget:\n%.300s", got)
+	}
+	if !strings.Contains(got, "the belief accumulates") {
+		t.Errorf("own-output read missing body content:\n%.300s", got)
+	}
+	if nativeCalls != 0 {
+		t.Errorf("own-output read went through the native capped path")
+	}
+
+	// The privilege replaces a real cap: the standard path truncates
+	// this same document.
+	capped, err := docTools.Read(context.Background(), documents.RefArgs{Ref: "core:office.md"})
+	if err != nil {
+		t.Fatalf("standard read: %v", err)
+	}
+	if !strings.Contains(capped, `"truncated": true`) {
+		t.Errorf("standard read did not truncate a >16KiB document; the privilege tests nothing:\n%.200s", capped)
+	}
+
+	// Foreign ref: native path.
+	if _, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:other.md"}); err != nil {
+		t.Fatalf("foreign read: %v", err)
+	}
+	if nativeCalls != 1 {
+		t.Errorf("foreign ref should use the native handler, calls = %d", nativeCalls)
+	}
+
+	// Own ref with level: native path (a projection never nears the cap).
+	if _, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:office.md", "level": "status_line"}); err != nil {
+		t.Fatalf("level read: %v", err)
+	}
+	if nativeCalls != 2 {
+		t.Errorf("level read should use the native handler, calls = %d", nativeCalls)
+	}
+
+	if !strings.Contains(wrapped[0].Description, "raised result budget") {
+		t.Errorf("wrapped description should teach the privilege: %q", wrapped[0].Description)
+	}
+}
+
+// TestReplaceOutputRejectsOversizedBody pins the write-side ceiling at
+// the replace tool: what the loop cannot read back whole, it must not
+// be able to write in the first place.
+func TestReplaceOutputRejectsOversizedBody(t *testing.T) {
+	store, _ := newLoopOutputDocumentStore(t)
+	runtimeTools := buildLoopOutputTools(store, []looppkg.OutputSpec{{
+		Name: "state",
+		Type: looppkg.OutputTypeMaintainedDocument,
+		Ref:  "core:state.md",
+	}})
+	if len(runtimeTools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(runtimeTools))
+	}
+	_, err := runtimeTools[0].Handler(context.Background(), map[string]any{
+		"body": strings.Repeat("x", looppkg.MaxOutputDocumentBytes+1),
+	})
+	if err == nil {
+		t.Fatal("oversized body should refuse")
+	}
+	if !strings.Contains(err.Error(), "outgrown single-document maintenance") {
+		t.Errorf("error should teach the restructure: %v", err)
+	}
+	// Nothing was written: the refusal is the whole outcome.
+	if _, readErr := store.Read(context.Background(), "core:state.md"); readErr == nil {
+		t.Error("refused write still created the document")
+	}
 }

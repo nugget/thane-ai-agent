@@ -14,7 +14,6 @@ import (
 
 const (
 	maxToolResultBytes         = 16 * 1024
-	toolResultPreviewBudget    = maxToolResultBytes - 512
 	defaultDocLinksLimit       = 20
 	maxDocLinksLimit           = 100
 	defaultBacklinkTargetLimit = 10
@@ -87,8 +86,21 @@ type LinksArgs struct {
 	PerBacklinkLimit int    `json:"per_backlink_limit,omitempty"`
 }
 
-// Read returns one indexed document payload.
+// Read returns one indexed document payload, serialized under the
+// standard tool-result budget.
 func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
+	return t.ReadWithResultBudget(ctx, args, maxToolResultBytes)
+}
+
+// ReadWithResultBudget returns one indexed document payload under a
+// caller-chosen serialization budget. The standard budget protects a
+// casual reader's context from a giant document; a caller whose job
+// REQUIRES the whole body — a loop reading the output it is about to
+// rewrite wholesale — raises it deliberately. The budget is never
+// unbounded: a pathological document (the 32 MB frontmatter-
+// amplification incident) must truncate rather than annihilate the
+// caller's context, so even privileged readers pass a finite ceiling.
+func (t *Tools) ReadWithResultBudget(ctx context.Context, args RefArgs, resultBudget int) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
 	}
@@ -99,7 +111,7 @@ func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(toModelDocumentRecord(doc, nowUTC()))
+	return marshalToolResultBudget(toModelDocumentRecord(doc, nowUTC()), resultBudget)
 }
 
 // Record returns one document as stored, for a caller that needs to
@@ -398,17 +410,28 @@ func (t *Tools) MoveSection(ctx context.Context, args SectionTransferArgs) (stri
 }
 
 func marshalToolResult(v any) (string, error) {
+	return marshalToolResultBudget(v, maxToolResultBytes)
+}
+
+func marshalToolResultBudget(v any, maxBytes int) (string, error) {
+	if maxBytes <= 0 {
+		maxBytes = maxToolResultBytes
+	}
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal document tool result: %w", err)
 	}
-	if len(data) > maxToolResultBytes {
-		preview := truncateUTF8Bytes(data, toolResultPreviewBudget)
+	if len(data) > maxBytes {
+		// The envelope's own JSON costs ~512 bytes; a budget at or below
+		// that overhead yields an empty preview rather than a negative
+		// slice bound — the helper must not panic on a small budget a
+		// future caller passes.
+		preview := truncateUTF8Bytes(data, max(0, maxBytes-512))
 		data, err = json.MarshalIndent(map[string]any{
 			"truncated":   true,
 			"bytes_total": len(data),
 			"bytes_shown": len(preview),
-			"note":        fmt.Sprintf("result exceeded %d bytes; narrow the request by lowering limit, specifying root/path_prefix, or selecting a section", maxToolResultBytes),
+			"note":        fmt.Sprintf("result exceeded %d bytes; narrow the request by lowering limit, specifying root/path_prefix, or selecting a section", maxBytes),
 			"preview":     preview,
 		}, "", "  ")
 		if err != nil {

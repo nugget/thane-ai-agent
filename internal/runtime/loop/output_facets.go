@@ -19,6 +19,30 @@ const (
 	digestMaxRunes     = 2048
 )
 
+// MaxOutputDocumentBytes is the ceiling on a maintained document's
+// body, enforced at every owner write (publish, replace, notes, and
+// create-time seed). It exists to close an invariant with the owner's
+// privileged read budget (128 KiB in the app layer): anything the loop
+// can write, it can always read back whole in one call. The gap
+// between the two is serialization headroom — the read returns the
+// body JSON-escaped inside a payload with outline and frontmatter, so
+// the write ceiling sits a third below the read budget. Rejecting the
+// write is the honest failure: a document at this size has outgrown
+// single-document maintenance, and the loop should hear that at the
+// moment of writing, not discover it as a truncated read next cycle.
+const MaxOutputDocumentBytes = 96 * 1024
+
+// ValidateOutputBodySize checks a maintained document body against
+// [MaxOutputDocumentBytes]. The error teaches the restructure rather
+// than inviting a retry: no smaller attempt at the same content will
+// pass, so the correction is to the document's design.
+func ValidateOutputBodySize(body string) error {
+	if size := len(body); size > MaxOutputDocumentBytes {
+		return fmt.Errorf("the document body is %d bytes and a maintained document's ceiling is %d (96 KiB) — past this size the document has outgrown single-document maintenance; move detail into linked documents or trim the body. The ceiling is what guarantees you can always read back what you write in one call", size, MaxOutputDocumentBytes)
+	}
+	return nil
+}
+
 // FacetPayload is one complete published projection set for a faceted
 // maintained document. Every publish carries the whole payload: a
 // rendered document shows exactly the last publish, so a partially
@@ -182,6 +206,19 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 		if heading, found := firstReservedFacetHeading(value); found {
 			return fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
 		}
+	}
+	// The full projection is the document's substance and the only
+	// unbudgeted field above, so it alone can push the document past
+	// the size the owner is guaranteed to read back whole. Checked
+	// first for the clean attribution, then the rendered document as a
+	// whole — the projections and their headings render into one body,
+	// and a full sitting exactly at the ceiling would put the composite
+	// over it.
+	if err := ValidateOutputBodySize(payload.Full); err != nil {
+		return fmt.Errorf("full: %w", err)
+	}
+	if err := ValidateOutputBodySize(o.RenderFacetDocument(payload)); err != nil {
+		return fmt.Errorf("the rendered document (every projection plus its headings): %w — full is the lever; the other projections are already budget-capped", err)
 	}
 	return nil
 }

@@ -352,3 +352,25 @@ Helpful nested note.
 	}
 	return NewTools(store)
 }
+
+// TestReadWithResultBudgetTinyBudgetDoesNotPanic pins the defensive
+// edge of the budget parameter: a budget at or below the truncation
+// envelope's own overhead must produce an envelope with an empty
+// preview, never a negative slice bound.
+func TestReadWithResultBudgetTinyBudgetDoesNotPanic(t *testing.T) {
+	tools := newDocumentToolsTestFixture(t)
+	body := strings.Repeat("content that will not fit in a tiny budget. ", 50)
+	if _, err := tools.Write(context.Background(), WriteArgs{
+		Ref:  "kb:tiny-budget.md",
+		Body: &body,
+	}); err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+	got, err := tools.ReadWithResultBudget(context.Background(), RefArgs{Ref: "kb:tiny-budget.md"}, 100)
+	if err != nil {
+		t.Fatalf("tiny-budget read: %v", err)
+	}
+	if !strings.Contains(got, `"truncated": true`) {
+		t.Errorf("tiny budget should truncate:\n%.200s", got)
+	}
+}

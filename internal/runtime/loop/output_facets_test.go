@@ -404,3 +404,60 @@ func TestRenderFacetScaffoldJSONFacet(t *testing.T) {
 		t.Errorf("json facet placeholder is not valid JSON: %q", payload.StatusLine)
 	}
 }
+
+// TestValidateOutputBodySize pins the write-side half of the
+// read-back invariant: a body past the ceiling is rejected with the
+// restructure teaching, and the ceiling sits below the owner's
+// privileged read budget so anything accepted here always reads back
+// whole.
+func TestValidateOutputBodySize(t *testing.T) {
+	if err := ValidateOutputBodySize(strings.Repeat("x", MaxOutputDocumentBytes)); err != nil {
+		t.Fatalf("body at the ceiling should pass: %v", err)
+	}
+	err := ValidateOutputBodySize(strings.Repeat("x", MaxOutputDocumentBytes+1))
+	if err == nil {
+		t.Fatal("body past the ceiling should refuse")
+	}
+	for _, want := range []string{"outgrown single-document maintenance", "read back what you write"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should teach the restructure, missing %q: %v", want, err)
+		}
+	}
+}
+
+// TestValidateFacetPayloadRejectsOversizedFull pins that the ceiling
+// reaches the faceted contract: full is the only unbudgeted field, so
+// it alone can push the document past what the owner reads back whole.
+func TestValidateFacetPayloadRejectsOversizedFull(t *testing.T) {
+	output := facetedOutput(OutputFacetStatusLine)
+	payload := FacetPayload{
+		StatusLine: "One line.",
+		Full:       strings.Repeat("x", MaxOutputDocumentBytes+1),
+	}
+	err := output.ValidateFacetPayload(payload)
+	if err == nil {
+		t.Fatal("oversized full should refuse")
+	}
+	if !strings.Contains(err.Error(), "full:") || !strings.Contains(err.Error(), "outgrown") {
+		t.Errorf("error should name full and teach the restructure: %v", err)
+	}
+}
+
+// TestValidateFacetPayloadRejectsOversizedComposite pins the boundary
+// the per-field check alone would miss: full inside the ceiling, but
+// the rendered document — projections plus headings — past it.
+func TestValidateFacetPayloadRejectsOversizedComposite(t *testing.T) {
+	output := facetedOutput(OutputFacetStatusLine, OutputFacetDigest)
+	payload := FacetPayload{
+		StatusLine: "One standalone line of current state.",
+		Digest:     strings.Repeat("d", 2000),
+		Full:       strings.Repeat("x", MaxOutputDocumentBytes-100),
+	}
+	err := output.ValidateFacetPayload(payload)
+	if err == nil {
+		t.Fatal("composite past the ceiling should refuse")
+	}
+	if !strings.Contains(err.Error(), "rendered document") || !strings.Contains(err.Error(), "full is the lever") {
+		t.Errorf("error should attribute the composite and name the lever: %v", err)
+	}
+}
