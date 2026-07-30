@@ -205,7 +205,11 @@ func writeAdmissionText(w io.Writer, results []app.RootAdmission) {
 			// because it will not.
 			marker = "!"
 		}
-		fmt.Fprintf(w, "  %s %s (%s)\n      %s\n", marker, result.Root, result.Mode, result.Err)
+		// Reasons here are not always one line: anything wrapping a git failure
+		// carries git's stderr, which is an error followed by usage advice, and
+		// printed raw those continuation lines start at column zero — losing the
+		// shape that says which root a reason belongs to.
+		fmt.Fprintf(w, "  %s %s (%s)\n%s\n", marker, result.Root, result.Mode, indentBlock(result.Err.Error(), "      "))
 	}
 }
 
