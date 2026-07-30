@@ -204,7 +204,7 @@ func (a *App) initServers(s *newState) error {
 	// Home Assistant's Ollama integration connects here, allowing Thane
 	// to serve as a drop-in replacement for a standalone Ollama instance.
 	if cfg.OllamaAPI.Enabled {
-		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, a.loop, logger)
+		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, cfg.OllamaAPI.APIKey, a.loop, logger)
 		a.ollamaServer.SetOWUTracker(owuTracker)
 	}
 
