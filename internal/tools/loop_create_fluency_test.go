@@ -124,11 +124,11 @@ func TestGuidedCreateRefusesUnknownFacet(t *testing.T) {
 	}
 }
 
-// TestGuidedCreateTierInputShapes covers the two array forms a caller can
+// TestGuidedCreateFacetInputShapes covers the two array forms a caller can
 // present and the element that is neither. A non-string coerced to ""
 // would be reported as an empty facet name, which names the symptom
 // rather than the mistake.
-func TestGuidedCreateTierInputShapes(t *testing.T) {
+func TestGuidedCreateFacetInputShapes(t *testing.T) {
 	t.Run("[]string is accepted", func(t *testing.T) {
 		got, err := parseOutputFacets([]string{"status_line", "digest"})
 		if err != nil {

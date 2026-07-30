@@ -75,7 +75,7 @@ believes. Two questions decide the rest:
    by other turns, other loops, or an ambient surface should declare
    `facets` so each reader takes the length it can afford.
    `thane_loop_create` declares them directly on its `output` argument;
-   a loop nobody reads but its owner can stay untiered.
+   a loop nobody reads but its owner needs no facets at all.
 
 2. **Does the loop need to escalate decisions to you, or accept new
    focus when you adjust its scope?**
