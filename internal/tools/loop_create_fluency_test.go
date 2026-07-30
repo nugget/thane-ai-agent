@@ -623,3 +623,42 @@ func TestGuidedCreateSeedDryRunWritesNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestGuidedCreateSalienceFlagsAreRegistryTargetOnly pins the guard on
+// the create door: the salience flags widen area/label/floor expansion,
+// so on a concrete entity they signal a misunderstanding the tool
+// should correct rather than ignore.
+func TestGuidedCreateSalienceFlagsAreRegistryTargetOnly(t *testing.T) {
+	t.Run("accepted on an area target", func(t *testing.T) {
+		entities, err := parseEntityList("entities", []any{
+			map[string]any{"entity_id": "area:office", "include_hidden": true, "include_diagnostic": true},
+		})
+		if err != nil {
+			t.Fatalf("area target with salience flags: %v", err)
+		}
+		if !entities[0].IncludeHidden || !entities[0].IncludeDiagnostic {
+			t.Errorf("flags not carried: %+v", entities[0])
+		}
+	})
+	t.Run("refused on a concrete entity", func(t *testing.T) {
+		_, err := parseEntityList("entities", []any{
+			map[string]any{"entity_id": "sensor.office_temperature", "include_hidden": true},
+		})
+		if err == nil {
+			t.Fatal("include_hidden on a concrete entity should refuse")
+		}
+		if !strings.Contains(err.Error(), "always watched") {
+			t.Errorf("error should teach the boundary, got: %v", err)
+		}
+	})
+	t.Run("flags land on the spec subscription", func(t *testing.T) {
+		spec, _ := dryRunSpec(t, map[string]any{
+			"name": "office_watch", "intent": "Watch the office.",
+			"operation": "service", "sleep_min": "10m", "sleep_max": "30m",
+			"entities": []any{map[string]any{"entity_id": "area:office", "include_diagnostic": true}},
+		})
+		if len(spec.Subscriptions) != 1 || !spec.Subscriptions[0].IncludeDiagnostic {
+			t.Errorf("subscription = %+v, want include_diagnostic carried", spec.Subscriptions)
+		}
+	})
+}

@@ -838,13 +838,13 @@ func thaneLoopCreateSchema() map[string]any {
 			},
 			"entities": map[string]any{
 				"type":        "array",
-				"description": "Optional Home Assistant entity subscriptions surfaced into the loop's context each iteration. By default they provide context only; an entry with wake: true also wakes this loop when the entity changes (debounced/coalesced — the simple-change-trigger door; compound conditions stay HA-side via MQTT wakes). Container ancestors' subscriptions also cascade in.",
+				"description": "Optional Home Assistant entity subscriptions surfaced into the loop's context each iteration. By default they provide context only; an entry with wake: true also wakes this loop when the entity changes (debounced/coalesced — the simple-change-trigger door; compound conditions stay HA-side via MQTT wakes). Container ancestors' subscriptions also cascade in. For a loop monitoring a room or domain, prefer two layers: one area:<area_id> entry for ambient coverage (expansion honors HA visibility, so it is safe by default and tracks the room as devices move), plus the few sharp entities that carry wake, transitions, or history — hand-enumerating a whole room invites omissions an area target makes impossible.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"entity_id": map[string]any{
 							"type":        "string",
-							"description": "Home Assistant entity ID (e.g. sensor.upstairs_temperature) or a glob (e.g. binary_sensor.*door*), re-expanded live each turn.",
+							"description": "Home Assistant entity ID (e.g. sensor.upstairs_temperature); a glob (e.g. binary_sensor.*door*), re-expanded live each turn; or an organizational target — area:<area_id>, label:<label_id>, floor:<floor_id> — watching that group's current members, re-resolved live. Organizational expansion honors HA visibility: hidden and diagnostic/config members stay out by default (include_hidden / include_diagnostic widen it).",
 						},
 						"history": map[string]any{
 							"type":        "array",
@@ -888,6 +888,14 @@ func thaneLoopCreateSchema() map[string]any {
 						"wake_debounce_seconds": map[string]any{
 							"type":        "integer",
 							"description": "How long changes coalesce before waking (default a few seconds).",
+						},
+						"include_hidden": map[string]any{
+							"type":        "boolean",
+							"description": "Widen an area/label/floor target's expansion to members the owner hid in Home Assistant — a deliberate forensic watch. Registry targets only; a concrete entity or glob you name is always watched.",
+						},
+						"include_diagnostic": map[string]any{
+							"type":        "boolean",
+							"description": "Widen an area/label/floor target's expansion to diagnostic/config-category members the default expansion leaves out. Registry targets only.",
 						},
 						"include": EntityMetadataIncludeParameter(),
 					},

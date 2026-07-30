@@ -146,10 +146,9 @@ anything persists.
   "sleep_min": "10m",
   "sleep_max": "30m",
   "subscriptions": [
-    {"entity_id": "sensor.server_closet_temperature"},
-    {"entity_id": "sensor.server_closet_humidity"},
-    {"entity_id": "sensor.ups_hor_rack_status"},
-    {"entity_id": "switch.dehumidifier"}
+    {"entity_id": "area:server_closet"},
+    {"entity_id": "sensor.server_closet_temperature", "history": [3600, 86400]},
+    {"entity_id": "sensor.ups_hor_rack_status", "transitions": 6}
   ],
   "tags": ["home", "ha", "awareness", "documents"],
   "outputs": [
@@ -168,6 +167,12 @@ anything persists.
   ]
 }
 ```
+
+The watch set is two layers: `area:server_closet` carries ambient
+coverage of everything the owner keeps visible there — expansion honors
+HA visibility and re-resolves live, so a sensor added to the closet next
+month appears without a spec edit — while the sharp entities carry the
+extras an area target cannot (history windows, transition logs, wake).
 
 ## Publishing
 

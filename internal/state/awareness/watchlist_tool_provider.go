@@ -114,7 +114,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 				"properties": map[string]any{
 					"entity_id": map[string]any{
 						"type":        "string",
-						"description": "What to subscribe to. Any of: a concrete entity ID (sensor.office_temperature); a glob (binary_sensor.*door*, *_temperature); or an organizational target — area:<area_id>, label:<label_id>, floor:<floor_id> (e.g. area:office) — which watches that group's current members, re-resolved live each turn so membership follows the home as devices move (capped per turn like globs). Use ha_registry_search to find area/label/floor IDs.",
+						"description": "What to subscribe to. Any of: a concrete entity ID (sensor.office_temperature); a glob (binary_sensor.*door*, *_temperature); or an organizational target — area:<area_id>, label:<label_id>, floor:<floor_id> (e.g. area:office) — which watches that group's current members, re-resolved live each turn so membership follows the home as devices move (capped per turn like globs). Organizational expansion honors HA visibility: members the owner hid, plus diagnostic/config-category entities, stay out by default — the owner's curation in HA is the filter, so subscribing a whole area is safe without inspecting it first (include_hidden / include_diagnostic widen it). Use ha_registry_search to find area/label/floor IDs.",
 					},
 					"owner": ownerParam,
 					"history": map[string]any{
@@ -159,6 +159,14 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 					"wake_debounce_seconds": map[string]any{
 						"type":        "integer",
 						"description": "How long this subscription's changes coalesce before waking its loop (default a few seconds). A loop's effective cadence follows its twitchiest wake subscription — one wake drains everything pending.",
+					},
+					"include_hidden": map[string]any{
+						"type":        "boolean",
+						"description": "Widen an area/label/floor target's expansion to members the owner hid in Home Assistant — a deliberate forensic watch. Default expansion honors HA visibility. Registry targets only; a concrete entity or glob you name is always watched.",
+					},
+					"include_diagnostic": map[string]any{
+						"type":        "boolean",
+						"description": "Widen an area/label/floor target's expansion to diagnostic/config-category members (signal strengths, firmware toggles) the default expansion leaves out. Registry targets only.",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -275,6 +283,14 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if transitions > maxTransitionsPerSubscription {
 		return "", fmt.Errorf("transitions is capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", maxTransitionsPerSubscription)
 	}
+	includeHidden, _ := args["include_hidden"].(bool)
+	includeDiagnostic, _ := args["include_diagnostic"].(bool)
+	// The salience flags widen registry-target expansion; a concrete
+	// entity or glob you name is always watched, so the flag there is a
+	// misunderstanding worth correcting rather than ignoring.
+	if (includeHidden || includeDiagnostic) && !ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+		return "", fmt.Errorf("include_hidden/include_diagnostic widen area/label/floor expansion only — a concrete entity or glob you name is always watched; drop the flag")
+	}
 	wake, _ := args["wake"].(bool)
 	wakeDebounce, err := watchlistIntArg(args["wake_debounce_seconds"], "wake_debounce_seconds")
 	if err != nil {
@@ -298,6 +314,8 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		TransitionsWindowSeconds: transitionsWindow,
 		Wake:                     wake,
 		WakeDebounceSeconds:      wakeDebounce,
+		IncludeHidden:            includeHidden,
+		IncludeDiagnostic:        includeDiagnostic,
 	}
 
 	if sub.Wake {
@@ -431,7 +449,7 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	// is almost always a typo'd id that would otherwise inject nothing
 	// forever. A concrete entity_id is its own membership and needs none.
 	if target := ParseSubscriptionTarget(entityID); target.Kind != TargetEntity {
-		exp, perr := previewTargetExpansion(newRenderRegistries(ctx, w.registry), target)
+		exp, perr := previewTargetExpansion(newRenderRegistries(ctx, w.registry), target, sub)
 		switch {
 		case perr != nil:
 			// The preview couldn't run (transient registry read failure).
@@ -536,7 +554,7 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 		// Show each glob/registry target's current expansion so a
 		// silently-empty subscription is visible at a glance.
 		if target := ParseSubscriptionTarget(row.EntityID); target.Kind != TargetEntity {
-			if exp, err := previewTargetExpansion(registries, target); err != nil {
+			if exp, err := previewTargetExpansion(registries, target, row.EntitySubscription); err != nil {
 				// A failed read is marked, not omitted — an absent
 				// expansion would read as "not a registry target" rather
 				// than "couldn't resolve it this turn."

@@ -103,6 +103,13 @@ Choose stream wiring by attention cost:
   parameter: omit `owner` and the same tools mutate your own
   always-visible subscription set instead — name the loop when the
   loop should carry the watch.
+  For a loop watching a room or domain, build the watch set in two
+  layers: one `area:<area_id>` entry for ambient coverage — expansion
+  honors HA visibility (hidden and diagnostic members stay out), so
+  subscribing the whole area is safe by default and tracks the room as
+  devices move — plus the few sharp entities carrying `wake`,
+  `transitions`, or `history`. Hand-enumerating a room invites
+  omissions an area target makes impossible.
   Add `include` metadata flags (`area`, `device`, `labels`,
   `description`, `visibility`, or `all`) when the loop needs
   physical-world context beside the live state, including HA's
