@@ -391,6 +391,9 @@ func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.Fac
 		if strings.TrimSpace(s) == "" {
 			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.notes is empty; pass the loop's starting thinking or omit the key")
 		}
+		if err := looppkg.ValidateOutputBodySize(s); err != nil {
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.notes: %w", err)
+		}
 		notes = s
 	}
 
@@ -425,6 +428,9 @@ func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.Fac
 	}
 	if strings.TrimSpace(full) == "" {
 		return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.full is empty; pass the document's first complete body or omit the key")
+	}
+	if err := looppkg.ValidateOutputBodySize(full); err != nil {
+		return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial.full: %w", err)
 	}
 	payload.Full = full
 	return payload, notes, true, nil

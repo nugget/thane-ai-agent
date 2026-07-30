@@ -212,6 +212,9 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 					if strings.TrimSpace(content) == "" {
 						return "", fmt.Errorf("body is required")
 					}
+					if err := looppkg.ValidateOutputBodySize(content); err != nil {
+						return "", err
+					}
 					result, err := store.Write(ctx, documents.WriteArgs{
 						Ref:  output.Ref,
 						Body: &content,
@@ -349,7 +352,7 @@ func replaceOutputDescription(output looppkg.OutputSpec) string {
 	if output.Type == looppkg.OutputTypeWorkingNotes {
 		return workingNotesDescription(output)
 	}
-	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane.", output.Name, output.Ref)
+	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane. The body has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call.", output.Name, output.Ref)
 }
 
 // workingNotesDescription frames the loop's private thinking. What

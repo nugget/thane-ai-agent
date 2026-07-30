@@ -393,3 +393,31 @@ func TestWrapOwnOutputDocRead(t *testing.T) {
 		t.Errorf("wrapped description should teach the privilege: %q", wrapped[0].Description)
 	}
 }
+
+// TestReplaceOutputRejectsOversizedBody pins the write-side ceiling at
+// the replace tool: what the loop cannot read back whole, it must not
+// be able to write in the first place.
+func TestReplaceOutputRejectsOversizedBody(t *testing.T) {
+	store, _ := newLoopOutputDocumentStore(t)
+	runtimeTools := buildLoopOutputTools(store, []looppkg.OutputSpec{{
+		Name: "state",
+		Type: looppkg.OutputTypeMaintainedDocument,
+		Ref:  "core:state.md",
+	}})
+	if len(runtimeTools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(runtimeTools))
+	}
+	_, err := runtimeTools[0].Handler(context.Background(), map[string]any{
+		"body": strings.Repeat("x", looppkg.MaxOutputDocumentBytes+1),
+	})
+	if err == nil {
+		t.Fatal("oversized body should refuse")
+	}
+	if !strings.Contains(err.Error(), "outgrown single-document maintenance") {
+		t.Errorf("error should teach the restructure: %v", err)
+	}
+	// Nothing was written: the refusal is the whole outcome.
+	if _, readErr := store.Read(context.Background(), "core:state.md"); readErr == nil {
+		t.Error("refused write still created the document")
+	}
+}

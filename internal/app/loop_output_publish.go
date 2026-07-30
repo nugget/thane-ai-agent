@@ -104,7 +104,7 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 		keys = append(keys, field.Key)
 	}
 	description := fmt.Sprintf(
-		"Publish the loop-declared output %q at %s. Pass every projection in one call (%s): they are written together so no reader sees one projection describing a state another has moved past. Section structure and headings are rendered automatically — pass only the content of each projection, never its heading. Each projection has its own size budget and an over-budget value is rejected rather than trimmed.",
+		"Publish the loop-declared output %q at %s. Pass every projection in one call (%s): they are written together so no reader sees one projection describing a state another has moved past. Section structure and headings are rendered automatically — pass only the content of each projection, never its heading. Each projection has its own size budget and an over-budget value is rejected rather than trimmed; full has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call.",
 		output.Name, output.Ref, strings.Join(keys, ", "),
 	)
 	if notes != nil {
@@ -117,6 +117,9 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 // audience that keeps it out of consumer surfaces on every write —
 // notes hold a current view, so each one supersedes the last.
 func writeLoopWorkingNotes(ctx context.Context, store *documents.Store, notes looppkg.OutputSpec, body string) (*documents.MutationResult, error) {
+	if err := looppkg.ValidateOutputBodySize(body); err != nil {
+		return nil, fmt.Errorf("notes: %w", err)
+	}
 	return store.Write(ctx, documents.WriteArgs{
 		Ref:         notes.Ref,
 		Body:        &body,
