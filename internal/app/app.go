@@ -83,9 +83,12 @@ type App struct {
 	llmClient             llm.Client
 	ollamaClients         map[string]*modelproviders.OllamaClient
 	resourceHealthClients map[string]fleet.ResourceHealthClient
-	modelRuntime          *fleet.Runtime
-	modelCatalog          *fleet.Catalog
-	modelRegistry         *fleet.Registry
+	// resourceWatchers holds the connwatch watcher per model resource so
+	// the router's readiness probe can consult live health at route time.
+	resourceWatchers map[string]*connwatch.Watcher
+	modelRuntime     *fleet.Runtime
+	modelCatalog     *fleet.Catalog
+	modelRegistry    *fleet.Registry
 
 	// Core subsystems
 	mem                       *memory.SQLiteStore
