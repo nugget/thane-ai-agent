@@ -32,12 +32,7 @@ type loopDefinitionBootstrapResult struct {
 // participate in startup hydration. Request/reply and background-task
 // operations are transient and are explicitly excluded.
 func isDurableDefinitionOperation(op looppkg.Operation) bool {
-	switch op {
-	case looppkg.OperationService, looppkg.OperationContainer, looppkg.OperationEventDriven:
-		return true
-	default:
-		return false
-	}
+	return op.IsDurableDefinition()
 }
 
 // loopDefinitionRuntime bridges durable loop definitions into the live

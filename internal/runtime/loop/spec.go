@@ -69,6 +69,24 @@ const (
 	OperationEventDriven Operation = "event_driven"
 )
 
+// IsDurableDefinition reports whether a stored definition with this
+// operation is one the reconciler keeps RUNNING while its policy is
+// active — service, container, and event_driven definitions are
+// converged toward "present in the live registry"; transient
+// operations (request_reply, background_task) are launched on demand
+// and never resurrected. This is the single predicate behind both the
+// reconciler's convergence decision and the stop_loop warning that a
+// stop will not stick, so the two cannot disagree about which loops
+// come back.
+func (op Operation) IsDurableDefinition() bool {
+	switch op {
+	case OperationService, OperationContainer, OperationEventDriven:
+		return true
+	default:
+		return false
+	}
+}
+
 // CoreLoopName is the well-known name reserved for the singleton
 // structural root container. Auto-created at startup if absent;
 // orphan loops default-parent to it; cannot be stopped via the
