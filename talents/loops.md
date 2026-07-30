@@ -51,6 +51,18 @@ under each heading, so the body a loop sees on its first wake is
 already the shape a correct publish produces. Fill the placeholders;
 do not invent structure around them.
 
+Better than a placeholder: seed the first publish. At create time you
+have just surveyed the domain — read the neighbors, checked the live
+entities, heard what the loop should be about — and the loop
+inheriting the document may run on a smaller model. `output.initial`
+takes the same arguments as the publish tool and becomes the
+document's first published state; the loop revises it from live state
+at its first wake. Seed `notes` in the same object with your starting
+theory — which signals look sharp, what you expect, what would change
+your mind — so the loop's private thinking opens with a belief to
+revise instead of a blank page. Author the seed from what you actually
+observed; when you have observed nothing, leave the placeholders.
+
 Declare `status_line` for any faceted output; add `teaser` when the
 output is something others search or link to, and `digest` when a
 reader should be able to act without opening the document.
