@@ -852,7 +852,7 @@ func (r *Registry) registerBuiltins() {
 				},
 				"target": map[string]any{
 					"type":        "object",
-					"description": "Fan-out addressing: any of entity_id, device_id, area_id, floor_id, label_id (string or array each). Areas, floors, labels, and devices accept human names (\"Office\") as well as registry IDs — names resolve case-insensitively, unknown references fail fast with the known names. Provide this or entity_id.",
+					"description": "Fan-out addressing: any of entity_id, device_id, area_id, floor_id, label_id (string or array each). Areas, floors, labels, and devices accept human names (\"Office\") as well as registry IDs — names resolve case-insensitively, unknown references fail fast with the known names. A device name matching several devices also fails fast, listing each candidate id with its integration: since HA 2026.8 one physical device appears once per integration, so pick the integration that owns the capability you're calling (or check ha_device first). Provide this or entity_id.",
 					"properties": map[string]any{
 						"entity_id": map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
 						"device_id": map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},

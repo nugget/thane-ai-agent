@@ -60,15 +60,15 @@ func ComputeDeviceSnapshot(ctx context.Context, client DeviceSnapshotClient, req
 	if err != nil {
 		return "", fmt.Errorf("ha_device: get device registry: %w", err)
 	}
-	device, candidates, ok := resolveDevice(devices, req.Device)
+	device, ambiguous, ok := resolveDevice(devices, req.Device)
 	if !ok {
-		if len(candidates) > 0 {
+		if len(ambiguous) > 0 {
 			return promptfmt.MarshalCompact(map[string]any{
 				"query":      req.Device,
 				"found":      false,
 				"reason":     "ambiguous",
-				"candidates": candidates,
-				"note":       "multiple devices matched; re-call with a device_id from candidates",
+				"candidates": describeDeviceCandidates(ctx, client, ambiguous),
+				"note":       "multiple devices matched — since HA 2026.8 one physical device appears once per integration, so same-name twins are expected; pick by integration and entity_count, then re-call with that device_id",
 			}), nil
 		}
 		return promptfmt.MarshalCompact(map[string]any{
@@ -327,9 +327,12 @@ func classifyDeviceChildren(children []areaMember, statesByID map[string]*homeas
 
 // resolveDevice matches a device by id, then by case-insensitive
 // user-assigned name or registry name, then by substring. It mirrors
-// resolveArea's exact-first strategy and returns candidate device_ids
-// when a substring query is ambiguous so the model can disambiguate.
-func resolveDevice(devices []homeassistant.DeviceRegistryEntry, query string) (homeassistant.DeviceRegistryEntry, []string, bool) {
+// resolveArea's exact-first strategy, but every name tier can be
+// ambiguous: since HA 2026.8 one physical device appears once per
+// integration, so even an exact name may match several registry rows.
+// Ambiguous matches are returned as entries for the caller to describe
+// so the model can disambiguate.
+func resolveDevice(devices []homeassistant.DeviceRegistryEntry, query string) (homeassistant.DeviceRegistryEntry, []homeassistant.DeviceRegistryEntry, bool) {
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return homeassistant.DeviceRegistryEntry{}, nil, false
@@ -341,18 +344,20 @@ func resolveDevice(devices []homeassistant.DeviceRegistryEntry, query string) (h
 		}
 	}
 	// Exact (case-insensitive) name or user-assigned name.
-	for i := range devices {
-		if strings.EqualFold(string(devices[i].NameByUser), q) || strings.EqualFold(string(devices[i].Name), q) {
-			return devices[i], nil, true
-		}
-	}
-	// Substring on either name; collect all matches for disambiguation.
-	qLower := strings.ToLower(q)
 	var matches []int
 	for i := range devices {
-		name := strings.ToLower(deviceDisplayName(devices[i]))
-		if name != "" && strings.Contains(name, qLower) {
+		if strings.EqualFold(string(devices[i].NameByUser), q) || strings.EqualFold(string(devices[i].Name), q) {
 			matches = append(matches, i)
+		}
+	}
+	// Substring on either name only when no exact hit exists.
+	if len(matches) == 0 {
+		qLower := strings.ToLower(q)
+		for i := range devices {
+			name := strings.ToLower(deviceDisplayName(devices[i]))
+			if name != "" && strings.Contains(name, qLower) {
+				matches = append(matches, i)
+			}
 		}
 	}
 	switch len(matches) {
@@ -361,13 +366,73 @@ func resolveDevice(devices []homeassistant.DeviceRegistryEntry, query string) (h
 	case 1:
 		return devices[matches[0]], nil, true
 	default:
-		candidates := make([]string, 0, len(matches))
+		ambiguous := make([]homeassistant.DeviceRegistryEntry, 0, len(matches))
 		for _, idx := range matches {
-			candidates = append(candidates, fmt.Sprintf("%s (%s)", devices[idx].ID, deviceDisplayName(devices[idx])))
+			ambiguous = append(ambiguous, devices[idx])
 		}
-		sort.Strings(candidates)
-		return homeassistant.DeviceRegistryEntry{}, candidates, false
+		return homeassistant.DeviceRegistryEntry{}, ambiguous, false
 	}
+}
+
+// describeDeviceCandidates renders ambiguous device matches with enough
+// identity to choose between them. Post-2026.8 duplicates usually share
+// their name exactly (the same hardware split into one device per
+// integration), so the name alone cannot disambiguate — each candidate
+// carries its owning integration and enabled-entity count, which is how
+// the twins actually differ (the native integration holds the controls,
+// a presence tracker holds one or two entities). Enrichment is
+// best-effort: a failed registry read omits the field rather than
+// failing resolution. Candidates are ordered richest-first because the
+// copy with the most entities is usually the one the model wants.
+func describeDeviceCandidates(ctx context.Context, client DeviceSnapshotClient, matches []homeassistant.DeviceRegistryEntry) []map[string]any {
+	domains := map[string]string{}
+	if entries, err := client.GetConfigEntries(ctx); err == nil {
+		for _, e := range entries {
+			domains[e.EntryID] = e.Domain
+		}
+	}
+	counts := map[string]int{}
+	if entities, err := client.GetEntityRegistry(ctx); err == nil {
+		for i := range entities {
+			if entities[i].DisabledBy == "" {
+				counts[entities[i].DeviceID]++
+			}
+		}
+	}
+	type candidate struct {
+		id     string
+		name   string
+		count  int
+		domain string
+	}
+	ranked := make([]candidate, 0, len(matches))
+	for _, d := range matches {
+		ranked = append(ranked, candidate{
+			id:     d.ID,
+			name:   deviceDisplayName(d),
+			count:  counts[d.ID],
+			domain: domains[d.OwningConfigEntry()],
+		})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].count != ranked[j].count {
+			return ranked[i].count > ranked[j].count
+		}
+		return ranked[i].id < ranked[j].id
+	})
+	out := make([]map[string]any, 0, len(ranked))
+	for _, c := range ranked {
+		m := map[string]any{
+			"device_id":    c.id,
+			"name":         c.name,
+			"entity_count": c.count,
+		}
+		if c.domain != "" {
+			m["integration"] = c.domain
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // deviceDisplayName prefers the user-assigned name, then the registry
@@ -384,17 +449,14 @@ func deviceDisplayName(device homeassistant.DeviceRegistryEntry) string {
 }
 
 // deviceIntegration resolves the device's owning integration (config
-// entry domain) from the primary config entry, falling back to the
-// first config entry. Returns "" when the device has no config entry or
-// the registry can't be read — integration is enrichment, not load-
-// bearing, so a fetch failure just omits it.
+// entry domain) via [homeassistant.DeviceRegistryEntry.OwningConfigEntry].
+// Returns "" when the device has no config entry or the registry can't
+// be read — integration is enrichment, not load-bearing, so a fetch
+// failure just omits it.
 func deviceIntegration(ctx context.Context, client DeviceSnapshotClient, device homeassistant.DeviceRegistryEntry) string {
-	entryID := device.PrimaryConfigEntry
+	entryID := device.OwningConfigEntry()
 	if entryID == "" {
-		if len(device.ConfigEntries) == 0 {
-			return ""
-		}
-		entryID = device.ConfigEntries[0]
+		return ""
 	}
 	entries, err := client.GetConfigEntries(ctx)
 	if err != nil {

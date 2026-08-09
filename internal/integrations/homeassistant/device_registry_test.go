@@ -133,6 +133,79 @@ func TestDeviceRegistryEntry_AllIntegrationFieldsTolerateNumbers(t *testing.T) {
 	}
 }
 
+// TestDeviceRegistryEntry_SingularOwnershipFieldsDecode pins the HA
+// 2026.8 registry shape: the singular config_entry_id/config_subentry_id
+// ownership fields decode alongside the deprecated collection fields,
+// which HA keeps emitting as compatibility shims until 2027.8.
+func TestDeviceRegistryEntry_SingularOwnershipFieldsDecode(t *testing.T) {
+	raw := `[{
+		"id":"a",
+		"name":"Split Device",
+		"config_entry_id":"entry_1",
+		"config_subentry_id":"sub_1",
+		"config_entries":["entry_1"],
+		"config_entries_subentries":{"entry_1":["sub_1"]},
+		"primary_config_entry":"entry_1"
+	}]`
+	var devices []DeviceRegistryEntry
+	if err := json.Unmarshal([]byte(raw), &devices); err != nil {
+		t.Fatalf("decode device list: %v", err)
+	}
+	if devices[0].ConfigEntryID != "entry_1" {
+		t.Errorf("ConfigEntryID = %q, want entry_1", devices[0].ConfigEntryID)
+	}
+	if devices[0].ConfigSubentryID != "sub_1" {
+		t.Errorf("ConfigSubentryID = %q, want sub_1", devices[0].ConfigSubentryID)
+	}
+}
+
+// TestDeviceRegistryEntry_OwningConfigEntry pins the ownership fallback
+// chain: the authoritative singular field (2026.8+) wins, then the
+// deprecated primary field, then the first collection element, so the
+// same reader works against both current and pre-2026.8 servers.
+func TestDeviceRegistryEntry_OwningConfigEntry(t *testing.T) {
+	cases := []struct {
+		name   string
+		device DeviceRegistryEntry
+		want   string
+	}{
+		{
+			name: "singular field wins over deprecated fields",
+			device: DeviceRegistryEntry{
+				ConfigEntryID:      "new",
+				PrimaryConfigEntry: "old_primary",
+				ConfigEntries:      []string{"old_first"},
+			},
+			want: "new",
+		},
+		{
+			name: "pre-2026.8 server falls back to primary",
+			device: DeviceRegistryEntry{
+				PrimaryConfigEntry: "old_primary",
+				ConfigEntries:      []string{"old_first"},
+			},
+			want: "old_primary",
+		},
+		{
+			name:   "oldest servers fall back to first config entry",
+			device: DeviceRegistryEntry{ConfigEntries: []string{"old_first", "old_second"}},
+			want:   "old_first",
+		},
+		{
+			name:   "no ownership at all",
+			device: DeviceRegistryEntry{ID: "orphan"},
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.device.OwningConfigEntry(); got != tc.want {
+				t.Errorf("OwningConfigEntry() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestEntityRegistryEntry_NumericFieldsTolerated covers the entity-registry
 // counterpart: a numeric unique_id (common — integrations use raw device IDs)
 // or original_name must not fail the entity_registry/list decode. unique_id

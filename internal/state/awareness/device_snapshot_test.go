@@ -261,6 +261,99 @@ func TestComputeDeviceSnapshot_AmbiguousName(t *testing.T) {
 	}
 }
 
+// TestComputeDeviceSnapshot_ExactNameTwinsAmbiguous is the HA 2026.8
+// regression: one physical device now appears once per integration, so
+// an EXACT name can match several registry rows. Resolution must refuse
+// to pick a row silently and instead return candidates the model can
+// choose between — attributed with the owning integration and enabled
+// entity count, richest twin first (that copy is usually the one that
+// holds the controls).
+func TestComputeDeviceSnapshot_ExactNameTwinsAmbiguous(t *testing.T) {
+	client := &fakeDeviceClient{
+		devices: []homeassistant.DeviceRegistryEntry{
+			// Presence-tracker twin first in registry order: pre-2026.8
+			// first-match-wins would have silently returned this one.
+			{ID: "dev_net", Name: "Office Ceiling Fan", ConfigEntryID: "cfg_net"},
+			{ID: "dev_fan", Name: "Office Ceiling Fan", ConfigEntryID: "cfg_fan"},
+		},
+		configs: []homeassistant.ConfigEntry{
+			{EntryID: "cfg_net", Domain: "unifi"},
+			{EntryID: "cfg_fan", Domain: "baf"},
+		},
+		entities: []homeassistant.EntityRegistryEntry{
+			{EntityID: "device_tracker.fan", DeviceID: "dev_net"},
+			{EntityID: "fan.office", DeviceID: "dev_fan"},
+			{EntityID: "light.office_fan", DeviceID: "dev_fan"},
+			{EntityID: "sensor.office_fan_rpm", DeviceID: "dev_fan", DisabledBy: "user"},
+		},
+	}
+
+	out, err := ComputeDeviceSnapshot(context.Background(), client, DeviceSnapshotRequest{Device: "office ceiling fan"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeDeviceSnapshot: %v", err)
+	}
+	payload := decodeDevicePayload(t, out)
+	if payload["found"] != false || payload["reason"] != "ambiguous" {
+		t.Fatalf("expected ambiguous, got %#v", payload)
+	}
+
+	cands, _ := payload["candidates"].([]any)
+	if len(cands) != 2 {
+		t.Fatalf("candidates = %#v, want 2", payload["candidates"])
+	}
+	first, _ := cands[0].(map[string]any)
+	second, _ := cands[1].(map[string]any)
+	// Richest twin leads: the native integration's copy with 2 enabled
+	// entities (the disabled one must not count).
+	if first["device_id"] != "dev_fan" || first["integration"] != "baf" || first["entity_count"] != float64(2) {
+		t.Errorf("first candidate = %#v, want dev_fan/baf/2", first)
+	}
+	if second["device_id"] != "dev_net" || second["integration"] != "unifi" || second["entity_count"] != float64(1) {
+		t.Errorf("second candidate = %#v, want dev_net/unifi/1", second)
+	}
+}
+
+// TestDeviceIntegration_PrefersSingularOwnershipField pins the 2026.8
+// migration: integration attribution reads config_entry_id first and
+// only falls back to the deprecated primary_config_entry (removed
+// upstream in 2027.8) for older servers.
+func TestDeviceIntegration_PrefersSingularOwnershipField(t *testing.T) {
+	client := &fakeDeviceClient{
+		configs: []homeassistant.ConfigEntry{
+			{EntryID: "cfg_new", Domain: "baf"},
+			{EntryID: "cfg_old", Domain: "unifi"},
+		},
+	}
+	cases := []struct {
+		name   string
+		device homeassistant.DeviceRegistryEntry
+		want   string
+	}{
+		{
+			name:   "2026.8 server: singular field wins",
+			device: homeassistant.DeviceRegistryEntry{ConfigEntryID: "cfg_new", PrimaryConfigEntry: "cfg_old"},
+			want:   "baf",
+		},
+		{
+			name:   "pre-2026.8 server: primary fallback",
+			device: homeassistant.DeviceRegistryEntry{PrimaryConfigEntry: "cfg_old"},
+			want:   "unifi",
+		},
+		{
+			name:   "no ownership: enrichment omitted",
+			device: homeassistant.DeviceRegistryEntry{ID: "orphan"},
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deviceIntegration(context.Background(), client, tc.device); got != tc.want {
+				t.Errorf("deviceIntegration = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestComputeDeviceSnapshot_NotFound(t *testing.T) {
 	client := &fakeDeviceClient{
 		devices: []homeassistant.DeviceRegistryEntry{{ID: "dev_a", Name: "Thermostat"}},

@@ -110,10 +110,13 @@ func (r *Registry) resolveServiceTarget(ctx context.Context, raw map[string]any)
 }
 
 // registryTargetEntry is one resolvable row of a registry: its ID plus
-// the names and aliases a caller may reference it by.
+// the names and aliases a caller may reference it by. desc is optional
+// disambiguation context surfaced when several rows match one name —
+// for devices it carries the owning integration's domain.
 type registryTargetEntry struct {
 	id      string
 	matches []string
+	desc    string
 }
 
 // resolveRegistryTargets resolves every value for one registry-backed
@@ -133,30 +136,53 @@ func (r *Registry) resolveRegistryTargets(ctx context.Context, key string, value
 
 	out := make([]string, 0, len(values))
 	for _, v := range values {
-		id, ok := matchRegistryTarget(entries, v)
-		if !ok {
+		hits := matchRegistryTarget(entries, v)
+		switch len(hits) {
+		case 0:
 			return nil, fmt.Errorf("unknown %s %q; known %ss: %s", kind, v, kind, joinCapped(names, 15))
+		case 1:
+			out = append(out, hits[0].id)
+		default:
+			descs := make([]string, 0, len(hits))
+			for _, h := range hits {
+				if h.desc != "" {
+					descs = append(descs, fmt.Sprintf("%s (%s)", h.id, h.desc))
+				} else {
+					descs = append(descs, h.id)
+				}
+			}
+			hint := ""
+			if kind == "device" {
+				hint = " — since HA 2026.8 one physical device appears once per integration, so same-name twins are expected; pick the integration you mean"
+			}
+			return nil, fmt.Errorf("%s %q matches %d %ss%s: %s; re-call targeting the intended id", kind, v, len(hits), kind, hint, strings.Join(descs, ", "))
 		}
-		out = append(out, id)
 	}
 	return out, nil
 }
 
-func matchRegistryTarget(entries []registryTargetEntry, value string) (string, bool) {
+// matchRegistryTarget resolves value against a registry: an exact id
+// wins outright, otherwise every entry whose name or alias matches
+// case-insensitively is collected. Multiple hits are a real outcome for
+// devices (one physical device appears once per integration since HA
+// 2026.8) and the caller must refuse to pick a row arbitrarily.
+func matchRegistryTarget(entries []registryTargetEntry, value string) []registryTargetEntry {
 	for _, e := range entries {
 		if e.id == value {
-			return e.id, true
+			return []registryTargetEntry{e}
 		}
 	}
 	lower := strings.ToLower(value)
+	var hits []registryTargetEntry
 	for _, e := range entries {
 		for _, m := range e.matches {
 			if strings.ToLower(m) == lower {
-				return e.id, true
+				hits = append(hits, e)
+				break
 			}
 		}
 	}
-	return "", false
+	return hits
 }
 
 func (r *Registry) registryTargetEntries(ctx context.Context, key string) ([]registryTargetEntry, string, error) {
@@ -196,9 +222,27 @@ func (r *Registry) registryTargetEntries(ctx context.Context, key string) ([]reg
 		if err != nil {
 			return nil, "device", err
 		}
+		// Integration attribution is enrichment for ambiguity errors —
+		// a failed config-entry read degrades to bare device ids.
+		domains := map[string]string{}
+		if cfgEntries, err := r.ha.GetConfigEntries(ctx); err == nil {
+			for _, e := range cfgEntries {
+				domains[e.EntryID] = e.Domain
+			}
+		}
 		entries := make([]registryTargetEntry, 0, len(devices))
 		for _, d := range devices {
-			entries = append(entries, registryTargetEntry{id: d.ID, matches: []string{string(d.Name)}})
+			// The user-assigned name leads: it is what the model was told
+			// the device is called. The registry name still matches so a
+			// never-renamed device resolves too.
+			matches := make([]string, 0, 2)
+			if d.NameByUser != "" {
+				matches = append(matches, string(d.NameByUser))
+			}
+			if d.Name != "" && !strings.EqualFold(string(d.Name), string(d.NameByUser)) {
+				matches = append(matches, string(d.Name))
+			}
+			entries = append(entries, registryTargetEntry{id: d.ID, matches: matches, desc: domains[d.OwningConfigEntry()]})
 		}
 		return entries, "device", nil
 	}

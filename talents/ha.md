@@ -95,9 +95,17 @@ and diagnostic entities HA keeps off its generated dashboards. The
 `configuration` and `diagnostic` groups are capped for a device with a
 long tail of knobs, with an honest `*_truncated_count`. Resolves by
 `device_id` or by name — user-assigned or registry name, with a
-substring fallback, returning candidates when a name is ambiguous. Reach
-for this instead of discovering a device's child entities one
-`ha_get_state` at a time.
+substring fallback, returning candidates when a name is ambiguous.
+
+Since Home Assistant 2026.8 one physical device appears as a **separate
+registry device per integration**, so two devices sharing a name exactly
+is normal, not registry corruption: a ceiling fan typically has a twin —
+the native integration's copy holding the controls, and a
+network-presence copy holding a connectivity entity or two. Ambiguous
+candidates carry `integration` and `entity_count` (richest first) so you
+can pick the copy that owns the capability you're after, then re-call
+with its `device_id`. Reach for this instead of discovering a device's
+child entities one `ha_get_state` at a time.
 
 ## Find one entity by description
 
@@ -399,10 +407,16 @@ Targets take `entity_id`, `device_id`, `area_id`, `floor_id`, and
 `label_id` (string or array each), and areas/floors/labels/devices
 accept human names as well as registry IDs — names resolve against the
 registry, and unknown references fail fast with the known names instead
-of HA's silent no-op. HA skips hidden entities in area/floor/label
-targets; that's the operator's curation, not a bug. The response
-reports which entities actually changed state — zero changes with a
-note usually means everything was already in the requested state.
+of HA's silent no-op. Device names match the user-assigned name and the
+registry name; a name shared by several devices also fails fast, listing
+each candidate id with its integration — since HA 2026.8 one physical
+device appears once per integration, so same-name twins are normal, and
+you pick the integration that owns the capability you're calling (the
+device's native integration, not its presence-tracker copy). HA skips
+hidden entities in area/floor/label targets; that's the operator's
+curation, not a bug. The response reports which entities actually
+changed state — zero changes with a note usually means everything was
+already in the requested state.
 
 Single-entity form, with the exact entity_id:
 
