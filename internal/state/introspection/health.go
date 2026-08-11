@@ -132,8 +132,9 @@ type BootView struct {
 // maxRecentBootViews caps the boot tail on the snapshot.
 const maxRecentBootViews = 5
 
-// bootStormThreshold is how many boots inside a day degrade the runtime
-// lamp: a healthy instance restarts for deploys, not for sport.
+// bootStormThreshold is the boot count inside a day at which the
+// runtime lamp degrades (inclusive — the fifth boot trips it): a
+// healthy instance restarts for deploys, not for sport.
 const bootStormThreshold = 5
 
 // HealthSnapshot is the whole annunciator panel in one shape, consumed
@@ -355,7 +356,7 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	}
 
 	snap.Version = i.collectVersionInfo(ctx, now)
-	if snap.Version.BootsLast24h > bootStormThreshold {
+	if snap.Version.BootsLast24h >= bootStormThreshold {
 		snap.Annunciator = append(snap.Annunciator, HealthRow{
 			Name:   "runtime",
 			Status: HealthDegraded,
@@ -402,8 +403,10 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 		}
 		if len(info.RecentBoots) < maxRecentBootViews {
 			view := BootView{AtDelta: promptfmt.FormatDeltaOnly(boot.At, now), Version: boot.Version}
-			if len(boot.Commit) > 7 {
-				view.Commit = boot.Commit[:7]
+			// Rune-safe truncation per the AGENTS.md invariant — commit
+			// hashes are ASCII today, but the pattern gets copied.
+			if runes := []rune(boot.Commit); len(runes) > 7 {
+				view.Commit = string(runes[:7])
 			} else {
 				view.Commit = boot.Commit
 			}
