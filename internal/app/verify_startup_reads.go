@@ -55,16 +55,27 @@ func (a *App) loadTalents(ctx context.Context, verifier talents.VerifyPathFunc) 
 	if err != nil {
 		return nil, fmt.Errorf("load talents: %w", err)
 	}
-	if len(parsedTalents) > 0 {
-		names := make([]string, 0, len(parsedTalents))
-		for _, talent := range parsedTalents {
-			names = append(names, talent.Name)
-		}
-		logger := a.logger
-		if logger == nil {
-			logger = slog.Default()
-		}
-		logger.Info("talents loaded", "dir", a.cfg.TalentsDir, "count", len(parsedTalents), "talents", names)
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
 	}
+	if len(parsedTalents) == 0 {
+		// The loader treats a missing directory as an empty set, so zero
+		// talents here is indistinguishable from a talents directory that
+		// was never migrated into core (#787) — and booting without any
+		// talent guidance is exactly the silent total loss the per-file
+		// skip notices exist to prevent. Boot proceeds, loudly. (Core
+		// prompt files — axioms, persona, mission — load separately and
+		// are unaffected.)
+		logger.Warn("no talents loaded; the model runs without talent guidance",
+			"dir", a.cfg.TalentsDir,
+			"hint", "talents live in {workspace}/core/talents — if this instance predates talents-in-core, move the old talents directory there and commit it")
+		return parsedTalents, nil
+	}
+	names := make([]string, 0, len(parsedTalents))
+	for _, talent := range parsedTalents {
+		names = append(names, talent.Name)
+	}
+	logger.Info("talents loaded", "dir", a.cfg.TalentsDir, "count", len(parsedTalents), "talents", names)
 	return parsedTalents, nil
 }
