@@ -285,6 +285,9 @@ func TestComputeDeviceSnapshot_ExactNameTwinsAmbiguous(t *testing.T) {
 			{EntityID: "fan.office", DeviceID: "dev_fan"},
 			{EntityID: "light.office_fan", DeviceID: "dev_fan"},
 			{EntityID: "sensor.office_fan_rpm", DeviceID: "dev_fan", DisabledBy: "user"},
+			// Foreign-device noise: counting is scoped to the matched
+			// twins, so this row must not appear anywhere in candidates.
+			{EntityID: "light.hall", DeviceID: "dev_other"},
 		},
 	}
 

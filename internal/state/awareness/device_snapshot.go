@@ -391,10 +391,14 @@ func describeDeviceCandidates(ctx context.Context, client DeviceSnapshotClient, 
 			domains[e.EntryID] = e.Domain
 		}
 	}
-	counts := map[string]int{}
+	wanted := make(map[string]bool, len(matches))
+	for _, d := range matches {
+		wanted[d.ID] = true
+	}
+	counts := make(map[string]int, len(matches))
 	if entities, err := client.GetEntityRegistry(ctx); err == nil {
 		for i := range entities {
-			if entities[i].DisabledBy == "" {
+			if wanted[entities[i].DeviceID] && entities[i].DisabledBy == "" {
 				counts[entities[i].DeviceID]++
 			}
 		}
