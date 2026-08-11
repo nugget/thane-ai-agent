@@ -232,6 +232,27 @@ curator:
 	}
 }
 
+// TestLoad_RetiredTalentsDirIsRejected guards the talents-into-core move
+// (#787, #1279): talent location is derived as {workspace}/core/talents,
+// and a config that still declares talents_dir must fail fast with the
+// migration recipe rather than silently loading behavior definitions
+// from outside the trust boundary.
+func TestLoad_RetiredTalentsDirIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+talents_dir: /srv/thane/talents
+`), 0600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to reject talents_dir")
+	}
+	if !strings.Contains(err.Error(), "talents_dir") || !strings.Contains(err.Error(), "core/talents") {
+		t.Errorf("error %q should mention talents_dir and the core/talents destination", err)
+	}
+}
+
 // TestLoad_RetiredCapabilityToolsKeyRejected guards the capability_tag
 // schema redesign: the legacy tools: replace-list was retired in favor
 // of the additive include:/exclude: pair. Load must fail with an

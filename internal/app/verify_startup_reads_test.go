@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -232,6 +233,53 @@ func TestLoadTalents_BlocksUnsignedTalent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load talents") {
 		t.Fatalf("error = %v, want load talents wrapper", err)
+	}
+}
+
+// TestLoadTalents_EmptyOrMissingDirWarns guards the unmigrated-instance
+// case from #787: the loader treats a missing talents directory as an
+// empty set, so an install whose talents never moved into core would
+// otherwise boot with zero behavioral guidance and zero log output.
+// Boot must proceed (an intentionally talent-less instance is legal)
+// but the empty set must be announced.
+func TestLoadTalents_EmptyOrMissingDirWarns(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		dir  func(t *testing.T) string
+	}{
+		{"missing dir", func(t *testing.T) string {
+			return filepath.Join(t.TempDir(), "core", "talents")
+		}},
+		{"empty dir", func(t *testing.T) string {
+			return t.TempDir()
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf strings.Builder
+			logger := slog.New(slog.NewTextHandler(&buf, nil))
+			dir := tt.dir(t)
+
+			a := &App{cfg: &config.Config{TalentsDir: dir}, logger: logger}
+			parsed, err := a.loadTalents(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("empty talent set must not fail boot; got %v", err)
+			}
+			if len(parsed) != 0 {
+				t.Fatalf("expected zero talents, got %d", len(parsed))
+			}
+			out := buf.String()
+			if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "no talents loaded") {
+				t.Errorf("expected WARN about empty talent set, got log output: %q", out)
+			}
+			if !strings.Contains(out, dir) {
+				t.Errorf("warning should name the talents dir %q, got: %q", dir, out)
+			}
+		})
 	}
 }
 

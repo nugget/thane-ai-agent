@@ -39,11 +39,17 @@ cryptographic identity:
 just init
 ```
 
-This creates `~/Thane/config.yaml`, copies talent files, sets up the
-persona, and bootstraps `~/Thane/core` as the instance trust root. The core
-root contains a generated Ed25519 signing key, an internal channel CA, and a
-signed git birth commit containing the public identity material and
-`core/config.yaml`. Edit `~/Thane/config.yaml` for your setup.
+This bootstraps `~/Thane/core` as the instance trust root: a generated
+Ed25519 signing key, an internal channel CA, and a signed git birth commit
+containing the public identity material, `core/config.yaml`, and the
+bundled talents under `core/talents/`. A reference `config.yaml` and
+`persona.md` are also written at the workspace root.
+
+The runtime reads `~/Thane/core/config.yaml` and nothing else. It is
+covered by core's signed history, so commit after editing — `thane serve`
+refuses to start on an uncommitted config, and `thane validate` names the
+fix for anything the boot gate would reject. Apply the settings below
+there.
 
 **Required settings:**
 
