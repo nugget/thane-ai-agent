@@ -65,6 +65,9 @@ func (a *App) Serve(ctx context.Context) error {
 			ProfileDir:  profileDir,
 			Interval:    time.Duration(a.cfg.MemoryGuard.IntervalSeconds) * time.Second,
 		}, a.logger)
+		// Stored on the App so observability surfaces (system_health) can
+		// read live memory against the limits; nil when the guard is off.
+		a.memGuard = guard
 		go guard.Start(ctx)
 	}
 

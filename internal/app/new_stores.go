@@ -56,6 +56,7 @@ func (a *App) initStores(s *newState) error {
 	a.initMessageInfrastructure(logger)
 	a.initDatasetSinks()
 	a.initEventDropMonitor()
+	a.initIntrospectionJournal()
 
 	// --- Loop registry ---
 	// Tracks all persistent background loops (metacognitive, pollers,

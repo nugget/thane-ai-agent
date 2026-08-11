@@ -115,6 +115,33 @@ func New(cfg Config, logger *slog.Logger) *Guard {
 // is clean, so the supervising wrapper must see a non-zero exit and relaunch.
 func (g *Guard) Tripped() bool { return g.tripped.Load() }
 
+// Reading is one live snapshot of process memory against the guard's
+// thresholds — the observability face of the guard, consumed by the
+// system_health annunciator.
+type Reading struct {
+	CurrentMB int  // memory in use now, per the guard's own probe
+	SoftMB    int  // heap-profile threshold
+	HardMB    int  // graceful-restart threshold
+	Tripped   bool // hard limit was reached this process lifetime
+}
+
+// Reading takes a fresh memory measurement and returns it alongside the
+// configured limits and trip state. Nil-safe (a nil guard reads as
+// zero) and safe to call concurrently with the poller: the thresholds
+// are immutable after New, the trip flag is atomic, and the probe reads
+// runtime.MemStats without touching guard state.
+func (g *Guard) Reading() Reading {
+	if g == nil {
+		return Reading{}
+	}
+	return Reading{
+		CurrentMB: int(g.readMem() / mib),
+		SoftMB:    int(g.soft / mib),
+		HardMB:    int(g.hard / mib),
+		Tripped:   g.tripped.Load(),
+	}
+}
+
 // Start runs the guard until ctx is cancelled. Run it in a goroutine.
 func (g *Guard) Start(ctx context.Context) {
 	g.logger.Info("memory guard active",
