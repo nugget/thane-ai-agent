@@ -7,15 +7,15 @@ import (
 )
 
 // SensorBuilder constructs Home Assistant MQTT sensor definitions for
-// telemetry metrics. It uses topic and device info from the MQTT
-// publisher to produce correctly namespaced discovery payloads.
+// telemetry metrics. It uses topic helpers from the MQTT publisher to
+// produce correctly namespaced component configs; device identity and
+// availability are shared at the discovery-payload root, so components
+// carry neither.
 type SensorBuilder struct {
 	InstanceID        string
 	Prefix            string // HA object_id prefix, e.g. "aimee_thane_"
 	StateTopicFn      func(string) string
 	AttributesTopicFn func(string) string
-	AvailabilityTopic string
-	Device            mqtt.DeviceInfo
 }
 
 // sensorSpec describes a single telemetry sensor for registration.
@@ -110,14 +110,12 @@ func (b *SensorBuilder) LoopSensors(loopName string) []mqtt.DynamicSensor {
 // buildSensor constructs a DynamicSensor from a spec.
 func (b *SensorBuilder) buildSensor(s sensorSpec) mqtt.DynamicSensor {
 	cfg := mqtt.SensorConfig{
-		Name:              s.name,
-		ObjectID:          b.Prefix + s.suffix,
-		HasEntityName:     true,
-		UniqueID:          b.InstanceID + "_" + s.suffix,
-		StateTopic:        b.StateTopicFn(s.suffix),
-		AvailabilityTopic: b.AvailabilityTopic,
-		Device:            b.Device,
-		Icon:              s.icon,
+		Name:          s.name,
+		ObjectID:      b.Prefix + s.suffix,
+		HasEntityName: true,
+		UniqueID:      b.InstanceID + "_" + s.suffix,
+		StateTopic:    b.StateTopicFn(s.suffix),
+		Icon:          s.icon,
 	}
 	if s.unit != "" {
 		cfg.UnitOfMeasurement = s.unit

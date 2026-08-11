@@ -84,6 +84,19 @@ func TestNewDeviceInfo(t *testing.T) {
 	if info.Model != "Thane AI Agent" {
 		t.Errorf("Model = %q, want %q", info.Model, "Thane AI Agent")
 	}
+	if info.SerialNumber != "test-instance-id" {
+		t.Errorf("SerialNumber = %q, want %q", info.SerialNumber, "test-instance-id")
+	}
+}
+
+func TestNewOriginInfo(t *testing.T) {
+	origin := NewOriginInfo()
+	if origin.Name != "Thane AI Agent" {
+		t.Errorf("Name = %q, want %q", origin.Name, "Thane AI Agent")
+	}
+	if origin.SupportURL == "" {
+		t.Error("SupportURL is empty — HA surfaces it on the device page")
+	}
 }
 
 func TestPublisher_TopicPaths(t *testing.T) {
@@ -102,7 +115,8 @@ func TestPublisher_TopicPaths(t *testing.T) {
 		{"baseTopic", p.baseTopic(), "thane/aimee-thane"},
 		{"AvailabilityTopic", p.AvailabilityTopic(), "thane/aimee-thane/availability"},
 		{"StateTopic uptime", p.StateTopic("uptime"), "thane/aimee-thane/uptime/state"},
-		{"discoveryTopic sensor uptime", p.discoveryTopic("sensor", "uptime"), "homeassistant/sensor/aimee-thane/uptime/config"},
+		{"deviceDiscoveryTopic", p.deviceDiscoveryTopic(), "homeassistant/device/aimee-thane/config"},
+		{"legacyDiscoveryTopic sensor uptime", p.legacyDiscoveryTopic("sensor", "uptime"), "homeassistant/sensor/aimee-thane/uptime/config"},
 	}
 
 	for _, tt := range tests {
@@ -162,13 +176,6 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 			}
 		}
 
-		// Every sensor should reference the availability topic.
-		wantAvail := "thane/test-thane/availability"
-		if d.config.AvailabilityTopic != wantAvail {
-			t.Errorf("sensor %s: AvailabilityTopic = %q, want %q",
-				d.entitySuffix, d.config.AvailabilityTopic, wantAvail)
-		}
-
 		// Every sensor should have a unique ID based on instance ID.
 		if !strings.HasPrefix(d.config.UniqueID, "instance-123_") {
 			t.Errorf("sensor %s: UniqueID = %q, should start with %q",
@@ -188,11 +195,6 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 		if !d.config.HasEntityName {
 			t.Errorf("sensor %s: HasEntityName = false, want true",
 				d.entitySuffix)
-		}
-
-		// Every sensor should reference the device.
-		if len(d.config.Device.Identifiers) == 0 {
-			t.Errorf("sensor %s: Device.Identifiers is empty", d.entitySuffix)
 		}
 	}
 
@@ -310,20 +312,108 @@ func TestPublisher_AttributesTopic(t *testing.T) {
 	}
 }
 
-func TestPublisher_DeviceGetter(t *testing.T) {
+// TestPublisher_SnapshotComponents pins the assembly of the
+// device-based discovery Components block: static and dynamic sensors
+// merge into one map keyed by suffix, a dynamic registration can
+// override a static suffix, and the required per-component platform is
+// defaulted to "sensor" when a caller leaves it empty.
+func TestPublisher_SnapshotComponents(t *testing.T) {
 	cfg := config.MQTTConfig{
 		Broker:          "mqtt://localhost:1883",
-		DeviceName:      "test-device",
+		DeviceName:      "test-thane",
 		DiscoveryPrefix: "homeassistant",
 	}
-	p := New(cfg, "instance-abc", NewDailyTokens(time.UTC), nil, nil)
+	p := New(cfg, "instance-123", NewDailyTokens(time.UTC), nil, nil)
+	p.RegisterSensors([]DynamicSensor{
+		{EntitySuffix: "nugget_ap", Config: SensorConfig{Name: "Nugget AP", UniqueID: "instance-123_nugget_ap"}},
+		{EntitySuffix: "uptime", Config: SensorConfig{Name: "Uptime Override", UniqueID: "instance-123_uptime"}},
+	})
 
-	dev := p.Device()
-	if dev.Name != "test-device" {
-		t.Errorf("Device().Name = %q, want %q", dev.Name, "test-device")
+	components := p.snapshotComponents()
+
+	wantCount := len(p.sensorDefinitions()) + 1 // uptime overridden, nugget_ap added
+	if len(components) != wantCount {
+		t.Errorf("components = %d, want %d", len(components), wantCount)
 	}
-	if len(dev.Identifiers) != 1 || dev.Identifiers[0] != "instance-abc" {
-		t.Errorf("Device().Identifiers = %v, want [instance-abc]", dev.Identifiers)
+	if got := components["uptime"].Name; got != "Uptime Override" {
+		t.Errorf("dynamic registration should override static suffix: Name = %q", got)
+	}
+	for suffix, c := range components {
+		if c.Platform != "sensor" {
+			t.Errorf("component %s: Platform = %q, want defaulted \"sensor\"", suffix, c.Platform)
+		}
+	}
+}
+
+// TestPublisher_MigrationBookkeeping pins the once-per-process legacy
+// migration accounting: every suffix starts pending (sorted), and only
+// an explicit markMigrated (recorded after a successful clear publish)
+// removes it from later sweeps.
+func TestPublisher_MigrationBookkeeping(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:          "mqtt://localhost:1883",
+		DeviceName:      "test-thane",
+		DiscoveryPrefix: "homeassistant",
+	}
+	p := New(cfg, "instance-123", NewDailyTokens(time.UTC), nil, nil)
+
+	components := map[string]SensorConfig{
+		"b_sensor": {}, "a_sensor": {}, "c_sensor": {},
+	}
+	pending := p.unmigratedSuffixes(components)
+	if len(pending) != 3 || pending[0] != "a_sensor" || pending[2] != "c_sensor" {
+		t.Errorf("pending = %v, want sorted [a_sensor b_sensor c_sensor]", pending)
+	}
+
+	p.markMigrated("b_sensor")
+	pending = p.unmigratedSuffixes(components)
+	if len(pending) != 2 || pending[0] != "a_sensor" || pending[1] != "c_sensor" {
+		t.Errorf("pending after markMigrated = %v, want [a_sensor c_sensor]", pending)
+	}
+}
+
+// TestDeviceDiscoveryConfig_PayloadShape pins the wire format of the
+// device-based discovery payload: the full-name root keys HA documents
+// (device/origin/availability/components), the origin block content,
+// and the required per-component platform.
+func TestDeviceDiscoveryConfig_PayloadShape(t *testing.T) {
+	cfg := deviceDiscoveryConfig{
+		Device:       NewDeviceInfo("instance-abc", "test-device"),
+		Origin:       NewOriginInfo(),
+		Availability: []availabilityEntry{{Topic: "thane/test-device/availability"}},
+		Components: map[string]SensorConfig{
+			"uptime": {Platform: "sensor", Name: "Uptime", UniqueID: "instance-abc_uptime", StateTopic: "thane/test-device/uptime/state"},
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	for _, key := range []string{"device", "origin", "availability", "components"} {
+		if _, ok := decoded[key]; !ok {
+			t.Errorf("payload missing root key %q:\n%s", key, data)
+		}
+	}
+
+	origin, _ := decoded["origin"].(map[string]any)
+	if origin["name"] != "Thane AI Agent" || origin["support_url"] == "" {
+		t.Errorf("origin block incomplete: %#v", origin)
+	}
+
+	device, _ := decoded["device"].(map[string]any)
+	if device["serial_number"] != "instance-abc" {
+		t.Errorf("device.serial_number = %#v, want instance-abc", device["serial_number"])
+	}
+
+	components, _ := decoded["components"].(map[string]any)
+	uptime, _ := components["uptime"].(map[string]any)
+	if uptime["platform"] != "sensor" {
+		t.Errorf("component platform = %#v, want \"sensor\"", uptime["platform"])
 	}
 }
 
@@ -352,12 +442,11 @@ func TestPublisher_ObjectIDPrefix(t *testing.T) {
 func TestSensorConfig_JsonAttributesTopic(t *testing.T) {
 	// With JsonAttributesTopic set.
 	cfg := SensorConfig{
+		Platform:            "sensor",
 		Name:                "Test",
 		UniqueID:            "test_1",
 		StateTopic:          "thane/test/state",
-		AvailabilityTopic:   "thane/test/availability",
 		JsonAttributesTopic: "thane/test/attributes",
-		Device:              DeviceInfo{Identifiers: []string{"id"}, Name: "d"},
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
