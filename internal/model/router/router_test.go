@@ -680,7 +680,7 @@ func TestRecordFailureTimeoutCoolsResourceAndShiftsRouting(t *testing.T) {
 		t.Fatalf("Route() selected %q, want %q", model, "edge-primary/qwen3:8b")
 	}
 
-	r.RecordFailure(decision.RequestID, 5000, 0, true)
+	r.RecordFailure(decision.RequestID, 5000, 0, CooldownReasonTimeout)
 
 	stats := r.GetStats()
 	depStats := stats.DeploymentStats["edge-primary/qwen3:8b"]
@@ -735,7 +735,7 @@ func TestRecordFailureWithoutTimeoutDoesNotCoolResource(t *testing.T) {
 		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
 	}
 
-	r.RecordFailure(decision.RequestID, 250, 0, false)
+	r.RecordFailure(decision.RequestID, 250, 0, "")
 
 	if until := r.resourceCooldownDeadline("edge"); !until.IsZero() {
 		t.Fatalf("resource cooldown unexpectedly set: %v", until)
@@ -774,7 +774,10 @@ func TestRecordOutcomeSuccessClearsResourceCooldown(t *testing.T) {
 		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
 	}
 
-	r.resourceCooldownUntil["edge"] = time.Now().Add(time.Minute)
+	r.resourceCooldown["edge"] = resourceCooldownState{
+		Until:  time.Now().Add(time.Minute),
+		Reason: CooldownReasonTimeout,
+	}
 	r.RecordOutcome(decision.RequestID, 120, 600, true)
 
 	if until := r.resourceCooldownDeadline("edge"); !until.IsZero() {
@@ -786,9 +789,9 @@ func TestGetStatsIncludesOnlyActiveResourceHealth(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	stats := activeResourceHealthSnapshot(map[string]time.Time{
-		"edge":  now.Add(2 * time.Minute),
-		"stale": now.Add(-time.Second),
+	stats := activeResourceHealthSnapshot(map[string]resourceCooldownState{
+		"edge":  {Until: now.Add(2 * time.Minute), Reason: CooldownReasonConnection},
+		"stale": {Until: now.Add(-time.Second), Reason: CooldownReasonTimeout},
 		"blank": {},
 	}, now)
 
@@ -799,8 +802,8 @@ func TestGetStatsIncludesOnlyActiveResourceHealth(t *testing.T) {
 	if !ok {
 		t.Fatal("missing active resource health for edge")
 	}
-	if health.CooldownReason != "recent timeout" {
-		t.Fatalf("CooldownReason = %q, want %q", health.CooldownReason, "recent timeout")
+	if health.CooldownReason != CooldownReasonConnection {
+		t.Fatalf("CooldownReason = %q, want %q", health.CooldownReason, CooldownReasonConnection)
 	}
 	if !health.CooldownUntil.After(now) {
 		t.Fatalf("CooldownUntil = %v, want future time", health.CooldownUntil)

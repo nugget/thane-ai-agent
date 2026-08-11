@@ -137,16 +137,59 @@ type Config struct {
 	MaxAuditLog  int     // How many decisions to keep in memory
 }
 
+// ResourceReadinessFunc reports whether a provider resource is currently
+// reachable. Wired from connwatch at app init so routing can steer away
+// from runners the health layer already knows are down. A nil func
+// treats every resource as ready; otherwise the func decides each ID,
+// and implementations should stay optimistic about resources they do
+// not recognize (the app wiring reports ready for resources without a
+// watcher).
+type ResourceReadinessFunc func(resourceID string) bool
+
+// resourceCooldownState is one resource's transient request-plane
+// cooldown: routing avoids the resource until the deadline passes, and
+// the reason is surfaced through Stats.ResourceHealth.
+type resourceCooldownState struct {
+	Until  time.Time
+	Reason string
+}
+
 // Router selects models based on request characteristics.
 type Router struct {
 	logger *slog.Logger
 	config Config
 
-	mu                    sync.RWMutex
-	auditLog              []Decision
-	stats                 Stats
-	experienceVersion     int64
-	resourceCooldownUntil map[string]time.Time
+	mu                sync.RWMutex
+	auditLog          []Decision
+	stats             Stats
+	experienceVersion int64
+	resourceCooldown  map[string]resourceCooldownState
+	resourceReadiness ResourceReadinessFunc
+}
+
+// SetResourceReadiness installs the readiness probe used to penalize
+// deployments on unreachable resources during scoring. Intended to be
+// called once during app wiring, before the router serves traffic.
+func (r *Router) SetResourceReadiness(fn ResourceReadinessFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resourceReadiness = fn
+}
+
+// resourceReady reports whether the named resource is reachable
+// according to the installed readiness probe. Defaults to ready when no
+// probe is installed or the resource ID is blank.
+func (r *Router) resourceReady(resourceID string) bool {
+	if strings.TrimSpace(resourceID) == "" {
+		return true
+	}
+	r.mu.RLock()
+	fn := r.resourceReadiness
+	r.mu.RUnlock()
+	if fn == nil {
+		return true
+	}
+	return fn(resourceID)
 }
 
 func cloneModels(in []Model) []Model {
@@ -216,11 +259,13 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 			ResourceCounts:   make(map[string]int64),
 			DeploymentStats:  make(map[string]DeploymentStats),
 		},
-		resourceCooldownUntil: make(map[string]time.Time),
+		resourceCooldown: make(map[string]resourceCooldownState),
 	}
 }
 
-const resourceTimeoutCooldown = 2 * time.Minute
+// resourceCooldownDuration is how long routing avoids a resource after
+// a cooldown-worthy failure (timeout, overload, or connection failure).
+const resourceCooldownDuration = 2 * time.Minute
 
 // ContextWindowForModel returns the context window size for the named
 // model. If the model is not found in the router's configuration, it
@@ -608,9 +653,23 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			}
 		}
 
+		// Resource health penalties. Both are soft penalties rather than
+		// disqualifiers so that routing still returns a best-effort pick
+		// when every resource is impaired. The magnitudes are chosen
+		// against the rest of the scoring table: positive bonuses stack to
+		// at most ~+145, and FactorLocalOnly penalizes paid models -200,
+		// so a penalty must exceed ~350 to guarantee a dead local runner
+		// loses to a live paid model even under local-first pressure.
+		// Cooldown (one bad request, self-expiring) stays gentler than
+		// unreachable (the health layer actively probing the runner and
+		// failing), preserving down < cooled < healthy ordering.
 		if until := r.resourceCooldownDeadline(m.ResourceID); !until.IsZero() && now.Before(until) {
-			score -= 100
-			rulesMatched = append(rulesMatched, "resource_timeout_cooldown_"+m.Name)
+			score -= 300
+			rulesMatched = append(rulesMatched, "resource_cooldown_"+m.Name)
+		}
+		if !r.resourceReady(m.ResourceID) {
+			score -= 500
+			rulesMatched = append(rulesMatched, "resource_unreachable_"+m.Name)
 		}
 
 		if delta, reasons := experienceScore(r.deploymentExperience(m.Name), req); delta != 0 {
@@ -678,7 +737,7 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 				r.stats.SuccessCount++
 				meta.Successes++
 				if resource != "" {
-					delete(r.resourceCooldownUntil, resource)
+					delete(r.resourceCooldown, resource)
 				}
 			} else {
 				r.stats.FailureCount++
@@ -697,8 +756,11 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 
 // RecordFailure updates a failed routing outcome and optionally applies
 // a temporary resource cooldown so automatic routing can avoid a runner
-// that is timing out on real chat traffic.
-func (r *Router) RecordFailure(requestID string, latencyMs int64, tokensUsed int, resourceTimeout bool) {
+// that is failing on real chat traffic. cooldownReason carries the
+// failure class from [ClassifyResourceFailure] (e.g. "recent timeout",
+// "recent connection failure"); an empty string records the failure
+// without cooling the resource.
+func (r *Router) RecordFailure(requestID string, latencyMs int64, tokensUsed int, cooldownReason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -720,8 +782,11 @@ func (r *Router) RecordFailure(requestID string, latencyMs int64, tokensUsed int
 			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
 			r.stats.DeploymentStats[model] = meta
 
-			if resourceTimeout && resource != "" {
-				r.resourceCooldownUntil[resource] = time.Now().Add(resourceTimeoutCooldown)
+			if cooldownReason != "" && resource != "" {
+				r.resourceCooldown[resource] = resourceCooldownState{
+					Until:  time.Now().Add(resourceCooldownDuration),
+					Reason: cooldownReason,
+				}
 			}
 			r.experienceVersion++
 			break
@@ -789,7 +854,7 @@ func (r *Router) GetStats() Stats {
 		FailureCount:     r.stats.FailureCount,
 		ProviderCounts:   cloneInt64Map(r.stats.ProviderCounts),
 		ResourceCounts:   cloneInt64Map(r.stats.ResourceCounts),
-		ResourceHealth:   activeResourceHealthSnapshot(r.resourceCooldownUntil, time.Now()),
+		ResourceHealth:   activeResourceHealthSnapshot(r.resourceCooldown, time.Now()),
 		DeploymentStats:  cloneDeploymentStatsMap(r.stats.DeploymentStats),
 	}
 }
@@ -828,21 +893,21 @@ func (r *Router) resourceCooldownDeadline(resource string) time.Time {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.resourceCooldownUntil[resource]
+	return r.resourceCooldown[resource].Until
 }
 
-func activeResourceHealthSnapshot(in map[string]time.Time, now time.Time) map[string]ResourceHealth {
+func activeResourceHealthSnapshot(in map[string]resourceCooldownState, now time.Time) map[string]ResourceHealth {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make(map[string]ResourceHealth)
-	for resource, until := range in {
-		if until.IsZero() || !until.After(now) {
+	for resource, cd := range in {
+		if cd.Until.IsZero() || !cd.Until.After(now) {
 			continue
 		}
 		out[resource] = ResourceHealth{
-			CooldownUntil:  until,
-			CooldownReason: "recent timeout",
+			CooldownUntil:  cd.Until,
+			CooldownReason: cd.Reason,
 		}
 	}
 	if len(out) == 0 {
