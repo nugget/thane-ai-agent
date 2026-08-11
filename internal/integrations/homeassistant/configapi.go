@@ -51,8 +51,18 @@ type ConfigEntry struct {
 }
 
 // DeviceRegistryEntry represents a Home Assistant device registry row.
+//
+// Since HA 2026.8 a device belongs to exactly one config entry (and at
+// most one subentry): ConfigEntryID / ConfigSubentryID are the
+// authoritative ownership fields, while ConfigEntries,
+// ConfigEntriesSubentry, and PrimaryConfigEntry are deprecated
+// compatibility shims HA removes in 2027.8. Read ownership through
+// [DeviceRegistryEntry.OwningConfigEntry], which encodes the fallback
+// chain for pre-2026.8 servers.
 type DeviceRegistryEntry struct {
 	ID                    string               `json:"id"`
+	ConfigEntryID         string               `json:"config_entry_id"`
+	ConfigSubentryID      string               `json:"config_subentry_id"`
 	ConfigEntries         []string             `json:"config_entries"`
 	ConfigEntriesSubentry map[string][]*string `json:"config_entries_subentries"`
 	Connections           [][]flexString       `json:"connections"`
@@ -72,6 +82,23 @@ type DeviceRegistryEntry struct {
 	DisabledBy            string               `json:"disabled_by"`
 	ConfigurationURL      string               `json:"configuration_url"`
 	PrimaryConfigEntry    string               `json:"primary_config_entry"`
+}
+
+// OwningConfigEntry returns the config entry id that owns this device,
+// preferring the authoritative singular field (HA 2026.8+) and falling
+// back through the deprecated primary/collection fields for older
+// servers. Returns "" when the device has no config entry at all.
+func (d DeviceRegistryEntry) OwningConfigEntry() string {
+	if d.ConfigEntryID != "" {
+		return d.ConfigEntryID
+	}
+	if d.PrimaryConfigEntry != "" {
+		return d.PrimaryConfigEntry
+	}
+	if len(d.ConfigEntries) > 0 {
+		return d.ConfigEntries[0]
+	}
+	return ""
 }
 
 // flexString is a string field that tolerates a JSON value that is a string,

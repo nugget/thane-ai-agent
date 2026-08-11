@@ -102,6 +102,76 @@ func TestHACallService_UnknownAreaFailsFastWithKnownNames(t *testing.T) {
 	}
 }
 
+// deviceTargetTestServer sets up the HA 2026.8 twin scenario: one
+// physical ceiling fan appearing as two registry devices, the native
+// integration's copy and a network-presence copy, both named "Office
+// Ceiling Fan". A third renamed device covers name_by_user matching.
+func deviceTargetTestServer(t *testing.T) *fakeHAServer {
+	t.Helper()
+	fake := targetTestServer(t)
+	fake.devices = []map[string]any{
+		{"id": "dev_net", "name": "Office Ceiling Fan", "config_entry_id": "cfg_net"},
+		{"id": "dev_fan", "name": "Office Ceiling Fan", "config_entry_id": "cfg_fan"},
+		{"id": "dev_lamp", "name": "shellyplug-s-a1b2c3", "name_by_user": "Bedroom North Lamp", "config_entry_id": "cfg_shelly"},
+	}
+	fake.configEntries = []map[string]any{
+		{"entry_id": "cfg_net", "domain": "unifi"},
+		{"entry_id": "cfg_fan", "domain": "baf"},
+		{"entry_id": "cfg_shelly", "domain": "shelly"},
+	}
+	return fake
+}
+
+func TestHACallService_DeviceTargetByUserAssignedNameResolves(t *testing.T) {
+	fake := deviceTargetTestServer(t)
+	reg := fake.registry(t)
+
+	raw, err := reg.Execute(context.Background(), "ha_call_service", `{"domain":"light","service":"turn_on","target":{"device_id":"Bedroom North Lamp"}}`)
+	if err != nil {
+		t.Fatalf("device target by user-assigned name: %v", err)
+	}
+	if res := decodeCallResult(t, raw); res.Target["device_id"] != "dev_lamp" {
+		t.Errorf("target.device_id = %v, want resolved id \"dev_lamp\"", res.Target["device_id"])
+	}
+	// The registry name still matches the same device.
+	raw, err = reg.Execute(context.Background(), "ha_call_service", `{"domain":"light","service":"turn_on","target":{"device_id":"shellyplug-s-a1b2c3"}}`)
+	if err != nil {
+		t.Fatalf("device target by registry name: %v", err)
+	}
+	if res := decodeCallResult(t, raw); res.Target["device_id"] != "dev_lamp" {
+		t.Errorf("target.device_id = %v, want resolved id \"dev_lamp\"", res.Target["device_id"])
+	}
+}
+
+// TestHACallService_AmbiguousDeviceNameFailsFastWithIntegrations is the
+// HA 2026.8 regression: a device name shared by per-integration twins
+// must refuse to fire at an arbitrary registry row and instead teach the
+// candidates with their owning integrations.
+func TestHACallService_AmbiguousDeviceNameFailsFastWithIntegrations(t *testing.T) {
+	fake := deviceTargetTestServer(t)
+	reg := fake.registry(t)
+
+	_, err := reg.Execute(context.Background(), "ha_call_service", `{"domain":"fan","service":"turn_on","target":{"device_id":"Office Ceiling Fan"}}`)
+	if err == nil {
+		t.Fatal("ambiguous device name must fail fast, not fire at the first registry row")
+	}
+	if got := err.Error(); !containsAll(got, "dev_net", "dev_fan", "unifi", "baf") {
+		t.Errorf("error should list both twins with their integrations, got %q", got)
+	}
+	if len(fake.servicePayloads) != 0 {
+		t.Errorf("no service call may reach HA on an ambiguous resolution; got %v", fake.servicePayloads)
+	}
+
+	// An exact id cuts through the ambiguity untouched.
+	raw, err := reg.Execute(context.Background(), "ha_call_service", `{"domain":"fan","service":"turn_on","target":{"device_id":"dev_fan"}}`)
+	if err != nil {
+		t.Fatalf("exact id must bypass name ambiguity: %v", err)
+	}
+	if res := decodeCallResult(t, raw); res.Target["device_id"] != "dev_fan" {
+		t.Errorf("target.device_id = %v, want \"dev_fan\"", res.Target["device_id"])
+	}
+}
+
 func TestHACallService_ArgumentValidation(t *testing.T) {
 	fake := targetTestServer(t)
 	reg := fake.registry(t)

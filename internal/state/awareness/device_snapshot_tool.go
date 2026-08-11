@@ -53,6 +53,8 @@ func (a *DeviceSnapshotTools) Tools() []*tools.Tool {
 				"Use this to understand a physical device as a whole — 'show me the thermostat device', " +
 				"'what does the front-door sensor expose', 'is this device healthy' — rather than fetching one entity at a time. " +
 				"Resolves by device_id or by name (user-assigned or registry name, with substring fallback; returns candidates when ambiguous). " +
+				"Since HA 2026.8 one physical device appears as a separate registry device per integration, so same-name twins are expected, not corruption — " +
+				"ambiguous candidates carry integration and entity_count so you can pick (the native integration's copy holds the controls; a presence tracker's copy holds one or two entities). " +
 				"Add include for per-entity area/device/label/description/visibility metadata.",
 			Parameters: map[string]any{
 				"type": "object",

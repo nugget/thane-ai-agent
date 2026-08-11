@@ -35,6 +35,7 @@ type fakeHAServer struct {
 	labels          []map[string]any
 	categories      map[string][]map[string]any
 	devices         []map[string]any
+	configEntries   []map[string]any
 	entityRows      []map[string]any
 	entityByID      map[string]map[string]any
 	logbook         []map[string]any
@@ -292,6 +293,11 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 		return f.categories[scope], true
 	case "config/device_registry/list":
 		return f.devices, true
+	case "config_entries/get":
+		if f.configEntries == nil {
+			return []map[string]any{}, true
+		}
+		return f.configEntries, true
 	case "config/entity_registry/list":
 		return f.entityRows, true
 	case "config/entity_registry/get":
