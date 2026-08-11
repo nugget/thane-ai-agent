@@ -264,6 +264,89 @@ func TestRuntimeLampInformsWithoutJudging(t *testing.T) {
 	}
 }
 
+// TestRecordBootRetryingOutlastsTransientFailure pins the production
+// lesson: the boot row must survive the startup write burst. The
+// fail-then-succeed transition is the case that matters — early
+// attempts fail, the contention clears, and exactly one row lands,
+// carrying the instant the retrying STARTED rather than the instant
+// the write finally won.
+func TestRecordBootRetryingOutlastsTransientFailure(t *testing.T) {
+	j := newTestJournal(t)
+	ctx := context.Background()
+
+	// Manufacture a deterministic transient failure: capture the table's
+	// DDL, drop it (every insert now errors), and restore it mid-retry.
+	var ddl string
+	if err := j.db.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE name = 'loop_events'`).Scan(&ddl); err != nil {
+		t.Fatalf("capture ddl: %v", err)
+	}
+	if _, err := j.db.ExecContext(ctx, `DROP TABLE loop_events`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+
+	before := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		j.recordBootRetrying(ctx, "v0.10.3", "abc", nil, 50, 20*time.Millisecond)
+	}()
+
+	// Let a few attempts fail before the "contention" clears.
+	time.Sleep(70 * time.Millisecond)
+	restoredAt := time.Now()
+	if _, err := j.db.ExecContext(ctx, ddl); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry loop never recovered after the failure cleared")
+	}
+
+	boots, err := j.RecentBoots(ctx, 5)
+	if err != nil || len(boots) != 1 {
+		t.Fatalf("boots = %v (%v), want exactly one row after recovery", boots, err)
+	}
+	// The recorded instant is the boot, not the lock acquisition: it
+	// must predate the moment the table came back.
+	if boots[0].At.Before(before.Add(-time.Second)) || boots[0].At.After(restoredAt) {
+		t.Errorf("boot at = %v, want the retry start (before %v), not the eventual write time", boots[0].At, restoredAt)
+	}
+
+	// Bounded failure: a permanently dead database exhausts the attempt
+	// budget rather than spinning forever.
+	dead := newTestJournal(t)
+	if err := dead.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadDone := make(chan struct{})
+	go func() {
+		defer close(deadDone)
+		dead.recordBootRetrying(ctx, "v0.10.3", "abc", nil, 3, time.Millisecond)
+	}()
+	select {
+	case <-deadDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry loop did not respect its attempt budget")
+	}
+
+	// Window exhaustion: an expired deadline ends the loop even with
+	// attempts remaining (the production wrapper bounds lifetime this way).
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	windowDone := make(chan struct{})
+	go func() {
+		defer close(windowDone)
+		dead.recordBootRetrying(expired, "v0.10.3", "abc", nil, 1000, time.Millisecond)
+	}()
+	select {
+	case <-windowDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry loop ignored its window deadline")
+	}
+}
+
 // TestJournalBootRoundTrip covers the boot journal itself.
 func TestJournalBootRoundTrip(t *testing.T) {
 	j := newTestJournal(t)

@@ -41,9 +41,10 @@ func (a *App) initIntrospectionJournal() {
 	a.deferWorker("loop-event-recorder", func(ctx context.Context) error {
 		// One boot row per process start, stamped with build identity —
 		// what makes deploy boundaries and restart storms computable.
-		if err := journal.RecordBoot(ctx, buildinfo.Version, buildinfo.GitCommit); err != nil {
-			a.logger.Warn("boot record failed", "error", err)
-		}
+		// Retried from its own goroutine: boot is the worst moment to
+		// write to logs.db (the indexer's startup burst can outlast the
+		// 5s busy timeout), and this row must not lose that race.
+		journal.RecordBootWithRetry(ctx, buildinfo.Version, buildinfo.GitCommit, a.logger)
 		go recorder.Run(ctx)
 		return nil
 	})

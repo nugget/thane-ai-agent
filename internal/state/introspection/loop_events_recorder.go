@@ -94,9 +94,16 @@ func NewRecorder(journal *Journal, bus *events.Bus, retention time.Duration, log
 	return &Recorder{journal: journal, bus: bus, retention: retention, logger: logger}
 }
 
+// recorderFirstPruneAfter delays the first prune past the startup write
+// burst: pruning fights the log indexer for the write lock at exactly
+// the moment the indexer is busiest, and a failed first prune is pure
+// noise — the daily tick covers the hygiene either way.
+const recorderFirstPruneAfter = 5 * time.Minute
+
 // Run consumes the bus until ctx is cancelled, flushing batches on
-// size or interval and pruning the journal daily. Run it in a
-// goroutine; it owns its subscription and unsubscribes on exit.
+// size or interval and pruning the journal daily (first prune deferred
+// past the startup burst). Run it in a goroutine; it owns its
+// subscription and unsubscribes on exit.
 func (r *Recorder) Run(ctx context.Context) {
 	ch := r.bus.Subscribe(recorderBufSize)
 	defer r.bus.Unsubscribe(ch)
@@ -105,6 +112,8 @@ func (r *Recorder) Run(ctx context.Context) {
 	defer flushTicker.Stop()
 	pruneTicker := time.NewTicker(recorderPruneEvery)
 	defer pruneTicker.Stop()
+	firstPrune := time.NewTimer(recorderFirstPruneAfter)
+	defer firstPrune.Stop()
 
 	batch := make([]LoopEvent, 0, recorderFlushCount)
 	flush := func() {
@@ -122,7 +131,6 @@ func (r *Recorder) Run(ctx context.Context) {
 		batch = batch[:0]
 	}
 
-	r.prune(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,6 +145,8 @@ func (r *Recorder) Run(ctx context.Context) {
 			}
 		case <-flushTicker.C:
 			flush()
+		case <-firstPrune.C:
+			r.prune(ctx)
 		case <-pruneTicker.C:
 			r.prune(ctx)
 		}
