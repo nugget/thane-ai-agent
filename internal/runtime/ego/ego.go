@@ -84,10 +84,12 @@ func derefFloat(p *float64, def float64) float64 {
 	return *p
 }
 
-// HydrateSpec fills in what a durable loop definition cannot carry.
-// That is now only the name: the prompt is declarative (the spec Task
-// and SupervisorProfile.Instructions), and nothing runtime-side writes
-// the state document.
+// HydrateSpec fills in what a durable loop definition cannot carry —
+// which is now only defaulting the name. It plays no part in output
+// wiring: the write tool (replace_output_ego_state) and the read-side
+// document tools are generated from the spec's declared outputs during
+// app hydration, and the model is the document's only author, through
+// that generated tool.
 func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
