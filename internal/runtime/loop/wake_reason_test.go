@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -157,18 +158,24 @@ func TestBeginIterationWakeDrainsCausesAndStampsState(t *testing.T) {
 }
 
 // TestWakeCauseCapDropsNewest: the first cause after a drain is the one
-// that actually woke the loop, so overflow keeps the oldest.
+// that actually woke the loop, so overflow keeps the oldest. Every
+// inserted cause carries a distinct source so a regression that drops
+// the oldest instead of the newest cannot slip past the assertions.
 func TestWakeCauseCapDropsNewest(t *testing.T) {
 	l := &Loop{}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for i := 0; i < maxPendingWakeCauses+3; i++ {
-		l.recordWakeCauseLocked(wakeCause{reason: WakeReasonMailbox, source: "first-wins"})
+		l.recordWakeCauseLocked(wakeCause{reason: WakeReasonMailbox, source: fmt.Sprintf("cause-%d", i)})
 	}
 	if len(l.pendingWakeCauses) != maxPendingWakeCauses {
 		t.Fatalf("retained %d causes, want the cap %d", len(l.pendingWakeCauses), maxPendingWakeCauses)
 	}
-	if l.pendingWakeCauses[0].source != "first-wins" {
-		t.Errorf("oldest cause dropped; want first-wins retained")
+	if got := l.pendingWakeCauses[0].source; got != "cause-0" {
+		t.Errorf("oldest cause = %q, want cause-0 retained", got)
+	}
+	wantNewest := fmt.Sprintf("cause-%d", maxPendingWakeCauses-1)
+	if got := l.pendingWakeCauses[len(l.pendingWakeCauses)-1].source; got != wantNewest {
+		t.Errorf("newest retained cause = %q, want %s (overflow past the cap dropped)", got, wantNewest)
 	}
 }
