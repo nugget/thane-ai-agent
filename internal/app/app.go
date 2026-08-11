@@ -35,6 +35,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/platform/memguard"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
@@ -51,6 +52,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/state/introspection"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -222,6 +224,12 @@ type App struct {
 
 	// Event bus
 	eventBus *events.Bus
+
+	// Introspection: persistent loop-event journal (nil when logs.db is
+	// unavailable) and the live memory guard (nil unless enabled; set in
+	// Serve). Both feed the internal-operations observability surfaces.
+	loopEventJournal *introspection.Journal
+	memGuard         *memguard.Guard
 
 	// Inter-component message bus
 	messageBus *messages.Bus
