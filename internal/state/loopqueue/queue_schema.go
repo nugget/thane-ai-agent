@@ -51,10 +51,18 @@ var queueSchema = database.Schema{
 		},
 		database.IndexCreate{
 			Name: "idx_loop_queue_completions_consumer",
-			// Supports per-consumer recent-completions queries and the
-			// age-based prune.
+			// Supports per-consumer recent-completions queries.
 			SQL: `CREATE INDEX IF NOT EXISTS idx_loop_queue_completions_consumer
 				ON loop_queue_completions (consumer_loop, acked_at DESC)`,
+		},
+		database.IndexCreate{
+			Name: "idx_loop_queue_completions_acked",
+			// Leads with acked_at for the queries that filter on the
+			// window alone — the daily prune and the cross-consumer
+			// completion stats — which the consumer-led index above
+			// cannot serve.
+			SQL: `CREATE INDEX IF NOT EXISTS idx_loop_queue_completions_acked
+				ON loop_queue_completions (acked_at)`,
 		},
 	},
 }
