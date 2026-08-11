@@ -1,7 +1,6 @@
 package metacognitive
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -85,136 +84,21 @@ func TestParseConfig_InvalidDuration(t *testing.T) {
 	}
 }
 
-// --- Hydrated spec/config projection tests ---
+// --- Hydration tests ---
+//
+// The definition itself lives in loops/metacognitive.md; its shape is
+// covered by the boot-path assertions in
+// internal/app/coreloop_docs_parity_test.go. What remains here is the
+// hydration seam a document cannot express.
 
-func TestHydratedSpec(t *testing.T) {
+func TestHydrateSpecDefaultsTheName(t *testing.T) {
 	cfg := testConfig()
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
-	if spec.Name != "metacognitive" {
-		t.Errorf("Name = %q, want metacognitive", spec.Name)
-	}
-	if spec.Operation != loop.OperationService {
-		t.Errorf("Operation = %q, want %q", spec.Operation, loop.OperationService)
-	}
-	if spec.Completion != loop.CompletionNone {
-		t.Errorf("Completion = %q, want %q", spec.Completion, loop.CompletionNone)
-	}
-	if spec.Profile.Mission != "metacognitive" {
-		t.Errorf("Profile.Mission = %q, want metacognitive", spec.Profile.Mission)
-	}
-	if spec.Profile.DelegationGating != "disabled" {
-		t.Errorf("Profile.DelegationGating = %q, want disabled", spec.Profile.DelegationGating)
-	}
-	if spec.Profile.ExtraHints["source"] != "metacognitive" {
-		t.Errorf("Profile.ExtraHints[source] = %q, want metacognitive", spec.Profile.ExtraHints["source"])
-	}
-	if len(spec.Tags) != 1 || spec.Tags[0] != "metacognitive" {
-		t.Errorf("Tags = %v, want [metacognitive]", spec.Tags)
-	}
-	if len(spec.Outputs) != 1 {
-		t.Fatalf("Outputs len = %d, want 1", len(spec.Outputs))
-	}
-	if spec.Outputs[0].Name != "metacognitive_state" {
-		t.Errorf("Outputs[0].Name = %q, want metacognitive_state", spec.Outputs[0].Name)
-	}
-	if spec.Outputs[0].Ref != "self:metacognitive.md" {
-		t.Errorf("Outputs[0].Ref = %q, want self:metacognitive.md", spec.Outputs[0].Ref)
-	}
-}
-
-func TestDefinitionSpecPersistable(t *testing.T) {
-	cfg := testConfig()
-
-	spec := DefinitionSpec(cfg)
+	spec := HydrateSpec(loop.Spec{}, cfg)
 	if spec.Name != DefinitionName {
-		t.Errorf("Name = %q, want %q", spec.Name, DefinitionName)
+		t.Errorf("Name = %q, want %q defaulted", spec.Name, DefinitionName)
 	}
-	if spec.TaskBuilder != nil || spec.PostIterate != nil || spec.Setup != nil {
-		t.Fatal("DefinitionSpec should not include runtime hooks")
-	}
-	if err := spec.ValidatePersistable(); err != nil {
-		t.Fatalf("ValidatePersistable: %v", err)
-	}
-}
-
-func TestHydratedConfig(t *testing.T) {
-	cfg := testConfig()
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
-	lc := spec.ToConfig()
-
-	if lc.Name != "metacognitive" {
-		t.Errorf("Name = %q, want metacognitive", lc.Name)
-	}
-	if lc.SleepMin != cfg.MinSleep {
-		t.Errorf("SleepMin = %v, want %v", lc.SleepMin, cfg.MinSleep)
-	}
-	if lc.SleepMax != cfg.MaxSleep {
-		t.Errorf("SleepMax = %v, want %v", lc.SleepMax, cfg.MaxSleep)
-	}
-	if lc.SleepDefault != cfg.DefaultSleep {
-		t.Errorf("SleepDefault = %v, want %v", lc.SleepDefault, cfg.DefaultSleep)
-	}
-	if lc.Jitter == nil || *lc.Jitter != cfg.Jitter {
-		t.Errorf("Jitter = %v, want %v", lc.Jitter, cfg.Jitter)
-	}
-	if lc.TaskBuilder != nil {
-		t.Error("metacognitive loop is declarative; no TaskBuilder expected")
-	}
-	if !strings.Contains(lc.Task, "Metacognitive loop iteration") {
-		t.Error("lc.Task should be the metacognitive base prompt")
-	}
-	if lc.PostIterate != nil {
-		t.Error("metacognitive attaches no PostIterate hook; its iteration history is the state document's own signed history")
-	}
-	// Profile-derived routing factors (mission/source) and DelegationGating
-	// are applied by the live loop at request time via Profile.RequestOptions,
-	// not by ToConfig — so they are asserted on the Spec in TestHydratedSpec
-	// rather than on this bare Config projection.
-
-	// Verify ExcludeTools contains key entries.
-	excluded := make(map[string]bool)
-	for _, name := range lc.ExcludeTools {
-		excluded[name] = true
-	}
-	for _, want := range []string{"file_grep", "file_write", "exec"} {
-		if !excluded[want] {
-			t.Errorf("expected %q in ExcludeTools", want)
-		}
-	}
-}
-
-func TestHydratedConfig_Task(t *testing.T) {
-	cfg := testConfig()
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
-	lc := spec.ToConfig()
-
-	// The prompt is now a static Task (no TaskBuilder); current state
-	// comes from the declared output context, not inlined into the prompt.
-	if lc.TaskBuilder != nil {
-		t.Error("metacognitive loop is declarative; no TaskBuilder expected")
-	}
-	if !strings.Contains(lc.Task, "replace_output_metacognitive_state") {
-		t.Error("Task should mention the generated output tool")
-	}
-	if !strings.Contains(lc.Task, "Declared Durable") {
-		t.Error("Task should point to the declared output context")
-	}
-	if strings.Contains(lc.Task, "does not exist yet") {
-		t.Error("Task should not carry the old first-iteration placeholder")
-	}
-}
-
-func TestMetacogExcludeTools_ExcludesLoopCreation(t *testing.T) {
-	// thane_loop_create is Core (#1106 A) so it bypasses the loops tag gate the
-	// ego can't activate; a reflective loop must not stand up new durable loops.
-	found := false
-	for _, n := range metacogExcludeTools {
-		if n == "thane_loop_create" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("metacogExcludeTools must exclude thane_loop_create; got %v", metacogExcludeTools)
+	named := HydrateSpec(loop.Spec{Name: "custom"}, cfg)
+	if named.Name != "custom" {
+		t.Errorf("Name = %q, want the declared name kept", named.Name)
 	}
 }

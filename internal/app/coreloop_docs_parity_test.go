@@ -11,7 +11,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
 
 // TestCoreLoopDocsMatchTheGoSpecs is what makes deleting the Go
@@ -25,14 +24,12 @@ import (
 // diff rather than as behaviour nobody notices until a loop runs wrong.
 //
 // It also keeps them in step afterwards. While both exist, editing one
-// without the other fails.
+// without the other fails. Metacognitive already crossed that bridge:
+// its Go definition was deleted (#1341, ahead of the mandate re-scope),
+// so its document is covered only by the boot-path assertions below.
 func TestCoreLoopDocsMatchTheGoSpecs(t *testing.T) {
 	cfg := defaultedServiceLoopConfig(t)
 
-	metacogCfg, err := metacognitive.ParseConfig(cfg.Metacognitive)
-	if err != nil {
-		t.Fatalf("metacognitive.ParseConfig: %v", err)
-	}
 	egoCfg, err := ego.ParseConfig(cfg.Ego)
 	if err != nil {
 		t.Fatalf("ego.ParseConfig: %v", err)
@@ -46,7 +43,6 @@ func TestCoreLoopDocsMatchTheGoSpecs(t *testing.T) {
 		file string
 		want looppkg.Spec
 	}{
-		{"metacognitive.md", metacognitive.DefinitionSpec(metacogCfg)},
 		{"ego.md", ego.DefinitionSpec(egoCfg)},
 		{"archivist.md", archivist.DefinitionSpec(archivistCfg)},
 	}
