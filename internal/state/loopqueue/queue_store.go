@@ -278,19 +278,55 @@ func (s *Store) MoveConsumer(ctx context.Context, from, to string) error {
 	return nil
 }
 
-// Ack removes a completed item from consumerLoop's partition. A missing
-// (consumerLoop, dedupKey) is a no-op (idempotent).
+// Ack removes a completed item from consumerLoop's partition and
+// journals the completion — consumer, key, priority, and the
+// enqueued→acked span — in the same transaction as the DELETE, so the
+// record is exact and a crash can never leave a phantom completion. A
+// missing (consumerLoop, dedupKey) is a no-op (idempotent) and journals
+// nothing: re-acking an already-acked item must not double-count
+// throughput.
 func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	dedupKey = strings.TrimSpace(dedupKey)
 	if consumerLoop == "" || dedupKey == "" {
 		return fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
 	}
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	var (
+		priority    int
+		enqueuedRaw any
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT priority, enqueued_at FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
+		consumerLoop, dedupKey,
+	).Scan(&priority, &enqueuedRaw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
 		consumerLoop, dedupKey,
-	)
-	return err
+	); err != nil {
+		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, priority, enqueued_at, acked_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, consumerLoop, dedupKey, priority, enqueuedRaw); err != nil {
+		return fmt.Errorf("loopqueue: journal completion %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	return nil
 }
 
 // Consumers returns the distinct consumer partitions that currently

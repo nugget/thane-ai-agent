@@ -31,5 +31,30 @@ var queueSchema = database.Schema{
 			SQL: `CREATE INDEX IF NOT EXISTS idx_loop_queue_drain
 				ON loop_queue (consumer_loop, status, priority DESC, enqueued_at ASC)`,
 		},
+		database.TableCreate{
+			Table: "loop_queue_completions",
+			// The audit trail Ack would otherwise erase: one row per
+			// acknowledged item, written in the same transaction as the
+			// DELETE, so consumer throughput, wait latency, and recent
+			// outcomes are queryable facts instead of log archaeology.
+			// A coalescing re-Enqueue is deliberately NOT a completion —
+			// it restates the same pending work in place. Rows are
+			// pruned by age via [Store.PruneCompletions].
+			SQL: `CREATE TABLE IF NOT EXISTS loop_queue_completions (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				consumer_loop TEXT NOT NULL,
+				dedup_key     TEXT NOT NULL,
+				priority      INTEGER NOT NULL DEFAULT 0,
+				enqueued_at   TIMESTAMP NOT NULL,
+				acked_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`,
+		},
+		database.IndexCreate{
+			Name: "idx_loop_queue_completions_consumer",
+			// Supports per-consumer recent-completions queries and the
+			// age-based prune.
+			SQL: `CREATE INDEX IF NOT EXISTS idx_loop_queue_completions_consumer
+				ON loop_queue_completions (consumer_loop, acked_at DESC)`,
+		},
 	},
 }
