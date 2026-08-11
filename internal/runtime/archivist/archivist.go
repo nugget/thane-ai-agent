@@ -20,6 +20,16 @@
 // batch from its queue, walks the silos, writes or refreshes dossiers
 // via the documents tools, acks what it finished, and enqueues any
 // newly-discovered related subjects (frontier-as-enqueue, never a spawn).
+//
+// The loop definition itself — prompt, spec, cadence, tool exclusions —
+// lives in the shipped document loops/archivist.md (embedded via
+// internal/app/coreloops and overridable from the core root's loops/
+// directory); the Go definition builder was deleted once the
+// docs-parity gate proved the document byte-for-byte equivalent. What
+// remains here is what a document cannot carry: parsing the YAML config
+// shape into durations and defaulting the definition name at hydration.
+// The loop-private work-queue tools are attached separately at app
+// hydration.
 package archivist
 
 import (
@@ -27,11 +37,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // DefinitionName is the durable loop definition name for the archivist
@@ -108,74 +115,6 @@ func derefFloat(p *float64, def float64) float64 {
 	return *p
 }
 
-// DefinitionSpec returns the persistable loop definition for the
-// archivist service. Runtime hooks are attached later by [HydrateSpec]
-// (and the work-queue tools by the app-level hydration) so the
-// definition can live in the durable registry alongside metacognitive
-// and ego.
-func DefinitionSpec(cfg Config) loop.Spec {
-	return loop.Spec{
-		Name:       DefinitionName,
-		Enabled:    cfg.Enabled,
-		Task:       prompts.ArchivistBaseTemplate,
-		Operation:  loop.OperationService,
-		Completion: loop.CompletionNone,
-		Outputs: []loop.OutputSpec{
-			{
-				Name: "archivist_state",
-				Type: loop.OutputTypeMaintainedDocument,
-				Ref:  "self:archivist.md",
-				Mode: loop.OutputModeReplace,
-				Purpose: "Archivist working state written by the archivist loop, for the archivist. Tracks: " +
-					"the subjects worked this pass, dossier pointers (which dossiers exist and where), " +
-					"and notes from the last few iterations. Read each turn so the archivist picks up where " +
-					"it left off. The durable work queue (not this file) holds pending subjects. NOT a " +
-					"public-facing document; the dossiers themselves are the model-facing output.",
-			},
-		},
-		SleepMin:     cfg.MinSleep,
-		SleepMax:     cfg.MaxSleep,
-		SleepDefault: cfg.DefaultSleep,
-		Jitter:       loop.Float64Ptr(cfg.Jitter),
-		ExcludeTools: archivistExcludeTools,
-		// Tags = capability surfaces the archivist boots with active.
-		// `archivist` is the loop's own identity tag; the rest match the
-		// tool families the archivist's prompt promises it can use
-		// (archive_search, recall_fact, contact_lookup, the documents
-		// tools for dossier writes). Since ExcludeTools blocks
-		// tag_activate, the archivist can't expand its surface at
-		// runtime — it has to ship with the right initial set. The
-		// work-queue tools are injected as loop-private RuntimeTools at
-		// app hydration, not via a capability tag.
-		Tags: []string{"archivist", "documents", "archive", "memory", "contacts"},
-		Profile: router.LoopProfile{
-			Mission:          "archivist",
-			DelegationGating: "disabled",
-			QualityFloor:     cfg.QualityFloor,
-			ExtraHints:       map[string]string{"source": "archivist"},
-		},
-		SupervisorProfile: supervisorProfile(cfg.SupervisorQualityFloor),
-		Supervisor:        cfg.SupervisorProbability > 0,
-		SupervisorProb:    cfg.SupervisorProbability,
-		Metadata: map[string]string{
-			"subsystem": "archivist",
-			"category":  "service",
-		},
-	}
-}
-
-// supervisorProfile builds the archivist's supervisor-turn overlay: the
-// frontier-review prompt prefix (always) plus a higher quality floor when
-// one is configured. Unset fields fall back to the normal Profile during
-// supervisor turns; the prefix is prepended to the Task.
-func supervisorProfile(qualityFloor int) *router.LoopProfile {
-	p := &router.LoopProfile{Instructions: prompts.ArchivistSupervisorInstructions}
-	if qualityFloor > 0 {
-		p.QualityFloor = qualityFloor
-	}
-	return p
-}
-
 // HydrateSpec defaults the definition name. The archivist's prompt is
 // declarative (the spec Task and SupervisorProfile.Instructions); its one
 // genuine runtime-only dependency — the loop-private work-queue tools — is
@@ -186,28 +125,3 @@ func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	}
 	return spec
 }
-
-// archivistExcludeTools lists tools the archivist loop should not have
-// access to. The archivist's writes go through the managed output
-// (`core:archivist.md`) and the documents tools (for dossiers in the
-// `dossiers/` namespace) — bare workspace file tools, exec, session
-// management, tag manipulation, and direct human-egress channels are
-// out of scope for a synthesis loop.
-//
-// Spawn tools are excluded too: the archivist is a background-class
-// consumer with zero spawn rights (issue #1024). It self-feeds its work
-// queue via queue_enqueue; it never launches loops. This is the
-// per-class half of the fork-bomb guard.
-//
-// Read tools are deliberately left in: archive_search, recall_fact,
-// contact_lookup, working memory access — the archivist needs to walk
-// across silos to do its job.
-var archivistExcludeTools = append([]string{
-	"file_read", "file_write", "file_edit", "file_list",
-	"file_search", "file_grep", "file_stat", "file_tree",
-	"exec",
-	"conversation_reset", "session_close", "session_split", "session_checkpoint",
-	"create_temp_file",
-	"tag_activate", "tag_deactivate",
-	"spawn_loop", "thane_now", "thane_assign", "thane_loop_create",
-}, tools.DirectHumanEgressToolNames()...)

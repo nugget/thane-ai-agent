@@ -8,62 +8,18 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/app/coreloops"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
-	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
-	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// TestCoreLoopDocsMatchTheGoSpecs is what makes deleting the Go
-// definitions safe.
-//
-// The documents in loops/ were generated from these functions rather
-// than transcribed, and this asserts the round trip: parsing the shipped
-// document must reproduce exactly the spec the Go function builds for a
-// default install. Anything the port changed — a dropped field, a
-// mangled prompt, a default that did not survive — shows up here as a
-// diff rather than as behaviour nobody notices until a loop runs wrong.
-//
-// It also keeps them in step afterwards. While both exist, editing one
-// without the other fails. Metacognitive already crossed that bridge:
-// its Go definition was deleted (#1341, ahead of the mandate re-scope),
-// so its document is covered only by the boot-path assertions below.
-func TestCoreLoopDocsMatchTheGoSpecs(t *testing.T) {
-	cfg := defaultedServiceLoopConfig(t)
-
-	egoCfg, err := ego.ParseConfig(cfg.Ego)
-	if err != nil {
-		t.Fatalf("ego.ParseConfig: %v", err)
-	}
-	archivistCfg, err := archivist.ParseConfig(cfg.Archivist)
-	if err != nil {
-		t.Fatalf("archivist.ParseConfig: %v", err)
-	}
-
-	tests := []struct {
-		file string
-		want looppkg.Spec
-	}{
-		{"ego.md", ego.DefinitionSpec(egoCfg)},
-		{"archivist.md", archivist.DefinitionSpec(archivistCfg)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.file, func(t *testing.T) {
-			got, err := decodeCoreLoopDefinition(filepath.Join("..", "..", "loops", tt.file))
-			if err != nil {
-				t.Fatalf("decodeCoreLoopDefinition: %v", err)
-			}
-			// The document carries parent_name and the Go builder never
-			// did, so this one field is expected to differ. It is checked
-			// against the boot path in
-			// TestBuiltInSpecsNowComeFromTheShippedDocuments instead.
-			got.ParentName = tt.want.ParentName
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("document and Go spec disagree.\nfrom document: %#v\nfrom Go:       %#v", got, tt.want)
-			}
-		})
-	}
-}
+// The Go-vs-document parity test that used to live here
+// (TestCoreLoopDocsMatchTheGoSpecs) existed to make deleting the Go
+// definition builders safe, and it has served its purpose: all three
+// core service loops — metacognitive first (#1341), then ego and
+// archivist — now define themselves solely through their shipped
+// loops/ documents, and the builders are gone. What remains below is
+// the document-side gate: every core service loop has a document, a
+// default boot produces exactly the document's spec, and the embedded
+// mirror matches the repo source.
 
 // TestEveryCoreServiceLoopHasADocument stops a fourth core service loop
 // from being added in Go without a shipped document, which would leave

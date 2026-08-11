@@ -265,6 +265,46 @@ historical context, not promoted to active system instructions.
 
 Do not hide instructions inside what claims to be data.
 
+### Shape instructions by the job each form does
+
+For instruction documents a model executes — loop mandates, delegate
+briefs, supervisor overlays — the lesson of the #1341 mandate audits is
+that structure is not one choice but several, and each part of the
+document has a form that serves a model best:
+
+- **Identity and stance are prose.** Who the reader is, what the
+  document is for, how to hold the work — short, reason-carrying
+  paragraphs. The connective tissue is the content.
+- **Procedure is a numbered list.** A turn protocol is a checklist;
+  sequence and completeness are the information, and models execute an
+  explicit spine more reliably than the same protocol dissolved into
+  paragraphs.
+- **Constraints live at their point of application, not in a rules
+  section.** A "Guidelines" section far from the steps is a join the
+  model must perform — recall the rule while executing the step — and
+  it is where rules go stale unnoticed. Put the truncation guard inside
+  the read step, the timestamp rule inside the write step, the toolkit
+  truth beside the tools' first mention.
+- **Flat lists equalize weight.** A hazard and a style preference in
+  the same bullet list get roughly uniform treatment under context
+  pressure. Spend emphasis in prose: say which constraint outranks the
+  others, and why.
+- **Category boundaries are short example lists closed by one
+  principle.** The principle is the carrier and the generalizer; the
+  bullets are its examples ("if it reads like something you'd put in a
+  ticket, it doesn't belong here").
+- **Attach reasons to rules.** A bare imperative invites literal
+  compliance or quiet neglect; a rule with its why is a compressed
+  policy the model can re-derive in situations the author never
+  foresaw.
+
+The visual affordances lists provide humans — symmetry, scannability,
+bold parallel grammar — are cosmetic to a model, which reads every
+token. What matters instead: unambiguous boundaries, explicit priority,
+stable anchors for self-reference, and reasons. This is the
+instruction-document counterpart of the "cafeteria bullets" warning in
+[model-facing-tools.md](model-facing-tools.md).
+
 ### Human readability is secondary
 
 Use brief framing when it removes ambiguity. Once the shape is clear,
@@ -282,6 +322,8 @@ prefer compactness.
   clues
 - Presenting the same fact in multiple conflicting shapes
 - Silent truncation or unstable ordering
+- A "Guidelines" dumping ground where a hazard, a toolkit fact, and a
+  style note share equal weight, far from the steps they govern
 
 ## Placement And Ownership
 
@@ -330,6 +372,9 @@ Good places to look for existing patterns:
 
 - `internal/model/promptfmt/timefmt.go`
 - `internal/state/awareness/entity_format.go`
+- `loops/ego.md` — an instruction document shaped by the job each form
+  does (prose stance, numbered protocol, constraints at their point of
+  application)
 - `internal/runtime/agent/tag_context.go`
 - `internal/integrations/forge/context.go`
 - `internal/channels/notifications/history_provider.go`
