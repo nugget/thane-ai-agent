@@ -106,6 +106,7 @@ type Registry struct {
 	launchLoopDefinition                       func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	liveLoopRegistry                           *looppkg.Registry
 	launchLoop                                 func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
+	mailboxPendingCounts                       func(context.Context) (map[string]int, error)
 	messageBus                                 *messages.Bus
 	loopIntentDeps                             LoopIntentToolDeps
 

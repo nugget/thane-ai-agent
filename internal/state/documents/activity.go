@@ -89,7 +89,7 @@ func (s *Store) Activity(ctx context.Context, q ActivityQuery) (*ActivityReport,
 	reviser := s.rootReviser(root)
 	if reviser == nil {
 		return nil, fmt.Errorf("root %q keeps no revision history; revision-backed roots: %s",
-			root, strings.Join(s.reviserRoots(), ", "))
+			root, strings.Join(s.RevisionBackedRoots(), ", "))
 	}
 	if q.Since.IsZero() {
 		return nil, fmt.Errorf("activity requires a window start (since)")
@@ -266,9 +266,10 @@ func aggregateActivityAuthors(revs []RevisionRef) []ActivityAuthor {
 	return authors
 }
 
-// reviserRoots lists the roots that keep revision history, for the
-// teaching error when a caller names one that does not.
-func (s *Store) reviserRoots() []string {
+// RevisionBackedRoots lists the roots that keep revision history —
+// the set Activity can report on, and the sweep set when a caller
+// names no root.
+func (s *Store) RevisionBackedRoots() []string {
 	var roots []string
 	for root := range s.rootRevisers {
 		roots = append(roots, root)
