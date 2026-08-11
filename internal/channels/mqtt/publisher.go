@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,7 @@ type Publisher struct {
 	cfg            config.MQTTConfig
 	instanceID     string
 	device         DeviceInfo
+	origin         OriginInfo
 	tokens         *DailyTokens
 	stats          StatsSource
 	logger         *slog.Logger
@@ -62,6 +64,13 @@ type Publisher struct {
 	mu             sync.Mutex
 	dynamicSensors []DynamicSensor
 	dynamicTopics  func() []string // returns extra topics to subscribe on (re-)connect
+
+	// migrated tracks entity suffixes whose legacy per-component
+	// discovery topic has been migrated (marker published, then
+	// cleared) this process. A suffix is recorded only after its clear
+	// publish succeeded, so a failed pass retries on the next
+	// (re-)connect.
+	migrated map[string]bool
 }
 
 // New creates a Publisher but does not connect. Call [Publisher.Start]
@@ -76,9 +85,11 @@ func New(cfg config.MQTTConfig, instanceID string, tokens *DailyTokens, stats St
 		cfg:        cfg,
 		instanceID: instanceID,
 		device:     NewDeviceInfo(instanceID, cfg.DeviceName),
+		origin:     NewOriginInfo(),
 		tokens:     tokens,
 		stats:      stats,
 		logger:     logger,
+		migrated:   make(map[string]bool),
 	}
 }
 
@@ -170,15 +181,12 @@ func (p *Publisher) EnsureSensor(ctx context.Context, sensor DynamicSensor) erro
 	if cm == nil {
 		return fmt.Errorf("mqtt publisher not connected")
 	}
-	p.publishSensorDiscovery(ctx, cm, sensor.EntitySuffix, sensor.Config)
+	// Device-based discovery describes the whole device in one payload,
+	// so a new component means republishing it — which also runs the
+	// legacy-topic migration for this suffix if an older binary ever
+	// published it per-component.
+	p.publishDiscovery(ctx, cm)
 	return nil
-}
-
-// Device returns the HA device info shared across all sensors published
-// by this publisher instance. Useful for callers building [DynamicSensor]
-// configs that reference the same HA device.
-func (p *Publisher) Device() DeviceInfo {
-	return p.device
 }
 
 // PublishDynamicState publishes the state and optional JSON attributes
@@ -448,7 +456,19 @@ func (p *Publisher) AttributesTopic(entity string) string {
 	return p.baseTopic() + "/" + entity + "/attributes"
 }
 
-func (p *Publisher) discoveryTopic(component, entity string) string {
+// deviceDiscoveryTopic is the single retained config topic for HA's
+// device-based discovery: one payload describes the device and every
+// component on it.
+func (p *Publisher) deviceDiscoveryTopic() string {
+	return p.cfg.DiscoveryPrefix + "/device/" + p.cfg.DeviceName + "/config"
+}
+
+// legacyDiscoveryTopic is the pre-2024.11 per-component discovery topic
+// (one retained config per entity). Kept only for the migration sweep:
+// markers and cleanup are published here so previously discovered
+// entities move to the device-based payload with their registry
+// entries, customizations, and history intact.
+func (p *Publisher) legacyDiscoveryTopic(component, entity string) string {
 	return p.cfg.DiscoveryPrefix + "/" + component + "/" + p.cfg.DeviceName + "/" + entity + "/config"
 }
 
@@ -460,35 +480,30 @@ type sensorDef struct {
 }
 
 func (p *Publisher) sensorDefinitions() []sensorDef {
-	avail := p.AvailabilityTopic()
 	prefix := p.ObjectIDPrefix()
 	return []sensorDef{
 		{
 			entitySuffix: "uptime",
 			config: SensorConfig{
-				Name:              "Uptime",
-				ObjectID:          prefix + "uptime",
-				HasEntityName:     true,
-				UniqueID:          p.instanceID + "_uptime",
-				StateTopic:        p.StateTopic("uptime"),
-				AvailabilityTopic: avail,
-				Device:            p.device,
-				Icon:              "mdi:clock-outline",
-				EntityCategory:    "diagnostic",
+				Name:           "Uptime",
+				ObjectID:       prefix + "uptime",
+				HasEntityName:  true,
+				UniqueID:       p.instanceID + "_uptime",
+				StateTopic:     p.StateTopic("uptime"),
+				Icon:           "mdi:clock-outline",
+				EntityCategory: "diagnostic",
 			},
 		},
 		{
 			entitySuffix: "version",
 			config: SensorConfig{
-				Name:              "Version",
-				ObjectID:          prefix + "version",
-				HasEntityName:     true,
-				UniqueID:          p.instanceID + "_version",
-				StateTopic:        p.StateTopic("version"),
-				AvailabilityTopic: avail,
-				Device:            p.device,
-				Icon:              "mdi:tag",
-				EntityCategory:    "diagnostic",
+				Name:           "Version",
+				ObjectID:       prefix + "version",
+				HasEntityName:  true,
+				UniqueID:       p.instanceID + "_version",
+				StateTopic:     p.StateTopic("version"),
+				Icon:           "mdi:tag",
+				EntityCategory: "diagnostic",
 			},
 		},
 		{
@@ -499,8 +514,6 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_tokens_today",
 				StateTopic:        p.StateTopic("tokens_today"),
-				AvailabilityTopic: avail,
-				Device:            p.device,
 				Icon:              "mdi:counter",
 				StateClass:        "measurement",
 				UnitOfMeasurement: "tokens",
@@ -509,72 +522,169 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 		{
 			entitySuffix: "last_request",
 			config: SensorConfig{
-				Name:              "Last Request",
-				ObjectID:          prefix + "last_request",
-				HasEntityName:     true,
-				UniqueID:          p.instanceID + "_last_request",
-				StateTopic:        p.StateTopic("last_request"),
-				AvailabilityTopic: avail,
-				Device:            p.device,
-				Icon:              "mdi:clock-check",
-				EntityCategory:    "diagnostic",
+				Name:           "Last Request",
+				ObjectID:       prefix + "last_request",
+				HasEntityName:  true,
+				UniqueID:       p.instanceID + "_last_request",
+				StateTopic:     p.StateTopic("last_request"),
+				Icon:           "mdi:clock-check",
+				EntityCategory: "diagnostic",
 			},
 		},
 		{
 			entitySuffix: "default_model",
 			config: SensorConfig{
-				Name:              "Default Model",
-				ObjectID:          prefix + "default_model",
-				HasEntityName:     true,
-				UniqueID:          p.instanceID + "_default_model",
-				StateTopic:        p.StateTopic("default_model"),
-				AvailabilityTopic: avail,
-				Device:            p.device,
-				Icon:              "mdi:brain",
-				EntityCategory:    "diagnostic",
+				Name:           "Default Model",
+				ObjectID:       prefix + "default_model",
+				HasEntityName:  true,
+				UniqueID:       p.instanceID + "_default_model",
+				StateTopic:     p.StateTopic("default_model"),
+				Icon:           "mdi:brain",
+				EntityCategory: "diagnostic",
 			},
 		},
 	}
 }
 
+// migrateDiscoveryPayload is HA's documented trigger for moving an
+// entity from per-component to device-based discovery: published
+// (retained) to the legacy config topic, it unloads the discovered
+// entity while KEEPING its registry entry, customizations, and history,
+// so the device-based payload can reclaim the same unique_id.
+var migrateDiscoveryPayload = []byte(`{"migrate_discovery":true}`)
+
+// publishDiscovery publishes the device-based discovery payload and,
+// for any entity suffix seen for the first time this process, performs
+// HA's documented legacy migration around it: migrate marker to the
+// legacy topic, then the device payload, then an empty retained payload
+// clearing the legacy topic. The sweep is idempotent — once the legacy
+// topics are empty a later pass has nothing to mark — and self-heals
+// the rollback case where an older binary re-littered them.
 func (p *Publisher) publishDiscovery(ctx context.Context, cm *autopaho.ConnectionManager) {
-	// Static (built-in) sensors.
-	for _, s := range p.sensorDefinitions() {
-		p.publishSensorDiscovery(ctx, cm, s.entitySuffix, s.config)
+	components := p.snapshotComponents()
+	pending := p.unmigratedSuffixes(components)
+
+	marked := make([]string, 0, len(pending))
+	for _, suffix := range pending {
+		topic := p.legacyDiscoveryTopic("sensor", suffix)
+		if err := p.publishRetained(ctx, cm, topic, migrateDiscoveryPayload); err != nil {
+			p.logger.Warn("mqtt legacy discovery migrate marker failed",
+				"entity", suffix, "topic", topic, "error", err)
+			continue
+		}
+		marked = append(marked, suffix)
+	}
+	if len(marked) > 0 {
+		p.logger.Info("mqtt legacy discovery migration started",
+			"entities", len(marked))
 	}
 
-	// Dynamic sensors registered by external packages.
-	p.mu.Lock()
-	dynCopy := make([]DynamicSensor, len(p.dynamicSensors))
-	copy(dynCopy, p.dynamicSensors)
-	p.mu.Unlock()
-
-	for _, ds := range dynCopy {
-		p.publishSensorDiscovery(ctx, cm, ds.EntitySuffix, ds.Config)
-	}
-}
-
-func (p *Publisher) publishSensorDiscovery(ctx context.Context, cm *autopaho.ConnectionManager, entitySuffix string, cfg SensorConfig) {
-	topic := p.discoveryTopic("sensor", entitySuffix)
-	payload, err := json.Marshal(cfg)
-	if err != nil {
-		p.logger.Error("mqtt marshal discovery payload",
-			"entity", entitySuffix, "error", err)
+	if err := p.publishDeviceDiscovery(ctx, cm, components); err != nil {
+		// Nothing is recorded as migrated: the next (re-)connect
+		// re-marks and re-publishes, and HA sits on the retained
+		// markers (registry entries intact) until it does.
 		return
 	}
 
-	if _, err := cm.Publish(ctx, &paho.Publish{
+	cleared := 0
+	for _, suffix := range marked {
+		topic := p.legacyDiscoveryTopic("sensor", suffix)
+		if err := p.publishRetained(ctx, cm, topic, nil); err != nil {
+			p.logger.Warn("mqtt legacy discovery cleanup failed",
+				"entity", suffix, "topic", topic, "error", err)
+			continue
+		}
+		p.markMigrated(suffix)
+		cleared++
+	}
+	if cleared > 0 {
+		p.logger.Info("mqtt legacy discovery migrated to device-based",
+			"entities", cleared)
+	}
+}
+
+// snapshotComponents assembles the full component map — static
+// definitions plus dynamic registrations — with Platform defaulted, as
+// one device-based discovery payload's Components block.
+func (p *Publisher) snapshotComponents() map[string]SensorConfig {
+	components := make(map[string]SensorConfig)
+	for _, s := range p.sensorDefinitions() {
+		components[s.entitySuffix] = s.config
+	}
+	p.mu.Lock()
+	for _, ds := range p.dynamicSensors {
+		components[ds.EntitySuffix] = ds.Config
+	}
+	p.mu.Unlock()
+	for suffix, c := range components {
+		if c.Platform == "" {
+			c.Platform = "sensor"
+			components[suffix] = c
+		}
+	}
+	return components
+}
+
+// unmigratedSuffixes returns the component suffixes whose legacy
+// discovery topic has not yet been migrated this process, sorted for
+// deterministic publish order.
+func (p *Publisher) unmigratedSuffixes(components map[string]SensorConfig) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pending := make([]string, 0, len(components))
+	for suffix := range components {
+		if !p.migrated[suffix] {
+			pending = append(pending, suffix)
+		}
+	}
+	sort.Strings(pending)
+	return pending
+}
+
+// markMigrated records a suffix whose legacy topic was marked and then
+// cleared successfully.
+func (p *Publisher) markMigrated(suffix string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.migrated[suffix] = true
+}
+
+// publishDeviceDiscovery publishes the single retained device-based
+// discovery payload describing this device and every component on it.
+func (p *Publisher) publishDeviceDiscovery(ctx context.Context, cm *autopaho.ConnectionManager, components map[string]SensorConfig) error {
+	cfg := deviceDiscoveryConfig{
+		Device:       p.device,
+		Origin:       p.origin,
+		Availability: []availabilityEntry{{Topic: p.AvailabilityTopic()}},
+		Components:   components,
+	}
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		p.logger.Error("mqtt marshal device discovery payload", "error", err)
+		return err
+	}
+
+	topic := p.deviceDiscoveryTopic()
+	if err := p.publishRetained(ctx, cm, topic, payload); err != nil {
+		p.logger.Warn("mqtt device discovery publish failed",
+			"topic", topic, "components", len(components), "error", err)
+		return err
+	}
+	p.logger.Debug("mqtt device discovery published",
+		"topic", topic, "components", len(components))
+	return nil
+}
+
+// publishRetained publishes a retained QoS-1 message; a nil payload
+// clears the retained message from the topic.
+func (p *Publisher) publishRetained(ctx context.Context, cm *autopaho.ConnectionManager, topic string, payload []byte) error {
+	_, err := cm.Publish(ctx, &paho.Publish{
 		Topic:   topic,
 		Payload: payload,
 		QoS:     1,
 		Retain:  true,
-	}); err != nil {
-		p.logger.Warn("mqtt discovery publish failed",
-			"entity", entitySuffix, "topic", topic, "error", err)
-	} else {
-		p.logger.Debug("mqtt discovery published",
-			"entity", entitySuffix, "topic", topic)
-	}
+	})
+	return err
 }
 
 func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.ConnectionManager, status string) {

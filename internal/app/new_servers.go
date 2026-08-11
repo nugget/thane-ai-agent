@@ -477,8 +477,6 @@ func (a *App) initServers(s *newState) error {
 					UniqueID:            mqttInstanceID + "_" + suffix,
 					StateTopic:          a.mqttPub.StateTopic(suffix),
 					JsonAttributesTopic: a.mqttPub.AttributesTopic(suffix),
-					AvailabilityTopic:   a.mqttPub.AvailabilityTopic(),
-					Device:              a.mqttPub.Device(),
 					Icon:                "mdi:access-point",
 				},
 			})
@@ -530,8 +528,6 @@ func (a *App) initServers(s *newState) error {
 			Prefix:            a.mqttPub.ObjectIDPrefix(),
 			StateTopicFn:      a.mqttPub.StateTopic,
 			AttributesTopicFn: a.mqttPub.AttributesTopic,
-			AvailabilityTopic: a.mqttPub.AvailabilityTopic(),
-			Device:            a.mqttPub.Device(),
 		}
 
 		a.mqttPub.RegisterSensors(telBuilder.StaticSensors())

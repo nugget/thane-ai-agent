@@ -48,8 +48,6 @@ func testBuilder() *SensorBuilder {
 		Prefix:            "thane_test_",
 		StateTopicFn:      func(s string) string { return "thane/test/" + s + "/state" },
 		AttributesTopicFn: func(s string) string { return "thane/test/" + s + "/attributes" },
-		AvailabilityTopic: "thane/test/availability",
-		Device:            mqtt.DeviceInfo{Name: "test"},
 	}
 }
 
