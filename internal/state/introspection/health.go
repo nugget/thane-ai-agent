@@ -296,10 +296,13 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		statuses := i.src.LoopStatuses()
 		snap.Loops = buildLoopCensus(statuses)
 		row := HealthRow{Name: "loops", Status: HealthOK,
-			Detail: fmt.Sprintf("%d running", snap.Loops.Total)}
+			Detail: fmt.Sprintf("%d loops in the fleet, none degraded", snap.Loops.Total)}
 		if snap.Loops.Degraded > 0 {
 			row.Status = HealthDegraded
 			row.Detail = fmt.Sprintf("%d of %d loops degraded: %v", snap.Loops.Degraded, snap.Loops.Total, snap.Loops.DegradedLoops)
+			if snap.Loops.DegradedTruncated {
+				row.Detail += fmt.Sprintf(" (+%d more)", snap.Loops.Degraded-len(snap.Loops.DegradedLoops))
+			}
 		}
 		snap.Annunciator = append(snap.Annunciator, row)
 	}

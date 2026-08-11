@@ -189,6 +189,9 @@ func (t *Tools) handleQueueStatus(ctx context.Context, args map[string]any) (str
 	}
 	consumer := toolargs.TrimmedString(args, "consumer")
 	limit := toolargs.IntOr(args, "completions_limit", defaultCompletionLimit)
+	if limit <= 0 {
+		limit = defaultCompletionLimit
+	}
 	if limit > maxCompletionLimit {
 		limit = maxCompletionLimit
 	}
@@ -319,6 +322,15 @@ func (t *Tools) handleLoopActivity(ctx context.Context, args map[string]any) (st
 		until, err = promptfmt.ParseTimeOrDelta(raw, now)
 		if err != nil {
 			return "", fmt.Errorf("invalid until %q: use a signed delta like \"-1h\" or an RFC3339 timestamp", raw)
+		}
+		// The journal only holds the past: a future until is clamped to
+		// now, and an inverted window is a caller error worth teaching
+		// rather than an empty result worth guessing about.
+		if until.After(now) {
+			until = now
+		}
+		if until.Before(since) {
+			return "", fmt.Errorf("until %q is before since (window start %s): widen since or move until later", raw, promptfmt.FormatDeltaOnly(since, now))
 		}
 	}
 	loopName := toolargs.TrimmedString(args, "loop_name")

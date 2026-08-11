@@ -44,7 +44,9 @@ wrote it — authorship comes from commit trailers, so a row authored
 threshold are flagged and sort first; a maintained document rewriting
 itself too often is how a runaway (an ego document accumulating
 nonsense) is caught before anyone reads it. For one document's story,
-switch to `doc_history` and `doc_diff`.
+switch to `doc_history` and `doc_diff` — those ride the `documents`
+tag, so activate it for per-document history (a loop that owns the
+document already carries the read family without any tag).
 
 `logs_query` and `cost_summary` carry the receipts: failure evidence
 scoped by loop, subsystem, or request, and spend grouped by model,
