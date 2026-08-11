@@ -292,9 +292,20 @@ operator guide.
 
 ## Persona & Talents
 
-```yaml
-talents_dir: ~/Thane/talents
-```
+Talents have no config key. They load from `{workspace}/core/talents/`,
+a location derived from the workspace rather than authored, so the
+prose that steers model behavior every turn is covered by the same
+signed history and cleanliness rule as the config beside it. Editing a
+talent means committing it: an uncommitted talent file fails the boot
+gate exactly as an uncommitted `config.yaml` does, and every talent
+must declare `tags:` (`always`, `persona`, or the capability tags that
+select it).
+
+A config that still declares the retired `talents_dir` key is rejected
+at load with the migration recipe: move the directory into core
+(`mv <talents_dir> {workspace}/core/talents`), commit it, and remove
+the `talents_dir:` line. An instance that skips the move boots with an
+empty talent set and a startup warning naming the missing directory.
 
 See [Context Layers](../understanding/context-layers.md) for how these
 fit into the system prompt. The workspace derives the protected
