@@ -67,6 +67,41 @@ func newActivityStore(t *testing.T, files map[string]string, reviser RootReviser
 	return store
 }
 
+// TestWriteNormalizesSpaceArtifacts pins the tokenizer-artifact fold:
+// the non-breaking space variants gpt-oss emits (U+202F, U+00A0) are
+// stored as plain spaces on every mutation path, so alternating
+// authors cannot churn invisible diffs or break text search.
+func TestWriteNormalizesSpaceArtifacts(t *testing.T) {
+	store := newActivityStore(t, map[string]string{"state.md": "# state\n"}, nil)
+	ctx := t.Context()
+
+	body := "wakes\u202fper\u00a0day: 4\u202f-\u202f6"
+	if _, err := store.Write(ctx, WriteArgs{Ref: "self:state.md", Body: &body}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rec, err := store.Read(ctx, "self:state.md")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.ContainsAny(rec.Body, "\u00a0\u202f") {
+		t.Errorf("stored body retains space artifacts: %q", rec.Body)
+	}
+	if !strings.Contains(rec.Body, "wakes per day: 4 - 6") {
+		t.Errorf("normalized body = %q, want plain spaces", rec.Body)
+	}
+
+	if _, err := store.JournalUpdate(ctx, JournalUpdateArgs{Ref: "self:state.md", Entry: "checked\u202fagain"}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	rec, err = store.Read(ctx, "self:state.md")
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if strings.ContainsAny(rec.Body, "\u00a0\u202f") {
+		t.Errorf("journal path retains space artifacts: %q", rec.Body)
+	}
+}
+
 func TestActivityErrorsTeachTheNextMove(t *testing.T) {
 	store := newActivityStore(t, map[string]string{"ego.md": "# ego\n"}, &recordingReviser{})
 

@@ -126,7 +126,28 @@ func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {
 	return record, nil
 }
 
+// normalizeSpaceArtifacts folds the non-breaking space variants some
+// model tokenizers emit (U+00A0, U+202F narrow no-break) into plain
+// spaces before a document write. Observed live 2026-08-11 on prod's
+// metacognitive.md: gpt-oss:120b writes narrow no-break spaces where
+// a frontier model writes plain ones, so alternating authors churned
+// dozens of invisibly-changed diff lines per revision and broke plain
+// text search against the stored body. Deliberately conservative:
+// zero-width characters are left alone (emoji sequences depend on
+// them) — only the two space impostors are folded.
+func normalizeSpaceArtifacts(s string) string {
+	if !strings.ContainsAny(s, "\u00a0\u202f") {
+		return s
+	}
+	return strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(s)
+}
+
 func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, error) {
+	if args.Body != nil {
+		normalized := normalizeSpaceArtifacts(*args.Body)
+		args.Body = &normalized
+	}
+	args.JournalEntry = normalizeSpaceArtifacts(args.JournalEntry)
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err
@@ -186,6 +207,7 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 }
 
 func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error) {
+	args.Body = normalizeSpaceArtifacts(args.Body)
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err
@@ -254,6 +276,7 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 }
 
 func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*MutationResult, error) {
+	args.Entry = normalizeSpaceArtifacts(args.Entry)
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err
