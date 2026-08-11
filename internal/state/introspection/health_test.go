@@ -264,6 +264,42 @@ func TestRuntimeLampInformsWithoutJudging(t *testing.T) {
 	}
 }
 
+// TestRecordBootRetryingOutlastsTransientFailure pins the production
+// lesson: the boot row must survive the startup write burst, so a
+// failed attempt retries instead of surrendering the deploy story.
+func TestRecordBootRetryingOutlastsTransientFailure(t *testing.T) {
+	j := newTestJournal(t)
+	ctx := context.Background()
+
+	// Happy path: lands on the first attempt.
+	j.recordBootRetrying(ctx, "v0.10.3", "abc", nil, 3, time.Millisecond)
+	boots, err := j.RecentBoots(ctx, 5)
+	if err != nil || len(boots) != 1 {
+		t.Fatalf("boots = %v (%v), want exactly one", boots, err)
+	}
+
+	// Bounded failure: a closed database never accepts the row, and the
+	// retry loop must exit on its budget rather than spin forever.
+	closed := newTestJournal(t)
+	// Closing the handle under the journal makes every attempt fail.
+	if err := closedDB(closed).Close(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		closed.recordBootRetrying(ctx, "v0.10.3", "abc", nil, 3, time.Millisecond)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry loop did not respect its attempt budget")
+	}
+}
+
+// closedDB exposes the journal's handle for the failure-path test.
+func closedDB(j *Journal) interface{ Close() error } { return j.db }
+
 // TestJournalBootRoundTrip covers the boot journal itself.
 func TestJournalBootRoundTrip(t *testing.T) {
 	j := newTestJournal(t)
