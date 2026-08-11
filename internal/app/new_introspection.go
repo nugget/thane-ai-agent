@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
 )
@@ -23,9 +24,14 @@ func (a *App) initIntrospectionJournal() {
 	}
 	a.loopEventJournal = journal
 
-	// Reuse the log index's retention when configured; the journal's own
-	// default (30d) otherwise. Pure age-based either way.
-	retention := a.cfg.Logging.RetentionDaysDuration()
+	// Reuse the log index's retention only when the operator explicitly
+	// set one; otherwise pass zero so the recorder applies the journal's
+	// own default (30d) rather than inheriting the log index's implicit
+	// 7-day fallback. Pure age-based either way.
+	var retention time.Duration
+	if a.cfg.Logging.RetentionDays != nil {
+		retention = a.cfg.Logging.RetentionDaysDuration()
+	}
 	recorder := introspection.NewRecorder(journal, a.eventBus, retention, a.logger)
 	a.deferWorker("loop-event-recorder", func(ctx context.Context) error {
 		go recorder.Run(ctx)
