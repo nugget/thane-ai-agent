@@ -109,7 +109,9 @@ const (
 	KindLoopTopology = "loop_topology"
 	// KindLoopIterationStart signals the beginning of a loop iteration.
 	// Data: loop_id, loop_name, conversation_id, supervisor,
-	// supervisor_trigger, attempt, signal_envelopes.
+	// supervisor_trigger, attempt, signal_envelopes, mailbox_items,
+	// wake_reason (what woke the loop: timer, mailbox, subscription,
+	// manual, ...), and wake_source when the wake carried a sender.
 	KindLoopIterationStart = "loop_iteration_start"
 	// KindLoopIterationComplete signals the end of a loop iteration.
 	// Data: loop_id, loop_name, model, input_tokens, output_tokens,

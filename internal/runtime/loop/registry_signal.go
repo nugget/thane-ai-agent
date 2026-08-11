@@ -42,7 +42,7 @@ func (r *Registry) WakeLoop(ctx context.Context, id string) error {
 	if l == nil {
 		return fmt.Errorf("loop %q not found", id)
 	}
-	l.pokeWake()
+	l.pokeWake(wakeCause{reason: WakeReasonMailbox, source: "external"})
 	return nil
 }
 

@@ -388,7 +388,12 @@ func (l *Loop) waitForEvent(ctx context.Context) (any, error) {
 	}
 }
 
-func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
+// sleep blocks for d unless woken early. It returns ok=false when the
+// context was cancelled (the loop should exit), and interrupted=true
+// when a wakeCh poke — not the timer — ended the sleep, which feeds the
+// next iteration's wake attribution as the lowest-priority signal that
+// the wake was not the loop's own cadence.
+func (l *Loop) sleep(ctx context.Context, d time.Duration) (ok, interrupted bool) {
 	// Record the scheduled wake instant so loop_status can report when the
 	// loop next fires; clear it on wake so a processing loop never reports a
 	// stale deadline. A wakeCh notification can cut the sleep short — this is
@@ -418,12 +423,12 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return false
+			return false, false
 		case <-timer.C:
-			return true
+			return true, false
 		case <-l.wakeCh:
 			timer.Stop()
-			return true
+			return true, true
 		case <-l.retuneCh:
 			timer.Stop()
 			// Promote the pending retune and re-clamp this sleep as if
@@ -447,6 +452,12 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 			deadline = start.Add(nd)
 			l.sleepUntil = deadline
 			l.currentSleep = nd
+			overdue := !time.Now().Before(deadline)
+			if overdue {
+				// The edited envelope made this sleep overdue: the loop
+				// wakes now, and the retune is what woke it.
+				l.recordWakeCauseLocked(wakeCause{reason: WakeReasonRetune})
+			}
 			l.mu.Unlock()
 			if promoted {
 				l.deps.Logger.Info("loop retune applied",
@@ -455,8 +466,8 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 					"resleep", nd.Round(time.Second).String(),
 				)
 			}
-			if !time.Now().Before(deadline) {
-				return true
+			if overdue {
+				return true, true
 			}
 		}
 	}

@@ -82,6 +82,16 @@ type LoopView struct {
 	// counting the one in flight — the cadence actually achieved, as
 	// against the SleepEnvelope's permitted one.
 	WakesLast24h *int `json:"wakes_last_24h"`
+	// LastWakeReason attributes the most recent iteration start (timer,
+	// mailbox, subscription, manual, ...), and LastWakeSource names the
+	// sender when the wake carried one. Null before the first iteration
+	// and on stored-only rows.
+	LastWakeReason *string `json:"last_wake_reason"`
+	LastWakeSource *string `json:"last_wake_source,omitempty"`
+	// WakeReasons24h histograms the trailing day's wakes by reason — how
+	// the achieved cadence decomposes into self-chosen timer wakes versus
+	// externally driven ones. Omitted when the window is empty.
+	WakeReasons24h map[string]int `json:"wake_reasons_24h,omitempty"`
 
 	// ---- economics (%CPU / %MEM / TIME) ----
 	Iterations        *int `json:"iterations"`
@@ -395,6 +405,15 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	}
 	wakes := s.WakesLast24h
 	v.WakesLast24h = &wakes
+	if s.LastWakeReason != "" {
+		reason := string(s.LastWakeReason)
+		v.LastWakeReason = &reason
+		if s.LastWakeSource != "" {
+			source := s.LastWakeSource
+			v.LastWakeSource = &source
+		}
+	}
+	v.WakeReasons24h = s.WakeReasons24h
 
 	// Token economics — left nil for handler-only loops, which run no LLM
 	// iterations and have no token metrics (a literal 0 would read as a real
