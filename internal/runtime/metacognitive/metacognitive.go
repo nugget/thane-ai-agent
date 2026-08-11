@@ -1,23 +1,12 @@
-// Package metacognitive implements a perpetual self-regulating attention
-// loop that receives persistent state, reasons via LLM, and adapts its
-// own sleep cycle. See issue #319.
-//
-// Each iteration is a fresh conversation. State persists across iterations
-// via a markdown file (metacognitive.md by default). The loop's cost is
-// self-limiting: quiet periods produce long sleeps and few iterations.
-//
-// Supervisor turns randomly select a frontier model to review the
-// loop's own behavior, catching blind spots that the cheaper local
-// model's consistent reasoning patterns miss. The per-wake
-// probability is driven by [Config.SupervisorProbability]; when a
-// supervisor turn fires, the loop overlays
-// [loop.Spec.SupervisorProfile] on its normal routing.
-//
-// The loop lifecycle is managed by the [loop] package. This loop is
-// declarative and attaches no runtime hooks: the per-iteration prompt is
-// the spec Task plus the supervisor-turn [loop.Spec.SupervisorProfile]
-// Instructions, and the state document is written only by the model,
-// through the declared output — the same shape as the ego loop.
+// Package metacognitive carries the config-parsing and hydration seam
+// for the metacognitive service loop. The loop definition itself —
+// prompt, spec, cadence, tool exclusions — lives in the shipped
+// document loops/metacognitive.md (embedded via internal/app/coreloops
+// and overridable from the core root's loops/ directory); the Go
+// definition builder was deleted once the docs-parity gate proved the
+// document byte-for-byte equivalent. What remains here is what a
+// document cannot carry: parsing the YAML config shape into durations
+// and defaulting the definition name at hydration.
 package metacognitive
 
 import (
@@ -25,11 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // DefinitionName is the durable loop definition name for the
@@ -95,61 +81,6 @@ func derefFloat(p *float64, def float64) float64 {
 	return *p
 }
 
-// DefinitionSpec returns the persistable loop definition for the
-// metacognitive service. Runtime hooks are attached later by
-// [HydrateSpec] so the definition can live in the durable registry.
-func DefinitionSpec(cfg Config) loop.Spec {
-	return loop.Spec{
-		Name:       DefinitionName,
-		Enabled:    cfg.Enabled,
-		Task:       prompts.MetacognitiveBaseTemplate,
-		Operation:  loop.OperationService,
-		Completion: loop.CompletionNone,
-		Outputs: []loop.OutputSpec{
-			{
-				Name:    "metacognitive_state",
-				Type:    loop.OutputTypeMaintainedDocument,
-				Ref:     "self:metacognitive.md",
-				Mode:    loop.OutputModeReplace,
-				Purpose: "Current metacognitive state: active concerns, recent observations, actions taken, and sleep reasoning that should persist across fresh loop iterations.",
-			},
-		},
-		SleepMin:     cfg.MinSleep,
-		SleepMax:     cfg.MaxSleep,
-		SleepDefault: cfg.DefaultSleep,
-		Jitter:       loop.Float64Ptr(cfg.Jitter),
-		ExcludeTools: metacogExcludeTools,
-		Tags:         []string{"metacognitive"},
-		Profile: router.LoopProfile{
-			Mission:          "metacognitive",
-			DelegationGating: "disabled",
-			QualityFloor:     cfg.QualityFloor,
-			ExtraHints:       map[string]string{"source": "metacognitive"},
-		},
-		SupervisorProfile: supervisorProfile(cfg.SupervisorQualityFloor),
-
-		Supervisor:     cfg.SupervisorProbability > 0,
-		SupervisorProb: cfg.SupervisorProbability,
-		Metadata: map[string]string{
-			"subsystem": "metacognitive",
-			"category":  "service",
-		},
-	}
-}
-
-// supervisorProfile builds the metacognitive service's supervisor-turn
-// overlay: the frontier-review prompt prefix (always) plus a higher
-// quality floor when one is configured. Unset fields fall back to the
-// normal Profile during supervisor turns; the prefix is prepended to the
-// Task.
-func supervisorProfile(qualityFloor int) *router.LoopProfile {
-	p := &router.LoopProfile{Instructions: prompts.MetacognitiveSupervisorInstructions}
-	if qualityFloor > 0 {
-		p.QualityFloor = qualityFloor
-	}
-	return p
-}
-
 // HydrateSpec fills in what a durable loop definition cannot carry.
 // That is now only the name: the prompt is declarative (the spec Task
 // and SupervisorProfile.Instructions), and nothing runtime-side writes
@@ -160,20 +91,3 @@ func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	}
 	return spec
 }
-
-// metacogExcludeTools lists tools that the metacognitive loop should not
-// have access to. File tools are replaced by the declared durable output
-// tool, exec is unnecessary and dangerous, session management is for
-// interactive use only.
-var metacogExcludeTools = append([]string{
-	"file_read", "file_write", "file_edit", "file_list",
-	"file_search", "file_grep", "file_stat", "file_tree",
-	"exec",
-	"conversation_reset", "session_close", "session_split", "session_checkpoint",
-	"create_temp_file",
-	"tag_activate", "tag_deactivate",
-	// A reflective loop must not stand up new durable loops; thane_loop_create is
-	// Core (#1106 A), so it has to be excluded by name rather than gated behind
-	// the `loops` capability metacognition can't activate.
-	"thane_loop_create",
-}, tools.DirectHumanEgressToolNames()...)
