@@ -736,6 +736,15 @@ type OllamaAPIConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"` // Bind address; empty = all interfaces
 	Port    int    `yaml:"port"`    // Default: 11434
+	// APIKey, when set, requires every request to the Ollama-compatible
+	// surface to present it as a bearer token (Authorization: Bearer
+	// <key>). This surface drives the full agent loop — tools, memory,
+	// delegation — so leaving it empty (open) is appropriate only when
+	// every host that can reach the port is trusted. Note that Home
+	// Assistant's Ollama integration cannot send bearer tokens; enable
+	// this only for token-capable clients (e.g. Open WebUI) or when HA
+	// connects through a proxy that injects the header.
+	APIKey string `yaml:"api_key"`
 }
 
 // OpenAIAPIConfig configures the optional OpenAI-compatible API server.

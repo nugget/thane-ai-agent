@@ -20,6 +20,7 @@ import (
 type OllamaServer struct {
 	address    string
 	port       int
+	apiKey     string
 	loop       *agent.Loop
 	owuTracker *OWUTracker
 	logger     *slog.Logger
@@ -36,14 +37,17 @@ func (s *OllamaServer) SetOWUTracker(t *OWUTracker) {
 // Parameters:
 //   - address: IP address to bind to (empty string binds to all interfaces)
 //   - port: Port to listen on (typically 11434 for Ollama compatibility)
+//   - apiKey: When non-empty, every request must present this value as a
+//     bearer token; empty leaves the surface unauthenticated
 //   - loop: The agent loop that processes requests
 //   - logger: Logger for request and error logging
 //
 // The server is created but not started. Call Start to begin serving requests.
-func NewOllamaServer(address string, port int, loop *agent.Loop, logger *slog.Logger) *OllamaServer {
+func NewOllamaServer(address string, port int, apiKey string, loop *agent.Loop, logger *slog.Logger) *OllamaServer {
 	return &OllamaServer{
 		address: address,
 		port:    port,
+		apiKey:  apiKey,
 		loop:    loop,
 		logger:  logger,
 	}
@@ -74,9 +78,11 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 	mux.HandleFunc("HEAD /{$}", s.handleHead)
 	mux.HandleFunc("GET /{$}", s.handleHealth)
 
+	// Auth sits inside logging so rejected requests still produce
+	// access-log lines with their 401 status.
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(mux),
+		Handler:      s.withLogging(ollamaAuth(s.apiKey, mux)),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second, // Long for slow models
 	}

@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,10 +14,36 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
+
+// ollamaMaxBodyBytes caps inbound compat-surface request bodies. The
+// surface is reachable by anything on the network segment, so an
+// unbounded read is a memory-exhaustion vector; 32 MiB leaves ample
+// room for chat history plus base64 images while bounding the damage.
+const ollamaMaxBodyBytes = 32 << 20
+
+// ollamaAuth enforces bearer-token auth on the Ollama-compatible
+// surface when apiKey is non-empty. An empty key passes every request
+// through unchanged, preserving the open-surface default for trusted
+// networks.
+func ollamaAuth(apiKey string, next http.Handler) http.Handler {
+	if apiKey == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ollama"`)
+			ollamaError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // OllamaChatRequest is the Ollama /api/chat request format.
 type OllamaChatRequest struct {
@@ -82,17 +110,19 @@ type OllamaVersionResponse struct {
 }
 
 // RegisterOllamaRoutes adds Ollama-compatible API endpoints to the mux.
-// Use this for single-port setups. For dual-port, use OllamaServer instead.
-func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
+// Use this for single-port setups. For dual-port, use OllamaServer
+// instead. apiKey carries the same bearer-token requirement as the
+// dedicated server; empty leaves the routes unauthenticated.
+func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux, apiKey string) {
+	mux.Handle("POST /api/chat", ollamaAuth(apiKey, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleOllamaChatShared(w, r, s.loop, s.owuTracker, s.logger)
-	})
-	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /api/tags", ollamaAuth(apiKey, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleOllamaTagsShared(w, r, s.logger)
-	})
-	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
+	})))
+	mux.Handle("GET /api/version", ollamaAuth(apiKey, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleOllamaVersionShared(w, r, s.logger)
-	})
+	})))
 }
 
 // handleOllamaChatShared handles the Ollama /api/chat endpoint.
@@ -125,8 +155,17 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		}
 	}
 
+	// Bound the body read before buffering it. Oversized requests get a
+	// clear 413 instead of exhausting memory.
+	r.Body = http.MaxBytesReader(w, r.Body, ollamaMaxBodyBytes)
 	rawBody, err := captureBody(r)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			ollamaError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("request body exceeds %d byte limit", maxErr.Limit))
+			return
+		}
 		ollamaError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
@@ -414,13 +453,17 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	resp, err := run(r.Context(), req, streamCallback)
 	if err != nil {
 		logger.Error("streaming failed", "error", err)
-		// Send error as final message
+		// Send a sanitized error as the final message. The raw error can
+		// carry internal detail (upstream hostnames, file paths) that has
+		// no business reaching an unauthenticated client; use the same
+		// client-safe mapping as the non-streaming path.
+		_, message := ollamaAgentError(err)
 		errResp := OllamaChatResponse{
 			Model:     model,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			Message: OllamaChatMessage{
 				Role:    "assistant",
-				Content: fmt.Sprintf("Error: %v", err),
+				Content: "Error: " + message,
 			},
 			Done:       true,
 			DoneReason: "error",
@@ -524,11 +567,13 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 }
 
 // handleOllamaVersionShared returns the Ollama-compatible version.
-// This reports Thane's version in Ollama's expected JSON format.
+// This reports Thane's real build version (leading "v" trimmed so the
+// value stays semver-shaped for clients that parse it) rather than a
+// hardcoded constant.
 func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(OllamaVersionResponse{
-		Version: "0.1.1", // Thane version
+		Version: strings.TrimPrefix(buildinfo.Version, "v"),
 	}); err != nil {
 		logger.Debug("failed to encode version response", "error", err)
 	}
@@ -607,11 +652,21 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 		}
 	}
 
-	// Extract area context from system message before stripping
-	// Look for "You are in area X (floor Y)"
-	for i, msg := range req.Messages {
-		if msg.Role == "system" {
-			// Extract area context if present
+	// Extract area context, then strip ALL system messages. Thane injects
+	// its own system prompt via talents; a client-supplied system message
+	// is at best HA boilerplate and at worst a prompt-injection attempt.
+	// The previous implementation stopped after the first one, which let
+	// a request carrying two system messages smuggle the second through.
+	kept := req.Messages[:0]
+	stripped := 0
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			kept = append(kept, msg)
+			continue
+		}
+		// Look for "You are in area X (floor Y)" in any system message;
+		// first match wins.
+		if areaContext == "" {
 			if idx := strings.Index(msg.Content, "You are in area "); idx != -1 {
 				end := strings.Index(msg.Content[idx:], "\n")
 				if end == -1 {
@@ -620,13 +675,12 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 				areaContext = msg.Content[idx : idx+end]
 				logger.Info("area context extracted", "area", areaContext)
 			}
-
-			// For now, strip the entire HA system message
-			// Thane will inject its own via talents
-			req.Messages = append(req.Messages[:i], req.Messages[i+1:]...)
-			logger.Info("HA system message stripped")
-			break
 		}
+		stripped++
+	}
+	if stripped > 0 {
+		req.Messages = kept
+		logger.Info("system messages stripped", "count", stripped)
 	}
 
 	return areaContext
