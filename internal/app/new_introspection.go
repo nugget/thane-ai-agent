@@ -117,6 +117,7 @@ func (a *App) initInspector() {
 	}
 	if a.indexHandler != nil {
 		src.IndexStats = a.indexHandler.Stats
+		src.LogSeverity = a.indexHandler.SeveritySnapshot
 	}
 	if a.syncRegistry != nil {
 		src.SyncStates = a.syncRegistry.All

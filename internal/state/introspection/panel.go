@@ -95,11 +95,12 @@ func (p *PanelProvider) TagContext(ctx context.Context, _ agentctx.ContextReques
 	snap := p.inspector.Health(ctx)
 
 	payload := map[string]any{
-		"annunciator": snap.Annunciator,
-		"version":     snap.Version,
-		"host":        snap.Host,
-		"loops":       snap.Loops,
-		"telemetry":   snap.Telemetry,
+		"annunciator":  snap.Annunciator,
+		"version":      snap.Version,
+		"log_activity": snap.LogActivity,
+		"host":         snap.Host,
+		"loops":        snap.Loops,
+		"telemetry":    snap.Telemetry,
 	}
 	if len(snap.Queues) > 0 {
 		payload["queues"] = snap.Queues

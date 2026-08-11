@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -962,5 +963,73 @@ func TestQueryBySession(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("unknown session: got %d entries, want 0", len(entries))
+	}
+}
+
+// TestIndexHandlerSeverityTally pins the ambient severity tally: WARN
+// and worse are counted since boot and per trailing hour, the ring
+// keeps newest-first samples with loop/subsystem attribution, and INFO
+// never registers. All in-memory — the point is that ambient severity
+// awareness costs no query against the index.
+func TestIndexHandlerSeverityTally(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, &slog.HandlerOptions{Level: slog.LevelDebug})
+	h := NewIndexHandler(inner, db)
+	defer h.Close()
+
+	logger := slog.New(h)
+	logger.Info("routine chatter", "subsystem", "email")
+	logger.Warn("retention degraded", "subsystem", "logging")
+	logger.Error("probe exploded", "loop_name", "archivist")
+	logger.Warn("second complaint", "subsystem", "mqtt")
+
+	sum := h.SeveritySnapshot()
+	if sum.WarnsSinceBoot != 2 || sum.ErrorsSinceBoot != 1 {
+		t.Errorf("since-boot = %d warns / %d errors, want 2/1", sum.WarnsSinceBoot, sum.ErrorsSinceBoot)
+	}
+	if sum.WarnsLastHour != 2 || sum.ErrorsLastHour != 1 {
+		t.Errorf("last-hour = %d warns / %d errors, want 2/1", sum.WarnsLastHour, sum.ErrorsLastHour)
+	}
+	if len(sum.Recent) != 3 {
+		t.Fatalf("recent = %d samples, want 3 (INFO must not register)", len(sum.Recent))
+	}
+	// Newest first, with attribution: the loop name wins over subsystem
+	// when both concepts exist on a record.
+	if sum.Recent[0].Msg != "second complaint" || sum.Recent[0].Level != "WARN" || sum.Recent[0].Source != "mqtt" {
+		t.Errorf("recent[0] = %+v, want the newest warn from mqtt", sum.Recent[0])
+	}
+	if sum.Recent[1].Msg != "probe exploded" || sum.Recent[1].Source != "archivist" {
+		t.Errorf("recent[1] = %+v, want the archivist error", sum.Recent[1])
+	}
+
+	// Nil-safety mirrors Stats().
+	var nilH *IndexHandler
+	if got := nilH.SeveritySnapshot(); got.WarnsSinceBoot != 0 || len(got.Recent) != 0 {
+		t.Errorf("nil handler snapshot = %+v, want zero", got)
+	}
+}
+
+// TestSeverityRingCapsAndTruncates: the ring keeps the newest records
+// past the cap, and pathological messages are rune-truncated.
+func TestSeverityRingCapsAndTruncates(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db)
+	defer h.Close()
+
+	logger := slog.New(h)
+	long := strings.Repeat("x", severityMsgMaxRunes+50)
+	for i := 0; i < severityRingCap+10; i++ {
+		logger.Warn(fmt.Sprintf("warn-%03d %s", i, long))
+	}
+	sum := h.SeveritySnapshot()
+	if len(sum.Recent) != severityRingCap {
+		t.Fatalf("ring = %d, want the cap %d", len(sum.Recent), severityRingCap)
+	}
+	if !strings.HasPrefix(sum.Recent[0].Msg, fmt.Sprintf("warn-%03d", severityRingCap+9)) {
+		t.Errorf("recent[0] = %q, want the newest warn", sum.Recent[0].Msg)
+	}
+	if len([]rune(sum.Recent[0].Msg)) > severityMsgMaxRunes+1 {
+		t.Errorf("message not truncated: %d runes", len([]rune(sum.Recent[0].Msg)))
 	}
 }

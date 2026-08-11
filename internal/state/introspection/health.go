@@ -133,12 +133,36 @@ type BootView struct {
 // maxRecentBootViews caps the boot tail on the snapshot.
 const maxRecentBootViews = 5
 
+// LogActivity is the process's own complaint stream, precomputed:
+// WARN-and-worse rates plus the newest samples. Data, not verdict — a
+// dozen warnings during a deploy and a dozen during a quiet afternoon
+// mean different things, and the reader has the context.
+type LogActivity struct {
+	ErrorsLastHour  int         `json:"errors_last_hour"`
+	WarnsLastHour   int         `json:"warns_last_hour"`
+	ErrorsSinceBoot uint64      `json:"errors_since_boot"`
+	WarnsSinceBoot  uint64      `json:"warns_since_boot"`
+	Recent          []LogSample `json:"recent,omitempty"`
+}
+
+// LogSample is one recent WARN-or-worse record, delta-formatted.
+type LogSample struct {
+	Delta  string `json:"delta"`
+	Level  string `json:"level"`
+	Source string `json:"source,omitempty"`
+	Msg    string `json:"msg"`
+}
+
+// maxLogSamples caps the recent-sample list on the snapshot.
+const maxLogSamples = 6
+
 // HealthSnapshot is the whole annunciator panel in one shape, consumed
 // identically by the system_health tool and the metacog context panel
 // so the two can never drift.
 type HealthSnapshot struct {
 	Annunciator []HealthRow     `json:"annunciator"`
 	Version     VersionInfo     `json:"version"`
+	LogActivity LogActivity     `json:"log_activity"`
 	Host        HostInfo        `json:"host"`
 	Loops       LoopCensus      `json:"loops"`
 	Queues      []QueueDepth    `json:"queues,omitempty"`
@@ -172,6 +196,8 @@ type HealthSources struct {
 	BusDropped func() uint64
 	// IndexStats reports log-index loss counters.
 	IndexStats func() logging.IndexStats
+	// LogSeverity reports the WARN-and-worse tally and recent samples.
+	LogSeverity func() logging.SeveritySummary
 	// SyncStates reports document-root remote sync state.
 	SyncStates func() []checkout.SyncState
 	// QueueStats reports live work-queue backlog per partition.
@@ -365,6 +391,27 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		snap.Annunciator = append(snap.Annunciator, HealthRow{
 			Name: "runtime", Status: HealthOK, Detail: detail,
 		})
+	}
+
+	if i.src.LogSeverity != nil {
+		sev := i.src.LogSeverity()
+		snap.LogActivity = LogActivity{
+			ErrorsLastHour:  sev.ErrorsLastHour,
+			WarnsLastHour:   sev.WarnsLastHour,
+			ErrorsSinceBoot: sev.ErrorsSinceBoot,
+			WarnsSinceBoot:  sev.WarnsSinceBoot,
+		}
+		for _, rec := range sev.Recent {
+			if len(snap.LogActivity.Recent) >= maxLogSamples {
+				break
+			}
+			snap.LogActivity.Recent = append(snap.LogActivity.Recent, LogSample{
+				Delta:  promptfmt.FormatDeltaOnly(rec.At, now),
+				Level:  rec.Level,
+				Source: rec.Source,
+				Msg:    rec.Msg,
+			})
+		}
 	}
 
 	snap.Host = collectHostInfo(i.src.DataDir, i.src.StartedAt, now)

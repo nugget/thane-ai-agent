@@ -68,6 +68,118 @@ type indexShared struct {
 	once        sync.Once    // guards Close
 	dropped     atomic.Uint64
 	writeErrors atomic.Uint64
+
+	// Severity tally: ambient awareness of WARN-and-worse records,
+	// kept in memory at the Handle seam so surfacing "the process has
+	// been complaining" never costs a query against the multi-GB index
+	// those records land in. Guarded by sevMu; see SeveritySnapshot.
+	sevMu      sync.Mutex
+	sevWarns   uint64
+	sevErrors  uint64
+	sevBuckets [severityBucketCount]severityBucket
+	sevRing    []SeverityRecord // newest last, capped at severityRingCap
+}
+
+// severityBucket is one minute of WARN/ERROR counts in the rolling
+// hour window. Minute is the unix-minute the bucket currently holds;
+// a write into a bucket from a different minute resets it, so stale
+// buckets age out lazily without a ticker.
+type severityBucket struct {
+	minute int64
+	warns  uint32
+	errors uint32
+}
+
+const (
+	severityBucketCount = 60
+	severityRingCap     = 48
+	severityMsgMaxRunes = 200
+)
+
+// SeverityRecord is one retained WARN-or-worse record, projected for
+// ambient display: when, how bad, where from, and what it said.
+type SeverityRecord struct {
+	At     time.Time
+	Level  string
+	Source string // loop name or subsystem when the record carried one
+	Msg    string
+}
+
+// SeveritySummary tallies WARN-and-worse records since boot and over
+// the trailing hour, with the newest samples. It is the push-side
+// companion to logs_query: rates and samples for ambient perception,
+// the index for drill-down.
+type SeveritySummary struct {
+	WarnsSinceBoot  uint64
+	ErrorsSinceBoot uint64
+	WarnsLastHour   int
+	ErrorsLastHour  int
+	Recent          []SeverityRecord // newest first
+}
+
+// noteSeverity records one WARN-or-worse entry into the tally.
+func (s *indexShared) noteSeverity(entry indexEntry, level slog.Level) {
+	rec := SeverityRecord{At: entry.Timestamp, Level: entry.Level, Msg: entry.Msg}
+	if runes := []rune(rec.Msg); len(runes) > severityMsgMaxRunes {
+		rec.Msg = string(runes[:severityMsgMaxRunes]) + "…"
+	}
+	if entry.LoopName != "" {
+		rec.Source = entry.LoopName
+	} else if entry.Subsystem != "" {
+		rec.Source = entry.Subsystem
+	}
+	minute := entry.Timestamp.Unix() / 60
+	idx := minute % severityBucketCount
+	if idx < 0 {
+		idx += severityBucketCount
+	}
+
+	s.sevMu.Lock()
+	defer s.sevMu.Unlock()
+	bucket := &s.sevBuckets[idx]
+	if bucket.minute != minute {
+		*bucket = severityBucket{minute: minute}
+	}
+	if level >= slog.LevelError {
+		s.sevErrors++
+		bucket.errors++
+	} else {
+		s.sevWarns++
+		bucket.warns++
+	}
+	s.sevRing = append(s.sevRing, rec)
+	if len(s.sevRing) > severityRingCap {
+		s.sevRing = s.sevRing[len(s.sevRing)-severityRingCap:]
+	}
+}
+
+// SeveritySnapshot returns the current severity tally. Nil-safe; the
+// trailing-hour counts are computed from the minute buckets as of now,
+// so a quiet hour reads zero even though the boot totals persist.
+func (h *IndexHandler) SeveritySnapshot() SeveritySummary {
+	if h == nil || h.shared == nil {
+		return SeveritySummary{}
+	}
+	s := h.shared
+	nowMinute := time.Now().Unix() / 60
+
+	s.sevMu.Lock()
+	defer s.sevMu.Unlock()
+	sum := SeveritySummary{
+		WarnsSinceBoot:  s.sevWarns,
+		ErrorsSinceBoot: s.sevErrors,
+	}
+	for _, bucket := range s.sevBuckets {
+		if bucket.minute > 0 && nowMinute-bucket.minute < severityBucketCount {
+			sum.WarnsLastHour += int(bucket.warns)
+			sum.ErrorsLastHour += int(bucket.errors)
+		}
+	}
+	sum.Recent = make([]SeverityRecord, len(s.sevRing))
+	for i, rec := range s.sevRing {
+		sum.Recent[len(s.sevRing)-1-i] = rec
+	}
+	return sum
 }
 
 // indexEntry is the set of fields written to SQLite for one log record.
@@ -163,6 +275,14 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 	if len(extras) > 0 {
 		b, _ := json.Marshal(extras)
 		entry.Attrs = string(b)
+	}
+
+	// Tally WARN-and-worse for ambient severity awareness, after attr
+	// classification so the record's loop/subsystem attribution rides
+	// along. Independent of the async index path: a dropped index write
+	// must not also lose the tally.
+	if r.Level >= slog.LevelWarn {
+		h.shared.noteSeverity(entry, r.Level)
 	}
 
 	// Non-blocking send under a read lock so Close() cannot close the

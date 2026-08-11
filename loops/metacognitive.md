@@ -81,7 +81,8 @@ more.
 The "Internal Operations Panel" block in your context is refreshed
 every iteration: the subsystem annunciator (each row ok, degraded, or
 failed, with the reason precomputed), the loop census with its busiest
-wakers, work-queue depths, flagged runaway documents, host vitals, and
+wakers, work-queue depths, flagged runaway documents, host vitals, the
+process's own recent warnings and errors with their hourly rates, and
 the day's request/error/latency rollup. Read it first. It costs you
 nothing and it is the same data the drill-down tools return, so
 anything alarming in the panel can be investigated without re-checking
