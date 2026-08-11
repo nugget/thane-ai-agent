@@ -140,6 +140,30 @@ func (a *App) initStores(s *newState) error {
 	}
 	a.loopQueue = loopQueue
 
+	// Daily prune for the completions journal Ack writes — the audit
+	// trail is bounded by age, mirroring the log-index pruner's shape.
+	a.deferWorker("loop-queue-completions-pruner", func(ctx context.Context) error {
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				if deleted, err := loopQueue.PruneCompletions(ctx, loopqueue.DefaultCompletionRetention); err != nil {
+					if ctx.Err() == nil {
+						logger.Warn("loop queue completions prune failed", "error", err)
+					}
+				} else if deleted > 0 {
+					logger.Info("pruned loop queue completions", "deleted", deleted)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		return nil
+	})
+
 	// --- Home Assistant client ---
 	// Optional but central. Without it, HA-related tools are unavailable
 	// and Thane operates as a general-purpose agent.
