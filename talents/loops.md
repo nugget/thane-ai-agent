@@ -233,5 +233,36 @@ Two consequences worth holding:
   (`loop_reparent` each, or `stop_loop` them), then relaunch the
   container. That's why re-tagging a busy container is churn.
 
+## Removing a loop
+
+Match the verb to how dead you want it:
+
+- **Gone** — `loop_definition_delete` is the one removal verb: it
+  deletes the stored definition AND stops the running instance, and
+  its result reports the live outcome — the stopped instance, or that
+  none was running. There is no second step for the loop itself.
+- **Kept but stopped** — `loop_definition_set_policy state=paused`.
+  The definition survives, the instance stops, and it stays stopped
+  across restarts until you set it active again.
+- **`stop_loop` alone is instance-tier and temporary** for any loop
+  whose durable definition is active: the reconciler relaunches it at
+  the next boot, commit, or schedule transition. That convergence is
+  the machinery working — a durable definition means "this loop should
+  be running" — so express durable intent through the definition
+  (pause or delete), not the instance.
+
+The loop's documents outlive it. Deleting a loop leaves its declared
+outputs in place — the delete result lists them — because the
+understanding a curator built may be worth keeping after the curation
+stops. Whether they stay is a separate, deliberate decision:
+`doc_delete` them if they should not survive the loop. Deleting a
+document while its loop still runs does nothing durable — the next
+wake rewrites it; stop the loop first.
+
+Report a kill only after verifying it: the delete result's
+stopped-instance report is that verification, and `loop_status` on the
+name confirms independently. A removal narrated but never verified is
+how a loop haunts its owner.
+
 When you need concrete JSON launch patterns, activate `loops_examples`
 and adapt the closest recipe minimally.

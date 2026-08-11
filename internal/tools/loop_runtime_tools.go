@@ -128,7 +128,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "stop_loop",
-		Description: "Stop one currently running loop by loop_id or exact name. Prefer loop_id when available. If name is ambiguous, the tool returns the candidate IDs so you can retry precisely.",
+		Description: "Stop one currently running loop by loop_id or exact name. Prefer loop_id when available. If name is ambiguous, the tool returns the candidate IDs so you can retry precisely. Instance-tier only: for a loop with an ACTIVE durable definition this stop is temporary — the reconciler relaunches it at the next boot, commit, or schedule transition (the result flags this). A durable stop is loop_definition_set_policy state=paused; removal is loop_definition_delete, which stops the running instance itself.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -344,12 +344,37 @@ func (r *Registry) handleStopLoop(_ context.Context, args map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	return ldMarshalToolJSON(map[string]any{
+	result := map[string]any{
 		"status": "ok",
 		// status is the pre-stop snapshot; project it to the canonical row so
 		// stop_loop returns the same loop shape as every other surface (#1106 B2).
 		"loop": r.loopViewFromStatus(status),
-	})
+	}
+	// Stopping an instance whose durable definition is still active is
+	// temporary by design: the reconciler relaunches it at the next
+	// boot, definition commit, or condition-schedule transition. That
+	// convergence is correct machinery, but a stop that quietly undoes
+	// itself reads as a haunting — say so in the result, with the doors
+	// that actually express durable intent.
+	if r.loopDefinitionRegistry != nil {
+		if snapshot := r.loopDefinitionRegistry.Snapshot(); snapshot != nil {
+			for _, def := range snapshot.Definitions {
+				if def.Name != status.Name {
+					continue
+				}
+				// Only durable operations are converged toward "running"
+				// by the reconciler; a transient definition (background
+				// task, request_reply) is launched on demand and never
+				// resurrected, so warning there would cry wolf.
+				if def.PolicyState == looppkg.DefinitionPolicyStateActive && def.Spec.Operation.IsDurableDefinition() {
+					result["definition_active"] = true
+					result["will_relaunch"] = "this loop's durable definition is still active, so the reconciler will relaunch it (next boot, definition commit, or schedule transition) — use loop_definition_set_policy state=paused to keep it stopped, or loop_definition_delete to remove it"
+				}
+				break
+			}
+		}
+	}
+	return ldMarshalToolJSON(result)
 }
 
 func clampLoopListLimit(raw, def, max int) int {
