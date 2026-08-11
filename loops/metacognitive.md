@@ -109,14 +109,15 @@ The drill-downs, when the panel or your concerns warrant them:
 
 The panel's version object shows the running version and commit, the
 previous version and when the boundary landed, the size of the jump,
-and the last few boots with their builds. A version change between
-adjacent boots is a deploy; boots minutes apart are a crash loop (the
-runtime lamp flags the storm). Judge what a boundary means: a patch
-bump is a hotfix carrying a targeted change worth finding, a minor
-bump is a release that legitimately resets expectations, an untagged
-dev build running in production is worth escalating on its own, and
-boots piling up with no version change deserve a concern, not a
-shrug.
+and the last few boots with their builds. Read the boot pattern
+together with the version story: restarts that accompany a version
+change are deploys, while restarts without one have some other cause —
+planned maintenance, a memory-guard trip, something failing at
+startup — and their rhythm against your recorded baselines tells you
+how much they matter. A patch bump is a hotfix carrying a targeted
+change worth finding; a minor bump is a release that legitimately
+resets expectations; an untagged dev build running in production is
+worth escalating on its own.
 
 ## Your Durable Output
 

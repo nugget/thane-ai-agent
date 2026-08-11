@@ -230,9 +230,11 @@ func TestVersionChangeClassification(t *testing.T) {
 	}
 }
 
-// TestBootStormDegradesTheRuntimeLamp: a healthy instance restarts for
-// deploys, not for sport.
-func TestBootStormDegradesTheRuntimeLamp(t *testing.T) {
+// TestRuntimeLampInformsWithoutJudging: restart counts have no
+// objective threshold, so the runtime row carries facts (version, boot
+// count when notable) and never a verdict — the judgment belongs to the
+// reader with the context.
+func TestRuntimeLampInformsWithoutJudging(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	var boots []BootRecord
 	for i := range 8 {
@@ -244,12 +246,12 @@ func TestBootStormDegradesTheRuntimeLamp(t *testing.T) {
 	})
 	insp.now = func() time.Time { return now }
 
-	snap := insp.Health(context.Background())
-	if row := rowByName(t, snap, "runtime"); row.Status != HealthDegraded || !strings.Contains(row.Detail, "8 boots") {
-		t.Errorf("runtime row = %+v, want degraded crash-loop detail", row)
+	if row := rowByName(t, insp.Health(context.Background()), "runtime"); row.Status != HealthOK || !strings.Contains(row.Detail, "8 boots") {
+		t.Errorf("busy runtime row = %+v, want ok with the boot count stated", row)
 	}
 
-	// A single boot reads ok, with the version in the detail.
+	// A single boot reads ok with just the version — an unremarkable
+	// count is not worth a clause.
 	calm := NewInspector(HealthSources{
 		BuildVersion: "v0.10.3",
 		BootHistory: func(context.Context) ([]BootRecord, error) {
@@ -257,8 +259,8 @@ func TestBootStormDegradesTheRuntimeLamp(t *testing.T) {
 		},
 	})
 	calm.now = func() time.Time { return now }
-	if row := rowByName(t, calm.Health(context.Background()), "runtime"); row.Status != HealthOK || !strings.Contains(row.Detail, "v0.10.3") {
-		t.Errorf("calm runtime row = %+v", row)
+	if row := rowByName(t, calm.Health(context.Background()), "runtime"); row.Status != HealthOK || !strings.Contains(row.Detail, "v0.10.3") || strings.Contains(row.Detail, "boots") {
+		t.Errorf("calm runtime row = %+v, want version only", row)
 	}
 }
 

@@ -114,10 +114,11 @@ type VersionInfo struct {
 	// "dev" when either side is not a semantic version.
 	Change       string `json:"change,omitempty"`
 	BootsLast24h int    `json:"boots_last_24h,omitempty"`
-	// RecentBoots is the raw tail of the boot journal, newest first:
-	// five boots minutes apart IS a crash loop, and a version change
-	// between adjacent rows IS a deploy — no threshold required to see
-	// either.
+	// RecentBoots is the raw tail of the boot journal, newest first.
+	// The tail is deliberately data rather than verdict: what a restart
+	// pattern means depends on context the reader has (deploy day,
+	// maintenance, a failing start), so the judgment stays with the
+	// consumer instead of a threshold here.
 	RecentBoots []BootView `json:"recent_boots,omitempty"`
 }
 
@@ -131,11 +132,6 @@ type BootView struct {
 
 // maxRecentBootViews caps the boot tail on the snapshot.
 const maxRecentBootViews = 5
-
-// bootStormThreshold is the boot count inside a day at which the
-// runtime lamp degrades (inclusive — the fifth boot trips it): a
-// healthy instance restarts for deploys, not for sport.
-const bootStormThreshold = 5
 
 // HealthSnapshot is the whole annunciator panel in one shape, consumed
 // identically by the system_health tool and the metacog context panel
@@ -355,17 +351,19 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		snap.Annunciator = append(snap.Annunciator, row)
 	}
 
+	// The runtime row is informational rather than judged: restart
+	// counts have no objective threshold — a deploy day and a crash
+	// loop can hold the same number — so the row carries the facts and
+	// the version object carries the boot tail, leaving the verdict to
+	// the reader who has the context.
 	snap.Version = i.collectVersionInfo(ctx, now)
-	if snap.Version.BootsLast24h >= bootStormThreshold {
+	if i.src.BuildVersion != "" {
+		detail := fmt.Sprintf("running %s", snap.Version.Running)
+		if snap.Version.BootsLast24h > 1 {
+			detail += fmt.Sprintf("; %d boots in the last 24h", snap.Version.BootsLast24h)
+		}
 		snap.Annunciator = append(snap.Annunciator, HealthRow{
-			Name:   "runtime",
-			Status: HealthDegraded,
-			Detail: fmt.Sprintf("%d boots in the last 24h suggests a crash loop (running %s)", snap.Version.BootsLast24h, snap.Version.Running),
-		})
-	} else if i.src.BuildVersion != "" {
-		snap.Annunciator = append(snap.Annunciator, HealthRow{
-			Name: "runtime", Status: HealthOK,
-			Detail: fmt.Sprintf("running %s", snap.Version.Running),
+			Name: "runtime", Status: HealthOK, Detail: detail,
 		})
 	}
 

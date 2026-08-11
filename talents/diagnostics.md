@@ -57,7 +57,7 @@ localize the problem faster.
 Version boundaries are diagnostic events in their own right, and
 `system_health` precomputes the deploy story: running vs previous
 version, when the boundary landed, the size of the jump, and the
-recent boot list that makes a crash loop visible at a glance. Every
+recent boot list that makes restart patterns readable at a glance. Every
 log line also records the version that wrote it, so `logs_query`
 answers what was running when something happened. When an anomaly's
 onset lines up with a version boundary, reason about the deploy before
