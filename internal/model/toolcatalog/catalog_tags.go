@@ -72,7 +72,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"people"},
 	},
 	"diagnostics": {
-		Description: "Logs, usage, version, and operational debugging tools.",
+		Description: "Introspection into thane's own internals, all read-only: the system_health annunciator panel (per-subsystem status rows), the loop process table now and over time (loop_status / loop_activity with wake attribution), work-queue audit (queue_status), document-churn detection (doc_activity), plus logs, usage, and version.",
 		Parents:     []string{"operations"},
 	},
 	"documents": {

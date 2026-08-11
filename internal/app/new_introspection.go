@@ -115,4 +115,14 @@ func (a *App) initInspector() {
 		src.LoopStatuses = a.loopRegistry.Statuses
 	}
 	a.inspector = introspection.NewInspector(src)
+
+	// The diagnostics tool family renders from the same Inspector (and
+	// journal/store/queue) the metacog context panel uses — one source
+	// of truth, two surfaces.
+	a.loop.Tools().RegisterProvider(introspection.NewTools(introspection.ToolDeps{
+		Inspector: a.inspector,
+		Journal:   a.loopEventJournal,
+		Documents: a.documentStore,
+		Queue:     a.loopQueue,
+	}))
 }

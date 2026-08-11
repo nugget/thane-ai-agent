@@ -25,6 +25,10 @@ const (
 type LoopRuntimeToolDeps struct {
 	Registry   *looppkg.Registry
 	LaunchLoop func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
+	// MailboxPending reports durable mailbox depth by loop name, joined
+	// onto loop_status rows as mailbox_pending. Optional: unwired, rows
+	// report null (depth not measured) rather than a fake zero.
+	MailboxPending func(context.Context) (map[string]int, error)
 }
 
 // ConfigureLoopRuntimeTools stores the runtime dependencies needed by the
@@ -32,6 +36,7 @@ type LoopRuntimeToolDeps struct {
 func (r *Registry) ConfigureLoopRuntimeTools(deps LoopRuntimeToolDeps) {
 	r.liveLoopRegistry = deps.Registry
 	r.launchLoop = deps.LaunchLoop
+	r.mailboxPendingCounts = deps.MailboxPending
 	r.registerLoopRuntimeTools()
 	r.registerLoopContainers()
 }
@@ -146,7 +151,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 	})
 }
 
-func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (string, error) {
+func (r *Registry) handleLoopStatus(ctx context.Context, args map[string]any) (string, error) {
 	if r.liveLoopRegistry == nil {
 		return "", fmt.Errorf("live loop registry is not configured")
 	}
@@ -160,6 +165,13 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	// per row) plus the definition-policy join, so every row is the canonical
 	// LoopView — the same rich shape every loop-data tool emits.
 	resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
+	// Join durable mailbox depth when the queue is wired. A failed probe
+	// leaves depth null (not measured) rather than failing the census.
+	if r.mailboxPendingCounts != nil {
+		if counts, err := r.mailboxPendingCounts(ctx); err == nil {
+			resolver = resolver.WithMailboxPending(counts)
+		}
+	}
 	filtered := make([]looppkg.LoopView, 0, len(statuses))
 	for _, status := range statuses {
 		// Project first so the query can match the human parent_name/ancestry
