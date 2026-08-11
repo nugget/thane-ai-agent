@@ -50,9 +50,10 @@ document already carries the read family without any tag).
 
 `logs_query` and `cost_summary` carry the receipts: failure evidence
 scoped by loop, subsystem, or request, and spend grouped by model,
-provider, or task. Reach for them when a finding needs evidence, not as
-the first sweep — the annunciator and the two loop views almost always
-localize the problem faster.
+provider, or task. The `system_health` snapshot already surfaces the
+newest warnings and errors with their hourly rates, so reach for
+`logs_query` when a sample there needs its full story — not as the
+first sweep.
 
 Version boundaries are diagnostic events in their own right, and
 `system_health` precomputes the deploy story: running vs previous

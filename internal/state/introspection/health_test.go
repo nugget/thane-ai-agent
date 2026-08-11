@@ -2,6 +2,7 @@ package introspection
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,41 @@ func TestInspectorHealthDegradedStates(t *testing.T) {
 			t.Errorf("empty sources produced rows: %+v", snap.Annunciator)
 		}
 	})
+}
+
+// TestLogActivityRidesTheSnapshot: the severity tally lands on the
+// snapshot delta-formatted and sample-capped — data for the panel and
+// system_health, with no judged lamp attached.
+func TestLogActivityRidesTheSnapshot(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	var recent []logging.SeverityRecord
+	for i := range maxLogSamples + 4 {
+		recent = append(recent, logging.SeverityRecord{
+			At: now.Add(-time.Duration(i+1) * time.Minute), Level: "WARN",
+			Source: "mqtt", Msg: fmt.Sprintf("complaint %d", i),
+		})
+	}
+	insp := NewInspector(HealthSources{
+		LogSeverity: func() logging.SeveritySummary {
+			return logging.SeveritySummary{
+				WarnsSinceBoot: 40, ErrorsSinceBoot: 3,
+				WarnsLastHour: 12, ErrorsLastHour: 1,
+				Recent: recent,
+			}
+		},
+	})
+	insp.now = func() time.Time { return now }
+
+	la := insp.Health(context.Background()).LogActivity
+	if la.WarnsLastHour != 12 || la.ErrorsSinceBoot != 3 {
+		t.Errorf("rates = %+v", la)
+	}
+	if len(la.Recent) != maxLogSamples {
+		t.Fatalf("samples = %d, want capped at %d", len(la.Recent), maxLogSamples)
+	}
+	if la.Recent[0].AtDelta != "-60s" || la.Recent[0].Source != "mqtt" || la.Recent[0].Msg != "complaint 0" {
+		t.Errorf("samples[0] = %+v, want the newest delta-formatted", la.Recent[0])
+	}
 }
 
 // TestVersionInfoComputesTheDeployStory pins the mechanical deploy
