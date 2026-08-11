@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -335,8 +336,16 @@ type BootRecord struct {
 
 // RecordBoot journals one process start with its build identity.
 func (j *Journal) RecordBoot(ctx context.Context, version, commit string) error {
+	return j.recordBootAt(ctx, time.Now(), version, commit)
+}
+
+// recordBootAt persists the boot row with an explicit instant, so a
+// retried record carries the time the process started rather than the
+// time the write finally won the lock — that instant feeds the deploy
+// boundary, the boot timeline, and the 24h count.
+func (j *Journal) recordBootAt(ctx context.Context, at time.Time, version, commit string) error {
 	return j.record(ctx, []LoopEvent{{
-		At:   time.Now(),
+		At:   at,
 		Kind: KindThaneBoot,
 		Detail: map[string]any{
 			"version": version,
@@ -349,31 +358,48 @@ func (j *Journal) RecordBoot(ctx context.Context, version, commit string) error 
 // logs.db — the log indexer is absorbing the startup burst, and on a
 // large database that contention can outlast the connection's 5s busy
 // timeout (observed in production on first deploy: SQLITE_BUSY on the
-// very row this journal exists to guarantee). Twenty attempts at 3s
-// spacing rides out a full minute of contention.
+// very row this journal exists to guarantee). Each failed attempt can
+// itself block for the busy timeout before the 3s wait, so the window
+// bounds the goroutine's true lifetime where the attempt count alone
+// would not.
 const (
 	bootRecordAttempts = 20
 	bootRecordSpacing  = 3 * time.Second
+	bootRecordWindow   = 3 * time.Minute
 )
 
 // RecordBootWithRetry journals the boot record from its own goroutine,
 // out-stubborning the startup write burst: it retries until the row
-// lands, the context ends, or the attempt budget is spent (warned — a
-// missing boot row silently breaks deploy detection, so giving up must
-// be loud). Called once from the app wiring as the recorder comes up.
+// lands, the retry window closes, or the attempt budget is spent —
+// either exhaustion is warned, because a missing boot row silently
+// breaks deploy detection, so giving up must be loud. The recorded
+// instant is captured before the first attempt, so a late-landing row
+// still says when the process started. Called once from the app wiring
+// as the recorder comes up.
 func (j *Journal) RecordBootWithRetry(ctx context.Context, version, commit string, logger *slog.Logger) {
-	go j.recordBootRetrying(ctx, version, commit, logger, bootRecordAttempts, bootRecordSpacing)
+	go func() {
+		retryCtx, cancel := context.WithTimeout(ctx, bootRecordWindow)
+		defer cancel()
+		j.recordBootRetrying(retryCtx, version, commit, logger, bootRecordAttempts, bootRecordSpacing)
+	}()
 }
 
 // recordBootRetrying is the synchronous body of RecordBootWithRetry,
-// with pacing injectable for tests.
+// with pacing injectable for tests. A deadline on ctx is the retry
+// window and its exhaustion warns; a plain cancellation is process
+// shutdown and exits quietly.
 func (j *Journal) recordBootRetrying(ctx context.Context, version, commit string, logger *slog.Logger, attempts int, spacing time.Duration) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	bootAt := time.Now()
+	surrender := func(lastErr error, attempt int) {
+		logger.Warn("boot record failed after retries; deploy detection will miss this boot",
+			"attempts", attempt, "error", lastErr)
+	}
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if err := j.RecordBoot(ctx, version, commit); err == nil {
+		if err := j.recordBootAt(ctx, bootAt, version, commit); err == nil {
 			if attempt > 1 {
 				logger.Info("boot record landed after retries", "attempts", attempt)
 			}
@@ -383,12 +409,14 @@ func (j *Journal) recordBootRetrying(ctx context.Context, version, commit string
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				surrender(lastErr, attempt)
+			}
 			return
 		case <-time.After(spacing):
 		}
 	}
-	logger.Warn("boot record failed after retries; deploy detection will miss this boot",
-		"attempts", attempts, "error", lastErr)
+	surrender(lastErr, attempts)
 }
 
 // RecentBoots returns the newest boot records, newest first, bounded by
