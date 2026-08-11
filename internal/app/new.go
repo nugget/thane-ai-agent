@@ -115,6 +115,9 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	if err := a.initChannels(s); err != nil {
 		return nil, err
 	}
+	// The health inspector reads everything above lazily; it must exist
+	// before initAwareness so context providers can render from it.
+	a.initInspector()
 	if err := a.initAwareness(s); err != nil {
 		return nil, err
 	}
