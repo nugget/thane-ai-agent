@@ -472,4 +472,14 @@ func TestCensusWakeWindowIsHonest(t *testing.T) {
 	if got := mature.Health(context.Background()).Loops.WakeWindow; got != "24h" {
 		t.Errorf("mature wake_window = %q, want 24h", got)
 	}
+
+	// Unknown start time means unknown window — omitted, never a
+	// claimed "24h".
+	unwired := NewInspector(HealthSources{
+		LoopStatuses: func() []looppkg.Status { return []looppkg.Status{{Name: "core"}} },
+	})
+	unwired.now = func() time.Time { return now }
+	if got := unwired.Health(context.Background()).Loops.WakeWindow; got != "" {
+		t.Errorf("unwired wake_window = %q, want omitted", got)
+	}
 }

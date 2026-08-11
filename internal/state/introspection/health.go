@@ -375,13 +375,18 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		statuses := i.src.LoopStatuses()
 		snap.Loops = buildLoopCensus(statuses)
 		// Honest window: the in-memory wake ring only spans the uptime.
-		wakeWindow := 24 * time.Hour
+		// With no usable start time the window is unknown, and unknown
+		// is omitted — claiming "24h" there would be the same lie this
+		// field exists to prevent.
 		if !i.src.StartedAt.IsZero() {
-			if up := now.Sub(i.src.StartedAt); up > 0 && up < wakeWindow {
-				wakeWindow = up.Round(time.Second)
+			if up := now.Sub(i.src.StartedAt); up > 0 {
+				wakeWindow := 24 * time.Hour
+				if up < wakeWindow {
+					wakeWindow = up.Round(time.Second)
+				}
+				snap.Loops.WakeWindow = promptfmt.FormatDuration(wakeWindow)
 			}
 		}
-		snap.Loops.WakeWindow = promptfmt.FormatDuration(wakeWindow)
 		row := HealthRow{Name: "loops", Status: HealthOK,
 			Detail: fmt.Sprintf("%d loops in the fleet, none degraded", snap.Loops.Total)}
 		if snap.Loops.Degraded > 0 {
