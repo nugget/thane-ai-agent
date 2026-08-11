@@ -418,6 +418,10 @@ func TestLoopCensusTopWakersOrderAndCap(t *testing.T) {
 		{Name: "ticker", WakesLast24h: 7},
 		{Name: "pinger", WakesLast24h: 6},
 		{Name: "extra", WakesLast24h: 1},
+		// A handler poller wakes per event with no model turn; its count
+		// would bury every cognitive loop (prod's ha-state-watcher hit
+		// 459 in eight minutes and metacog misread it as a storm).
+		{Name: "ha-state-watcher", WakesLast24h: 459, HandlerOnly: true},
 	}
 	census := buildLoopCensus(statuses)
 
@@ -440,5 +444,32 @@ func TestLoopCensusTopWakersOrderAndCap(t *testing.T) {
 		if w.Name == "quiet" {
 			t.Errorf("zero-wake loop must not appear in top wakers")
 		}
+		if w.Name == "ha-state-watcher" {
+			t.Errorf("handler-only poller must not appear in top wakers")
+		}
+	}
+}
+
+// TestCensusWakeWindowIsHonest: after a restart the in-memory wake ring
+// only spans the uptime, and the census says so instead of letting the
+// counts imply a full day's coverage.
+func TestCensusWakeWindowIsHonest(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	young := NewInspector(HealthSources{
+		LoopStatuses: func() []looppkg.Status { return []looppkg.Status{{Name: "core"}} },
+		StartedAt:    now.Add(-8 * time.Minute),
+	})
+	young.now = func() time.Time { return now }
+	if got := young.Health(context.Background()).Loops.WakeWindow; got != "8m" {
+		t.Errorf("young wake_window = %q, want 8m", got)
+	}
+
+	mature := NewInspector(HealthSources{
+		LoopStatuses: func() []looppkg.Status { return []looppkg.Status{{Name: "core"}} },
+		StartedAt:    now.Add(-72 * time.Hour),
+	})
+	mature.now = func() time.Time { return now }
+	if got := mature.Health(context.Background()).Loops.WakeWindow; got != "24h" {
+		t.Errorf("mature wake_window = %q, want 24h", got)
 	}
 }

@@ -436,6 +436,32 @@ func TestLoopViewResolver_FromStatus_WakeAttribution(t *testing.T) {
 	}
 }
 
+// TestLoopViewResolver_FromStatus_WakeWindowHonesty: a loop younger
+// than the wake ring's day-long span reports the window its count
+// actually covers; a mature loop omits it, meaning the full day.
+func TestLoopViewResolver_FromStatus_WakeWindowHonesty(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	young := r.FromStatus(Status{
+		ID: "lp_y", Name: "young", State: State("sleeping"),
+		StartedAt: now.Add(-8 * time.Minute),
+		Config:    Config{Operation: OperationService},
+	})
+	if young.WakeWindow == nil || *young.WakeWindow != "8m" {
+		t.Errorf("young wake_window = %v, want 8m", young.WakeWindow)
+	}
+
+	mature := r.FromStatus(Status{
+		ID: "lp_m", Name: "mature", State: State("sleeping"),
+		StartedAt: now.Add(-48 * time.Hour),
+		Config:    Config{Operation: OperationService},
+	})
+	if mature.WakeWindow != nil {
+		t.Errorf("mature wake_window = %v, want omitted (full day)", mature.WakeWindow)
+	}
+}
+
 // TestLoopViewResolver_FromStatus_SupervisorRecencyInBothUnits pins the
 // pair: turns-back answers "has my recent work been reviewed", time-ago
 // answers "how long since" — different questions on a loop whose interval

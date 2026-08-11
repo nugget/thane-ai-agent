@@ -62,10 +62,19 @@ type LoopCensus struct {
 	Degraded          int            `json:"degraded"`
 	DegradedLoops     []string       `json:"degraded_loops,omitempty"`
 	DegradedTruncated bool           `json:"degraded_truncated,omitempty"`
-	// TopWakers ranks loops by trailing-day iteration starts, busiest
-	// first. An outlier here against its usual rate is the wake-storm
-	// signal; loop_activity decomposes the why.
+	// TopWakers ranks loops by trailing-window iteration starts,
+	// busiest first. An outlier here against its usual rate is the
+	// wake-storm signal; loop_activity decomposes the why. Handler-only
+	// loops are excluded: a poller waking per event runs no model turn,
+	// and its counts would drown the cognitive loops this ranking
+	// exists to watch (production metacog misread exactly that on day
+	// one). Pollers stay visible in loop_status.
 	TopWakers []LoopWakeRate `json:"top_wakers,omitempty"`
+	// WakeWindow is the span the wake counts actually cover. The wake
+	// ring is in-memory, so after a restart the "trailing day" is only
+	// as long as the uptime — the field says so rather than letting the
+	// counts imply coverage they lack.
+	WakeWindow string `json:"wake_window,omitempty"`
 }
 
 // LoopWakeRate is one loop's achieved trailing-day cadence.
@@ -365,6 +374,14 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	if i.src.LoopStatuses != nil {
 		statuses := i.src.LoopStatuses()
 		snap.Loops = buildLoopCensus(statuses)
+		// Honest window: the in-memory wake ring only spans the uptime.
+		wakeWindow := 24 * time.Hour
+		if !i.src.StartedAt.IsZero() {
+			if up := now.Sub(i.src.StartedAt); up > 0 && up < wakeWindow {
+				wakeWindow = up.Round(time.Second)
+			}
+		}
+		snap.Loops.WakeWindow = promptfmt.FormatDuration(wakeWindow)
 		row := HealthRow{Name: "loops", Status: HealthOK,
 			Detail: fmt.Sprintf("%d loops in the fleet, none degraded", snap.Loops.Total)}
 		if snap.Loops.Degraded > 0 {
@@ -535,7 +552,7 @@ func buildLoopCensus(statuses []looppkg.Status) LoopCensus {
 				census.DegradedTruncated = true
 			}
 		}
-		if st.WakesLast24h > 0 {
+		if st.WakesLast24h > 0 && !st.HandlerOnly {
 			census.TopWakers = append(census.TopWakers, LoopWakeRate{Name: st.Name, WakesLast24h: st.WakesLast24h})
 		}
 	}
