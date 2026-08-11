@@ -51,18 +51,32 @@ type HostInfo struct {
 	DiskUsedPct   int    `json:"disk_used_pct,omitempty"`
 }
 
-// LoopCensus is the fleet rollup: totals by state plus the degraded
-// loops by name, capped with an explicit remainder.
+// LoopCensus is the fleet rollup: totals by state, the degraded loops
+// by name (capped with an explicit remainder), and the busiest wakers —
+// the first place a wake storm shows.
 type LoopCensus struct {
 	Total             int            `json:"total"`
 	ByState           map[string]int `json:"by_state,omitempty"`
 	Degraded          int            `json:"degraded"`
 	DegradedLoops     []string       `json:"degraded_loops,omitempty"`
 	DegradedTruncated bool           `json:"degraded_truncated,omitempty"`
+	// TopWakers ranks loops by trailing-day iteration starts, busiest
+	// first. An outlier here against its usual rate is the wake-storm
+	// signal; loop_activity decomposes the why.
+	TopWakers []LoopWakeRate `json:"top_wakers,omitempty"`
+}
+
+// LoopWakeRate is one loop's achieved trailing-day cadence.
+type LoopWakeRate struct {
+	Name         string `json:"name"`
+	WakesLast24h int    `json:"wakes_last_24h"`
 }
 
 // maxCensusDegradedNames caps the degraded-loop name list on the census.
 const maxCensusDegradedNames = 10
+
+// maxCensusTopWakers caps the busiest-waker ranking.
+const maxCensusTopWakers = 5
 
 // QueueDepth is one work-queue partition's live backlog.
 type QueueDepth struct {
@@ -326,6 +340,18 @@ func buildLoopCensus(statuses []looppkg.Status) LoopCensus {
 				census.DegradedTruncated = true
 			}
 		}
+		if st.WakesLast24h > 0 {
+			census.TopWakers = append(census.TopWakers, LoopWakeRate{Name: st.Name, WakesLast24h: st.WakesLast24h})
+		}
+	}
+	sort.SliceStable(census.TopWakers, func(i, j int) bool {
+		if census.TopWakers[i].WakesLast24h != census.TopWakers[j].WakesLast24h {
+			return census.TopWakers[i].WakesLast24h > census.TopWakers[j].WakesLast24h
+		}
+		return census.TopWakers[i].Name < census.TopWakers[j].Name
+	})
+	if len(census.TopWakers) > maxCensusTopWakers {
+		census.TopWakers = census.TopWakers[:maxCensusTopWakers]
 	}
 	return census
 }
