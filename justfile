@@ -316,35 +316,14 @@ service-status:
 service-status:
     @launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
-# Bootstrap a working directory from repo sources (config, talents, persona)
+# Bootstrap a workspace via thane init (core trust root, signed birth commit)
 [group('deploy')]
-init dir="Thane":
+init dir="Thane": build
     #!/usr/bin/env sh
     set -e
-    mkdir -p "{{dir}}/db" "{{dir}}/talents"
-    if [ ! -f "{{dir}}/config.yaml" ]; then
-        cp examples/config.example.yaml "{{dir}}/config.yaml"
-        echo "Created {{dir}}/config.yaml — edit with your settings"
-    else
-        echo "{{dir}}/config.yaml already exists, skipping"
-    fi
-    for f in talents/*.md; do
-        [ -f "$f" ] && cp -n "$f" "{{dir}}/talents/" 2>/dev/null || true
-    done
-    echo "Copied talents to {{dir}}/talents/"
-    if [ ! -f "{{dir}}/persona.md" ]; then
-        if [ -f persona.md ]; then
-            cp persona.md "{{dir}}/persona.md"
-        elif [ -f examples/persona.example.md ]; then
-            cp examples/persona.example.md "{{dir}}/persona.md"
-        fi
-        echo "Created {{dir}}/persona.md — customize your agent's personality"
-    else
-        echo "{{dir}}/persona.md already exists, skipping"
-    fi
+    ./dist/thane-{{host_os}}-{{host_arch}} init "{{dir}}"
     echo ""
-    echo "Working directory ready: {{dir}}/"
-    echo "  1. Edit config:  $EDITOR {{dir}}/config.yaml"
+    echo "  1. Edit config:  $EDITOR {{dir}}/core/config.yaml  (commit after editing)"
     echo "  2. Run:          just serve"
 
 # Build from main branch and deploy to ~/Thane (ensures clean release metadata)
@@ -419,7 +398,7 @@ deploy-macos host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-re
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
 serve: build
-    cd Thane && ../dist/thane-{{host_os}}-{{host_arch}} serve
+    cd Thane && ../dist/thane-{{host_os}}-{{host_arch}} serve -workspace .
 
 # Tail live service logs (default: dev workdir). Follows the events
 # dataset and rolls to the next HH.jsonl segment automatically. Waits

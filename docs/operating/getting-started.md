@@ -32,24 +32,30 @@ This builds a platform-specific binary into `dist/`. Cross-compile with
 
 ## Initialize
 
-Set up the `~/Thane` directory with config, talents, persona, and a local
+Set up the `~/Thane` workspace with config, talents, persona, and a local
 cryptographic identity:
 
 ```bash
-just init
+just init ~/Thane
 ```
 
-This bootstraps `~/Thane/core` as the instance trust root: a generated
-Ed25519 signing key, an internal channel CA, and a signed git birth commit
-containing the public identity material, `core/config.yaml`, and the
-bundled talents under `core/talents/`. A reference `config.yaml` and
-`persona.md` are also written at the workspace root.
+(`just init` with no argument bootstraps a repo-local `Thane/` directory,
+the development workspace `just serve` runs against.)
 
-The runtime reads `~/Thane/core/config.yaml` and nothing else. It is
-covered by core's signed history, so commit after editing — `thane serve`
-refuses to start on an uncommitted config, and `thane validate` names the
-fix for anything the boot gate would reject. Apply the settings below
-there.
+This runs `thane init`, which bootstraps `core/` inside the workspace as
+the instance trust root: a generated Ed25519 signing key, an internal
+channel CA, and a signed git birth commit containing the public identity
+material, `core/config.yaml`, and the bundled talents under
+`core/talents/`. A reference `config.yaml` and `persona.md` are also
+written at the workspace root.
+
+In normal operation the runtime reads `core/config.yaml` from the
+workspace and nothing else (`-insecure-config` exists as a recovery path
+for loading a file from outside the trust boundary, at the cost of a
+degraded runtime). The config is covered by core's signed history, so
+commit after editing — `thane serve` refuses to start on an uncommitted
+config, and `thane validate` names the fix for anything the boot gate
+would reject. Apply the settings below there.
 
 **Required settings:**
 

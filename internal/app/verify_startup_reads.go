@@ -63,9 +63,11 @@ func (a *App) loadTalents(ctx context.Context, verifier talents.VerifyPathFunc) 
 		// The loader treats a missing directory as an empty set, so zero
 		// talents here is indistinguishable from a talents directory that
 		// was never migrated into core (#787) — and booting without any
-		// behavioral guidance is exactly the silent total loss the
-		// per-file skip notices exist to prevent. Boot proceeds, loudly.
-		logger.Warn("no talents loaded; the model runs without behavioral guidance",
+		// talent guidance is exactly the silent total loss the per-file
+		// skip notices exist to prevent. Boot proceeds, loudly. (Core
+		// prompt files — axioms, persona, mission — load separately and
+		// are unaffected.)
+		logger.Warn("no talents loaded; the model runs without talent guidance",
 			"dir", a.cfg.TalentsDir,
 			"hint", "talents live in {workspace}/core/talents — if this instance predates talents-in-core, move the old talents directory there and commit it")
 		return parsedTalents, nil
