@@ -236,13 +236,27 @@ type Loop struct {
 	lastSleptFor     time.Duration
 	lastSleptPlanned time.Duration
 
-	// wakeTimes is the trailing-24h record of iteration start instants,
-	// oldest first. It answers "how often have I actually been running"
-	// — a number a self-pacing loop needs and cannot derive from a
-	// lifetime iteration count, because the interval it chose has been
-	// changing the whole time. Pruned on append; see maxWakeHistory for
-	// what a sub-minute poller does to it.
-	wakeTimes []time.Time
+	// wakeHistory is the trailing-24h record of iteration starts,
+	// oldest first, each carrying its wake reason. It answers "how
+	// often have I actually been running, and why" — numbers a
+	// self-pacing loop needs and cannot derive from a lifetime
+	// iteration count, because the interval it chose has been
+	// changing the whole time. Pruned on append; see maxWakeHistory
+	// for what a sub-minute poller does to it.
+	wakeHistory []wakeRecord
+
+	// pendingWakeCauses records content-detached wake pokes (mailbox
+	// enqueues, retained-row re-wakes, external nudges, retune
+	// returns) between iterations, appended under l.mu at the poke
+	// site and drained by [Loop.beginIterationWake]. Notification
+	// envelopes are not recorded here; they classify themselves at
+	// drain time. Capped at maxPendingWakeCauses, drop-newest.
+	pendingWakeCauses []wakeCause
+
+	// lastWakeAttr is the resolved attribution of the most recent
+	// iteration start — why the loop last woke, and who woke it when
+	// the wake carried a sender. Zero before the first iteration.
+	lastWakeAttr WakeAttribution
 
 	// lastSupervisorAt is when the most recent successful supervisor turn
 	// ran, the wall-clock companion to lastSupervisorIter. Iterations-ago
@@ -748,6 +762,9 @@ func (l *Loop) Status() Status {
 		SleptFor:              l.lastSleptFor,
 		SleptPlanned:          l.lastSleptPlanned,
 		WakesLast24h:          l.wakesInWindowLocked(time.Now()),
+		LastWakeReason:        l.lastWakeAttr.Reason,
+		LastWakeSource:        l.lastWakeAttr.Source,
+		WakeReasons24h:        l.wakeReasonsInWindowLocked(time.Now()),
 		Iterations:            l.iterations,
 		Attempts:              l.attempts,
 		TotalInputTokens:      l.totalInputTokens,
@@ -1289,6 +1306,14 @@ func (l *Loop) run(ctx context.Context) {
 		defer cancel()
 	}
 
+	// wakeInterrupted carries the most recent timer sleep's outcome to
+	// the next iteration's wake attribution: true when a wakeCh poke cut
+	// the sleep short. It is a low-priority attribution input — drained
+	// content and recorded causes explain a wake first — and exists so a
+	// coalesced token whose content was consumed elsewhere reads as an
+	// unexplained early wake rather than masquerading as the timer.
+	wakeInterrupted := false
+
 	// --- INITIAL SLEEP (timer-driven loops only) ---
 	// On fresh startup, timer-driven loops sleep before their first
 	// iteration instead of firing immediately. The delay is jittered
@@ -1318,13 +1343,15 @@ func (l *Loop) run(ctx context.Context) {
 			"duration", initialSleep.Round(time.Second),
 		)
 
-		if !l.sleep(ctx, initialSleep) {
+		ok, interrupted := l.sleep(ctx, initialSleep)
+		if !ok {
 			logger.Debug("loop stopped during initial sleep",
 				"phase", "initial_sleep",
 			)
 			l.emitStopped()
 			return
 		}
+		wakeInterrupted = interrupted
 	}
 
 	for {
@@ -1418,7 +1445,7 @@ func (l *Loop) run(ctx context.Context) {
 					"consecutive_errors", consecutiveErrors,
 					"backoff", backoff.Round(time.Second),
 				)
-				if !l.sleep(ctx, backoff) {
+				if ok, _ := l.sleep(ctx, backoff); !ok {
 					logger.Debug("loop stopped during wait backoff",
 						"phase", "wait_backoff",
 						"backoff", backoff.Round(time.Second),
@@ -1503,10 +1530,11 @@ func (l *Loop) run(ctx context.Context) {
 		iterStartTime := time.Now()
 		// Recorded before dispatch, unlike lastWakeAt below, so the turn
 		// being built can count itself. A no-op iteration still consumed a
-		// wake, so this does not share lastWakeAt's no-op skip.
-		l.mu.Lock()
-		l.recordWakeLocked(iterStartTime)
-		l.mu.Unlock()
+		// wake, so this does not share lastWakeAt's no-op skip. The same
+		// call resolves WHY the iteration is starting, from the drained
+		// signals/mailbox content plus the recorded poke causes.
+		wakeAttr := l.beginIterationWake(iterStartTime, signals, mailboxItems, event, wakeInterrupted, attemptCount == 0)
+		wakeInterrupted = false
 
 		// Dispatch: Handler runs directly; otherwise build an agent
 		// turn and let the loop runtime execute it.
@@ -1521,20 +1549,25 @@ func (l *Loop) run(ctx context.Context) {
 		// Transition to processing and emit iteration_start before
 		// dispatching work so the dashboard sees activity immediately.
 		l.setState(StateProcessing)
+		iterStartData := map[string]any{
+			"loop_id":            l.id,
+			"loop_name":          l.config.Name,
+			"conversation_id":    convID,
+			"supervisor":         isSupervisor,
+			"supervisor_trigger": string(supervisorTrigger),
+			"attempt":            attemptCount + 1,
+			"signal_envelopes":   len(signals),
+			"mailbox_items":      len(mailboxItems),
+			"wake_reason":        string(wakeAttr.Reason),
+		}
+		if wakeAttr.Source != "" {
+			iterStartData["wake_source"] = wakeAttr.Source
+		}
 		l.publishEvent(events.Event{
 			Timestamp: time.Now(),
 			Source:    events.SourceLoop,
 			Kind:      events.KindLoopIterationStart,
-			Data: map[string]any{
-				"loop_id":            l.id,
-				"loop_name":          l.config.Name,
-				"conversation_id":    convID,
-				"supervisor":         isSupervisor,
-				"supervisor_trigger": string(supervisorTrigger),
-				"attempt":            attemptCount + 1,
-				"signal_envelopes":   len(signals),
-				"mailbox_items":      len(mailboxItems),
-			},
+			Data:      iterStartData,
 		})
 		iterLog.Debug("loop iteration starting")
 
@@ -1950,12 +1983,14 @@ func (l *Loop) run(ctx context.Context) {
 
 			iterLog.Debug("loop sleeping", "duration", sleep.Round(time.Second))
 
-			if !l.sleep(ctx, sleep) {
+			ok, interrupted := l.sleep(ctx, sleep)
+			if !ok {
 				logger.Debug("loop stopped during sleep",
 					"phase", "sleep",
 				)
 				break
 			}
+			wakeInterrupted = interrupted
 		} else if l.config.WaitFunc == nil && err != nil && mailboxErr == nil && len(mailboxItems) > 0 && l.hasAttemptsRemaining() {
 			// OperationEventDriven with a failed turn and un-acked
 			// mailbox rows: waitForWake would block until the next
@@ -1974,7 +2009,7 @@ func (l *Loop) run(ctx context.Context) {
 				"backoff", backoff.Round(time.Second),
 				"retained_items", len(mailboxItems),
 			)
-			if !l.sleep(ctx, backoff) {
+			if ok, _ := l.sleep(ctx, backoff); !ok {
 				logger.Debug("loop stopped during mailbox retry backoff",
 					"phase", "mailbox_backoff",
 				)

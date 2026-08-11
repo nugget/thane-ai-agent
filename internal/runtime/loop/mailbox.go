@@ -305,6 +305,10 @@ func (l *Loop) enqueueMailbox(ctx context.Context, keyPrefix string, payload []b
 		ItemID:       item.ID,
 		PendingItems: pending,
 	}
+	// The drained item carries no producer label, so record the enqueue
+	// key prefix as the wake source before poking; the next iteration's
+	// attribution corroborates it against the items it actually drains.
+	l.recordWakeCauseLocked(wakeCause{reason: WakeReasonMailbox, source: keyPrefix})
 	select {
 	case l.wakeCh <- struct{}{}:
 	default:
@@ -391,10 +395,16 @@ func (l *Loop) wakeIfMailboxNonEmpty(ctx context.Context) {
 	if depth == 0 {
 		return
 	}
-	l.pokeWake()
+	l.pokeWake(wakeCause{reason: WakeReasonMailboxRetry, source: "retained"})
 }
 
-func (l *Loop) pokeWake() {
+// pokeWake records why the wake is being requested, then signals the
+// coalescing wake channel. Every caller states its cause so the next
+// iteration's attribution never has to guess who poked.
+func (l *Loop) pokeWake(cause wakeCause) {
+	l.mu.Lock()
+	l.recordWakeCauseLocked(cause)
+	l.mu.Unlock()
 	select {
 	case l.wakeCh <- struct{}{}:
 	default:

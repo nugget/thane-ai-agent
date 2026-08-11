@@ -400,6 +400,42 @@ func TestLoopViewResolver_FromStatus_CadenceSelfKnowledge(t *testing.T) {
 	}
 }
 
+// TestLoopViewResolver_FromStatus_WakeAttribution pins the projection of
+// wake attribution: reason and source ride the row when the loop has
+// woken at least once, and the trailing-day histogram decomposes the
+// achieved cadence by cause. A loop with no wakes yet keeps every
+// attribution field null rather than inventing a reason.
+func TestLoopViewResolver_FromStatus_WakeAttribution(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	v := r.FromStatus(Status{
+		ID: "lp_arch", Name: "archivist", State: State("processing"),
+		LastWakeReason: WakeReasonMailbox,
+		LastWakeSource: "session",
+		WakeReasons24h: map[string]int{"mailbox": 12, "timer": 3},
+		Config:         Config{Operation: OperationService},
+	})
+	if v.LastWakeReason == nil || *v.LastWakeReason != "mailbox" {
+		t.Errorf("LastWakeReason = %v, want mailbox", v.LastWakeReason)
+	}
+	if v.LastWakeSource == nil || *v.LastWakeSource != "session" {
+		t.Errorf("LastWakeSource = %v, want session", v.LastWakeSource)
+	}
+	if v.WakeReasons24h["mailbox"] != 12 || v.WakeReasons24h["timer"] != 3 {
+		t.Errorf("WakeReasons24h = %v, want mailbox:12 timer:3", v.WakeReasons24h)
+	}
+
+	fresh := r.FromStatus(Status{
+		ID: "lp_new", Name: "fresh", State: State("sleeping"),
+		Config: Config{Operation: OperationService},
+	})
+	if fresh.LastWakeReason != nil || fresh.LastWakeSource != nil || fresh.WakeReasons24h != nil {
+		t.Errorf("pre-first-wake row must keep attribution null, got reason=%v source=%v histogram=%v",
+			fresh.LastWakeReason, fresh.LastWakeSource, fresh.WakeReasons24h)
+	}
+}
+
 // TestLoopViewResolver_FromStatus_SupervisorRecencyInBothUnits pins the
 // pair: turns-back answers "has my recent work been reviewed", time-ago
 // answers "how long since" — different questions on a loop whose interval

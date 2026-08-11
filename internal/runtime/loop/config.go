@@ -608,6 +608,19 @@ type Status struct {
 	// cadence, which a lifetime iteration count cannot stand in for on a
 	// loop that keeps changing its own interval.
 	WakesLast24h int `json:"wakes_last_24h,omitempty"`
+	// LastWakeReason attributes the most recent iteration start: what
+	// actually woke the loop (timer, mailbox, subscription, manual
+	// loop_wake, ...). Empty before the first iteration. See
+	// [WakeReason] for the vocabulary.
+	LastWakeReason WakeReason `json:"last_wake_reason,omitempty"`
+	// LastWakeSource is the sender/producer identity behind
+	// LastWakeReason when the wake carried one (a loop_wake caller, a
+	// wake dispatcher name, a mailbox key prefix); empty otherwise.
+	LastWakeSource string `json:"last_wake_source,omitempty"`
+	// WakeReasons24h histograms the trailing day's iteration starts by
+	// wake reason — the attribution companion to WakesLast24h. Nil when
+	// no wakes are retained in the window.
+	WakeReasons24h map[string]int `json:"wake_reasons_24h,omitempty"`
 	// Iterations is the total number of completed (successful) iterations.
 	Iterations int `json:"iterations"`
 	// Attempts is the total number of iteration attempts (including failures).
