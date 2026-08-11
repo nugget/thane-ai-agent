@@ -48,6 +48,10 @@ func NewDocFlags(store *documents.Store) DocFlagsFunc {
 // maxPanelDocFlags caps the flagged-document list on the panel.
 const maxPanelDocFlags = 5
 
+// maxSummaryDegradedNames caps how many degraded rows the summary line
+// names before folding the rest into a "+N more" marker.
+const maxSummaryDegradedNames = 8
+
 // panelSoftMaxBytes is the point past which the panel drops its
 // healthy annunciator rows and keeps only the not-ok ones, marked
 // explicitly. Well under the 64KB context-bucket cap — the panel is
@@ -103,11 +107,19 @@ func (p *PanelProvider) TagContext(ctx context.Context, _ agentctx.ContextReques
 	if len(degraded) == 0 {
 		payload["summary"] = fmt.Sprintf("all %d annunciator rows ok", len(snap.Annunciator))
 	} else {
-		names := make([]string, 0, len(degraded))
-		for _, row := range degraded {
+		// The summary is a headline, not the list: cap the named rows so
+		// a mass outage cannot balloon the panel past its soft cap (and
+		// past the context bucket's own truncator, which would cut the
+		// fenced JSON mid-payload).
+		names := make([]string, 0, min(len(degraded), maxSummaryDegradedNames))
+		for _, row := range degraded[:min(len(degraded), maxSummaryDegradedNames)] {
 			names = append(names, row.Name)
 		}
-		payload["summary"] = fmt.Sprintf("%d of %d annunciator rows not ok: %s", len(degraded), len(snap.Annunciator), strings.Join(names, ", "))
+		summary := fmt.Sprintf("%d of %d annunciator rows not ok: %s", len(degraded), len(snap.Annunciator), strings.Join(names, ", "))
+		if extra := len(degraded) - len(names); extra > 0 {
+			summary += fmt.Sprintf(" (+%d more)", extra)
+		}
+		payload["summary"] = summary
 	}
 
 	if p.docFlags != nil {
