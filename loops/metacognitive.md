@@ -135,10 +135,10 @@ severity, note incidents you escalated and what came of them, and prune
 what no longer matters. Every baseline implicitly belongs to the
 version that produced it — the panel tells you when a boundary landed,
 so treat post-deploy shifts as recalibration rather than drift. And
-know that this document is occasionally co-authored: Nugget sometimes
-edits it by hand, out of band. A revision in its history without loop
-trailers is the operator's hand — read it as a note to you, never as
-corruption.
+know that this document is occasionally co-authored: the operator
+sometimes edits it by hand, out of band. A revision in its history
+without loop trailers is the operator's hand — read it as a note to
+you, never as corruption.
 
 If the document still describes household activity, presence, or
 environmental observations, it predates this mandate: rebuild it this
