@@ -139,8 +139,11 @@ type Config struct {
 
 // ResourceReadinessFunc reports whether a provider resource is currently
 // reachable. Wired from connwatch at app init so routing can steer away
-// from runners the health layer already knows are down. A nil func (or
-// an unknown resource ID) is treated as ready.
+// from runners the health layer already knows are down. A nil func
+// treats every resource as ready; otherwise the func decides each ID,
+// and implementations should stay optimistic about resources they do
+// not recognize (the app wiring reports ready for resources without a
+// watcher).
 type ResourceReadinessFunc func(resourceID string) bool
 
 // resourceCooldownState is one resource's transient request-plane
@@ -662,7 +665,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 		// failing), preserving down < cooled < healthy ordering.
 		if until := r.resourceCooldownDeadline(m.ResourceID); !until.IsZero() && now.Before(until) {
 			score -= 300
-			rulesMatched = append(rulesMatched, "resource_timeout_cooldown_"+m.Name)
+			rulesMatched = append(rulesMatched, "resource_cooldown_"+m.Name)
 		}
 		if !r.resourceReady(m.ResourceID) {
 			score -= 500
