@@ -54,11 +54,13 @@ provider, or task. Reach for them when a finding needs evidence, not as
 the first sweep — the annunciator and the two loop views almost always
 localize the problem faster.
 
-Version boundaries are diagnostic events in their own right. The
-Current Conditions block carries the running version and uptime, and
-every log line records the version that wrote it, so `logs_query` can
-answer what was running when something happened. When an anomaly's
-onset lines up with a version change, reason about the deploy before
+Version boundaries are diagnostic events in their own right, and
+`system_health` precomputes the deploy story: running vs previous
+version, when the boundary landed, the size of the jump, and the
+recent boot list that makes a crash loop visible at a glance. Every
+log line also records the version that wrote it, so `logs_query`
+answers what was running when something happened. When an anomaly's
+onset lines up with a version boundary, reason about the deploy before
 reasoning about drift — they are different findings with different
 next moves.
 

@@ -116,8 +116,8 @@ func (t *Tools) Tools() []*tools.Tool {
 					},
 					"kind": map[string]any{
 						"type":        "string",
-						"enum":        []string{"loop_started", "loop_stopped", "loop_iteration_start", "loop_iteration_complete", "loop_error", "loop_state_change", "loop_mailbox_arrival", "loop_midturn_input"},
-						"description": "Optional event-kind filter. loop_iteration_start rows carry the wake attribution.",
+						"enum":        []string{"loop_started", "loop_stopped", "loop_iteration_start", "loop_iteration_complete", "loop_error", "loop_state_change", "loop_mailbox_arrival", "loop_midturn_input", "thane_boot"},
+						"description": "Optional event-kind filter. loop_iteration_start rows carry the wake attribution; thane_boot rows mark process starts with the build version, so deploy boundaries and restarts are queryable history.",
 					},
 					"since": windowParam("the activity window"),
 					"until": map[string]any{

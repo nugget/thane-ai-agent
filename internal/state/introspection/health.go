@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
@@ -95,11 +97,51 @@ type TelemetryRollup struct {
 	DBSizesBytes map[string]int64 `json:"db_sizes_bytes,omitempty"`
 }
 
+// VersionInfo is the precomputed deploy story: what is running, what
+// ran before it, when the boundary landed, and how big the jump was —
+// so no model ever bookkeeps a version to detect a release. BootsLast24h
+// rides along because restarts and deploys explain each other: boots
+// piling up WITHOUT a version change is a crash loop, not a deploy.
+type VersionInfo struct {
+	Running string `json:"running"`
+	Commit  string `json:"commit,omitempty"`
+	// Previous is the last different version in boot history, and
+	// ChangedDelta is when the boot that introduced Running happened.
+	// Both empty when boot history shows no boundary (or is absent).
+	Previous     string `json:"previous,omitempty"`
+	ChangedDelta string `json:"changed_delta,omitempty"`
+	// Change classifies the boundary: "patch", "minor", "major", or
+	// "dev" when either side is not a semantic version.
+	Change       string `json:"change,omitempty"`
+	BootsLast24h int    `json:"boots_last_24h,omitempty"`
+	// RecentBoots is the raw tail of the boot journal, newest first:
+	// five boots minutes apart IS a crash loop, and a version change
+	// between adjacent rows IS a deploy — no threshold required to see
+	// either.
+	RecentBoots []BootView `json:"recent_boots,omitempty"`
+}
+
+// BootView is one journaled process start, delta-formatted for the
+// model.
+type BootView struct {
+	AtDelta string `json:"at_delta"`
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+}
+
+// maxRecentBootViews caps the boot tail on the snapshot.
+const maxRecentBootViews = 5
+
+// bootStormThreshold is how many boots inside a day degrade the runtime
+// lamp: a healthy instance restarts for deploys, not for sport.
+const bootStormThreshold = 5
+
 // HealthSnapshot is the whole annunciator panel in one shape, consumed
 // identically by the system_health tool and the metacog context panel
 // so the two can never drift.
 type HealthSnapshot struct {
 	Annunciator []HealthRow     `json:"annunciator"`
+	Version     VersionInfo     `json:"version"`
 	Host        HostInfo        `json:"host"`
 	Loops       LoopCensus      `json:"loops"`
 	Queues      []QueueDepth    `json:"queues,omitempty"`
@@ -141,6 +183,11 @@ type HealthSources struct {
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
 	Telemetry *telemetry.Collector
+	// BuildVersion and BuildCommit identify the running binary.
+	BuildVersion string
+	BuildCommit  string
+	// BootHistory reads journaled process starts, newest first.
+	BootHistory func(ctx context.Context) ([]BootRecord, error)
 	// DataDir is the disk-probe target (thane's data directory).
 	DataDir string
 	// StartedAt is process start, for uptime.
@@ -307,6 +354,20 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		snap.Annunciator = append(snap.Annunciator, row)
 	}
 
+	snap.Version = i.collectVersionInfo(ctx, now)
+	if snap.Version.BootsLast24h > bootStormThreshold {
+		snap.Annunciator = append(snap.Annunciator, HealthRow{
+			Name:   "runtime",
+			Status: HealthDegraded,
+			Detail: fmt.Sprintf("%d boots in the last 24h suggests a crash loop (running %s)", snap.Version.BootsLast24h, snap.Version.Running),
+		})
+	} else if i.src.BuildVersion != "" {
+		snap.Annunciator = append(snap.Annunciator, HealthRow{
+			Name: "runtime", Status: HealthOK,
+			Detail: fmt.Sprintf("running %s", snap.Version.Running),
+		})
+	}
+
 	snap.Host = collectHostInfo(i.src.DataDir, i.src.StartedAt, now)
 	if i.src.Telemetry != nil {
 		metrics := i.src.Telemetry.Collect(ctx)
@@ -319,6 +380,89 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		}
 	}
 	return snap
+}
+
+// collectVersionInfo assembles the deploy story from build identity and
+// the journaled boot history: walk newest-first past the boots that
+// share the running version — the oldest of those is the boundary boot —
+// until the first differing version, which is what ran before.
+func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) VersionInfo {
+	info := VersionInfo{Running: i.src.BuildVersion, Commit: i.src.BuildCommit}
+	if i.src.BootHistory == nil {
+		return info
+	}
+	boots, err := i.src.BootHistory(ctx)
+	if err != nil || len(boots) == 0 {
+		return info
+	}
+	var boundary time.Time
+	for _, boot := range boots {
+		if !boot.At.Before(now.Add(-24 * time.Hour)) {
+			info.BootsLast24h++
+		}
+		if len(info.RecentBoots) < maxRecentBootViews {
+			view := BootView{AtDelta: promptfmt.FormatDeltaOnly(boot.At, now), Version: boot.Version}
+			if len(boot.Commit) > 7 {
+				view.Commit = boot.Commit[:7]
+			} else {
+				view.Commit = boot.Commit
+			}
+			info.RecentBoots = append(info.RecentBoots, view)
+		}
+		if info.Previous == "" {
+			if boot.Version == info.Running {
+				boundary = boot.At
+			} else {
+				info.Previous = boot.Version
+				if !boundary.IsZero() {
+					info.ChangedDelta = promptfmt.FormatDeltaOnly(boundary, now)
+				}
+				info.Change = classifyVersionChange(info.Previous, info.Running)
+			}
+		}
+	}
+	return info
+}
+
+// classifyVersionChange names the size of a version jump: patch, minor,
+// major — or "dev" when either side is not a semantic version, which is
+// itself information (an untagged build shipped).
+func classifyVersionChange(prev, curr string) string {
+	prevParts, prevOK := semverParts(prev)
+	currParts, currOK := semverParts(curr)
+	if !prevOK || !currOK {
+		return "dev"
+	}
+	switch {
+	case prevParts[0] != currParts[0]:
+		return "major"
+	case prevParts[1] != currParts[1]:
+		return "minor"
+	case prevParts[2] != currParts[2]:
+		return "patch"
+	default:
+		return ""
+	}
+}
+
+func semverParts(v string) ([3]int, bool) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+		v = v[:idx]
+	}
+	fields := strings.Split(v, ".")
+	if len(fields) != 3 {
+		return [3]int{}, false
+	}
+	var parts [3]int
+	for idx, field := range fields {
+		n, err := strconv.Atoi(field)
+		if err != nil {
+			return [3]int{}, false
+		}
+		parts[idx] = n
+	}
+	return parts, true
 }
 
 // buildLoopCensus rolls the registry snapshot into totals. Degraded

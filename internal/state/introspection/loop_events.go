@@ -18,6 +18,13 @@ import (
 // retrospectives; the journal is operational history, not an archive.
 const DefaultLoopEventRetention = 30 * 24 * time.Hour
 
+// KindThaneBoot is the journal-native row recorded once per process
+// start, stamped with the running version and commit. It is written by
+// the wiring, not received from the bus: the bus has no process-level
+// lifecycle event, and the boot record is what makes deploy boundaries
+// and restart storms mechanically computable instead of model-inferred.
+const KindThaneBoot = "thane_boot"
+
 // loopEventsSchema declares the loop_events journal: the persistent
 // record of loop lifecycle events (wakes with attribution, iteration
 // outcomes, errors, state changes, mailbox arrivals) that the in-memory
@@ -317,6 +324,65 @@ func (j *Journal) AggregateActivity(ctx context.Context, loopName string, since,
 		return agg, fmt.Errorf("introspection: aggregate wake sources: %w", err)
 	}
 	return agg, nil
+}
+
+// BootRecord is one journaled process start: when, and what build.
+type BootRecord struct {
+	At      time.Time
+	Version string
+	Commit  string
+}
+
+// RecordBoot journals one process start with its build identity. Called
+// once from the app wiring as the recorder comes up.
+func (j *Journal) RecordBoot(ctx context.Context, version, commit string) error {
+	return j.record(ctx, []LoopEvent{{
+		At:   time.Now(),
+		Kind: KindThaneBoot,
+		Detail: map[string]any{
+			"version": version,
+			"commit":  commit,
+		},
+	}})
+}
+
+// RecentBoots returns the newest boot records, newest first, bounded by
+// limit (<= 0 defaults to 50). The walk from the newest row backward is
+// what turns raw boots into a deploy boundary: the first row whose
+// version differs from the running one marks where the current version
+// began.
+func (j *Journal) RecentBoots(ctx context.Context, limit int) ([]BootRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := j.db.QueryContext(ctx, `
+		SELECT at, detail FROM loop_events
+		WHERE kind = ?
+		ORDER BY at DESC, id DESC LIMIT ?
+	`, KindThaneBoot, limit)
+	if err != nil {
+		return nil, fmt.Errorf("introspection: recent boots: %w", err)
+	}
+	defer rows.Close()
+
+	var boots []BootRecord
+	for rows.Next() {
+		var (
+			atRaw  any
+			detail string
+		)
+		if err := rows.Scan(&atRaw, &detail); err != nil {
+			return nil, err
+		}
+		rec := BootRecord{At: parseJournalTimestamp(atRaw)}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(detail), &m); err == nil {
+			rec.Version, _ = m["version"].(string)
+			rec.Commit, _ = m["commit"].(string)
+		}
+		boots = append(boots, rec)
+	}
+	return boots, rows.Err()
 }
 
 // Prune deletes journaled events older than maxAge and reports how many

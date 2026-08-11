@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/memguard"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
@@ -38,6 +39,11 @@ func (a *App) initIntrospectionJournal() {
 	}
 	recorder := introspection.NewRecorder(journal, a.eventBus, retention, a.logger)
 	a.deferWorker("loop-event-recorder", func(ctx context.Context) error {
+		// One boot row per process start, stamped with build identity —
+		// what makes deploy boundaries and restart storms computable.
+		if err := journal.RecordBoot(ctx, buildinfo.Version, buildinfo.GitCommit); err != nil {
+			a.logger.Warn("boot record failed", "error", err)
+		}
 		go recorder.Run(ctx)
 		return nil
 	})
@@ -83,9 +89,17 @@ func (a *App) initInspector() {
 	}
 
 	src := introspection.HealthSources{
-		Telemetry: telemetry.NewCollector(telSources),
-		DataDir:   a.cfg.DataDir,
-		StartedAt: time.Now(),
+		Telemetry:    telemetry.NewCollector(telSources),
+		DataDir:      a.cfg.DataDir,
+		StartedAt:    time.Now(),
+		BuildVersion: buildinfo.Version,
+		BuildCommit:  buildinfo.GitCommit,
+	}
+	if a.loopEventJournal != nil {
+		journal := a.loopEventJournal
+		src.BootHistory = func(ctx context.Context) ([]introspection.BootRecord, error) {
+			return journal.RecentBoots(ctx, 50)
+		}
 	}
 	if a.connMgr != nil {
 		src.ConnStatus = a.connMgr.Status

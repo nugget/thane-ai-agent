@@ -174,6 +174,116 @@ func TestInspectorHealthDegradedStates(t *testing.T) {
 	})
 }
 
+// TestVersionInfoComputesTheDeployStory pins the mechanical deploy
+// detection: the boundary walk (oldest same-version boot is when the
+// running version arrived), the change classification, the boot-storm
+// count, and the raw boot tail — all precomputed so no model ever
+// bookkeeps a version.
+func TestVersionInfoComputesTheDeployStory(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	boots := []BootRecord{
+		{At: now.Add(-30 * time.Minute), Version: "v0.10.3", Commit: "abcdef1234567"},
+		{At: now.Add(-2 * time.Hour), Version: "v0.10.3", Commit: "abcdef1234567"},
+		{At: now.Add(-3 * 24 * time.Hour), Version: "v0.10.2", Commit: "0123456789ab"},
+		{At: now.Add(-9 * 24 * time.Hour), Version: "v0.10.2", Commit: "0123456789ab"},
+	}
+	insp := NewInspector(HealthSources{
+		BuildVersion: "v0.10.3",
+		BuildCommit:  "abcdef1234567",
+		BootHistory:  func(context.Context) ([]BootRecord, error) { return boots, nil },
+	})
+	insp.now = func() time.Time { return now }
+
+	v := insp.Health(context.Background()).Version
+	if v.Running != "v0.10.3" || v.Previous != "v0.10.2" {
+		t.Errorf("running/previous = %s/%s, want v0.10.3/v0.10.2", v.Running, v.Previous)
+	}
+	// The boundary is the OLDEST boot carrying the running version.
+	if v.ChangedDelta != "-2h" {
+		t.Errorf("changed_delta = %q, want -2h — the boot that introduced v0.10.3", v.ChangedDelta)
+	}
+	if v.Change != "patch" {
+		t.Errorf("change = %q, want patch", v.Change)
+	}
+	if v.BootsLast24h != 2 {
+		t.Errorf("boots_last_24h = %d, want 2", v.BootsLast24h)
+	}
+	if len(v.RecentBoots) != 4 || v.RecentBoots[0].AtDelta != "-1800s" || v.RecentBoots[0].Commit != "abcdef1" {
+		t.Errorf("recent_boots = %+v, want 4 delta-formatted rows with short commits", v.RecentBoots)
+	}
+}
+
+func TestVersionChangeClassification(t *testing.T) {
+	tests := []struct{ prev, curr, want string }{
+		{"v0.10.2", "v0.10.3", "patch"},
+		{"v0.10.3", "v0.11.0", "minor"},
+		{"v0.11.0", "v1.0.0", "major"},
+		{"v0.10.3", "dev", "dev"},
+		{"dev", "v0.10.3", "dev"},
+		{"v0.10.3", "v0.10.3", ""},
+		{"v0.10.3-rc1", "v0.10.3", ""},
+	}
+	for _, tt := range tests {
+		if got := classifyVersionChange(tt.prev, tt.curr); got != tt.want {
+			t.Errorf("classify(%s -> %s) = %q, want %q", tt.prev, tt.curr, got, tt.want)
+		}
+	}
+}
+
+// TestBootStormDegradesTheRuntimeLamp: a healthy instance restarts for
+// deploys, not for sport.
+func TestBootStormDegradesTheRuntimeLamp(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	var boots []BootRecord
+	for i := range 8 {
+		boots = append(boots, BootRecord{At: now.Add(-time.Duration(i+1) * 10 * time.Minute), Version: "dev"})
+	}
+	insp := NewInspector(HealthSources{
+		BuildVersion: "dev",
+		BootHistory:  func(context.Context) ([]BootRecord, error) { return boots, nil },
+	})
+	insp.now = func() time.Time { return now }
+
+	snap := insp.Health(context.Background())
+	if row := rowByName(t, snap, "runtime"); row.Status != HealthDegraded || !strings.Contains(row.Detail, "8 boots") {
+		t.Errorf("runtime row = %+v, want degraded crash-loop detail", row)
+	}
+
+	// A single boot reads ok, with the version in the detail.
+	calm := NewInspector(HealthSources{
+		BuildVersion: "v0.10.3",
+		BootHistory: func(context.Context) ([]BootRecord, error) {
+			return []BootRecord{{At: now.Add(-time.Hour), Version: "v0.10.3"}}, nil
+		},
+	})
+	calm.now = func() time.Time { return now }
+	if row := rowByName(t, calm.Health(context.Background()), "runtime"); row.Status != HealthOK || !strings.Contains(row.Detail, "v0.10.3") {
+		t.Errorf("calm runtime row = %+v", row)
+	}
+}
+
+// TestJournalBootRoundTrip covers the boot journal itself.
+func TestJournalBootRoundTrip(t *testing.T) {
+	j := newTestJournal(t)
+	ctx := context.Background()
+	if err := j.RecordBoot(ctx, "v0.10.2", "0123456"); err != nil {
+		t.Fatalf("record boot: %v", err)
+	}
+	if err := j.RecordBoot(ctx, "v0.10.3", "abcdef0"); err != nil {
+		t.Fatalf("record boot: %v", err)
+	}
+	boots, err := j.RecentBoots(ctx, 10)
+	if err != nil {
+		t.Fatalf("recent boots: %v", err)
+	}
+	if len(boots) != 2 || boots[0].Version != "v0.10.3" || boots[1].Version != "v0.10.2" {
+		t.Fatalf("boots = %+v, want newest-first v0.10.3 then v0.10.2", boots)
+	}
+	if boots[0].Commit != "abcdef0" || boots[0].At.IsZero() {
+		t.Errorf("boot detail not round-tripped: %+v", boots[0])
+	}
+}
+
 // TestLoopCensusTopWakersOrderAndCap pins the busiest-waker ranking:
 // descending by trailing-day wakes with a stable name tiebreak, zero
 // wakers omitted, and the list truncated at the cap.

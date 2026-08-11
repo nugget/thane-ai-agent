@@ -96,6 +96,7 @@ func (p *PanelProvider) TagContext(ctx context.Context, _ agentctx.ContextReques
 
 	payload := map[string]any{
 		"annunciator": snap.Annunciator,
+		"version":     snap.Version,
 		"host":        snap.Host,
 		"loops":       snap.Loops,
 		"telemetry":   snap.Telemetry,
