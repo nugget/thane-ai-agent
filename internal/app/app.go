@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
@@ -226,10 +227,13 @@ type App struct {
 	eventBus *events.Bus
 
 	// Introspection: persistent loop-event journal (nil when logs.db is
-	// unavailable) and the live memory guard (nil unless enabled; set in
-	// Serve). Both feed the internal-operations observability surfaces.
+	// unavailable), the health inspector behind system_health and the
+	// metacog panel, and the live memory guard (atomic because Serve
+	// stores it after New while tool goroutines read it). All feed the
+	// internal-operations observability surfaces.
 	loopEventJournal *introspection.Journal
-	memGuard         *memguard.Guard
+	inspector        *introspection.Inspector
+	memGuard         atomic.Pointer[memguard.Guard]
 
 	// Inter-component message bus
 	messageBus *messages.Bus

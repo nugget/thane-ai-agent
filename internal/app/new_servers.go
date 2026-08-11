@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -532,16 +531,7 @@ func (a *App) initServers(s *newState) error {
 
 		a.mqttPub.RegisterSensors(telBuilder.StaticSensors())
 
-		dbPaths := map[string]string{
-			"main":  filepath.Join(cfg.DataDir, "thane.db"),
-			"usage": filepath.Join(cfg.DataDir, "usage.db"),
-		}
-		if logDir := cfg.Logging.DirPath(); logDir != "" {
-			dbPaths["logs"] = filepath.Join(logDir, "logs.db")
-		}
-		if cfg.Attachments.StoreDir != "" {
-			dbPaths["attachments"] = filepath.Join(cfg.DataDir, "attachments.db")
-		}
+		dbPaths := a.telemetryDBPaths()
 
 		telSources := telemetry.Sources{
 			LoopRegistry: a.loopRegistry,
