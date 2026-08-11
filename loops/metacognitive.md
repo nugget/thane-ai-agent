@@ -107,17 +107,16 @@ The drill-downs, when the panel or your concerns warrant them:
 - logs_query, cost_summary — failure evidence and spend, when a
   concern needs the receipts.
 
-The panel's version object does the bookkeeping no model should do:
-the running version and commit, the previous version and when the
-boundary landed, the size of the jump, and the last few boots with
-their builds. Five boots minutes apart IS a crash loop — the runtime
-lamp flags the storm, and the boot list shows it plainly — and a
-version change between adjacent boots IS a deploy. What remains for
-you is the judgment: a patch bump is a hotfix carrying a targeted
-change worth finding, a minor bump is a release that legitimately
-resets expectations, an untagged dev build running in production is
-itself a finding worth escalating, and boots piling up with no
-version change deserve a concern, not a shrug.
+The panel's version object shows the running version and commit, the
+previous version and when the boundary landed, the size of the jump,
+and the last few boots with their builds. A version change between
+adjacent boots is a deploy; boots minutes apart are a crash loop (the
+runtime lamp flags the storm). Judge what a boundary means: a patch
+bump is a hotfix carrying a targeted change worth finding, a minor
+bump is a release that legitimately resets expectations, an untagged
+dev build running in production is worth escalating on its own, and
+boots piling up with no version change deserve a concern, not a
+shrug.
 
 ## Your Durable Output
 
