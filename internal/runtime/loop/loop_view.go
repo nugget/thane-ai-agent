@@ -80,8 +80,12 @@ type LoopView struct {
 	LastSleepPlanned *string `json:"last_sleep_planned"`
 	// WakesLast24h is how many iterations began in the trailing day,
 	// counting the one in flight — the cadence actually achieved, as
-	// against the SleepEnvelope's permitted one.
-	WakesLast24h *int `json:"wakes_last_24h"`
+	// against the SleepEnvelope's permitted one. WakeWindow qualifies
+	// it: the ring is in-memory, so a loop younger than a day has only
+	// been counted for its lifetime, and the window says so rather than
+	// letting the count imply a full day's coverage.
+	WakesLast24h *int    `json:"wakes_last_24h"`
+	WakeWindow   *string `json:"wake_window,omitempty"`
 	// LastWakeReason attributes the most recent iteration start (timer,
 	// mailbox, subscription, manual, ...), and LastWakeSource names the
 	// sender when the wake carried one. Null before the first iteration
@@ -427,6 +431,12 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	}
 	wakes := s.WakesLast24h
 	v.WakesLast24h = &wakes
+	if !s.StartedAt.IsZero() {
+		if up := now.Sub(s.StartedAt); up > 0 && up < wakeHistoryWindow {
+			window := promptfmt.FormatDuration(up.Round(time.Second))
+			v.WakeWindow = &window
+		}
+	}
 	if s.LastWakeReason != "" {
 		reason := string(s.LastWakeReason)
 		v.LastWakeReason = &reason
