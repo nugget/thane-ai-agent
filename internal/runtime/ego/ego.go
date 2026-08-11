@@ -1,11 +1,15 @@
-// Package ego implements the self-reflection loop that maintains
-// self/ego.md. It runs as a service loop: each iteration is a fresh
-// conversation with bounded voluntary sleep, supervisor randomization
-// for periodic frontier review, and a declared maintained-document
-// output that pins ego.md to the loop.
+// Package ego carries the config-parsing and hydration seam for the
+// ego self-reflection loop. The loop definition itself — prompt, spec,
+// cadence, tool exclusions — lives in the shipped document loops/ego.md
+// (embedded via internal/app/coreloops and overridable from the core
+// root's loops/ directory); the Go definition builder was deleted once
+// the docs-parity gate proved the document byte-for-byte equivalent.
+// What remains here is what a document cannot carry: parsing the YAML
+// config shape into durations and defaulting the definition name at
+// hydration.
 //
 // The agent's core context provider reads ego.md every turn and injects
-// it into the system prompt; this loop is the sole writer.
+// it into the system prompt; the ego loop is its sole writer.
 package ego
 
 import (
@@ -13,11 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // DefinitionName is the durable loop definition name for the ego
@@ -83,82 +84,13 @@ func derefFloat(p *float64, def float64) float64 {
 	return *p
 }
 
-// DefinitionSpec returns the persistable loop definition for the ego
-// service. Runtime hooks are attached later by [HydrateSpec] so the
-// definition can live in the durable registry.
-func DefinitionSpec(cfg Config) loop.Spec {
-	return loop.Spec{
-		Name:       DefinitionName,
-		Enabled:    cfg.Enabled,
-		Task:       prompts.EgoBaseTemplate,
-		Operation:  loop.OperationService,
-		Completion: loop.CompletionNone,
-		Outputs: []loop.OutputSpec{
-			{
-				Name:    "ego_state",
-				Type:    loop.OutputTypeMaintainedDocument,
-				Ref:     "self:ego.md",
-				Mode:    loop.OutputModeReplace,
-				Purpose: "Self-reflection written by the ego loop, for the agent: how the agent's thinking is evolving, behavioral patterns it notices in itself, observations about its relationships, genuine open questions, and honest self-assessment. Read every turn via the agent's core context. NOT a task list, status report, or operational notes.",
-			},
-		},
-		SleepMin:     cfg.MinSleep,
-		SleepMax:     cfg.MaxSleep,
-		SleepDefault: cfg.DefaultSleep,
-		Jitter:       loop.Float64Ptr(cfg.Jitter),
-		ExcludeTools: egoExcludeTools,
-		Tags:         []string{"ego"},
-		Profile: router.LoopProfile{
-			Mission:          "ego",
-			DelegationGating: "disabled",
-			QualityFloor:     cfg.QualityFloor,
-			ExtraHints:       map[string]string{"source": "ego"},
-		},
-		SupervisorProfile: supervisorProfile(cfg.SupervisorQualityFloor),
-		Supervisor:        cfg.SupervisorProbability > 0,
-		SupervisorProb:    cfg.SupervisorProbability,
-		Metadata: map[string]string{
-			"subsystem": "ego",
-			"category":  "service",
-		},
-	}
-}
-
-// supervisorProfile builds the ego service's supervisor-turn overlay: the
-// frontier-review prompt prefix (always) plus a higher quality floor when
-// one is configured. Any field left unset falls back to the normal
-// Profile during supervisor turns; the prefix is prepended to the Task.
-func supervisorProfile(qualityFloor int) *router.LoopProfile {
-	p := &router.LoopProfile{Instructions: prompts.EgoSupervisorInstructions}
-	if qualityFloor > 0 {
-		p.QualityFloor = qualityFloor
-	}
-	return p
-}
-
-// HydrateSpec is retained for the core-service registration shape. The ego
-// loop is fully declarative — its prompt is the spec Task and its
-// supervisor-turn prefix is SupervisorProfile.Instructions — so there are
-// no runtime-only hooks to attach beyond defaulting the name.
+// HydrateSpec fills in what a durable loop definition cannot carry.
+// That is now only the name: the prompt is declarative (the spec Task
+// and SupervisorProfile.Instructions), and nothing runtime-side writes
+// the state document.
 func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
 	}
 	return spec
 }
-
-// egoExcludeTools lists tools that the ego loop should not have access
-// to. File tools are replaced by the declared durable output tool, exec
-// is unnecessary, session management is for interactive use only.
-var egoExcludeTools = append([]string{
-	"file_read", "file_write", "file_edit", "file_list",
-	"file_search", "file_grep", "file_stat", "file_tree",
-	"exec",
-	"conversation_reset", "session_close", "session_split", "session_checkpoint",
-	"create_temp_file",
-	"tag_activate", "tag_deactivate",
-	// A reflective loop must not stand up new durable loops; thane_loop_create is
-	// Core (#1106 A), so it has to be excluded by name rather than gated behind
-	// the `loops` capability the ego can't activate.
-	"thane_loop_create",
-}, tools.DirectHumanEgressToolNames()...)

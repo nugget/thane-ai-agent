@@ -1,7 +1,6 @@
 package ego
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -68,97 +67,20 @@ func TestParseConfig_InvalidDuration(t *testing.T) {
 	}
 }
 
-func TestDefinitionSpec_Outputs(t *testing.T) {
-	cfg := Config{
-		Enabled:                true,
-		MinSleep:               30 * time.Minute,
-		MaxSleep:               24 * time.Hour,
-		DefaultSleep:           6 * time.Hour,
-		Jitter:                 0.2,
-		SupervisorProbability:  0.2,
-		QualityFloor:           5,
-		SupervisorQualityFloor: 8,
-	}
-	spec := DefinitionSpec(cfg)
+// --- Hydration tests ---
+//
+// The definition itself lives in the shipped loops/ document; its shape
+// is covered by the boot-path assertions in
+// internal/app/coreloop_docs_parity_test.go. What remains here is the
+// hydration seam a document cannot express.
 
+func TestHydrateSpecDefaultsTheName(t *testing.T) {
+	spec := HydrateSpec(loop.Spec{}, Config{})
 	if spec.Name != DefinitionName {
-		t.Errorf("Name = %q, want %q", spec.Name, DefinitionName)
+		t.Errorf("Name = %q, want %q defaulted", spec.Name, DefinitionName)
 	}
-	if spec.Operation != loop.OperationService {
-		t.Errorf("Operation = %q, want %q", spec.Operation, loop.OperationService)
-	}
-	if len(spec.Outputs) != 1 {
-		t.Fatalf("Outputs len = %d, want 1", len(spec.Outputs))
-	}
-	out := spec.Outputs[0]
-	// self, not core: ego.md is what Thane has made of what the operator
-	// declared, so it is written under the agent's own signer policy. The
-	// interactive agent's injection resolves the same root, and the two have
-	// to agree or the loop writes where nothing reads.
-	if out.Ref != "self:ego.md" {
-		t.Errorf("Outputs[0].Ref = %q, want self:ego.md", out.Ref)
-	}
-	if out.Type != loop.OutputTypeMaintainedDocument {
-		t.Errorf("Outputs[0].Type = %q, want maintained_document", out.Type)
-	}
-	if out.EffectiveMode() != loop.OutputModeReplace {
-		t.Errorf("Outputs[0].Mode = %q, want replace", out.EffectiveMode())
-	}
-	if !strings.HasPrefix(out.ToolName(), "replace_output_") {
-		t.Errorf("ToolName = %q, want replace_output_* prefix", out.ToolName())
-	}
-	if !spec.Supervisor {
-		t.Error("Supervisor should be enabled when SupervisorProbability > 0")
-	}
-	if spec.SleepMin != 30*time.Minute {
-		t.Errorf("SleepMin = %v, want 30m", spec.SleepMin)
-	}
-	if spec.Profile.Mission != "ego" {
-		t.Errorf("Profile.Mission = %q, want ego", spec.Profile.Mission)
-	}
-	if spec.Profile.DelegationGating != "disabled" {
-		t.Errorf("Profile.DelegationGating = %q, want disabled", spec.Profile.DelegationGating)
-	}
-	if len(spec.Tags) != 1 || spec.Tags[0] != "ego" {
-		t.Errorf("Tags = %v, want [ego]", spec.Tags)
-	}
-}
-
-func TestSpec_DeclarativePrompt(t *testing.T) {
-	cfg := Config{Enabled: true, SupervisorProbability: 0.2}
-	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
-
-	// The ego loop is fully declarative: no TaskBuilder closure.
-	if spec.TaskBuilder != nil {
-		t.Error("ego loop is declarative; HydrateSpec should attach no TaskBuilder")
-	}
-	// The per-iteration prompt is the static Task.
-	if !strings.Contains(spec.Task, "Ego loop iteration") {
-		t.Errorf("spec.Task should be the ego base prompt, got %q", spec.Task)
-	}
-	if strings.Contains(spec.Task, "Supervisor Review") {
-		t.Error("base Task should not include the supervisor section")
-	}
-	// The supervisor-turn prefix is the declarative
-	// SupervisorProfile.Instructions. It is asserted on its content
-	// rather than on a "Supervisor Review" heading: that heading is the
-	// definition document's section, and the instructions are its body.
-	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "critically evaluate") {
-		t.Error("supervisor-turn prefix should live in SupervisorProfile.Instructions")
-	}
-}
-
-func TestEgoExcludeTools_ExcludesLoopCreation(t *testing.T) {
-	// thane_loop_create is Core (#1106 A) so it bypasses the loops tag gate the
-	// ego can't activate; a reflective loop must not stand up new durable loops.
-	found := false
-	for _, n := range egoExcludeTools {
-		if n == "thane_loop_create" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("egoExcludeTools must exclude thane_loop_create; got %v", egoExcludeTools)
+	named := HydrateSpec(loop.Spec{Name: "custom"}, Config{})
+	if named.Name != "custom" {
+		t.Errorf("Name = %q, want the declared name kept", named.Name)
 	}
 }
