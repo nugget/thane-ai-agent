@@ -15,6 +15,7 @@ package loopqueue
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -305,17 +306,29 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 		`SELECT priority, enqueued_at FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
 		consumerLoop, dedupKey,
 	).Scan(&priority, &enqueuedRaw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
 	}
-	if _, err := tx.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
 		consumerLoop, dedupKey,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	// Journal only when this transaction actually removed the row. Two
+	// concurrent Acks of the same key can both pass the SELECT before
+	// serializing on the write; the loser's DELETE affects zero rows,
+	// and journaling it anyway would double-count throughput.
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	if deleted == 0 {
+		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, priority, enqueued_at, acked_at)

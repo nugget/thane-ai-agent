@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
 )
 
 // DefaultLoopEventRetention bounds the journal by age when the logging
@@ -259,16 +260,16 @@ func (j *Journal) AggregateActivity(ctx context.Context, loopName string, since,
 	}
 
 	var err error
-	if agg.Wakes, err = countRow(`kind = ?`, "loop_iteration_start"); err != nil {
+	if agg.Wakes, err = countRow(`kind = ?`, events.KindLoopIterationStart); err != nil {
 		return agg, fmt.Errorf("introspection: aggregate wakes: %w", err)
 	}
-	if agg.Errors, err = countRow(`kind = ?`, "loop_error"); err != nil {
+	if agg.Errors, err = countRow(`kind = ?`, events.KindLoopError); err != nil {
 		return agg, fmt.Errorf("introspection: aggregate errors: %w", err)
 	}
-	if agg.Completions, err = countRow(`kind = ?`, "loop_iteration_complete"); err != nil {
+	if agg.Completions, err = countRow(`kind = ?`, events.KindLoopIterationComplete); err != nil {
 		return agg, fmt.Errorf("introspection: aggregate completions: %w", err)
 	}
-	if agg.NoOps, err = countRow(`kind = ? AND json_extract(detail, '$.no_op') = 1`, "loop_iteration_complete"); err != nil {
+	if agg.NoOps, err = countRow(`kind = ? AND json_extract(detail, '$.no_op') = 1`, events.KindLoopIterationComplete); err != nil {
 		return agg, fmt.Errorf("introspection: aggregate no-ops: %w", err)
 	}
 
@@ -283,7 +284,7 @@ func (j *Journal) AggregateActivity(ctx context.Context, loopName string, since,
 			WHERE kind = ? AND `+column+` != ''`+scope+`
 			GROUP BY `+column+`
 			ORDER BY n DESC, `+column+` ASC
-		`, append([]any{"loop_iteration_start"}, scopeArgs...)...)
+		`, append([]any{events.KindLoopIterationStart}, scopeArgs...)...)
 		if err != nil {
 			return nil, err
 		}
