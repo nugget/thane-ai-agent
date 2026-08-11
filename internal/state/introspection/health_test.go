@@ -205,7 +205,7 @@ func TestLogActivityRidesTheSnapshot(t *testing.T) {
 	if len(la.Recent) != maxLogSamples {
 		t.Fatalf("samples = %d, want capped at %d", len(la.Recent), maxLogSamples)
 	}
-	if la.Recent[0].Delta != "-60s" || la.Recent[0].Source != "mqtt" || la.Recent[0].Msg != "complaint 0" {
+	if la.Recent[0].AtDelta != "-60s" || la.Recent[0].Source != "mqtt" || la.Recent[0].Msg != "complaint 0" {
 		t.Errorf("samples[0] = %+v, want the newest delta-formatted", la.Recent[0])
 	}
 }

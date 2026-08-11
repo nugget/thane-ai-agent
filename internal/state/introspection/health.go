@@ -147,10 +147,10 @@ type LogActivity struct {
 
 // LogSample is one recent WARN-or-worse record, delta-formatted.
 type LogSample struct {
-	Delta  string `json:"delta"`
-	Level  string `json:"level"`
-	Source string `json:"source,omitempty"`
-	Msg    string `json:"msg"`
+	AtDelta string `json:"at_delta"`
+	Level   string `json:"level"`
+	Source  string `json:"source,omitempty"`
+	Msg     string `json:"msg"`
 }
 
 // maxLogSamples caps the recent-sample list on the snapshot.
@@ -406,10 +406,10 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 				break
 			}
 			snap.LogActivity.Recent = append(snap.LogActivity.Recent, LogSample{
-				Delta:  promptfmt.FormatDeltaOnly(rec.At, now),
-				Level:  rec.Level,
-				Source: rec.Source,
-				Msg:    rec.Msg,
+				AtDelta: promptfmt.FormatDeltaOnly(rec.At, now),
+				Level:   rec.Level,
+				Source:  rec.Source,
+				Msg:     rec.Msg,
 			})
 		}
 	}
