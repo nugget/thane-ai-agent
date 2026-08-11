@@ -19,8 +19,11 @@ Choose the next move deliberately:
   forces a supervisor turn on the next iteration of the owner loop;
   this is the canonical service-loop → operator attention path. No
   recipient, no actions, no waiting — file the concern and continue.
-- If you need logs, version, usage, or failure evidence, activate
-  `diagnostics`.
+- If the question is about Thane's own runtime — subsystem health, the
+  loop process table now or over time, wake attribution, work-queue
+  backlog, runaway documents, logs, usage, or version — activate
+  `diagnostics`. Its `system_health` is the one-call annunciator panel;
+  start there when you only know "something is off".
 - If the question is about model registry, routing, or policy, activate
   `models`.
 - If the work is about scheduled tasks or timing policy, activate

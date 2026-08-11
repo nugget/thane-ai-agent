@@ -130,7 +130,7 @@ its tag is not active.
 | `req.AllowedTools` | allowlist | request | If non-empty, only these tools survive. |
 | `req.RuntimeTools` | layer | request | Adds request-scoped tools, all marked `Core`. |
 | `req.ExcludeTools` | blocklist | request | Removes named tools from the catalog. |
-| `req.SkipTagFilter` | bypass | request | Disables the tag-based filter entirely (used by metacognitive). |
+| `req.SkipTagFilter` | bypass | request | Disables the tag-based filter entirely (set by the delegate executor; also implied for any loop that declares no tags). |
 | Tag filter | filter | scope | `FilterByTags(scope.Snapshot())` per iteration. |
 | `Tool.Core` | preservation | tool definition | Survives the tag filter. |
 | `delegateFamilyToolNames` | blocklist | delegate executor | Hard-coded recursion guard. Applied at *both* layers (see below). |

@@ -14,6 +14,7 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/introspection"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -85,6 +86,17 @@ func (a *App) initAwareness(s *newState) error {
 		logger,
 	)
 	a.loop.RegisterTagContextProvider("message_channel", messageChannelProvider)
+
+	// --- Internal operations panel ---
+	// The metacognitive loop's ambient perception (#1341): the same
+	// HealthSnapshot the system_health tool renders, injected every
+	// iteration whose active tags carry "metacognitive" — in practice
+	// the metacog loop itself, whose spec declares that tag. Perception
+	// costs it no tool calls; the diagnostics tools are the drill-down.
+	if a.inspector != nil {
+		a.loop.RegisterTagContextProvider("metacognitive",
+			introspection.NewPanelProvider(a.inspector, introspection.NewDocFlags(a.documentStore), logger))
+	}
 
 	// --- Entity watchlist ---
 	// Allows the agent to dynamically add HA entities to a watched list

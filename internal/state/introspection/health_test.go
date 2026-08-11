@@ -173,3 +173,41 @@ func TestInspectorHealthDegradedStates(t *testing.T) {
 		}
 	})
 }
+
+// TestLoopCensusTopWakersOrderAndCap pins the busiest-waker ranking:
+// descending by trailing-day wakes with a stable name tiebreak, zero
+// wakers omitted, and the list truncated at the cap.
+func TestLoopCensusTopWakersOrderAndCap(t *testing.T) {
+	statuses := []looppkg.Status{
+		{Name: "quiet", WakesLast24h: 0},
+		{Name: "beta", WakesLast24h: 12},
+		{Name: "alpha", WakesLast24h: 12},
+		{Name: "storm", WakesLast24h: 96},
+		{Name: "steady", WakesLast24h: 4},
+		{Name: "ticker", WakesLast24h: 7},
+		{Name: "pinger", WakesLast24h: 6},
+		{Name: "extra", WakesLast24h: 1},
+	}
+	census := buildLoopCensus(statuses)
+
+	if len(census.TopWakers) != maxCensusTopWakers {
+		t.Fatalf("top wakers = %d entries, want the cap %d", len(census.TopWakers), maxCensusTopWakers)
+	}
+	wantOrder := []LoopWakeRate{
+		{Name: "storm", WakesLast24h: 96},
+		{Name: "alpha", WakesLast24h: 12},
+		{Name: "beta", WakesLast24h: 12},
+		{Name: "ticker", WakesLast24h: 7},
+		{Name: "pinger", WakesLast24h: 6},
+	}
+	for i, want := range wantOrder {
+		if census.TopWakers[i] != want {
+			t.Errorf("top_wakers[%d] = %+v, want %+v", i, census.TopWakers[i], want)
+		}
+	}
+	for _, w := range census.TopWakers {
+		if w.Name == "quiet" {
+			t.Errorf("zero-wake loop must not appear in top wakers")
+		}
+	}
+}
