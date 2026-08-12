@@ -2106,6 +2106,7 @@ components:
           example: self:metacognitive.md
         modified_at:
           type: string
+          format: date-time
           description: Document modification timestamp.
           example: "2026-08-12T18:45:06.195768Z"
         facets:

@@ -82,18 +82,32 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, faceted := looppkg.ParseFacetSections(record.Body)
+	// The declared contract gates every representation: this endpoint
+	// is addressed by an output name on a definition, so what it serves
+	// is what that definition declares. A hand-edited body that happens
+	// to contain a reserved heading is content, not contract — parsed
+	// sections count only when the spec declared facets.
+	payload, sectioned := looppkg.ParseFacetSections(record.Body)
+	faceted := sectioned && output.HasFacets()
+	declared := make(map[string]bool, len(output.Facets))
+	for _, facet := range output.Facets {
+		declared[string(facet.Name)] = true
+	}
+
+	// Negotiated response: the representation depends on Accept, so
+	// caches must key on it.
+	w.Header().Set("Vary", "Accept")
 	accept := strings.ToLower(r.Header.Get("Accept"))
 	switch {
 	case strings.Contains(accept, "text/plain"):
 		verdict := ""
-		if faceted {
+		if faceted && declared[string(looppkg.OutputFacetStatusLine)] {
 			if line, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine)); ok {
 				verdict = strings.TrimSpace(line)
 			}
 		}
 		if verdict == "" {
-			s.errorResponse(w, http.StatusNotAcceptable, "output "+outputName+" has published no status_line; available representations: application/json, text/markdown")
+			s.errorResponse(w, http.StatusNotAcceptable, "output "+outputName+" declares or has published no status_line; available representations: application/json, text/markdown")
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -109,10 +123,7 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		if faceted {
 			out.Full = payload.Full
 			facets := make(map[string]string)
-			for _, key := range looppkg.FacetKeys() {
-				if key == "full" {
-					continue
-				}
+			for key := range declared {
 				if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
 					facets[key] = value
 				}

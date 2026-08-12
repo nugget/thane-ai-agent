@@ -66,6 +66,9 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 	if plain.Code != http.StatusOK || strings.TrimSpace(plain.Body.String()) != "panel clean, baselines steady" {
 		t.Errorf("text/plain = %d %q, want the bare status_line", plain.Code, plain.Body.String())
 	}
+	if plain.Header().Get("Vary") != "Accept" {
+		t.Errorf("negotiated response missing Vary: Accept")
+	}
 
 	typed := get("application/json")
 	if typed.Code != http.StatusOK {
@@ -83,6 +86,38 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 	markdown := get("")
 	if markdown.Code != http.StatusOK || !strings.Contains(markdown.Body.String(), "## Status Line") {
 		t.Errorf("default representation should be the document body: %d %q", markdown.Code, markdown.Body.String())
+	}
+
+	// An undeclared contract refuses too: a body whose author typed a
+	// reserved heading into a facet-less output is content, not
+	// contract (#1372 review).
+	regUndeclared, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{{
+		Name:      "plainloop",
+		Enabled:   true,
+		Task:      "keep a document",
+		Operation: looppkg.OperationService,
+		Outputs: []looppkg.OutputSpec{{
+			Name: "notes",
+			Type: looppkg.OutputTypeMaintainedDocument,
+			Ref:  "self:notes.md",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry (undeclared): %v", err)
+	}
+	s2 := &Server{logger: slog.Default()}
+	s2.UseLoopDefinitionRegistry(regUndeclared)
+	s2.UseDocumentReader(func(context.Context, string) (*documents.DocumentRecord, error) {
+		return &documents.DocumentRecord{Ref: "self:notes.md", Body: "## Status Line\n\nan impostor verdict\n\n## Details\n\nbody\n"}, nil
+	})
+	reqU := httptest.NewRequest(http.MethodGet, "/v1/loops/plainloop/outputs/notes", nil)
+	reqU.Header.Set("Accept", "text/plain")
+	reqU.SetPathValue("name", "plainloop")
+	reqU.SetPathValue("output", "notes")
+	recU := httptest.NewRecorder()
+	s2.handleLoopOutputGet(recU, reqU)
+	if recU.Code != http.StatusNotAcceptable {
+		t.Errorf("undeclared contract served text/plain: %d %q", recU.Code, recU.Body.String())
 	}
 
 	// A verdict-less document refuses the plain representation.
