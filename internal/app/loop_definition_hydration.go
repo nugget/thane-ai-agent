@@ -19,9 +19,33 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 	// fixed by editing the document, never by starting again, so the CLI
 	// exits terminally instead of leaving a supervisor to retry the same
 	// bytes forever.
-	coreDefinitions, err := loadCoreLoopDefinitions(a.cfg.Paths["core"])
+	// The core path resolves with the same fallback the validate
+	// pre-flight uses: Paths["core"] when App wiring has populated it,
+	// the workspace derivation otherwise. The fallback is load-bearing
+	// at boot, not just in pre-flight — the definition registry is
+	// built before the document roots populate Paths, so reading the
+	// map alone means reading an empty string: the loader silently
+	// no-ops, and the shipped documents never take effect. Production
+	// ran that way undetected for as long as the legacy config enabled
+	// flags existed to seed the embedded defaults instead; the day the
+	// last flag was removed, all three reflective loops and their
+	// container vanished from a healthy-looking boot.
+	corePath := strings.TrimSpace(a.cfg.Paths["core"])
+	if corePath == "" {
+		corePath = strings.TrimSpace(a.cfg.CoreRoot())
+	}
+	coreDefinitions, err := loadCoreLoopDefinitions(corePath)
 	if err != nil {
 		return nil, coreAuthoring(fmt.Errorf("core loop definitions: %w", err))
+	}
+	// Count and source are forensics the next silent absence deserves:
+	// a boot that loaded zero core documents should say so where the
+	// registry-initialized event is read.
+	if a.logger != nil {
+		a.logger.Info("core loop definitions loaded",
+			"dir", corePath,
+			"count", len(coreDefinitions),
+		)
 	}
 	baseDefinitions := append(coreDefinitions, a.cfg.Loops.Definitions...)
 	seen := make(map[string]struct{}, len(baseDefinitions))
