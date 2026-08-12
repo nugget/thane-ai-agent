@@ -164,13 +164,21 @@ type Store struct {
 type Options struct {
 	// AllowedSignersPath points git signature verification at an
 	// existing OpenSSH allowed signers file. Empty writes a
-	// repository-local .allowed_signers file containing the signing key.
+	// repository-local .allowed_signers file containing the signing key
+	// plus the declared seed signers.
 	AllowedSignersPath string
 
-	// SeedSigners are the keys entitled to establish this repository.
-	// They are written into .allowed_signers alongside the agent key
-	// when the file is first created, and never applied again — a root
-	// that already has a trust surface owns it.
+	// SeedSigners are the keys entitled to establish this repository, in
+	// two senses. At birth they are written into .allowed_signers
+	// alongside the agent key when the file is first created, and never
+	// rewritten from config — a root that already has a trust surface
+	// owns it. Permanently they are a verification floor: a seed remains
+	// able to sign this root whatever the in-tree file says, so
+	// verification falls back to the seed set when .allowed_signers does
+	// not vouch for a commit (logged as a WARN each time — see
+	// logSeedFloorUsed). Removing a key from .allowed_signers therefore
+	// does not revoke it while config still declares it here; dropping it
+	// from the declared seed set is what withdraws the entitlement.
 	SeedSigners []TrustedSigner
 }
 

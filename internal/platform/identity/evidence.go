@@ -91,9 +91,15 @@ type BirthEvidence struct {
 	Commit GitObjectID `json:"commit"`
 	// AssertedAt is the birth time claimed inside that signed commit.
 	AssertedAt time.Time `json:"asserted_at"`
-	// TimeAssurance states what supports AssertedAt.
+	// TimeAssurance states what supports AssertedAt. Schema version 1 has
+	// exactly one value, "signed_claim": the time is asserted inside the
+	// signed birth commit, not witnessed by any external clock.
 	TimeAssurance string `json:"time_assurance"`
-	// Anchor distinguishes operator-anchored, self-signed, and unknown posture.
+	// Anchor is the declared seed posture: "operator" when the declared
+	// seed set is not solely the agent's own key, "self_signed" when it
+	// is, and "unknown" when no seeds are declared. It reflects the
+	// declaration, not who signed the birth — Verification.Admission is
+	// what checks the birth against it.
 	Anchor string `json:"anchor"`
 }
 
@@ -158,7 +164,15 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 		return evidence, fmt.Errorf("identity evidence: unsupported git object format %q", objectFormat)
 	}
 
-	rootOutput, err := gitScalar(ctx, absCore, "rev-list", "--max-parents=0", "HEAD")
+	// The trailing "--" is load-bearing, for the same reason it is on the
+	// admission seam's rootCommits: core is a directory an agent writes
+	// files into, and a loose file named HEAD there makes the revision
+	// ambiguous with a path — git then refuses with usage advice instead of
+	// answering, and /v1/identity would 503 over a file beside the history
+	// rather than anything wrong with the history itself. The separator
+	// says everything before it is a revision; --end-of-options guards the
+	// option boundary the same way.
+	rootOutput, err := gitScalar(ctx, absCore, "rev-list", "--max-parents=0", "--end-of-options", "HEAD", "--")
 	if err != nil {
 		return evidence, fmt.Errorf("identity evidence: read core birth: %w", err)
 	}
@@ -168,7 +182,7 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 	}
 	rootCommit := roots[0]
 
-	headCommit, err := gitScalar(ctx, absCore, "rev-parse", "--verify", "HEAD^{commit}")
+	headCommit, err := gitScalar(ctx, absCore, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
 	if err != nil {
 		return evidence, fmt.Errorf("identity evidence: read core HEAD: %w", err)
 	}
@@ -241,7 +255,14 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 	}
 	if admissionErr != nil {
 		admission.Status = EvidenceFailed
-		admission.Detail = "core birth or trust-file history does not satisfy the declared seed policy"
+		// With no declared seeds there is no policy for the history to
+		// fail; saying it "does not satisfy" one would claim something
+		// about core's history that was never observed.
+		if len(seeds) == 0 {
+			admission.Detail = "no seed policy is declared for core, so its birth cannot be judged"
+		} else {
+			admission.Detail = "core birth or trust-file history does not satisfy the declared seed policy"
+		}
 	}
 
 	head := CheckEvidence{
@@ -355,10 +376,9 @@ func verifyActiveIdentity(ctx context.Context, repo, headCommit, signingFingerpr
 }
 
 func gitScalar(ctx context.Context, repo string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
-	out, err := cmd.CombinedOutput()
+	out, err := gitStdout(ctx, repo, args...)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -367,12 +387,26 @@ func gitBlob(ctx context.Context, repo, commit, name string) ([]byte, error) {
 	if strings.Contains(name, ":") {
 		return nil, fmt.Errorf("invalid birth artifact name %q", name)
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", repo, "show", commit+":"+name)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	return gitStdout(ctx, repo, "show", commit+":"+name)
+}
+
+// gitStdout runs a read-only git command and returns its stdout alone.
+// Stderr travels only in the error path: the values parsed from these
+// commands become commit hashes, YAML policy, SSH keys, and certificates,
+// and a stderr warning printed alongside a successful command must never
+// contaminate them.
+func gitStdout(ctx context.Context, repo string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("%w: %s", err, msg)
+		}
+		return nil, err
 	}
-	return out, nil
+	return stdout.Bytes(), nil
 }
 
 func coreWorktreeClean(ctx context.Context, repo string) (bool, error) {

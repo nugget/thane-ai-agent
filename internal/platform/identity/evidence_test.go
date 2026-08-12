@@ -109,6 +109,55 @@ func TestObserveReportsDirtyCore(t *testing.T) {
 	}
 }
 
+// TestObserveSurvivesAFileNamedHEAD pins the revision/path hardening on the
+// evidence git helpers. Core is a directory an agent writes files into, and
+// a loose file named HEAD makes a bare revision argument ambiguous with a
+// path — git then refuses with usage advice instead of answering, which
+// would fail the whole observation (and 503 /v1/identity) over a file
+// beside the history rather than anything wrong with the history itself.
+func TestObserveSurvivesAFileNamedHEAD(t *testing.T) {
+	t.Parallel()
+	coreDir, seeds := evidenceCore(t, false)
+	if err := os.WriteFile(filepath.Join(coreDir, "HEAD"), []byte("a document, not a revision\n"), 0o644); err != nil {
+		t.Fatalf("write HEAD file: %v", err)
+	}
+
+	got, err := Observe(t.Context(), coreDir, seeds)
+	if err != nil {
+		t.Fatalf("Observe with a file named HEAD: %v", err)
+	}
+	if got.Core.Birth.Commit.OID == "" {
+		t.Fatal("birth commit OID is empty")
+	}
+	if got.Core.Verification.Admission.Status != EvidenceVerified {
+		t.Fatalf("admission = %+v, want verified", got.Core.Verification.Admission)
+	}
+}
+
+// TestObserveWithoutSeedsSaysNoPolicyRatherThanFailedPolicy pins the
+// honesty split in the admission detail: with no declared seeds there is
+// no policy for core's history to fail, and the evidence must say the
+// birth cannot be judged rather than claim a nonexistent policy was
+// checked and unsatisfied.
+func TestObserveWithoutSeedsSaysNoPolicyRatherThanFailedPolicy(t *testing.T) {
+	t.Parallel()
+	coreDir, _ := evidenceCore(t, false)
+
+	got, err := Observe(t.Context(), coreDir, nil)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got.Core.Verification.Admission.Status != EvidenceFailed {
+		t.Fatalf("admission = %+v, want failed", got.Core.Verification.Admission)
+	}
+	if want := "no seed policy is declared for core, so its birth cannot be judged"; got.Core.Verification.Admission.Detail != want {
+		t.Fatalf("admission detail = %q, want %q", got.Core.Verification.Admission.Detail, want)
+	}
+	if got.Core.Birth.Anchor != "unknown" {
+		t.Fatalf("anchor = %q, want unknown when no seeds are declared", got.Core.Birth.Anchor)
+	}
+}
+
 func TestObserveRejectsMissingCore(t *testing.T) {
 	t.Parallel()
 	if _, err := Observe(t.Context(), filepath.Join(t.TempDir(), "missing"), nil); err == nil {

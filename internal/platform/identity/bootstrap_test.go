@@ -109,6 +109,55 @@ func TestBootstrapCoreCreatesSignedBirthCommit(t *testing.T) {
 	verifyGitCommit(t, coreDir)
 }
 
+// TestBootstrapCorePostureFieldsAgree pins the derivation contract on
+// [BootstrapResult]: SelfSigned and OperatorPrincipal are two projections
+// of the same founding fact, so on a created core they can never disagree.
+func TestBootstrapCorePostureFieldsAgree(t *testing.T) {
+	requireGit(t)
+
+	tests := []struct {
+		name          string
+		operator      bool
+		wantPrincipal string
+	}{
+		{name: "self signed", wantPrincipal: ""},
+		{name: "operator anchored", operator: true, wantPrincipal: "operator@example.com"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var operator *OperatorSigner
+			if tc.operator {
+				pair, err := GenerateSigningKeyPair("operator")
+				if err != nil {
+					t.Fatalf("GenerateSigningKeyPair: %v", err)
+				}
+				keyPath := filepath.Join(t.TempDir(), "operator_ed25519")
+				if err := os.WriteFile(keyPath, pair.PrivatePEM, 0o600); err != nil {
+					t.Fatalf("write operator key: %v", err)
+				}
+				operator = &OperatorSigner{
+					Principal:      "operator@example.com",
+					PublicKey:      pair.Public,
+					PrivateKeyPath: keyPath,
+				}
+			}
+			result, err := BootstrapCore(t.Context(), filepath.Join(t.TempDir(), "core"), "pocket", operator, nil, nil)
+			if err != nil {
+				t.Fatalf("BootstrapCore: %v", err)
+			}
+			if !result.Created {
+				t.Fatal("Created = false, want true")
+			}
+			if result.OperatorPrincipal != tc.wantPrincipal {
+				t.Fatalf("OperatorPrincipal = %q, want %q", result.OperatorPrincipal, tc.wantPrincipal)
+			}
+			if result.SelfSigned != (result.OperatorPrincipal == "") {
+				t.Fatalf("SelfSigned = %v disagrees with OperatorPrincipal = %q", result.SelfSigned, result.OperatorPrincipal)
+			}
+		})
+	}
+}
+
 func TestBootstrapCoreSkipsCompleteIdentity(t *testing.T) {
 	requireGit(t)
 
