@@ -8,11 +8,16 @@ updates:
       prefix: "chore"
   # Hermetic dev tools (golangci-lint, vacuum) are pinned in tools/go.mod via
   # the Go tool directive. Tracking that module is what turns their version
-  # bumps into Dependabot PRs.
+  # bumps into Dependabot PRs — but the tool directive records every pin as
+  # an `// indirect` require, and Dependabot's gomod version updates only
+  # consider direct dependencies by default, so without the explicit allow
+  # below this entry has an empty update set and never opens a PR.
   - package-ecosystem: gomod
     directory: /tools
     schedule:
       interval: weekly
+    allow:
+      - dependency-type: all
     commit-message:
       prefix: "chore"
   - package-ecosystem: github-actions

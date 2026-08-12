@@ -1,23 +1,27 @@
 # Deployment
 
-Thane ships as a single Go binary with production-grade service definitions
-for macOS and Linux. Go's cross-compilation means Thane runs anywhere —
-these are the platforms with tested service configs today.
+Thane ships as a single Go binary that runs against a workspace. The
+workspace is the deployable unit: `thane init` bootstraps it, the config
+lives inside it at `<workspace>/core/config.yaml` under signed version
+control, and `thane serve -workspace <dir>` (default `~/Thane`) is the
+one process a supervisor needs to keep alive. Go's cross-compilation
+means Thane runs anywhere — macOS and Linux are the tested platforms.
 
 ## macOS
-
-User launch agent — zero sudo required.
 
 For production use, create a dedicated macOS user account for Thane
 (standard or administrator). This keeps Thane's data, config, and runtime
 isolated from your personal account. Everything lives under `~/Thane/` in
 that user's home directory — Finder-visible, easy to inspect and back up.
 
+The [companion app](#macos-companion-app) owns the process lifecycle for
+production macOS deployments. To run an instance by hand:
+
 ```bash
 just install                  # -> ~/Thane/bin/thane
-just service-install          # -> ~/Library/LaunchAgents/info.nugget.thane.plist
-launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist
-just logs                     # Tail the latest ~/Thane/archive/sources/thane/events/... JSONL segment
+just init ~/Thane             # Bootstrap the workspace (core trust root, signed config)
+~/Thane/bin/thane serve       # Loads ~/Thane/core/config.yaml; -workspace points elsewhere
+just logs ~/Thane             # Tail the latest ~/Thane/archive/sources/thane/events/... JSONL segment
 just alerts ~/Thane WARN 2    # Follow new WARN+ records across every structured log dataset
 ```
 
@@ -49,30 +53,49 @@ needs manual approval.
 
 ### macOS Companion App
 
-A native macOS companion app is in early development at
-[thane-agent-macos](https://github.com/nugget/thane-agent-macos). The
-companion app aims to simplify deployment on macOS — managing the Thane
-process, handling permissions, and providing a native menu bar presence.
+The native macOS companion app at
+[thane-agent-macos](https://github.com/nugget/thane-agent-macos) is the
+production supervisor on macOS — it manages the Thane process, handles
+permissions, applies auto-updates, and provides a native menu bar
+presence. `just deploy-macos user@host` builds, notarizes, and installs
+a signed pkg on a companion-managed host.
 
 ## Linux
 
-systemd with dedicated service user and full security hardening:
+Thane ships no supervisor unit: it is one static binary plus a workspace,
+so it slots into whatever supervision the host already runs. Give the
+service its own user, put the workspace in that user's territory, and
+point the supervisor at `thane serve -workspace`:
 
 ```bash
-sudo just install             # -> /usr/local/bin/thane
-sudo just service-install     # Creates thane user, installs unit, enables service
-sudo cp examples/config.example.yaml /etc/thane/config.yaml
-# Edit /etc/thane/config.yaml with your settings
-sudo systemctl start thane
+sudo useradd --system --create-home --home-dir /var/lib/thane --shell /usr/sbin/nologin thane
+sudo just install                              # -> /usr/local/bin/thane
+sudo -u thane /usr/local/bin/thane init /var/lib/thane
 ```
 
-The systemd unit includes comprehensive sandboxing:
-- `ProtectSystem=strict` — read-only filesystem except allowed paths
-- `NoNewPrivileges` — no privilege escalation
-- `PrivateTmp` — isolated temp directory
-- `MemoryDenyWriteExecute` — W^X enforcement
-- `SystemCallFilter` — restricted syscalls
-- Dedicated user with no login shell
+A minimal systemd unit is a few lines:
+
+```ini
+[Unit]
+Description=Thane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=thane
+ExecStart=/usr/local/bin/thane serve -workspace /var/lib/thane
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The config lives at `/var/lib/thane/core/config.yaml`, inside the
+workspace's signed history — edit and commit it there (there is no
+`/etc/thane`). `thane validate` reports anything the boot gate would
+refuse, and `just alerts /var/lib/thane` follows warnings and errors
+from the workspace's structured log index.
 
 ## Network Requirements
 

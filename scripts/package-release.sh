@@ -32,13 +32,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$package_dir/examples" "$package_dir/init"
+mkdir -p "$package_dir/examples"
 
 install -m 755 "$binary_path" "$package_dir/thane"
 install -m 644 "$root_dir/README.md" "$package_dir/README.md"
 install -m 644 "$root_dir/LICENSE" "$package_dir/LICENSE"
 cp -R "$root_dir/examples/." "$package_dir/examples/"
-cp -R "$root_dir/init/." "$package_dir/init/"
 
 case "$target_os" in
     darwin)
