@@ -39,7 +39,7 @@ outputs:
       facets:
         - status_line
         - digest
-      purpose: 'Current metacognitive state, published at three fidelities. The full body is private working memory: operational baselines (what normal looks like, per subsystem and loop), active concerns with evidence and severity, incidents observed and escalated, and sleep reasoning that should persist across fresh loop iterations. The digest is the actionable summary a reader can act on without opening the document. The status_line is the verdict — the one sentence in the system that is a judgment about the whole system, injected into interactive context each turn.'
+      purpose: 'Current metacognitive state, published at three fidelities. The full body is the loop''s own working memory: operational baselines (what normal looks like, per subsystem and loop), active concerns with evidence and severity, incidents observed and escalated, and sleep reasoning that should persist across fresh loop iterations. The digest is the actionable summary a reader can act on without opening the document. The status_line is the verdict — the one sentence in the system that is a judgment about the whole system, injected into interactive context each turn.'
 tags:
     - metacognitive
     - diagnostics

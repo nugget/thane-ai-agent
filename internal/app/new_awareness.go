@@ -208,6 +208,17 @@ func (a *App) initAwareness(s *newState) error {
 	// class-aware projection so the window reads closed→open for a
 	// garage_door, not off→on — injected here because contextfmt imports
 	// the homeassistant package and the provider cannot import it back.
+	// The system's one-line self-assessment: metacog's published
+	// status_line facet, the annunciator of judgments beside the state
+	// window's annunciator of facts (#1351). Always-on (ambient
+	// interactive awareness) — worker loops don't carry the fleet's
+	// verdict; quiet until the metacognitive document publishes facets.
+	// Registered BEFORE the state window on purpose: both write the
+	// Live State bucket, cap priority is registration order, and the
+	// one-line verdict must survive a busy unbounded window — not the
+	// other way around.
+	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
+
 	stateWindowProvider := homeassistant.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
 		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
@@ -215,13 +226,6 @@ func (a *App) initAwareness(s *newState) error {
 		logger,
 	)
 	a.loop.RegisterAlwaysContextProvider(stateWindowProvider)
-
-	// The system's one-line self-assessment: metacog's published
-	// status_line facet, the annunciator of judgments beside the state
-	// window's annunciator of facts (#1351). Always-on (ambient
-	// interactive awareness) — worker loops don't carry the fleet's
-	// verdict. Quiet until the metacognitive document publishes facets.
-	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
 
 	// The window's per-entity retention rings back the subscription
 	// transition logs (#1210): declared logs render from here, and
