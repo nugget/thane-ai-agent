@@ -168,17 +168,23 @@ paths:
                   trust:
                     type: string
                     enum: [unverified]
+                    example: unverified
                     description: >-
                       Present only when the instance is running on a config
                       from outside its trust boundary (`-insecure-config`).
                   trust_detail:
                     type: string
+                    example: >-
+                      running on -insecure-config; direct human egress and
+                      service loops are withheld until core verifies
                     description: >-
                       Human-readable explanation of the unverified posture
                       and which capabilities are withheld. Present only
                       alongside `trust`.
                   dependencies:
                     type: object
+                    example:
+                      signal: { name: signal, ready: true }
                     description: >-
                       Watched dependencies keyed by name, present when
                       dependency health is wired. Any entry with
