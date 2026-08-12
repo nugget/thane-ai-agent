@@ -206,8 +206,9 @@ muddle them and the loop drifts.
   persona, ego, persona-tagged talents, always-on ambient context),
   which is the largest single prompt cost in a background loop and
   pure latency on a local model. The worker keeps its always-tagged
-  talents, its tagged guidance, its task, and current conditions — it
-  sheds only the self it was never using. Leave the field unset for a
+  talents, its tagged guidance, its declared subscriptions and its own
+  loop context, its task, and current conditions — it sheds only the
+  self it was never using, never its eyes. Leave the field unset for a
   loop whose work needs the identity: reflection or judgment about
   the agent itself, or composing messages in the agent's own voice.
   The mode is per-loop and never inherited; when in doubt, leave it

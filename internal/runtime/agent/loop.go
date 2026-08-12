@@ -301,12 +301,17 @@ type Loop struct {
 	// before SetTagContextAssembler is called. SetTagContextAssembler
 	// drains them into the assembler at wiring time. After that, the
 	// pending fields are nil and Register* calls forward directly.
-	pendingProvidersMu     sync.Mutex
-	pendingTagProviders    map[string]TagContextProvider
-	pendingAlwaysProviders []TagContextProvider
+	// Always-on and loop-scoped registrations stage in one interleaved
+	// list for the same reason the assembler holds them in one: order
+	// is prompt order, and the drain must not regroup the classes.
+	pendingProvidersMu    sync.Mutex
+	pendingTagProviders   map[string]TagContextProvider
+	pendingGatedProviders []gatedContextProvider
 
 	// tagContextAssembler builds typed context sections from tagged KB
-	// articles, tagged providers, and always-on providers.
+	// articles, tagged providers, and the gated providers (always-on
+	// ambient context plus loop-scoped subscriptions/self view, each
+	// class behind its own ContextRequest gate).
 	// Set via SetTagContextAssembler; nil disables tag context.
 	tagContextAssembler *TagContextAssembler
 
@@ -472,7 +477,28 @@ func (l *Loop) RegisterAlwaysContextProvider(p TagContextProvider) {
 		l.tagContextAssembler.RegisterAlwaysProvider(p)
 		return
 	}
-	l.pendingAlwaysProviders = append(l.pendingAlwaysProviders, p)
+	l.pendingGatedProviders = append(l.pendingGatedProviders, gatedContextProvider{provider: p})
+	l.pendingProvidersMu.Unlock()
+}
+
+// RegisterLoopScopedContextProvider adds a provider to the loop-scoped
+// bucket: the running loop's own operational context (declared entity
+// subscriptions, its "This loop" self view). Loop-scoped providers fire
+// on every loop turn regardless of prompt mode — a task-mode worker
+// sheds the ambient identity but keeps its own eyes — and are
+// suppressed only where SuppressAlwaysContext is set (delegate runs).
+// Same staging semantics as [Loop.RegisterTagContextProvider].
+func (l *Loop) RegisterLoopScopedContextProvider(p TagContextProvider) {
+	if p == nil {
+		return
+	}
+	l.pendingProvidersMu.Lock()
+	if l.tagContextAssembler != nil {
+		l.pendingProvidersMu.Unlock()
+		l.tagContextAssembler.RegisterLoopScopedProvider(p)
+		return
+	}
+	l.pendingGatedProviders = append(l.pendingGatedProviders, gatedContextProvider{provider: p, loopScoped: true})
 	l.pendingProvidersMu.Unlock()
 }
 
@@ -615,9 +641,9 @@ func (l *Loop) ConfigureChannelDelegation(w ChannelDelegationWiring) {
 func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	l.pendingProvidersMu.Lock()
 	pendingTagged := l.pendingTagProviders
-	pendingAlways := l.pendingAlwaysProviders
+	pendingGated := l.pendingGatedProviders
 	l.pendingTagProviders = nil
-	l.pendingAlwaysProviders = nil
+	l.pendingGatedProviders = nil
 	l.tagContextAssembler = a
 	l.pendingProvidersMu.Unlock()
 
@@ -627,8 +653,12 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	for tag, p := range pendingTagged {
 		a.RegisterTaggedProvider(tag, p)
 	}
-	for _, p := range pendingAlways {
-		a.RegisterAlwaysProvider(p)
+	for _, gp := range pendingGated {
+		if gp.loopScoped {
+			a.RegisterLoopScopedProvider(gp.provider)
+		} else {
+			a.RegisterAlwaysProvider(gp.provider)
+		}
 	}
 }
 
@@ -643,10 +673,10 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	for tag, p := range l.pendingTagProviders {
 		pendingTagged[tag] = p
 	}
-	pendingAlways := append([]TagContextProvider(nil), l.pendingAlwaysProviders...)
+	pendingGated := append([]gatedContextProvider(nil), l.pendingGatedProviders...)
 	l.pendingProvidersMu.Unlock()
 
-	if len(pendingTagged) == 0 && len(pendingAlways) == 0 {
+	if len(pendingTagged) == 0 && len(pendingGated) == 0 {
 		return nil
 	}
 	assembler = NewTagContextAssembler(TagContextAssemblerConfig{
@@ -656,8 +686,12 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	for tag, p := range pendingTagged {
 		assembler.RegisterTaggedProvider(tag, p)
 	}
-	for _, p := range pendingAlways {
-		assembler.RegisterAlwaysProvider(p)
+	for _, gp := range pendingGated {
+		if gp.loopScoped {
+			assembler.RegisterLoopScopedProvider(gp.provider)
+		} else {
+			assembler.RegisterAlwaysProvider(gp.provider)
+		}
 	}
 	return assembler
 }
@@ -1155,20 +1189,26 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	}
 
 	// 7. Typed context buckets (capability knowledge + ambient context).
-	// TagContextAssembler walks tagged KB articles, tagged providers, and
-	// always-on providers, then returns named buckets so durable guidance,
-	// continuity, related context, and live state are not flattened into
-	// one generic section. Always-on providers are gated by IncludeAlways:
-	// main loop runs include them; delegate runs (which set
-	// req.SuppressAlwaysContext via the loops launch) do not.
+	// TagContextAssembler walks tagged KB articles, tagged providers,
+	// always-on providers, and loop-scoped providers, then returns named
+	// buckets so durable guidance, continuity, related context, and live
+	// state are not flattened into one generic section. The two gated
+	// sources answer different questions: IncludeAlways admits the
+	// ambient experiential context and drops on task-mode and delegate
+	// runs alike; IncludeLoopScoped admits the running loop's own
+	// subscriptions and self view, which task mode keeps — a worker
+	// sheds the ambient self, not its eyes — and only delegate runs
+	// (req.SuppressAlwaysContext via the loops launch) drop.
 	if assembler := l.contextAssemblerForPrompt(); assembler != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
+		suppressAlways := tools.SuppressAlwaysContextFromContext(ctx)
 		req := ContextRequest{
-			UserMessage:   userMessage,
-			ActiveTags:    tags,
-			IncludeAlways: !taskPrompt && !tools.SuppressAlwaysContextFromContext(ctx),
+			UserMessage:       userMessage,
+			ActiveTags:        tags,
+			IncludeAlways:     !taskPrompt && !suppressAlways,
+			IncludeLoopScoped: !suppressAlways,
 		}
 		for _, contextSection := range assembler.BuildSections(haCtx, req) {
 			title := contextSection.Bucket.Title()

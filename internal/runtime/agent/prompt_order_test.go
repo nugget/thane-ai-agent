@@ -53,6 +53,10 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 		content: "CONTINUITY_MARKER",
 		bucket:  agentctx.ContextBucketContinuity,
 	})
+	l.RegisterLoopScopedContextProvider(&mockTagProvider{
+		content: "LOOP_SCOPED_MARKER",
+		bucket:  agentctx.ContextBucketLiveState,
+	})
 
 	_, sections := l.buildSystemPromptWithProfileSections(
 		testCtxForLoop(l),
@@ -85,6 +89,7 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 	assertPromptSectionContains(t, sections, "TAGGED GUIDANCE", "TAGGED_GUIDANCE_MARKER")
 	assertPromptSectionContains(t, sections, "CONTINUITY CONTEXT", "CONTINUITY_MARKER")
 	assertPromptSectionContains(t, sections, "LIVE STATE", "LIVE_STATE_MARKER")
+	assertPromptSectionContains(t, sections, "LIVE STATE", "LOOP_SCOPED_MARKER")
 }
 
 func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
@@ -126,6 +131,13 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 		content: "CONTINUITY_MARKER",
 		bucket:  agentctx.ContextBucketContinuity,
 	})
+	// Loop-scoped context is the #1363 regression guard: a task-mode
+	// worker sheds the ambient bucket (asserted absent below) but must
+	// keep its own subscriptions and self view.
+	l.RegisterLoopScopedContextProvider(&mockTagProvider{
+		content: "LOOP_SCOPED_MARKER",
+		bucket:  agentctx.ContextBucketLiveState,
+	})
 
 	ctx := agentctx.WithPromptMode(testCtxForLoop(l), agentctx.PromptModeTask)
 	_, sections := l.buildSystemPromptWithProfileSections(
@@ -154,6 +166,7 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 	)
 	assertPromptSectionContains(t, sections, "TAGGED GUIDANCE", "TAGGED_GUIDANCE_MARKER")
 	assertPromptSectionContains(t, sections, "LIVE STATE", "LIVE_STATE_MARKER")
+	assertPromptSectionContains(t, sections, "LIVE STATE", "LOOP_SCOPED_MARKER")
 }
 
 func TestBuildSystemPromptSections_CoreFileBudgetTruncation(t *testing.T) {

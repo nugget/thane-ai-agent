@@ -42,8 +42,10 @@ func (a *App) initAwareness(s *newState) error {
 	// so it is self-aware — id/state/parent/intent/cadence/effective-tags —
 	// without a loop_status tool call (#1106 B3). One provider serves every
 	// non-container loop; it resolves the current loop from the iteration's
-	// loop_id.
-	a.loop.RegisterAlwaysContextProvider(agent.NewLoopSelfContextProvider(a.loopViewByID))
+	// loop_id. Loop-scoped, not always-on: this is the loop's own
+	// operational context, which a task-mode worker keeps while shedding
+	// the ambient identity (#1363).
+	a.loop.RegisterLoopScopedContextProvider(agent.NewLoopSelfContextProvider(a.loopViewByID))
 	a.loop.RegisterAlwaysContextProvider(agent.NewChannelOverviewProvider(agent.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
 		Phones: &contactPhoneResolver{store: a.contactStore},
@@ -140,14 +142,16 @@ func (a *App) initAwareness(s *newState) error {
 		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
-		// One always-on provider walks the loop registry's ancestor
-		// chain on each iteration to assemble effective subscriptions
-		// for the current loop. Per-tag watchlist providers are gone —
-		// the structural parent/child binding from container loops
-		// replaces the scope_tag indirection.
+		// One provider walks the loop registry's ancestor chain on each
+		// iteration to assemble effective subscriptions for the current
+		// loop. Per-tag watchlist providers are gone — the structural
+		// parent/child binding from container loops replaces the
+		// scope_tag indirection. Loop-scoped, not always-on: a loop's
+		// declared watch set is its eyes, and a task-mode worker keeps
+		// its eyes while shedding the ambient identity (#1363).
 		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, a.ha, logger)
 		loopSubProvider.SetRegistryClient(a.ha)
-		a.loop.RegisterAlwaysContextProvider(loopSubProvider)
+		a.loop.RegisterLoopScopedContextProvider(loopSubProvider)
 
 		logger.Info("entity watchlist context enabled")
 	}

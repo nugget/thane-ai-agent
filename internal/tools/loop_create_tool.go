@@ -937,7 +937,7 @@ func thaneLoopCreateSchema() map[string]any {
 			"prompt_mode": map[string]any{
 				"type":        "string",
 				"enum":        []string{"full", "task"},
-				"description": "Optional system-prompt shape (service/event_driven). \"task\" is the compact worker prompt: it sheds the reflective identity layer while keeping tagged guidance, the task, and current conditions — right for mechanical maintainer/watcher/poller loops, where identity prose is the largest single prompt cost. Omit (or set \"full\") for loops that reflect on the agent or compose messages in its voice. Changeable later, live, via loop_definition_update.",
+				"description": "Optional system-prompt shape (service/event_driven). \"task\" is the compact worker prompt: it sheds the reflective identity layer while keeping tagged guidance, the loop's declared subscriptions and self view, the task, and current conditions — right for mechanical maintainer/watcher/poller loops, where identity prose is the largest single prompt cost. Omit (or set \"full\") for loops that reflect on the agent or compose messages in its voice. Changeable later, live, via loop_definition_update.",
 			},
 			"sleep_min": map[string]any{
 				"type":        "string",

@@ -77,8 +77,9 @@ func (p *LoopSubscriptionProvider) SetRegistryClient(registries HARegistryClient
 // and renders the effective subscription list. Returns empty string
 // when no loop_id is bound to ctx, the loop is no longer registered,
 // or the effective list is empty — each is a normal quiescent state,
-// not an error. Registered as an always-on provider via
-// [agent.Loop.RegisterAlwaysContextProvider].
+// not an error. Registered as a loop-scoped provider via
+// [agent.Loop.RegisterLoopScopedContextProvider]: the watch set is the
+// loop's own operational context, rendered in every prompt mode.
 func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	if p.loops == nil {
 		return "", nil
@@ -109,8 +110,15 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.
 	// Defensive: if the store query errors, log and continue
 	// without the filter (better to double-render than to break
 	// context entirely).
+	//
+	// Gated on IncludeAlways because "already visible" is a claim
+	// about THIS turn's prompt: [WatchlistProvider] rides the
+	// always-on bucket, so on a task-mode turn it renders nothing
+	// and nothing suppresses — otherwise an entity subscribed both
+	// always-visible and loop-scoped would be emitted by neither
+	// provider (#1363 review).
 	alreadyVisible := make(map[string]struct{})
-	if p.store != nil && len(subs) > 0 {
+	if req.IncludeAlways && p.store != nil && len(subs) > 0 {
 		candidates := make([]string, 0, len(subs))
 		for _, sub := range subs {
 			candidates = append(candidates, sub.EntityID)

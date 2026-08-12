@@ -47,7 +47,7 @@ validation from `loop_definition_lint` before anything persists.)
 
 | Key | Meaning |
 |---|---|
-| `prompt_mode` | `full` (default) wears the complete identity — persona, ego, axioms, always-on context. `task` is the compact worker prompt for mechanical maintainer/watcher/poller loops; it keeps tagged guidance, the task, and current conditions while shedding the identity. Loops that reflect on the agent or speak in its voice stay `full` |
+| `prompt_mode` | `full` (default) wears the complete identity — persona, ego, axioms, always-on context. `task` is the compact worker prompt for mechanical maintainer/watcher/poller loops; it keeps tagged guidance, the loop's declared subscriptions and self view, the task, and current conditions while shedding the identity. Loops that reflect on the agent or speak in its voice stay `full` |
 | `profile` | Routing and request shaping: `model` (pin a model), `quality_floor` (minimum model rating 1–10), `mission` (context profile), `local_only` / `prefer_speed` (`"true"`/`"false"` strings), `delegation_gating` (`disabled` gives direct tool access), `exclude_tools`, `instructions` (self-only text prepended to every iteration's task), `extra_hints` (free-form routing hints) |
 
 ## Operation and completion
