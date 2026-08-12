@@ -176,6 +176,49 @@ same fix after a release ships is migration work.
   - [ ] Premium/ops/assist semantics still match operator expectations
   - [ ] Dynamic model-registry overlays reviewed for any temporary canary-only policy changes
   - [ ] MCP server configuration verifies the right tools will land in the intended tags/toolboxes
+- [ ] **Toolchain and recipe audit**
+
+  Pinned tools exist for reproducibility, not preservation. A pin ages
+  silently: the canonical example is vacuum, pinned at v0.29.5 while
+  its schema-validation race
+  ([#1078](https://github.com/nugget/thane-ai-agent/issues/1078))
+  flaked the CI gate for weeks — upstream shipped three releases in
+  that window, and nobody looked, because no release step said to
+  look. Workarounds are the second half of the same failure: a retry
+  loop, a timeout bump, or a lint suppression written against a tool's
+  bug outlives the bug unless something forces the question. Running
+  this audit once per release is what makes "periodically" automatic.
+
+  - [ ] **Enumerate and bump the pins.** The homes:
+        [`tools/go.mod`](../tools/go.mod) — golangci-lint and vacuum,
+        the hermetic dev tools `just ci` runs — plus the `go`
+        directives in [`go.mod`](../go.mod) and `tools/go.mod`, and
+        the action pins in
+        [`.github/workflows/`](../.github/workflows/). Check each
+        upstream for newer releases and read the changelogs
+        specifically for fixes to problems we have worked around.
+        Bump deliberately: one tool per commit, full `just ci` after
+        each — a linter bump that surfaces new findings is
+        pre-release work by definition, cheap here and a
+        merge-blocker later.
+  - [ ] **Re-justify tool workarounds after each bump.** Every retry
+        loop, timeout flag, and `//nolint` written against a tool bug
+        was built for a specific version of that tool. After a bump,
+        test whether the workaround is still needed and delete it
+        when it isn't. The `lint-openapi` retry guard is the standing
+        example: once the upstream race is fixed, the retry is three
+        lines of ceremony hiding the fact that the problem is gone.
+  - [ ] **Audit the build/ci/deploy recipes against reality.** Walk
+        the `build`, `test`, and `deploy` groups in the
+        [`justfile`](../justfile) and ask of each recipe: does this
+        still describe how the thing actually happens? Deployment
+        reality drifts fastest — the launchd/systemd `service-*`
+        recipes describe supervisor paths that production no longer
+        uses (the companion app owns the prod lifecycle), and a
+        recipe that silently stopped being the real path is worse
+        than a deleted one. Prune what is dead, mark what is
+        dev-only, and confirm the `ci` recipe's step list still
+        matches the gate GitHub Actions runs.
 - [ ] **Code surface hygiene**
   - [ ] New code paths use inherited/component loggers, not ad-hoc `slog.Default()` where request or subsystem context matters
 
