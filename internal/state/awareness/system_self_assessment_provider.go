@@ -75,7 +75,7 @@ func (p *SystemSelfAssessmentProvider) TagContext(ctx context.Context, _ agentct
 	if !ok {
 		return "", nil
 	}
-	verdict, ok := payload.FacetByKey("status_line")
+	verdict, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine))
 	if !ok || strings.TrimSpace(verdict) == "" {
 		return "", nil
 	}

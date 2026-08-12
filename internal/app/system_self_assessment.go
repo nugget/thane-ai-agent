@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
+
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
@@ -28,11 +30,22 @@ func (a *App) readSystemSelfAssessmentDocument(ctx context.Context) (string, tim
 	if !ok {
 		return "", time.Time{}, nil
 	}
+	// Select the verdict-bearing output: the maintained document that
+	// declares a status_line facet. Falling back to the first maintained
+	// document keeps the resolver working against a pre-facet spec,
+	// where the provider stays quiet on content anyway.
 	ref := ""
 	for _, output := range spec.Outputs {
-		if output.Type == looppkg.OutputTypeMaintainedDocument && strings.TrimSpace(output.Ref) != "" {
+		if output.Type != looppkg.OutputTypeMaintainedDocument || strings.TrimSpace(output.Ref) == "" {
+			continue
+		}
+		if ref == "" {
 			ref = output.Ref
-			break
+		}
+		for _, facet := range output.Facets {
+			if facet.Name == looppkg.OutputFacetStatusLine {
+				ref = output.Ref
+			}
 		}
 	}
 	if ref == "" {
@@ -40,11 +53,11 @@ func (a *App) readSystemSelfAssessmentDocument(ctx context.Context) (string, tim
 	}
 	record, err := a.documentStore.Read(ctx, ref)
 	if err != nil {
-		if strings.Contains(err.Error(), "document not found") {
+		if documents.IsNotFound(err) {
 			return "", time.Time{}, nil
 		}
 		return "", time.Time{}, err
 	}
-	modified, _ := time.Parse(time.RFC3339, record.ModifiedAt)
+	modified, _ := time.Parse(time.RFC3339Nano, record.ModifiedAt)
 	return record.Body, modified, nil
 }
