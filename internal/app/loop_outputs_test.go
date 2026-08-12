@@ -168,6 +168,66 @@ Everything is calm.
 	}
 }
 
+func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
+	t.Parallel()
+
+	store, coreDir := newLoopOutputDocumentStore(t)
+	now := time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)
+	facetedSpec := looppkg.OutputSpec{
+		Name:    "metacognitive_state",
+		Type:    looppkg.OutputTypeMaintainedDocument,
+		Ref:     "core:metacognitive.md",
+		Purpose: "Current metacognitive state.",
+		Facets: []looppkg.FacetSpec{
+			{Name: looppkg.OutputFacetStatusLine},
+			{Name: looppkg.OutputFacetDigest},
+		},
+	}
+
+	raw := "## Status Line\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns.\n\n## Details\n\nthe working memory body\n"
+	if err := os.WriteFile(filepath.Join(coreDir, "metacognitive.md"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write metacognitive.md: %v", err)
+	}
+
+	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{facetedSpec}, now)
+	if err != nil {
+		t.Fatalf("renderLoopOutputContextWithNow: %v", err)
+	}
+	// The authored projections ride whole under their own key, and the
+	// content field carries only the Details body — never a blind byte
+	// slice of the rendered document (#1250).
+	if !strings.Contains(ctx, `"projections"`) {
+		t.Fatalf("faceted output context missing projections:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "panel clean, baselines steady") || !strings.Contains(ctx, "No open concerns.") {
+		t.Fatalf("projections missing authored values:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "the working memory body") {
+		t.Fatalf("content missing the Details body:\n%s", ctx)
+	}
+	if strings.Contains(ctx, `## Status Line`) {
+		t.Fatalf("content should not carry the rendered section structure:\n%s", ctx)
+	}
+
+	// A pre-facet body under a faceted spec — declared facets, first
+	// publish pending — keeps the legacy whole-body path so the loop
+	// still sees the document it must carry into that first publish.
+	preFacet := "# State\n\nbaselines and concerns, pre-facet shape\n"
+	if err := os.WriteFile(filepath.Join(coreDir, "metacognitive.md"), []byte(preFacet), 0o644); err != nil {
+		t.Fatalf("rewrite metacognitive.md: %v", err)
+	}
+	ctx, err = renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{facetedSpec}, now)
+	if err != nil {
+		t.Fatalf("renderLoopOutputContextWithNow (pre-facet): %v", err)
+	}
+	if strings.Contains(ctx, `"projections"`) {
+		t.Fatalf("pre-facet document must not invent projections:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "baselines and concerns, pre-facet shape") {
+		t.Fatalf("pre-facet content missing body:\n%s", ctx)
+	}
+}
+
 func TestHydrateLoopOutputsRequiresDocumentStore(t *testing.T) {
 	t.Parallel()
 

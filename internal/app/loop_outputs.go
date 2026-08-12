@@ -41,7 +41,14 @@ type loopOutputContextEntry struct {
 	BytesTotal       int      `json:"bytes_total,omitempty"`
 	UnavailableError string   `json:"unavailable_error,omitempty"`
 	Facets           []string `json:"facets,omitempty"`
-	Audience         string   `json:"audience,omitempty"`
+	// Projections carries the published facet values verbatim for a
+	// faceted document — each is budget-capped by contract, so they
+	// ride whole. Content then holds only the full/Details body, which
+	// is where the byte budget belongs: before this split, the entire
+	// rendered document was blindly byte-truncated even though authored
+	// projections existed precisely so no reader has to do that (#1250).
+	Projections map[string]string `json:"projections,omitempty"`
+	Audience    string            `json:"audience,omitempty"`
 }
 
 // hydrateLoopOutputs is the universal "make this spec runtime-ready"
@@ -275,6 +282,26 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		entry.UpdatedDelta = loopOutputUpdatedDelta(doc, now)
 		switch output.Type {
 		case looppkg.OutputTypeMaintainedDocument:
+			if _, faceted := looppkg.ParseFacetSections(doc.Body); faceted && output.HasFacets() {
+				// The loop's own context mirrors its publish tool's
+				// argument shape: each authored projection whole, the
+				// Details body under the byte budget. Same shape out
+				// as goes in, so a republish is mechanical.
+				payload := output.ParseFacetDocument(doc.Body)
+				projections := make(map[string]string)
+				for _, field := range output.FacetFields() {
+					if value, ok := payload.FacetByKey(field.Key); ok && strings.TrimSpace(value) != "" {
+						projections[field.Key] = value
+					}
+				}
+				if len(projections) > 0 {
+					entry.Projections = projections
+				}
+				entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(payload.Full, loopOutputContentBytes, false)
+				break
+			}
+			// A pre-facet body (declared facets, first publish pending)
+			// keeps the legacy whole-body path.
 			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
 		case looppkg.OutputTypeWorkingNotes:
 			// The head, not the tail: a loop rewriting its current
