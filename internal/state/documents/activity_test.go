@@ -67,6 +67,35 @@ func newActivityStore(t *testing.T, files map[string]string, reviser RootReviser
 	return store
 }
 
+// TestWriteNormalizesHyphenImpostors extends the fold to the second
+// observed family (prod metacognitive.md, 2026-08-12): U+2011
+// non-breaking hyphens written by one author and churned to plain
+// hyphens by the next — eighteen invisible diff lines in a single
+// revision. U+2010 folds as the visually identical sibling. En and em
+// dashes are visible, intended typography and must survive untouched.
+func TestWriteNormalizesHyphenImpostors(t *testing.T) {
+	store := newActivityStore(t, map[string]string{"state.md": "# state\n"}, nil)
+	ctx := t.Context()
+
+	body := "quality‑floor 3; hvac‐gym — healthy – stable"
+	if _, err := store.Write(ctx, WriteArgs{Ref: "self:state.md", Body: &body}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rec, err := store.Read(ctx, "self:state.md")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.ContainsAny(rec.Body, "‐‑") {
+		t.Errorf("stored body retains hyphen impostors: %q", rec.Body)
+	}
+	if !strings.Contains(rec.Body, "quality-floor 3; hvac-gym") {
+		t.Errorf("normalized body = %q, want plain hyphens", rec.Body)
+	}
+	if !strings.Contains(rec.Body, "— healthy – stable") {
+		t.Errorf("intended en/em dashes were mangled: %q", rec.Body)
+	}
+}
+
 // TestWriteNormalizesSpaceArtifacts pins the tokenizer-artifact fold:
 // the non-breaking space variants gpt-oss emits (U+202F, U+00A0) are
 // stored as plain spaces on every mutation path, so alternating
