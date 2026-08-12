@@ -99,7 +99,12 @@ func (a *App) initInspector() {
 	if a.loopEventJournal != nil {
 		journal := a.loopEventJournal
 		src.BootHistory = func(ctx context.Context) ([]introspection.BootRecord, error) {
-			return journal.RecentBoots(ctx, 50)
+			// 500, not 50: boots_last_24h counts across this page, and a
+			// crash storm (a restart every 20 minutes is 72 boots/day)
+			// must not saturate the very counter that exists to expose
+			// it. The journal query is indexed and cheap; the snapshot's
+			// visible boot tail stays capped downstream.
+			return journal.RecentBoots(ctx, 500)
 		}
 	}
 	if a.connMgr != nil {

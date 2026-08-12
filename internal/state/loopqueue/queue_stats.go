@@ -72,7 +72,6 @@ func (s *Store) PendingCounts(ctx context.Context) (map[string]int, error) {
 type Completion struct {
 	Consumer   string
 	DedupKey   string
-	Priority   int
 	EnqueuedAt time.Time
 	AckedAt    time.Time
 }
@@ -95,7 +94,7 @@ func (s *Store) RecentCompletions(ctx context.Context, consumer string, since ti
 		limit = 20
 	}
 	query := `
-		SELECT consumer_loop, dedup_key, priority, enqueued_at, acked_at
+		SELECT consumer_loop, dedup_key, enqueued_at, acked_at
 		FROM loop_queue_completions
 		WHERE acked_at >= ?`
 	args := []any{since.UTC()}
@@ -120,7 +119,7 @@ func (s *Store) RecentCompletions(ctx context.Context, consumer string, since ti
 			enqueuedRaw any
 			ackedRaw    any
 		)
-		if err := rows.Scan(&c.Consumer, &c.DedupKey, &c.Priority, &enqueuedRaw, &ackedRaw); err != nil {
+		if err := rows.Scan(&c.Consumer, &c.DedupKey, &enqueuedRaw, &ackedRaw); err != nil {
 			return nil, err
 		}
 		c.EnqueuedAt = parseQueueTimestamp(enqueuedRaw)

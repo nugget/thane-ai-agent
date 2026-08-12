@@ -46,11 +46,19 @@ type HealthRow struct {
 // under the data directory. No gopsutil — everything here comes from
 // runtime, syscall, and os.
 type HostInfo struct {
-	UptimeDelta   string `json:"uptime_delta,omitempty"`
-	Goroutines    int    `json:"goroutines"`
-	GOMAXPROCS    int    `json:"gomaxprocs"`
-	DiskFreeBytes int64  `json:"disk_free_bytes,omitempty"`
-	DiskUsedPct   int    `json:"disk_used_pct,omitempty"`
+	UptimeDelta string `json:"uptime_delta,omitempty"`
+	Goroutines  int    `json:"goroutines"`
+	GOMAXPROCS  int    `json:"gomaxprocs"`
+	// DiskFreeBytes is free space on the filesystem under the data
+	// directory. Omitted (zero) together with DiskUsedPct when the disk
+	// probe is unsupported or fails — absence, not a fake zero disk.
+	DiskFreeBytes int64 `json:"disk_free_bytes,omitempty"`
+	// DiskUsedPct is the used percentage of that filesystem, floored at
+	// 1 while any space is used so sub-1% usage can never round down to
+	// an omitted field. Omitted (zero) only alongside DiskFreeBytes,
+	// when the probe is unsupported or fails — never as a rounding
+	// artifact.
+	DiskUsedPct int `json:"disk_used_pct,omitempty"`
 }
 
 // LoopCensus is the fleet rollup: totals by state, the degraded loops
@@ -73,7 +81,9 @@ type LoopCensus struct {
 	// WakeWindow is the span the wake counts actually cover. The wake
 	// ring is in-memory, so after a restart the "trailing day" is only
 	// as long as the uptime — the field says so rather than letting the
-	// counts imply coverage they lack.
+	// counts imply coverage they lack. Empty means the window is
+	// unknown (no usable process start time): treat the wake counts as
+	// having unstated coverage, never assume the trailing day.
 	WakeWindow string `json:"wake_window,omitempty"`
 }
 
@@ -94,6 +104,23 @@ type QueueDepth struct {
 	Consumer  string `json:"consumer"`
 	Pending   int    `json:"pending"`
 	OldestAge string `json:"oldest_age,omitempty"` // duration, e.g. "42m"
+}
+
+// queueDepths projects live per-partition backlog stats into wire rows.
+// It is the single render path for queue depth: the health snapshot's
+// queues section and the queue_status tool's pending rows both come
+// from here, so the same partition can never show two different depths
+// or ages depending on which surface asked.
+func queueDepths(pending []loopqueue.ConsumerPending, now time.Time) []QueueDepth {
+	depths := make([]QueueDepth, 0, len(pending))
+	for _, cp := range pending {
+		depth := QueueDepth{Consumer: cp.Consumer, Pending: cp.Pending}
+		if !cp.OldestEnqueuedAt.IsZero() {
+			depth.OldestAge = promptfmt.FormatDuration(now.Sub(cp.OldestEnqueuedAt).Round(time.Second))
+		}
+		depths = append(depths, depth)
+	}
+	return depths
 }
 
 // TelemetryRollup is the 24h operational summary drawn from the
@@ -119,8 +146,11 @@ type VersionInfo struct {
 	// Both empty when boot history shows no boundary (or is absent).
 	Previous     string `json:"previous,omitempty"`
 	ChangedDelta string `json:"changed_delta,omitempty"`
-	// Change classifies the boundary: "patch", "minor", "major", or
-	// "dev" when either side is not a semantic version.
+	// Change classifies the boundary: "patch", "minor", "major", "dev"
+	// when either side is not a semantic version — or empty (omitted)
+	// when the two versions differ only in prerelease/build metadata,
+	// which is exactly what an rc→final deploy looks like: Previous and
+	// ChangedDelta still mark the boundary, it just has no size class.
 	Change       string `json:"change,omitempty"`
 	BootsLast24h int    `json:"boots_last_24h,omitempty"`
 	// RecentBoots is the raw tail of the boot journal, newest first.
@@ -169,13 +199,20 @@ const maxLogSamples = 6
 // identically by the system_health tool and the metacog context panel
 // so the two can never drift.
 type HealthSnapshot struct {
-	Annunciator []HealthRow     `json:"annunciator"`
-	Version     VersionInfo     `json:"version"`
-	LogActivity LogActivity     `json:"log_activity"`
-	Host        HostInfo        `json:"host"`
-	Loops       LoopCensus      `json:"loops"`
-	Queues      []QueueDepth    `json:"queues,omitempty"`
-	Telemetry   TelemetryRollup `json:"telemetry"`
+	Annunciator []HealthRow `json:"annunciator"`
+	Version     VersionInfo `json:"version"`
+	// LogActivity zero-fills when the log-severity source is unwired:
+	// all-zero rates there can mean a genuinely clean hour or nobody
+	// counting, and the section does not say which.
+	LogActivity LogActivity `json:"log_activity"`
+	Host        HostInfo    `json:"host"`
+	// Loops zero-fills when the loop registry is unwired: a total of 0
+	// is also what a genuinely empty fleet reports.
+	Loops  LoopCensus   `json:"loops"`
+	Queues []QueueDepth `json:"queues,omitempty"`
+	// Telemetry zero-fills when the collector is unwired: zero requests
+	// and a quiet day are indistinguishable here.
+	Telemetry TelemetryRollup `json:"telemetry"`
 }
 
 // Degraded lists the annunciator rows that are not ok — the panel's
@@ -190,10 +227,54 @@ func (s HealthSnapshot) Degraded() []HealthRow {
 	return rows
 }
 
+// snapshotPayload projects a snapshot into the flat wire payload every
+// model-facing surface emits: the snapshot's sections as top-level keys
+// plus the precomputed summary line. The system_health tool returns
+// exactly this map and the metacog panel renders it (adding only its
+// own flagged-document and size-cap handling), so the same fact never
+// ships in two shapes — same keys, same nesting, same summary
+// truncation, whichever surface the model reads.
+func snapshotPayload(snap HealthSnapshot) map[string]any {
+	payload := map[string]any{
+		"annunciator":  snap.Annunciator,
+		"version":      snap.Version,
+		"log_activity": snap.LogActivity,
+		"host":         snap.Host,
+		"loops":        snap.Loops,
+		"telemetry":    snap.Telemetry,
+	}
+	if len(snap.Queues) > 0 {
+		payload["queues"] = snap.Queues
+	}
+	degraded := snap.Degraded()
+	if len(degraded) == 0 {
+		payload["summary"] = fmt.Sprintf("all %d annunciator rows ok", len(snap.Annunciator))
+		return payload
+	}
+	// The summary is a headline, not the list: cap the named rows so a
+	// mass outage cannot balloon the payload (and, on the panel, blow
+	// past the soft cap into the context bucket's truncator, which
+	// would cut the fenced JSON mid-payload).
+	names := make([]string, 0, min(len(degraded), maxSummaryDegradedNames))
+	for _, row := range degraded[:min(len(degraded), maxSummaryDegradedNames)] {
+		names = append(names, row.Name)
+	}
+	summary := fmt.Sprintf("%d of %d annunciator rows not ok: %s", len(degraded), len(snap.Annunciator), strings.Join(names, ", "))
+	if extra := len(degraded) - len(names); extra > 0 {
+		summary += fmt.Sprintf(" (+%d more)", extra)
+	}
+	payload["summary"] = summary
+	return payload
+}
+
 // HealthSources are the live feeds the Inspector reads. Every field is
 // optional (nil-safe): an unwired source simply contributes no rows, so
 // the Inspector works identically in production, tests, and reduced
-// configurations.
+// configurations. One honesty caveat: only the row-shaped sections
+// (annunciator lamps, queues) truly vanish when unwired — the
+// snapshot's always-present sections (log_activity, loops, telemetry)
+// marshal zero-valued instead, so in a reduced configuration those
+// zeros mean "nobody measured", not "measured clean".
 type HealthSources struct {
 	// ConnStatus reports per-service reachability (connwatch).
 	ConnStatus func() map[string]connwatch.ServiceStatus
@@ -349,17 +430,15 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 			row.Status = HealthDegraded
 			row.Detail = fmt.Sprintf("backlog probe failed: %v", err)
 		} else {
+			snap.Queues = queueDepths(stats, now)
 			var stale []string
-			for _, cp := range stats {
-				depth := QueueDepth{Consumer: cp.Consumer, Pending: cp.Pending}
-				if !cp.OldestEnqueuedAt.IsZero() {
-					age := now.Sub(cp.OldestEnqueuedAt)
-					depth.OldestAge = promptfmt.FormatDuration(age.Round(time.Second))
-					if age > queueBacklogStaleAfter {
-						stale = append(stale, fmt.Sprintf("%s (oldest %s)", cp.Consumer, depth.OldestAge))
-					}
+			for idx, cp := range stats {
+				if cp.OldestEnqueuedAt.IsZero() {
+					continue
 				}
-				snap.Queues = append(snap.Queues, depth)
+				if age := now.Sub(cp.OldestEnqueuedAt); age > queueBacklogStaleAfter {
+					stale = append(stale, fmt.Sprintf("%s (oldest %s)", cp.Consumer, snap.Queues[idx].OldestAge))
+				}
 			}
 			if len(stale) > 0 {
 				row.Status = HealthDegraded

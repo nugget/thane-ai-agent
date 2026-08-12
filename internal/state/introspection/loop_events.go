@@ -234,7 +234,12 @@ type LoopActivityAggregate struct {
 	BySource     map[string]int
 	Errors       int
 	Completions  int
-	NoOps        int
+	// NoOps is the subset of Completions whose iteration changed
+	// nothing — every no-op is already counted there, so summing the
+	// two double-counts. It rides beside Completions because the ratio
+	// is the signal: a loop completing every wake while changing
+	// nothing is going through the motions.
+	NoOps int
 }
 
 // maxAggregateSources caps the by-source decomposition; sources beyond

@@ -2,6 +2,7 @@ package introspection
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -481,5 +482,99 @@ func TestCensusWakeWindowIsHonest(t *testing.T) {
 	unwired.now = func() time.Time { return now }
 	if got := unwired.Health(context.Background()).Loops.WakeWindow; got != "" {
 		t.Errorf("unwired wake_window = %q, want omitted", got)
+	}
+}
+
+// TestQueueDepthsWireShape pins the exact bytes of the shared queue-row
+// projection. queueDepths is the single render path behind both the
+// snapshot's queues section and queue_status's pending rows, and this
+// is the wire contract the consolidation had to preserve: same keys,
+// same order, oldest_age omitted when a partition has no timestamp.
+func TestQueueDepthsWireShape(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		pending []loopqueue.ConsumerPending
+		want    string
+	}{
+		{
+			name:    "no partitions render an empty array, not null",
+			pending: nil,
+			want:    `[]`,
+		},
+		{
+			name: "aged and ageless rows",
+			pending: []loopqueue.ConsumerPending{
+				{Consumer: "archivist", Pending: 3, OldestEnqueuedAt: now.Add(-10 * time.Minute)},
+				{Consumer: "core", Pending: 1},
+			},
+			want: `[{"consumer":"archivist","pending":3,"oldest_age":"10m"},{"consumer":"core","pending":1}]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blob, err := json.Marshal(queueDepths(tt.pending, now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(blob) != tt.want {
+				t.Errorf("wire bytes = %s, want %s", blob, tt.want)
+			}
+		})
+	}
+}
+
+// TestSnapshotPayloadCapsSummaryNames: the shared payload's summary is
+// a headline, not the list — past the cap the remaining degraded rows
+// fold into an explicit "+N more" on every surface, tool included.
+func TestSnapshotPayloadCapsSummaryNames(t *testing.T) {
+	snap := HealthSnapshot{}
+	for i := range maxSummaryDegradedNames + 3 {
+		snap.Annunciator = append(snap.Annunciator, HealthRow{
+			Name: fmt.Sprintf("conn:svc-%02d", i), Status: HealthFailed,
+		})
+	}
+	payload := snapshotPayload(snap)
+	summary, _ := payload["summary"].(string)
+	if !strings.Contains(summary, fmt.Sprintf("%d of %d annunciator rows not ok", maxSummaryDegradedNames+3, maxSummaryDegradedNames+3)) {
+		t.Errorf("summary = %q, want the full degraded count stated", summary)
+	}
+	if !strings.Contains(summary, "(+3 more)") {
+		t.Errorf("summary = %q, want the over-cap remainder marked (+3 more)", summary)
+	}
+	if strings.Count(summary, "conn:") != maxSummaryDegradedNames {
+		t.Errorf("summary names %d rows, want the cap %d: %q", strings.Count(summary, "conn:"), maxSummaryDegradedNames, summary)
+	}
+
+	// Queues stay out of the payload when empty — same omission the
+	// struct's own omitempty gives the marshaled snapshot.
+	if _, present := payload["queues"]; present {
+		t.Errorf("empty queues section must be omitted from the payload")
+	}
+}
+
+// TestDiskUsedPct pins the percentage floor: a used disk never reads
+// 0%, because zero is the omitted value and omission must keep meaning
+// "the probe failed", never "rounded away".
+func TestDiskUsedPct(t *testing.T) {
+	const tb = uint64(1) << 40
+	tests := []struct {
+		name        string
+		free, total uint64
+		want        int
+	}{
+		{"no probe result", 0, 0, 0},
+		{"genuinely empty disk", tb, tb, 0},
+		{"sub-1% usage floors at 1", tb - (tb / 1000), tb, 1},
+		{"half used", tb / 2, tb, 50},
+		{"full disk", 0, tb, 100},
+		{"inconsistent probe (free > total) clamps clean", tb * 2, tb, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := diskUsedPct(tt.free, tt.total); got != tt.want {
+				t.Errorf("diskUsedPct(%d, %d) = %d, want %d", tt.free, tt.total, got, tt.want)
+			}
+		})
 	}
 }

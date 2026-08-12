@@ -52,8 +52,8 @@ func TestAckJournalsExactlyOnce(t *testing.T) {
 		t.Fatalf("recent completions = %d rows, want 1", len(comps))
 	}
 	c := comps[0]
-	if c.Consumer != "archivist" || c.DedupKey != "session:a" || c.Priority != 3 {
-		t.Errorf("completion = %+v, want archivist/session:a priority 3", c)
+	if c.Consumer != "archivist" || c.DedupKey != "session:a" {
+		t.Errorf("completion = %+v, want archivist/session:a", c)
 	}
 	if c.EnqueuedAt.IsZero() || c.AckedAt.IsZero() {
 		t.Errorf("completion timestamps not recorded: %+v", c)

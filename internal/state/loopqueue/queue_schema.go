@@ -40,6 +40,12 @@ var queueSchema = database.Schema{
 			// A coalescing re-Enqueue is deliberately NOT a completion —
 			// it restates the same pending work in place. Rows are
 			// pruned by age via [Store.PruneCompletions].
+			//
+			// The priority column is vestigial: early builds journaled
+			// each item's priority but no consumer ever read it back, so
+			// Ack stopped recording it. The column stays because the
+			// table already exists in production (forward-only schema);
+			// new rows take its DEFAULT 0.
 			SQL: `CREATE TABLE IF NOT EXISTS loop_queue_completions (
 				id            INTEGER PRIMARY KEY AUTOINCREMENT,
 				consumer_loop TEXT NOT NULL,

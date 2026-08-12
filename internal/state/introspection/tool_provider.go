@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -58,7 +57,7 @@ func (t *Tools) Tools() []*tools.Tool {
 	return []*tools.Tool{
 		{
 			Name: "system_health",
-			Description: "The annunciator panel for thane's own internals: one status row per subsystem (ok / degraded / failed, with a precomputed detail sentence) covering external connections, the memory guard, event-bus loss, log-index loss, document-root sync, work-queue backlog, and the loop fleet — plus host basics (disk, goroutines, uptime), per-partition queue depths, and a 24h telemetry rollup (requests, errors, latency p50/p95, database sizes). " +
+			Description: "The annunciator panel for thane's own internals: one status row per subsystem (ok / degraded / failed, with a precomputed detail sentence) covering external connections, the memory guard, event-bus loss, log-index loss, document-root sync, work-queue backlog, and the loop fleet — plus host basics (disk, goroutines, uptime), per-partition queue depths, a 24h telemetry rollup (requests, errors, latency p50/p95, database sizes), the deploy story (running vs previous version, when the boundary landed, size of the jump, recent boots), and the process's own WARN/ERROR rates with the newest samples. " +
 				"Zero arguments; call it first when anything feels off. Each degraded row names the subsystem the drill-down tools filter by: loop problems → loop_status / loop_activity, queue backlog → queue_status, log or error detail → logs_query, document churn → doc_activity.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 			Handler:    t.handleSystemHealth,
@@ -106,7 +105,7 @@ func (t *Tools) Tools() []*tools.Tool {
 		{
 			Name: "loop_activity",
 			Description: "The loop fleet's history, from the persistent event journal: loop_status is the now-snapshot, loop_activity is what actually happened — every wake with its attributed cause (timer, mailbox, subscription, manual loop_wake, notify — and who sent it), iteration outcomes, errors, and state changes, surviving restarts and covering loops that have since stopped. " +
-				"The aggregate leads: wake volume and rate, the by-reason and by-source decomposition (who keeps waking this loop), error and no-op counts. Use it to spot wake storms, dead cadences, and loops going through the motions.",
+				"The aggregate leads: wake volume and rate, the by-reason and by-source decomposition (who keeps waking this loop), error and completion counts. no_ops counts the completions that changed nothing — a subset of completions, not a sibling outcome, so never sum the two. Use it to spot wake storms, dead cadences, and loops going through the motions.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -162,20 +161,10 @@ func (t *Tools) handleSystemHealth(ctx context.Context, _ map[string]any) (strin
 	if t.deps.Inspector == nil {
 		return "", tools.ErrUnavailable{Tool: "system_health", Reason: "health inspector is not wired"}
 	}
-	snap := t.deps.Inspector.Health(ctx)
-	degraded := snap.Degraded()
-	summary := fmt.Sprintf("all %d annunciator rows ok", len(snap.Annunciator))
-	if len(degraded) > 0 {
-		names := make([]string, 0, len(degraded))
-		for _, row := range degraded {
-			names = append(names, row.Name)
-		}
-		summary = fmt.Sprintf("%d of %d annunciator rows not ok: %s", len(degraded), len(snap.Annunciator), strings.Join(names, ", "))
-	}
-	return marshalToolResult(map[string]any{
-		"summary": summary,
-		"health":  snap,
-	})
+	// The tool returns the same flat payload the metacog panel renders
+	// (snapshotPayload) — one projection, so a model reading the panel
+	// one iteration and this tool the next sees one shape, not two.
+	return marshalToolResult(snapshotPayload(t.deps.Inspector.Health(ctx)))
 }
 
 func (t *Tools) handleQueueStatus(ctx context.Context, args map[string]any) (string, error) {
@@ -200,19 +189,10 @@ func (t *Tools) handleQueueStatus(ctx context.Context, args map[string]any) (str
 	if err != nil {
 		return "", fmt.Errorf("read pending stats: %w", err)
 	}
-	type pendingRow struct {
-		Consumer  string `json:"consumer"`
-		Pending   int    `json:"pending"`
-		OldestAge string `json:"oldest_age,omitempty"`
-	}
-	pendingRows := make([]pendingRow, 0, len(pending))
-	for _, cp := range pending {
-		row := pendingRow{Consumer: cp.Consumer, Pending: cp.Pending}
-		if !cp.OldestEnqueuedAt.IsZero() {
-			row.OldestAge = promptfmt.FormatDuration(now.Sub(cp.OldestEnqueuedAt).Round(time.Second))
-		}
-		pendingRows = append(pendingRows, row)
-	}
+	// Rendered through the same projection the health snapshot's queues
+	// section uses, so the two surfaces can never age the same
+	// partition differently.
+	pendingRows := queueDepths(pending, now)
 
 	stats, err := t.deps.Queue.CompletionStatsSince(ctx, since)
 	if err != nil {

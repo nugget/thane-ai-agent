@@ -60,10 +60,11 @@ const panelSoftMaxBytes = 8 * 1024
 
 // PanelProvider injects the internal-operations panel into every
 // iteration whose active tags include the one it is registered under
-// (the metacognitive loop's own tag). It renders from the same
-// Inspector the system_health tool uses, so the panel and the tool can
-// never disagree; the tools are the drill-down, the panel is the
-// ambient perception that makes each fresh iteration start informed.
+// (the metacognitive loop's own tag). It renders the same flat payload
+// the system_health tool returns (snapshotPayload), so the panel and
+// the tool can never disagree in fact or in shape; the tools are the
+// drill-down, the panel is the ambient perception that makes each
+// fresh iteration start informed.
 type PanelProvider struct {
 	inspector *Inspector
 	docFlags  DocFlagsFunc
@@ -94,35 +95,10 @@ func (p *PanelProvider) TagContext(ctx context.Context, _ agentctx.ContextReques
 	}
 	snap := p.inspector.Health(ctx)
 
-	payload := map[string]any{
-		"annunciator":  snap.Annunciator,
-		"version":      snap.Version,
-		"log_activity": snap.LogActivity,
-		"host":         snap.Host,
-		"loops":        snap.Loops,
-		"telemetry":    snap.Telemetry,
-	}
-	if len(snap.Queues) > 0 {
-		payload["queues"] = snap.Queues
-	}
+	// One projection for both surfaces: the panel body is exactly what
+	// system_health returns, plus the panel-only additions below.
+	payload := snapshotPayload(snap)
 	degraded := snap.Degraded()
-	if len(degraded) == 0 {
-		payload["summary"] = fmt.Sprintf("all %d annunciator rows ok", len(snap.Annunciator))
-	} else {
-		// The summary is a headline, not the list: cap the named rows so
-		// a mass outage cannot balloon the panel past its soft cap (and
-		// past the context bucket's own truncator, which would cut the
-		// fenced JSON mid-payload).
-		names := make([]string, 0, min(len(degraded), maxSummaryDegradedNames))
-		for _, row := range degraded[:min(len(degraded), maxSummaryDegradedNames)] {
-			names = append(names, row.Name)
-		}
-		summary := fmt.Sprintf("%d of %d annunciator rows not ok: %s", len(degraded), len(snap.Annunciator), strings.Join(names, ", "))
-		if extra := len(degraded) - len(names); extra > 0 {
-			summary += fmt.Sprintf(" (+%d more)", extra)
-		}
-		payload["summary"] = summary
-	}
 
 	if p.docFlags != nil {
 		flags, err := p.docFlags(ctx)
