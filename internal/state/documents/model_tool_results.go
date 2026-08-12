@@ -39,11 +39,17 @@ type modelRootDocumentHint struct {
 }
 
 type modelDocumentSummary struct {
-	Root          string              `json:"root"`
-	Ref           string              `json:"ref"`
-	Path          string              `json:"path"`
-	Title         string              `json:"title"`
-	Summary       string              `json:"summary,omitempty"`
+	Root    string `json:"root"`
+	Ref     string `json:"ref"`
+	Path    string `json:"path"`
+	Title   string `json:"title"`
+	Summary string `json:"summary,omitempty"`
+	// Facets lists the projections present in the document body
+	// (status_line, teaser, digest). doc_search's description promises
+	// each faceted hit advertises them so the next step is one
+	// deliberate doc_read with level (#1250) — dropping the field here
+	// would break that promise at the model boundary.
+	Facets        []string            `json:"facets,omitempty"`
 	Tags          []string            `json:"tags,omitempty"`
 	Frontmatter   map[string][]string `json:"frontmatter,omitempty"`
 	ModifiedDelta string              `json:"modified_delta,omitempty"`
@@ -176,6 +182,7 @@ func toModelDocumentSummary(doc DocumentSummary, now time.Time) modelDocumentSum
 		Path:          doc.Path,
 		Title:         doc.Title,
 		Summary:       doc.Summary,
+		Facets:        append([]string(nil), doc.Facets...),
 		Tags:          append([]string(nil), doc.Tags...),
 		Frontmatter:   modelFrontmatter(doc.Frontmatter, now),
 		ModifiedDelta: modelDelta(doc.ModifiedAt, now),

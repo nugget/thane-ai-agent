@@ -164,7 +164,7 @@ func loopProfileSchema(description string) map[string]any {
 			"quality_floor":     map[string]any{"type": "integer", "description": "Minimum model quality rating (1–10) for selection."},
 			"mission":           map[string]any{"type": "string", "description": "Mission/context profile name shaping prompt assembly."},
 			"local_only":        map[string]any{"type": "string", "description": "\"true\"/\"false\" string — restrict routing to local models. Supervisor turns force this to false."},
-			"delegation_gating": map[string]any{"type": "string", "description": "Set \"disabled\" to forbid this loop from delegating or spawning sub-work."},
+			"delegation_gating": map[string]any{"type": "string", "description": "Delegation-first tool gating. Set \"disabled\" to give the loop direct access to its tools instead of the orchestrator-and-delegate pattern — the usual choice for tagged service loops. Leave unset to keep gating on."},
 			"prefer_speed":      map[string]any{"type": "string", "description": "\"true\"/\"false\" string — bias routing toward faster models."},
 			"exclude_tools":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Profile-level tool exclusions, unioned with the spec-level exclude_tools."},
 			"instructions":      map[string]any{"type": "string", "description": "Self-only prompt prefix prepended to the task (does not cascade to container children). On a supervisor_profile this is the supervisor-turn guidance."},

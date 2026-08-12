@@ -242,8 +242,7 @@ when its scope should shift.
 ## Four steps
 
 1. **You launch the watcher** with `thane_loop_create`
-   (`operation: service`, dashboard or journal shape — see those
-   branches).
+   (`operation: service`, dashboard shape — see that branch).
 
 2. **The watcher runs at its own pace** inside the envelope, tuning
    via `set_next_sleep` and adjusting its own watch set via
@@ -583,8 +582,8 @@ routing through the orchestrator-delegate gating pattern.
 
 When a service loop should mostly run cheap iterations but occasionally
 take a more expensive supervisor pass, set `supervisor: true` plus
-`supervisor_prob`, `supervisor_quality_floor`, and a
-`supervisor_context` that prompts the model to step back.
+`supervisor_prob`, and a `supervisor_profile` whose `quality_floor`
+raises the bar and whose `instructions` prompt the model to step back.
 `thane_loop_create` doesn't expose supervisor fields directly — use
 `loop_definition_set` or `spawn_loop` for supervisor-shaped loops.
 
@@ -600,23 +599,27 @@ take a more expensive supervisor pass, set `supervisor: true` plus
     "sleep_max": "30m",
     "sleep_default": "15m",
     "jitter": 0.2,
+    "tags": ["home", "knowledge", "documents"],
     "supervisor": true,
     "supervisor_prob": 0.15,
-    "quality_floor": 4,
-    "supervisor_quality_floor": 9,
-    "supervisor_context": "Supervisor turn. Step back from individual readings, look for cross-device patterns or weak assumptions, and decide whether anything now deserves escalation or a sharper hypothesis.",
     "profile": {
       "mission": "background",
+      "quality_floor": 4,
       "delegation_gating": "disabled",
-      "initial_tags": ["home", "knowledge", "documents"],
       "instructions": "Maintain one durable state document. Use the journal when something materially changes. Call set_next_sleep when the next wake should be meaningfully shorter or longer than the default cycle."
+    },
+    "supervisor_profile": {
+      "quality_floor": 9,
+      "instructions": "Supervisor turn. Step back from individual readings, look for cross-device patterns or weak assumptions, and decide whether anything now deserves escalation or a sharper hypothesis."
     }
   }
 }
 ```
 
-Put the main prompt in `spec.task`, not top-level `launch.task`, so
-`supervisor_context` applies cleanly on supervisor turns.
+Capability tags are spec-level `tags` — a durable declaration, not a
+`profile` field. Put the main prompt in `spec.task`, not top-level
+`launch.task`, so the `supervisor_profile` instructions apply cleanly
+on supervisor turns.
 
 ## Ad-hoc and one-shot research
 
@@ -631,9 +634,9 @@ omit completion (the origin context infers the callback):
       "name": "research_current_issue",
       "task": "Investigate the current issue from multiple angles, keep concise notes in a managed document if needed, and report back with the strongest answer once the uncertainty has collapsed.",
       "operation": "background_task",
+      "tags": ["knowledge", "documents"],
       "profile": {
         "mission": "background",
-        "initial_tags": ["knowledge", "documents"],
         "instructions": "Prefer the smallest tool surface that can collapse uncertainty. Use document tools for durable notes."
       }
     }

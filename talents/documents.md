@@ -261,7 +261,9 @@ against the whole corpus are usually too broad to be useful:
 `modified_after` and `modified_before` take RFC3339 timestamps or signed
 deltas (`-7d` = past week). Search returns compact summaries with
 refs, not bodies — pipe a ref to `documents_read` to actually read the
-hit.
+hit. A hit from a loop-curated document shows its authored teaser and
+lists its available facets — follow up with one deliberate `doc_read`
+at the `level` your decision needs rather than pulling the whole body.
 
 If `tags` filtering returns nothing unexpected, run `doc_values` for
 `tags` against that root to see the actual vocabulary.
@@ -398,7 +400,10 @@ model doesn't have to:
 }
 ```
 
-Right for `mode: journal` service loops (`thane_loop_create`, `operation: service`) and any append-only chronology.
+Right for any append-only chronology — including a service loop
+(`thane_loop_create`, `operation: service`) that wants a dated record
+beside its maintained output; loop outputs no longer have a journal
+type, so the loop calls `doc_journal_update` directly.
 Wrong when the goal is to replace what's there — that's `doc_write` or
 `doc_edit` with `replace_body`.
 
