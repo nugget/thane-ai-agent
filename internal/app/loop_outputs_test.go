@@ -208,6 +208,12 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 	if strings.Contains(ctx, `## Status Line`) {
 		t.Fatalf("content should not carry the rendered section structure:\n%s", ctx)
 	}
+	// full is unbudgeted and lives only in content; a "full" key under
+	// projections would smuggle the whole Details body past the byte
+	// budget (the regression review caught in the first draft).
+	if strings.Contains(ctx, `"full":`) {
+		t.Fatalf("projections must not carry the full body:\n%s", ctx)
+	}
 
 	// A pre-facet body under a faceted spec — declared facets, first
 	// publish pending — keeps the legacy whole-body path so the loop

@@ -289,9 +289,16 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 				// as goes in, so a republish is mechanical.
 				payload := output.ParseFacetDocument(doc.Body)
 				projections := make(map[string]string)
-				for _, field := range output.FacetFields() {
-					if value, ok := payload.FacetByKey(field.Key); ok && strings.TrimSpace(value) != "" {
-						projections[field.Key] = value
+				// Declared facets only — FacetFields() appends the
+				// always-published full field, and full is exactly what
+				// must NOT ride here: it is unbudgeted, and its home is
+				// the byte-capped content below. Duplicating it under
+				// projections would reintroduce the unbounded growth
+				// this split exists to end.
+				for _, facet := range output.Facets {
+					key := string(facet.Name)
+					if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
+						projections[key] = value
 					}
 				}
 				if len(projections) > 0 {
