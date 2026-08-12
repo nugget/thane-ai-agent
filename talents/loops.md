@@ -203,15 +203,15 @@ muddle them and the loop drifts.
   maintainer, watcher, or poller — fetch a source, check a state,
   update a document — should declare `prompt_mode: "task"`: the
   compact worker prompt sheds the reflective identity stack (axioms,
-  persona, ego, always-on talents and ambient context), which is the
-  largest single prompt cost in a background loop and pure latency on
-  a local model. The worker keeps its tagged guidance, its task, and
-  current conditions — it sheds only the self it was never using.
-  Leave the field unset for a loop whose work needs the identity:
-  reflection or judgment about the agent itself, or composing
-  messages in the agent's own voice. The mode is per-loop and never
-  inherited; when in doubt, leave it unset and trim later — it
-  retunes live via `loop_definition_update`.
+  persona, ego, persona-tagged talents, always-on ambient context),
+  which is the largest single prompt cost in a background loop and
+  pure latency on a local model. The worker keeps its always-tagged
+  talents, its tagged guidance, its task, and current conditions — it
+  sheds only the self it was never using. Leave the field unset for a
+  loop whose work needs the identity: reflection or judgment about
+  the agent itself, or composing messages in the agent's own voice.
+  The mode is per-loop and never inherited; when in doubt, leave it
+  unset and trim later — it retunes live via `loop_definition_update`.
 
 ## Changing a loop that's already running
 

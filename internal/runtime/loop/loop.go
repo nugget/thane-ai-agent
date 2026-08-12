@@ -1043,6 +1043,14 @@ func (l *Loop) promoteRetuneLocked() bool {
 	l.requestBase.InitialTags = prevBase.InitialTags
 	l.requestBase.RuntimeTools = prevBase.RuntimeTools
 	l.requestInstructions = spec.Profile.Instructions
+	// A retuned prompt mode must actually win: prepareAgentTurnRequest
+	// prefers the launch-time override, which would otherwise shadow
+	// the retune until relaunch — the same shadowing the task override
+	// above routes around. An empty retuned mode expresses no opinion
+	// and leaves any launch-time override in place.
+	if spec.PromptMode != "" {
+		l.requestOverride.PromptMode = ""
+	}
 	return true
 }
 

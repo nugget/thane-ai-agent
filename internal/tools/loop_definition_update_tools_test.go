@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -111,6 +112,34 @@ func TestLoopDefinitionUpdate_MergesAndPreserves(t *testing.T) {
 	fields, _ := env["updated_fields"].([]any)
 	if len(fields) != 5 {
 		t.Errorf("updated_fields = %v, want 5 entries", env["updated_fields"])
+	}
+}
+
+// TestLoopDefinitionUpdate_PromptMode covers the #1171 rollout path end
+// to end at the tool boundary: prompt_mode merges through the wire form,
+// persists on the stored spec, preserves its neighbors, and an invalid
+// value is refused by the same spec validation loop_definition_set uses.
+func TestLoopDefinitionUpdate_PromptMode(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+	seedOverlayUpdateTarget(t, deps)
+
+	if _, err := updateTargetExec(t, deps, map[string]any{"prompt_mode": "task"}); err != nil {
+		t.Fatalf("loop_definition_update: %v", err)
+	}
+	got := deps.persisted["update_target"]
+	if got.PromptMode != agentctx.PromptModeTask {
+		t.Errorf("PromptMode = %q, want task", got.PromptMode)
+	}
+	if got.Task != "original task" || got.Profile.Mission != "background" {
+		t.Errorf("neighboring fields disturbed: task=%q mission=%q", got.Task, got.Profile.Mission)
+	}
+
+	_, err := updateTargetExec(t, deps, map[string]any{"prompt_mode": "compact"})
+	if err == nil || !strings.Contains(err.Error(), "prompt_mode") {
+		t.Fatalf("err = %v, want prompt_mode rejection", err)
+	}
+	if got := deps.persisted["update_target"]; got.PromptMode != agentctx.PromptModeTask {
+		t.Errorf("rejected update mutated the stored spec: PromptMode = %q", got.PromptMode)
 	}
 }
 

@@ -170,10 +170,12 @@ type Spec struct {
 
 	// PromptMode selects the system-prompt shape for every iteration of
 	// this loop. Empty or "full" wears the complete identity stack —
-	// axioms, persona, mission, ego, the always-on talents and ambient
-	// context. "task" is the compact worker prompt: it sheds that
-	// reflective layer while keeping tagged guidance, active tags, the
-	// Task, and current conditions. The convention (#1171): mechanical
+	// axioms, persona, mission, ego, the persona-tagged talents, and
+	// the always-on ambient context. "task" is the compact worker
+	// prompt: the persona is swapped for a bounded worker preamble and
+	// the rest of that layer is shed, while always-tagged talents,
+	// tagged guidance, active tags, the Task, and current conditions
+	// all remain. The convention (#1171): mechanical
 	// maintainer/watcher/poller loops declare "task"; reflective loops —
 	// any loop whose job is judgment about the agent itself — declare
 	// "full". A per-launch [Launch.PromptMode] overrides this default

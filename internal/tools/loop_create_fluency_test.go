@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -108,6 +109,53 @@ func TestGuidedCreateWorkingNotes(t *testing.T) {
 	if result["working_notes_document"] != "kb:dashboards/closet-notes.md" {
 		t.Errorf("result should name the notes document it created, got %v", result["working_notes_document"])
 	}
+}
+
+// TestGuidedCreatePromptMode covers the front door's half of the #1171
+// convention: an explicit "task" lands on the derived spec, and an
+// omitted argument stays empty — the runtime default is full, but only
+// a caller's explicit choice becomes a durable pin.
+func TestGuidedCreatePromptMode(t *testing.T) {
+	t.Run("explicit task mode lands on the spec", func(t *testing.T) {
+		args := curateArgs(nil)
+		args["prompt_mode"] = "task"
+		spec, _ := dryRunSpec(t, args)
+		if spec.PromptMode != agentctx.PromptModeTask {
+			t.Errorf("PromptMode = %q, want task", spec.PromptMode)
+		}
+	})
+
+	t.Run("omitted mode stays unset", func(t *testing.T) {
+		spec, _ := dryRunSpec(t, curateArgs(nil))
+		if spec.PromptMode != "" {
+			t.Errorf("PromptMode = %q, want empty (no silent pin)", spec.PromptMode)
+		}
+	})
+
+	t.Run("invalid mode is refused with a teaching error", func(t *testing.T) {
+		rig := newCurateTestRig(t)
+		args := curateArgs(nil)
+		args["prompt_mode"] = "compact"
+		args["dry_run"] = true
+		_, err := rig.tool.Handler(context.Background(), args)
+		if err == nil || !strings.Contains(err.Error(), "prompt_mode") {
+			t.Fatalf("err = %v, want prompt_mode rejection naming valid values", err)
+		}
+	})
+
+	t.Run("containers refuse the argument", func(t *testing.T) {
+		rig := newCurateTestRig(t)
+		_, err := rig.tool.Handler(context.Background(), map[string]any{
+			"name":        "grouping",
+			"intent":      "Group related loops.",
+			"operation":   "container",
+			"prompt_mode": "task",
+			"dry_run":     true,
+		})
+		if err == nil || !strings.Contains(err.Error(), "prompt_mode") {
+			t.Fatalf("err = %v, want container prompt_mode rejection", err)
+		}
+	})
 }
 
 // TestGuidedCreateRefusesUnknownFacet pins the failure direction. A facet
