@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 var (
@@ -19,6 +21,7 @@ var (
 type parsedDocument struct {
 	Title       string
 	Summary     string
+	Facets      []string
 	WordCount   int
 	Tags        []string
 	Frontmatter map[string][]string
@@ -58,9 +61,41 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 		title = base
 	}
 
+	// A faceted body carries its own authored snippet: the teaser is
+	// written for exactly this surface, the status_line is the authored
+	// fallback when no teaser is declared, and only an unfaceted body
+	// falls back to the derived first paragraph. The present facets ride
+	// along so a search hit can advertise which projections doc_read can
+	// pull (#1250).
+	summary := ""
+	var facets []string
+	if payload, faceted := looppkg.ParseFacetSections(body); faceted {
+		for _, key := range looppkg.FacetKeys() {
+			// full is every document's baseline and advertises nothing;
+			// the facet list exists to say which condensed projections
+			// doc_read can pull.
+			if key == "full" {
+				continue
+			}
+			if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
+				facets = append(facets, key)
+			}
+		}
+		if teaser, ok := payload.FacetByKey(string(looppkg.OutputFacetTeaser)); ok && strings.TrimSpace(teaser) != "" {
+			summary = strings.TrimSpace(teaser)
+		} else if verdict, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine)); ok && strings.TrimSpace(verdict) != "" {
+			summary = strings.TrimSpace(verdict)
+		} else {
+			summary = firstParagraph(payload.Full)
+		}
+	} else {
+		summary = firstParagraph(body)
+	}
+
 	return parsedDocument{
 		Title:       title,
-		Summary:     firstParagraph(body),
+		Summary:     summary,
+		Facets:      facets,
 		WordCount:   len(strings.Fields(body)),
 		Tags:        append([]string(nil), meta["tags"]...),
 		Frontmatter: meta,

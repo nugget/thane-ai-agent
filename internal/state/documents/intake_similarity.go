@@ -11,7 +11,7 @@ import (
 
 func (s *Store) relatedIntakeDocuments(ctx context.Context, root string, args IntakeArgs, title string, tags []string) ([]IntakeRelatedDocument, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT root, rel_path, title, summary, tags_json, frontmatter_json, modified_at, word_count
+		`SELECT root, rel_path, title, summary, facets_json, tags_json, frontmatter_json, modified_at, word_count
 		 FROM indexed_documents
 		 WHERE root = ?
 		 ORDER BY modified_at DESC, rel_path

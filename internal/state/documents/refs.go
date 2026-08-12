@@ -36,8 +36,12 @@ func makeRef(root, relPath string) string {
 func scanDocument(rows *sql.Rows, doc *DocumentSummary) error {
 	var tagsJSON string
 	var metaJSON string
-	if err := rows.Scan(&doc.Root, &doc.Path, &doc.Title, &doc.Summary, &tagsJSON, &metaJSON, &doc.ModifiedAt, &doc.WordCount); err != nil {
+	var facetsJSON string
+	if err := rows.Scan(&doc.Root, &doc.Path, &doc.Title, &doc.Summary, &facetsJSON, &tagsJSON, &metaJSON, &doc.ModifiedAt, &doc.WordCount); err != nil {
 		return err
+	}
+	if err := json.Unmarshal([]byte(facetsJSON), &doc.Facets); err != nil || len(doc.Facets) == 0 {
+		doc.Facets = nil
 	}
 	doc.Ref = makeRef(doc.Root, doc.Path)
 	if err := json.Unmarshal([]byte(tagsJSON), &doc.Tags); err != nil {
