@@ -126,30 +126,41 @@ func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {
 	return record, nil
 }
 
-// normalizeSpaceArtifacts folds the non-breaking space variants some
-// model tokenizers emit (U+00A0, U+202F narrow no-break) into plain
-// spaces before a document write. Observed live 2026-08-11 on prod's
-// metacognitive.md: gpt-oss:120b writes narrow no-break spaces where
-// a frontier model writes plain ones, so alternating authors churned
-// dozens of invisibly-changed diff lines per revision and broke plain
-// text search against the stored body. Deliberately conservative:
+// normalizeGlyphArtifacts folds the invisible-difference impostors
+// some model tokenizers emit into their plain equivalents before a
+// document write. Two families, both observed live on prod's
+// metacognitive.md: the no-break space variants (U+00A0, U+202F
+// narrow no-break — gpt-oss:120b, 2026-08-11) and the hyphen
+// impostors (U+2011 non-breaking hyphen, eighteen of which churned in
+// a single revision when a frontier model replaced them with plain
+// hyphens, 2026-08-12; U+2010 rides along as its visually identical
+// sibling). Alternating authors otherwise churn dozens of
+// invisibly-changed diff lines per revision and break plain-text
+// search against the stored body. Deliberately conservative: en and
+// em dashes are visible, intended typography and are never folded;
 // zero-width characters are left alone (emoji sequences depend on
-// them) — only the two space impostors are folded.
-var spaceArtifactReplacer = strings.NewReplacer("\u00a0", " ", "\u202f", " ")
+// them). Only impostors — characters indistinguishable from their
+// plain form at reading distance — are folded.
+var glyphArtifactReplacer = strings.NewReplacer(
+	"\u00a0", " ", "\u202f", " ",
+	"\u2010", "-", "\u2011", "-",
+)
 
-func normalizeSpaceArtifacts(s string) string {
-	if !strings.ContainsAny(s, "\u00a0\u202f") {
+const glyphArtifactSet = "\u00a0\u202f\u2010\u2011"
+
+func normalizeGlyphArtifacts(s string) string {
+	if !strings.ContainsAny(s, glyphArtifactSet) {
 		return s
 	}
-	return spaceArtifactReplacer.Replace(s)
+	return glyphArtifactReplacer.Replace(s)
 }
 
 func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, error) {
 	if args.Body != nil {
-		normalized := normalizeSpaceArtifacts(*args.Body)
+		normalized := normalizeGlyphArtifacts(*args.Body)
 		args.Body = &normalized
 	}
-	args.JournalEntry = normalizeSpaceArtifacts(args.JournalEntry)
+	args.JournalEntry = normalizeGlyphArtifacts(args.JournalEntry)
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err
@@ -209,7 +220,7 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 }
 
 func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error) {
-	args.Body = normalizeSpaceArtifacts(args.Body)
+	args.Body = normalizeGlyphArtifacts(args.Body)
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err
@@ -278,7 +289,7 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 }
 
 func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*MutationResult, error) {
-	args.Entry = normalizeSpaceArtifacts(args.Entry)
+	args.Entry = normalizeGlyphArtifacts(args.Entry)
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err

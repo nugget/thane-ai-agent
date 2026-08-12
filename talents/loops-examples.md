@@ -204,7 +204,9 @@ the section headings; they are rendered for you.
 Each projection has a rune budget — 120 for `status_line`, 500 for
 `teaser`, 2048 for `digest` — and an over-budget value is rejected
 rather than trimmed, because a clipped projection reads as a fragment
-with no sign that anything is missing. Write to the budget, not near it.
+with no sign that anything is missing. The budget is a ceiling, not
+a target — compose comfortably under it; you cannot count runes
+precisely enough to graze a ceiling safely.
 
 Think about what each length is *for* rather than truncating the one
 above it. The status line is a glance: what is true right now. The

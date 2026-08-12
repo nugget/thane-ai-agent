@@ -34,7 +34,7 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 	for _, field := range fields {
 		description := field.Guidance + looppkg.FormatGuidance(field.Format)
 		if field.MaxRunes > 0 {
-			description = fmt.Sprintf("%s Maximum %d characters.", description, field.MaxRunes)
+			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
 		}
 		properties[field.Key] = map[string]any{
 			"type":        "string",
