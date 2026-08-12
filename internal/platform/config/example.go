@@ -7,6 +7,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -302,6 +303,9 @@ func ExampleConfig() *Config {
 					Intent:     "Keep a current read on office activity so notable changes surface without being asked.",
 					Operation:  looppkg.OperationService,
 					Completion: looppkg.CompletionNone,
+					// A mechanical watcher wants the compact worker
+					// prompt (#1171); reflective loops leave this unset.
+					PromptMode: agentctx.PromptModeTask,
 					Conditions: looppkg.Conditions{
 						Schedule: &looppkg.ScheduleCondition{
 							Timezone: "America/Chicago",

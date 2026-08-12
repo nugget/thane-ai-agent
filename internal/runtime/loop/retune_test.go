@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // These tests pin the retune conformance contract (#1153): a running loop
@@ -262,6 +264,40 @@ func TestQueueRetuneUnstartedLoopPromotesInline(t *testing.T) {
 	s := l.Status()
 	if s.Config.Task != "new task" || s.PendingRetune {
 		t.Errorf("unstarted loop: task=%q pending=%v, want inline promote", s.Config.Task, s.PendingRetune)
+	}
+}
+
+// TestQueueRetunePromotesPromptMode pins the #1171 rollout path: flipping
+// prompt_mode on a stored worker-loop definition reaches the live loop as
+// a retune — the requestBase rebuild in promoteRetuneLocked carries it —
+// so the trim needs no relaunch.
+func TestQueueRetunePromotesPromptMode(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "retune-target",
+		Task:         "old task",
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       Float64Ptr(0),
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	retuned := retuneSpec("old task", time.Minute, 0)
+	retuned.PromptMode = agentctx.PromptModeTask
+	if err := l.QueueRetune(retuned); err != nil {
+		t.Fatalf("QueueRetune: %v", err)
+	}
+
+	req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+	if err != nil {
+		t.Fatalf("prepareAgentTurnRequest: %v", err)
+	}
+	if req.PromptMode != agentctx.PromptModeTask {
+		t.Errorf("PromptMode after retune = %q, want task", req.PromptMode)
 	}
 }
 

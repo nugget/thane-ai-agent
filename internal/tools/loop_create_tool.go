@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
@@ -33,12 +34,14 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
 			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. Better than the placeholder skeleton: output.initial authors the first publish at create time from the survey you just did (same arguments as the publish tool; see the parameter). A document that already exists is preserved rather than re-scaffolded or seeded (document_state / working_notes_state in the result report which happened). Document-owning loops carry the read-side doc tools regardless of tags (doc_read — which returns this loop's own outputs whole, even when large — plus doc_outline/doc_section for paging other large documents, and doc_history/doc_diff/doc_at for revision history). Omit output for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
+			"prompt_mode picks the system-prompt shape: set \"task\" for a mechanical maintainer/watcher/poller (fetch a source, check a state, update a document) — the compact worker prompt drops the reflective identity stack, the largest single prompt cost in a background loop; leave it unset for a loop that reflects on the agent or composes messages in its voice. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, facets when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
 		ContentResolveExempt: []string{
 			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
 			"instructions", "sleep_min", "sleep_max", "sleep_default", "jitter",
 			"quality_floor", "exclude_tools", "metadata", "replace", "dry_run",
+			"prompt_mode",
 		},
 		Parameters: thaneLoopCreateSchema(),
 		Handler:    r.handleThaneLoopCreate,
@@ -76,7 +79,8 @@ func (r *Registry) handleThaneLoopCreate(ctx context.Context, args map[string]an
 func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any, name, intent string) (string, error) {
 	if err := rejectArgsForOperation(args, looppkg.OperationContainer,
 		"output", "entities", "instructions", "quality_floor", "exclude_tools",
-		"sleep_min", "sleep_max", "sleep_default", "jitter", "metadata"); err != nil {
+		"sleep_min", "sleep_max", "sleep_default", "jitter", "metadata",
+		"prompt_mode"); err != nil {
 		return "", err
 	}
 
@@ -207,6 +211,18 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 	tags := parseLoopCreateTags(args)
 	instructions := toolargs.TrimmedString(args, "instructions")
 
+	// An omitted prompt_mode stays empty on the spec — the runtime
+	// default is full, but only a caller's explicit choice becomes a
+	// durable pin.
+	var promptMode agentctx.PromptMode
+	if raw := toolargs.TrimmedString(args, "prompt_mode"); raw != "" {
+		mode, err := agentctx.ParsePromptMode(raw)
+		if err != nil {
+			return nil, err
+		}
+		promptMode = mode
+	}
+
 	qualityFloor, err := parseLoopCreateQualityFloor(args)
 	if err != nil {
 		return nil, err
@@ -301,6 +317,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		Task:          task,
 		Intent:        intent,
 		Operation:     op,
+		PromptMode:    promptMode,
 		Tags:          tags,
 		Outputs:       outputs,
 		Subscriptions: curateEntitiesToSubscriptions(entities, now),
@@ -916,6 +933,11 @@ func thaneLoopCreateSchema() map[string]any {
 			"instructions": map[string]any{
 				"type":        "string",
 				"description": "Optional steering text prepended to every iteration's task (service/event_driven). Persists on the spec's profile and shows in loop_definition_get.",
+			},
+			"prompt_mode": map[string]any{
+				"type":        "string",
+				"enum":        []string{"full", "task"},
+				"description": "Optional system-prompt shape (service/event_driven). \"task\" is the compact worker prompt: it sheds the reflective identity layer while keeping tagged guidance, the task, and current conditions — right for mechanical maintainer/watcher/poller loops, where identity prose is the largest single prompt cost. Omit (or set \"full\") for loops that reflect on the agent or compose messages in its voice. Changeable later, live, via loop_definition_update.",
 			},
 			"sleep_min": map[string]any{
 				"type":        "string",

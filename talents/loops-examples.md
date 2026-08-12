@@ -143,6 +143,7 @@ anything persists.
   "intent": "Keep the current state of the server closet — environment, power, and equipment health — legible to anyone who asks, and surface excursions that need attention.",
   "task": "Read the current sensor values and the document you maintain. If the state has moved materially, publish all projections together. If nothing has changed, publish nothing and record why in working notes.",
   "operation": "service",
+  "prompt_mode": "task",
   "sleep_min": "10m",
   "sleep_max": "30m",
   "subscriptions": [
@@ -173,6 +174,13 @@ coverage of everything the owner keeps visible there — expansion honors
 HA visibility and re-resolves live, so a sensor added to the closet next
 month appears without a spec edit — while the sharp entities carry the
 extras an area target cannot (history windows, transition logs, wake).
+
+`prompt_mode: "task"` is right for a mechanical maintainer like this
+one: read sensors, judge drift, publish. The compact worker prompt
+sheds the reflective identity stack — the largest single prompt cost
+in a background loop — while keeping the tagged guidance and
+conditions the work actually uses. A loop that reflects on the agent
+or speaks to humans in its voice leaves the field unset.
 
 ## Publishing
 

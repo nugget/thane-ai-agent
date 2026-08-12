@@ -1305,6 +1305,7 @@ archivist:
 #         exclude_tools: []
 #         extra_hints: {}
 #         instructions: Be concise and focus on high-signal observations.
+#       prompt_mode: task
 #       operation: service
 #       completion: none
 #       outputs: []

@@ -18,6 +18,9 @@ profile:
     extra_hints:
         source: metacognitive
 operation: service
+# Reflective loop: wears the full identity stack by design. This pin
+# guards against any future default that trims service loops (#1171).
+prompt_mode: full
 completion: none
 outputs:
     - name: metacognitive_state

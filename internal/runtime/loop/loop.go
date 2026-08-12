@@ -2296,7 +2296,7 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	req.UsageRole = firstNonEmpty(l.requestOverride.UsageRole, req.UsageRole)
 	req.UsageTaskName = firstNonEmpty(l.requestOverride.UsageTaskName, req.UsageTaskName)
 	req.SystemPrompt = firstNonEmpty(l.requestOverride.SystemPrompt, req.SystemPrompt)
-	req.PromptMode = firstPromptMode(l.requestOverride.PromptMode, req.PromptMode)
+	req.PromptMode = firstPromptMode(l.requestOverride.PromptMode, req.PromptMode, l.requestBase.PromptMode)
 	req.SuppressAlwaysContext = l.requestOverride.SuppressAlwaysContext || req.SuppressAlwaysContext
 	return req, nil
 }

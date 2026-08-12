@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // Operation describes the runtime pattern a loop is expected to
@@ -166,6 +167,18 @@ type Spec struct {
 	// Profile shapes loop execution: routing hints, context-injection
 	// tags, tool exclusions, and related request-shaping guidance.
 	Profile router.LoopProfile `yaml:"profile,omitempty" json:"profile,omitempty"`
+
+	// PromptMode selects the system-prompt shape for every iteration of
+	// this loop. Empty or "full" wears the complete identity stack —
+	// axioms, persona, mission, ego, the always-on talents and ambient
+	// context. "task" is the compact worker prompt: it sheds that
+	// reflective layer while keeping tagged guidance, active tags, the
+	// Task, and current conditions. The convention (#1171): mechanical
+	// maintainer/watcher/poller loops declare "task"; reflective loops —
+	// any loop whose job is judgment about the agent itself — declare
+	// "full". A per-launch [Launch.PromptMode] overrides this default
+	// for one launch.
+	PromptMode agentctx.PromptMode `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
 
 	// Operation describes the runtime pattern expected for the loop.
 	Operation Operation `yaml:"operation,omitempty" json:"operation,omitempty"`
@@ -403,6 +416,9 @@ func (s *Spec) Validate() error {
 	if err := s.Profile.Validate(); err != nil {
 		return fmt.Errorf("loop: profile: %w", err)
 	}
+	if !s.PromptMode.Valid() {
+		return fmt.Errorf("loop: invalid prompt_mode %q; valid values are \"full\" and \"task\"", s.PromptMode)
+	}
 	if err := validateOutputs(s.Outputs); err != nil {
 		return fmt.Errorf("loop: %w", err)
 	}
@@ -461,6 +477,15 @@ func validateContainerShape(s *Spec) error {
 	// Supervisor and SupervisorProb must remain off.
 	// SupervisorProfile-only is OK — that's the inheritance vector
 	// the cascade walker uses.
+	//
+	// PromptMode is checked here rather than in the shared helper
+	// because [Config] has no such field: it shapes the per-iteration
+	// request, and containers never iterate, so a value here would be
+	// dead config — and prompt modes deliberately do not cascade
+	// (#1171: the mode is a per-loop declaration, never inherited).
+	if s.PromptMode != "" {
+		return fmt.Errorf("loop: container %q cannot set prompt_mode (containers never execute a turn, and prompt modes do not cascade to descendants)", s.Name)
+	}
 	return containerShape(
 		s.Name, s.Task,
 		s.TaskBuilder != nil, s.TurnBuilder != nil, s.Handler != nil, s.WaitFunc != nil, s.PostIterate != nil,
@@ -627,6 +652,7 @@ func (s *Spec) profileRequest() Request {
 		ExcludeTools:     opts.ExcludeTools,
 		InitialTags:      append([]string(nil), s.Tags...),
 		RuntimeTools:     cloneRuntimeTools(s.RuntimeTools),
+		PromptMode:       s.PromptMode,
 	}
 }
 
