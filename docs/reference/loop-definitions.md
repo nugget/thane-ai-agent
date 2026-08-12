@@ -1,23 +1,30 @@
-# Loop Definition Documents
+# Loop Definitions
 
-A core loop definition is a markdown document: the yaml spec block
-carries the machine-readable configuration, and prose sections carry
-the prompts. The shipped defaults live in [`loops/`](../../loops/) and
-are embedded into the binary at build time; an operator overrides one
-by placing a document of the same name in `<core>/loops/`, which wins
-and is re-read at every boot. Loops declared under `loops.definitions`
-in config.yaml use the same spec schema, minus the prose sections.
+A loop definition describes one loop — its identity, prompt shape,
+pacing, outputs, and watches. One spec schema underlies every way a
+definition comes to exist: the definition documents in a core root,
+the `loops.definitions` list in config.yaml, and the specs the agent
+authors itself through `thane_loop_create` and `loop_definition_set`.
+This page documents that schema.
 
-The parser is strict on purpose: an unknown or misspelled key refuses
+A definition document is self-contained by design — nothing in it is
+specific to one install except the entities it watches — so a document
+written for one Thane can run on another. The shipped documents in
+[`loops/`](../../loops/) are reference implementations of the form:
+embedded into the binary as defaults, overridden by a document of the
+same name in `<core>/loops/`, and re-read at every boot.
+
+## The document form
+
+A definition document is markdown: one fenced yaml block carries the
+spec, and prose sections carry the prompts. Three H2 headings are
+reserved; every other heading is ordinary prose the parser ignores.
+The parser is strict on purpose — an unknown or misspelled key refuses
 the boot loudly rather than silently doing nothing. Run
 `thane validate` after editing — it parses the config and every
 definition document, reporting all problems at once — before
-restarting.
-
-## The document format
-
-Three H2 headings are reserved; every other heading is ordinary prose
-the parser ignores.
+restarting. (Specs authored through the loop tools get the same
+validation from `loop_definition_lint` before anything persists.)
 
 | Section | Carries |
 |---|---|
