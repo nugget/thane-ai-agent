@@ -432,6 +432,51 @@ paths:
       responses:
         "204": { description: Deleted. }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/loops/{name}/outputs/{output}:
+    get:
+      tags: [Loop Definitions]
+      operationId: getLoopOutput
+      summary: Read one declared loop output at a negotiated fidelity
+      description: >-
+        Serves the named loop's declared output document at the fidelity the
+        Accept header asks for. text/plain returns the published status_line
+        alone (speakable, no markup; 406 when the document has published no
+        status_line). application/json returns the typed contract — the
+        published facets as fields plus the full body. text/markdown, or any
+        other Accept, returns the document body.
+      x-thane-scope: definitions:read
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+          description: Loop definition name.
+        - name: output
+          in: path
+          required: true
+          schema: { type: string }
+          description: Declared output name on that definition.
+      responses:
+        "200":
+          description: The output at the negotiated fidelity.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: "panel clean, baselines steady"
+            application/json:
+              schema: { $ref: "#/components/schemas/LoopOutput" }
+            text/markdown:
+              schema: { type: string }
+              example: "## Status Line\n\npanel clean, baselines steady\n\n## Details\n\n..."
+        "404": { $ref: "#/components/responses/NotFound" }
+        "406":
+          description: >-
+            The requested representation is not published — a text/plain
+            request against a document with no status_line. The error names
+            the available representations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /v1/loop-definitions/{name}/launch:
     post:
       tags: [Loop Definitions]
@@ -2040,6 +2085,38 @@ components:
             eligibility: { eligible: true }
             warnings: []
             loop: { name: cota_weekend_observer, operation: service, running: true, state: processing, iterations: 142, effective_tags: [{ tag: messaging, from: self }] }
+    LoopOutput:
+      type: object
+      description: >-
+        One declared loop output in its typed representation: the published
+        facets as fields (absent keys were not published) and the full body.
+      required: [loop, output, ref, full]
+      properties:
+        loop:
+          type: string
+          description: Loop definition name.
+          example: metacognitive
+        output:
+          type: string
+          description: Declared output name.
+          example: metacognitive_state
+        ref:
+          type: string
+          description: Managed document ref the output lands in.
+          example: self:metacognitive.md
+        modified_at:
+          type: string
+          description: Document modification timestamp.
+          example: "2026-08-12T18:45:06.195768Z"
+        facets:
+          type: object
+          additionalProperties: { type: string }
+          description: Published projections keyed by facet (status_line, teaser, digest).
+          example: { status_line: "panel clean, baselines steady" }
+        full:
+          type: string
+          description: The full body — the Details section of a faceted document, the whole body otherwise.
+          example: "Baselines and open concerns..."
     DefinitionView:
       type: object
       description: >-

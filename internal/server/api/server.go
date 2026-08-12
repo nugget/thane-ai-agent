@@ -89,6 +89,7 @@ type Server struct {
 	modelRegistry                      *fleet.Registry
 	contactStore                       *contacts.Store
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
+	documentRead                       DocumentReader
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
 	loopRegistry                       LoopStatusReader
 	logQuerier                         LogQuerier
@@ -485,6 +486,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Loop definition registry endpoints
 	mux.HandleFunc("GET /v1/loop-definitions", s.handleLoopDefinitions)
 	mux.HandleFunc("GET /v1/loop-definitions/{name}", s.handleLoopDefinitionGet)
+	mux.HandleFunc("GET /v1/loops/{name}/outputs/{output}", s.handleLoopOutputGet)
 	mux.HandleFunc("POST /v1/loop-definitions", s.handleLoopDefinitionSet)
 	mux.HandleFunc("DELETE /v1/loop-definitions/{name}", s.handleLoopDefinitionDelete)
 	mux.HandleFunc("POST /v1/loop-definitions/policy", s.handleLoopDefinitionPolicySet)

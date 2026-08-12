@@ -53,6 +53,9 @@ func (a *App) initServers(s *newState) error {
 	server.SetArchiveStore(a.archiveStore)
 	server.UseContactStore(a.contactStore)
 	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
+	if a.documentStore != nil {
+		server.UseDocumentReader(a.documentStore.Read)
+	}
 	server.ConfigureLoopDefinitionView(a.loopDefinitionView)
 	server.ConfigureLoopDefinitionPersistence(a.commitLoopDefinition, a.deletePersistedLoopDefinition)
 	server.ConfigureLoopDefinitionLifecycle(

@@ -65,6 +65,14 @@ type LoopView struct {
 	NextWakeDelta        *string `json:"next_wake_delta"`
 	CurrentSleepDuration *string `json:"current_sleep_duration"`
 	PolicyUpdatedDelta   *string `json:"policy_updated_delta"`
+	// Outputs are the durable documents this loop declares, projected
+	// from the same spec on a stored definition and a live loop: name,
+	// document ref, the generated write tool, and the facets the
+	// contract declares — enough for a consumer to know what the loop
+	// publishes and which projection levels doc_read can pull, without
+	// fetching the definition (#1250). Configuration, not telemetry.
+	Outputs []LoopViewOutput `json:"outputs,omitempty"`
+
 	// SleepEnvelope is the cadence this loop is allowed to choose within.
 	// It is configuration rather than telemetry, so it is present on a
 	// stored definition as well as a live loop; null on anything with no
@@ -258,6 +266,42 @@ func (r LoopViewResolver) WithMailboxPending(byName map[string]int) LoopViewReso
 	return r
 }
 
+// LoopViewOutput is one declared durable output on a LoopView row: the
+// projection of an OutputSpec that consumers of the canonical loop row
+// need — identity, where it lands, how it is written, and which facet
+// levels are declared — without the write-side detail (mode, purpose
+// prose) the definition itself carries.
+type LoopViewOutput struct {
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Ref      string   `json:"ref"`
+	ToolName string   `json:"tool_name,omitempty"`
+	Facets   []string `json:"facets,omitempty"`
+	Audience string   `json:"audience,omitempty"`
+}
+
+// loopViewOutputs projects a spec's declared outputs into view rows.
+func loopViewOutputs(outputs []OutputSpec) []LoopViewOutput {
+	if len(outputs) == 0 {
+		return nil
+	}
+	views := make([]LoopViewOutput, 0, len(outputs))
+	for _, output := range outputs {
+		view := LoopViewOutput{
+			Name:     output.Name,
+			Type:     string(output.Type),
+			Ref:      output.Ref,
+			ToolName: output.ToolName(),
+			Audience: string(output.EffectiveAudience()),
+		}
+		for _, facet := range output.Facets {
+			view.Facets = append(view.Facets, string(facet.Name))
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
 // NewLoopViewResolver builds the id/name/parent/child indexes once from the
 // full status batch (so parent_name and child_count stay accurate even when
 // the displayed rows are filtered) and captures a single clock for all
@@ -326,6 +370,7 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 		Ancestry:   r.ancestry(s.ID),
 		ChildCount: r.childCount[s.ID],
 		Supervisor: s.Config.Supervisor,
+		Outputs:    loopViewOutputs(s.Config.Outputs),
 		// EventDriven is set from the live Status in applyLiveTelemetry.
 	}
 	if pn := r.nameByID[s.ParentID]; pn != "" {
@@ -571,6 +616,7 @@ func (r DefinitionViewResolver) FromDefinition(snap DefinitionSnapshot, eligibil
 		ChildCount:  r.childCount[snap.Name],
 		EventDriven: op == OperationEventDriven,
 		Supervisor:  spec.Supervisor,
+		Outputs:     loopViewOutputs(spec.Outputs),
 
 		PolicyState:  string(snap.PolicyState),
 		PolicySource: string(snap.PolicySource),
