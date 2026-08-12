@@ -123,3 +123,46 @@ func TestEmbeddedDocumentsMatchTheRepoSources(t *testing.T) {
 		}
 	}
 }
+
+// TestCoreLoopDocumentsLoadWithoutPopulatedPaths is the regression test
+// for the boot-ordering defect found in production 2026-08-12: the
+// definition registry is built before App wiring populates Paths, so a
+// loader reading only Paths["core"] sees an empty string and silently
+// no-ops. The legacy config enabled flags masked this by seeding the
+// embedded defaults; the day the last flag was removed, ego,
+// metacognitive, archivist, and their self container vanished from a
+// healthy-looking boot. The loader must resolve the core root with the
+// same workspace fallback the validate pre-flight uses — this test is
+// tonight's production shape: no Paths, no enabled flags, a real
+// document on disk that must load anyway.
+func TestCoreLoopDocumentsLoadWithoutPopulatedPaths(t *testing.T) {
+	workspace := t.TempDir()
+	loopsDir := filepath.Join(workspace, "core", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	doc := "# Watch\n\n## Spec\n\n```yaml\nname: doc_defined_watch\nenabled: true\noperation: service\nsleep_min: 5m0s\nsleep_max: 1h0m0s\nsleep_default: 10m0s\n```\n\n## Task\n\nWatch something.\n"
+	if err := os.WriteFile(filepath.Join(loopsDir, "watch.md"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Workspace.Path = workspace
+	// Paths deliberately nil and every legacy enabled flag deliberately
+	// false: nothing may seed but the document itself.
+	app := &App{cfg: cfg}
+
+	specs, err := app.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+	found := false
+	for _, spec := range specs {
+		if spec.Name == "doc_defined_watch" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("document-defined loop did not load without populated Paths; specs: %d", len(specs))
+	}
+}
