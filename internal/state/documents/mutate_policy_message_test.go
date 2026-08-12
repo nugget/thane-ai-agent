@@ -47,16 +47,11 @@ func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
 		}
 	})
 
-	t.Run("empty status_line stays mechanical", func(t *testing.T) {
+	t.Run("empty status_line stays mechanical, digest still becomes the body", func(t *testing.T) {
 		raw := "## Status Line\n\n\n## Digest\n\nsummary\n\n## Details\n\nbody\n"
 		msg := documentWriteMessage("doc_write", "kb", "x.md", raw)
-		if !strings.HasPrefix(msg, "doc_write kb:x.md\n\n") && msg != "doc_write kb:x.md" {
-			if !strings.Contains(msg, "summary") {
-				t.Fatalf("message = %q", msg)
-			}
-		}
-		if strings.Contains(strings.SplitN(msg, "\n", 2)[0], "—") {
-			t.Fatalf("empty verdict must not decorate the subject: %q", msg)
+		if msg != "doc_write kb:x.md\n\nsummary" {
+			t.Fatalf("message = %q, want undecorated subject with digest body", msg)
 		}
 	})
 }

@@ -256,7 +256,7 @@ func (s *Store) Write(ctx context.Context, filename, content, message string) er
 		s.logger.Info("provenance file committed",
 			"file", filename,
 			"bytes", len(content),
-			"message", message,
+			"message", messageSubject(message),
 		)
 	}
 
@@ -303,7 +303,7 @@ func (s *Store) WriteFiles(ctx context.Context, files map[string]string, message
 	if committed {
 		s.logger.Info("provenance files committed",
 			"files", filenames,
-			"message", message,
+			"message", messageSubject(message),
 		)
 	}
 
@@ -341,7 +341,7 @@ func (s *Store) Delete(ctx context.Context, filename, message string) error {
 	if committed {
 		s.logger.Info("provenance file deletion committed",
 			"file", filename,
-			"message", message,
+			"message", messageSubject(message),
 		)
 	}
 	return nil
@@ -403,4 +403,16 @@ func (s *Store) History(ctx context.Context, filename string) (*FileHistory, err
 // (e.g., for size checks or passing to other subsystems).
 func (s *Store) FilePath(filename string) string {
 	return filepath.Join(s.path, filename)
+}
+
+// messageSubject reduces a commit message to its subject line for
+// logging. Messages may legitimately carry multi-line bodies — faceted
+// document writes put the digest there — and a log line is a summary
+// surface, not a transcript: the subject identifies the commit, and
+// the full message lives in the repository it describes.
+func messageSubject(message string) string {
+	if i := strings.IndexByte(message, '\n'); i >= 0 {
+		return message[:i]
+	}
+	return message
 }
