@@ -291,17 +291,34 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 }
 
 func loopOutputUpdatedDelta(doc *documents.DocumentRecord, now time.Time) string {
+	if ts, ok := documentUpdatedTime(doc); ok {
+		return promptfmt.FormatDeltaOnly(ts, now)
+	}
+	return ""
+}
+
+// documentUpdatedTime resolves when a maintained document was last
+// updated: the document's own declared frontmatter stamps ("updated",
+// then "updated_at") outrank the file's modification time, and every
+// value parses through database.ParseTimestamp — the shared
+// timestamp-format authority — never a per-caller layout guess. One
+// seam serves both delta rendering here and any consumer needing the
+// time itself (the system self-assessment provider's age).
+func documentUpdatedTime(doc *documents.DocumentRecord) (time.Time, bool) {
 	if doc == nil {
-		return ""
+		return time.Time{}, false
 	}
 	for _, key := range []string{"updated", "updated_at"} {
 		for _, value := range doc.Frontmatter[key] {
-			if delta := loopOutputDelta(value, now); delta != "" {
-				return delta
+			if ts, err := database.ParseTimestamp(value); err == nil {
+				return ts, true
 			}
 		}
 	}
-	return loopOutputDelta(doc.ModifiedAt, now)
+	if ts, err := database.ParseTimestamp(doc.ModifiedAt); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
 }
 
 func loopOutputDelta(value string, now time.Time) string {

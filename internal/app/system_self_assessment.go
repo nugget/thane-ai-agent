@@ -58,6 +58,8 @@ func (a *App) readSystemSelfAssessmentDocument(ctx context.Context) (string, tim
 		}
 		return "", time.Time{}, err
 	}
-	modified, _ := time.Parse(time.RFC3339Nano, record.ModifiedAt)
+	// Zero when unresolvable; the provider omits the age rather than
+	// inventing one.
+	modified, _ := documentUpdatedTime(record)
 	return record.Body, modified, nil
 }
