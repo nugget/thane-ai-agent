@@ -11,6 +11,7 @@ tags: [loops]
 name: archivist
 parent_name: self
 enabled: true
+intent: Turn the accumulated flow of memory — archive, sessions, facts, contacts — into coherent subject dossiers, self-paced from a durable work queue.
 profile:
     quality_floor: 5
     mission: archivist
@@ -18,8 +19,11 @@ profile:
     extra_hints:
         source: archivist
 operation: service
-# Reflective loop: wears the full identity stack by design. This pin
-# guards against any future default that trims service loops (#1171).
+# "full" keeps the complete identity — persona, ego, axioms, the
+# always-on context — in this loop's prompt. This loop's work is the
+# agent's own self, which is exactly what the compact "task" worker
+# prompt strips away, so the mode is pinned here rather than left to
+# any default.
 prompt_mode: full
 completion: none
 outputs:
@@ -74,9 +78,6 @@ metadata:
 # unknown keys — a typo fails the boot loudly, so run `thane validate`
 # before restarting. Comments are ignored.
 #
-# intent: ""             # one-sentence purpose, shown by the loop tools
-# task: ""               # not set here — the "## Task" section below
-#                        # carries the prompt; declaring both is refused
 # subscriptions: []      # entities rendered each turn; entry keys:
 #                        #   entity_id, history, forecast, ttl_seconds,
 #                        #   mode, self_only, requires_tag, transitions,

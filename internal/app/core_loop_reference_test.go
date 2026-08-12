@@ -51,6 +51,18 @@ func TestShippedCoreLoopDocumentsReferenceEverySpecKey(t *testing.T) {
 		}
 		doc := string(raw)
 		for _, key := range keys {
+			// task is not a spec-block key in these documents: the
+			// "## Task" section carries the prompt, and declaring both
+			// is refused by the loader. The section heading is what
+			// satisfies the reference obligation — a reference line
+			// documenting a key the same file forbids would only
+			// confuse.
+			if key == "task" {
+				if !strings.Contains(doc, "## Task") {
+					t.Errorf("%s: no \"## Task\" section; the task belongs there, not in the spec block", entry.Name())
+				}
+				continue
+			}
 			if !strings.Contains(doc, key+":") {
 				t.Errorf("%s: spec key %q is neither set nor referenced; add it to the spec block's reference comment so operators can see the full surface", entry.Name(), key)
 			}
