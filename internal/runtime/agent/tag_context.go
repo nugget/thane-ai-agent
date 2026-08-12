@@ -28,17 +28,27 @@ import (
 //  2. Tagged live providers — [TagContextProvider] implementations
 //     registered against a specific capability tag via
 //     [Loop.RegisterTagContextProvider]. Filtered by ActiveTags.
-//  3. Always-on providers — [TagContextProvider] implementations
-//     registered via [Loop.RegisterAlwaysContextProvider]. Gated by
-//     ContextRequest.IncludeAlways: main loop runs include them,
-//     delegate runs do not.
+//  3. Gated providers — [TagContextProvider] implementations that
+//     render every turn their gate admits, held in one list in
+//     registration order. Always-on registrations
+//     ([Loop.RegisterAlwaysContextProvider]) carry the ambient
+//     experiential context and render under
+//     ContextRequest.IncludeAlways; loop-scoped registrations
+//     ([Loop.RegisterLoopScopedContextProvider]) carry the running
+//     loop's own subscriptions and self view and render under
+//     ContextRequest.IncludeLoopScoped. The two gates are independent:
+//     full-mode loop turns set both, task-mode turns set only
+//     loop-scoped, delegate runs set neither.
 //
 // Each rendered bucket has its own 64 KB cap and truncation marker.
-// Tagged vs always is encoded as where each source registered, not as
-// a separate code path. KB articles and explicit context refs flow
-// through the optional managed-root signature verifier. Providers that
-// read disk-managed material are responsible for applying their own
-// verification before returning model-facing content.
+// A provider's class is encoded as how it registered, not as a
+// separate code path — one interleaved list preserves registration
+// order across classes, so a prompt's within-bucket ordering never
+// depends on which gates happen to be open. KB articles and explicit
+// context refs flow through the optional managed-root signature
+// verifier. Providers that read disk-managed material are responsible
+// for applying their own verification before returning model-facing
+// content.
 //
 // Both the main agent loop and delegate executor share a single
 // assembler. The assembler is safe for concurrent use after
@@ -57,10 +67,21 @@ type TagContextAssembler struct {
 	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger   *slog.Logger
 
-	mu                  sync.Mutex
-	tagProviders        map[string]TagContextProvider
-	alwaysProviders     []TagContextProvider
-	loopScopedProviders []TagContextProvider
+	mu           sync.Mutex
+	tagProviders map[string]TagContextProvider
+	// gatedProviders holds always-on and loop-scoped providers in one
+	// list, in registration order. One list rather than two because
+	// order is prompt order: within a bucket, providers render in the
+	// sequence they registered, whichever class they belong to.
+	gatedProviders []gatedContextProvider
+}
+
+// gatedContextProvider pairs a provider with the request gate that
+// admits it: loop-scoped providers render under IncludeLoopScoped,
+// everything else under IncludeAlways.
+type gatedContextProvider struct {
+	provider   TagContextProvider
+	loopScoped bool
 }
 
 // TagContextBucketer lets a context provider choose the prompt bucket
@@ -261,24 +282,24 @@ func (a *TagContextAssembler) RegisterAlwaysProvider(p TagContextProvider) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.alwaysProviders = append(a.alwaysProviders, p)
+	a.gatedProviders = append(a.gatedProviders, gatedContextProvider{provider: p})
 }
 
-// RegisterLoopScopedProvider adds a provider to the loop-scoped bucket:
+// RegisterLoopScopedProvider adds a provider to the loop-scoped class:
 // context that belongs to the running loop itself — its declared entity
 // subscriptions, its own self view — rather than to the ambient
-// experience the always-on bucket carries. The split exists because the
+// experience the always-on class carries. The split exists because the
 // two are gated differently (ContextRequest.IncludeLoopScoped vs
 // IncludeAlways): a task-mode worker keeps its own operational context
-// while shedding the ambient self. Order is preserved across
-// registrations.
+// while shedding the ambient self. Registration order is preserved
+// across both classes — it is prompt order within a bucket.
 func (a *TagContextAssembler) RegisterLoopScopedProvider(p TagContextProvider) {
 	if a == nil || p == nil {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.loopScopedProviders = append(a.loopScopedProviders, p)
+	a.gatedProviders = append(a.gatedProviders, gatedContextProvider{provider: p, loopScoped: true})
 }
 
 // TaggedProviders returns a snapshot of the registered tag→provider
@@ -317,13 +338,12 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 }
 
 // BuildSections assembles typed context sections for the request. The
-// single internal pipeline walks four sources in order — KB articles,
-// tagged providers, always-on providers, loop-scoped providers. The
-// last two carry independent gates: always-on providers render under
-// req.IncludeAlways (full-mode main-loop runs), loop-scoped providers
-// under req.IncludeLoopScoped (every loop turn regardless of prompt
-// mode; delegates suppress both). Returns nil when no source produces
-// content.
+// single internal pipeline walks three sources in order — KB articles,
+// tagged providers, then the gated providers (always-on and
+// loop-scoped interleaved in registration order, each admitted by its
+// own gate: req.IncludeAlways for ambient context, req.IncludeLoopScoped
+// for the running loop's own subscriptions and self view). Returns nil
+// when no source produces content.
 func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.ContextRequest) []agentctx.ContextSection {
 	if a == nil {
 		return nil
@@ -334,8 +354,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	for k, v := range a.tagProviders {
 		tagProviders[k] = v
 	}
-	alwaysProviders := append([]TagContextProvider(nil), a.alwaysProviders...)
-	loopScopedProviders := append([]TagContextProvider(nil), a.loopScopedProviders...)
+	gatedProviders := append([]gatedContextProvider(nil), a.gatedProviders...)
 	a.mu.Unlock()
 
 	seen := make(map[string]bool)
@@ -401,54 +420,44 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		}
 	}
 
-	// Source 3: Always-on providers, gated by IncludeAlways. Delegate
-	// runs pass IncludeAlways=false to skip ambient context (presence,
-	// episodic memory, working memory, notification history, etc.)
-	// that the bounded child task does not need; task-mode loop runs
-	// skip it too, as part of shedding the identity stack.
-	if req.IncludeAlways {
-		for _, p := range alwaysProviders {
-			content, err := p.TagContext(ctx, req)
-			if err != nil {
-				a.logger.Warn("always context provider failed", "error", err)
+	// Source 3: Gated providers — always-on and loop-scoped — walked
+	// as one list in registration order, each entry admitted by its
+	// own gate. Always-on entries carry ambient experiential context
+	// (presence, episodic memory, notification history, etc.) and
+	// render under IncludeAlways: full-mode loop turns only.
+	// Loop-scoped entries carry the running loop's own operational
+	// context (declared subscriptions, the "This loop" self view) and
+	// render under IncludeLoopScoped: every loop turn regardless of
+	// prompt mode — a task-mode worker sheds the ambient self, not its
+	// eyes. Delegate runs open neither gate. The single interleaved
+	// walk keeps full-mode prompts byte-identical to the pre-split
+	// ordering and keeps bucket-cap priority a property of
+	// registration order, not of class.
+	for _, gp := range gatedProviders {
+		if gp.loopScoped {
+			if !req.IncludeLoopScoped {
 				continue
 			}
-			if content == "" {
-				continue
-			}
-			bucket := providerContextBucket(p, agentctx.ContextBucketContinuity)
-			if acc.append(bucket, []byte(content)) {
-				a.logger.Warn("tag context bucket limit reached",
-					"bucket", string(bucket), "bucket_title", bucket.Title(),
-					"source", "always_provider", "limit_bytes", maxTagContextBytes)
-			}
+		} else if !req.IncludeAlways {
+			continue
 		}
-	}
-
-	// Source 4: Loop-scoped providers, gated by IncludeLoopScoped —
-	// the running loop's own operational context (declared entity
-	// subscriptions, the "This loop" self view). Deliberately
-	// independent of IncludeAlways: a task-mode worker sheds the
-	// ambient self above but keeps its own eyes and its own envelope.
-	// Rendered after the always bucket so full-mode prompts keep their
-	// established ordering (always-visible watchlist before loop
-	// subscriptions).
-	if req.IncludeLoopScoped {
-		for _, p := range loopScopedProviders {
-			content, err := p.TagContext(ctx, req)
-			if err != nil {
-				a.logger.Warn("loop-scoped context provider failed", "error", err)
-				continue
-			}
-			if content == "" {
-				continue
-			}
-			bucket := providerContextBucket(p, agentctx.ContextBucketLiveState)
-			if acc.append(bucket, []byte(content)) {
-				a.logger.Warn("tag context bucket limit reached",
-					"bucket", string(bucket), "bucket_title", bucket.Title(),
-					"source", "loop_scoped_provider", "limit_bytes", maxTagContextBytes)
-			}
+		defaultBucket, source := agentctx.ContextBucketContinuity, "always_provider"
+		if gp.loopScoped {
+			defaultBucket, source = agentctx.ContextBucketLiveState, "loop_scoped_provider"
+		}
+		content, err := gp.provider.TagContext(ctx, req)
+		if err != nil {
+			a.logger.Warn("gated context provider failed", "source", source, "error", err)
+			continue
+		}
+		if content == "" {
+			continue
+		}
+		bucket := providerContextBucket(gp.provider, defaultBucket)
+		if acc.append(bucket, []byte(content)) {
+			a.logger.Warn("tag context bucket limit reached",
+				"bucket", string(bucket), "bucket_title", bucket.Title(),
+				"source", source, "limit_bytes", maxTagContextBytes)
 		}
 	}
 

@@ -720,6 +720,38 @@ func TestTagContextAssembler_LoopScopedGating(t *testing.T) {
 	}
 }
 
+// TestTagContextAssembler_GatedProvidersKeepRegistrationOrder pins the
+// interleaving contract: always-on and loop-scoped providers render in
+// registration order within a bucket, whichever class each belongs to.
+// The split into two gates must not regroup full-mode prompts — before
+// the split, production registered the loop self view between two
+// ambient providers and the subscriptions before the state window, and
+// that ordering (and its bucket-cap priority) has to survive.
+func TestTagContextAssembler_GatedProvidersKeepRegistrationOrder(t *testing.T) {
+	a := NewTagContextAssembler(TagContextAssemblerConfig{})
+	a.RegisterAlwaysProvider(&mockTagProvider{content: "FIRST_AMBIENT", bucket: agentctx.ContextBucketLiveState})
+	a.RegisterLoopScopedProvider(&mockTagProvider{content: "THEN_LOOP", bucket: agentctx.ContextBucketLiveState})
+	a.RegisterAlwaysProvider(&mockTagProvider{content: "LAST_AMBIENT", bucket: agentctx.ContextBucketLiveState})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		IncludeAlways:     true,
+		IncludeLoopScoped: true,
+	})
+	if len(sections) != 1 {
+		t.Fatalf("BuildSections returned %d sections, want 1: %#v", len(sections), sections)
+	}
+	content := sections[0].Content
+	first := strings.Index(content, "FIRST_AMBIENT")
+	then := strings.Index(content, "THEN_LOOP")
+	last := strings.Index(content, "LAST_AMBIENT")
+	if first == -1 || then == -1 || last == -1 {
+		t.Fatalf("missing marker in bucket content: %q", content)
+	}
+	if first > then || then > last {
+		t.Errorf("bucket content regrouped by class instead of registration order: %q", content)
+	}
+}
+
 func TestTagContextAssembler_TaggedProviderOrderIsStable(t *testing.T) {
 	a := NewTagContextAssembler(TagContextAssemblerConfig{})
 	a.RegisterTaggedProvider("zulu", &mockTagProvider{content: "ZULU_PROVIDER"})

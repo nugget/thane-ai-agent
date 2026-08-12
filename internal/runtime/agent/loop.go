@@ -301,13 +301,17 @@ type Loop struct {
 	// before SetTagContextAssembler is called. SetTagContextAssembler
 	// drains them into the assembler at wiring time. After that, the
 	// pending fields are nil and Register* calls forward directly.
-	pendingProvidersMu         sync.Mutex
-	pendingTagProviders        map[string]TagContextProvider
-	pendingAlwaysProviders     []TagContextProvider
-	pendingLoopScopedProviders []TagContextProvider
+	// Always-on and loop-scoped registrations stage in one interleaved
+	// list for the same reason the assembler holds them in one: order
+	// is prompt order, and the drain must not regroup the classes.
+	pendingProvidersMu    sync.Mutex
+	pendingTagProviders   map[string]TagContextProvider
+	pendingGatedProviders []gatedContextProvider
 
 	// tagContextAssembler builds typed context sections from tagged KB
-	// articles, tagged providers, and always-on providers.
+	// articles, tagged providers, and the gated providers (always-on
+	// ambient context plus loop-scoped subscriptions/self view, each
+	// class behind its own ContextRequest gate).
 	// Set via SetTagContextAssembler; nil disables tag context.
 	tagContextAssembler *TagContextAssembler
 
@@ -473,7 +477,7 @@ func (l *Loop) RegisterAlwaysContextProvider(p TagContextProvider) {
 		l.tagContextAssembler.RegisterAlwaysProvider(p)
 		return
 	}
-	l.pendingAlwaysProviders = append(l.pendingAlwaysProviders, p)
+	l.pendingGatedProviders = append(l.pendingGatedProviders, gatedContextProvider{provider: p})
 	l.pendingProvidersMu.Unlock()
 }
 
@@ -494,7 +498,7 @@ func (l *Loop) RegisterLoopScopedContextProvider(p TagContextProvider) {
 		l.tagContextAssembler.RegisterLoopScopedProvider(p)
 		return
 	}
-	l.pendingLoopScopedProviders = append(l.pendingLoopScopedProviders, p)
+	l.pendingGatedProviders = append(l.pendingGatedProviders, gatedContextProvider{provider: p, loopScoped: true})
 	l.pendingProvidersMu.Unlock()
 }
 
@@ -637,11 +641,9 @@ func (l *Loop) ConfigureChannelDelegation(w ChannelDelegationWiring) {
 func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	l.pendingProvidersMu.Lock()
 	pendingTagged := l.pendingTagProviders
-	pendingAlways := l.pendingAlwaysProviders
-	pendingLoopScoped := l.pendingLoopScopedProviders
+	pendingGated := l.pendingGatedProviders
 	l.pendingTagProviders = nil
-	l.pendingAlwaysProviders = nil
-	l.pendingLoopScopedProviders = nil
+	l.pendingGatedProviders = nil
 	l.tagContextAssembler = a
 	l.pendingProvidersMu.Unlock()
 
@@ -651,11 +653,12 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	for tag, p := range pendingTagged {
 		a.RegisterTaggedProvider(tag, p)
 	}
-	for _, p := range pendingAlways {
-		a.RegisterAlwaysProvider(p)
-	}
-	for _, p := range pendingLoopScoped {
-		a.RegisterLoopScopedProvider(p)
+	for _, gp := range pendingGated {
+		if gp.loopScoped {
+			a.RegisterLoopScopedProvider(gp.provider)
+		} else {
+			a.RegisterAlwaysProvider(gp.provider)
+		}
 	}
 }
 
@@ -670,11 +673,10 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	for tag, p := range l.pendingTagProviders {
 		pendingTagged[tag] = p
 	}
-	pendingAlways := append([]TagContextProvider(nil), l.pendingAlwaysProviders...)
-	pendingLoopScoped := append([]TagContextProvider(nil), l.pendingLoopScopedProviders...)
+	pendingGated := append([]gatedContextProvider(nil), l.pendingGatedProviders...)
 	l.pendingProvidersMu.Unlock()
 
-	if len(pendingTagged) == 0 && len(pendingAlways) == 0 && len(pendingLoopScoped) == 0 {
+	if len(pendingTagged) == 0 && len(pendingGated) == 0 {
 		return nil
 	}
 	assembler = NewTagContextAssembler(TagContextAssemblerConfig{
@@ -684,11 +686,12 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	for tag, p := range pendingTagged {
 		assembler.RegisterTaggedProvider(tag, p)
 	}
-	for _, p := range pendingAlways {
-		assembler.RegisterAlwaysProvider(p)
-	}
-	for _, p := range pendingLoopScoped {
-		assembler.RegisterLoopScopedProvider(p)
+	for _, gp := range pendingGated {
+		if gp.loopScoped {
+			assembler.RegisterLoopScopedProvider(gp.provider)
+		} else {
+			assembler.RegisterAlwaysProvider(gp.provider)
+		}
 	}
 	return assembler
 }

@@ -78,7 +78,7 @@ func TestLoopSubscriptionProviderSkipsAlwaysVisibleEntities(t *testing.T) {
 	}
 
 	ctx := looppkg.WithLoopIDForTest(context.Background(), leaf.ID())
-	out, err := p.TagContext(ctx, agentctx.ContextRequest{})
+	out, err := p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
@@ -90,6 +90,22 @@ func TestLoopSubscriptionProviderSkipsAlwaysVisibleEntities(t *testing.T) {
 	}
 	if strings.Contains(out, "sensor.shared") {
 		t.Errorf("loop-scoped render leaked sensor.shared (already always-visible): %q", out)
+	}
+
+	// Task mode is the inverse case (#1363 review): the always-visible
+	// WatchlistProvider does not render when IncludeAlways is false, so
+	// "already visible" is no longer true and nothing may suppress —
+	// otherwise the overlapping entity would be emitted by neither
+	// provider and the loop would go blind to it.
+	taskOut, err := p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: false, IncludeLoopScoped: true})
+	if err != nil {
+		t.Fatalf("TagContext (task mode): %v", err)
+	}
+	if !strings.Contains(taskOut, "sensor.shared") {
+		t.Errorf("task-mode render must include sensor.shared — the watchlist is not rendering, so nothing is 'already visible': %q", taskOut)
+	}
+	if !strings.Contains(taskOut, "sensor.loop") {
+		t.Errorf("task-mode render missing sensor.loop: %q", taskOut)
 	}
 
 	// The output-text check above is what enforces the dedup;
@@ -136,7 +152,7 @@ func TestLoopSubscriptionProviderHonorsRequiresTag(t *testing.T) {
 
 	ctx := looppkg.WithLoopIDForTest(context.Background(), leaf.ID())
 
-	out, err := p.TagContext(ctx, agentctx.ContextRequest{})
+	out, err := p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true})
 	if err != nil {
 		t.Fatalf("TagContext (tag off): %v", err)
 	}
@@ -147,7 +163,7 @@ func TestLoopSubscriptionProviderHonorsRequiresTag(t *testing.T) {
 		t.Errorf("ungated subscription missing: %q", out)
 	}
 
-	out, err = p.TagContext(ctx, agentctx.ContextRequest{ActiveTags: map[string]bool{"ranch_water": true}})
+	out, err = p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true, ActiveTags: map[string]bool{"ranch_water": true}})
 	if err != nil {
 		t.Fatalf("TagContext (tag on): %v", err)
 	}
@@ -188,7 +204,7 @@ func TestLoopSubscriptionProviderDedupIgnoresGatedOffGlobalRows(t *testing.T) {
 
 	// Tag off: the global tier renders nothing for the entity, so the
 	// loop's own subscription must show it.
-	out, err := p.TagContext(ctx, agentctx.ContextRequest{})
+	out, err := p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true})
 	if err != nil {
 		t.Fatalf("TagContext (tag off): %v", err)
 	}
@@ -197,7 +213,7 @@ func TestLoopSubscriptionProviderDedupIgnoresGatedOffGlobalRows(t *testing.T) {
 	}
 
 	// Tag on: the global tier renders it, so the loop must dedup.
-	out, err = p.TagContext(ctx, agentctx.ContextRequest{ActiveTags: map[string]bool{"ranch_water": true}})
+	out, err = p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true, ActiveTags: map[string]bool{"ranch_water": true}})
 	if err != nil {
 		t.Fatalf("TagContext (tag on): %v", err)
 	}
@@ -245,7 +261,7 @@ func TestLoopSubscriptionProviderGatedLeafShadowsUngatedAncestor(t *testing.T) {
 	}
 	ctx := looppkg.WithLoopIDForTest(context.Background(), leaf.ID())
 
-	out, err := p.TagContext(ctx, agentctx.ContextRequest{})
+	out, err := p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true})
 	if err != nil {
 		t.Fatalf("TagContext (tag off): %v", err)
 	}
@@ -253,7 +269,7 @@ func TestLoopSubscriptionProviderGatedLeafShadowsUngatedAncestor(t *testing.T) {
 		t.Errorf("shadowed entity rendered while the leaf's gate is closed; first-wins should include conditions: %q", out)
 	}
 
-	out, err = p.TagContext(ctx, agentctx.ContextRequest{ActiveTags: map[string]bool{"ranch_water": true}})
+	out, err = p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true, ActiveTags: map[string]bool{"ranch_water": true}})
 	if err != nil {
 		t.Fatalf("TagContext (tag on): %v", err)
 	}
@@ -297,7 +313,7 @@ func TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows(t *testing.T
 	}
 	ctx := looppkg.WithLoopIDForTest(context.Background(), leaf.ID())
 
-	out, err := p.TagContext(ctx, agentctx.ContextRequest{})
+	out, err := p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
@@ -312,7 +328,7 @@ func TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows(t *testing.T
 	}); err != nil {
 		t.Fatalf("upgrade to both: %v", err)
 	}
-	out, err = p.TagContext(ctx, agentctx.ContextRequest{})
+	out, err = p.TagContext(ctx, agentctx.ContextRequest{IncludeAlways: true})
 	if err != nil {
 		t.Fatalf("TagContext (both): %v", err)
 	}
