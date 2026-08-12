@@ -4,9 +4,10 @@
 // These are the built-in defaults for the core service loops. An
 // operator overrides one by placing a document of the same name in the
 // core document root, which wins; absent that, the shipped document is
-// what boots. Shipping them rather than seeding them at install means an
-// upgrade cannot leave a loop silently undefined because a copy step was
-// missed.
+// what boots when config enables the loop. A loop with no document and
+// no enabled flag does not run at all. Shipping the defaults rather
+// than seeding them at install means an upgrade cannot leave an
+// enabled loop silently undefined because a copy step was missed.
 package coreloops
 
 import "embed"

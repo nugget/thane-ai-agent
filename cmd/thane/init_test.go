@@ -47,22 +47,23 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		}
 	}
 
-	// Verify config.yaml exists with restricted permissions.
-	cfgInfo, err := os.Stat(filepath.Join(dir, "config.yaml"))
+	// Verify the workspace-root reference copies exist. They carry
+	// .example names because the runtime never reads them — the live
+	// config is core/config.yaml and the live persona core/persona.md.
+	cfgInfo, err := os.Stat(filepath.Join(dir, "config.example.yaml"))
 	if err != nil {
-		t.Fatalf("config.yaml not created: %v", err)
+		t.Fatalf("config.example.yaml not created: %v", err)
 	}
-	if got := cfgInfo.Mode().Perm(); got != 0o600 {
-		t.Errorf("config.yaml permissions = %o, want 0600", got)
+	if got := cfgInfo.Mode().Perm(); got != 0o644 {
+		t.Errorf("config.example.yaml permissions = %o, want 0644", got)
 	}
 
-	// Verify persona.md exists with standard permissions.
-	personaInfo, err := os.Stat(filepath.Join(dir, "persona.md"))
+	personaInfo, err := os.Stat(filepath.Join(dir, "persona.example.md"))
 	if err != nil {
-		t.Fatalf("persona.md not created: %v", err)
+		t.Fatalf("persona.example.md not created: %v", err)
 	}
 	if got := personaInfo.Mode().Perm(); got != 0o644 {
-		t.Errorf("persona.md permissions = %o, want 0644", got)
+		t.Errorf("persona.example.md permissions = %o, want 0644", got)
 	}
 
 	// Verify at least one talent file was deployed. They live inside core,
@@ -92,14 +93,27 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	if !strings.Contains(out, "✓") {
 		t.Error("output missing ✓ marker for created files")
 	}
-	if !strings.Contains(out, "config.yaml") {
-		t.Error("output missing config.yaml")
+	if !strings.Contains(out, "config.example.yaml") {
+		t.Error("output missing config.example.yaml")
 	}
-	if !strings.Contains(out, "persona.md") {
-		t.Error("output missing persona.md")
+	if !strings.Contains(out, "persona.example.md") {
+		t.Error("output missing persona.example.md")
 	}
 	if !strings.Contains(out, "core identity") {
 		t.Error("output missing core identity")
+	}
+
+	// The closing guidance must point at the files the runtime reads —
+	// the workspace-root copies are references, and telling an operator
+	// to edit them is telling them to edit files nothing loads.
+	if !strings.Contains(out, "core/config.yaml") {
+		t.Error("closing guidance should point edits at core/config.yaml")
+	}
+	if !strings.Contains(out, "core/persona.md") {
+		t.Error("closing guidance should point persona authoring at core/persona.md")
+	}
+	if !strings.Contains(out, "docs/operating/getting-started.md") {
+		t.Error("closing guidance should reference docs/operating/getting-started.md")
 	}
 
 	for _, rel := range []string{
@@ -215,15 +229,15 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 		t.Fatalf("first runInit failed: %v", err)
 	}
 
-	// Record original config content.
-	origConfig, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	// Record original reference-config content.
+	origConfig, err := os.ReadFile(filepath.Join(dir, "config.example.yaml"))
 	if err != nil {
-		t.Fatalf("read config.yaml: %v", err)
+		t.Fatalf("read config.example.yaml: %v", err)
 	}
 
-	// Write a sentinel into config.yaml so we can verify it isn't overwritten.
+	// Write a sentinel so we can verify the file isn't overwritten.
 	sentinel := []byte("# sentinel — do not overwrite\n")
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), sentinel, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.example.yaml"), sentinel, 0o644); err != nil {
 		t.Fatalf("write sentinel: %v", err)
 	}
 
@@ -240,13 +254,13 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 		t.Error("output missing 'exists, skipping' for pre-existing files")
 	}
 
-	// Verify config.yaml was NOT overwritten.
-	got, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	// Verify config.example.yaml was NOT overwritten.
+	got, err := os.ReadFile(filepath.Join(dir, "config.example.yaml"))
 	if err != nil {
-		t.Fatalf("read config.yaml after second run: %v", err)
+		t.Fatalf("read config.example.yaml after second run: %v", err)
 	}
 	if !bytes.Equal(got, sentinel) {
-		t.Errorf("config.yaml was overwritten: got %d bytes (original was %d)", len(got), len(origConfig))
+		t.Errorf("config.example.yaml was overwritten: got %d bytes (original was %d)", len(got), len(origConfig))
 	}
 }
 

@@ -941,11 +941,6 @@ func (c ProvenanceConfig) Configured() bool {
 	return c.Path != "" && c.SigningKey != ""
 }
 
-// SigningConfig declares the operator-managed set of trusted signing keys
-// for git-backed document roots. These keys are unioned with the agent's
-// own signing key — which is always trusted and can never be removed — to
-// form the trust set that signature verification checks against. Keys are
-// operator-only: they live in config and are never exposed to a model.
 // SigningConfig is retained for future instance-wide signing settings.
 // The trust set itself is declared per root as seed_signers, because
 // roots have different trust domains: the config that decides what the
@@ -2240,7 +2235,10 @@ type AnalysisConfig struct {
 // is unchanged; the single type collapses what were three byte-identical
 // structs plus three parallel applyDefaults/validate blocks (#999).
 type ServiceLoopConfig struct {
-	// Enabled controls whether the loop starts. Default: false.
+	// Enabled seeds the loop's shipped definition document when no
+	// document in {core}/loops declares it. When a document exists it is
+	// authoritative — its own enabled: key decides whether the loop
+	// runs, and this flag is ignored. Default: false.
 	Enabled bool `yaml:"enabled"`
 
 	// MinSleep is the minimum allowed sleep duration between iterations;
@@ -2351,21 +2349,6 @@ type StateWindowConfig struct {
 	MaxAgeMinutes int `yaml:"max_age_minutes"`
 }
 
-// Load reads a YAML configuration file, expands environment variables,
-// applies defaults for any unset fields, and validates the result.
-//
-// After [Load] returns a non-nil [Config], every field is usable without
-// additional nil or empty-string checks. The load pipeline is:
-//
-//  1. Read the file.
-//  2. Expand environment variables (e.g., ${HOME}, ${ANTHROPIC_API_KEY}).
-//  3. Unmarshal YAML into a [Config].
-//  4. Normalize via [Config.normalizeRoots] (desugar roots: into
-//     legacy paths/doc_roots; emit deprecation warning for legacy
-//     shape).
-//  5. Apply defaults via [Config.applyDefaults].
-//  6. Validate via [Config.Validate].
-//
 // deriveWorkspace sets workspace.path from the config's own location
 // rather than trusting the file to describe where it lives.
 //
@@ -2438,18 +2421,39 @@ func (c *Config) CoreConfigPath() string {
 }
 
 // Load reads and parses a config whose workspace is derived from its own
-// location.
+// location. It is [LoadWithWorkspace] with no fallback workspace; the
+// load pipeline and the post-load guarantee are documented there.
 func Load(path string) (*Config, error) {
 	return LoadWithWorkspace(path, "")
 }
 
-// LoadWithWorkspace reads a config, falling back to the given workspace
-// when the config's location cannot supply one — which happens only for
-// a config loaded from outside any core, where the -workspace flag is
-// the sole remaining source. A derived workspace always wins: the
-// config's own location is the more trustworthy of the two, and a
-// fallback that could override it would reintroduce the drift that
-// retiring workspace.path removed.
+// LoadWithWorkspace reads a YAML configuration file, expands environment
+// variables, applies defaults for any unset fields, and validates the
+// result.
+//
+// After it returns a non-nil [Config], every field is usable without
+// additional nil or empty-string checks. The load pipeline is:
+//
+//  1. Read the file.
+//  2. Expand environment variables (e.g., ${HOME}, ${ANTHROPIC_API_KEY}).
+//  3. Refuse retired keys via [rejectRetiredKeys], so a renamed or
+//     removed key fails loudly instead of silently deconfiguring the
+//     subsystem it used to govern.
+//  4. Unmarshal YAML into a [Config].
+//  5. Derive workspace.path from the config's own location via
+//     [Config.deriveWorkspace], falling back to fallbackWorkspace when
+//     the config lives outside any core.
+//  6. Normalize via [Config.normalizeRoots] (desugar roots: into
+//     legacy paths/doc_roots; emit deprecation warning for legacy
+//     shape).
+//  7. Apply defaults via [Config.applyDefaults].
+//  8. Validate via [Config.Validate].
+//
+// The fallback in step 5 exists only for a config loaded from outside
+// any core, where the -workspace flag is the sole remaining source. A
+// derived workspace always wins: the config's own location is the more
+// trustworthy of the two, and a fallback that could override it would
+// reintroduce the drift that retiring workspace.path removed.
 func LoadWithWorkspace(path, fallbackWorkspace string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2488,26 +2492,6 @@ func LoadWithWorkspace(path, fallbackWorkspace string) (*Config, error) {
 	return cfg, nil
 }
 
-// rejectRetiredKeys returns an actionable error when the YAML
-// document contains a key that was renamed or removed and whose
-// silent ignore could leave a real subsystem misconfigured. yaml.v3's
-// default is to ignore unknown keys, which is fine for fields where
-// the surface area is small but dangerous for whole subsystem blocks
-// (the Companion section, formerly platform:, is the canonical
-// example: silent ignore would leave Companion unconfigured without
-// any signal to the operator).
-//
-// The walker handles both top-level keys (platform → companion) and
-// targeted nested-path checks: capability_tags.<tag>.tools (replaced
-// by include/exclude) and mcp.servers[].default_tags (renamed to
-// tags). Each retired key gets a specific message pointing the
-// operator at the new shape.
-// rejectRetiredWorkspaceKeys refuses a declared workspace.path.
-//
-// Silently ignoring it would be worse than refusing: an operator who
-// sets it believes they have pointed the instance somewhere, and the
-// instance would run from a different directory without saying so. The
-// error names the two things that actually decide the workspace now.
 // rejectRetiredSigningKeys refuses the instance-wide signer list.
 //
 // Silently dropping it would leave every signed root with no declared
@@ -2525,6 +2509,12 @@ func rejectRetiredSigningKeys(signing *yaml.Node) error {
 	return nil
 }
 
+// rejectRetiredWorkspaceKeys refuses a declared workspace.path.
+//
+// Silently ignoring it would be worse than refusing: an operator who
+// sets it believes they have pointed the instance somewhere, and the
+// instance would run from a different directory without saying so. The
+// error names the two things that actually decide the workspace now.
 func rejectRetiredWorkspaceKeys(workspace *yaml.Node) error {
 	if workspace == nil || workspace.Kind != yaml.MappingNode {
 		return nil
@@ -2537,6 +2527,20 @@ func rejectRetiredWorkspaceKeys(workspace *yaml.Node) error {
 	return nil
 }
 
+// rejectRetiredKeys returns an actionable error when the YAML
+// document contains a key that was renamed or removed and whose
+// silent ignore could leave a real subsystem misconfigured. yaml.v3's
+// default is to ignore unknown keys, which is fine for fields where
+// the surface area is small but dangerous for whole subsystem blocks
+// (the Companion section, formerly platform:, is the canonical
+// example: silent ignore would leave Companion unconfigured without
+// any signal to the operator).
+//
+// The walker handles both top-level keys (platform → companion) and
+// targeted nested-path checks: capability_tags.<tag>.tools (replaced
+// by include/exclude) and mcp.servers[].default_tags (renamed to
+// tags). Each retired key gets a specific message pointing the
+// operator at the new shape.
 func rejectRetiredKeys(data []byte) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {

@@ -51,9 +51,6 @@ var sourcesThaneReadmeMD []byte
 //go:embed interactions_schema_v1.json
 var interactionsSchemaV1JSON []byte
 
-// runInit initializes a Thane working directory with bundled defaults.
-// It creates the directory structure and writes default config, persona,
-// and talent files. Existing files are never overwritten.
 // initOptions carries the operator's answer to "who founds this instance".
 type initOptions struct {
 	// OperatorKey is an explicit private key path. Empty means discover one
@@ -111,6 +108,10 @@ func describeCorePosture(w io.Writer, result *identity.BootstrapResult, why stri
 	fmt.Fprintln(w, "      thane init -operator-key ~/.ssh/id_ed25519 <dir>")
 }
 
+// runInit initializes a Thane workspace: the directory skeleton, the
+// core trust root with its signed birth commit (config, identity
+// material, talents), the archive skeleton, and reference copies of the
+// example config and persona. Existing files are never overwritten.
 func runInit(w io.Writer, dir string, opts initOptions) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -128,13 +129,15 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 		}
 	}
 
-	// Write config.yaml from embedded default (0600 — may contain secrets).
-	if err := writeIfMissing(w, filepath.Join(absDir, "config.yaml"), configExampleYAML, 0o600); err != nil {
+	// Reference copies at the workspace root, named *.example.* because
+	// the runtime never reads them: config loads from core/config.yaml
+	// (part of core's birth commit) and persona from core/persona.md.
+	// They exist so a fresh workspace carries the annotated examples the
+	// operator extends those files from.
+	if err := writeIfMissing(w, filepath.Join(absDir, "config.example.yaml"), configExampleYAML, 0o644); err != nil {
 		return err
 	}
-
-	// Write persona.md from embedded default.
-	if err := writeIfMissing(w, filepath.Join(absDir, "persona.md"), personaExampleMD, 0o644); err != nil {
+	if err := writeIfMissing(w, filepath.Join(absDir, "persona.example.md"), personaExampleMD, 0o644); err != nil {
 		return err
 	}
 
@@ -165,8 +168,11 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Edit config.yaml and persona.md to customize your installation.")
-	fmt.Fprintln(w, "See docs/getting-started.md for guidance on persona vs talents.")
+	fmt.Fprintln(w, "Runtime config is core/config.yaml — add your settings there and commit;")
+	fmt.Fprintln(w, "thane serve refuses an uncommitted config. Author core/persona.md the same")
+	fmt.Fprintln(w, "way. config.example.yaml and persona.example.md at the workspace root are")
+	fmt.Fprintln(w, "annotated references the runtime never reads.")
+	fmt.Fprintln(w, "See docs/operating/getting-started.md for guidance on persona vs talents.")
 	return nil
 }
 

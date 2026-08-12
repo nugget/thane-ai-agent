@@ -215,8 +215,8 @@ func unresolvableParentWarning(result CoreLoopDefinition, definedIn map[string]s
 func coreLoopDefinitionWarnings(spec looppkg.Spec) []string {
 	var warnings []string
 	if _, isCoreService := coreServiceLoopByName[strings.TrimSpace(spec.Name)]; isCoreService && strings.TrimSpace(spec.ParentName) == "" {
-		// The built-in path parents these three under cognition after
-		// building the spec, and a document takes precedence over that
+		// The built-in path parents these three under the self container
+		// after building the spec, and a document takes precedence over that
 		// path entirely — so a document that says nothing about its
 		// parent does not inherit the default, it lands at the root.
 		// Silent re-parenting empties the container an operator can see

@@ -3,7 +3,7 @@
 // It exposes an OpenAI-compatible API, an optional Ollama-compatible API
 // (for Home Assistant integration), and a CLI for one-shot queries and
 // document ingestion. Configuration is loaded from a single YAML file
-// loaded from {workspace}/core/config.yaml (see [config.FindConfig]).
+// at {workspace}/core/config.yaml (see [config.FindConfig]).
 //
 // Usage:
 //

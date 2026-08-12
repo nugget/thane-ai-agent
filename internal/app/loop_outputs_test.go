@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -214,6 +215,35 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 	if strings.Contains(ctx, `"full":`) {
 		t.Fatalf("projections must not carry the full body:\n%s", ctx)
 	}
+	// The facets array carries the declared facets exactly — full is
+	// every faceted document's baseline, not a declared facet, and every
+	// sibling surface (LoopView outputs[].facets, doc_search hits)
+	// excludes it. A bare substring check let the array element "full"
+	// slip past the `"full":` assertion above.
+	jsonBody := extractOutputContextJSON(t, ctx)
+	var parsed struct {
+		Outputs []struct {
+			Facets []string `json:"facets"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(jsonBody), &parsed); err != nil {
+		t.Fatalf("unmarshal output context JSON: %v\n%s", err, ctx)
+	}
+	if len(parsed.Outputs) != 1 {
+		t.Fatalf("outputs len = %d, want 1", len(parsed.Outputs))
+	}
+	if got, want := parsed.Outputs[0].Facets, []string{"status_line", "digest"}; !slices.Equal(got, want) {
+		t.Fatalf("facets = %v, want %v (declared facets only)", got, want)
+	}
+	// Projections ride in declared-facet (ladder) order, not the
+	// alphabetical order a Go map would marshal in — every other surface
+	// renders status_line before digest, and this one reads the same.
+	projSection := ctx[strings.Index(ctx, `"projections"`):]
+	statusIdx := strings.Index(projSection, `"status_line":`)
+	digestIdx := strings.Index(projSection, `"digest":`)
+	if statusIdx == -1 || digestIdx == -1 || statusIdx > digestIdx {
+		t.Fatalf("projections not in declared ladder order (status_line before digest):\n%s", ctx)
+	}
 
 	// A pre-facet body under a faceted spec — declared facets, first
 	// publish pending — keeps the legacy whole-body path so the loop
@@ -256,7 +286,7 @@ func TestTruncateLoopOutputTextPreservesUTF8(t *testing.T) {
 	t.Parallel()
 
 	const text = "abcédef"
-	head, truncated, shown, total := truncateLoopOutputText(text, 4, false)
+	head, truncated, shown, total := truncateLoopOutputText(text, 4)
 	if !truncated {
 		t.Fatal("head truncated = false, want true")
 	}
@@ -269,20 +299,20 @@ func TestTruncateLoopOutputTextPreservesUTF8(t *testing.T) {
 	if shown != len(head) || total != len(text) {
 		t.Fatalf("head counts shown=%d total=%d, want %d/%d", shown, total, len(head), len(text))
 	}
+}
 
-	tail, truncated, shown, total := truncateLoopOutputText(text, 4, true)
-	if !truncated {
-		t.Fatal("tail truncated = false, want true")
+// extractOutputContextJSON pulls the fenced JSON payload out of a
+// rendered Declared Durable Outputs block, so assertions can parse the
+// structure instead of substring-matching the whole rendering.
+func extractOutputContextJSON(t *testing.T, ctx string) string {
+	t.Helper()
+	const fence = "```json\n"
+	start := strings.Index(ctx, fence)
+	end := strings.LastIndex(ctx, "\n```")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatalf("output context missing fenced JSON block:\n%s", ctx)
 	}
-	if !utf8.ValidString(tail) {
-		t.Fatalf("tail is invalid UTF-8: %q", tail)
-	}
-	if !strings.HasSuffix(tail, "def") {
-		t.Fatalf("tail = %q, want suffix after split rune", tail)
-	}
-	if shown != len(tail) || total != len(text) {
-		t.Fatalf("tail counts shown=%d total=%d, want %d/%d", shown, total, len(tail), len(text))
-	}
+	return ctx[start+len(fence) : end]
 }
 
 func newLoopOutputDocumentStore(t *testing.T) (*documents.Store, string) {
