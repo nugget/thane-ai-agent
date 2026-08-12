@@ -77,8 +77,9 @@ func (p *LoopSubscriptionProvider) SetRegistryClient(registries HARegistryClient
 // and renders the effective subscription list. Returns empty string
 // when no loop_id is bound to ctx, the loop is no longer registered,
 // or the effective list is empty — each is a normal quiescent state,
-// not an error. Registered as an always-on provider via
-// [agent.Loop.RegisterAlwaysContextProvider].
+// not an error. Registered as a loop-scoped provider via
+// [agent.Loop.RegisterLoopScopedContextProvider]: the watch set is the
+// loop's own operational context, rendered in every prompt mode.
 func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	if p.loops == nil {
 		return "", nil

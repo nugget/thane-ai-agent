@@ -57,9 +57,10 @@ type TagContextAssembler struct {
 	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger   *slog.Logger
 
-	mu              sync.Mutex
-	tagProviders    map[string]TagContextProvider
-	alwaysProviders []TagContextProvider
+	mu                  sync.Mutex
+	tagProviders        map[string]TagContextProvider
+	alwaysProviders     []TagContextProvider
+	loopScopedProviders []TagContextProvider
 }
 
 // TagContextBucketer lets a context provider choose the prompt bucket
@@ -263,6 +264,23 @@ func (a *TagContextAssembler) RegisterAlwaysProvider(p TagContextProvider) {
 	a.alwaysProviders = append(a.alwaysProviders, p)
 }
 
+// RegisterLoopScopedProvider adds a provider to the loop-scoped bucket:
+// context that belongs to the running loop itself — its declared entity
+// subscriptions, its own self view — rather than to the ambient
+// experience the always-on bucket carries. The split exists because the
+// two are gated differently (ContextRequest.IncludeLoopScoped vs
+// IncludeAlways): a task-mode worker keeps its own operational context
+// while shedding the ambient self. Order is preserved across
+// registrations.
+func (a *TagContextAssembler) RegisterLoopScopedProvider(p TagContextProvider) {
+	if a == nil || p == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.loopScopedProviders = append(a.loopScopedProviders, p)
+}
+
 // TaggedProviders returns a snapshot of the registered tag→provider
 // map. Used by callers that need to inspect what's wired (e.g., the
 // capability surface builder).
@@ -299,10 +317,13 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 }
 
 // BuildSections assembles typed context sections for the request. The
-// single internal pipeline walks three sources in order — KB articles,
-// tagged providers, always-on providers. Always-on providers are gated
-// by req.IncludeAlways; main loop runs include them, delegate runs do
-// not. Returns nil when no source produces content.
+// single internal pipeline walks four sources in order — KB articles,
+// tagged providers, always-on providers, loop-scoped providers. The
+// last two carry independent gates: always-on providers render under
+// req.IncludeAlways (full-mode main-loop runs), loop-scoped providers
+// under req.IncludeLoopScoped (every loop turn regardless of prompt
+// mode; delegates suppress both). Returns nil when no source produces
+// content.
 func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.ContextRequest) []agentctx.ContextSection {
 	if a == nil {
 		return nil
@@ -314,6 +335,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		tagProviders[k] = v
 	}
 	alwaysProviders := append([]TagContextProvider(nil), a.alwaysProviders...)
+	loopScopedProviders := append([]TagContextProvider(nil), a.loopScopedProviders...)
 	a.mu.Unlock()
 
 	seen := make(map[string]bool)
@@ -382,7 +404,8 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	// Source 3: Always-on providers, gated by IncludeAlways. Delegate
 	// runs pass IncludeAlways=false to skip ambient context (presence,
 	// episodic memory, working memory, notification history, etc.)
-	// that the bounded child task does not need.
+	// that the bounded child task does not need; task-mode loop runs
+	// skip it too, as part of shedding the identity stack.
 	if req.IncludeAlways {
 		for _, p := range alwaysProviders {
 			content, err := p.TagContext(ctx, req)
@@ -398,6 +421,33 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 				a.logger.Warn("tag context bucket limit reached",
 					"bucket", string(bucket), "bucket_title", bucket.Title(),
 					"source", "always_provider", "limit_bytes", maxTagContextBytes)
+			}
+		}
+	}
+
+	// Source 4: Loop-scoped providers, gated by IncludeLoopScoped —
+	// the running loop's own operational context (declared entity
+	// subscriptions, the "This loop" self view). Deliberately
+	// independent of IncludeAlways: a task-mode worker sheds the
+	// ambient self above but keeps its own eyes and its own envelope.
+	// Rendered after the always bucket so full-mode prompts keep their
+	// established ordering (always-visible watchlist before loop
+	// subscriptions).
+	if req.IncludeLoopScoped {
+		for _, p := range loopScopedProviders {
+			content, err := p.TagContext(ctx, req)
+			if err != nil {
+				a.logger.Warn("loop-scoped context provider failed", "error", err)
+				continue
+			}
+			if content == "" {
+				continue
+			}
+			bucket := providerContextBucket(p, agentctx.ContextBucketLiveState)
+			if acc.append(bucket, []byte(content)) {
+				a.logger.Warn("tag context bucket limit reached",
+					"bucket", string(bucket), "bucket_title", bucket.Title(),
+					"source", "loop_scoped_provider", "limit_bytes", maxTagContextBytes)
 			}
 		}
 	}

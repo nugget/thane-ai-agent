@@ -41,9 +41,24 @@ type promptModeKey struct{}
 // delegate runs that should see only tag-scoped context appropriate
 // to the bounded child task.
 type ContextRequest struct {
-	UserMessage   string
-	ActiveTags    map[string]bool
+	UserMessage string
+	ActiveTags  map[string]bool
+
+	// IncludeAlways admits the ambient experiential bucket: presence,
+	// episodic memory, working memory, notification history, and the
+	// other continuity context an interactive turn wears. Full-mode
+	// main-loop runs set it; task-mode runs and delegate runs do not.
 	IncludeAlways bool
+
+	// IncludeLoopScoped admits the running loop's own operational
+	// context: its declared entity subscriptions and its "This loop"
+	// self view. Independent of IncludeAlways because the two answer
+	// different questions — a task-mode worker sheds the ambient self
+	// but still needs its own eyes and its own envelope. Every loop
+	// turn sets it regardless of prompt mode; delegate runs (which
+	// suppress always-context) leave it off, since a bounded child has
+	// no subscriptions and no envelope worth rendering.
+	IncludeLoopScoped bool
 }
 
 // ContextBucket names the model-facing section class for generated

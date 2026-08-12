@@ -673,6 +673,53 @@ func TestTagContextAssembler_BuildSectionsBuckets(t *testing.T) {
 	}
 }
 
+// TestTagContextAssembler_LoopScopedGating pins the #1363 split: the
+// loop-scoped bucket renders under IncludeLoopScoped independently of
+// IncludeAlways. Task-mode loop turns are the case the split exists
+// for — the worker sheds ambient experiential context but keeps its
+// own subscriptions and self view — and a delegate run (both gates
+// off) renders neither.
+func TestTagContextAssembler_LoopScopedGating(t *testing.T) {
+	build := func(includeAlways, includeLoopScoped bool) string {
+		a := NewTagContextAssembler(TagContextAssemblerConfig{})
+		a.RegisterAlwaysProvider(&mockTagProvider{
+			content: "AMBIENT_SELF",
+			bucket:  agentctx.ContextBucketRelated,
+		})
+		a.RegisterLoopScopedProvider(&mockTagProvider{
+			content: "LOOP_EYES",
+			bucket:  agentctx.ContextBucketLiveState,
+		})
+		var out strings.Builder
+		for _, s := range a.BuildSections(context.Background(), agentctx.ContextRequest{
+			IncludeAlways:     includeAlways,
+			IncludeLoopScoped: includeLoopScoped,
+		}) {
+			out.WriteString(s.Content)
+			out.WriteString("\n")
+		}
+		return out.String()
+	}
+
+	fullMode := build(true, true)
+	if !strings.Contains(fullMode, "AMBIENT_SELF") || !strings.Contains(fullMode, "LOOP_EYES") {
+		t.Errorf("full mode should render both buckets, got: %q", fullMode)
+	}
+
+	taskMode := build(false, true)
+	if strings.Contains(taskMode, "AMBIENT_SELF") {
+		t.Errorf("task mode should shed the ambient bucket, got: %q", taskMode)
+	}
+	if !strings.Contains(taskMode, "LOOP_EYES") {
+		t.Errorf("task mode must keep the loop-scoped bucket — a worker sheds the ambient self, not its eyes; got: %q", taskMode)
+	}
+
+	delegate := build(false, false)
+	if strings.Contains(delegate, "AMBIENT_SELF") || strings.Contains(delegate, "LOOP_EYES") {
+		t.Errorf("a delegate run should render neither bucket, got: %q", delegate)
+	}
+}
+
 func TestTagContextAssembler_TaggedProviderOrderIsStable(t *testing.T) {
 	a := NewTagContextAssembler(TagContextAssemblerConfig{})
 	a.RegisterTaggedProvider("zulu", &mockTagProvider{content: "ZULU_PROVIDER"})
