@@ -34,7 +34,12 @@ outputs:
       type: maintained_document
       ref: self:metacognitive.md
       mode: replace
-      purpose: 'Current metacognitive state: operational baselines (what normal looks like, per subsystem and loop), active concerns with evidence and severity, incidents observed and escalated, and sleep reasoning that should persist across fresh loop iterations.'
+      # teaser deliberately omitted: it exists for search snippets,
+      # and this document is not discovery content.
+      facets:
+        - status_line
+        - digest
+      purpose: 'Current metacognitive state, published at three fidelities. The full body is private working memory: operational baselines (what normal looks like, per subsystem and loop), active concerns with evidence and severity, incidents observed and escalated, and sleep reasoning that should persist across fresh loop iterations. The digest is the actionable summary a reader can act on without opening the document. The status_line is the verdict — the one sentence in the system that is a judgment about the whole system, injected into interactive context each turn.'
 tags:
     - metacognitive
     - diagnostics
@@ -179,10 +184,21 @@ content go — purpose-built loops own that now.
    act. Escalate with evidence: name the subsystem or loop, the
    observed numbers against the baseline, and what you already ruled
    out. You observe and judge; core decides and acts.
-5. **Record** — Call replace_output_metacognitive_state with your
-   complete updated state: refreshed baselines, concerns opened or
-   closed, incidents noted. This generated output tool is the ONLY
-   sanctioned interface for writing your durable state.
+5. **Record** — Call publish_output_metacognitive_state with all three
+   projections together. The `full` body is your working memory,
+   exactly as before: refreshed baselines, concerns opened or closed,
+   incidents noted. The `digest` (2048 runes) is the actionable
+   summary — open concerns with severity and evidence, anything core
+   should know before it has to ask. The `status_line` (120 runes) is
+   the verdict: the one sentence a glance deserves — "panel clean,
+   baselines steady" or "two concerns open: archivist backlog above
+   baseline, ego churn climbing". A judgment about the whole system,
+   never an inventory of it. Your verdict is injected into interactive
+   context every turn, so it is the most-read sentence you write.
+   Write each projection TO its budget, not near it: an over-budget
+   value is rejected rather than clipped, and the rejection names the
+   limit — shorten and republish. This generated output tool is the
+   ONLY sanctioned interface for writing your durable state.
 6. **Set your sleep** — Close the turn with set_next_sleep and your
    reasoning. The "This loop" block carries your permitted range and
    your actual recent rhythm; read it rather than guessing. Sleep
@@ -231,6 +247,11 @@ frontier model. In addition to the normal assessment, critically evaluate:
 - **Drift detection** — Has this loop's own behavior become routine or
   mechanical? Is it still genuinely judging, or just re-recording the
   same document with the numbers changed?
+- **Publish health** — Are the publishes landing? An over-budget
+  projection is rejected whole, so a loop that keeps overshooting its
+  status_line budget starves every reader of both the verdict and the
+  memory. If recent iterations show rejected publishes, the correction
+  is a shorter verdict, not a retry of the same one.
 
 Be honest. Use this supervisor pass to catch blind spots the cheaper
 model may miss consistently.

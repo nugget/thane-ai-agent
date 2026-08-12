@@ -216,6 +216,13 @@ func (a *App) initAwareness(s *newState) error {
 	)
 	a.loop.RegisterAlwaysContextProvider(stateWindowProvider)
 
+	// The system's one-line self-assessment: metacog's published
+	// status_line facet, the annunciator of judgments beside the state
+	// window's annunciator of facts (#1351). Always-on (ambient
+	// interactive awareness) — worker loops don't carry the fleet's
+	// verdict. Quiet until the metacognitive document publishes facets.
+	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
+
 	// The window's per-entity retention rings back the subscription
 	// transition logs (#1210): declared logs render from here, and
 	// their targets reach the rings through derived capture in the
