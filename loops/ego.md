@@ -8,9 +8,13 @@ tags: [loops]
 ## Spec
 
 ```yaml
+# Every key this block accepts is documented in
+# docs/reference/loop-definitions.md. Unknown keys refuse the boot —
+# run `thane validate` after editing.
 name: ego
 parent_name: self
 enabled: true
+intent: Keep the agent's self-understanding honest and current in ego.md — the self every interactive turn wears.
 profile:
     quality_floor: 5
     mission: ego
@@ -18,8 +22,11 @@ profile:
     extra_hints:
         source: ego
 operation: service
-# Reflective loop: wears the full identity stack by design. This pin
-# guards against any future default that trims service loops (#1171).
+# "full" keeps the complete identity — persona, ego, axioms, the
+# always-on context — in this loop's prompt. This loop's work is the
+# agent's own self, which is exactly what the compact "task" worker
+# prompt strips away, so the mode is pinned here rather than left to
+# any default.
 prompt_mode: full
 completion: none
 outputs:
