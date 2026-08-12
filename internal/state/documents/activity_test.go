@@ -67,26 +67,39 @@ func newActivityStore(t *testing.T, files map[string]string, reviser RootReviser
 	return store
 }
 
-// TestWriteNormalizesHyphenImpostors extends the fold to the second
-// observed family (prod metacognitive.md, 2026-08-12): U+2011
+// TestMutationPathsNormalizeHyphenImpostors extends the fold to the
+// second observed family (prod metacognitive.md, 2026-08-12): U+2011
 // non-breaking hyphens written by one author and churned to plain
-// hyphens by the next — eighteen invisible diff lines in a single
-// revision. U+2010 folds as the visually identical sibling. En and em
+// hyphens by the next â eighteen invisible diff lines in a single
+// revision. U+2010 folds as the visually identical sibling; en and em
 // dashes are visible, intended typography and must survive untouched.
-func TestWriteNormalizesHyphenImpostors(t *testing.T) {
+// Every mutation path is pinned â Write, Edit, and JournalUpdate all
+// normalize â because the space fold's review taught this exact
+// lesson once already: a chokepoint invariant tested on one door is a
+// regression waiting behind the others.
+func TestMutationPathsNormalizeHyphenImpostors(t *testing.T) {
 	store := newActivityStore(t, map[string]string{"state.md": "# state\n"}, nil)
 	ctx := t.Context()
+
+	assertClean := func(step string) {
+		t.Helper()
+		rec, err := store.Read(ctx, "self:state.md")
+		if err != nil {
+			t.Fatalf("%s read: %v", step, err)
+		}
+		if strings.ContainsAny(rec.Body, "‐‑") {
+			t.Errorf("%s: stored body retains hyphen impostors: %q", step, rec.Body)
+		}
+	}
 
 	body := "quality‑floor 3; hvac‐gym — healthy – stable"
 	if _, err := store.Write(ctx, WriteArgs{Ref: "self:state.md", Body: &body}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	assertClean("write")
 	rec, err := store.Read(ctx, "self:state.md")
 	if err != nil {
 		t.Fatalf("read: %v", err)
-	}
-	if strings.ContainsAny(rec.Body, "‐‑") {
-		t.Errorf("stored body retains hyphen impostors: %q", rec.Body)
 	}
 	if !strings.Contains(rec.Body, "quality-floor 3; hvac-gym") {
 		t.Errorf("normalized body = %q, want plain hyphens", rec.Body)
@@ -94,6 +107,16 @@ func TestWriteNormalizesHyphenImpostors(t *testing.T) {
 	if !strings.Contains(rec.Body, "— healthy – stable") {
 		t.Errorf("intended en/em dashes were mangled: %q", rec.Body)
 	}
+
+	if _, err := store.Edit(ctx, EditArgs{Ref: "self:state.md", Mode: "append_body", Body: "cross‑check pending"}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	assertClean("edit")
+
+	if _, err := store.JournalUpdate(ctx, JournalUpdateArgs{Ref: "self:state.md", Entry: "re‑verified"}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	assertClean("journal")
 }
 
 // TestWriteNormalizesSpaceArtifacts pins the tokenizer-artifact fold:
