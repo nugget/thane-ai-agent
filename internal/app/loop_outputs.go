@@ -321,17 +321,6 @@ func documentUpdatedTime(doc *documents.DocumentRecord) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func loopOutputDelta(value string, now time.Time) string {
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	ts, err := database.ParseTimestamp(value)
-	if err != nil {
-		return ""
-	}
-	return promptfmt.FormatDeltaOnly(ts, now)
-}
-
 func outputInterfaceDescription(output looppkg.OutputSpec) string {
 	if output.HasFacets() {
 		keys := make([]string, 0, 4)
