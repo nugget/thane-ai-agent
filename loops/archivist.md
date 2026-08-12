@@ -97,12 +97,6 @@ metadata:
 # outputs: entries also accept facets (status_line/teaser/digest),
 #   audience (published|internal), purpose; type working_notes is the
 #   loop-private variant.
-#
-# Legacy config.yaml names translate as: min_sleep/max_sleep/
-#   default_sleep -> sleep_min/sleep_max/sleep_default;
-#   supervisor_probability -> supervisor_prob; router.quality_floor ->
-#   profile.quality_floor; supervisor_router.quality_floor ->
-#   supervisor_profile.quality_floor.
 # --------------------------------------------------------------------
 ```
 
