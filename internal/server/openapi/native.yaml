@@ -140,17 +140,56 @@ paths:
       tags: [System]
       operationId: getHealth
       summary: Liveness probe
-      description: Unversioned, unauthenticated liveness check for load balancers.
+      description: >-
+        Unversioned, unauthenticated liveness check for load balancers and
+        supervisors. Supervisors should alert on any `status` other than
+        `healthy`: `degraded` means the process is up but impaired — a
+        watched dependency is down, or the instance is running on an
+        unverified config with capabilities withheld (the `trust` and
+        `trust_detail` fields carry that posture). Treating `degraded` as
+        healthy would let an unverified instance run indefinitely without
+        anyone noticing.
       security: []
       responses:
         "200":
-          description: Service is alive.
+          description: Service is alive; `status` says whether it is well.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  status: { type: string, example: ok }
+                  status:
+                    type: string
+                    enum: [healthy, degraded]
+                    example: healthy
+                    description: >-
+                      Overall posture. `degraded` when any dependency is
+                      down or the config could not be verified.
+                  trust:
+                    type: string
+                    enum: [unverified]
+                    description: >-
+                      Present only when the instance is running on a config
+                      from outside its trust boundary (`-insecure-config`).
+                  trust_detail:
+                    type: string
+                    description: >-
+                      Human-readable explanation of the unverified posture
+                      and which capabilities are withheld. Present only
+                      alongside `trust`.
+                  dependencies:
+                    type: object
+                    description: >-
+                      Watched dependencies keyed by name, present when
+                      dependency health is wired. Any entry with
+                      `ready: false` degrades `status`.
+                    additionalProperties:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        ready: { type: boolean }
+                        last_check: { type: string }
+                        last_error: { type: string }
   /v1/version:
     get:
       tags: [System]
@@ -441,9 +480,13 @@ paths:
         Serves the named loop's declared output document at the fidelity the
         Accept header asks for. text/plain returns the published status_line
         alone (speakable, no markup; 406 when the document has published no
-        status_line). application/json returns the typed contract — the
-        published facets as fields plus the full body. text/markdown, or any
-        other Accept, returns the document body.
+        status_line and nothing else was acceptable). application/json
+        returns the typed contract — the published facets as fields plus the
+        full body. text/markdown, an unrecognized Accept, or no Accept at
+        all returns the document body. Negotiation is real: entries are
+        ranked by q-value (q=0 refuses a type), then specificity (exact
+        beats `text/*` beats `*/*`), then listed order, so a client whose
+        header names application/json ahead of text/plain gets JSON.
       x-thane-scope: definitions:read
       parameters:
         - name: name
@@ -471,9 +514,11 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "406":
           description: >-
-            The requested representation is not published — a text/plain
-            request against a document with no status_line. The error names
-            the available representations.
+            No acceptable representation is servable — typically a request
+            accepting only text/plain against a document with no published
+            status_line. When the Accept header also admits another type,
+            that type is served instead of this error. The error names the
+            available representations.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1391,8 +1436,8 @@ components:
             asserted_at: "2026-07-01T12:00:00Z"
             time_assurance: signed_claim
             anchor: operator
+          current_commit: { algorithm: sha1, oid: "fedcba9876543210fedcba9876543210fedcba98" }
           head:
-            commit: { algorithm: sha1, oid: "fedcba9876543210fedcba9876543210fedcba98" }
             worktree_clean: true
             trust_file_change_count: 1
           verification:

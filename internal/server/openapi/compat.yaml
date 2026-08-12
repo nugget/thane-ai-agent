@@ -108,6 +108,16 @@ paths:
               schema: { $ref: "#/components/schemas/OllamaChatResponse" }
             application/x-ndjson:
               schema: { $ref: "#/components/schemas/OllamaChatResponse" }
+        "401": { $ref: "#/components/responses/OllamaUnauthorized" }
+        "413":
+          description: >-
+            Request body exceeds the 32 MiB cap. The surface is reachable by
+            anything on its network segment, so inbound bodies are bounded
+            before buffering; 32 MiB leaves ample room for chat history plus
+            base64 images while bounding the damage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OllamaError" }
   /api/generate:
     post:
       tags: [ollama]
@@ -124,6 +134,7 @@ paths:
       servers:
         - url: http://localhost:11434
       responses:
+        "401": { $ref: "#/components/responses/OllamaUnauthorized" }
         "501":
           description: Not implemented. Use `POST /api/chat` with a `messages` array.
           content:
@@ -142,24 +153,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OllamaTags" }
+        "401": { $ref: "#/components/responses/OllamaUnauthorized" }
   /api/version:
     get:
       tags: [ollama]
       operationId: ollamaVersion
       summary: Version (Ollama shape)
+      description: >-
+        Reports Thane's real build version (leading `v` trimmed so the value
+        stays semver-shaped for clients that parse it), not an Ollama
+        release number — the surface is Ollama-shaped, the software is not.
       servers:
         - url: http://localhost:11434
       responses:
         "200":
-          description: Reported Ollama-compatible version string.
+          description: Thane's build version in the Ollama response shape.
           content:
             application/json:
               schema:
                 type: object
                 example:
-                  version: 0.6.8
+                  version: 0.10.3
                 properties:
-                  version: { type: string, example: 0.6.8 }
+                  version: { type: string, example: 0.10.3 }
+        "401": { $ref: "#/components/responses/OllamaUnauthorized" }
 
 components:
   securitySchemes:
@@ -167,6 +184,19 @@ components:
       type: http
       scheme: bearer
       description: Per-client API key. Coarse inference access (no granular scopes).
+  responses:
+    OllamaUnauthorized:
+      description: >-
+        Missing or invalid bearer token. Returned only when an API key is
+        configured for the surface; with no key configured the surface is
+        open (the trusted-network default) and never returns 401.
+      headers:
+        WWW-Authenticate:
+          description: 'Authentication challenge: `Bearer realm="ollama"`.'
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OllamaError" }
   schemas:
     ChatMessage:
       type: object

@@ -557,9 +557,12 @@ var migrateDiscoveryPayload = []byte(`{"migrate_discovery":true}`)
 // for any entity suffix seen for the first time this process, performs
 // HA's documented legacy migration around it: migrate marker to the
 // legacy topic, then the device payload, then an empty retained payload
-// clearing the legacy topic. The sweep is idempotent — once the legacy
-// topics are empty a later pass has nothing to mark — and self-heals
-// the rollback case where an older binary re-littered them.
+// clearing the legacy topic. The sweep is per-process, not per-broker:
+// migrated lives in memory, so every fresh process re-marks and
+// re-clears legacy topics that were emptied releases ago. That re-run
+// is harmless — HA keeps the registry entry either way — and it is
+// also what self-heals the rollback case where an older binary
+// re-littered the legacy topics.
 func (p *Publisher) publishDiscovery(ctx context.Context, cm *autopaho.ConnectionManager) {
 	components := p.snapshotComponents()
 	pending := p.unmigratedSuffixes(components)

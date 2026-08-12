@@ -67,14 +67,14 @@ func ClassifyResourceFailure(err error) string {
 	}
 
 	// String fallbacks for errors that crossed a non-wrapping boundary
-	// (provider adapters, upstream HTTP bodies). "overloaded" and "529"
-	// are Anthropic's overload signals; treat them like timeouts so the
-	// resource gets breathing room.
+	// (provider adapters, upstream HTTP bodies). "overloaded" and status
+	// 529 are Anthropic's overload signals; treat them like timeouts so
+	// the resource gets breathing room.
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "timeout"),
 		strings.Contains(msg, "overloaded"),
-		strings.Contains(msg, "529"):
+		mentionsStatus529(msg):
 		return CooldownReasonTimeout
 	case strings.Contains(msg, "no such host"),
 		strings.Contains(msg, "connection refused"),
@@ -84,4 +84,20 @@ func ClassifyResourceFailure(err error) string {
 		return CooldownReasonConnection
 	}
 	return ""
+}
+
+// mentionsStatus529 reports whether msg carries HTTP status 529 the way
+// a status code actually renders: as its own whitespace-delimited token,
+// at most wearing sentence punctuation ("API error 529: overloaded",
+// "status 529", a leading "529 Overloaded"). A bare substring match
+// misfired here — request IDs and token counts routinely embed the
+// digits ("req_a1529bc", "1529 tokens"), and each false positive
+// silently cooled a healthy resource for the full cooldown window.
+func mentionsStatus529(msg string) bool {
+	for _, field := range strings.Fields(msg) {
+		if strings.Trim(field, `:;,.()[]{}"'`) == "529" {
+			return true
+		}
+	}
+	return false
 }
