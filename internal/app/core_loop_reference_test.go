@@ -48,8 +48,12 @@ func TestLoopDefinitionsReferenceCoversEverySpecKey(t *testing.T) {
 // TestShippedCoreLoopDocumentsPointAtTheReference keeps the pointer
 // honest: each shipped definition document opens its spec block with a
 // comment naming the reference, so an operator editing an override
-// knows where the full surface is documented without reading Go. A
-// document that drops the pointer strands its next editor.
+// knows where the full surface is documented without reading Go. The
+// position is the contract, not just the presence — a pointer buried
+// in prose or below the keys is not where an editing eye starts — so
+// the check parses the ## Spec fence with the loader's own section
+// helpers and requires the reference path inside the block's leading
+// comment lines.
 func TestShippedCoreLoopDocumentsPointAtTheReference(t *testing.T) {
 	entries, err := coreloops.Documents.ReadDir("defaults")
 	if err != nil {
@@ -66,8 +70,27 @@ func TestShippedCoreLoopDocumentsPointAtTheReference(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
-		if !strings.Contains(string(raw), "docs/reference/loop-definitions.md") {
-			t.Errorf("%s: spec block does not point at docs/reference/loop-definitions.md; the pointer is how an operator finds the full key reference", entry.Name())
+		specSection, ok := splitCoreLoopSections(string(raw))[coreLoopSpecHeading]
+		if !ok {
+			t.Errorf("%s: no %q section", entry.Name(), "## "+coreLoopSpecHeading)
+			continue
+		}
+		specYAML, ok := unfenceYAML(specSection)
+		if !ok {
+			t.Errorf("%s: the %q section is not a single yaml fence", entry.Name(), "## "+coreLoopSpecHeading)
+			continue
+		}
+		var lead []string
+		for _, line := range strings.Split(specYAML, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				lead = append(lead, trimmed)
+				continue
+			}
+			break
+		}
+		if !strings.Contains(strings.Join(lead, "\n"), "docs/reference/loop-definitions.md") {
+			t.Errorf("%s: the spec block does not open with a comment pointing at docs/reference/loop-definitions.md; the pointer is how an operator finds the full key reference, and its place is the top of the block", entry.Name())
 		}
 	}
 }
