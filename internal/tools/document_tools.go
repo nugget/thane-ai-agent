@@ -183,7 +183,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies. A faceted document’s summary is its authored teaser (or status_line when no teaser is declared) rather than a derived excerpt, and the hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

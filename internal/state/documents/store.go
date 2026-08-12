@@ -40,11 +40,15 @@ type RootDocumentHint struct {
 
 // DocumentSummary is the compact search/browse view of a document.
 type DocumentSummary struct {
-	Root        string              `json:"root"`
-	Ref         string              `json:"ref"`
-	Path        string              `json:"path"`
-	Title       string              `json:"title"`
-	Summary     string              `json:"summary,omitempty"`
+	Root    string `json:"root"`
+	Ref     string `json:"ref"`
+	Path    string `json:"path"`
+	Title   string `json:"title"`
+	Summary string `json:"summary,omitempty"`
+	// Facets lists the projections present in the document body
+	// (status_line, teaser, digest), advertised on search hits so the
+	// next step — doc_read with level — is one deliberate call (#1250).
+	Facets      []string            `json:"facets,omitempty"`
 	Tags        []string            `json:"tags,omitempty"`
 	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
 	ModifiedAt  string              `json:"modified_at"`
@@ -145,6 +149,7 @@ func (s *Store) migrate() error {
 		abs_path TEXT NOT NULL,
 		title TEXT NOT NULL DEFAULT '',
 		summary TEXT NOT NULL DEFAULT '',
+		facets_json TEXT NOT NULL DEFAULT '[]',
 		tags_json TEXT NOT NULL DEFAULT '[]',
 		frontmatter_json TEXT NOT NULL DEFAULT '{}',
 		links_json TEXT NOT NULL DEFAULT '[]',
@@ -169,8 +174,26 @@ func (s *Store) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_indexed_document_sections_doc ON indexed_document_sections(root, rel_path, ordinal);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Upgrade path for indexes created before facets_json existed. The
+	// index is derived state, so the one-time purge after adding the
+	// column is the reindex trigger: Refresh repopulates every row with
+	// its facets on the next pass, rather than leaving pre-upgrade rows
+	// advertising nothing until their documents happen to change.
+	if _, err := s.db.Exec(`SELECT facets_json FROM indexed_documents LIMIT 1`); err != nil {
+		if _, err := s.db.Exec(`ALTER TABLE indexed_documents ADD COLUMN facets_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return fmt.Errorf("add facets_json column: %w", err)
+		}
+		if _, err := s.db.Exec(`DELETE FROM indexed_documents`); err != nil {
+			return fmt.Errorf("purge index for facets reindex: %w", err)
+		}
+		if _, err := s.db.Exec(`DELETE FROM indexed_document_sections`); err != nil {
+			return fmt.Errorf("purge section index for facets reindex: %w", err)
+		}
+	}
+	return nil
 }
 
 // Refresh incrementally refreshes all indexed roots.
@@ -345,6 +368,13 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 	if err != nil {
 		return fmt.Errorf("marshal tags: %w", err)
 	}
+	if doc.Facets == nil {
+		doc.Facets = []string{}
+	}
+	facetsJSON, err := json.Marshal(doc.Facets)
+	if err != nil {
+		return fmt.Errorf("marshal facets: %w", err)
+	}
 	metaJSON, err := json.Marshal(doc.Frontmatter)
 	if err != nil {
 		return fmt.Errorf("marshal frontmatter: %w", err)
@@ -364,19 +394,20 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO indexed_documents
-			(root, rel_path, abs_path, title, summary, tags_json, frontmatter_json, links_json, modified_at, size_bytes, word_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(root, rel_path, abs_path, title, summary, facets_json, tags_json, frontmatter_json, links_json, modified_at, size_bytes, word_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(root, rel_path) DO UPDATE SET
 		 	abs_path = excluded.abs_path,
 		 	title = excluded.title,
 		 	summary = excluded.summary,
+		 	facets_json = excluded.facets_json,
 		 	tags_json = excluded.tags_json,
 		 	frontmatter_json = excluded.frontmatter_json,
 		 	links_json = excluded.links_json,
 		 	modified_at = excluded.modified_at,
 		 	size_bytes = excluded.size_bytes,
 		 	word_count = excluded.word_count`,
-		root, relPath, absPath, doc.Title, doc.Summary, string(tagsJSON), string(metaJSON), string(linksJSON), modified, size, doc.WordCount,
+		root, relPath, absPath, doc.Title, doc.Summary, string(facetsJSON), string(tagsJSON), string(metaJSON), string(linksJSON), modified, size, doc.WordCount,
 	); err != nil {
 		return fmt.Errorf("upsert indexed document: %w", err)
 	}

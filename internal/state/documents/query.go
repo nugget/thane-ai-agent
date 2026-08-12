@@ -68,7 +68,7 @@ func (s *Store) Browse(ctx context.Context, root, prefix string, limit int) (*Br
 	}
 	prefix = trimPathPrefix(prefix)
 	args := []any{root}
-	query := `SELECT root, rel_path, title, summary, tags_json, frontmatter_json, modified_at, word_count
+	query := `SELECT root, rel_path, title, summary, facets_json, tags_json, frontmatter_json, modified_at, word_count
 		 FROM indexed_documents
 		 WHERE root = ?`
 	if prefix != "" {
@@ -162,7 +162,7 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 
 	var args []any
 	var where []string
-	query := `SELECT root, rel_path, title, summary, tags_json, frontmatter_json, modified_at, word_count FROM indexed_documents`
+	query := `SELECT root, rel_path, title, summary, facets_json, tags_json, frontmatter_json, modified_at, word_count FROM indexed_documents`
 	if q.Root != "" {
 		if !rootExists(s.roots, q.Root) {
 			return nil, fmt.Errorf("unknown document root %q", q.Root)
