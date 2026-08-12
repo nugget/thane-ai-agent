@@ -183,14 +183,29 @@ func (s *Store) migrate() error {
 	// its facets on the next pass, rather than leaving pre-upgrade rows
 	// advertising nothing until their documents happen to change.
 	if _, err := s.db.Exec(`SELECT facets_json FROM indexed_documents LIMIT 1`); err != nil {
-		if _, err := s.db.Exec(`ALTER TABLE indexed_documents ADD COLUMN facets_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		// One transaction, deliberately: the probe above only fails
+		// while the column is absent, so a partial upgrade — column
+		// added, purge half done — would pass the probe on the next
+		// boot and never heal. Atomic means the upgrade either fully
+		// happened or fully retries.
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin facets upgrade: %w", err)
+		}
+		defer func() {
+			_ = tx.Rollback()
+		}()
+		if _, err := tx.Exec(`ALTER TABLE indexed_documents ADD COLUMN facets_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return fmt.Errorf("add facets_json column: %w", err)
 		}
-		if _, err := s.db.Exec(`DELETE FROM indexed_documents`); err != nil {
+		if _, err := tx.Exec(`DELETE FROM indexed_documents`); err != nil {
 			return fmt.Errorf("purge index for facets reindex: %w", err)
 		}
-		if _, err := s.db.Exec(`DELETE FROM indexed_document_sections`); err != nil {
+		if _, err := tx.Exec(`DELETE FROM indexed_document_sections`); err != nil {
 			return fmt.Errorf("purge section index for facets reindex: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit facets upgrade: %w", err)
 		}
 	}
 	return nil
