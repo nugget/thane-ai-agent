@@ -4,12 +4,73 @@ import (
 	"context"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 
 	_ "modernc.org/sqlite"
 )
+
+// TestArchivistDefinitionEnabledGatesQueueWiring pins the single-gate
+// contract: the session-close producer wires exactly when the archivist's
+// effective loop definition exists and is enabled. The legacy config flag
+// must be irrelevant — before this gate existed, config said whether the
+// queue filled while the definition said whether the loop ran, and the two
+// could disagree in only one direction: silently.
+func TestArchivistDefinitionEnabledGatesQueueWiring(t *testing.T) {
+	archivistSpec := func(enabled bool) looppkg.Spec {
+		return looppkg.Spec{
+			Name:      archivist.DefinitionName,
+			Enabled:   enabled,
+			Task:      "archive things",
+			Operation: looppkg.OperationService,
+		}
+	}
+	registryWith := func(t *testing.T, specs ...looppkg.Spec) *looppkg.DefinitionRegistry {
+		t.Helper()
+		reg, err := looppkg.NewDefinitionRegistry(specs)
+		if err != nil {
+			t.Fatalf("NewDefinitionRegistry: %v", err)
+		}
+		return reg
+	}
+
+	t.Run("enabled definition wires, config flag not consulted", func(t *testing.T) {
+		a := &App{
+			loopDefinitionRegistry: registryWith(t, archivistSpec(true)),
+			// The legacy flag says off; the definition says on. The
+			// definition wins because it is the same declaration that
+			// runs the loop.
+			cfg: &config.Config{},
+		}
+		if !a.archivistDefinitionEnabled() {
+			t.Error("enabled definition should gate the wiring on, regardless of config.archivist.enabled")
+		}
+	})
+
+	t.Run("disabled definition does not wire", func(t *testing.T) {
+		a := &App{loopDefinitionRegistry: registryWith(t, archivistSpec(false))}
+		if a.archivistDefinitionEnabled() {
+			t.Error("disabled definition should gate the wiring off")
+		}
+	})
+
+	t.Run("absent definition does not wire", func(t *testing.T) {
+		a := &App{loopDefinitionRegistry: registryWith(t)}
+		if a.archivistDefinitionEnabled() {
+			t.Error("absent definition should gate the wiring off")
+		}
+	})
+
+	t.Run("nil registry does not wire", func(t *testing.T) {
+		a := &App{}
+		if a.archivistDefinitionEnabled() {
+			t.Error("nil registry should gate the wiring off")
+		}
+	})
+}
 
 func newQueueTestApp(t *testing.T) (*App, *loopqueue.Store) {
 	t.Helper()

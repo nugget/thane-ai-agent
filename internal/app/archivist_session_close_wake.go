@@ -101,13 +101,13 @@ func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, conversati
 // few-minutes latency advantage is irrelevant to the hourly, self-paced
 // archivist. One gate, not two (issue #1024).
 //
-// Skipped when archivist.enabled is false or the queue is absent: there is no
-// consumer, so don't accumulate work.
+// Skipped when the archivist definition is absent or disabled, or the queue
+// is missing: there is no consumer, so don't accumulate work.
 func (a *App) wireSessionCloseToArchivistQueue() {
 	if a == nil || a.archiveStore == nil || a.loopQueue == nil {
 		return
 	}
-	if a.cfg == nil || !a.cfg.Archivist.Enabled {
+	if !a.archivistDefinitionEnabled() {
 		return
 	}
 	if a.summaryWorker == nil {
@@ -124,4 +124,24 @@ func (a *App) wireSessionCloseToArchivistQueue() {
 			"loop", archivist.DefinitionName,
 		)
 	}
+}
+
+// archivistDefinitionEnabled reports whether the archivist's effective loop
+// definition exists and is enabled — the single gate for wiring the
+// session-close producer. The definition document (core/loops/archivist.md,
+// or the shipped default) is the same declaration that makes the loop run,
+// so the producer wires exactly when a consumer exists. The legacy
+// config.yaml `archivist.enabled` flag is deliberately not consulted: the
+// definition made it a second switch for the same loop, and the two could
+// only disagree silently — a running archivist whose queue never fills.
+//
+// Runtime policy (paused/inactive) is also deliberately not consulted: a
+// pause is temporary, and work accumulated while paused is exactly what the
+// resumed loop should drain. Only the durable declaration decides.
+func (a *App) archivistDefinitionEnabled() bool {
+	if a == nil {
+		return false
+	}
+	spec, ok := a.loopDefinitionRegistry.Get(archivist.DefinitionName)
+	return ok && spec.Enabled
 }
