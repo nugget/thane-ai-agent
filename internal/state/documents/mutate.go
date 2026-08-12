@@ -135,11 +135,13 @@ func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {
 // text search against the stored body. Deliberately conservative:
 // zero-width characters are left alone (emoji sequences depend on
 // them) — only the two space impostors are folded.
+var spaceArtifactReplacer = strings.NewReplacer("\u00a0", " ", "\u202f", " ")
+
 func normalizeSpaceArtifacts(s string) string {
 	if !strings.ContainsAny(s, "\u00a0\u202f") {
 		return s
 	}
-	return strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(s)
+	return spaceArtifactReplacer.Replace(s)
 }
 
 func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, error) {

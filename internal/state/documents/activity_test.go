@@ -100,6 +100,20 @@ func TestWriteNormalizesSpaceArtifacts(t *testing.T) {
 	if strings.ContainsAny(rec.Body, "\u00a0\u202f") {
 		t.Errorf("journal path retains space artifacts: %q", rec.Body)
 	}
+
+	if _, err := store.Edit(ctx, EditArgs{Ref: "self:state.md", Mode: "append_body", Body: "appended\u00a0note"}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	rec, err = store.Read(ctx, "self:state.md")
+	if err != nil {
+		t.Fatalf("post-edit read: %v", err)
+	}
+	if strings.ContainsAny(rec.Body, "\u00a0\u202f") {
+		t.Errorf("edit path retains space artifacts: %q", rec.Body)
+	}
+	if !strings.Contains(rec.Body, "appended note") {
+		t.Errorf("edited body = %q, want plain-space append", rec.Body)
+	}
 }
 
 func TestActivityErrorsTeachTheNextMove(t *testing.T) {
