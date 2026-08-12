@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string) error {
@@ -17,7 +20,7 @@ func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string
 		return err
 	}
 	if writer := s.rootWriter(root); writer != nil {
-		if err := writer.Write(ctx, relPath, raw, documentMutationMessage("doc_write", root, relPath)); err != nil {
+		if err := writer.Write(ctx, relPath, raw, documentWriteMessage("doc_write", root, relPath, raw)); err != nil {
 			return fmt.Errorf("write document through root policy: %w", err)
 		}
 		if err := s.refreshDocumentWrite(ctx, root, relPath); err != nil {
@@ -103,4 +106,46 @@ func (s *Store) ensureRootAuthoringAllowed(root string) error {
 
 func documentMutationMessage(action, root, relPath string) string {
 	return action + " " + makeRef(root, relPath)
+}
+
+// facetSubjectMaxRunes clamps a status_line borrowed into a commit
+// subject. Published projections are already budgeted below this, so
+// the clamp only fires on content that arrived through a non-publish
+// write (doc_write can put anything under a reserved heading) — and a
+// commit subject is annotation, not the content itself, so clipping
+// here is honest where clipping a projection would not be.
+const facetSubjectMaxRunes = 120
+
+// documentWriteMessage composes the commit message for a document
+// write. For an unfaceted document it is the same mechanical subject
+// documentMutationMessage produces. When the content carries facet
+// sections, the message borrows them: the status_line joins the
+// subject — so the root's git log reads as a timeline of the
+// document's own one-line verdicts — and the digest becomes the commit
+// body, the actionable summary at the moment of the write. No writer
+// cooperation is needed: the facet headings are the contract, so every
+// write of a faceted document gets this regardless of which tool or
+// author produced it.
+func documentWriteMessage(action, root, relPath, raw string) string {
+	subject := documentMutationMessage(action, root, relPath)
+	_, body := splitFrontmatter(raw)
+	payload, ok := looppkg.ParseFacetSections(body)
+	if !ok {
+		return subject
+	}
+	if verdict, ok := payload.FacetByKey("status_line"); ok {
+		if line := strings.TrimSpace(verdict); line != "" {
+			line = strings.Join(strings.Fields(line), " ")
+			if runes := []rune(line); len(runes) > facetSubjectMaxRunes {
+				line = string(runes[:facetSubjectMaxRunes-1]) + "…"
+			}
+			subject += " — " + line
+		}
+	}
+	if digest, ok := payload.FacetByKey("digest"); ok {
+		if summary := strings.TrimSpace(digest); summary != "" {
+			subject += "\n\n" + summary
+		}
+	}
+	return subject
 }
