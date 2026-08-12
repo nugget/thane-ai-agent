@@ -372,9 +372,9 @@ func ParseFacetSections(body string) (FacetPayload, bool) {
 	return payload, found
 }
 
-// FacetByKey returns one facet's value from a payload by its field key,
-// so a consumer can ask for the level it wants without a switch of its
-// own over the ladder.
+// FacetByKey returns one projection level's value from a payload by its
+// field key — "full" included — so a consumer can ask for the level it
+// wants without a switch of its own over the ladder.
 func (p FacetPayload) FacetByKey(key string) (string, bool) {
 	section, ok := facetSectionByKey(key)
 	if !ok {
@@ -385,7 +385,10 @@ func (p FacetPayload) FacetByKey(key string) (string, bool) {
 }
 
 // FacetKeys returns every facet key in canonical order, for a consumer
-// advertising the levels a document offers.
+// advertising the levels a document offers. It includes "full"
+// deliberately: the full body is not a declarable facet — it is the
+// document itself — but it is always a readable projection level, and a
+// consumer advertising levels needs the complete ladder.
 func FacetKeys() []string {
 	keys := make([]string, 0, len(facetSections))
 	for _, section := range facetSections {
@@ -532,7 +535,8 @@ func (o OutputSpec) FacetPayloadFromArgs(args map[string]any) (FacetPayload, err
 }
 
 // IsFacetKey reports whether key names a facet in the contract, for a
-// consumer validating a caller-supplied level before using it.
+// consumer validating a caller-supplied level before using it. "full"
+// answers true: not a declarable facet, but always a readable level.
 func IsFacetKey(key string) bool {
 	_, ok := facetSectionByKey(key)
 	return ok

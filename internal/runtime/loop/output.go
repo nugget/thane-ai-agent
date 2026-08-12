@@ -29,7 +29,10 @@ const (
 	OutputTypeWorkingNotes OutputType = "working_notes"
 )
 
-// OutputMode describes the allowed write mode for a loop output.
+// OutputMode describes the allowed write mode for a loop output. Since
+// the journal_document type retired, the enum holds one value; it stays
+// an enum because the mode axis is the declared extension point for
+// future write shapes, not because a spec has a choice to make today.
 type OutputMode string
 
 const (
@@ -95,7 +98,12 @@ type OutputSpec struct {
 	Type OutputType `yaml:"type" json:"type"`
 	// Ref is the managed document ref, such as core:metacognitive.md.
 	Ref string `yaml:"ref" json:"ref"`
-	// Mode is the write mode. It defaults from Type when omitted.
+	// Mode is the write mode. It defaults from Type when omitted, and
+	// with journal_document retired every valid spec resolves to
+	// "replace" — so the field is wire compatibility for stored specs
+	// that named it explicitly plus the declared extension point for
+	// future write shapes, not a live choice. Deprecated for authoring:
+	// leave it empty and let Type imply it.
 	Mode OutputMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Purpose is optional model-facing guidance for this output.
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`

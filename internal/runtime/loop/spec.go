@@ -168,20 +168,14 @@ type Spec struct {
 	// tags, tool exclusions, and related request-shaping guidance.
 	Profile router.LoopProfile `yaml:"profile,omitempty" json:"profile,omitempty"`
 
-	// PromptMode selects the system-prompt shape for every iteration of
-	// this loop. Empty or "full" wears the complete identity stack —
-	// axioms, persona, mission, ego, the persona-tagged talents, and
-	// the always-on ambient context. "task" is the compact worker
-	// prompt: the persona is swapped for a bounded worker preamble and
-	// the rest of that layer is shed, while always-tagged talents,
-	// tagged guidance, active tags, the loop's declared subscriptions
-	// and self view, the Task, and current conditions all remain (a
-	// worker sheds the ambient self, not its eyes — #1363). The
-	// convention (#1171): mechanical
-	// maintainer/watcher/poller loops declare "task"; reflective loops —
-	// any loop whose job is judgment about the agent itself — declare
-	// "full". A per-launch [Launch.PromptMode] overrides this default
-	// for one launch.
+	// PromptMode is the loop's declarative prompt-shape default; the
+	// [agentctx.PromptModeFull] and [agentctx.PromptModeTask] constants
+	// define what each shape contains. The convention (#1171):
+	// mechanical maintainer/watcher/poller loops declare "task";
+	// reflective loops — any loop whose job is judgment about the agent
+	// itself — declare "full" (empty means full). See the "PromptMode"
+	// section of the package documentation for how this default layers
+	// with [Launch.PromptMode] and [Request.PromptMode].
 	PromptMode agentctx.PromptMode `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
 
 	// Operation describes the runtime pattern expected for the loop.

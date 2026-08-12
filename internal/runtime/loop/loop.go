@@ -69,14 +69,18 @@ type Request struct {
 	// mid-turn input. Runtime-only.
 	PullInput func(ctx context.Context) []llm.Message `yaml:"-" json:"-"`
 
-	MaxIterations   int                 `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
-	MaxOutputTokens int                 `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
-	ToolTimeout     time.Duration       `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
-	UsageRole       string              `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
-	UsageTaskName   string              `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
-	SystemPrompt    string              `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	FallbackContent string              `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
-	PromptMode      agentctx.PromptMode `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
+	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole       string        `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	FallbackContent string        `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
+
+	// PromptMode is the per-run prompt shape, already resolved from the
+	// spec default and any launch override; see the "PromptMode" section
+	// of the package documentation for the layering.
+	PromptMode agentctx.PromptMode `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
 
 	// SuppressAlwaysContext drops the always-on bucket from the
 	// system-prompt assembler's context output for this run. Default

@@ -37,12 +37,16 @@ type Launch struct {
 	SkipContext       bool                     `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
 	SkipTagFilter     bool                     `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
 	SystemPrompt      string                   `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	PromptMode        agentctx.PromptMode      `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
-	MaxIterations     int                      `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
-	MaxOutputTokens   int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
-	ToolTimeout       time.Duration            `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
-	UsageRole         string                   `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
-	UsageTaskName     string                   `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	// PromptMode overrides the spec's declared prompt mode for this
+	// launch only; empty defers to the spec. See the prompt mode
+	// lifecycle in the package documentation for how the override
+	// merges and when a retune clears it.
+	PromptMode      agentctx.PromptMode `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
+	MaxIterations   int                 `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens int                 `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout     time.Duration       `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole       string              `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName   string              `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
 
 	// SuppressAlwaysContext drops the always-on context bucket from
 	// the system prompt assembler for this run. Default false matches

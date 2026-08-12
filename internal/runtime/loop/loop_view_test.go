@@ -438,7 +438,10 @@ func TestLoopViewResolver_FromStatus_WakeAttribution(t *testing.T) {
 
 // TestLoopViewResolver_FromStatus_WakeWindowHonesty: a loop younger
 // than the wake ring's day-long span reports the window its count
-// actually covers; a mature loop omits it, meaning the full day.
+// actually covers, and a mature loop states "24h" outright. Absence is
+// reserved for coverage-unknown (no usable start time) — the same
+// reading the loop census gives the key (c6c6b226), so a model cannot
+// learn opposite meanings for one key from two surfaces.
 func TestLoopViewResolver_FromStatus_WakeWindowHonesty(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	r := NewLoopViewResolver(nil, nil, now)
@@ -457,8 +460,44 @@ func TestLoopViewResolver_FromStatus_WakeWindowHonesty(t *testing.T) {
 		StartedAt: now.Add(-48 * time.Hour),
 		Config:    Config{Operation: OperationService},
 	})
-	if mature.WakeWindow != nil {
-		t.Errorf("mature wake_window = %v, want omitted (full day)", mature.WakeWindow)
+	if mature.WakeWindow == nil || *mature.WakeWindow != "24h" {
+		t.Errorf("mature wake_window = %v, want the stated 24h, not an omission the census reads as unknown", mature.WakeWindow)
+	}
+}
+
+// TestLoopViewResolver_FromStatus_WokenEarlyIsJudgedOnRawDurations pins
+// the derivation to the durations themselves. The formatted strings
+// truncate to whole seconds, so a jittered plan plus scheduler slop can
+// cross a formatting boundary on a plain timer wake — the flag must not
+// fire there, and an overslept wake must never read as an early one.
+func TestLoopViewResolver_FromStatus_WokenEarlyIsJudgedOnRawDurations(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	tests := []struct {
+		name    string
+		slept   time.Duration
+		planned time.Duration
+		want    bool
+	}{
+		// Formats as "30m1s" slept vs "30m" planned — the exact string
+		// mismatch that used to fake an interruption.
+		{"jittered timer wake across a truncation boundary", 30*time.Minute + 1050*time.Millisecond, 30*time.Minute + 950*time.Millisecond, false},
+		{"overslept wake is not an early wake", 31 * time.Minute, 30 * time.Minute, false},
+		{"sub-tolerance early wake reads as ordinary", 30*time.Minute - 500*time.Millisecond, 30 * time.Minute, false},
+		{"notification cut the sleep short", 5 * time.Minute, 30 * time.Minute, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := r.FromStatus(Status{
+				ID: "lp_w", Name: "watch", State: State("running"),
+				SleptFor: tt.slept, SleptPlanned: tt.planned,
+				Config: Config{Operation: OperationService},
+			})
+			if v.WokenEarly != tt.want {
+				t.Errorf("WokenEarly = %v, want %v (slept %v of planned %v)", v.WokenEarly, tt.want, tt.slept, tt.planned)
+			}
+		})
 	}
 }
 

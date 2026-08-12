@@ -78,27 +78,46 @@ type LoopView struct {
 	// stored definition as well as a live loop; null on anything with no
 	// periodic timer.
 	SleepEnvelope *SleepEnvelope `json:"sleep_envelope"`
-	// LastSleep is how long the most recent sleep actually lasted and
-	// LastSleepPlanned is what it was scheduled for, both as Go duration
-	// literals. Equal on an ordinary wake; LastSleep is the shorter of
-	// the two when a notification cut the sleep short, which is how a
-	// loop tells "something wanted me" from "my cadence was overridden".
+	// LastSleep is how long the most recent sleep actually lasted, as a
+	// Go duration literal. Close to the plan on an ordinary wake —
+	// scheduler slop can run it a shade past LastSleepPlanned —
+	// and materially shorter when a notification cut the sleep short.
 	// Null before the first sleep and on event-driven loops.
-	LastSleep        *string `json:"last_sleep"`
+	LastSleep *string `json:"last_sleep"`
+	// LastSleepPlanned is the duration the most recent sleep was
+	// scheduled for, as a Go duration literal: the post-clamp,
+	// post-jitter plan that LastSleep is judged against. Null before
+	// the first sleep and on event-driven loops.
 	LastSleepPlanned *string `json:"last_sleep_planned"`
+	// WokenEarly reports that the most recent sleep ended materially
+	// short of its plan — a notification arrived. It is derived from
+	// the raw durations with a tolerance for scheduler slop, never from
+	// the formatted strings above, so an ordinary timer wake that
+	// drifts across a whole-second formatting boundary cannot read as
+	// an interruption. Omitted when false and on stored-only rows.
+	WokenEarly bool `json:"woken_early,omitempty"`
 	// WakesLast24h is how many iterations began in the trailing day,
 	// counting the one in flight — the cadence actually achieved, as
-	// against the SleepEnvelope's permitted one. WakeWindow qualifies
-	// it: the ring is in-memory, so a loop younger than a day has only
-	// been counted for its lifetime, and the window says so rather than
-	// letting the count imply a full day's coverage.
-	WakesLast24h *int    `json:"wakes_last_24h"`
-	WakeWindow   *string `json:"wake_window,omitempty"`
+	// against the SleepEnvelope's permitted one. It only counts the
+	// span WakeWindow names, which is shorter than a day on a young
+	// loop.
+	WakesLast24h *int `json:"wakes_last_24h"`
+	// WakeWindow is the span WakesLast24h actually covers: the loop's
+	// lifetime while it is younger than a day (the wake ring is
+	// in-memory, so a young loop has only been counted since it
+	// started), clamped to "24h" once coverage reaches the full day.
+	// Absent means coverage is unknown (no usable start time), never
+	// shorthand for a full day — the same reading the loop census gives
+	// the key.
+	WakeWindow *string `json:"wake_window,omitempty"`
 	// LastWakeReason attributes the most recent iteration start (timer,
-	// mailbox, subscription, manual, ...), and LastWakeSource names the
-	// sender when the wake carried one. Null before the first iteration
-	// and on stored-only rows.
+	// mailbox, subscription, manual, ...). Null before the first
+	// iteration and on stored-only rows.
 	LastWakeReason *string `json:"last_wake_reason"`
+	// LastWakeSource names the sender or producer behind LastWakeReason
+	// when the wake carried one (a loop_wake caller, a wake dispatcher
+	// name, a mailbox key prefix). Omitted when the wake named no
+	// sender.
 	LastWakeSource *string `json:"last_wake_source,omitempty"`
 	// WakeReasons24h histograms the trailing day's wakes by reason — how
 	// the achieved cadence decomposes into self-chosen timer wakes versus
@@ -162,9 +181,13 @@ type LoopView struct {
 // values, and what appears here is exactly what set_next_sleep accepts
 // back, so the model round-trips the literal instead of converting it.
 type SleepEnvelope struct {
-	// Min and Max are the clamp. A request outside them is not rejected,
-	// it is silently moved to the nearest bound.
+	// Min is the lower clamp bound. A request outside the clamp is
+	// moved to the nearest bound rather than refused: set_next_sleep
+	// reports the move as clamped, and the run loop re-clamps silently
+	// before every sleep.
 	Min string `json:"min"`
+	// Max is the upper clamp bound, catching requests above it the same
+	// way Min catches requests below.
 	Max string `json:"max"`
 	// Default is what the runtime sleeps when an iteration ends without
 	// choosing — not a recommendation, just the fallback.
@@ -410,6 +433,13 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	return v
 }
 
+// wokenEarlyTolerance separates a notification-cut sleep from ordinary
+// scheduler slop when deriving [LoopView.WokenEarly]: an actual sleep
+// more than this much shorter than its plan was interrupted; anything
+// closer ran its course. Slop is milliseconds and a notification saves
+// minutes, so a second cleanly splits the two.
+const wokenEarlyTolerance = time.Second
+
 // applyLiveTelemetry fills the live-only half of a LoopView from a running
 // loop's Status: identity, runtime state, lifecycle deltas, economics, error
 // state, supervisor cadence, and the effective_* inheritance lists. Shared by
@@ -473,12 +503,29 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 		planned := promptfmt.FormatDuration(s.SleptPlanned)
 		v.LastSleep = &slept
 		v.LastSleepPlanned = &planned
+		// Judged on the raw durations, not the formatted strings above:
+		// promptfmt truncates to whole seconds, and a jittered plan plus
+		// scheduler slop crosses a truncation boundary often enough to
+		// fake an interruption on a plain timer wake — or to read an
+		// overslept wake as an early one.
+		v.WokenEarly = s.SleptPlanned-s.SleptFor > wokenEarlyTolerance
 	}
 	wakes := s.WakesLast24h
 	v.WakesLast24h = &wakes
+	// Emitted whenever the start time is known, clamped to the ring's
+	// full day at maturity — absence stays reserved for "coverage
+	// unknown", matching the loop census (c6c6b226) so the key cannot
+	// mean opposite things on the two surfaces that emit it.
 	if !s.StartedAt.IsZero() {
-		if up := now.Sub(s.StartedAt); up > 0 && up < wakeHistoryWindow {
-			window := promptfmt.FormatDuration(up.Round(time.Second))
+		if up := now.Sub(s.StartedAt); up > 0 {
+			span := wakeHistoryWindow
+			if up < wakeHistoryWindow {
+				span = up.Round(time.Second)
+				if span > wakeHistoryWindow {
+					span = wakeHistoryWindow
+				}
+			}
+			window := promptfmt.FormatDuration(span)
 			v.WakeWindow = &window
 		}
 	}

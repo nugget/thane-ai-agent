@@ -137,4 +137,32 @@
 // set, this is ignored" or "see FieldC for the related case" in a
 // field comment, that's a sign the field belongs in this lifecycle
 // document instead.
+//
+// # Prompt mode lifecycle
+//
+// PromptMode selects the system-prompt shape an iteration wears — the
+// agentctx.PromptMode constants define what "full" and "task" contain.
+// Like capability tags, one conceptual value flows through three
+// fields, each a distinct point in a loop's life rather than a
+// redundancy:
+//
+//	Spec.PromptMode              declarative default, persisted with the spec
+//	     │
+//	     │  Spec.profileRequest()
+//	     ▼
+//	requestBase.PromptMode       the loop's durable baseline
+//	     │
+//	     │  + Launch.PromptMode      per-launch override (requestOverride)
+//	     ▼
+//	Request.PromptMode           merged value each iteration:
+//	                             requestOverride > request > requestBase
+//
+// The merge happens in prepareAgentTurnRequest via firstPromptMode. A
+// retune interacts with the override deliberately: when a retuned spec
+// declares a mode, the launch-time override is cleared so the retune
+// actually wins; a retune that declares no mode expresses no opinion
+// and leaves any launch-time override standing.
+//
+// When adding prompt-mode plumbing, anchor against this map rather
+// than re-explaining the chain in each field's Godoc.
 package loop
