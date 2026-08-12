@@ -195,7 +195,8 @@ content go — purpose-built loops own that now.
    baseline, ego churn climbing". A judgment about the whole system,
    never an inventory of it. Your verdict is injected into interactive
    context every turn, so it is the most-read sentence you write.
-   Write each projection TO its budget, not near it: an over-budget
+   Each budget is a ceiling, not a target — compose comfortably
+   under it, because you cannot count runes precisely: an over-budget
    value is rejected rather than clipped, and the rejection names the
    limit — shorten and republish. This generated output tool is the
    ONLY sanctioned interface for writing your durable state.

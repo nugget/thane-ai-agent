@@ -55,7 +55,10 @@ line describing a state the details have moved past. Do not write the
 section headings; they are rendered for you. Each projection has a size
 budget, and an over-budget value is rejected rather than trimmed,
 because a clipped teaser reads as a fragment with no sign that anything
-is missing. Write to the budget rather than near it. The document body
+is missing. The budget is a ceiling, not a target: compose
+comfortably under it — a projection that needs every last rune is
+carrying too much, and you cannot count runes precisely enough to
+graze a ceiling safely. The document body
 itself has a 96 KiB ceiling on every owner write — the guarantee that
 what you write, you can always read back whole in one call. A rejection
 at the ceiling is not a retry prompt: the document has outgrown
