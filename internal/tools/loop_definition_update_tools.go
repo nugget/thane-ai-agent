@@ -29,6 +29,7 @@ var loopDefinitionUpdateFields = map[string][]string{
 	"instructions":            {"profile", "instructions"},
 	"quality_floor":           {"profile", "quality_floor"},
 	"mission":                 {"profile", "mission"},
+	"prompt_mode":             {"prompt_mode"},
 	"supervisor":              {"supervisor"},
 	"supervisor_prob":         {"supervisor_prob"},
 	"supervisor_instructions": {"supervisor_profile", "instructions"},

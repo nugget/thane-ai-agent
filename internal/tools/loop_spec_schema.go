@@ -43,6 +43,11 @@ func loopSpecSchema(description string) map[string]any {
 				"description": "Runtime pattern. service = perpetual self-paced loop; event_driven = wakes only on subscription/tag events (no periodic sleep); background_task = detached one-shot; request_reply = synchronous; container = non-executing graph node.",
 			},
 			"profile": loopProfileSchema("Routing and request-shaping for normal (non-supervisor) iterations."),
+			"prompt_mode": map[string]any{
+				"type":        "string",
+				"enum":        []string{"full", "task"},
+				"description": "System-prompt shape for every iteration. \"task\" is the compact worker prompt: it sheds the reflective identity layer — axioms, persona, ego, mission, persona-tagged talents, always-on ambient context; the largest single prompt cost in a background loop — while keeping always-tagged talents, tagged guidance, active tags, the task, and current conditions. Declare \"task\" for mechanical maintainer/watcher/poller loops (fetch a source, check a state, update a document). Leave unset (or \"full\") for any loop whose job needs the identity: reflection or self-assessment, or composing messages in the agent's own voice. Editable live via loop_definition_update.",
+			},
 			"supervisor": map[string]any{
 				"type":        "boolean",
 				"description": "Enable periodic supervisor turns: a per-wake Bernoulli trial promotes the iteration to a more capable, non-local model.",

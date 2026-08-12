@@ -173,7 +173,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_update",
-		Description: "Change a subset of fields on one existing dynamic loop definition in the persistent loops overlay, without resending the whole spec. Use this for incremental edits — enable supervisor, set supervisor_prob, rewrite the profile instructions, retune the sleep envelope, pin a model — instead of recomposing the entire definition with loop_definition_set. Pass name plus any subset of the editable fields below; every field you omit is preserved exactly. Config-owned definitions are immutable. Structural and list-valued fields (operation, completion, outputs, subscriptions, tags) are not editable here — use loop_definition_set to rewrite those; to move a loop use loop_reparent, and to change run state (active/paused) use loop_definition_set_policy. The edit is persisted immediately and applies live to a running loop: the next turn embodies it (a turn already in flight finishes under its previous config), and an in-flight sleep is re-clamped to an edited envelope, waking immediately if overdue. Structural rewrites via loop_definition_set still require a relaunch.",
+		Description: "Change a subset of fields on one existing dynamic loop definition in the persistent loops overlay, without resending the whole spec. Use this for incremental edits — enable supervisor, set supervisor_prob, rewrite the profile instructions, retune the sleep envelope, pin a model, flip prompt_mode — instead of recomposing the entire definition with loop_definition_set. Pass name plus any subset of the editable fields below; every field you omit is preserved exactly. Config-owned definitions are immutable. Structural and list-valued fields (operation, completion, outputs, subscriptions, tags) are not editable here — use loop_definition_set to rewrite those; to move a loop use loop_reparent, and to change run state (active/paused) use loop_definition_set_policy. The edit is persisted immediately and applies live to a running loop: the next turn embodies it (a turn already in flight finishes under its previous config), and an in-flight sleep is re-clamped to an edited envelope, waking immediately if overdue. Structural rewrites via loop_definition_set still require a relaunch.",
 		// Same literal-payload hazard as loop_definition_set/lint: the merged
 		// spec carries outputs[].ref strings, and the field values are stored
 		// verbatim. Universal prefix-to-content resolution would rewrite a real
@@ -205,6 +205,11 @@ func (r *Registry) registerLoopDefinitionTools() {
 				"mission": map[string]any{
 					"type":        "string",
 					"description": "Routing mission hint (spec.profile.mission), e.g. \"conversation\" or \"background\".",
+				},
+				"prompt_mode": map[string]any{
+					"type":        "string",
+					"enum":        []string{"full", "task"},
+					"description": "System-prompt shape for the loop's iterations (spec.prompt_mode). \"task\" = the compact worker prompt for mechanical maintainer/watcher/poller loops — it sheds the reflective identity stack, the largest single prompt cost in a background loop. \"full\" = the complete identity, for loops that reflect on the agent or speak in its voice. Applies live at the loop's next turn boundary.",
 				},
 				"supervisor": map[string]any{
 					"type":        "boolean",

@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // These tests pin the retune conformance contract (#1153): a running loop
@@ -263,6 +265,92 @@ func TestQueueRetuneUnstartedLoopPromotesInline(t *testing.T) {
 	if s.Config.Task != "new task" || s.PendingRetune {
 		t.Errorf("unstarted loop: task=%q pending=%v, want inline promote", s.Config.Task, s.PendingRetune)
 	}
+}
+
+// TestQueueRetunePromotesPromptMode pins the #1171 rollout path: flipping
+// prompt_mode on a stored worker-loop definition reaches the live loop as
+// a retune — the requestBase rebuild in promoteRetuneLocked carries it —
+// so the trim needs no relaunch.
+func TestQueueRetunePromotesPromptMode(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "retune-target",
+		Task:         "old task",
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       Float64Ptr(0),
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	retuned := retuneSpec("old task", time.Minute, 0)
+	retuned.PromptMode = agentctx.PromptModeTask
+	if err := l.QueueRetune(retuned); err != nil {
+		t.Fatalf("QueueRetune: %v", err)
+	}
+
+	req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+	if err != nil {
+		t.Fatalf("prepareAgentTurnRequest: %v", err)
+	}
+	if req.PromptMode != agentctx.PromptModeTask {
+		t.Errorf("PromptMode after retune = %q, want task", req.PromptMode)
+	}
+}
+
+// TestQueueRetunePromptModeVersusLaunchOverride pins the shadowing rule:
+// a launch-time prompt_mode override would otherwise outrank the retuned
+// spec forever (prepareAgentTurnRequest prefers the override), so a
+// retune that declares a mode clears the override — the same route the
+// task override takes — while a retune silent on prompt_mode leaves the
+// launch-time choice in place.
+func TestQueueRetunePromptModeVersusLaunchOverride(t *testing.T) {
+	t.Parallel()
+
+	newOverriddenLoop := func(t *testing.T) *Loop {
+		t.Helper()
+		l, err := NewFromLaunch(Launch{
+			Spec:       retuneSpec("old task", time.Minute, 0),
+			PromptMode: agentctx.PromptModeFull,
+		}, Deps{Runner: &noopRunner{}})
+		if err != nil {
+			t.Fatalf("NewFromLaunch: %v", err)
+		}
+		return l
+	}
+
+	t.Run("a declared retune mode clears the launch override", func(t *testing.T) {
+		l := newOverriddenLoop(t)
+		retuned := retuneSpec("old task", time.Minute, 0)
+		retuned.PromptMode = agentctx.PromptModeTask
+		if err := l.QueueRetune(retuned); err != nil {
+			t.Fatalf("QueueRetune: %v", err)
+		}
+		req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+		if err != nil {
+			t.Fatalf("prepareAgentTurnRequest: %v", err)
+		}
+		if req.PromptMode != agentctx.PromptModeTask {
+			t.Errorf("PromptMode = %q, want task (retune wins over launch override)", req.PromptMode)
+		}
+	})
+
+	t.Run("a silent retune leaves the launch override in place", func(t *testing.T) {
+		l := newOverriddenLoop(t)
+		if err := l.QueueRetune(retuneSpec("old task", time.Minute, 0)); err != nil {
+			t.Fatalf("QueueRetune: %v", err)
+		}
+		req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+		if err != nil {
+			t.Fatalf("prepareAgentTurnRequest: %v", err)
+		}
+		if req.PromptMode != agentctx.PromptModeFull {
+			t.Errorf("PromptMode = %q, want full (launch override preserved)", req.PromptMode)
+		}
+	})
 }
 
 // TestQueueRetuneRejectsOperationDrift guards against the drift trap: a

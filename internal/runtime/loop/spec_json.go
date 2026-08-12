@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 type specJSON struct {
@@ -15,6 +16,7 @@ type specJSON struct {
 	Task           string               `json:"task,omitempty"`
 	Intent         string               `json:"intent,omitempty"`
 	Profile        any                  `json:"profile,omitempty"`
+	PromptMode     agentctx.PromptMode  `json:"prompt_mode,omitempty"`
 	Operation      Operation            `json:"operation,omitempty"`
 	Completion     Completion           `json:"completion,omitempty"`
 	Outputs        []OutputSpec         `json:"outputs,omitempty"`
@@ -71,6 +73,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Task:              s.Task,
 		Intent:            s.Intent,
 		Profile:           s.Profile,
+		PromptMode:        s.PromptMode,
 		Operation:         s.Operation,
 		Completion:        s.Completion,
 		Outputs:           cloneOutputs(s.Outputs),
@@ -151,6 +154,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Enabled:          wire.Enabled,
 		Task:             wire.Task,
 		Intent:           wire.Intent,
+		PromptMode:       wire.PromptMode,
 		Operation:        wire.Operation,
 		Completion:       wire.Completion,
 		Outputs:          cloneOutputs(wire.Outputs),

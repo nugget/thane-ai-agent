@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func TestSpecValidate(t *testing.T) {
@@ -111,6 +112,94 @@ func TestSpecValidate(t *testing.T) {
 		err := spec.Validate()
 		if err == nil || !strings.Contains(err.Error(), "jitter") {
 			t.Fatalf("Validate() error = %v, want jitter rejection", err)
+		}
+	})
+
+	t.Run("task prompt_mode on a service spec is valid", func(t *testing.T) {
+		spec := &Spec{
+			Name:         "worker",
+			Task:         "Check the site and update the document.",
+			Operation:    OperationService,
+			PromptMode:   agentctx.PromptModeTask,
+			SleepMin:     time.Minute,
+			SleepMax:     time.Hour,
+			SleepDefault: 10 * time.Minute,
+		}
+		if err := spec.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("invalid prompt_mode is rejected", func(t *testing.T) {
+		spec := &Spec{
+			Name:       "bad-prompt-mode",
+			Task:       "Do something.",
+			PromptMode: agentctx.PromptMode("everything"),
+		}
+		err := spec.Validate()
+		if err == nil || !strings.Contains(err.Error(), "prompt_mode") {
+			t.Fatalf("Validate() error = %v, want prompt_mode rejection", err)
+		}
+	})
+
+	t.Run("container rejects prompt_mode", func(t *testing.T) {
+		spec := &Spec{
+			Name:       "grouping",
+			Operation:  OperationContainer,
+			PromptMode: agentctx.PromptModeTask,
+		}
+		err := spec.Validate()
+		if err == nil || !strings.Contains(err.Error(), "prompt_mode") {
+			t.Fatalf("Validate() error = %v, want container prompt_mode rejection", err)
+		}
+	})
+}
+
+// TestSpecPromptModeReachesPreparedRequest pins the #1171 contract: a
+// durable definition's prompt_mode is the loop's per-iteration default,
+// and a per-launch override still wins over it.
+func TestSpecPromptModeReachesPreparedRequest(t *testing.T) {
+	t.Parallel()
+
+	spec := Spec{
+		Name:         "worker",
+		Task:         "Check the site and update the document.",
+		Operation:    OperationService,
+		Completion:   CompletionNone,
+		PromptMode:   agentctx.PromptModeTask,
+		SleepMin:     time.Minute,
+		SleepMax:     time.Hour,
+		SleepDefault: 10 * time.Minute,
+	}
+
+	t.Run("spec-level mode is the iteration default", func(t *testing.T) {
+		l, err := NewFromSpec(spec, Deps{Runner: &noopRunner{}})
+		if err != nil {
+			t.Fatalf("NewFromSpec: %v", err)
+		}
+		req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+		if err != nil {
+			t.Fatalf("prepareAgentTurnRequest: %v", err)
+		}
+		if req.PromptMode != agentctx.PromptModeTask {
+			t.Errorf("PromptMode = %q, want task (from spec)", req.PromptMode)
+		}
+	})
+
+	t.Run("launch override wins over the spec default", func(t *testing.T) {
+		l, err := NewFromLaunch(Launch{
+			Spec:       spec,
+			PromptMode: agentctx.PromptModeFull,
+		}, Deps{Runner: &noopRunner{}})
+		if err != nil {
+			t.Fatalf("NewFromLaunch: %v", err)
+		}
+		req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+		if err != nil {
+			t.Fatalf("prepareAgentTurnRequest: %v", err)
+		}
+		if req.PromptMode != agentctx.PromptModeFull {
+			t.Errorf("PromptMode = %q, want full (launch override)", req.PromptMode)
 		}
 	})
 }
@@ -284,6 +373,7 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		Task:       "Watch the office.",
 		Operation:  OperationService,
 		Completion: CompletionConversation,
+		PromptMode: agentctx.PromptModeTask,
 		Tags:       []string{"homeassistant"},
 		Profile: router.LoopProfile{
 			Mission:      "background",
@@ -313,7 +403,7 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	gotJSON := string(data)
-	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`, `"delegation_gating":"disabled"`, `"routing_factors":{"prefer_speed":"true"}`} {
+	for _, want := range []string{`"enabled":true`, `"prompt_mode":"task"`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`, `"delegation_gating":"disabled"`, `"routing_factors":{"prefer_speed":"true"}`} {
 		if !strings.Contains(gotJSON, want) {
 			t.Fatalf("json = %s, want substring %s", gotJSON, want)
 		}
@@ -340,6 +430,9 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 	}
 	if got := roundTrip.RoutingFactors[router.FactorPreferSpeed]; got != "true" {
 		t.Fatalf("RoutingFactors[prefer_speed] = %q, want true", got)
+	}
+	if roundTrip.PromptMode != agentctx.PromptModeTask {
+		t.Fatalf("PromptMode = %q, want task", roundTrip.PromptMode)
 	}
 }
 

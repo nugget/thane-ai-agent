@@ -199,6 +199,20 @@ muddle them and the loop drifts.
   script through unstructured input, that's the signal — a loop
   with interpretive instructions handles it more durably.
 
+- **`prompt_mode` decides how much self the loop wears.** A mechanical
+  maintainer, watcher, or poller — fetch a source, check a state,
+  update a document — should declare `prompt_mode: "task"`: the
+  compact worker prompt sheds the reflective identity stack (axioms,
+  persona, ego, persona-tagged talents, always-on ambient context),
+  which is the largest single prompt cost in a background loop and
+  pure latency on a local model. The worker keeps its always-tagged
+  talents, its tagged guidance, its task, and current conditions — it
+  sheds only the self it was never using. Leave the field unset for a
+  loop whose work needs the identity: reflection or judgment about
+  the agent itself, or composing messages in the agent's own voice.
+  The mode is per-loop and never inherited; when in doubt, leave it
+  unset and trim later — it retunes live via `loop_definition_update`.
+
 ## Changing a loop that's already running
 
 A running loop carries the config it launched with. Whether an edit
@@ -206,9 +220,9 @@ reaches the live instance or waits for a relaunch depends on the tool
 you use, not just the field:
 
 - **Retune it live** — task, model, instructions, sleep envelope,
-  quality floor, supervisor, max_iter all promote into the running
-  loop via `loop_definition_update` at its next turn boundary. No
-  relaunch, no lost iteration.
+  quality floor, prompt mode, supervisor, max_iter all promote into
+  the running loop via `loop_definition_update` at its next turn
+  boundary. No relaunch, no lost iteration.
 - **Change its watch set live** — entity subscriptions have their own
   door: `add_entity_subscription` / `remove_entity_subscription` with
   `owner` set to the loop's name edit one watch entry in place, also
