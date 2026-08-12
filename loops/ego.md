@@ -8,6 +8,9 @@ tags: [loops]
 ## Spec
 
 ```yaml
+# Every key this block accepts is documented in
+# docs/reference/loop-definitions.md. Unknown keys refuse the boot —
+# run `thane validate` after editing.
 name: ego
 parent_name: self
 enabled: true
@@ -64,34 +67,6 @@ supervisor_profile:
 metadata:
     category: service
     subsystem: ego
-# --- Spec key reference --------------------------------------------
-# The keys above are this loop's live configuration; the keys below
-# are the rest of the accepted surface, listed so an operator editing
-# an override sees every option without reading Go. The parser refuses
-# unknown keys — a typo fails the boot loudly, so run `thane validate`
-# before restarting. Comments are ignored.
-#
-# subscriptions: []      # entities rendered each turn; entry keys:
-#                        #   entity_id, history, forecast, ttl_seconds,
-#                        #   mode, self_only, requires_tag, transitions,
-#                        #   transitions_window_seconds, wake,
-#                        #   wake_debounce_seconds
-# conditions: {}         # eligibility, e.g. schedule: timezone + windows
-# max_duration: 1h       # wall-clock lifetime cap; omit = unbounded
-# max_iter: 100          # lifetime iteration cap; omit = unbounded
-# on_retrigger: single   # single | restart | queue | spawn
-# routing_factors: {}    # open-ended router hints (string map)
-# delegation_gating: ""  # top-level form; prefer profile.delegation_gating
-# parent_id: ""          # runtime-assigned at launch; author parent_name
-#
-# profile: also accepts model, local_only, prefer_speed, instructions,
-#   exclude_tools, extra_hints. supervisor_profile: accepts the same
-#   keys; its instructions are carried by the "## Supervisor Review"
-#   section of this document (declaring both is refused).
-# outputs: entries also accept facets (status_line/teaser/digest),
-#   audience (published|internal), purpose; type working_notes is the
-#   loop-private variant.
-# --------------------------------------------------------------------
 ```
 
 ## Task
