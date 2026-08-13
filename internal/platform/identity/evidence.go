@@ -397,6 +397,11 @@ func gitBlob(ctx context.Context, repo, commit, name string) ([]byte, error) {
 // contaminate them.
 func gitStdout(ctx context.Context, repo string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+	// Read-only evidence git never takes the index lock: a deadline-
+	// killed opportunistic refresh strands .git/index.lock and wedges
+	// core's writer — the diagnostics surface must not be able to
+	// degrade the instance it diagnoses.
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -411,6 +416,7 @@ func gitStdout(ctx context.Context, repo string, args ...string) ([]byte, error)
 
 func coreWorktreeClean(ctx context.Context, repo string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", repo, "diff", "--quiet", "HEAD", "--")
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	err := cmd.Run()
 	if err == nil {
 		return true, nil
