@@ -265,3 +265,34 @@ func TestRecorderPersistsBusEvents(t *testing.T) {
 		t.Errorf("rows[1] = %+v, want the error", rows[1])
 	}
 }
+
+// TestCountBootsSince pins the exact-count contract behind
+// boots_last_24h: the count answers from the full journal, windowed by
+// the since bound, independent of any page size.
+func TestCountBootsSince(t *testing.T) {
+	t.Parallel()
+
+	j := newTestJournal(t)
+	ctx := context.Background()
+	for range 3 {
+		if err := j.RecordBoot(ctx, "v0.10.3", "abcdef1"); err != nil {
+			t.Fatalf("RecordBoot: %v", err)
+		}
+	}
+
+	got, err := j.CountBootsSince(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("CountBootsSince: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("count since -1h = %d, want 3", got)
+	}
+
+	got, err = j.CountBootsSince(ctx, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("CountBootsSince(future): %v", err)
+	}
+	if got != 0 {
+		t.Errorf("count since +1h = %d, want 0", got)
+	}
+}

@@ -87,15 +87,42 @@ func ClassifyResourceFailure(err error) string {
 }
 
 // mentionsStatus529 reports whether msg carries HTTP status 529 the way
-// a status code actually renders: as its own whitespace-delimited token,
-// at most wearing sentence punctuation ("API error 529: overloaded",
-// "status 529", a leading "529 Overloaded"). A bare substring match
-// misfired here — request IDs and token counts routinely embed the
-// digits ("req_a1529bc", "1529 tokens"), and each false positive
-// silently cooled a healthy resource for the full cooldown window.
+// a status code actually renders, and only that way: leading the
+// message (HTTP's own "529 Overloaded" status-line shape), wrapped in
+// brackets ("request rejected (529)"), or keeping status-shaped company
+// ("API error 529: overloaded", "status 529"). A standalone token is
+// deliberately not enough — an application sentence like "prompt has
+// 529 tokens" carries the same digits as its own word, and each false
+// positive silently cooled a healthy resource for the full cooldown
+// window.
 func mentionsStatus529(msg string) bool {
-	for _, field := range strings.Fields(msg) {
-		if strings.Trim(field, `:;,.()[]{}"'`) == "529" {
+	fields := strings.Fields(msg)
+	trim := func(s string) string {
+		return strings.ToLower(strings.Trim(s, `:;,.()[]{}"'`))
+	}
+	statusContext := func(s string) bool {
+		switch {
+		case s == "status", s == "code", s == "http", s == "https", s == "api":
+			return true
+		case strings.HasSuffix(s, "error"):
+			return true
+		case strings.HasPrefix(s, "overloaded"):
+			return true
+		}
+		return false
+	}
+	for i, field := range fields {
+		if trim(field) != "529" {
+			continue
+		}
+		wrapped := strings.HasPrefix(strings.Trim(field, `:;,."'`), "(") ||
+			strings.HasPrefix(strings.Trim(field, `:;,."'`), "[")
+		switch {
+		case i == 0, wrapped:
+			return true
+		case statusContext(trim(fields[i-1])):
+			return true
+		case i+1 < len(fields) && statusContext(trim(fields[i+1])):
 			return true
 		}
 	}

@@ -72,6 +72,8 @@ func TestClassifyResourceFailure(t *testing.T) {
 		// request ID or token count must not cool a healthy resource.
 		{"request id embedding 529", errors.New("API error 400: invalid request (request id req_a1529bc7)"), ""},
 		{"token count embedding 529", errors.New("prompt is 1529 tokens which exceeds the model maximum"), ""},
+		{"exact 529 token count", errors.New("prompt has 529 tokens which exceeds the model maximum"), ""},
+		{"exact 529 mid-sentence quantity", errors.New("queue holds 529 pending records"), ""},
 		{"port embedding 529", errors.New("bad gateway from 10.0.0.7:5290"), ""},
 		// Application-level failures say nothing about resource health.
 		{"http 400", errors.New("API error 400: invalid request"), ""},

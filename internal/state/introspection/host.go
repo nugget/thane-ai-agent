@@ -27,23 +27,22 @@ func collectHostInfo(dataDir string, startedAt, now time.Time) HostInfo {
 			if free > total {
 				free = total
 			}
-			if free > math.MaxInt64 {
-				info.DiskFreeBytes = math.MaxInt64
-			} else {
-				info.DiskFreeBytes = int64(free)
+			freeBytes := int64(math.MaxInt64)
+			if free <= math.MaxInt64 {
+				freeBytes = int64(free)
 			}
-			info.DiskUsedPct = diskUsedPct(free, total)
+			pct := diskUsedPct(free, total)
+			info.DiskFreeBytes = &freeBytes
+			info.DiskUsedPct = &pct
 		}
 	}
 	return info
 }
 
 // diskUsedPct converts a probe reading into the snapshot's percentage:
-// float64 math, clamped to [0, 100], and floored at 1 whenever any
-// space is used — a large mostly-empty disk must never round its usage
-// down to zero, because a zero percentage is omitted from the wire and
-// omission is reserved for "the probe failed". A zero total (no probe
-// result at all) yields 0, the omitted value.
+// float64 math, rounded to nearest, clamped to [0, 100]. Zero is a
+// real reading — presence on the wire is carried by the HostInfo
+// pointer fields, so the value never has to lie to stay visible.
 func diskUsedPct(free, total uint64) int {
 	if total == 0 {
 		return 0
@@ -51,10 +50,6 @@ func diskUsedPct(free, total uint64) int {
 	if free > total {
 		free = total
 	}
-	pct := int(float64(total-free) / float64(total) * 100)
-	pct = min(max(pct, 0), 100)
-	if pct == 0 && total > free {
-		pct = 1
-	}
-	return pct
+	pct := int(float64(total-free)/float64(total)*100 + 0.5)
+	return min(max(pct, 0), 100)
 }

@@ -216,6 +216,36 @@ func TestLogActivityRidesTheSnapshot(t *testing.T) {
 // running version arrived), the change classification, the boot-storm
 // count, and the raw boot tail — all precomputed so no model ever
 // bookkeeps a version.
+// TestBootCountSourceOutranksThePage pins the crash-storm contract: when
+// the exact-count source is wired, boots_last_24h reports it verbatim —
+// never the bounded history page's size, which a storm outruns.
+func TestBootCountSourceOutranksThePage(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	boots := []BootRecord{
+		{At: now.Add(-5 * time.Minute), Version: "v0.10.3", Commit: "abcdef1234567"},
+		{At: now.Add(-10 * time.Minute), Version: "v0.10.3", Commit: "abcdef1234567"},
+	}
+	var askedSince time.Time
+	insp := NewInspector(HealthSources{
+		BuildVersion: "v0.10.3",
+		BuildCommit:  "abcdef1234567",
+		BootHistory:  func(context.Context) ([]BootRecord, error) { return boots, nil },
+		BootCountSince: func(_ context.Context, since time.Time) (int, error) {
+			askedSince = since
+			return 17280, nil // a five-second restart policy's day
+		},
+	})
+	insp.now = func() time.Time { return now }
+
+	v := insp.Health(context.Background()).Version
+	if v.BootsLast24h != 17280 {
+		t.Errorf("boots_last_24h = %d, want the exact count 17280, not the page size", v.BootsLast24h)
+	}
+	if want := now.Add(-24 * time.Hour); !askedSince.Equal(want) {
+		t.Errorf("count window asked for %v, want %v", askedSince, want)
+	}
+}
+
 func TestVersionInfoComputesTheDeployStory(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	boots := []BootRecord{
@@ -553,9 +583,10 @@ func TestSnapshotPayloadCapsSummaryNames(t *testing.T) {
 	}
 }
 
-// TestDiskUsedPct pins the percentage floor: a used disk never reads
-// 0%, because zero is the omitted value and omission must keep meaning
-// "the probe failed", never "rounded away".
+// TestDiskUsedPct pins nearest-integer rounding with clean clamps.
+// Zero is a legitimate reading here: probe success rides the HostInfo
+// pointer fields, so the value no longer has to avoid zero to stay
+// visible on the wire.
 func TestDiskUsedPct(t *testing.T) {
 	const tb = uint64(1) << 40
 	tests := []struct {
@@ -565,7 +596,8 @@ func TestDiskUsedPct(t *testing.T) {
 	}{
 		{"no probe result", 0, 0, 0},
 		{"genuinely empty disk", tb, tb, 0},
-		{"sub-1% usage floors at 1", tb - (tb / 1000), tb, 1},
+		{"sub-half-percent usage rounds to a real 0", tb - (tb / 1000), tb, 0},
+		{"just past half a percent rounds up", tb - (tb / 100), tb, 1},
 		{"half used", tb / 2, tb, 50},
 		{"full disk", 0, tb, 100},
 		{"inconsistent probe (free > total) clamps clean", tb * 2, tb, 0},

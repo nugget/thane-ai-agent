@@ -46,8 +46,8 @@ This runs `thane init`, which bootstraps `core/` inside the workspace as
 the instance trust root: a generated Ed25519 signing key, an internal
 channel CA, and a signed git birth commit containing the public identity
 material, `core/config.yaml`, and the bundled talents under
-`core/talents/`. A reference `config.example.yaml` and `persona.md` are
-also written at the workspace root.
+`core/talents/`. A reference `config.example.yaml` and
+`persona.example.md` are also written at the workspace root.
 
 In normal operation the runtime reads `core/config.yaml` from the
 workspace and nothing else (`-insecure-config` exists as a recovery path

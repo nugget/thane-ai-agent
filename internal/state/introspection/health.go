@@ -50,15 +50,15 @@ type HostInfo struct {
 	Goroutines  int    `json:"goroutines"`
 	GOMAXPROCS  int    `json:"gomaxprocs"`
 	// DiskFreeBytes is free space on the filesystem under the data
-	// directory. Omitted (zero) together with DiskUsedPct when the disk
-	// probe is unsupported or fails — absence, not a fake zero disk.
-	DiskFreeBytes int64 `json:"disk_free_bytes,omitempty"`
-	// DiskUsedPct is the used percentage of that filesystem, floored at
-	// 1 while any space is used so sub-1% usage can never round down to
-	// an omitted field. Omitted (zero) only alongside DiskFreeBytes,
-	// when the probe is unsupported or fails — never as a rounding
-	// artifact.
-	DiskUsedPct int `json:"disk_used_pct,omitempty"`
+	// directory. Set together with DiskUsedPct exactly when the probe
+	// succeeded — zero is a real reading (a full disk), so presence
+	// carries probe success and the value never has to. Nil together
+	// with DiskUsedPct when the probe is unsupported or fails.
+	DiskFreeBytes *int64 `json:"disk_free_bytes,omitempty"`
+	// DiskUsedPct is the used percentage of that filesystem, rounded
+	// to the nearest integer; 0 is a real reading on an empty disk.
+	// Nil together with DiskFreeBytes when the probe fails.
+	DiskUsedPct *int `json:"disk_used_pct,omitempty"`
 }
 
 // LoopCensus is the fleet rollup: totals by state, the degraded loops
@@ -299,8 +299,17 @@ type HealthSources struct {
 	// BuildVersion and BuildCommit identify the running binary.
 	BuildVersion string
 	BuildCommit  string
-	// BootHistory reads journaled process starts, newest first.
+	// BootHistory reads journaled process starts, newest first. The
+	// page feeds the visible boot tail and the version-boundary walk;
+	// counting happens through BootCountSince, never by measuring this
+	// page.
 	BootHistory func(ctx context.Context) ([]BootRecord, error)
+	// BootCountSince reports the exact number of journaled boots at or
+	// after a moment. When wired, BootsLast24h uses it instead of
+	// counting the bounded BootHistory page — a crash storm produces
+	// more boots than any page holds, and the counter that exists to
+	// expose the storm must not saturate at the page size.
+	BootCountSince func(ctx context.Context, since time.Time) (int, error)
 	// DataDir is the disk-probe target (thane's data directory).
 	DataDir string
 	// StartedAt is process start, for uptime.
@@ -542,10 +551,15 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	if err != nil || len(boots) == 0 {
 		return info
 	}
+	// The exact count comes from the journal when the source is wired;
+	// the page walk below is the fallback so reduced configurations
+	// still report something (bounded by the page, and honest about it
+	// only in the sense that a storm reads as "at least a pageful").
+	pageCount := 0
 	var boundary time.Time
 	for _, boot := range boots {
 		if !boot.At.Before(now.Add(-24 * time.Hour)) {
-			info.BootsLast24h++
+			pageCount++
 		}
 		if len(info.RecentBoots) < maxRecentBootViews {
 			view := BootView{AtDelta: promptfmt.FormatDeltaOnly(boot.At, now), Version: boot.Version}
@@ -568,6 +582,12 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 				}
 				info.Change = classifyVersionChange(info.Previous, info.Running)
 			}
+		}
+	}
+	info.BootsLast24h = pageCount
+	if i.src.BootCountSince != nil {
+		if count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour)); err == nil {
+			info.BootsLast24h = count
 		}
 	}
 	return info
