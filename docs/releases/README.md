@@ -6,7 +6,8 @@ This directory is Thane's durable release record. Each `v*.md` file contains the
 
 | Published (UTC) | Release | Release label | Sources |
 |---|---|---|---|
-| 2026-07-07 @ 17:17 <!-- epoch: 1783444649 --> | [v0.10.2 — The Native Home Assistant Release](v0.10.2.md) | Latest | [GitHub](https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.2) |
+| 2026-08-13 @ 01:19 <!-- epoch: 1786583998 --> | [v0.10.3 — The Trust Boundary Release](v0.10.3.md) | Latest | [GitHub](https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.3) |
+| 2026-07-07 @ 17:17 <!-- epoch: 1783444649 --> | [v0.10.2 — The Native Home Assistant Release](v0.10.2.md) | &nbsp; | [GitHub](https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.2) |
 | 2026-07-02 @ 21:01 <!-- epoch: 1783026096 --> | [v0.10.1 — The Provenance Release](v0.10.1.md) | &nbsp; | [GitHub](https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.1) |
 | 2026-06-30 @ 18:20 <!-- epoch: 1782843633 --> | [v0.10.0 — The Loop Corpus Release](v0.10.0.md) | &nbsp; | [GitHub](https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.0) |
 | 2026-06-26 @ 02:36 <!-- epoch: 1782441378 --> | [v0.10.0-rc.1](v0.10.0-rc.1.md) | Pre-release | [GitHub](https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.0-rc.1) |
