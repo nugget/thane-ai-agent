@@ -601,9 +601,6 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	return info
 }
 
-// classifyVersionChange names the size of a version jump: patch, minor,
-// major — or "dev" when either side is not a semantic version, which is
-// itself information (an untagged build shipped).
 // sameCommit reports whether two commit identifiers name the same commit,
 // tolerating the short-vs-full hash forms the boot journal and buildinfo
 // variously carry.
@@ -618,6 +615,9 @@ func sameCommit(a, b string) bool {
 	return strings.HasPrefix(b, a)
 }
 
+// classifyVersionChange names the size of a version jump: patch, minor,
+// major — or "dev" when either side is not a semantic version, which is
+// itself information (an untagged build shipped).
 func classifyVersionChange(prev, curr string) string {
 	prevParts, prevOK := semverParts(prev)
 	currParts, currOK := semverParts(curr)
