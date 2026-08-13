@@ -9,6 +9,66 @@
   },
   "releases": [
     {
+      "tag_name": "v0.10.3",
+      "name": "v0.10.3 — The Trust Boundary Release",
+      "github_release_id": 369613441,
+      "github_node_id": "RE_kwDORJaKbM4WB9qB",
+      "source_url": "https://github.com/nugget/thane-ai-agent/releases/tag/v0.10.3",
+      "api_url": "https://api.github.com/repos/nugget/thane-ai-agent/releases/369613441",
+      "author": "nugget",
+      "created_at": "2026-08-13T00:58:44Z",
+      "published_at": "2026-08-13T01:19:58Z",
+      "updated_at": "2026-08-13T01:19:58Z",
+      "target_commitish": "771089876a11273c4bc6310fa0395455d6456a67",
+      "prerelease": false,
+      "draft": false,
+      "immutable": true,
+      "archived_file": "v0.10.3.md",
+      "archived_file_sha256": "27cc3e42b990fab626e6a81931bb3f3e7ccf3b9c26ff6da791377030bc3b67c3",
+      "assets": [
+        {
+          "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.3/thane_0.10.3_checksums.txt",
+          "content_type": "text/plain; charset=utf-8",
+          "digest": "sha256:a2fcd881c3e359a83c2c770feee185c4dba8248126fe3a96f29f7ed467e6cc42",
+          "download_count": 0,
+          "name": "thane_0.10.3_checksums.txt",
+          "size": 388
+        },
+        {
+          "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.3/thane_0.10.3_darwin_amd64.pkg",
+          "content_type": "application/octet-stream",
+          "digest": "sha256:bd9d8ccea09137e2deb1855a376c45bdf63271b3ea2de25090ccd706afaf6f3d",
+          "download_count": 0,
+          "name": "thane_0.10.3_darwin_amd64.pkg",
+          "size": 19626164
+        },
+        {
+          "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.3/thane_0.10.3_darwin_arm64.pkg",
+          "content_type": "application/octet-stream",
+          "digest": "sha256:713786a89a26ad0e47085c81cc21b8387c48e4f5b77887ea13321b211ac2890a",
+          "download_count": 0,
+          "name": "thane_0.10.3_darwin_arm64.pkg",
+          "size": 18155784
+        },
+        {
+          "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.3/thane_0.10.3_linux_amd64.tar.gz",
+          "content_type": "application/x-gtar",
+          "digest": "sha256:cc4ab5e46477225d7ac4d5e5090467447ec26a9c68866bfcb1d9db8cbf93bf17",
+          "download_count": 0,
+          "name": "thane_0.10.3_linux_amd64.tar.gz",
+          "size": 18814256
+        },
+        {
+          "browser_download_url": "https://github.com/nugget/thane-ai-agent/releases/download/v0.10.3/thane_0.10.3_linux_arm64.tar.gz",
+          "content_type": "application/x-gtar",
+          "digest": "sha256:bb5744a872dba9da9ec41a6153dc627ba340604a7c0d3bf3dbd778f6168fe02a",
+          "download_count": 0,
+          "name": "thane_0.10.3_linux_arm64.tar.gz",
+          "size": 17449586
+        }
+      ]
+    },
+    {
       "tag_name": "v0.2.0",
       "name": "v0.2.0",
       "github_release_id": 285037993,
