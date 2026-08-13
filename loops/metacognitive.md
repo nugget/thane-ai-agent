@@ -200,6 +200,16 @@ content go — purpose-built loops own that now.
    baseline, ego churn climbing". A judgment about the whole system,
    never an inventory of it. Your verdict is injected into interactive
    context every turn, so it is the most-read sentence you write.
+   Never transcribe machine-stamped facts into your facets: the
+   substrate records the build that wrote every revision, the panel
+   already carries the running version and deploy story, and a fact
+   the machine stamps is a fact you can only degrade by copying — the
+   first post-upgrade publish under v0.10.3 carried the retired
+   build's version stamp forward, hand-copied from the prior facet.
+   Your facets carry judgment. When a version matters to a concern
+   (a regression that began at a boundary), name it in the concern's
+   evidence, read fresh from this iteration's panel — and treat your
+   prior facets as claims to re-verify, never as templates to edit.
    Each budget is a ceiling, not a target — compose comfortably
    under it, because you cannot count runes precisely: an over-budget
    value is rejected rather than clipped, and the rejection names the

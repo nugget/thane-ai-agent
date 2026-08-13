@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -40,6 +41,7 @@ func TestWithTurnProvenance(t *testing.T) {
 			message: "doc_write self:metacognitive.md",
 			want: map[string]string{
 				documents.TrailerModel:        "gpt-oss:120b",
+				documents.TrailerVersion:      buildinfo.Version,
 				documents.TrailerLoopID:       "loop-abc",
 				documents.TrailerConversation: "loop-metacognitive-1-123",
 				documents.TrailerSession:      "sess-1",
@@ -49,11 +51,15 @@ func TestWithTurnProvenance(t *testing.T) {
 			},
 		},
 		{
-			name:    "a turn that knows nothing leaves the message alone",
+			// A turn with no context still has a build: the version is
+			// machine truth about the writing process, not a turn fact,
+			// so it is the one trailer that never goes absent.
+			name:    "a turn that knows nothing still stamps the build",
 			writer:  &documentRootProvenanceWriter{root: "self"},
 			ctx:     func(ctx context.Context) context.Context { return ctx },
 			message: "doc_write self:metacognitive.md",
-			want:    map[string]string{},
+			want:    map[string]string{documents.TrailerVersion: buildinfo.Version},
+			absent:  []string{documents.TrailerModel, documents.TrailerRequest},
 		},
 		{
 			name:   "the default conversation identifies nothing and is omitted",

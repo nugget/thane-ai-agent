@@ -151,8 +151,15 @@ type VersionInfo struct {
 	// when the two versions differ only in prerelease/build metadata,
 	// which is exactly what an rc→final deploy looks like: Previous and
 	// ChangedDelta still mark the boundary, it just has no size class.
-	Change       string `json:"change,omitempty"`
-	BootsLast24h int    `json:"boots_last_24h,omitempty"`
+	Change string `json:"change,omitempty"`
+	// PreviousSameCommit marks a re-tag boundary: Previous's label
+	// points at the same commit Running was built from — a build
+	// promoted to a release tag, not a code change. Without this flag
+	// the deploy story reads as an upgrade that isn't one; the first
+	// production re-tag (v0.10.2-400 → v0.10.3, same commit) confused
+	// the loop that reads this into carrying the retired label forward.
+	PreviousSameCommit bool `json:"previous_same_commit,omitempty"`
+	BootsLast24h       int  `json:"boots_last_24h,omitempty"`
 	// RecentBoots is the raw tail of the boot journal, newest first.
 	// The tail is deliberately data rather than verdict: what a restart
 	// pattern means depends on context the reader has (deploy day,
@@ -581,6 +588,7 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 					info.ChangedDelta = promptfmt.FormatDeltaOnly(boundary, now)
 				}
 				info.Change = classifyVersionChange(info.Previous, info.Running)
+				info.PreviousSameCommit = sameCommit(boot.Commit, info.Commit)
 			}
 		}
 	}
@@ -596,6 +604,20 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 // classifyVersionChange names the size of a version jump: patch, minor,
 // major — or "dev" when either side is not a semantic version, which is
 // itself information (an untagged build shipped).
+// sameCommit reports whether two commit identifiers name the same commit,
+// tolerating the short-vs-full hash forms the boot journal and buildinfo
+// variously carry.
+func sameCommit(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return strings.HasPrefix(b, a)
+}
+
 func classifyVersionChange(prev, curr string) string {
 	prevParts, prevOK := semverParts(prev)
 	currParts, currOK := semverParts(curr)
