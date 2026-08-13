@@ -175,7 +175,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
-	github.com/nunnatsa/ginkgolinter v0.23.0 // indirect
+	github.com/nunnatsa/ginkgolinter v0.23.1 // indirect
 	github.com/pb33f/doctor v0.0.79 // indirect
 	github.com/pb33f/jsonpath v0.8.3 // indirect
 	github.com/pb33f/libasyncapi v0.0.2 // indirect
@@ -248,7 +248,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
-	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
+	golang.org/x/exp/typeparams v0.0.0-20260718201538-764159d718ef // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
