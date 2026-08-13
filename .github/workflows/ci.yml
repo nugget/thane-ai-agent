@@ -21,7 +21,7 @@ permissions:
 # jobs race and each restore a cache missing its own artifacts, forcing a
 # recompile every run. Per-job keys keep each job's warm cache intact.
 env:
-  LYCHEE_VERSION: '0.23.0'
+  LYCHEE_VERSION: '0.24.2'
   GO_VERSION: '1.25'
 
 jobs:

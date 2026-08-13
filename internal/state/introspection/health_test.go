@@ -2,6 +2,7 @@ package introspection
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -215,6 +216,36 @@ func TestLogActivityRidesTheSnapshot(t *testing.T) {
 // running version arrived), the change classification, the boot-storm
 // count, and the raw boot tail — all precomputed so no model ever
 // bookkeeps a version.
+// TestBootCountSourceOutranksThePage pins the crash-storm contract: when
+// the exact-count source is wired, boots_last_24h reports it verbatim —
+// never the bounded history page's size, which a storm outruns.
+func TestBootCountSourceOutranksThePage(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	boots := []BootRecord{
+		{At: now.Add(-5 * time.Minute), Version: "v0.10.3", Commit: "abcdef1234567"},
+		{At: now.Add(-10 * time.Minute), Version: "v0.10.3", Commit: "abcdef1234567"},
+	}
+	var askedSince time.Time
+	insp := NewInspector(HealthSources{
+		BuildVersion: "v0.10.3",
+		BuildCommit:  "abcdef1234567",
+		BootHistory:  func(context.Context) ([]BootRecord, error) { return boots, nil },
+		BootCountSince: func(_ context.Context, since time.Time) (int, error) {
+			askedSince = since
+			return 17280, nil // a five-second restart policy's day
+		},
+	})
+	insp.now = func() time.Time { return now }
+
+	v := insp.Health(context.Background()).Version
+	if v.BootsLast24h != 17280 {
+		t.Errorf("boots_last_24h = %d, want the exact count 17280, not the page size", v.BootsLast24h)
+	}
+	if want := now.Add(-24 * time.Hour); !askedSince.Equal(want) {
+		t.Errorf("count window asked for %v, want %v", askedSince, want)
+	}
+}
+
 func TestVersionInfoComputesTheDeployStory(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	boots := []BootRecord{
@@ -481,5 +512,101 @@ func TestCensusWakeWindowIsHonest(t *testing.T) {
 	unwired.now = func() time.Time { return now }
 	if got := unwired.Health(context.Background()).Loops.WakeWindow; got != "" {
 		t.Errorf("unwired wake_window = %q, want omitted", got)
+	}
+}
+
+// TestQueueDepthsWireShape pins the exact bytes of the shared queue-row
+// projection. queueDepths is the single render path behind both the
+// snapshot's queues section and queue_status's pending rows, and this
+// is the wire contract the consolidation had to preserve: same keys,
+// same order, oldest_age omitted when a partition has no timestamp.
+func TestQueueDepthsWireShape(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		pending []loopqueue.ConsumerPending
+		want    string
+	}{
+		{
+			name:    "no partitions render an empty array, not null",
+			pending: nil,
+			want:    `[]`,
+		},
+		{
+			name: "aged and ageless rows",
+			pending: []loopqueue.ConsumerPending{
+				{Consumer: "archivist", Pending: 3, OldestEnqueuedAt: now.Add(-10 * time.Minute)},
+				{Consumer: "core", Pending: 1},
+			},
+			want: `[{"consumer":"archivist","pending":3,"oldest_age":"10m"},{"consumer":"core","pending":1}]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blob, err := json.Marshal(queueDepths(tt.pending, now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(blob) != tt.want {
+				t.Errorf("wire bytes = %s, want %s", blob, tt.want)
+			}
+		})
+	}
+}
+
+// TestSnapshotPayloadCapsSummaryNames: the shared payload's summary is
+// a headline, not the list — past the cap the remaining degraded rows
+// fold into an explicit "+N more" on every surface, tool included.
+func TestSnapshotPayloadCapsSummaryNames(t *testing.T) {
+	snap := HealthSnapshot{}
+	for i := range maxSummaryDegradedNames + 3 {
+		snap.Annunciator = append(snap.Annunciator, HealthRow{
+			Name: fmt.Sprintf("conn:svc-%02d", i), Status: HealthFailed,
+		})
+	}
+	payload := snapshotPayload(snap)
+	summary, _ := payload["summary"].(string)
+	if !strings.Contains(summary, fmt.Sprintf("%d of %d annunciator rows not ok", maxSummaryDegradedNames+3, maxSummaryDegradedNames+3)) {
+		t.Errorf("summary = %q, want the full degraded count stated", summary)
+	}
+	if !strings.Contains(summary, "(+3 more)") {
+		t.Errorf("summary = %q, want the over-cap remainder marked (+3 more)", summary)
+	}
+	if strings.Count(summary, "conn:") != maxSummaryDegradedNames {
+		t.Errorf("summary names %d rows, want the cap %d: %q", strings.Count(summary, "conn:"), maxSummaryDegradedNames, summary)
+	}
+
+	// Queues stay out of the payload when empty — same omission the
+	// struct's own omitempty gives the marshaled snapshot.
+	if _, present := payload["queues"]; present {
+		t.Errorf("empty queues section must be omitted from the payload")
+	}
+}
+
+// TestDiskUsedPct pins nearest-integer rounding with clean clamps.
+// Zero is a legitimate reading here: probe success rides the HostInfo
+// pointer fields, so the value no longer has to avoid zero to stay
+// visible on the wire.
+func TestDiskUsedPct(t *testing.T) {
+	const tb = uint64(1) << 40
+	tests := []struct {
+		name        string
+		free, total uint64
+		want        int
+	}{
+		{"no probe result", 0, 0, 0},
+		{"genuinely empty disk", tb, tb, 0},
+		{"sub-half-percent usage rounds to a real 0", tb - (tb / 1000), tb, 0},
+		{"just past half a percent rounds up", tb - (tb / 100), tb, 1},
+		{"half used", tb / 2, tb, 50},
+		{"full disk", 0, tb, 100},
+		{"inconsistent probe (free > total) clamps clean", tb * 2, tb, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := diskUsedPct(tt.free, tt.total); got != tt.want {
+				t.Errorf("diskUsedPct(%d, %d) = %d, want %d", tt.free, tt.total, got, tt.want)
+			}
+		})
 	}
 }

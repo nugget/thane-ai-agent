@@ -597,11 +597,16 @@ type Status struct {
 	// JSON; [LoopView] emits the seconds form.
 	CurrentSleep time.Duration `json:"-"`
 	// SleptFor is how long the most recent completed sleep actually
-	// lasted; SleptPlanned is what it was scheduled for. They diverge
-	// when a notification cut the sleep short. Zero before the first
-	// sleep and on event-driven loops. Projection-only (`json:"-"`) —
-	// [LoopView] emits the model-facing duration strings.
-	SleptFor     time.Duration `json:"-"`
+	// lasted — materially shorter than SleptPlanned when a notification
+	// cut it short. Zero before the first sleep and on event-driven
+	// loops. Projection-only (`json:"-"`) — [LoopView] emits the
+	// model-facing duration string.
+	SleptFor time.Duration `json:"-"`
+	// SleptPlanned is the duration the most recent completed sleep was
+	// scheduled for: the post-clamp, post-jitter plan SleptFor is
+	// judged against. Zero before the first sleep and on event-driven
+	// loops. Projection-only (`json:"-"`) — [LoopView] emits the
+	// model-facing duration string.
 	SleptPlanned time.Duration `json:"-"`
 	// WakesLast24h is how many iterations this loop has begun in the
 	// trailing 24 hours, including the one in flight. It is the achieved

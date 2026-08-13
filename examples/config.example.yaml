@@ -1159,7 +1159,10 @@ compaction:
 #
 # (optional) Metacognitive configures the perpetual metacognitive attention loop.
 # metacognitive:
-#   Enabled controls whether the loop starts. Default: false.
+#   Enabled seeds the loop's shipped definition document when no
+#   document in {core}/loops declares it. When a document exists it is
+#   authoritative — its own enabled: key decides whether the loop
+#   runs, and this flag is ignored. Default: false.
 #   enabled: false
 #   MinSleep is the minimum allowed sleep duration between iterations;
 #   the loop cannot request a shorter sleep via set_next_sleep. Parsed
@@ -1201,7 +1204,10 @@ compaction:
 # Defaults: min_sleep 30m, max_sleep 24h, default_sleep 6h, jitter 0.2,
 # supervisor_probability 0.2, router.quality_floor 5 (supervisor 8).
 ego:
-  # Enabled controls whether the loop starts. Default: false.
+  # Enabled seeds the loop's shipped definition document when no
+  # document in {core}/loops declares it. When a document exists it is
+  # authoritative — its own enabled: key decides whether the loop
+  # runs, and this flag is ignored. Default: false.
   enabled: false
   # MinSleep is the minimum allowed sleep duration between iterations;
   # the loop cannot request a shorter sleep via set_next_sleep. Parsed
@@ -1246,7 +1252,10 @@ ego:
 # Defaults: min_sleep 15m, max_sleep 12h, default_sleep 1h, jitter 0.2,
 # supervisor_probability 0.1, router.quality_floor 5 (supervisor 8).
 archivist:
-  # Enabled controls whether the loop starts. Default: false.
+  # Enabled seeds the loop's shipped definition document when no
+  # document in {core}/loops declares it. When a document exists it is
+  # authoritative — its own enabled: key decides whether the loop
+  # runs, and this flag is ignored. Default: false.
   enabled: false
   # MinSleep is the minimum allowed sleep duration between iterations;
   # the loop cannot request a shorter sleep via set_next_sleep. Parsed

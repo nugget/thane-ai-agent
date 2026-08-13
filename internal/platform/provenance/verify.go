@@ -245,7 +245,20 @@ func (v *Verifier) gitOutput(ctx context.Context, verify bool, args ...string) (
 		}
 	}
 	cmdArgs = append(cmdArgs, args...)
+	// A context that died while this call waited its turn (the per-root
+	// mutex, earlier verifications, the caller's shared budget) must not
+	// be reported as a git failure: prod burned an investigation cycle
+	// on "git status failed: context deadline exceeded" where git never
+	// ran and the repo answered in milliseconds.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("verification skipped, caller context exhausted before git ran: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	// Read-side git must never take the index lock: an opportunistic
+	// status refresh can strand .git/index.lock when the deadline kills
+	// the process, wedging the root's writer permanently — reproduced,
+	// not hypothetical.
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

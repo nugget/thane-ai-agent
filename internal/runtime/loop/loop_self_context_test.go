@@ -63,9 +63,14 @@ func TestLoopView_SelfContextMarkdown_Full(t *testing.T) {
 		t.Errorf("eligible = %v, want true", payload["eligible"])
 	}
 	// Nearest container first — the one whose policy bears most directly
-	// on this loop.
-	if ancestry, _ := payload["ancestry"].([]any); len(ancestry) != 2 || ancestry[0] != "watchers" || ancestry[1] != "core" {
-		t.Errorf("ancestry = %v, want [watchers core]", payload["ancestry"])
+	// on this loop. The key names the direction because LoopView's
+	// ancestry carries the same chain root-first, and a bare array
+	// cannot say which end is the root.
+	if containers, _ := payload["containers_nearest_first"].([]any); len(containers) != 2 || containers[0] != "watchers" || containers[1] != "core" {
+		t.Errorf("containers_nearest_first = %v, want [watchers core]", payload["containers_nearest_first"])
+	}
+	if _, present := payload["ancestry"]; present {
+		t.Error("self-context must not reuse LoopView's ancestry key for a reversed chain")
 	}
 	if payload["intent"] != "Keep a current read on the reservoir level" {
 		t.Errorf("intent = %v", payload["intent"])
@@ -90,7 +95,7 @@ func TestLoopView_SelfContextMarkdown_Full(t *testing.T) {
 func TestLoopView_SelfContextMarkdown_OmitsAbsentFields(t *testing.T) {
 	v := LoopView{Name: "bare", Operation: "service", Eligible: false}
 	payload := decodeSelfContext(t, v.SelfContextMarkdown())
-	for _, key := range []string{"intent", "effective_tags", "iterations", "ancestry", "sleep_envelope", "last_sleep", "id", "state"} {
+	for _, key := range []string{"intent", "effective_tags", "iterations", "containers_nearest_first", "sleep_envelope", "last_sleep", "id", "state"} {
 		if _, present := payload[key]; present {
 			t.Errorf("payload should omit absent %q, got %#v", key, payload)
 		}
@@ -113,6 +118,7 @@ func TestLoopView_SelfContextMarkdown_Empty(t *testing.T) {
 func TestLoopView_SelfContextMarkdown_CadenceTrailhead(t *testing.T) {
 	iters := 412
 	wakes := 47
+	window := "40m"
 	slept := "4m"
 	planned := "30m"
 	supDelta := "-4h12m"
@@ -122,8 +128,10 @@ func TestLoopView_SelfContextMarkdown_CadenceTrailhead(t *testing.T) {
 		Name: "metacognitive", Operation: "service", Eligible: true,
 		Iterations:            &iters,
 		WakesLast24h:          &wakes,
+		WakeWindow:            &window,
 		LastSleep:             &slept,
 		LastSleepPlanned:      &planned,
+		WokenEarly:            true,
 		LastSupervisorDelta:   &supDelta,
 		SupervisorItersAgo:    &supAgo,
 		LastSupervisorTrigger: &trigger,
@@ -136,12 +144,18 @@ func TestLoopView_SelfContextMarkdown_CadenceTrailhead(t *testing.T) {
 	if payload["wakes_last_24h"] != float64(47) || payload["iterations"] != float64(412) {
 		t.Errorf("rhythm = %#v", payload)
 	}
+	// The wake count carries its coverage window (#1355): without it a
+	// loop restarted forty minutes ago reads 47 wakes as a daily rate.
+	if payload["wake_window"] != "40m" {
+		t.Errorf("wake_window = %v, want 40m", payload["wake_window"])
+	}
 	if payload["last_sleep"] != "4m" || payload["last_sleep_planned"] != "30m" {
 		t.Errorf("sleep durations = %#v", payload)
 	}
-	// The comparison is made in Go, not left to the reader.
+	// The comparison is made in Go — upstream, on the raw durations —
+	// not left to the reader.
 	if payload["woken_early"] != true {
-		t.Errorf("woken_early = %v, want true when the two durations disagree", payload["woken_early"])
+		t.Errorf("woken_early = %v, want true when the view says the sleep was cut short", payload["woken_early"])
 	}
 	if payload["last_supervisor_delta"] != "-4h12m" || payload["supervisor_iters_ago"] != float64(9) || payload["last_supervisor_trigger"] != "random" {
 		t.Errorf("supervisor recency = %#v", payload)
@@ -171,9 +185,12 @@ func TestLoopView_SelfContextMarkdown_CadenceTrailhead(t *testing.T) {
 
 // TestLoopView_SelfContextMarkdown_UninterruptedSleepIsNotFlaggedEarly
 // keeps the flag meaningful: it fires on a notification wake, not on
-// every wake.
+// every wake. The formatted strings deliberately disagree here — a
+// jittered timer wake truncates to "30m1s" against a "30m" plan — and
+// the flag must follow the view's raw-duration verdict, not a string
+// comparison of the two.
 func TestLoopView_SelfContextMarkdown_UninterruptedSleepIsNotFlaggedEarly(t *testing.T) {
-	slept := "30m"
+	slept := "30m1s"
 	planned := "30m"
 	v := LoopView{
 		Name: "metacognitive", Operation: "service", Eligible: true,

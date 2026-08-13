@@ -234,7 +234,12 @@ type LoopActivityAggregate struct {
 	BySource     map[string]int
 	Errors       int
 	Completions  int
-	NoOps        int
+	// NoOps is the subset of Completions whose iteration changed
+	// nothing — every no-op is already counted there, so summing the
+	// two double-counts. It rides beside Completions because the ratio
+	// is the signal: a loop completing every wake while changing
+	// nothing is going through the motions.
+	NoOps int
 }
 
 // maxAggregateSources caps the by-source decomposition; sources beyond
@@ -456,6 +461,25 @@ func (j *Journal) RecentBoots(ctx context.Context, limit int) ([]BootRecord, err
 		boots = append(boots, rec)
 	}
 	return boots, rows.Err()
+}
+
+// CountBootsSince reports how many thane_boot events the journal holds
+// at or after since. The deploy story's boots_last_24h derives from
+// this exact count rather than from the bounded [Journal.RecentBoots]
+// page, so a crash storm can never saturate the counter that exists to
+// expose it.
+func (j *Journal) CountBootsSince(ctx context.Context, since time.Time) (int, error) {
+	// UTC-normalized like every write (recordEvents binds ev.At.UTC()):
+	// the column compares as text, so a local-offset bound would order
+	// lexicographically, not chronologically.
+	row := j.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM loop_events WHERE kind = ? AND at >= ?
+	`, KindThaneBoot, since.UTC())
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("introspection: count boots: %w", err)
+	}
+	return n, nil
 }
 
 // Prune deletes journaled events older than maxAge and reports how many

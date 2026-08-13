@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -59,6 +61,10 @@ func TestUnwiredDepsReturnErrUnavailable(t *testing.T) {
 	}
 }
 
+// TestSystemHealthToolLeadsWithSummary pins the tool's flat envelope:
+// the snapshot's sections are top-level keys beside the summary — the
+// same shape the metacog panel renders — with no wrapper object between
+// the model and the facts.
 func TestSystemHealthToolLeadsWithSummary(t *testing.T) {
 	insp := NewInspector(HealthSources{
 		BusDropped: func() uint64 { return 3 },
@@ -69,8 +75,8 @@ func TestSystemHealthToolLeadsWithSummary(t *testing.T) {
 		t.Fatalf("system_health: %v", err)
 	}
 	var result struct {
-		Summary string         `json:"summary"`
-		Health  HealthSnapshot `json:"health"`
+		Summary     string      `json:"summary"`
+		Annunciator []HealthRow `json:"annunciator"`
 	}
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("result not JSON: %v\n%s", err, out)
@@ -78,8 +84,52 @@ func TestSystemHealthToolLeadsWithSummary(t *testing.T) {
 	if !strings.Contains(result.Summary, "1 of 1 annunciator rows not ok") || !strings.Contains(result.Summary, "event_bus") {
 		t.Errorf("summary = %q, want the degraded bus named", result.Summary)
 	}
-	if len(result.Health.Annunciator) != 1 || result.Health.Annunciator[0].Status != HealthDegraded {
-		t.Errorf("health = %+v", result.Health.Annunciator)
+	if len(result.Annunciator) != 1 || result.Annunciator[0].Status != HealthDegraded {
+		t.Errorf("annunciator = %+v", result.Annunciator)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, nested := raw["health"]; nested {
+		t.Errorf("tool result still nests the snapshot under \"health\"; the tool and the panel must share one flat shape")
+	}
+}
+
+// TestToolAndPanelShareOnePayload pins the anti-drift contract: the
+// system_health result and the panel's fenced JSON are the same payload
+// from the same projection — same keys, same nesting, same summary —
+// so a model reading one surface and then the other never sees the
+// identical fact in two shapes.
+func TestToolAndPanelShareOnePayload(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	insp := NewInspector(HealthSources{
+		BusDropped: func() uint64 { return 7 },
+		QueueStats: func(context.Context) ([]loopqueue.ConsumerPending, error) {
+			return []loopqueue.ConsumerPending{
+				{Consumer: "archivist", Pending: 2, OldestEnqueuedAt: now.Add(-10 * time.Minute)},
+			}, nil
+		},
+	})
+	insp.now = func() time.Time { return now }
+
+	out, err := NewTools(ToolDeps{Inspector: insp}).handleSystemHealth(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("system_health: %v", err)
+	}
+	var toolPayload map[string]any
+	if err := json.Unmarshal([]byte(out), &toolPayload); err != nil {
+		t.Fatalf("tool result not JSON: %v\n%s", err, out)
+	}
+
+	body, err := NewPanelProvider(insp, nil, nil).TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	panelPayload := panelJSON(t, body)
+
+	if !reflect.DeepEqual(toolPayload, panelPayload) {
+		t.Errorf("tool and panel payloads differ:\ntool:  %v\npanel: %v", toolPayload, panelPayload)
 	}
 }
 

@@ -67,14 +67,14 @@ func ClassifyResourceFailure(err error) string {
 	}
 
 	// String fallbacks for errors that crossed a non-wrapping boundary
-	// (provider adapters, upstream HTTP bodies). "overloaded" and "529"
-	// are Anthropic's overload signals; treat them like timeouts so the
-	// resource gets breathing room.
+	// (provider adapters, upstream HTTP bodies). "overloaded" and status
+	// 529 are Anthropic's overload signals; treat them like timeouts so
+	// the resource gets breathing room.
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "timeout"),
 		strings.Contains(msg, "overloaded"),
-		strings.Contains(msg, "529"):
+		mentionsStatus529(msg):
 		return CooldownReasonTimeout
 	case strings.Contains(msg, "no such host"),
 		strings.Contains(msg, "connection refused"),
@@ -84,4 +84,47 @@ func ClassifyResourceFailure(err error) string {
 		return CooldownReasonConnection
 	}
 	return ""
+}
+
+// mentionsStatus529 reports whether msg carries HTTP status 529 the way
+// a status code actually renders, and only that way: leading the
+// message (HTTP's own "529 Overloaded" status-line shape), wrapped in
+// brackets ("request rejected (529)"), or keeping status-shaped company
+// ("API error 529: overloaded", "status 529"). A standalone token is
+// deliberately not enough — an application sentence like "prompt has
+// 529 tokens" carries the same digits as its own word, and each false
+// positive silently cooled a healthy resource for the full cooldown
+// window.
+func mentionsStatus529(msg string) bool {
+	fields := strings.Fields(msg)
+	trim := func(s string) string {
+		return strings.ToLower(strings.Trim(s, `:;,.()[]{}"'`))
+	}
+	statusContext := func(s string) bool {
+		switch {
+		case s == "status", s == "code", s == "http", s == "https", s == "api":
+			return true
+		case strings.HasSuffix(s, "error"):
+			return true
+		case strings.HasPrefix(s, "overloaded"):
+			return true
+		}
+		return false
+	}
+	for i, field := range fields {
+		if trim(field) != "529" {
+			continue
+		}
+		wrapped := strings.HasPrefix(strings.Trim(field, `:;,."'`), "(") ||
+			strings.HasPrefix(strings.Trim(field, `:;,."'`), "[")
+		switch {
+		case i == 0, wrapped:
+			return true
+		case statusContext(trim(fields[i-1])):
+			return true
+		case i+1 < len(fields) && statusContext(trim(fields[i+1])):
+			return true
+		}
+	}
+	return false
 }

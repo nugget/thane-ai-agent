@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -66,5 +67,56 @@ func TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem(t *testing.T) {
 	}
 	if plainHit.Facets != nil {
 		t.Errorf("plain document advertises facets: %v", plainHit.Facets)
+	}
+}
+
+// TestSearchToolResultCarriesFacetsAcrossModelBoundary pins the same
+// promise at the surface the model actually reads. The storage-layer
+// test above asserts against Store.Search's DocumentSummary; the tool
+// result goes through a separate model projection, and a projection
+// that drops the field ships a doc_search description promising facets
+// on results that never contain them. So this test goes through
+// Tools.Search and asserts against the serialized tool result itself.
+func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	body := "## Status Line\n\nverdict line here\n\n## Teaser\n\nThe authored capybara teaser.\n\n## Details\n\nlong body\n"
+	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/faceted.md", Title: "Faceted", Body: stringPtr(body)}); err != nil {
+		t.Fatalf("write faceted: %v", err)
+	}
+	plain := "# Plain\n\nA plain capybara document.\n"
+	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/plain.md", Title: "Plain", Body: stringPtr(plain)}); err != nil {
+		t.Fatalf("write plain: %v", err)
+	}
+
+	out, err := NewTools(store).Search(ctx, SearchArgs{Query: "capybara"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	var payload struct {
+		Results []struct {
+			Ref    string   `json:"ref"`
+			Facets []string `json:"facets"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(Search()) error: %v", err)
+	}
+	byRef := make(map[string][]string, len(payload.Results))
+	for _, hit := range payload.Results {
+		byRef[hit.Ref] = hit.Facets
+	}
+	got, ok := byRef["kb:zoo/faceted.md"]
+	if !ok {
+		t.Fatalf("faceted document missing from tool result: %s", out)
+	}
+	if len(got) != 2 || got[0] != "status_line" || got[1] != "teaser" {
+		t.Errorf("model-facing facets = %v, want [status_line teaser]", got)
+	}
+	if plainFacets, ok := byRef["kb:zoo/plain.md"]; !ok {
+		t.Fatalf("plain document missing from tool result: %s", out)
+	} else if plainFacets != nil {
+		t.Errorf("plain document's tool result advertises facets: %v", plainFacets)
 	}
 }

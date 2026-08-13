@@ -39,12 +39,17 @@ type BootstrapResult struct {
 	CoreDir               string
 	SigningKeyFingerprint string
 	ChannelCAFingerprint  string
-	// SelfSigned reports that core's only seed signer is the instance's own
-	// agent key, so nothing outside the instance attests to it and the agent
-	// can re-establish the root holding its config.
+	// SelfSigned reports that this bootstrap founded core without an
+	// operator key, so its only seed signer is the instance's own agent
+	// key: nothing outside the instance attests to it and the agent can
+	// re-establish the root holding its config. On a Created result it is
+	// always equal to OperatorPrincipal == "" — both are derived from the
+	// same fact, so they cannot disagree. When Created is false no
+	// bootstrap ran, and neither field claims anything about the existing
+	// core's posture.
 	SelfSigned bool
-	// OperatorPrincipal names the operator key core was anchored to, empty
-	// when SelfSigned.
+	// OperatorPrincipal is the principal of the operator key that founded
+	// core; empty when core founded itself with its own agent key.
 	OperatorPrincipal string
 }
 
@@ -182,13 +187,16 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *
 	}
 
 	created = true
+	// One fact, two projections: SelfSigned is derived from the same
+	// principal callers read, never set independently of it.
+	principal := operatorPrincipal(operator)
 	return &BootstrapResult{
 		Created:               true,
 		CoreDir:               absCoreDir,
 		SigningKeyFingerprint: signing.Fingerprint,
 		ChannelCAFingerprint:  channelCA.Fingerprint,
-		SelfSigned:            operator == nil,
-		OperatorPrincipal:     operatorPrincipal(operator),
+		SelfSigned:            principal == "",
+		OperatorPrincipal:     principal,
 	}, nil
 }
 

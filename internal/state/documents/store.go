@@ -90,6 +90,49 @@ type Store struct {
 	refreshMu       sync.Mutex
 	lastRefresh     time.Time
 	refreshInterval time.Duration
+	fullVerifyMu    sync.Mutex
+	lastFullVerify  map[string]time.Time
+}
+
+// reverifyInterval is how often the refresher re-verifies UNCHANGED
+// indexed files against their root's signature policy. Changed files
+// verify immediately on every pass; this interval only bounds how long
+// a trust revocation (rewritten history, a withdrawn signer) can go
+// unnoticed on files whose bytes never moved. Verifying everything
+// every refresh tick was ~4 git subprocesses per file per pass, all
+// serialized through the root's verifier mutex — the standing load
+// floor under the 2026-08-12 production incident.
+const reverifyInterval = 5 * time.Minute
+
+// beginVerifyPass reports whether this refresh pass over root is a
+// full-verification pass, and stamps the clock when it is.
+func (s *Store) beginVerifyPass(root string) bool {
+	s.fullVerifyMu.Lock()
+	defer s.fullVerifyMu.Unlock()
+	if s.lastFullVerify == nil {
+		s.lastFullVerify = make(map[string]time.Time)
+	}
+	if time.Since(s.lastFullVerify[root]) < reverifyInterval {
+		return false
+	}
+	s.lastFullVerify[root] = time.Now()
+	return true
+}
+
+// indexedDocUnchanged reports whether the index already holds this file
+// at its current mtime and size — the same freshness test upsertFile
+// applies, run early so an unchanged file can skip re-verification
+// between full passes.
+func (s *Store) indexedDocUnchanged(ctx context.Context, root, relPath string, info fs.FileInfo) bool {
+	var existingModified string
+	var existingSize int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT modified_at, size_bytes FROM indexed_documents WHERE root = ? AND rel_path = ?`,
+		root, relPath,
+	).Scan(&existingModified, &existingSize)
+	return err == nil &&
+		existingModified == info.ModTime().UTC().Format(time.RFC3339Nano) &&
+		existingSize == info.Size()
 }
 
 const defaultRefreshInterval = 5 * time.Second
@@ -269,6 +312,7 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 	if err != nil {
 		return err
 	}
+	fullVerify := s.beginVerifyPass(root)
 	seen := make(map[string]bool)
 	walkErr := filepath.WalkDir(scanDir, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
@@ -290,13 +334,27 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 		}
 		rel = filepath.ToSlash(filepath.Clean(rel))
 		seen[rel] = true
-		if err := s.verifyDocumentForConsumer(ctx, root, rel, "document_index"); err != nil {
-			s.logger.Warn("document index skipped file blocked by signature policy",
-				"root", root, "path", rel, "error", err)
-			if err := s.deleteIndexedDocumentRows(ctx, root, rel); err != nil {
-				return err
+		// Verify when the file changed or the root's periodic full
+		// pass is due; an unchanged, already-indexed file skips the
+		// 4-subprocess git verification between full passes. A file
+		// missing from the index (new, or previously blocked) always
+		// reads as changed, so blocked files keep re-testing — and
+		// keep warning — every pass until they clear.
+		needVerify := fullVerify
+		if !needVerify {
+			if fi, ferr := d.Info(); ferr != nil || !s.indexedDocUnchanged(ctx, root, rel, fi) {
+				needVerify = true
 			}
-			return nil
+		}
+		if needVerify {
+			if err := s.verifyDocumentForConsumer(ctx, root, rel, "document_index"); err != nil {
+				s.logger.Warn("document index skipped file blocked by signature policy",
+					"root", root, "path", rel, "error", err)
+				if err := s.deleteIndexedDocumentRows(ctx, root, rel); err != nil {
+					return err
+				}
+				return nil
+			}
 		}
 		if err := s.upsertFile(ctx, root, rel); err != nil {
 			s.logger.Warn("document index skipped file", "root", root, "path", path, "error", err)

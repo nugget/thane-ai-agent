@@ -176,14 +176,14 @@ often want `profile.delegation_gating: "disabled"`.
 A `thane_loop_create` service spec (`operation="service"`) separates
 `intent` (what this loop tracks and why), `instructions` (steering text
 prepended to every iteration —
-the spec's `Profile.Instructions`), and `output` (the document target
-and mode). Get the boundaries right and the loop runs honestly;
+the spec's `Profile.Instructions`), and `output` (the document target).
+Get the boundaries right and the loop runs honestly;
 muddle them and the loop drifts.
 
 - **Document destinations belong in `output`, not in `intent`.**
   "Update kb:foo with the current state" is the wrong shape for the
   intent; the loop already knows where to write because `output:
-  {document: "kb:foo", mode: "maintain"}` told it. Intent names
+  {document: "kb:foo"}` told it. Intent names
   *what to observe and why it matters*, not where to write. Document
   management is a framework concern; the intent shouldn't restate it.
 

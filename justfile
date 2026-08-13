@@ -120,36 +120,14 @@ lint: generate
 # errors fail the build; content gaps (missing descriptions/examples) ride at
 # `warn` during the #1060 stack and become errors at its capstone. vacuum is
 # hermetic (pinned in tools/go.mod, run via the {{vacuum}} `go run` wrapper) —
-# no host install needed.
-#
-# Flake guard (#1078): vacuum's schema rules (oas-schema-check, oas-missing-type)
-# nondeterministically collapse — emitting wholesale spurious errors with varying
-# counts — when their per-rule / JSONPath-lookup timeouts are starved on a loaded
-# runner; a residual ~2% race remains even with slack. The rules finish in well
-# under a second locally, so the generous --timeout/--lookup-timeout below are
-# pure headroom, and a bounded retry clears the rare residual collapse. A genuine
-# spec error is deterministic and still fails all three attempts.
+# no host install needed. The #1078 flake guard (a 3-attempt retry around a
+# schema-rule race) was retired when the vacuum 0.30.0 bump picked up the
+# upstream fix; a lint failure here is a real spec error.
 [doc("Lint the native + compat OpenAPI specs against the Thane ruleset (.vacuum.yaml)")]
 [group('test')]
 lint-openapi:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    lint_spec() {
-        local spec="$1" attempt
-        for attempt in 1 2 3; do
-            if {{vacuum}} lint -r .vacuum.yaml --fail-severity error \
-                --timeout 120 --lookup-timeout 10000 "$spec"; then
-                return 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-                echo "lint-openapi: ${spec} failed (attempt ${attempt}/3); retrying" >&2
-            fi
-        done
-        echo "lint-openapi: ${spec} still failing after 3 attempts" >&2
-        return 1
-    }
-    lint_spec internal/server/openapi/native.yaml
-    lint_spec internal/server/openapi/compat.yaml
+    {{vacuum}} lint -r .vacuum.yaml --fail-severity error internal/server/openapi/native.yaml
+    {{vacuum}} lint -r .vacuum.yaml --fail-severity error internal/server/openapi/compat.yaml
 
 # Check go.mod/go.sum are tidy
 [group('test')]
@@ -214,107 +192,6 @@ install: build
 [group('deploy')]
 uninstall:
     rm -f {{install-prefix}}/bin/thane
-
-# --- Service ---
-
-# Install and enable the system service (systemd unit + user + directories)
-[group('deploy')]
-[linux]
-service-install: install
-    #!/usr/bin/env sh
-    set -e
-    # Create service user (no login, no home dir creation — StateDirectory handles it)
-    if ! id thane >/dev/null 2>&1; then
-        useradd --system --no-create-home --shell /usr/sbin/nologin thane
-        echo "Created system user: thane"
-    fi
-    # Install unit file
-    install -m 644 init/thane.service /etc/systemd/system/thane.service
-    # Ensure state and config directories exist with proper ownership
-    install -d -o thane -g thane -m 750 /var/lib/thane
-    install -d -o thane -g thane -m 750 /etc/thane
-    # Reload and enable
-    systemctl daemon-reload
-    systemctl enable thane.service
-    echo ""
-    echo "Service installed and enabled."
-    echo "  Config:  /etc/thane/config.yaml"
-    echo "  State:   /var/lib/thane/"
-    echo "  Logs:    journalctl -u thane"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Copy your config:  cp examples/config.example.yaml /etc/thane/config.yaml"
-    echo "  2. Edit secrets:      $EDITOR /etc/thane/config.yaml"
-    echo "  3. Lock it down:      chmod 600 /etc/thane/config.yaml && chown thane:thane /etc/thane/config.yaml"
-    echo "  4. Start it up:       systemctl start thane"
-
-# Install and enable the system service (launchd user agent)
-[group('deploy')]
-[macos]
-service-install: install
-    #!/usr/bin/env sh
-    set -e
-    THANE_HOME="{{thane-home}}"
-    # Create directory structure
-    mkdir -p "$THANE_HOME/db"
-    mkdir -p "$THANE_HOME/archive"
-    # Generate plist with absolute paths for this user
-    mkdir -p ~/Library/LaunchAgents
-    sed -e "s|/usr/local/bin/thane|$THANE_HOME/bin/thane|g" \
-        -e "s|/usr/local/var/thane|$THANE_HOME|g" \
-        init/info.nugget.thane.plist > ~/Library/LaunchAgents/info.nugget.thane.plist
-    echo ""
-    echo "Service installed as user launch agent."
-    echo "  Home:    $THANE_HOME/"
-    echo "  Binary:  $THANE_HOME/bin/thane"
-    echo "  Config:  $THANE_HOME/config.yaml"
-    echo "  Data:    $THANE_HOME/db/"
-    echo "  Archive: $THANE_HOME/archive/sources/thane/{events,requests,http_access,loops,delegates,envelopes,conversations}/YYYY/MM/DD/<dataset>-YYYY-MM-DD-HH.jsonl"
-    echo "  Index:   $THANE_HOME/archive/logs.db"
-    echo "  Crashes: $THANE_HOME/crash.log       (pre-init errors only)"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Copy your config:  cp examples/config.example.yaml $THANE_HOME/config.yaml"
-    echo "  2. Edit secrets:      \$EDITOR $THANE_HOME/config.yaml"
-    echo "  3. Lock it down:      chmod 600 $THANE_HOME/config.yaml"
-    echo "  4. Start it up:       launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist"
-
-# Remove the system service
-[group('deploy')]
-[linux]
-service-uninstall:
-    #!/usr/bin/env sh
-    set -e
-    systemctl stop thane.service 2>/dev/null || true
-    systemctl disable thane.service 2>/dev/null || true
-    rm -f /etc/systemd/system/thane.service
-    systemctl daemon-reload
-    echo "Service removed. To fully clean up:"
-    echo "  rm -rf /var/lib/thane /etc/thane"
-    echo "  userdel thane"
-
-# Remove the system service
-[group('deploy')]
-[macos]
-service-uninstall:
-    #!/usr/bin/env sh
-    set -e
-    launchctl unload ~/Library/LaunchAgents/info.nugget.thane.plist 2>/dev/null || true
-    rm -f ~/Library/LaunchAgents/info.nugget.thane.plist
-    echo "Service removed. To fully clean up:"
-    echo "  rm -rf {{thane-home}}"
-
-# Show service status
-[group('operations')]
-[linux]
-service-status:
-    systemctl status thane.service
-
-# Show service status
-[group('operations')]
-[macos]
-service-status:
-    @launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
 # Bootstrap a workspace via thane init (core trust root, signed birth commit)
 [group('deploy')]

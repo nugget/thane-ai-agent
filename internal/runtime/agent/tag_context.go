@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -344,6 +345,28 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 // own gate: req.IncludeAlways for ambient context, req.IncludeLoopScoped
 // for the running loop's own subscriptions and self view). Returns nil
 // when no source produces content.
+// slowContextSourceThreshold flags a context source consuming an
+// outsized share of the assembler's shared budget. The 2026-08-12
+// production incident was undiagnosable from logs precisely because a
+// slow-but-successful source is silent: the shared budget died
+// upstream and the failure surfaced downstream under the wrong name.
+const slowContextSourceThreshold = 250 * time.Millisecond
+
+// warnSlowContextSource emits the budget-accounting WARN for a context
+// source that ran long. detail is a tag name or provider type; empty
+// is fine for block-level sources.
+func warnSlowContextSource(logger *slog.Logger, source, detail string, start time.Time) {
+	elapsed := time.Since(start)
+	if elapsed <= slowContextSourceThreshold {
+		return
+	}
+	args := []any{"source", source, "elapsed", elapsed.Round(time.Millisecond).String()}
+	if detail != "" {
+		args = append(args, "detail", detail)
+	}
+	logger.Warn("context source ran long against the shared assembly budget", args...)
+}
+
 func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.ContextRequest) []agentctx.ContextSection {
 	if a == nil {
 		return nil
@@ -365,6 +388,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	// without a restart. Articles declare tag affinity via
 	// frontmatter: `tags:` for any-of activation, `tags_all:` for
 	// all-of activation. Both compose; see [articleMatchesTags].
+	kbStart := time.Now()
 	articles := a.loadKBArticles()
 	for _, article := range articles {
 		if !articleMatchesTags(article, req.ActiveTags) {
@@ -397,13 +421,17 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		}
 	}
 
+	warnSlowContextSource(a.logger, "tagged_kb_articles", "", kbStart)
+
 	// Source 2: Tagged live providers, filtered by ActiveTags.
 	for _, tag := range sortedActiveTags(req.ActiveTags) {
 		p, ok := tagProviders[tag]
 		if !ok {
 			continue
 		}
+		pStart := time.Now()
 		content, err := p.TagContext(ctx, req)
+		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
 				"tag", tag, "error", err)
@@ -445,7 +473,9 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		if gp.loopScoped {
 			defaultBucket, source = agentctx.ContextBucketLiveState, "loop_scoped_provider"
 		}
+		pStart := time.Now()
 		content, err := gp.provider.TagContext(ctx, req)
+		warnSlowContextSource(a.logger, source, fmt.Sprintf("%T", gp.provider), pStart)
 		if err != nil {
 			a.logger.Warn("gated context provider failed", "source", source, "error", err)
 			continue

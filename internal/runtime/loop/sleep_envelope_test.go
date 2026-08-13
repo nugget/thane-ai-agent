@@ -191,6 +191,46 @@ func TestHandleSetNextSleepRejectsLoopsThatDoNotSleep(t *testing.T) {
 	}
 }
 
+// TestParseNextSleepDurationArg pins the tolerance contract the schema
+// advertises: a Go duration string, a bare number, and the quoted bare
+// number local models actually emit all land on the same reading —
+// minutes — while genuinely unparseable values still fail.
+func TestParseNextSleepDurationArg(t *testing.T) {
+	tests := []struct {
+		name          string
+		arg           any
+		want          time.Duration
+		wantRequested string
+		wantErr       bool
+	}{
+		{"go duration string", "45m", 45 * time.Minute, "45m", false},
+		{"bare int is minutes", 30, 30 * time.Minute, "30m", false},
+		{"bare float is minutes", 2.5, 150 * time.Second, "2.5m", false},
+		{"quoted number is minutes too", "30", 30 * time.Minute, "30m", false},
+		{"quoted float is minutes too", "2.5", 150 * time.Second, "2.5m", false},
+		{"quoted number survives whitespace", " 30 ", 30 * time.Minute, "30m", false},
+		{"unknown unit still fails", "30q", 0, "", true},
+		{"empty string", "", 0, "", true},
+		{"prose is not a duration", "soon", 0, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, requested, err := parseNextSleepDurationArg(map[string]any{"duration": tt.arg})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("duration = %v, want %v", got, tt.want)
+			}
+			// The echoed "requested" names the unit the number was read
+			// in, so a caller that sent 30 sees it was read as 30m.
+			if requested != tt.wantRequested {
+				t.Errorf("requested = %q, want %q", requested, tt.wantRequested)
+			}
+		})
+	}
+}
+
 // capturingRunner records the request each iteration was prepared with,
 // so a test can assert on the tool surface the model was actually given
 // rather than on the builder in isolation.

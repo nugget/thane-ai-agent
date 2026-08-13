@@ -145,8 +145,9 @@ The current policy fields are:
 
 ### Signed roots
 
-Signature verification always uses the repository-local
-`.allowed_signers` file. Thane creates it once, when a signed root is
+Signature verification reads the repository-local `.allowed_signers`
+file, with the root's declared `seed_signers` standing behind it as a
+permanent floor. Thane creates the file once, when a signed root is
 first established, from the agent key plus that root's declared
 `seed_signers`:
 
@@ -168,6 +169,18 @@ After that the file is the root's own trust surface and config never
 rewrites it. Adding signers is done by editing and committing
 `.allowed_signers` — a change that must be signed by one of the root's
 seed signers.
+
+The in-tree file does not have the last word on seeds, though. A
+declared seed signer remains trusted for ordinary verification even when
+`.allowed_signers` stops listing it: when the in-tree file does not
+vouch for a commit, verification falls back to the declared seed set.
+That floor is what lets a seed key repair a polluted trust file — without
+it, the one key entitled to fix `.allowed_signers` would be refused by
+the very file it needs to fix. Every commit trusted this way is logged
+as a WARN naming both remedies: restore the entry in `.allowed_signers`,
+or drop the key from `seed_signers` if withdrawing it was intended. The
+flip side is that editing `.allowed_signers` alone never revokes a seed
+signer; only removing it from config does.
 
 `seed_signers` is declared per root rather than once for the instance,
 because roots have different trust domains. The keys entitled to sign a

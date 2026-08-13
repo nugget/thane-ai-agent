@@ -2,7 +2,6 @@ package provenance
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -165,92 +164,8 @@ func renderSignerSet(signers []TrustedSigner, reserved map[string]string) ([]str
 	return lines, nil
 }
 
-// SeedAllowedSigners establishes this repository's trust set once — the agent
-// key plus the root's declared seed signers — and leaves it alone thereafter.
-// It reports whether it wrote and committed the file.
-//
-// Seeding rather than reconciling is the difference between config being a
-// root's origin and config being its permanent authority. A root's
-// .allowed_signers is that root's own record of whom it trusts, extended by
-// commits signed with keys it already trusts. Rewriting it from config on
-// every boot would mean one instance's config silently redefines who may sign
-// a corpus shared with others, and would collapse every root into whatever
-// the widest list says.
-//
-// An existing file is left alone even when it differs from config. That is
-// the point rather than a limitation: divergence is the root exercising its
-// own delegation, not drift to be corrected.
-//
-// The repository must already have a HEAD, so call it after
-// [Store.BootstrapBirthCommit]. Rendering enforces the trust invariants
-// (agent key unremovable and never reused by an operator, no principal-spoof
-// duplicates), so a config that violates them fails here rather than silently
-// weakening verification.
-func (s *Store) SeedAllowedSigners(ctx context.Context, seed []TrustedSigner) (bool, error) {
-	if s.allowedSignersPath != "" {
-		return false, fmt.Errorf("SeedAllowedSigners: store verifies against an external allowed_signers file (%s); in-tree seeding does not apply", s.allowedSignersPath)
-	}
-	s.mu.Lock()
-	_, statErr := os.Stat(filepath.Join(s.path, ".allowed_signers"))
-	s.mu.Unlock()
-	switch {
-	case statErr == nil:
-		return false, nil
-	case !errors.Is(statErr, os.ErrNotExist):
-		return false, fmt.Errorf("stat .allowed_signers: %w", statErr)
-	}
-	return s.writeAllowedSigners(ctx, seed)
-}
-
-func (s *Store) writeAllowedSigners(ctx context.Context, operators []TrustedSigner) (bool, error) {
-	// This reconcile writes and commits the repo-local trust file. When the
-	// Store verifies against an external allowed_signers file, that file is
-	// not in the worktree and cannot be committed — reconciling the
-	// repo-local file would write a trust surface git never consults. Refuse
-	// rather than silently diverge; out-of-tree trust is a separate path.
-	if s.allowedSignersPath != "" {
-		return false, fmt.Errorf("ReconcileAllowedSigners: store verifies against an external allowed_signers file (%s); in-tree reconcile does not apply", s.allowedSignersPath)
-	}
-
-	desired, err := RenderAllowedSigners(s.signer.PublicKey(), operators)
-	if err != nil {
-		return false, fmt.Errorf("render allowed_signers: %w", err)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	path := filepath.Join(s.path, ".allowed_signers")
-	// A symlink here would let the trust surface be redirected out from
-	// under verification; reject anything but a regular file (absent is
-	// fine — we are about to create it).
-	if err := validateAllowedSignersFile(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
-	current, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("read .allowed_signers: %w", err)
-	}
-	if string(current) == desired {
-		return false, nil
-	}
-	if err := atomicWriteFile(path, []byte(desired), 0o644); err != nil {
-		return false, fmt.Errorf("write .allowed_signers: %w", err)
-	}
-	// Re-validate after the rename: a swapped symlink would have been
-	// replaced by our regular file, but confirm the invariant still holds.
-	if err := validateAllowedSignersFile(path); err != nil {
-		return false, err
-	}
-	if _, err := s.commitFiles(ctx, []string{".allowed_signers"}, "reconcile allowed_signers"); err != nil {
-		return false, fmt.Errorf("commit .allowed_signers: %w", err)
-	}
-	s.logger.Info("reconciled allowed_signers", "operator_entries", len(operators))
-	return true, nil
-}
-
 // VerifyHead confirms the repository's HEAD commit verifies as trusted against
-// the current allowed_signers file. Run it after reconciling the trust set as
+// the current allowed_signers file. Run it after the trust set is seeded as
 // a boot-time round-trip: git parses the whole allowed_signers file to verify
 // any commit, so this catches a malformed signer line or an OpenSSH version
 // that cannot parse a rendered option (such as a validity window) right away,

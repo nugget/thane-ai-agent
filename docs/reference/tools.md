@@ -407,7 +407,7 @@ structured envelopes over the message bus directly, and
 |------|-----------|-------------|
 | `thane_now` | sync | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
-| `thane_loop_create` (`operation: service`) | recurring | Scaffold a managed document (via `output`) and launch a self-paced recurring loop that maintains it (`journal` mode appends entries; `maintain` mode rewrites idempotently); `entities` surface HA subscriptions into the loop's context. |
+| `thane_loop_create` (`operation: service`) | recurring | Scaffold a declared output document in the exact shape its generated `publish_output_*` tool writes (optional `output.initial` seeds the first publish; working notes ride alongside) and launch a self-paced recurring loop that maintains it; `entities` surface HA subscriptions into the loop's context. |
 | `thane_loop_create` (`operation: container`) | durable container | Create a non-executing loop container that groups descendant loops and provides inheritable tags. |
 
 `thane_now` and `thane_assign` accept `context_mode`. The default,
@@ -526,6 +526,10 @@ tools for Signal-specific workflows.
 | `get_version` | Agent version, build info, and commit SHA. |
 | `cost_summary` | Aggregated token usage and cost (uses `usage.Summary`, including `cache_hit_rate`). |
 | `logs_query` | Query the structured log index with attribute filters. |
+| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, per-partition queue depths, a 24h telemetry rollup, the deploy story (running vs previous version, recent boots), and the process's own WARN/ERROR rates. |
+| `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |
+| `doc_activity` | Revision-churn report over the managed document roots: revisions, net line delta, size, and authorship per document, with runaway-growth flagging. |
+| `loop_activity` | Journal-backed loop history: every wake with its attributed cause and sender, iteration outcomes, errors, and state changes — survives restarts and covers stopped loops. |
 
 ## MCP tools
 

@@ -351,7 +351,7 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 }
 
 // TestBuiltInContainerDefinitionSpecs_Gating guards the container gating:
-// cognition only when a core loop is enabled, home-assistant only when HA or
+// self only when a core loop is enabled, home-assistant only when HA or
 // MQTT is configured. (channels is not a base-definition container — it is
 // spawned eagerly as an implicit container; see TestEnsureChannelsContainer.)
 func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
@@ -371,7 +371,7 @@ func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
 	}
 
 	if cog := names(builtInContainerDefinitionSpecsForTest(coreServiceTestConfig())); !cog[selfContainerName] {
-		t.Error("cognition container missing when core loops enabled")
+		t.Error("self container missing when core loops enabled")
 	}
 
 	ha := names(builtInContainerDefinitionSpecsForTest(&config.Config{

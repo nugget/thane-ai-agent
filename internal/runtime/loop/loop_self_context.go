@@ -11,7 +11,11 @@ import (
 //
 // Its keys are LoopView's keys wherever the two overlap, so a loop that
 // reads its own state here and calls loop_status a moment later is
-// reading one vocabulary rather than translating between two. Absent
+// reading one vocabulary rather than translating between two. The one
+// deliberate departure is containers_nearest_first: it carries
+// LoopView's ancestry chain reversed, and because a bare JSON array
+// says nothing about which end is the root, the direction rides in the
+// key name rather than silently disagreeing with loop_status. Absent
 // facts are omitted rather than emitted as null: this payload ships every
 // iteration, and a running loop's own state has no "not applicable" half
 // the way a stored-definition row does.
@@ -22,24 +26,32 @@ type loopSelfContext struct {
 	State     string `json:"state,omitempty"`
 	Eligible  bool   `json:"eligible"`
 
-	// Ancestry is ordered leaf-adjacent first ("watchers", "core") —
-	// nearest container first, because that is the one whose policy and
-	// tags bear on this loop most directly.
-	Ancestry   []string `json:"ancestry,omitempty"`
+	// Containers is the loop's graph position ordered leaf-adjacent
+	// first ("watchers", "core") — nearest container first, because
+	// that is the one whose policy and tags bear on this loop most
+	// directly. Deliberately not named ancestry: LoopView.Ancestry is
+	// the same chain root-first, and one key must not mean two
+	// directions depending on which surface emitted it.
+	Containers []string `json:"containers_nearest_first,omitempty"`
 	ChildCount int      `json:"child_count,omitempty"`
 	Intent     string   `json:"intent,omitempty"`
 
-	Iterations        *int    `json:"iterations,omitempty"`
-	WakesLast24h      *int    `json:"wakes_last_24h,omitempty"`
+	Iterations   *int `json:"iterations,omitempty"`
+	WakesLast24h *int `json:"wakes_last_24h,omitempty"`
+	// WakeWindow qualifies WakesLast24h with the span the count
+	// actually covers, so a loop restarted by a deploy forty minutes
+	// ago reads its two wakes as "2 per 40m", not "2 per day".
+	WakeWindow        *string `json:"wake_window,omitempty"`
 	LastSleep         *string `json:"last_sleep,omitempty"`
 	LastSleepPlanned  *string `json:"last_sleep_planned,omitempty"`
 	NextWakeDelta     *string `json:"next_wake_delta,omitempty"`
 	ConsecutiveErrors *int    `json:"consecutive_errors,omitempty"`
 
-	// WokenEarly is the comparison of the two sleep durations, made here
-	// rather than left to the reader. It means a notification arrived —
-	// not that the loop's chosen cadence was overridden, which is the
-	// reading it would otherwise reach for.
+	// WokenEarly mirrors LoopView.WokenEarly, the comparison of the two
+	// sleep durations made upstream on the raw values rather than left
+	// to the reader. It means a notification arrived — not that the
+	// loop's chosen cadence was overridden, which is the reading it
+	// would otherwise reach for.
 	WokenEarly bool `json:"woken_early,omitempty"`
 
 	LastSupervisorDelta   *string `json:"last_supervisor_delta,omitempty"`
@@ -106,15 +118,17 @@ func (v LoopView) selfContext() loopSelfContext {
 		Name:                  v.Name,
 		Operation:             v.Operation,
 		Eligible:              v.Eligible,
-		Ancestry:              leafFirstAncestry(v.ParentName, v.Ancestry),
+		Containers:            leafFirstAncestry(v.ParentName, v.Ancestry),
 		ChildCount:            v.ChildCount,
 		Intent:                v.Intent,
 		Iterations:            v.Iterations,
 		WakesLast24h:          v.WakesLast24h,
+		WakeWindow:            v.WakeWindow,
 		LastSleep:             v.LastSleep,
 		LastSleepPlanned:      v.LastSleepPlanned,
 		NextWakeDelta:         v.NextWakeDelta,
 		ConsecutiveErrors:     v.ConsecutiveErrors,
+		WokenEarly:            v.WokenEarly,
 		LastSupervisorDelta:   v.LastSupervisorDelta,
 		SupervisorItersAgo:    v.SupervisorItersAgo,
 		LastSupervisorTrigger: v.LastSupervisorTrigger,
@@ -127,7 +141,6 @@ func (v LoopView) selfContext() loopSelfContext {
 	if v.State != nil {
 		sc.State = *v.State
 	}
-	sc.WokenEarly = v.LastSleep != nil && v.LastSleepPlanned != nil && *v.LastSleep != *v.LastSleepPlanned
 	return sc
 }
 

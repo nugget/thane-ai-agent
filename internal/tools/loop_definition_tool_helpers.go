@@ -265,7 +265,7 @@ func loopLaunchOverrideProperties() map[string]any {
 		"prompt_mode": map[string]any{
 			"type":        "string",
 			"enum":        []string{"full", "task"},
-			"description": "Override the system-prompt shape for this launch only. full is the normal Thane prompt; task is a compact worker prompt that suppresses full identity and always-on continuity context. The durable default lives on spec.prompt_mode — set it there (via loop_definition_set or loop_definition_update) when the loop should always run this way; this override wins over the spec for one launch.",
+			"description": "Override the system-prompt shape for this launch only. full is the normal Thane prompt; task is the compact worker prompt: it sheds the reflective identity and always-on ambient context while keeping tagged guidance, the loop's declared subscriptions and self view, the task, and current conditions. The durable default lives on spec.prompt_mode — set it there (via loop_definition_set or loop_definition_update) when the loop should always run this way; this override wins over the spec for one launch.",
 		},
 		"skip_context": map[string]any{
 			"type":        "boolean",

@@ -299,7 +299,11 @@ func (c checker) keyMaterial(r *Report, repoOK bool) {
 			Detail: "core is not a git repository"})
 		return
 	}
-	tracked, err := c.git("ls-files", "--cached", "--", "*.key", "*_ed25519", "*_rsa", "*.pem", "id_*")
+	// Detection and advice share keyMaterialPatterns as their single
+	// source: a pattern added to the variable is both looked for here and
+	// prescribed in the .gitignore fix text, so the check can never
+	// recommend a guard it has stopped verifying.
+	tracked, err := c.git(append([]string{"ls-files", "--cached", "--"}, keyMaterialPatterns...)...)
 	if err != nil {
 		r.Checks = append(r.Checks, Check{Name: "key_material_excluded", Status: StatusFail,
 			Detail: "cannot list tracked files: " + err.Error(),

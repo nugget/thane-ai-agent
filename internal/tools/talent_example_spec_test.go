@@ -77,6 +77,73 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 	}
 }
 
+// TestSupervisorExampleSpecIsCanonical decodes the battery_watch
+// supervisor example through the same path loop_definition_set uses
+// and pins its authoring shape: supervisor routing lives in
+// supervisor_profile, not the legacy top-level compat keys
+// (supervisor_quality_floor, supervisor_context), and capability tags
+// are spec-level tags, not a profile field json.Unmarshal drops
+// silently. The legacy keys still decode — with a one-shot WARN — so
+// validation alone cannot catch a regression to the retired shape;
+// the raw text is asserted alongside the decoded spec.
+func TestSupervisorExampleSpecIsCanonical(t *testing.T) {
+	raw, err := os.ReadFile("../../talents/loops-examples.md")
+	if err != nil {
+		t.Fatalf("read talent: %v", err)
+	}
+	node := string(raw)
+	start := strings.Index(node, "## Supervisor turns on service loops")
+	if start < 0 {
+		t.Fatal("supervisor example not found")
+	}
+	block := regexp.MustCompile("(?s)```json\n(.*?)```").FindStringSubmatch(node[start:])
+	if block == nil {
+		t.Fatal("no json block in the supervisor example")
+	}
+
+	for _, retired := range []string{"supervisor_quality_floor", "supervisor_context", "initial_tags"} {
+		if strings.Contains(block[1], retired) {
+			t.Errorf("supervisor example teaches retired or misplaced key %q", retired)
+		}
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(block[1]), &payload); err != nil {
+		t.Fatalf("example json does not parse: %v", err)
+	}
+	decoded, err := decodeLoopSpecArg(payload, "spec")
+	if err != nil {
+		t.Fatalf("example spec does not decode: %v", err)
+	}
+	if err := decoded.ValidatePersistable(); err != nil {
+		t.Fatalf("example spec does not validate: %v", err)
+	}
+
+	if decoded.SupervisorProfile == nil {
+		t.Fatal("example spec decodes without a supervisor_profile")
+	}
+	if decoded.SupervisorProfile.QualityFloor != 9 {
+		t.Errorf("supervisor_profile.quality_floor = %d, want 9", decoded.SupervisorProfile.QualityFloor)
+	}
+	if decoded.SupervisorProfile.Instructions == "" {
+		t.Error("supervisor_profile.instructions is empty — the supervisor turn has no step-back guidance")
+	}
+	if decoded.Profile.QualityFloor != 4 {
+		t.Errorf("profile.quality_floor = %d, want 4", decoded.Profile.QualityFloor)
+	}
+	wantTags := map[string]bool{"home": false, "knowledge": false, "documents": false}
+	for _, tag := range decoded.Tags {
+		if _, ok := wantTags[tag]; ok {
+			wantTags[tag] = true
+		}
+	}
+	for tag, seen := range wantTags {
+		if !seen {
+			t.Errorf("spec-level tags missing %q — the loop launches without its tool surface", tag)
+		}
+	}
+}
+
 // assertExamplePublishSampleIsValid runs the example's publish payload
 // through the same validation a real call meets.
 //

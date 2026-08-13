@@ -280,10 +280,10 @@ func (s *Store) MoveConsumer(ctx context.Context, from, to string) error {
 }
 
 // Ack removes a completed item from consumerLoop's partition and
-// journals the completion — consumer, key, priority, and the
-// enqueued→acked span — in the same transaction as the DELETE, so the
-// record is exact and a crash can never leave a phantom completion. A
-// missing (consumerLoop, dedupKey) is a no-op (idempotent) and journals
+// journals the completion — consumer, key, and the enqueued→acked
+// span — in the same transaction as the DELETE, so the record is exact
+// and a crash can never leave a phantom completion. A missing
+// (consumerLoop, dedupKey) is a no-op (idempotent) and journals
 // nothing: re-acking an already-acked item must not double-count
 // throughput.
 func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
@@ -298,14 +298,11 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
-	var (
-		priority    int
-		enqueuedRaw any
-	)
+	var enqueuedRaw any
 	err = tx.QueryRowContext(ctx,
-		`SELECT priority, enqueued_at FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
+		`SELECT enqueued_at FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
 		consumerLoop, dedupKey,
-	).Scan(&priority, &enqueuedRaw)
+	).Scan(&enqueuedRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -331,9 +328,9 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, priority, enqueued_at, acked_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`, consumerLoop, dedupKey, priority, enqueuedRaw); err != nil {
+		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, enqueued_at, acked_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+	`, consumerLoop, dedupKey, enqueuedRaw); err != nil {
 		return fmt.Errorf("loopqueue: journal completion %s/%s: %w", consumerLoop, dedupKey, err)
 	}
 	if err := tx.Commit(); err != nil {

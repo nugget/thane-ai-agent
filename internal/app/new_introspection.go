@@ -99,8 +99,14 @@ func (a *App) initInspector() {
 	if a.loopEventJournal != nil {
 		journal := a.loopEventJournal
 		src.BootHistory = func(ctx context.Context) ([]introspection.BootRecord, error) {
-			return journal.RecentBoots(ctx, 50)
+			// This page feeds the visible boot tail and the
+			// version-boundary walk only — boots_last_24h comes from
+			// BootCountSince, so no crash storm can outrun the page.
+			// 500 keeps the boundary findable across a storm of
+			// same-version restarts without pretending to be a count.
+			return journal.RecentBoots(ctx, 500)
 		}
+		src.BootCountSince = journal.CountBootsSince
 	}
 	if a.connMgr != nil {
 		src.ConnStatus = a.connMgr.Status

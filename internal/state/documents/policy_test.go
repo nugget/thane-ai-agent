@@ -280,6 +280,11 @@ func TestStorePolicyRequiredSignatureRemovesPreviouslyIndexedDocument(t *testing
 
 	verifier.files["doc.md"] = SignatureVerification{Status: SignatureFailed, Message: "signature revoked"}
 	store.lastRefresh = time.Time{}
+	// Unchanged files re-verify only on the periodic full pass
+	// (reverifyInterval); reset the pass clock so this refresh is one,
+	// pinning that revocation is caught on the next due pass rather
+	// than on every tick.
+	store.lastFullVerify = nil
 	if err := store.Refresh(ctx); err != nil {
 		t.Fatalf("revoked Refresh: %v", err)
 	}

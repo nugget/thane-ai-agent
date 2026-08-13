@@ -2,6 +2,7 @@ package provenance
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -238,12 +239,13 @@ func TestRenderAllowedSigners_CollapsesSamePrincipalDuplicate(t *testing.T) {
 	}
 }
 
-// TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone covers the full
-// I/O path: rendering the agent+seed union into the repo's .allowed_signers,
-// committing it as signed history, keeping HEAD verifiable, and then never
-// touching the file again — including when config later disagrees with it,
-// which is the root exercising its own delegation rather than drift.
-func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
+// TestSeedLandsOnceAndReopeningLeavesTheRootAlone covers the full I/O path
+// of the real seeding seam — [NewWithOptions] via ensureRepo: rendering the
+// agent+seed union into the repo's .allowed_signers at creation, committing
+// it as signed birth history, keeping HEAD verifiable, and then never
+// touching the file again. Reopening the store re-runs the seam, so an
+// established root must come through byte-identical with no new commit.
+func TestSeedLandsOnceAndReopeningLeavesTheRootAlone(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -263,16 +265,6 @@ func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
 		t.Fatalf("BootstrapBirthCommit: %v", err)
 	}
 
-	// The seed landed when the repository was established; asking again
-	// must not rewrite it.
-	changed, err := s.SeedAllowedSigners(t.Context(), ops)
-	if err != nil {
-		t.Fatalf("SeedAllowedSigners: %v", err)
-	}
-	if changed {
-		t.Fatal("seeding an established root changed = true, want false")
-	}
-
 	got, err := os.ReadFile(filepath.Join(dir, ".allowed_signers"))
 	if err != nil {
 		t.Fatalf("read .allowed_signers: %v", err)
@@ -284,30 +276,36 @@ func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
 		t.Fatalf("operator line missing or malformed:\n%s", got)
 	}
 
-	// HEAD (the seed commit) must still verify against the rendered
-	// trust file — the agent key that signed it is in the file.
+	// HEAD (the birth commit) must verify against the rendered trust
+	// file — the agent key that signed it is in the file.
 	if err := s.git(t.Context(), nil, nil, "verify-commit", "HEAD"); err != nil {
 		t.Fatalf("verify-commit HEAD after seed: %v", err)
 	}
 
-	// Idempotent: an unchanged set makes no commit and does not move HEAD.
+	// Idempotent: reopening with the same declared seed set rewrites
+	// nothing and does not move HEAD.
 	before := headHash(t, s)
-	changed, err = s.SeedAllowedSigners(t.Context(), ops)
+	reopened, err := NewWithOptions(dir, signer, slog.Default(), Options{SeedSigners: ops})
 	if err != nil {
-		t.Fatalf("second SeedAllowedSigners: %v", err)
+		t.Fatalf("reopen NewWithOptions: %v", err)
 	}
-	if changed {
-		t.Fatal("second seed changed = true, want false — an existing trust set is the root's own")
+	after, err := os.ReadFile(filepath.Join(dir, ".allowed_signers"))
+	if err != nil {
+		t.Fatalf("read .allowed_signers after reopen: %v", err)
 	}
-	if after := headHash(t, s); after != before {
-		t.Fatalf("HEAD moved on re-seed: %s -> %s", before, after)
+	if string(after) != string(got) {
+		t.Fatalf(".allowed_signers changed on reopen:\nbefore:\n%s\nafter:\n%s", got, after)
+	}
+	if h := headHash(t, reopened); h != before {
+		t.Fatalf("HEAD moved on reopen: %s -> %s", before, h)
 	}
 }
 
-// TestSeedAllowedSignersRejectsExternalTrustFile confirms in-tree seeding
-// refuses to run when the Store verifies against an external
-// allowed_signers file it could not commit anyway.
-func TestSeedAllowedSignersRejectsExternalTrustFile(t *testing.T) {
+// TestExternalTrustFileSuppressesInTreeSeeding confirms a store that
+// verifies against an external allowed_signers file never writes the
+// repo-local one: that file is not what git consults, so seeding it would
+// create a trust surface verification never reads.
+func TestExternalTrustFileSuppressesInTreeSeeding(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -317,13 +315,15 @@ func TestSeedAllowedSignersRejectsExternalTrustFile(t *testing.T) {
 	if err := os.WriteFile(allowedPath, []byte(AgentPrincipal+" "+signer.PublicKey()+"\n"), 0o644); err != nil {
 		t.Fatalf("write external allowed_signers: %v", err)
 	}
-	s, err := NewWithOptions(filepath.Join(dir, "repo"), signer, slog.Default(), Options{AllowedSignersPath: allowedPath})
-	if err != nil {
+	repoDir := filepath.Join(dir, "repo")
+	if _, err := NewWithOptions(repoDir, signer, slog.Default(), Options{
+		AllowedSignersPath: allowedPath,
+		SeedSigners:        []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey}},
+	}); err != nil {
 		t.Fatalf("NewWithOptions: %v", err)
 	}
-	_, err = s.SeedAllowedSigners(t.Context(), []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey}})
-	if err == nil || !strings.Contains(err.Error(), "external allowed_signers") {
-		t.Fatalf("ReconcileAllowedSigners error = %v, want external-file rejection", err)
+	if _, err := os.Stat(filepath.Join(repoDir, ".allowed_signers")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repo-local .allowed_signers stat = %v, want absent when trust is external", err)
 	}
 }
 
@@ -399,8 +399,10 @@ func TestSeedSignersLandAtRepositoryCreation(t *testing.T) {
 
 // TestSeedIsNotReappliedAfterTheRootDiverges covers the case that
 // separates seeding from reconciling: once a root's own file says
-// something config does not, config does not win. Divergence is the root
-// exercising its delegation, not drift.
+// something config does not, config does not win. Reopening the store —
+// the only path that writes the file at all — must leave an established
+// trust surface alone. Divergence is the root exercising its delegation,
+// not drift.
 func TestSeedIsNotReappliedAfterTheRootDiverges(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -427,10 +429,11 @@ func TestSeedIsNotReappliedAfterTheRootDiverges(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if _, err := s.SeedAllowedSigners(t.Context(), []TrustedSigner{
+	// Reopen with config now declaring a seed the file does not carry.
+	if _, err := NewWithOptions(dir, signer, slog.Default(), Options{SeedSigners: []TrustedSigner{
 		{Principal: "alice@example.com", PublicKey: testAliceKey},
-	}); err != nil {
-		t.Fatalf("SeedAllowedSigners: %v", err)
+	}}); err != nil {
+		t.Fatalf("reopen NewWithOptions: %v", err)
 	}
 
 	after, err := os.ReadFile(path)
@@ -439,5 +442,8 @@ func TestSeedIsNotReappliedAfterTheRootDiverges(t *testing.T) {
 	}
 	if !strings.Contains(string(after), "carol@example.com") {
 		t.Fatalf("the root's own delegation was overwritten from config:\n%s", string(after))
+	}
+	if strings.Contains(string(after), "alice@example.com") {
+		t.Fatalf("config's seed was applied to an established root:\n%s", string(after))
 	}
 }

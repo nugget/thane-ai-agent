@@ -72,7 +72,7 @@ func sleepControlParameters(env *SleepEnvelope) map[string]any {
 		"properties": map[string]any{
 			"duration": map[string]any{
 				"description": fmt.Sprintf(
-					"Requested next sleep, as a Go duration string between %s and %s (e.g. %q or %q). A bare number is accepted as a minute count for tolerant local-model compatibility.",
+					"Requested next sleep, as a Go duration string between %s and %s (e.g. %q or %q). A bare number — quoted or not — is accepted as a minute count for tolerant local-model compatibility.",
 					env.Min, env.Max, env.Min, env.Default,
 				),
 				"anyOf": []map[string]any{
@@ -155,9 +155,10 @@ func (l *Loop) HandleSetNextSleep(ctx context.Context, args map[string]any) (str
 }
 
 // parseNextSleepDurationArg reads the duration argument. A bare number is
-// read as minutes rather than rejected: local models routinely emit one,
-// and a minute count is the only reading that is ever sensible for a
-// loop's sleep.
+// read as minutes rather than rejected — quoted or not: local models
+// routinely emit one, the families that emit it are also the ones that
+// quote every number, and a minute count is the only reading that is
+// ever sensible for a loop's sleep.
 func parseNextSleepDurationArg(args map[string]any) (time.Duration, string, error) {
 	raw, ok := args["duration"]
 	if !ok {
@@ -184,7 +185,16 @@ func parseNextSleepDurationArg(args map[string]any) (time.Duration, string, erro
 	}
 	d, err := time.ParseDuration(durStr)
 	if err != nil {
-		return 0, "", fmt.Errorf("invalid duration %q: %w", durStr, err)
+		// duration:"30" gets the same minutes reading as duration:30.
+		// Rebuilt as a duration string so the "requested" echoed back
+		// names the unit the number was read in.
+		if f, ferr := strconv.ParseFloat(durStr, 64); ferr == nil {
+			minutes := strconv.FormatFloat(f, 'f', -1, 64) + "m"
+			if md, merr := time.ParseDuration(minutes); merr == nil {
+				return md, minutes, nil
+			}
+		}
+		return 0, "", fmt.Errorf("invalid duration %q: %w (send a Go duration like \"30m\", or a bare number of minutes)", durStr, err)
 	}
 	return d, durStr, nil
 }

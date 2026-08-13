@@ -17,11 +17,13 @@ import (
 // `thane serve`. It does not start any services or open any sockets —
 // this is purely a pre-flight gate for scripts and operators.
 //
-// The configPath argument follows the same convention as other
-// subcommands: when empty, [config.FindConfig] walks the standard
-// search order; when set, that exact path is used. The returned error
-// signals "config is invalid" so the binary exits non-zero, which
-// makes `thane validate && thane serve` a usable deploy guard.
+// The configPath argument is the -insecure-config escape hatch: when
+// set, that exact file is loaded from outside the trust boundary. When
+// empty, the config comes from {workspace}/core/config.yaml — the one
+// location the runtime reads — with the workspace resolved from
+// workspacePath or its default. The returned error signals "config is
+// invalid" so the binary exits non-zero, which makes `thane validate
+// && thane serve` a usable deploy guard.
 //
 // Output mode "text" prints a one-line confirmation followed by a
 // short structural summary. Mode "json" emits a single object with
@@ -317,8 +319,10 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 	fmt.Fprintf(w, "  Home Assistant:       %v\n", cfg.HomeAssistant.Configured())
 	fmt.Fprintf(w, "  Signal bridge:        %v\n", cfg.Signal.Enabled)
 	fmt.Fprintf(w, "  Embeddings:           %v\n", cfg.Embeddings.Enabled)
-	fmt.Fprintf(w, "  Metacognitive loop:   %v\n", cfg.Metacognitive.Enabled)
-	fmt.Fprintf(w, "  Ego loop:             %v\n", cfg.Ego.Enabled)
+	// The core service loops are deliberately absent here: their config
+	// enabled flags stopped stating whether they run once definition
+	// documents became authoritative (#1361), and the Core loop
+	// definitions section below reports what actually governs.
 }
 
 // writeValidateJSON emits the structured validation report. cfg may be
@@ -378,8 +382,6 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 			"homeassistant_configured": cfg.HomeAssistant.Configured(),
 			"signal_enabled":           cfg.Signal.Enabled,
 			"embeddings_enabled":       cfg.Embeddings.Enabled,
-			"metacognitive_enabled":    cfg.Metacognitive.Enabled,
-			"ego_enabled":              cfg.Ego.Enabled,
 		}
 	}
 	enc := json.NewEncoder(w)

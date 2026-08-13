@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,8 +48,44 @@ type loopOutputContextEntry struct {
 	// is where the byte budget belongs: before this split, the entire
 	// rendered document was blindly byte-truncated even though authored
 	// projections existed precisely so no reader has to do that (#1250).
-	Projections map[string]string `json:"projections,omitempty"`
-	Audience    string            `json:"audience,omitempty"`
+	Projections orderedProjections `json:"projections,omitempty"`
+	Audience    string             `json:"audience,omitempty"`
+}
+
+// facetProjection is one published facet value, keyed by its facet name.
+type facetProjection struct {
+	Key   string
+	Value string
+}
+
+// orderedProjections marshals as a JSON object whose keys ride in
+// declared-facet order. A plain map would serialize alphabetically
+// (digest before status_line), making this the one surface out of step
+// with the ladder order every sibling rendering follows — the facets
+// array here, doc_read levels, and the rendered document headings.
+type orderedProjections []facetProjection
+
+func (p orderedProjections) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, projection := range p {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, err := json.Marshal(projection.Key)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(projection.Value)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
 }
 
 // hydrateLoopOutputs is the universal "make this spec runtime-ready"
@@ -263,8 +300,14 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 			Interface: outputInterfaceDescription(output),
 			Audience:  string(output.EffectiveAudience()),
 		}
-		for _, field := range output.FacetFields() {
-			entry.Facets = append(entry.Facets, field.Key)
+		// Declared facets only, matching every sibling surface (LoopView
+		// outputs[].facets, doc_search hits). FacetFields() would append
+		// the always-published full field, which is every faceted
+		// document's baseline rather than a declared facet — listing it
+		// here and not there would make the same field name carry two
+		// memberships at surfaces the same model reads.
+		for _, facet := range output.Facets {
+			entry.Facets = append(entry.Facets, string(facet.Name))
 		}
 		doc, err := store.Read(ctx, output.Ref)
 		if err != nil {
@@ -288,7 +331,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 				// Details body under the byte budget. Same shape out
 				// as goes in, so a republish is mechanical.
 				payload := output.ParseFacetDocument(doc.Body)
-				projections := make(map[string]string)
+				var projections orderedProjections
 				// Declared facets only — FacetFields() appends the
 				// always-published full field, and full is exactly what
 				// must NOT ride here: it is unbudgeted, and its home is
@@ -298,22 +341,22 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 				for _, facet := range output.Facets {
 					key := string(facet.Name)
 					if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
-						projections[key] = value
+						projections = append(projections, facetProjection{Key: key, Value: value})
 					}
 				}
 				if len(projections) > 0 {
 					entry.Projections = projections
 				}
-				entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(payload.Full, loopOutputContentBytes, false)
+				entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(payload.Full, loopOutputContentBytes)
 				break
 			}
 			// A pre-facet body (declared facets, first publish pending)
 			// keeps the legacy whole-body path.
-			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
+			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes)
 		case looppkg.OutputTypeWorkingNotes:
 			// The head, not the tail: a loop rewriting its current
 			// thinking needs to see what it is replacing.
-			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
+			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes)
 		}
 		payload.Outputs = append(payload.Outputs, entry)
 	}
@@ -405,7 +448,11 @@ func workingNotesDescription(output looppkg.OutputSpec) string {
 	return fmt.Sprintf("Rewrite this loop's working notes %q at %s — its private thinking, carried from turn to turn. Hold what you currently believe: working theories, what an experiment is showing so far, what you expect to happen next, what you are unsure of and what would settle it. Replace the whole body each time so it stays a current view rather than a log; drop what you no longer think and keep what still holds. No consumer surface reads it — it stays out of search results and out of other loops' context — so write what would clutter or mislead a published document.", output.Name, output.Ref)
 }
 
-func truncateLoopOutputText(s string, maxBytes int, tail bool) (string, bool, int, int) {
+// truncateLoopOutputText keeps the head of an over-budget body on a
+// rune boundary and marks the cut. Head only: the tail variant from the
+// append-journal era went unused once working notes switched to
+// whole-body rewrites, where what matters is what is being replaced.
+func truncateLoopOutputText(s string, maxBytes int) (string, bool, int, int) {
 	total := len(s)
 	if total <= maxBytes {
 		return s, false, total, total
@@ -413,20 +460,11 @@ func truncateLoopOutputText(s string, maxBytes int, tail bool) (string, bool, in
 	if maxBytes <= 0 {
 		return "", true, 0, total
 	}
-	var out string
-	if tail {
-		start := len(s) - maxBytes
-		for start < len(s) && !utf8.RuneStart(s[start]) {
-			start++
-		}
-		out = "[truncated: showing recent tail]\n" + s[start:]
-	} else {
-		end := maxBytes
-		for end < len(s) && end > 0 && !utf8.RuneStart(s[end]) {
-			end--
-		}
-		out = s[:end] + "\n[truncated: output exceeded context budget]"
+	end := maxBytes
+	for end < len(s) && end > 0 && !utf8.RuneStart(s[end]) {
+		end--
 	}
+	out := s[:end] + "\n[truncated: output exceeded context budget]"
 	return out, true, len(out), total
 }
 

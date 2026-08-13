@@ -13,7 +13,7 @@ package outputtargets
 // Colors are published as ordinary attributes because an entity-sourced
 // complication cannot template its colors — only a template-sourced one
 // can. Both bindings read the same entity, so the operator picks the
-// tier they want without Thane publishing anything differently.
+// binding they want without Thane publishing anything differently.
 
 const appleWatchColorNote = "Ignored unless the complication is template-sourced and reads this attribute in its color template. watchOS also renders on-face complications in the face's accent palette, so expect full fidelity in the Smart Stack and a tinted approximation on the watch face itself."
 
