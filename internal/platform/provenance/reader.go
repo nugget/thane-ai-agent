@@ -454,6 +454,10 @@ func validateReaderFilename(filename string) error {
 // broaden a per-file query beyond the single file.
 func runGitText(ctx context.Context, repoPath string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath, "--literal-pathspecs"}, args...)...)
+	// Read-only helpers never take the index lock: a deadline-killed
+	// opportunistic index refresh strands .git/index.lock and wedges
+	// the root's writer.
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -469,5 +473,6 @@ func runGitText(ctx context.Context, repoPath string, args ...string) (string, e
 // runGitCheck runs a git command only for its exit status.
 func runGitCheck(ctx context.Context, repoPath string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath, "--literal-pathspecs"}, args...)...)
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	return cmd.Run()
 }
