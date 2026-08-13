@@ -48,6 +48,11 @@ const (
 	// were in force when it was made. Absent on core's own history, where the
 	// parent commit already says it.
 	TrailerCoreHead = "Thane-Core-Head"
+	// TrailerVersion records the build that performed the write. Machine-stamped
+	// so no document ever needs a hand-transcribed version claim — the first
+	// production re-tag proved a model copying its own prior facet will carry a
+	// retired label forward; the trailer is the fact, the facet is the judgment.
+	TrailerVersion = "Thane-Version"
 )
 
 // RevisionQuery bounds a [RootReviser.History] page.
