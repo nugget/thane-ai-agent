@@ -76,7 +76,7 @@ func OpenMirror(spec MirrorSpec) (*Mirror, error) {
 	if worktreePath == "" {
 		return nil, fmt.Errorf("%s: worktree path is required", name)
 	}
-	absWorktreePath, err := filepath.Abs(worktreePath)
+	absWorktreePath, err := absPath(worktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("%s: resolve worktree path: %w", name, err)
 	}
