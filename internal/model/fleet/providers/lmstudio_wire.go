@@ -91,6 +91,44 @@ type lmStudioChatResponse struct {
 	Usage   *lmStudioUsage       `json:"usage,omitempty"`
 }
 
+// lmStudioStreamErrorText returns the human-readable failure LM Studio
+// encoded in an SSE data frame, or "" when the frame is an ordinary chunk.
+//
+// A streaming request that LM Studio cannot serve does not fail the way its
+// non-streaming sibling does. The non-streaming call answers 4xx with the
+// reason in the body; the streaming call answers HTTP 200, opens the stream,
+// and delivers the reason as an `event: error` frame. Both shapes of the
+// `error` field are accepted: a bare string (as the 4xx body uses) and an
+// object carrying `message` (as the stream frame uses).
+func lmStudioStreamErrorText(data string) string {
+	var probe struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(data), &probe); err != nil {
+		return ""
+	}
+	if len(probe.Error) == 0 || string(probe.Error) == "null" {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(probe.Error, &text); err == nil && strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text)
+	}
+
+	var object struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(probe.Error, &object); err == nil && strings.TrimSpace(object.Message) != "" {
+		return strings.TrimSpace(object.Message)
+	}
+	if strings.TrimSpace(probe.Message) != "" {
+		return strings.TrimSpace(probe.Message)
+	}
+	return "LM Studio reported an unspecified stream error"
+}
+
 type lmStudioChatChoice struct {
 	Index        int                      `json:"index"`
 	Message      *lmStudioMessageResponse `json:"message,omitempty"`
