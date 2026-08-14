@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
@@ -323,12 +324,31 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolC
 		if err != nil {
 			return nil, err
 		}
-		call := llm.ToolCall{ID: acc.ID}
+		callID, err := ensureLMStudioToolCallID(acc.ID)
+		if err != nil {
+			return nil, err
+		}
+		call := llm.ToolCall{ID: callID}
 		call.Function.Name = acc.Name
 		call.Function.Arguments = args
 		out = append(out, call)
 	}
 	return out, nil
+}
+
+// ensureLMStudioToolCallID repairs a runner omission before the assistant
+// message enters iteration history. LM Studio rejects that same historical
+// tool call on the next request when its id is empty, even though its Qwen
+// parser can produce tool calls without assigning one.
+func ensureLMStudioToolCallID(id string) (string, error) {
+	if strings.TrimSpace(id) != "" {
+		return id, nil
+	}
+	generated, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("generate fallback LM Studio tool call ID: %w", err)
+	}
+	return "call_" + generated.String(), nil
 }
 
 func decodeLMStudioToolCallsFromSlice(in []lmStudioToolCallDelta) ([]llm.ToolCall, error) {
@@ -390,6 +410,17 @@ func lmStudioContentText(v any) string {
 	}
 }
 
-func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) {
+func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) error {
+	if resp == nil {
+		return nil
+	}
 	llm.ApplyTextToolCallFallback(resp, validToolNames, llm.DefaultToolCallTextProfile())
+	for i := range resp.Message.ToolCalls {
+		id, err := ensureLMStudioToolCallID(resp.Message.ToolCalls[i].ID)
+		if err != nil {
+			return err
+		}
+		resp.Message.ToolCalls[i].ID = id
+	}
+	return nil
 }
