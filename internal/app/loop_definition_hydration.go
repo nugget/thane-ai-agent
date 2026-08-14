@@ -95,6 +95,9 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 	if a == nil {
 		return spec, nil
 	}
+	if err := a.validateLoopBindings(spec); err != nil {
+		return looppkg.Spec{}, err
+	}
 	name := strings.TrimSpace(spec.Name)
 	// Core model-facing service loops dispatch through their shared
 	// registration descriptor (see [coreServiceLoops]); each one's
@@ -256,4 +259,38 @@ func hydrateHAStateWatcherSpec(spec looppkg.Spec, watcher *homeassistant.StateWa
 		return nil
 	}
 	return spec
+}
+
+// validateLoopBindings resolves a spec's bindings against live
+// configuration. [looppkg.ValidateBindings] has already checked that
+// every key is registered and every value non-empty; what it cannot
+// know is whether the value names something this site actually has.
+//
+// The check belongs at hydration because that is the last moment
+// before a loop starts running with a boundary that does not resolve.
+// A binding to a misspelled account would otherwise surface as a
+// refusal on the loop's first forge call — days later, in a loop whose
+// whole purpose is unattended operation, reported as an ordinary tool
+// failure rather than as the misconfiguration it is.
+func (a *App) validateLoopBindings(spec looppkg.Spec) error {
+	account, ok := spec.Bindings[looppkg.BindingForgeAccount]
+	if !ok {
+		return nil
+	}
+	if a.forgeService == nil {
+		return fmt.Errorf("loop %q binds %s=%q but no forge accounts are configured at this site",
+			spec.Name, looppkg.BindingForgeAccount, account)
+	}
+	// Deliberately unbound. ResolveAccount honors a binding carried by
+	// ctx, so threading the caller's context here would redirect the
+	// lookup to the caller's account and report a binding refusal for
+	// a spec that merely names an account this site does not have —
+	// turning a plain configuration error into a confusing one. The
+	// question being asked is "does this account exist", not "may this
+	// caller use it".
+	if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
+		return fmt.Errorf("loop %q binds %s=%q: %w",
+			spec.Name, looppkg.BindingForgeAccount, account, err)
+	}
+	return nil
 }

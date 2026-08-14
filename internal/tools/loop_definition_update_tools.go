@@ -96,6 +96,9 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
+	if err := r.requireCallerBindingsForDefinition(ctx, name, "update definition"); err != nil {
+		return "", err
+	}
 
 	// Read-modify-write through the spec's own JSON wire form. The overlay
 	// already persists specs via these MarshalJSON/UnmarshalJSON methods, so

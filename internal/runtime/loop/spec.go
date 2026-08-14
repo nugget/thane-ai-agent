@@ -216,6 +216,19 @@ type Spec struct {
 	// available tools.
 	ExcludeTools []string `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 
+	// Bindings name the specific instances of shared resources this
+	// loop may reach — the forge account its forge tools resolve to,
+	// and whatever else registers a key later. Tags decide whether a
+	// surface is available; bindings decide which instance of it the
+	// caller gets, which is a question the model would otherwise answer
+	// for itself through a tool argument.
+	//
+	// Keys are a closed set ([BindingKeys]); an unregistered key
+	// refuses the definition. Ancestors win on collision, so a
+	// container's binding is a boundary its descendants cannot declare
+	// their way out of. See [mergeBindings].
+	Bindings map[string]string `yaml:"bindings,omitempty" json:"bindings,omitempty"`
+
 	// SleepMin is the minimum sleep duration between iterations.
 	SleepMin time.Duration `yaml:"sleep_min,omitempty" json:"sleep_min,omitempty"`
 	// SleepMax is the maximum sleep duration between iterations.
@@ -405,6 +418,9 @@ func (s *Spec) Validate() error {
 			return fmt.Errorf("loop: core container %q cannot declare a parent — it is the structural root by definition", CoreLoopName)
 		}
 	}
+	if err := ValidateBindings(s.Bindings); err != nil {
+		return fmt.Errorf("loop %q: %w", s.Name, err)
+	}
 	if !validCompletions[s.Completion] {
 		return fmt.Errorf("loop: unsupported completion %q", s.Completion)
 	}
@@ -544,6 +560,7 @@ func (s *Spec) ToConfig() Config {
 		Subscriptions:        cloneEntitySubscriptions(ns.Subscriptions),
 		Tags:                 append([]string(nil), ns.Tags...),
 		ExcludeTools:         append([]string(nil), ns.ExcludeTools...),
+		Bindings:             CloneBindings(ns.Bindings),
 		SleepMin:             ns.SleepMin,
 		SleepMax:             ns.SleepMax,
 		SleepDefault:         ns.SleepDefault,

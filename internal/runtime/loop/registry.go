@@ -415,6 +415,7 @@ type effectiveStateResult struct {
 	Subscriptions    []EffectiveSubscription
 	Tags             []EffectiveTag
 	ExcludeTools     []EffectiveExcludeTool
+	Bindings         []EffectiveBinding
 	RoutingFactors   []EffectiveRoutingFactor
 	DelegationGating *EffectiveDelegationGating
 	// SupervisorRoutingFactors is the parallel cascade for the
@@ -462,6 +463,49 @@ func (r *Registry) EffectiveTags(loopID string) []EffectiveTag {
 // operator (or model) where the exclusion came from.
 func (r *Registry) EffectiveExcludeTools(loopID string) []EffectiveExcludeTool {
 	return r.effectiveState(loopID).ExcludeTools
+}
+
+// EffectiveBindings returns the resolved resource bindings for loopID
+// with provenance. Unlike every other cascading field, the OUTERMOST
+// declaration wins: a binding is a restriction the container imposed,
+// and if a descendant could rebind a key its ancestor declared, the
+// ancestor's binding would be advice rather than a boundary. A
+// descendant may still bind a key no ancestor mentions.
+func (r *Registry) EffectiveBindings(loopID string) []EffectiveBinding {
+	return r.effectiveState(loopID).Bindings
+}
+
+// InheritableBindings returns the bindings a NEW child of parentID
+// would inherit through the ancestor cascade — which is not the same
+// as the parent's own effective bindings, because a non-container
+// parent's declarations do not cascade to its children. Only its
+// container ancestors reach that far.
+//
+// This exists because parentage is a caller-supplied value on the
+// launch surfaces, and bindings resolve ancestors-first. Choosing a
+// parent is therefore choosing a binding, so a launch has to be able
+// to ask what a proposed parent would impose before accepting it.
+// Returns nil when parentID names no live loop.
+func (r *Registry) InheritableBindings(parentID string) []EffectiveBinding {
+	parent := r.Get(parentID)
+	if parent == nil {
+		return nil
+	}
+	eff := r.EffectiveBindings(parentID)
+	if parent.Operation() == OperationContainer {
+		return eff
+	}
+	out := make([]EffectiveBinding, 0, len(eff))
+	for _, b := range eff {
+		if b.From == EffectiveOriginSelf {
+			continue
+		}
+		out = append(out, b)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // EffectiveRoutingFactors returns the resolved routing-factor map
@@ -590,6 +634,39 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 	}
 
 	result := effectiveStateResult{}
+	// Bindings walk outermost-first so the ancestor's declaration is
+	// the one that sticks; every other field below walks leaf-first.
+	// The operation filter matches the main walk: only container
+	// ancestors contribute, while the starting loop always does.
+	seenBindings := make(map[string]struct{})
+	for i := len(walk) - 1; i >= 0; i-- {
+		l := walk[i]
+		if i > 0 && l.Operation() != OperationContainer {
+			continue
+		}
+		origin := EffectiveOriginSelf
+		if i > 0 {
+			origin = l.Name()
+		}
+		for key, value := range l.bindingsSnapshot() {
+			if key == "" || value == "" {
+				continue
+			}
+			if _, dup := seenBindings[key]; dup {
+				continue
+			}
+			seenBindings[key] = struct{}{}
+			result.Bindings = append(result.Bindings, EffectiveBinding{
+				Key:   key,
+				Value: value,
+				From:  origin,
+			})
+		}
+	}
+	sort.Slice(result.Bindings, func(i, j int) bool {
+		return result.Bindings[i].Key < result.Bindings[j].Key
+	})
+
 	seenSubs := make(map[string]struct{})
 	seenTags := make(map[string]struct{})
 	seenExcludes := make(map[string]struct{})

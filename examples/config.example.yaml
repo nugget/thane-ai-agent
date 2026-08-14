@@ -1365,6 +1365,7 @@ archivist:
 #       tags:
 #         - ha
 #       exclude_tools: []
+#       bindings: {}
 #       sleep_min: 2m
 #       sleep_max: 10m
 #       sleep_default: 5m

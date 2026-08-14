@@ -96,5 +96,51 @@ validation from `loop_definition_lint` before anything persists.)
 |---|---|
 | `tags` | Capability tags activated at iteration 0: tool surface, tagged knowledge, tagged context |
 | `exclude_tools` | Tool names to deny. The token `group:direct_human_egress` expands to every direct human-messaging tool, so the list cannot go stale as tools are added |
+| `bindings` | Resource instances this loop is scoped to, as a string map. Keys are a closed set and an unknown key refuses the definition |
 | `routing_factors` | Open-ended string map of router scoring inputs; prefer the named `profile` fields for well-known knobs |
 | `delegation_gating` | Top-level form of the same switch as `profile.delegation_gating`; prefer the profile form |
+
+### Bindings
+
+A tag decides *whether* a surface is available; a binding decides *which
+instance* of it the caller gets. The two answer different questions, and
+without the second the first is often incomplete: granting `forge` hands a
+loop every configured forge account, because the `account` argument on
+every forge tool is the model's to fill in. A loop meant to observe
+through a read-only credential could name the primary account and wear the
+write token instead.
+
+```yaml
+tags:
+    - forge
+bindings:
+    forge_account: github-readonly
+```
+
+With that binding, forge tools resolve an empty `account` argument to
+`github-readonly` and refuse any other account by name. The forge account
+block injected into the prompt narrows to the bound account as well, so
+the loop is never shown a door the tools will not open.
+
+| Binding | Meaning |
+|---|---|
+| `forge_account` | Forge account name (from `forge.accounts`) that this loop's forge tools resolve to. The account must exist at hydration, or the definition refuses |
+
+Bindings cascade from container ancestors, and on a key collision the
+**ancestor wins** — the inverse of `routing_factors`. A routing factor is
+a preference a child may know better than its container; a binding is a
+restriction the container imposed, and a child that could rebind it would
+turn a boundary into advice. A child may still bind a key no ancestor
+mentions.
+
+Bindings also follow the caller across model-authored loop creation. A bound
+caller cannot omit its binding, replace it in a submitted spec, or launch a
+stored definition whose effective binding is different or absent. Nesting a
+new loop under a container with a conflicting binding is refused rather than
+silently changing which resource the child can reach. Unbound operator and API
+callers remain free to author and launch independently bound definitions.
+
+A binding restricts *which* credential is used, not what that credential
+may do. The account's own token policy is what makes a read-only account
+harmless; the binding is what makes the choice of account non-negotiable.
+Both layers are needed, and neither substitutes for the other.

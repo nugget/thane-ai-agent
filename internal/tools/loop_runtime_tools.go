@@ -297,6 +297,9 @@ func (r *Registry) handleSpawnLoop(ctx context.Context, args map[string]any) (st
 		return "", fmt.Errorf("launch: %w", err)
 	}
 	launch, completion := applyAdHocLoopLaunchContextDefaults(ctx, launch)
+	if err := r.guardLaunchParent(ctx, launch.ParentID, launch.Spec.ParentName); err != nil {
+		return "", err
+	}
 	result, err := r.launchLoop(ctx, launch)
 	if err != nil {
 		return "", err

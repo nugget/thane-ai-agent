@@ -7,6 +7,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // ServiceDependencies supplies the runtime collaborators used by [Service].
@@ -31,6 +32,7 @@ type ServiceDependencies struct {
 // code depends on this facade instead of assembling those pieces separately.
 type Service struct {
 	manager         *Manager
+	logger          *slog.Logger
 	tools           *Tools
 	contextProvider *ContextProvider
 	poller          *SubscriptionPoller
@@ -61,14 +63,14 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 
 	opLog := NewOperationLog()
 	subscriptions := NewSubscriptionStore(deps.State, deps.Logger, cfg.MaxSubscriptions)
-	forgeTools := NewTools(manager, opLog, deps.Logger, subscriptions)
-	forgeTools.SetLoopResolver(deps.LoopResolver)
 
 	service := &Service{
-		manager:         manager,
-		tools:           forgeTools,
-		contextProvider: NewContextProvider(manager, opLog),
+		manager: manager,
+		logger:  deps.Logger,
 	}
+	service.tools = newTools(service, opLog, deps.Logger, subscriptions)
+	service.tools.SetLoopResolver(deps.LoopResolver)
+	service.contextProvider = newContextProvider(service, opLog)
 	if cfg.SubscriptionCheckInterval > 0 {
 		service.poller = NewSubscriptionPoller(manager, subscriptions, deps.MessageBus, deps.Logger)
 	}
@@ -91,12 +93,51 @@ func (s *Service) ContextProvider() *ContextProvider {
 	return s.contextProvider
 }
 
-// ResolveAccount selects the configured forge account used by a request.
-func (s *Service) ResolveAccount(name string) (ResolvedAccount, error) {
+// ResolveAccount selects the configured forge account used by a request while
+// enforcing any forge account binding carried by ctx. An omitted account uses
+// the binding when present and the primary configured account otherwise.
+func (s *Service) ResolveAccount(ctx context.Context, requested string) (ResolvedAccount, error) {
 	if s == nil || s.manager == nil {
 		return ResolvedAccount{}, fmt.Errorf("forge service is not configured")
 	}
-	return s.manager.ResolveAccount(name)
+
+	bound := boundAccount(ctx)
+	if bound != "" {
+		if requested != "" && requested != bound {
+			if s.logger != nil {
+				s.logger.Warn("forge account request refused by binding",
+					"requested_account", requested,
+					"bound_account", bound,
+					"loop_id", looppkg.LoopIDFromContext(ctx))
+			}
+			return ResolvedAccount{}, fmt.Errorf("forge account %q is not available here: this loop is bound to account %q, and the binding is part of its definition rather than something a tool call can change. Retry with account=%q or omit the argument, and if the work genuinely requires %q, say so instead of routing around it",
+				requested, bound, bound, requested)
+		}
+		requested = bound
+	}
+	return s.manager.ResolveAccount(requested)
+}
+
+// boundAccount returns the forge account this caller is scoped to, or an empty
+// string when the caller is unbound.
+func boundAccount(ctx context.Context) string {
+	return looppkg.BindingFromContext(ctx, looppkg.BindingForgeAccount)
+}
+
+// AccountsInConfigOrder returns the configured accounts in declaration
+// order, primary first. It exists so callers that render or enumerate
+// accounts do not reach through the service into the manager's
+// internals: consolidating account ownership behind this type is only
+// worth doing if the type is actually the way through.
+func (s *Service) AccountsInConfigOrder() []AccountConfig {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	out := make([]AccountConfig, 0, len(s.manager.order))
+	for _, name := range s.manager.order {
+		out = append(out, s.manager.configs[name])
+	}
+	return out
 }
 
 // SubscriptionPollingEnabled reports whether repository polling is enabled by

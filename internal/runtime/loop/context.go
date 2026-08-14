@@ -4,6 +4,7 @@ import "context"
 
 type loopIDKey struct{}
 type fallbackContentKey struct{}
+type bindingsKey struct{}
 
 // withLoopID injects the loop ID into the run context so downstream
 // code (e.g. handlers, turn builders, the agent runner, tool calls,
@@ -53,4 +54,48 @@ func FallbackContent(ctx context.Context) string {
 		return content
 	}
 	return ""
+}
+
+// WithBindings stamps the turn's resource bindings onto a context, so
+// a subsystem can discover which instance of a shared resource this
+// caller is scoped to. Nil or empty bindings return the context
+// unchanged, which is what leaves unbound callers — interactive turns,
+// API requests, anything outside a bound loop — behaving exactly as
+// they did before any binding existed.
+//
+// It lives here rather than in the tools package because the
+// subsystems that must honor a binding sit below tools in the import
+// graph; the loop package is the common ancestor that already carries
+// the loop's identity to the same places.
+//
+// The transport is deliberately indifferent to who declared the
+// binding. Today a loop spec is the only writer, but a channel binding
+// or a contact-trust policy could stamp the same key without any
+// subsystem below needing to learn a second mechanism.
+func WithBindings(ctx context.Context, bindings map[string]string) context.Context {
+	if len(bindings) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, bindingsKey{}, CloneBindings(bindings))
+}
+
+// BindingsFromContext returns every binding on the context, or nil
+// when the caller is unbound.
+func BindingsFromContext(ctx context.Context) map[string]string {
+	bindings, ok := ctx.Value(bindingsKey{}).(map[string]string)
+	if !ok {
+		return nil
+	}
+	return CloneBindings(bindings)
+}
+
+// BindingFromContext returns the value bound to key, or "" when the
+// caller is unbound for that key. Subsystems read their own key and
+// ignore the rest.
+func BindingFromContext(ctx context.Context, key string) string {
+	bindings, ok := ctx.Value(bindingsKey{}).(map[string]string)
+	if !ok {
+		return ""
+	}
+	return bindings[key]
 }

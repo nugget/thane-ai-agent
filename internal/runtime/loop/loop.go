@@ -31,16 +31,20 @@ type Runner interface {
 // Request mirrors the loop-facing fields of agent.Request. The loop
 // package defines its own type to avoid importing agent.
 type Request struct {
-	Model            string                 `yaml:"model,omitempty" json:"model,omitempty"`
-	ConversationID   string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
-	ChannelBinding   *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
-	Messages         []Message              `yaml:"messages,omitempty" json:"messages,omitempty"`
-	SkipContext      bool                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
-	AllowedTools     []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	ExcludeTools     []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
-	SkipTagFilter    bool                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
-	RoutingFactors   map[string]string      `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
-	DelegationGating string                 `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"` // Typed feature switch; "disabled" gives the model direct tool access (no orchestrator-and-delegate gating).
+	Model          string                 `yaml:"model,omitempty" json:"model,omitempty"`
+	ConversationID string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
+	Messages       []Message              `yaml:"messages,omitempty" json:"messages,omitempty"`
+	SkipContext    bool                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	AllowedTools   []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools   []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	// Bindings are the resolved resource bindings for this turn. They
+	// reach tool handlers through the execution context, where the
+	// owning subsystem reads its own key. See [Spec.Bindings].
+	Bindings         map[string]string `yaml:"bindings,omitempty" json:"bindings,omitempty"`
+	SkipTagFilter    bool              `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	RoutingFactors   map[string]string `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
+	DelegationGating string            `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"` // Typed feature switch; "disabled" gives the model direct tool access (no orchestrator-and-delegate gating).
 	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to core and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
@@ -692,6 +696,11 @@ func (l *Loop) Status() Status {
 		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
 		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
 	}
+	// Cloned for the same reason as the maps below, with a sharper edge:
+	// an aliased binding map lets a Status() caller rewrite the active
+	// account boundary without the loop lock, racing an iteration that
+	// is reading it.
+	cfgCopy.Bindings = CloneBindings(l.config.Bindings)
 	if l.config.RoutingFactors != nil {
 		cfgCopy.RoutingFactors = make(map[string]string, len(l.config.RoutingFactors))
 		for k, v := range l.config.RoutingFactors {
@@ -837,6 +846,7 @@ func (l *Loop) Status() Status {
 		s.EffectiveTags = eff.Tags
 		s.EffectiveSubscriptions = eff.Subscriptions
 		s.EffectiveExcludeTools = eff.ExcludeTools
+		s.EffectiveBindings = eff.Bindings
 		s.EffectiveRoutingFactors = eff.RoutingFactors
 		s.EffectiveDelegationGating = eff.DelegationGating
 	}
@@ -1037,6 +1047,15 @@ func (l *Loop) promoteRetuneLocked() bool {
 	l.config.Supervisor = fresh.Supervisor
 	l.config.SupervisorProb = fresh.SupervisorProb
 	l.config.SupervisorProfile = fresh.SupervisorProfile
+	// Bindings promote live. They carry no structural coupling — each
+	// turn re-resolves them through mergeBindings — so there is nothing
+	// to rebuild, and the direction that matters is the tightening one:
+	// an operator moving a loop from a write account to a read-only one
+	// gets "retune: applied" back, and the write credential must not
+	// stay in force behind that answer until the next relaunch. Cloned
+	// so the running loop never aliases the stored spec's map, and
+	// assigned unconditionally so clearing every binding is expressible.
+	l.config.Bindings = CloneBindings(fresh.Bindings)
 	// Rebuild the profile-derived request shaping, but keep the spawn-time
 	// InitialTags and RuntimeTools: tags are a structural (relaunch-tier)
 	// field and runtime tools are compiled by hydration — the raw stored
@@ -1096,6 +1115,15 @@ func (l *Loop) excludeToolsSnapshot() []string {
 		return nil
 	}
 	return mergeUniqueStrings(l.config.ExcludeTools, l.requestBase.ExcludeTools)
+}
+
+// bindingsSnapshot returns the loop's own declared resource bindings
+// for use by the cascade walker. Own declarations only — the walker
+// composes them with ancestors'.
+func (l *Loop) bindingsSnapshot() map[string]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return CloneBindings(l.config.Bindings)
 }
 
 // routingFactorsSnapshot returns the loop's effective routing
@@ -1194,6 +1222,7 @@ func (l *Loop) inheritedTags() []string {
 // existing merge chain without double-counting the loop's own.
 type inheritedCascade struct {
 	ExcludeTools             []string
+	Bindings                 map[string]string
 	RoutingFactors           map[string]string
 	SupervisorRoutingFactors map[string]string
 	DelegationGating         string
@@ -1214,6 +1243,20 @@ func (l *Loop) inheritedCascade() inheritedCascade {
 			continue
 		}
 		out.ExcludeTools = append(out.ExcludeTools, e.Tool)
+	}
+	for _, b := range eff.Bindings {
+		if b.From == EffectiveOriginSelf {
+			continue
+		}
+		if out.Bindings == nil {
+			out.Bindings = make(map[string]string)
+		}
+		// EffectiveBindings is already deduped outermost-first, so the
+		// first ancestor entry for a key is the one that won.
+		if _, dup := out.Bindings[b.Key]; dup {
+			continue
+		}
+		out.Bindings[b.Key] = b.Value
 	}
 	for _, f := range eff.RoutingFactors {
 		if f.From == EffectiveOriginSelf {
@@ -2284,6 +2327,11 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	// shell_exec under home_automation" restriction reaches every
 	// descendant regardless of what they declare locally.
 	req.ExcludeTools = mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, req.ExcludeTools, l.requestOverride.ExcludeTools, cascade.ExcludeTools)
+	// Ancestors first: a container's binding outranks this loop's own,
+	// and a per-request override is weakest of all. A restriction that
+	// a caller could lift by passing a Request field would not be a
+	// restriction.
+	req.Bindings = MergeBindings(cascade.Bindings, l.config.Bindings, req.Bindings, l.requestOverride.Bindings)
 	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
 	req.RoutingFactors = hints
 	// Inherited gating is the weakest priority — own config and

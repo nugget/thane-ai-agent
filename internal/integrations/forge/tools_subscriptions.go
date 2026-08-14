@@ -75,7 +75,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		return "", err
 	}
 
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +185,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 }
 
 // HandleRepoUnfollow removes a repository subscription.
-func (t *Tools) HandleRepoUnfollow(_ context.Context, args map[string]any) (string, error) {
+func (t *Tools) HandleRepoUnfollow(ctx context.Context, args map[string]any) (string, error) {
 	if t.subscriptions == nil {
 		return "", fmt.Errorf("forge repository subscriptions are unavailable")
 	}
@@ -196,6 +196,14 @@ func (t *Tools) HandleRepoUnfollow(_ context.Context, args map[string]any) (stri
 	sub, err := t.subscriptions.Get(id)
 	if err != nil {
 		return "", err
+	}
+	// Subscriptions are addressed by opaque ID rather than by account,
+	// so without this check a bound caller could delete another
+	// account's subscription simply by naming its ID — a destructive
+	// reach the account binding is supposed to have closed.
+	if bound := boundAccount(ctx); bound != "" && sub.Account != bound {
+		return "", fmt.Errorf("subscription %q belongs to forge account %q, and this loop is bound to %q; it is not yours to remove",
+			id, sub.Account, bound)
 	}
 	if err := t.subscriptions.Remove(id); err != nil {
 		return "", err
@@ -209,7 +217,7 @@ func (t *Tools) HandleRepoUnfollow(_ context.Context, args map[string]any) (stri
 }
 
 // HandleRepoSubscriptions lists repository subscriptions.
-func (t *Tools) HandleRepoSubscriptions(_ context.Context, _ map[string]any) (string, error) {
+func (t *Tools) HandleRepoSubscriptions(ctx context.Context, _ map[string]any) (string, error) {
 	if t.subscriptions == nil {
 		return "", fmt.Errorf("forge repository subscriptions are unavailable")
 	}
@@ -218,9 +226,17 @@ func (t *Tools) HandleRepoSubscriptions(_ context.Context, _ map[string]any) (st
 		return "", err
 	}
 
+	// Each entry names an account and a repository, so an unfiltered
+	// listing hands a bound caller exactly the inventory of other
+	// accounts its binding exists to withhold.
+	bound := boundAccount(ctx)
+
 	now := time.Now()
 	entries := make([]repoSubscriptionEntry, 0, len(subs))
 	for _, sub := range subs {
+		if bound != "" && sub.Account != bound {
+			continue
+		}
 		entry := repoSubscriptionEntry{
 			SubscriptionID: sub.ID,
 			Account:        sub.Account,

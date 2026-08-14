@@ -18,20 +18,28 @@ import (
 // handled universally by the tool registry's ContentResolver before
 // handlers run — individual handlers receive already-resolved content.
 type Tools struct {
-	manager       *Manager
+	service       *Service
 	opLog         *OperationLog
 	logger        *slog.Logger
 	subscriptions *SubscriptionStore
 	loopResolver  messages.LoopResolver
 }
 
-// NewTools creates forge tools backed by the given manager. The opLog
-// records successful operations for context injection; pass nil to
-// disable operation tracking. subscriptions may be nil to disable the
-// repository-subscription surface.
+// NewTools creates standalone forge tools backed by the given manager. New
+// application runtimes should construct [Service] so account policy, context,
+// and subscriptions share one owner. The opLog records successful operations
+// for context injection; pass nil to disable operation tracking. subscriptions
+// may be nil to disable the repository-subscription surface.
 func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return newTools(&Service{manager: mgr, logger: logger}, opLog, logger, subscriptions)
+}
+
+func newTools(service *Service, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
 	return &Tools{
-		manager:       mgr,
+		service:       service,
 		opLog:         opLog,
 		logger:        logger,
 		subscriptions: subscriptions,
@@ -296,15 +304,15 @@ type searchResponse struct {
 
 // resolveAccountAndRepo extracts the account and repo from args,
 // resolves the repo to owner/repo format, and returns the provider
-// along with the resolved account name.
-func (t *Tools) resolveAccountAndRepo(args map[string]any) (ForgeProvider, string, string, error) {
-	account := stringArg(args, "account")
+// along with the resolved account name. Any account binding on the
+// context is applied first.
+func (t *Tools) resolveAccountAndRepo(ctx context.Context, args map[string]any) (ForgeProvider, string, string, error) {
 	repo := stringArg(args, "repo")
 	if repo == "" {
 		return nil, "", "", fmt.Errorf("repo is required")
 	}
 
-	resolved, err := t.manager.ResolveAccount(account)
+	resolved, err := t.service.ResolveAccount(ctx, stringArg(args, "account"))
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -324,7 +332,7 @@ func (t *Tools) resolveAccountAndRepo(args map[string]any) (ForgeProvider, strin
 
 // HandleIssueCreate creates a new issue on a forge repository.
 func (t *Tools) HandleIssueCreate(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -358,7 +366,7 @@ func (t *Tools) HandleIssueCreate(ctx context.Context, args map[string]any) (str
 // HandleIssueUpdate updates an existing issue. Body REPLACES the
 // entire issue body when provided — it does not append.
 func (t *Tools) HandleIssueUpdate(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -398,7 +406,7 @@ func (t *Tools) HandleIssueUpdate(ctx context.Context, args map[string]any) (str
 
 // HandleIssueGet retrieves a single issue by number.
 func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -443,7 +451,7 @@ func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string
 
 // HandleIssueList lists issues matching the given filters.
 func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -489,7 +497,7 @@ func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (strin
 
 // HandleIssueComment posts a comment on an issue or pull request.
 func (t *Tools) HandleIssueComment(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -521,7 +529,7 @@ func (t *Tools) HandleIssueComment(ctx context.Context, args map[string]any) (st
 
 // HandlePRList lists pull requests matching the given filters.
 func (t *Tools) HandlePRList(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -567,7 +575,7 @@ func (t *Tools) HandlePRList(ctx context.Context, args map[string]any) (string, 
 
 // HandlePRGet retrieves a single pull request by number.
 func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -648,7 +656,7 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 // HandlePRDiff returns the unified diff for a pull request, truncated
 // at max_lines (default 2000).
 func (t *Tools) HandlePRDiff(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -681,7 +689,7 @@ func (t *Tools) HandlePRDiff(ctx context.Context, args map[string]any) (string, 
 
 // HandlePRFiles returns the files changed in a pull request.
 func (t *Tools) HandlePRFiles(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -720,7 +728,7 @@ func (t *Tools) HandlePRFiles(ctx context.Context, args map[string]any) (string,
 
 // HandlePRCommits returns commits in a pull request.
 func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -765,7 +773,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 
 // HandlePRReviews returns reviews for a pull request with inline comments.
 func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -816,7 +824,7 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 
 // HandlePRReview submits a review on a pull request.
 func (t *Tools) HandlePRReview(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -853,7 +861,7 @@ func (t *Tools) HandlePRReview(ctx context.Context, args map[string]any) (string
 
 // HandlePRReviewComment posts an inline comment on a pull request diff.
 func (t *Tools) HandlePRReviewComment(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -899,7 +907,7 @@ func (t *Tools) HandlePRReviewComment(ctx context.Context, args map[string]any) 
 
 // HandlePRChecks returns CI check runs for a pull request.
 func (t *Tools) HandlePRChecks(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -938,7 +946,7 @@ func (t *Tools) HandlePRChecks(ctx context.Context, args map[string]any) (string
 
 // HandlePRMerge merges a pull request.
 func (t *Tools) HandlePRMerge(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -972,7 +980,7 @@ func (t *Tools) HandlePRMerge(ctx context.Context, args map[string]any) (string,
 
 // HandleReact adds an emoji reaction to an issue, PR, or comment.
 func (t *Tools) HandleReact(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -1006,7 +1014,7 @@ func (t *Tools) HandleReact(ctx context.Context, args map[string]any) (string, e
 
 // HandleRequestReview requests reviews from specified users.
 func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -1037,8 +1045,7 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 
 // HandleSearch performs a forge-native search.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
-	account := stringArg(args, "account")
-	resolved, err := t.manager.ResolveAccount(account)
+	resolved, err := t.service.ResolveAccount(ctx, stringArg(args, "account"))
 	if err != nil {
 		return "", err
 	}
