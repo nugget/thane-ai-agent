@@ -475,6 +475,39 @@ func (r *Registry) EffectiveBindings(loopID string) []EffectiveBinding {
 	return r.effectiveState(loopID).Bindings
 }
 
+// InheritableBindings returns the bindings a NEW child of parentID
+// would inherit through the ancestor cascade — which is not the same
+// as the parent's own effective bindings, because a non-container
+// parent's declarations do not cascade to its children. Only its
+// container ancestors reach that far.
+//
+// This exists because parentage is a caller-supplied value on the
+// launch surfaces, and bindings resolve ancestors-first. Choosing a
+// parent is therefore choosing a binding, so a launch has to be able
+// to ask what a proposed parent would impose before accepting it.
+// Returns nil when parentID names no live loop.
+func (r *Registry) InheritableBindings(parentID string) []EffectiveBinding {
+	parent := r.Get(parentID)
+	if parent == nil {
+		return nil
+	}
+	eff := r.EffectiveBindings(parentID)
+	if parent.Operation() == OperationContainer {
+		return eff
+	}
+	out := make([]EffectiveBinding, 0, len(eff))
+	for _, b := range eff {
+		if b.From == EffectiveOriginSelf {
+			continue
+		}
+		out = append(out, b)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // EffectiveRoutingFactors returns the resolved routing-factor map
 // for loopID. The cascade walks leaf-first up through container
 // ancestors with first-seen-wins dedup, so the closest declaration

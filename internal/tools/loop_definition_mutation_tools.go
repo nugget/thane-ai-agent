@@ -284,6 +284,9 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 		return "", err
 	}
 	launch = applyLoopLaunchContextDefaults(ctx, def, launch)
+	if err := r.guardLaunchParent(ctx, launch.ParentID, launch.Spec.ParentName); err != nil {
+		return "", err
+	}
 	// Captured before the launch so the running-durable short-circuit
 	// (LaunchDefinition returns the existing loop's ID untouched) is
 	// distinguishable from a fresh start and can be flagged below.
