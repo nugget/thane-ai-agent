@@ -5,6 +5,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // Root describes how a managed subtree maps onto its backing git repository.
@@ -21,11 +23,11 @@ type Root struct {
 // ResolveRoot resolves repoPath and worktreePath to absolute paths and verifies
 // that the worktree is the repository root or a subtree inside it.
 func ResolveRoot(repoPath, worktreePath string) (Root, error) {
-	absRepoPath, err := filepath.Abs(repoPath)
+	absRepoPath, err := absPath(repoPath)
 	if err != nil {
 		return Root{}, fmt.Errorf("resolve repository path: %w", err)
 	}
-	absWorktreePath, err := filepath.Abs(worktreePath)
+	absWorktreePath, err := absPath(worktreePath)
 	if err != nil {
 		return Root{}, fmt.Errorf("resolve worktree path: %w", err)
 	}
@@ -73,4 +75,18 @@ func prefixWithinRepo(repoPath, worktreePath string) (string, error) {
 		return "", fmt.Errorf("repository %s must be the worktree path %s or one of its parents", repoPath, worktreePath)
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+// absPath resolves a caller-supplied path to an absolute one, expanding
+// a leading ~ first.
+//
+// filepath.Abs alone does not expand ~: it prepends the working
+// directory, so "~/Thane/repos/x" silently becomes
+// "<cwd>/~/Thane/repos/x" — a real directory with a literal "~"
+// component, created without complaint. Nothing errors, and the
+// checkout lands somewhere the operator never named. Paths on this
+// surface come from model tool arguments and operator config, both of
+// which write ~ by habit.
+func absPath(path string) (string, error) {
+	return filepath.Abs(paths.ExpandHome(path))
 }
