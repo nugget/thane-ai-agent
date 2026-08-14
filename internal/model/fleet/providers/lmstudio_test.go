@@ -204,6 +204,33 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 	}
 }
 
+func TestDecodeLMStudioToolCalls_SynthesizesUniqueMissingIDs(t *testing.T) {
+	t.Parallel()
+
+	calls, err := decodeLMStudioToolCalls(map[int]*lmStudioToolAccumulator{
+		0: {Name: "first"},
+		1: {Name: "second"},
+		2: {ID: "runner_call_3", Name: "third"},
+	})
+	if err != nil {
+		t.Fatalf("decodeLMStudioToolCalls() error = %v", err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("tool calls = %d, want 3", len(calls))
+	}
+	for i := range 2 {
+		if !strings.HasPrefix(calls[i].ID, "call_") {
+			t.Errorf("tool call %d ID = %q, want generated call_ prefix", i, calls[i].ID)
+		}
+	}
+	if calls[0].ID == calls[1].ID {
+		t.Errorf("generated tool call IDs are not unique: %q", calls[0].ID)
+	}
+	if calls[2].ID != "runner_call_3" {
+		t.Errorf("runner-supplied tool call ID = %q, want runner_call_3", calls[2].ID)
+	}
+}
+
 func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	t.Parallel()
 
@@ -268,6 +295,9 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	}
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].ID; got != "call_1" {
+		t.Fatalf("tool ID = %q, want call_1", got)
 	}
 	if got := resp.Message.ToolCalls[0].Function.Name; got != "ha_get_state" {
 		t.Fatalf("tool name = %q, want ha_get_state", got)
@@ -542,6 +572,9 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	}
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].ID; got != "call_1" {
+		t.Fatalf("tool ID = %q, want call_1", got)
 	}
 	if got := resp.Message.ToolCalls[0].Function.Name; got != "ha_get_state" {
 		t.Fatalf("tool name = %q, want ha_get_state", got)
