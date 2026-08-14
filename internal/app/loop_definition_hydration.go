@@ -281,6 +281,13 @@ func (a *App) validateLoopBindings(spec looppkg.Spec) error {
 		return fmt.Errorf("loop %q binds %s=%q but no forge accounts are configured at this site",
 			spec.Name, looppkg.BindingForgeAccount, account)
 	}
+	// Deliberately unbound. ResolveAccount honors a binding carried by
+	// ctx, so threading the caller's context here would redirect the
+	// lookup to the caller's account and report a binding refusal for
+	// a spec that merely names an account this site does not have —
+	// turning a plain configuration error into a confusing one. The
+	// question being asked is "does this account exist", not "may this
+	// caller use it".
 	if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
 		return fmt.Errorf("loop %q binds %s=%q: %w",
 			spec.Name, looppkg.BindingForgeAccount, account, err)

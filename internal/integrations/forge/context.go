@@ -69,20 +69,19 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 // is painted on — the reader spends a turn discovering by refusal what
 // the prompt could have told it for free.
 func (p *ContextProvider) buildContext(bound string) (string, error) {
-	if p.service == nil || p.service.manager == nil || len(p.service.manager.order) == 0 {
+	accounts := p.service.AccountsInConfigOrder()
+	if len(accounts) == 0 {
 		return "", nil
 	}
-	manager := p.service.manager
 
 	now := time.Now()
 
 	// Account config.
-	views := make([]accountView, 0, len(manager.order))
-	for _, name := range manager.order {
-		if bound != "" && name != bound {
+	views := make([]accountView, 0, len(accounts))
+	for _, cfg := range accounts {
+		if bound != "" && cfg.Name != bound {
 			continue
 		}
-		cfg := manager.configs[name]
 		views = append(views, accountView{
 			Account:      cfg.Name,
 			Type:         cfg.Provider,

@@ -124,6 +124,22 @@ func boundAccount(ctx context.Context) string {
 	return looppkg.BindingFromContext(ctx, looppkg.BindingForgeAccount)
 }
 
+// AccountsInConfigOrder returns the configured accounts in declaration
+// order, primary first. It exists so callers that render or enumerate
+// accounts do not reach through the service into the manager's
+// internals: consolidating account ownership behind this type is only
+// worth doing if the type is actually the way through.
+func (s *Service) AccountsInConfigOrder() []AccountConfig {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	out := make([]AccountConfig, 0, len(s.manager.order))
+	for _, name := range s.manager.order {
+		out = append(out, s.manager.configs[name])
+	}
+	return out
+}
+
 // SubscriptionPollingEnabled reports whether repository polling is enabled by
 // configuration. Dynamic loop definitions must honor this policy rather than
 // recreating a poller when subscription_check_interval is zero.
