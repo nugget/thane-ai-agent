@@ -14,6 +14,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
 
+// restoreLoadTimeout bounds the rollback that puts a deployment's previous
+// context window back after a failed expansion. It is generous because it
+// covers a model load, and it exists only so a rollback running outside the
+// request's cancellation cannot hang indefinitely.
+const restoreLoadTimeout = 5 * time.Minute
+
 // RefreshResult describes the outcome of a runtime inventory refresh.
 type RefreshResult struct {
 	Changed  bool
@@ -118,6 +124,10 @@ func (r *Runtime) SetLogger(logger *slog.Logger) {
 	if r == nil || r.bundle == nil || logger == nil {
 		return
 	}
+	// The runtime logs on its own account too — context expansion warnings,
+	// rollback notices — so it has to move off the bootstrap handler with
+	// the provider clients rather than keeping the logger it started with.
+	r.log = logger
 	for id, oc := range r.bundle.OllamaClients {
 		oc.SetLogger(logger.With("resource", id))
 	}
@@ -321,7 +331,15 @@ func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextS
 		// now serving nothing. Put back what was there rather than leaving
 		// a working model unloaded because a larger window was unavailable.
 		if unloaded && previousWindow > 0 {
-			if _, restoreErr := client.LoadModel(ctx, dep.ModelName, previousWindow); restoreErr != nil {
+			// Deliberately not the request's context. The commonest reason
+			// for the load to have failed is that ctx was canceled or timed
+			// out, and reusing it would make the rollback fail on the spot —
+			// turning a refused expansion into an unloaded deployment every
+			// time, which is the one outcome this is here to prevent.
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreLoadTimeout)
+			defer cancel()
+
+			if _, restoreErr := client.LoadModel(restoreCtx, dep.ModelName, previousWindow); restoreErr != nil {
 				return nil, errors.Join(err, fmt.Errorf("restore previous context window %d: %w", previousWindow, restoreErr))
 			}
 			r.logger().Warn("context expansion failed, restored previous window",
@@ -330,7 +348,7 @@ func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextS
 				"requested", contextSize,
 				"restored", previousWindow,
 			)
-			if _, refreshErr := r.refreshLocked(ctx); refreshErr != nil {
+			if _, refreshErr := r.refreshLocked(restoreCtx); refreshErr != nil {
 				return nil, errors.Join(err, refreshErr)
 			}
 		}

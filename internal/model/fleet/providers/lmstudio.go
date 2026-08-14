@@ -264,7 +264,9 @@ func (c *LMStudioClient) UnloadModel(ctx context.Context, instanceID string) err
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	// The success body is not read for its content, but it still has to be
+	// drained for the connection to return to this shared client's pool.
+	defer httpkit.DrainAndClose(resp.Body, 4096)
 
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)

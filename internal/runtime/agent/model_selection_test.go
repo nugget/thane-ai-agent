@@ -1508,3 +1508,122 @@ func TestGrowLoadContextTokens(t *testing.T) {
 		})
 	}
 }
+
+// Doubling is a guess, and a guess can be wrong by more than a factor of
+// two. When the runner rejects the doubled window as well, the recovery has
+// to fall back to the deployment's advertised maximum — the answer this path
+// always reached for before the growth was bounded — rather than giving up
+// with a window it merely hoped would be enough.
+func TestRun_ExplicitModelEscalatesToMaxWhenDoublingIsNotEnough(t *testing.T) {
+	var mu sync.Mutex
+	loadedContext := 24000
+	var loadSizes []int
+	chatCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/models/unload":
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": "google/gemma-3-4b"})
+		case "/api/v1/models":
+			mu.Lock()
+			current := loadedContext
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(struct {
+				Models []map[string]any `json:"models"`
+			}{
+				Models: []map[string]any{{
+					"key":                "google/gemma-3-4b",
+					"type":               "llm",
+					"architecture":       "gemma3",
+					"format":             "mlx",
+					"max_context_length": 131072,
+					"capabilities":       map[string]any{"trained_for_tool_use": true},
+					"loaded_instances": []map[string]any{{
+						"id":     "google/gemma-3-4b",
+						"config": map[string]any{"context_length": current},
+					}},
+				}},
+			})
+		case "/api/v1/models/load":
+			var req struct {
+				ContextLength int `json:"context_length"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode load request: %v", err)
+			}
+			mu.Lock()
+			loadSizes = append(loadSizes, req.ContextLength)
+			loadedContext = req.ContextLength
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
+				Type:       "llm",
+				InstanceID: "google/gemma-3-4b",
+				Status:     "loaded",
+			})
+		case "/v1/chat/completions":
+			mu.Lock()
+			current := loadedContext
+			chatCalls++
+			mu.Unlock()
+			// Only the full 131072 window can serve this request, so the
+			// doubling to 48000 is rejected exactly as the original was.
+			if current < 131072 {
+				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": "deepslate/google/gemma-3-4b",
+				"choices": []map[string]any{{
+					"index":   0,
+					"message": map[string]any{"role": "assistant", "content": "ok"},
+				}},
+				"usage": map[string]any{"prompt_tokens": 12, "completion_tokens": 2},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: srv.URL, Provider: "lmstudio"},
+			},
+			Available: []config.ModelConfig{
+				{Name: "gpt-oss:20b", Resource: "spark", SupportsTools: true, ContextWindow: 8192},
+			},
+		},
+	}
+	cat, err := fleet.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("fleet.BuildCatalog: %v", err)
+	}
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
+	if err != nil {
+		t.Fatalf("fleet.NewRuntime: %v", err)
+	}
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"ha_get_state"})
+	loop.UseModelRegistry(runtime.Registry())
+	loop.UseModelRuntime(runtime)
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Model:    "deepslate/google/gemma-3-4b",
+		Messages: []Message{{Role: "user", Content: "Reply with exactly ok"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the escalation to reach a window that serves", err)
+	}
+	if strings.TrimSpace(resp.Content) != "ok" {
+		t.Fatalf("resp.Content = %q, want ok", resp.Content)
+	}
+
+	mu.Lock()
+	gotSizes := loadSizes
+	mu.Unlock()
+	if len(gotSizes) != 2 || gotSizes[0] != 48000 || gotSizes[1] != 131072 {
+		t.Fatalf("load sizes = %v, want [48000 131072] — the doubling, then the maximum", gotSizes)
+	}
+}
