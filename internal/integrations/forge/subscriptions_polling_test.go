@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+// enablePollingForTest marks polling live without standing up a real
+// poller. It lives in a test file rather than on Service: production
+// has no reason to swap a configured poller after construction, and an
+// exported setter would let a caller silently disable one.
+func enablePollingForTest(s *Service) {
+	s.poller = &SubscriptionPoller{}
+}
+
 // newPollingTestTools builds follow-capable tools whose polling state
 // the caller chooses.
 func newPollingTestTools(t *testing.T, pollingEnabled bool) *Tools {
@@ -23,7 +31,7 @@ func newPollingTestTools(t *testing.T, pollingEnabled bool) *Tools {
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = newTestSubscriptionStore(t)
 	if pollingEnabled {
-		tools.service.EnableSubscriptionPollingForTest(&SubscriptionPoller{})
+		enablePollingForTest(tools.service)
 	}
 	return tools
 }
@@ -78,8 +86,20 @@ func TestFollowWarnsWhenSubscriptionIsInert(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+	// Read it back rather than trusting the response: a returned ID
+	// proves the handler built a reply, not that anything persisted.
+	// Deleting the store write would leave a response-only assertion
+	// green, and "stored but inert" is precisely the behavior this
+	// test exists to protect.
 	if resp.SubscriptionID == "" {
-		t.Error("subscription was not stored")
+		t.Fatal("response carried no subscription id")
+	}
+	stored, err := tools.subscriptions.Get(resp.SubscriptionID)
+	if err != nil {
+		t.Fatalf("subscription %q was not persisted: %v", resp.SubscriptionID, err)
+	}
+	if stored.Repo == "" {
+		t.Errorf("persisted subscription is empty: %+v", stored)
 	}
 	for _, want := range []string{"inert", "subscription_check_interval"} {
 		if !strings.Contains(resp.Warning, want) {
