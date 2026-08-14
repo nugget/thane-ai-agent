@@ -131,6 +131,43 @@ func SubscriptionID(account, repo, branch string, target messages.LoopWakeTarget
 	return hex.EncodeToString(h[:6])
 }
 
+// CheckAdmission reports whether sub would be accepted by [Add],
+// without writing anything.
+//
+// It exists so a caller can find out before doing something it cannot
+// take back. forge_repo_follow clones a working tree for a requested
+// local_checkout, and Mirror.Sync resets that tree hard — discarding
+// local modifications by design. Learning about a duplicate ID or a
+// full subscription table only after that reset means a rejected
+// follow can still have destroyed a directory it then declines to
+// track. Add re-runs these checks itself; this is an early look, not
+// a substitute.
+func (s *SubscriptionStore) CheckAdmission(sub ProjectSubscription) error {
+	if s == nil || s.state == nil {
+		return fmt.Errorf("nil opstate store")
+	}
+	return s.checkAdmission(sub)
+}
+
+func (s *SubscriptionStore) checkAdmission(sub ProjectSubscription) error {
+	if err := validateSubscription(sub); err != nil {
+		return err
+	}
+	ids, err := s.loadIndex()
+	if err != nil {
+		return fmt.Errorf("load subscription index: %w", err)
+	}
+	for _, id := range ids {
+		if id == sub.ID {
+			return fmt.Errorf("subscription %q already exists", sub.ID)
+		}
+	}
+	if len(ids) >= s.maxItems {
+		return fmt.Errorf("forge subscription limit reached (%d/%d)", len(ids), s.maxItems)
+	}
+	return nil
+}
+
 // Add persists a new subscription and appends it to the index.
 func (s *SubscriptionStore) Add(sub ProjectSubscription) error {
 	if s.state == nil {
@@ -143,17 +180,12 @@ func (s *SubscriptionStore) Add(sub ProjectSubscription) error {
 		sub.CreatedAt = time.Now().UTC()
 	}
 
+	if err := s.checkAdmission(sub); err != nil {
+		return err
+	}
 	ids, err := s.loadIndex()
 	if err != nil {
 		return fmt.Errorf("load subscription index: %w", err)
-	}
-	for _, id := range ids {
-		if id == sub.ID {
-			return fmt.Errorf("subscription %q already exists", sub.ID)
-		}
-	}
-	if len(ids) >= s.maxItems {
-		return fmt.Errorf("forge subscription limit reached (%d/%d)", len(ids), s.maxItems)
 	}
 
 	if err := s.write(sub); err != nil {

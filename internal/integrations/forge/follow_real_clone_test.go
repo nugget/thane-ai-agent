@@ -32,6 +32,7 @@ func TestFollowReallyClonesWorkingTree(t *testing.T) {
 	// A real upstream with one commit on main.
 	upstream := t.TempDir()
 	git(upstream, "init", "-q", "-b", "main")
+	git(upstream, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(upstream, "README.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

@@ -249,6 +249,13 @@ roots:
     authoring: read_only
 ```
 
+A checkout only stays maintained while repository polling runs.
+`forge_repo_follow` performs the initial clone itself, so the tree
+exists as soon as the follow succeeds, but it is the subscription
+poller that refreshes it — set `forge.subscription_check_interval` to
+a positive number of seconds, or the root above silently serves the
+snapshot taken when it was first followed.
+
 With that configuration, `thanecode:internal/app/new.go` resolves to the
 maintained checkout. Keep checkout roots under `workspace.path`; if a
 read-only root must live elsewhere, also include that directory in

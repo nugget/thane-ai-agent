@@ -283,3 +283,46 @@ func TestSubscriptionListingWarnsWhenInert(t *testing.T) {
 		})
 	}
 }
+
+// TestFollowDoesNotTouchDiskWhenRejected covers the ordering that made
+// a rejected follow destructive. Mirror.Sync resets the working tree
+// hard, discarding local modifications by design, so running it before
+// the store agrees to take the subscription meant a duplicate ID or a
+// full table could wipe a directory and then decline to track it.
+func TestFollowDoesNotTouchDiskWhenRejected(t *testing.T) {
+	t.Parallel()
+
+	tools := newPollingTestTools(t, true)
+	syncCalls := 0
+	tools.checkoutSync = func(_ context.Context, _ ProjectSubscription) (string, error) {
+		syncCalls++
+		return "deadbeef", nil
+	}
+
+	args := map[string]any{
+		"repo":           "repo",
+		"branch":         "main",
+		"local_checkout": t.TempDir(),
+		"wake_loop":      map[string]any{"name": "repo_curator"},
+	}
+
+	if _, err := tools.HandleRepoFollow(context.Background(), args); err != nil {
+		t.Fatalf("first follow: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("syncCalls = %d after the first follow, want 1", syncCalls)
+	}
+
+	// The same repo/branch/wake target yields the same subscription ID,
+	// so this is refused as a duplicate.
+	_, err := tools.HandleRepoFollow(context.Background(), args)
+	if err == nil {
+		t.Fatal("duplicate follow succeeded")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %q, want the duplicate refusal", err)
+	}
+	if syncCalls != 1 {
+		t.Errorf("syncCalls = %d; the rejected follow reset a working tree it then refused to track", syncCalls)
+	}
+}
