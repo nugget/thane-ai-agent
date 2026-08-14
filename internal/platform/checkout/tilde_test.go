@@ -30,8 +30,12 @@ func TestResolveRootExpandsTilde(t *testing.T) {
 	}
 
 	for name, got := range map[string]string{"RepoPath": root.RepoPath, "WorktreePath": root.WorktreePath} {
-		if strings.Contains(got, "~") {
-			t.Errorf("%s = %q still contains a literal tilde", name, got)
+		// The defect is a literal "~" path COMPONENT, not a tilde
+		// character anywhere in the string: a home directory may
+		// legitimately contain one, and flagging that would fail this
+		// test for the wrong reason on a machine where it is true.
+		if hasTildeComponent(got) {
+			t.Errorf("%s = %q contains an unexpanded ~ path component", name, got)
 		}
 		if !filepath.IsAbs(got) {
 			t.Errorf("%s = %q is not absolute", name, got)
@@ -56,5 +60,40 @@ func TestResolveRootLeavesOtherPathsAlone(t *testing.T) {
 	gotEval, _ := filepath.EvalSymlinks(root.RepoPath)
 	if gotEval != wantEval {
 		t.Errorf("RepoPath = %q, want %q", root.RepoPath, dir)
+	}
+}
+
+// hasTildeComponent reports whether any element of path is exactly "~",
+// which is what an unexpanded tilde leaves behind.
+func hasTildeComponent(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == "~" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAbsPathRefusesUnexpandedTilde covers the fallback that would
+// otherwise recreate the bug quietly. ExpandHome returns its input
+// unchanged when the home directory cannot be determined, and
+// filepath.Abs would then produce "<cwd>/~/..." — a plausible-looking
+// wrong answer on the one path where nothing is watching.
+func TestAbsPathRefusesUnexpandedTilde(t *testing.T) {
+	// os.UserHomeDir reads $HOME on Unix; emptying it makes expansion
+	// fail the way it would on a process with no home.
+	t.Setenv("HOME", "")
+
+	if _, err := absPath("~/repo"); err == nil {
+		t.Error("absPath() accepted a tilde it could not expand; filepath.Abs would have mangled it into <cwd>/~/repo")
+	}
+
+	// A path needing no expansion still resolves with no home set.
+	got, err := absPath("/tmp/repo")
+	if err != nil {
+		t.Fatalf("absPath(absolute) = %v, want it to resolve without a home directory", err)
+	}
+	if got != "/tmp/repo" {
+		t.Errorf("absPath() = %q, want %q", got, "/tmp/repo")
 	}
 }

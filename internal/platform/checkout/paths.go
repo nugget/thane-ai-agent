@@ -88,5 +88,15 @@ func prefixWithinRepo(repoPath, worktreePath string) (string, error) {
 // surface come from model tool arguments and operator config, both of
 // which write ~ by habit.
 func absPath(path string) (string, error) {
-	return filepath.Abs(paths.ExpandHome(path))
+	expanded := paths.ExpandHome(path)
+	// ExpandHome returns its input unchanged when the home directory
+	// cannot be determined, and filepath.Abs would then turn "~/x" back
+	// into "<cwd>/~/x" — the very misresolution this helper exists to
+	// prevent, reintroduced on the one path where nothing is watching.
+	// A tilde that survived expansion is refused rather than resolved
+	// into a plausible-looking wrong answer.
+	if strings.HasPrefix(expanded, "~") {
+		return "", fmt.Errorf("cannot resolve %q: it begins with ~ and the home directory could not be determined; supply an absolute path", path)
+	}
+	return filepath.Abs(expanded)
 }
