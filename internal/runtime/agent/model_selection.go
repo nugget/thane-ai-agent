@@ -12,8 +12,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
-const estimatedImageContextTokens = 1536
-
 // IncompatibleModelError reports that an explicit deployment cannot
 // satisfy the request's required capabilities.
 type IncompatibleModelError struct {
@@ -286,23 +284,6 @@ func messagesNeedImages(msgs []Message) bool {
 		}
 	}
 	return false
-}
-
-func estimateLLMMessagesContextTokens(msgs []llm.Message) int {
-	total := 0
-	for _, msg := range msgs {
-		total += roughTokenCount(msg.Content)
-		total += len(msg.Images) * estimatedImageContextTokens
-	}
-	return total
-}
-
-func roughTokenCount(s string) int {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	return (len(s) + 3) / 4
 }
 
 func isLMStudioLoadedContextError(err error) bool {

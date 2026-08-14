@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -884,7 +885,12 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 
 func TestRun_ExplicitModelRetriesProviderContextErrorAfterRegistryRefresh(t *testing.T) {
 	var mu sync.Mutex
-	loadedContext := 4096
+	// Start loaded well above what estimateLoadContextTokens will size this
+	// request at, so selection-time preparation sees a window that already
+	// fits and issues no explicit load. That is the case this test is about:
+	// the estimate says the request fits, the runner disagrees anyway, and
+	// recovery has to notice the reload and retry against it.
+	loadedContext := 32768
 	chatCalls := 0
 	loadCalls := 0
 
@@ -1279,5 +1285,50 @@ func TestRun_RoutedImageRequestRejectsWhenNoEligibleImageCapableDeploymentExists
 	}
 	if len(mock.calls) != 0 {
 		t.Fatalf("llm calls = %d, want 0 when routing rejects", len(mock.calls))
+	}
+}
+
+// Sizing a loaded context window from the messages alone is what put a
+// production loop into a nudge-and-fallback cycle: the window was loaded at
+// exactly the estimated prompt size, and the tool schemas that travel beside
+// the prompt pushed the real request past it every time.
+func TestEstimateLoadContextTokens_CountsToolsAndHeadroom(t *testing.T) {
+	t.Parallel()
+
+	msgs := []llm.Message{
+		{Role: "system", Content: strings.Repeat("a", 4000)},
+		{Role: "user", Content: strings.Repeat("b", 400)},
+	}
+	toolDefs := make([]map[string]any, 0, 62)
+	for i := range 62 {
+		toolDefs = append(toolDefs, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        fmt.Sprintf("tool_%02d", i),
+				"description": "Performs an operation on the target resource.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"target": map[string]any{"type": "string", "description": "Resource identifier."},
+					},
+					"required": []string{"target"},
+				},
+			},
+		})
+	}
+
+	messagesOnly := estimateLLMMessagesContextTokens(msgs)
+	withTools := estimateLoadContextTokens(msgs, toolDefs)
+
+	if got := estimateLoadContextTokens(msgs, nil); got != messagesOnly+reservedOutputContextTokens {
+		t.Fatalf("estimateLoadContextTokens(msgs, nil) = %d, want %d", got, messagesOnly+reservedOutputContextTokens)
+	}
+	if withTools <= messagesOnly+reservedOutputContextTokens {
+		t.Fatalf("estimateLoadContextTokens() = %d, want it to exceed messages+headroom (%d) once tools are attached",
+			withTools, messagesOnly+reservedOutputContextTokens)
+	}
+	if withTools <= messagesOnly {
+		t.Fatalf("estimateLoadContextTokens() = %d, must never size a window at or below the prompt estimate %d",
+			withTools, messagesOnly)
 	}
 }
