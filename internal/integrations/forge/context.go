@@ -44,7 +44,16 @@ func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
 
 // forgeContextJSON is the JSON structure emitted by the provider.
 type forgeContextJSON struct {
-	Forges    []accountView  `json:"forges"`
+	Forges []accountView `json:"forges"`
+
+	// BindingError explains an empty account list that is a
+	// misconfiguration rather than an absence of forges. It rides
+	// inside the JSON rather than as prose beside it because the block
+	// is header-then-JSON everywhere else, and a reader that has
+	// learned to parse what follows the header should not meet a
+	// different shape on the one path that reports a broken boundary.
+	BindingError string `json:"binding_error,omitempty"`
+
 	RecentOps []recentOpJSON `json:"recent_operations,omitempty"`
 }
 
@@ -92,16 +101,16 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 		})
 	}
 
+	output := forgeContextJSON{Forges: views}
+
 	// A binding naming an account that is not configured would
 	// otherwise render an empty list, which reads as "no forge here"
 	// rather than "this loop is misconfigured". Hydration refuses this
 	// at boot; saying it plainly covers a live account removal.
-	if len(views) == 0 {
-		return "### Forge Accounts\n\nThis loop is bound to forge account " + bound +
-			", which is not configured at this site. No forge operation can succeed until the operator restores the account or changes the binding.\n", nil
+	if len(views) == 0 && bound != "" {
+		output.BindingError = "This loop is bound to forge account " + bound +
+			", which is not configured at this site. No forge operation can succeed until the operator restores the account or changes the binding."
 	}
-
-	output := forgeContextJSON{Forges: views}
 
 	// Recent operations (if log is available and non-empty).
 	//

@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
@@ -190,7 +191,7 @@ func TestContextProviderNarrowsToBoundAccount(t *testing.T) {
 		}
 	})
 
-	t.Run("a binding to a vanished account says so", func(t *testing.T) {
+	t.Run("a binding to a vanished account says so, without changing the block's shape", func(t *testing.T) {
 		t.Parallel()
 		out, err := provider.TagContext(boundCtx("github-retired"), agentctx.ContextRequest{})
 		if err != nil {
@@ -198,6 +199,27 @@ func TestContextProviderNarrowsToBoundAccount(t *testing.T) {
 		}
 		if !strings.Contains(out, "not configured") {
 			t.Errorf("context = %q\nwant an explicit statement that the bound account is missing", out)
+		}
+		// The block is header-then-JSON on every other path, and a
+		// reader that has learned to parse what follows the header
+		// should not meet prose on the one path reporting a broken
+		// boundary. This asserts the shape, not just the message.
+		if !strings.HasPrefix(out, "### Forge Accounts\n\n") {
+			t.Fatalf("missing the standard header: %q", out)
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(out, "### Forge Accounts\n\n"))
+		var parsed struct {
+			Forges       []map[string]any `json:"forges"`
+			BindingError string           `json:"binding_error"`
+		}
+		if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+			t.Fatalf("payload after the header is not JSON: %v\ngot: %s", err, out)
+		}
+		if len(parsed.Forges) != 0 {
+			t.Errorf("forges = %v, want empty", parsed.Forges)
+		}
+		if !strings.Contains(parsed.BindingError, "github-retired") {
+			t.Errorf("binding_error = %q, want it to name the unavailable account", parsed.BindingError)
 		}
 	})
 }
