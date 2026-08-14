@@ -116,6 +116,7 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 	// [Registry.Register] default-parent the loop to the core; if
 	// the operator wants the structural link, fixing the parent
 	// definition and re-reconciling re-establishes it.
+	declaredParentName := strings.TrimSpace(spec.ParentName)
 	if r.loops != nil && spec.ParentName != "" && spec.ParentID == "" {
 		if parent := r.loops.GetByName(spec.ParentName); parent != nil {
 			spec.ParentID = parent.ID()
@@ -130,6 +131,17 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 			)
 			spec.ParentName = ""
 		}
+	}
+	// Degrading parentage must not degrade a boundary. Everything above
+	// treats a missing parent as a routing inconvenience — reparent to
+	// core, log, carry on — which is right for tags and subscriptions
+	// and wrong for a binding: a loop restricted only by its container
+	// would start unrestricted the moment that container is paused,
+	// inactive, or merely reconciled later in the batch, reaching every
+	// configured account with nothing in the logs saying the
+	// restriction had stopped applying.
+	if err := r.requireDeclaredBindingsDeliverable(spec, declaredParentName); err != nil {
+		return spec, err
 	}
 	// Orphan loops attach to the core at registration time —
 	// [Registry.Register] owns that default-parenting now so every
@@ -820,4 +832,58 @@ func (a *App) loopDefinitionView() *looppkg.DefinitionRegistryView {
 		a.loopDefinitionRegistry.Snapshot(),
 		nil,
 	)
+}
+
+// requireDeclaredBindingsDeliverable refuses to start a loop whose
+// persisted ancestry declares a binding the live topology will not
+// actually deliver.
+//
+// Two ways they diverge. A parent that is paused, inactive, or simply
+// not yet reconciled is dropped above, so a child inheriting its
+// binding would run with none. And a container that is still running
+// keeps the structure it launched with, so replacing its definition
+// leaves the live cascade disagreeing with the stored chain the
+// authoring guards approved against.
+//
+// This is the runtime's answer to both: whatever was approved when the
+// definition was written, the loop does not start unless the boundary
+// it is supposed to be inside is the one it will actually get. That
+// makes the authoring-time guards an early, friendlier error rather
+// than the thing the boundary rests on.
+func (r *loopDefinitionRuntime) requireDeclaredBindingsDeliverable(spec looppkg.Spec, declaredParentName string) error {
+	if r == nil || r.definitions == nil {
+		return nil
+	}
+	chain := []looppkg.Spec{spec}
+	if declaredParentName != "" {
+		chain = append(chain, r.definitions.AncestorSpecs(declaredParentName)...)
+	}
+	expected := looppkg.EffectiveBindingsFromSpecChain(chain)
+	if len(expected) == 0 {
+		return nil
+	}
+
+	var inherited map[string]string
+	if r.loops != nil && spec.ParentID != "" {
+		live := make(map[string]string)
+		for _, b := range r.loops.InheritableBindings(spec.ParentID) {
+			live[b.Key] = b.Value
+		}
+		inherited = live
+	}
+	actual := looppkg.MergeBindings(inherited, spec.Bindings)
+
+	for key, want := range expected {
+		got, ok := actual[key]
+		if ok && got == want {
+			continue
+		}
+		if !ok {
+			return fmt.Errorf("loop %q declares binding %s=%q through its ancestry, but the live graph does not supply it (parent_name %q is unavailable); refusing to start it unbound",
+				spec.Name, key, want, declaredParentName)
+		}
+		return fmt.Errorf("loop %q declares binding %s=%q through its ancestry, but the live graph resolves %s=%q; refusing to start it under a boundary it was not authorized for",
+			spec.Name, key, want, key, got)
+	}
+	return nil
 }

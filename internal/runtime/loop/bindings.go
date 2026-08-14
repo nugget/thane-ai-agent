@@ -144,3 +144,24 @@ func CloneBindings(in map[string]string) map[string]string {
 	}
 	return out
 }
+
+// EffectiveBindingsFromSpecChain resolves the bindings a loop would
+// carry given a persisted ancestry chain, where index 0 is the loop
+// itself and later entries are its ancestors outward.
+//
+// It mirrors the live registry's cascade rather than reimplementing it:
+// ancestors contribute only when they are containers, and the outermost
+// declaration wins. Callers that authorize against stored definitions
+// need this, and having it live beside [MergeBindings] and the walker
+// is what keeps the two from drifting into disagreement about what a
+// chain means.
+func EffectiveBindingsFromSpecChain(chain []Spec) map[string]string {
+	sets := make([]map[string]string, 0, len(chain))
+	for i := len(chain) - 1; i >= 0; i-- {
+		if i > 0 && chain[i].Operation != OperationContainer {
+			continue
+		}
+		sets = append(sets, chain[i].Bindings)
+	}
+	return MergeBindings(sets...)
+}

@@ -42,7 +42,7 @@ func (r *Registry) requireCallerBindingsForDefinition(ctx context.Context, name,
 	if len(chain) == 0 {
 		return &looppkg.UnknownDefinitionError{Name: name}
 	}
-	return requireCallerBindings(action, name, caller, effectiveBindingsFromDefinitionChain(chain))
+	return requireCallerBindings(action, name, caller, looppkg.EffectiveBindingsFromSpecChain(chain))
 }
 
 func (r *Registry) requireCallerBindingsForSpec(ctx context.Context, spec looppkg.Spec) error {
@@ -55,22 +55,7 @@ func (r *Registry) requireCallerBindingsForSpec(ctx context.Context, spec looppk
 	if parentName := strings.TrimSpace(spec.ParentName); parentName != "" && r.loopDefinitionRegistry != nil {
 		chain = append(chain, r.loopDefinitionRegistry.AncestorSpecs(parentName)...)
 	}
-	return requireCallerBindings("author definition", spec.Name, caller, effectiveBindingsFromDefinitionChain(chain))
-}
-
-// effectiveBindingsFromDefinitionChain mirrors the live registry's binding
-// cascade over DefinitionRegistry.AncestorSpecs output: index 0 is the leaf,
-// ancestors contribute only when they are containers, and the outermost
-// declaration wins.
-func effectiveBindingsFromDefinitionChain(chain []looppkg.Spec) map[string]string {
-	sets := make([]map[string]string, 0, len(chain))
-	for i := len(chain) - 1; i >= 0; i-- {
-		if i > 0 && chain[i].Operation != looppkg.OperationContainer {
-			continue
-		}
-		sets = append(sets, chain[i].Bindings)
-	}
-	return looppkg.MergeBindings(sets...)
+	return requireCallerBindings("author definition", spec.Name, caller, looppkg.EffectiveBindingsFromSpecChain(chain))
 }
 
 func requireCallerBindings(action, name string, caller, effective map[string]string) error {
