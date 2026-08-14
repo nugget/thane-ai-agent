@@ -103,17 +103,6 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	checkoutRemoteURL := ""
 	subscriptionID := SubscriptionID(acct, repo, branch, wakeTarget)
 	if localCheckout != "" {
-		// A local checkout is populated by the subscription poller, so
-		// with polling disabled this argument promises a directory
-		// nothing will ever create. Refused rather than recorded: the
-		// operator goes looking for a working tree, finds nothing, and
-		// has no way to tell a missing clone from a broken one. The
-		// bare subscription is still allowed below with a warning,
-		// because a record that becomes live when polling is enabled
-		// is different from a path that silently never appears.
-		if !t.service.SubscriptionPollingEnabled() {
-			return "", fmt.Errorf("local_checkout cannot be honored: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), and the checkout is only ever populated by the poller. Set subscription_check_interval to enable polling, or follow the repository without local_checkout")
-		}
 		if branch == "" {
 			return "", fmt.Errorf("local_checkout requires branch because repository %s has no default branch; set branch", repo)
 		}
@@ -178,6 +167,25 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 			sub.LastCommit = commits[0].SHA
 			sub.LatestCommit = commitTitle(commits[0])
 		}
+	}
+
+	// Asking for a local checkout is asking for a working tree, so the
+	// follow makes one rather than filing an intention. OpenMirror is
+	// lazy by contract — it resolves a path and touches no disk, which
+	// is right for constructing many mirrors at startup and wrong here
+	// — so nothing created the checkout until the first poll, and where
+	// polling is disabled, never. Production followed a repository,
+	// got ok, and found no directory.
+	//
+	// Synced before the record is stored: a subscription pointing at a
+	// checkout that could not be made is the phantom path this fixes,
+	// so a failed clone fails the call instead of persisting a promise.
+	if strings.TrimSpace(sub.CheckoutPath) != "" && t.checkoutSync != nil {
+		head, err := t.checkoutSync(ctx, sub)
+		if err != nil {
+			return "", fmt.Errorf("create local checkout at %s: %w", sub.CheckoutPath, err)
+		}
+		sub.LastSyncedSHA = head
 	}
 
 	if err := t.subscriptions.Add(sub); err != nil {
@@ -317,5 +325,5 @@ func subscriptionInertWarning(service *Service) string {
 	if service.SubscriptionPollingEnabled() {
 		return ""
 	}
-	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop or sync anything until an operator enables it. The record persists and becomes live at that point."
+	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop until an operator enables it. Any local checkout was created now and is current as of this moment, but it will not refresh. The record persists and becomes live when polling is enabled."
 }

@@ -381,11 +381,12 @@ an existing loop, usually one created with `thane_loop_create`
 poller syncs that checkout before delivering repository events. The path
 must be empty or an existing Thane-owned mirror checkout; non-empty
 directories and unmarked git checkouts are refused. Unfollowing leaves
-the checkout on disk. Because the poller is the only thing that
-populates a checkout, `local_checkout` is refused when
-`forge.subscription_check_interval` is unset or zero; a subscription
-without one is still accepted there but stays inert until polling is
-enabled, and says so in its response.
+the checkout on disk. The follow performs the initial clone itself, so
+the working tree exists when the call returns and a failed clone fails
+the call rather than storing a path that never appears. With
+`forge.subscription_check_interval` unset or zero the checkout is still
+created and is accurate as of that moment, but nothing refreshes it and
+the subscription wakes no loop; the response says so.
 
 ## `scheduler` — time-based tasks
 

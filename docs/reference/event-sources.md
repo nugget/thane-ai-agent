@@ -105,13 +105,13 @@ as a read-only mirror checkout by the poller before event delivery. That
 path must be empty or an existing Thane-owned mirror checkout; non-empty
 directories and unmarked git checkouts are refused.
 
-The poller is the only thing that populates a checkout, so
-`local_checkout` requires polling: when `forge.subscription_check_interval`
-is unset or zero the follow is refused rather than recording a path
-nothing will ever create. A subscription without a checkout is still
-accepted under that setting, but it is inert until polling is enabled —
-it wakes no loop and syncs nothing — and the tool says so in its
-response.
+`forge_repo_follow` performs the initial clone itself, so a checkout
+exists on disk when the call returns; a clone that fails fails the
+call rather than storing a path nothing will ever create. The poller
+keeps it current thereafter. With `forge.subscription_check_interval`
+unset or zero the checkout is still created and accurate as of that
+moment, but nothing refreshes it and the subscription wakes no loop —
+the tool says so in its response.
 
 Unlike legacy pollers that start a fresh generic conversation, forge
 subscriptions require `wake_loop`. New `release` and `commit` events are
