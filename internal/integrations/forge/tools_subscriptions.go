@@ -55,6 +55,12 @@ type repoSubscriptionEntry struct {
 type repoSubscriptionsResponse struct {
 	Count         int                     `json:"count"`
 	Subscriptions []repoSubscriptionEntry `json:"subscriptions"`
+
+	// Warning repeats the inert-subscription caveat on the listing.
+	// A reader who did not make these rows has no other way to learn
+	// that none of them will fire, and the listing is where someone
+	// goes to find out whether a subscription is working.
+	Warning string `json:"warning,omitempty"`
 }
 
 type repoUnfollowResponse struct {
@@ -103,17 +109,6 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	checkoutRemoteURL := ""
 	subscriptionID := SubscriptionID(acct, repo, branch, wakeTarget)
 	if localCheckout != "" {
-		// A local checkout is populated by the subscription poller, so
-		// with polling disabled this argument promises a directory
-		// nothing will ever create. Refused rather than recorded: the
-		// operator goes looking for a working tree, finds nothing, and
-		// has no way to tell a missing clone from a broken one. The
-		// bare subscription is still allowed below with a warning,
-		// because a record that becomes live when polling is enabled
-		// is different from a path that silently never appears.
-		if !t.service.SubscriptionPollingEnabled() {
-			return "", fmt.Errorf("local_checkout cannot be honored: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), and the checkout is only ever populated by the poller. Set subscription_check_interval to enable polling, or follow the repository without local_checkout")
-		}
 		if branch == "" {
 			return "", fmt.Errorf("local_checkout requires branch because repository %s has no default branch; set branch", repo)
 		}
@@ -180,11 +175,57 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		}
 	}
 
+	// Asking for a local checkout is asking for a working tree, so the
+	// follow makes one rather than filing an intention. OpenMirror is
+	// lazy by contract — it resolves a path and touches no disk, which
+	// is right for constructing many mirrors at startup and wrong here
+	// — so nothing created the checkout until the first poll, and where
+	// polling is disabled, never. Production followed a repository,
+	// got ok, and found no directory.
+	//
+	// Synced before the record is stored: a subscription pointing at a
+	// checkout that could not be made is the phantom path this fixes,
+	// so a failed clone fails the call instead of persisting a promise.
+	// Doing it here also keeps the failure attached to the moment that
+	// can act on it — the caller still holds the repository, the path,
+	// and the reason it asked. Deferred to the first poll, the same
+	// error surfaces hours later in a loop that knows none of that.
+	// Nothing irreversible before the store agrees to take this. A
+	// duplicate ID or a full table would otherwise be discovered after
+	// the clone, and Mirror.Sync resets the tree hard — so a rejected
+	// follow could destroy a working directory it then declines to
+	// track. Add re-checks; this is the early look that keeps the
+	// destructive step from running first.
+	if err := t.subscriptions.CheckAdmission(sub); err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(sub.CheckoutPath) != "" && t.checkoutSync != nil {
+		head, err := t.checkoutSync(ctx, sub)
+		if err != nil {
+			return "", fmt.Errorf("create local checkout at %s: %w", sub.CheckoutPath, err)
+		}
+		sub.LastSyncedSHA = head
+	}
+
 	if err := t.subscriptions.Add(sub); err != nil {
 		return "", err
 	}
 
 	t.recordOp("forge_repo_follow", acct, repo, sub.ID)
+	// The agent gets this in its response; the operator gets it here.
+	// Whoever set subscription_check_interval to zero is not the one
+	// reading tool output, and a subscription that quietly does nothing
+	// is exactly what they would want to know they just created.
+	if warning := subscriptionInertWarning(t.service); warning != "" && t.logger != nil {
+		t.logger.Warn("forge subscription created while repository polling is disabled",
+			"subscription_id", sub.ID,
+			"repo", sub.Repo,
+			"account", sub.Account,
+			"local_checkout", sub.CheckoutPath,
+			"detail", warning)
+	}
+
 	return marshalResponse(repoFollowResponse{
 		SubscriptionID: sub.ID,
 		Account:        sub.Account,
@@ -283,6 +324,7 @@ func (t *Tools) HandleRepoSubscriptions(ctx context.Context, _ map[string]any) (
 	return marshalResponse(repoSubscriptionsResponse{
 		Count:         len(entries),
 		Subscriptions: entries,
+		Warning:       subscriptionListingInertWarning(t.service, len(entries)),
 	})
 }
 
@@ -313,9 +355,22 @@ func repositoryCheckoutRemoteURL(meta *Repository) string {
 // loop on new releases and commits, and syncs any local checkout. With
 // polling disabled the record is durable and correct and completely
 // silent, which is the shape most likely to be mistaken for working.
+// subscriptionListingInertWarning is the listing's version of the
+// caveat. It differs from the follow's in two ways that matter to a
+// reader: a listed checkout reflects its last successful sync rather
+// than this moment, and an empty listing has nothing to caveat — a
+// warning attached to zero rows (an account filter matching nothing,
+// say) describes a problem the reader does not have.
+func subscriptionListingInertWarning(service *Service, listed int) string {
+	if listed == 0 || service.SubscriptionPollingEnabled() {
+		return ""
+	}
+	return "Repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so none of these subscriptions will wake a loop, and any local checkout reflects its last successful sync rather than the current remote. The records persist and become live when polling is enabled."
+}
+
 func subscriptionInertWarning(service *Service) string {
 	if service.SubscriptionPollingEnabled() {
 		return ""
 	}
-	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop or sync anything until an operator enables it. The record persists and becomes live at that point."
+	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop until an operator enables it. Any local checkout was created now and is current as of this moment, but it will not refresh. The record persists and becomes live when polling is enabled."
 }

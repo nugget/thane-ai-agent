@@ -23,6 +23,13 @@ type Tools struct {
 	logger        *slog.Logger
 	subscriptions *SubscriptionStore
 	loopResolver  messages.LoopResolver
+
+	// checkoutSync performs the initial mirror sync when a follow
+	// requests a local checkout. Injectable so tests can exercise the
+	// follow path without a network clone; production uses the same
+	// syncer the poller does, so the checkout a follow creates and the
+	// one the poller maintains are made by identical code.
+	checkoutSync func(context.Context, ProjectSubscription) (string, error)
 }
 
 // NewTools creates standalone forge tools backed by the given manager. New
@@ -43,6 +50,7 @@ func newTools(service *Service, opLog *OperationLog, logger *slog.Logger, subscr
 		opLog:         opLog,
 		logger:        logger,
 		subscriptions: subscriptions,
+		checkoutSync:  mirrorSubscriptionCheckoutSyncer{logger: logger}.Sync,
 	}
 }
 

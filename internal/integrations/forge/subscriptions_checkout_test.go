@@ -37,6 +37,14 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	tools.subscriptions = store
 	// A local checkout is only meaningful when the poller runs.
 	enablePollingForTest(tools.service)
+	// The follow now creates the checkout; stub the clone so these
+	// tests keep exercising subscription bookkeeping rather than git.
+	syncedPath := ""
+	tools.checkoutSync = func(_ context.Context, sub ProjectSubscription) (string, error) {
+		syncedPath = sub.CheckoutPath
+		return "synced-head", nil
+	}
+	_ = syncedPath
 
 	raw, err := tools.HandleRepoFollow(context.Background(), map[string]any{
 		"repo":           "repo",
@@ -148,6 +156,14 @@ func TestHandleRepoFollowRejectsLocalCheckoutWithoutCloneURL(t *testing.T) {
 	tools.subscriptions = store
 	// A local checkout is only meaningful when the poller runs.
 	enablePollingForTest(tools.service)
+	// The follow now creates the checkout; stub the clone so these
+	// tests keep exercising subscription bookkeeping rather than git.
+	syncedPath := ""
+	tools.checkoutSync = func(_ context.Context, sub ProjectSubscription) (string, error) {
+		syncedPath = sub.CheckoutPath
+		return "synced-head", nil
+	}
+	_ = syncedPath
 
 	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
 		"repo":           "repo",
