@@ -72,6 +72,11 @@ func loopSpecSchema(description string) map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Tool names to exclude from this loop. Direct human-egress tools are denied by default for subsystem loops — wake the core loop with request_core_attention instead.",
 			},
+			"bindings": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description":          "Resource instances this loop is scoped to. Tags decide whether a surface is available; bindings decide which instance of it you get. Recognized key: \"forge_account\" — the forge account name every forge tool resolves to, refusing the others. Keys are a closed set and an unknown one refuses the definition. A container's binding cannot be overridden by its children.",
+			},
 			"sleep_min": map[string]any{
 				"type":        "string",
 				"description": "Minimum sleep between iterations as a duration string (e.g. \"15m\"); the loop cannot self-select a shorter sleep.",

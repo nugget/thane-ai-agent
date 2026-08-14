@@ -55,11 +55,16 @@ type recentOpJSON struct {
 
 // TagContext returns the forge context block for tag-gated injection.
 // Implements [agent.TagContextProvider].
-func (p *ContextProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
-	return p.buildContext()
+func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+	return p.buildContext(boundAccount(ctx))
 }
 
-func (p *ContextProvider) buildContext() (string, error) {
+// buildContext renders the account block. When bound is non-empty the
+// block narrows to that account: the tools will refuse every other one,
+// and advertising an account the caller cannot use teaches a door that
+// is painted on — the reader spends a turn discovering by refusal what
+// the prompt could have told it for free.
+func (p *ContextProvider) buildContext(bound string) (string, error) {
 	if p.manager == nil || len(p.manager.order) == 0 {
 		return "", nil
 	}
@@ -69,6 +74,9 @@ func (p *ContextProvider) buildContext() (string, error) {
 	// Account config.
 	views := make([]accountView, 0, len(p.manager.order))
 	for _, name := range p.manager.order {
+		if bound != "" && name != bound {
+			continue
+		}
 		cfg := p.manager.configs[name]
 		views = append(views, accountView{
 			Account:      cfg.Name,
@@ -76,7 +84,17 @@ func (p *ContextProvider) buildContext() (string, error) {
 			URL:          cfg.URL,
 			DefaultOwner: cfg.Owner,
 			Description:  cfg.Description,
+			Bound:        bound != "",
 		})
+	}
+
+	// A binding naming an account that is not configured would
+	// otherwise render an empty list, which reads as "no forge here"
+	// rather than "this loop is misconfigured". Hydration refuses this
+	// at boot; saying it plainly covers a live account removal.
+	if len(views) == 0 {
+		return "### Forge Accounts\n\nThis loop is bound to forge account " + bound +
+			", which is not configured at this site. No forge operation can succeed until the operator restores the account or changes the binding.\n", nil
 	}
 
 	output := forgeContextJSON{Forges: views}

@@ -196,6 +196,11 @@ type Config struct {
 	// available tools.
 	ExcludeTools []string
 
+	// Bindings name the specific instances of shared resources this
+	// loop may reach — see [Spec.Bindings] for the grammar and
+	// [mergeBindings] for the ancestors-win cascade.
+	Bindings map[string]string
+
 	// SleepMin is the minimum sleep duration between iterations.
 	// Default: 30s.
 	SleepMin time.Duration
@@ -712,6 +717,12 @@ type Status struct {
 	// loop's tool exclusions, with provenance on each entry. Same
 	// nil-conflation as EffectiveTags.
 	EffectiveExcludeTools []EffectiveExcludeTool `json:"effective_exclude_tools,omitempty"`
+	// EffectiveBindings is the post-ancestor-merge view of this loop's
+	// resource bindings, populated from [Registry.EffectiveBindings]
+	// when the loop is registered. A loop inspecting itself should be
+	// able to read the boundary it is operating inside rather than
+	// inferring it from a refusal.
+	EffectiveBindings []EffectiveBinding `json:"effective_bindings,omitempty"`
 	// EffectiveRoutingFactors is the post-ancestor-merge view of this
 	// loop's routing factors, child-wins on key collision. Same
 	// nil-conflation as EffectiveTags.

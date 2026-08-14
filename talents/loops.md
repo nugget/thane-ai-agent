@@ -217,6 +217,23 @@ muddle them and the loop drifts.
   The mode is per-loop and never inherited; when in doubt, leave it
   unset and trim later — it retunes live via `loop_definition_update`.
 
+- **`tags` say whether; `bindings` say which.** A tag decides what
+  surface a loop can reach — granting `forge` turns on the forge
+  tools. It does not decide which forge account those tools use,
+  because every forge tool takes an `account` argument that the model
+  fills in, so a tagged loop reaches every configured account by
+  default. When a site has more than one account and they differ in
+  what their tokens may do, declare `bindings: {forge_account:
+  "<name>"}`. An omitted `account` argument then resolves to the bound
+  account instead of the primary, any other account is refused by
+  name, and the account block in context narrows to the one account
+  you can actually use. Bindings inherit from container parents, and
+  on collision the *ancestor* wins — a container's binding is a
+  boundary its children cannot declare their way out of, which is the
+  opposite of how `routing_factors` resolve. Binding to an account
+  that does not exist refuses the definition rather than failing later
+  at the first call.
+
 ## Changing a loop that's already running
 
 A running loop carries the config it launched with. Whether an edit

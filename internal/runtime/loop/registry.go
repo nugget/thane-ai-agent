@@ -415,6 +415,7 @@ type effectiveStateResult struct {
 	Subscriptions    []EffectiveSubscription
 	Tags             []EffectiveTag
 	ExcludeTools     []EffectiveExcludeTool
+	Bindings         []EffectiveBinding
 	RoutingFactors   []EffectiveRoutingFactor
 	DelegationGating *EffectiveDelegationGating
 	// SupervisorRoutingFactors is the parallel cascade for the
@@ -462,6 +463,16 @@ func (r *Registry) EffectiveTags(loopID string) []EffectiveTag {
 // operator (or model) where the exclusion came from.
 func (r *Registry) EffectiveExcludeTools(loopID string) []EffectiveExcludeTool {
 	return r.effectiveState(loopID).ExcludeTools
+}
+
+// EffectiveBindings returns the resolved resource bindings for loopID
+// with provenance. Unlike every other cascading field, the OUTERMOST
+// declaration wins: a binding is a restriction the container imposed,
+// and if a descendant could rebind a key its ancestor declared, the
+// ancestor's binding would be advice rather than a boundary. A
+// descendant may still bind a key no ancestor mentions.
+func (r *Registry) EffectiveBindings(loopID string) []EffectiveBinding {
+	return r.effectiveState(loopID).Bindings
 }
 
 // EffectiveRoutingFactors returns the resolved routing-factor map
@@ -590,6 +601,39 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 	}
 
 	result := effectiveStateResult{}
+	// Bindings walk outermost-first so the ancestor's declaration is
+	// the one that sticks; every other field below walks leaf-first.
+	// The operation filter matches the main walk: only container
+	// ancestors contribute, while the starting loop always does.
+	seenBindings := make(map[string]struct{})
+	for i := len(walk) - 1; i >= 0; i-- {
+		l := walk[i]
+		if i > 0 && l.Operation() != OperationContainer {
+			continue
+		}
+		origin := EffectiveOriginSelf
+		if i > 0 {
+			origin = l.Name()
+		}
+		for key, value := range l.bindingsSnapshot() {
+			if key == "" || value == "" {
+				continue
+			}
+			if _, dup := seenBindings[key]; dup {
+				continue
+			}
+			seenBindings[key] = struct{}{}
+			result.Bindings = append(result.Bindings, EffectiveBinding{
+				Key:   key,
+				Value: value,
+				From:  origin,
+			})
+		}
+	}
+	sort.Slice(result.Bindings, func(i, j int) bool {
+		return result.Bindings[i].Key < result.Bindings[j].Key
+	})
+
 	seenSubs := make(map[string]struct{})
 	seenTags := make(map[string]struct{})
 	seenExcludes := make(map[string]struct{})

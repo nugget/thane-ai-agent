@@ -128,6 +128,11 @@ type accountView struct {
 	URL          string `json:"url"`
 	DefaultOwner string `json:"default_owner,omitempty"`
 	Description  string `json:"description,omitempty"`
+
+	// Bound marks the account as the one this caller is restricted to,
+	// so the model reads the narrowed list as a boundary rather than as
+	// the whole of what the site has configured.
+	Bound bool `json:"bound,omitempty"`
 }
 
 // Context returns a markdown block describing the configured forge

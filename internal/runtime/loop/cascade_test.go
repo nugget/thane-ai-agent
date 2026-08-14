@@ -339,3 +339,90 @@ func TestLoopStatusReportsCascadeFields(t *testing.T) {
 		t.Errorf("EffectiveDelegationGating = %+v, want {disabled ctx}", st.EffectiveDelegationGating)
 	}
 }
+
+// TestEffectiveBindingsAncestorWins covers the inverted cascade.
+// Bindings are the one field where the ancestor's declaration beats
+// the leaf's: a container's binding is a restriction it imposed, and a
+// descendant that could rebind the key would turn that boundary into a
+// suggestion. Provenance names the container so an operator reading a
+// refusal can find where the restriction was declared.
+func TestEffectiveBindingsAncestorWins(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	root, err := New(Config{
+		Name:      "root",
+		Operation: OperationContainer,
+		Bindings:  map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("new root: %v", err)
+	}
+	if err := r.Register(root); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+
+	leaf, err := New(Config{
+		Name:     "leaf",
+		Task:     "t",
+		ParentID: root.ID(),
+		Bindings: map[string]string{BindingForgeAccount: "github-primary"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new leaf: %v", err)
+	}
+	if err := r.Register(leaf); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+
+	got := r.EffectiveBindings(leaf.ID())
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(got), got)
+	}
+	if got[0].Key != BindingForgeAccount {
+		t.Errorf("Key = %q, want %q", got[0].Key, BindingForgeAccount)
+	}
+	if got[0].Value != "github-readonly" {
+		t.Errorf("Value = %q, want the container's binding to survive the child's attempt to rebind it", got[0].Value)
+	}
+	if got[0].From != "root" {
+		t.Errorf("From = %q, want %q so a refusal can be traced to its declaration", got[0].From, "root")
+	}
+}
+
+// TestEffectiveBindingsLeafMayBindUnclaimedKey confirms the cascade
+// restricts rather than forbids: a descendant can still bind a key no
+// ancestor mentions.
+func TestEffectiveBindingsLeafMayBindUnclaimedKey(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	root, err := New(Config{Name: "root", Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new root: %v", err)
+	}
+	if err := r.Register(root); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+
+	leaf, err := New(Config{
+		Name:     "leaf",
+		Task:     "t",
+		ParentID: root.ID(),
+		Bindings: map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new leaf: %v", err)
+	}
+	if err := r.Register(leaf); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+
+	got := r.EffectiveBindings(leaf.ID())
+	if len(got) != 1 || got[0].Value != "github-readonly" {
+		t.Fatalf("EffectiveBindings = %+v, want the leaf's own binding to apply", got)
+	}
+	if got[0].From != EffectiveOriginSelf {
+		t.Errorf("From = %q, want %q", got[0].From, EffectiveOriginSelf)
+	}
+}

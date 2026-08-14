@@ -157,6 +157,7 @@ type LoopView struct {
 	EffectiveTags             []EffectiveTag             `json:"effective_tags"`
 	EffectiveSubscriptions    []EffectiveSubscription    `json:"effective_subscriptions"`
 	EffectiveExcludeTools     []EffectiveExcludeTool     `json:"effective_exclude_tools"`
+	EffectiveBindings         []EffectiveBinding         `json:"effective_bindings"`
 	EffectiveRoutingFactors   []EffectiveRoutingFactor   `json:"effective_routing_factors"`
 	EffectiveDelegationGating *EffectiveDelegationGating `json:"effective_delegation_gating"`
 }
@@ -590,6 +591,7 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	v.EffectiveTags = orEmptyLoopSlice(s.EffectiveTags)
 	v.EffectiveSubscriptions = orEmptyLoopSlice(s.EffectiveSubscriptions)
 	v.EffectiveExcludeTools = orEmptyLoopSlice(s.EffectiveExcludeTools)
+	v.EffectiveBindings = orEmptyLoopSlice(s.EffectiveBindings)
 	v.EffectiveRoutingFactors = orEmptyLoopSlice(s.EffectiveRoutingFactors)
 	v.EffectiveDelegationGating = s.EffectiveDelegationGating
 }

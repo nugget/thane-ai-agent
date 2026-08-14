@@ -46,11 +46,16 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages         []Message                           `json:"messages"`
-	Model            string                              `json:"model,omitempty"`
-	ConversationID   string                              `json:"conversation_id,omitempty"`
-	ChannelBinding   *memory.ChannelBinding              `json:"channel_binding,omitempty"`
-	RoutingFactors   map[string]string                   `json:"routing_factors,omitempty"`   // Caller-supplied routing factors the router weights (see router.Factor* constants)
+	Messages       []Message              `json:"messages"`
+	Model          string                 `json:"model,omitempty"`
+	ConversationID string                 `json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding `json:"channel_binding,omitempty"`
+	RoutingFactors map[string]string      `json:"routing_factors,omitempty"` // Caller-supplied routing factors the router weights (see router.Factor* constants)
+	// Bindings scope this turn to specific instances of shared
+	// resources (see loop.Spec.Bindings). They reach tool handlers and
+	// context providers through the execution context, where each
+	// subsystem reads its own key.
+	Bindings         map[string]string                   `json:"bindings,omitempty"`
 	DelegationGating string                              `json:"delegation_gating,omitempty"` // Typed feature switch: "disabled" gives the model direct access to all tools instead of the orchestrator-and-delegate gating pattern
 	SkipContext      bool                                `json:"-"`                           // Skip memory, tools, and context injection (for lightweight completions)
 	AllowedTools     []string                            `json:"-"`                           // Optional allowlist of tools visible for this run
@@ -1841,6 +1846,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	ctx = agentctx.WithPromptMode(ctx, req.PromptMode)
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
+	// Bound here as well as on tool calls: a context block that
+	// advertises a resource the tools will refuse teaches the model a
+	// door that is painted on.
+	promptCtx = loop.WithBindings(promptCtx, req.Bindings)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
 	promptCtx = tools.WithSuppressAlwaysContext(promptCtx, req.SuppressAlwaysContext)
 
@@ -2321,6 +2330,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCtx := tools.WithConversationID(iterCtx, convID)
 			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
 			toolCtx = tools.WithHints(toolCtx, req.RoutingFactors)
+			toolCtx = loop.WithBindings(toolCtx, req.Bindings)
 			if scope != nil {
 				toolCtx = tools.WithInheritableCapabilityTags(toolCtx, scope.InheritableTags())
 			}

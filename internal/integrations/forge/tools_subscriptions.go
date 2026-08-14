@@ -75,7 +75,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		return "", err
 	}
 
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
