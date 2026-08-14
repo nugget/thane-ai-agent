@@ -247,6 +247,7 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		usage          lmStudioUsage
 		toolAcc        = make(map[int]*lmStudioToolAccumulator)
 		done           bool
+		chunks         int
 	)
 
 	processEvent := func(data string) error {
@@ -256,11 +257,19 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		if data == "[DONE]" {
 			return io.EOF
 		}
+		// An error frame decodes cleanly into lmStudioChatResponse — every
+		// field it carries is unknown to that type — so it would otherwise
+		// pass through as a chunk contributing nothing, turning an upstream
+		// failure into a silently empty completion. Check for it first.
+		if errText := lmStudioStreamErrorText(data); errText != "" {
+			return fmt.Errorf("stream error: %s", errText)
+		}
 
 		var chunk lmStudioChatResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return fmt.Errorf("decode stream chunk: %w", err)
 		}
+		chunks++
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
@@ -331,6 +340,14 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		if err := processEvent(strings.Join(eventLines, "\n")); err != nil && err != io.EOF {
 			return nil, err
 		}
+	}
+
+	// A stream that carried no chunks at all never produced a completion,
+	// however cleanly it closed. Reporting success here would hand the
+	// caller a well-formed zero-token response and hide the failure; the
+	// non-streaming path rejects its equivalent for the same reason.
+	if chunks == 0 {
+		return nil, fmt.Errorf("LM Studio returned an empty stream for model %q", requestedModel)
 	}
 
 	toolCalls, err := decodeLMStudioToolCalls(toolAcc)

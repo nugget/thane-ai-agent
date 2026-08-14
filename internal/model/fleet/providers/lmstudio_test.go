@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -600,5 +601,92 @@ func TestLMStudioChatStream_DefaultsAssistantRoleWhenStreamOmitsIt(t *testing.T)
 	}
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+}
+
+// The failure this guards against was observed in production: LM Studio
+// answers a streaming request it cannot serve with HTTP 200 and an
+// `event: error` frame, where the non-streaming call would have answered
+// 400. The frame decodes cleanly into lmStudioChatResponse, so before this
+// was handled the upstream failure surfaced as a successful zero-token
+// completion and the agent's context-reload recovery never fired.
+func TestLMStudioChatStream_SurfacesErrorFrame(t *testing.T) {
+	t.Parallel()
+
+	const upstream = "The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "event error frame with object payload",
+			body: "event: error\ndata: {\"error\":{\"message\":" + strconv.Quote(upstream) + "},\"message\":" + strconv.Quote(upstream) + "}\n\n",
+		},
+		{
+			name: "data frame with string payload",
+			body: "data: {\"error\":" + strconv.Quote(upstream) + "}\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tt.body)
+			}))
+			defer srv.Close()
+
+			client := NewLMStudioClient(srv.URL, "", nil)
+			resp, err := client.ChatStream(context.Background(), "qwen/qwen3-coder-next",
+				[]llm.Message{{Role: "user", Content: "summarize the repository"}}, nil,
+				func(llm.StreamEvent) {})
+			if err == nil {
+				t.Fatalf("ChatStream() error = nil, want stream error (resp = %+v)", resp)
+			}
+			if !strings.Contains(err.Error(), upstream) {
+				t.Fatalf("ChatStream() error = %q, want it to carry the upstream text verbatim", err)
+			}
+		})
+	}
+}
+
+// A stream can also close cleanly having delivered nothing at all. That is
+// not a completion either, and reporting success would hand the caller a
+// well-formed zero-token response.
+func TestLMStudioChatStream_ChunklessStreamErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty body", body: ""},
+		{name: "done with no chunks", body: "data: [DONE]\n\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tt.body)
+			}))
+			defer srv.Close()
+
+			client := NewLMStudioClient(srv.URL, "", nil)
+			_, err := client.ChatStream(context.Background(), "qwen/qwen3-coder-next",
+				[]llm.Message{{Role: "user", Content: "summarize the repository"}}, nil,
+				func(llm.StreamEvent) {})
+			if err == nil {
+				t.Fatal("ChatStream() error = nil, want empty stream error")
+			}
+			if !strings.Contains(err.Error(), "empty stream") {
+				t.Fatalf("ChatStream() error = %q, want empty stream message", err)
+			}
+		})
 	}
 }
