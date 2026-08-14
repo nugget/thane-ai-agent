@@ -231,6 +231,28 @@ func TestDecodeLMStudioToolCalls_SynthesizesUniqueMissingIDs(t *testing.T) {
 	}
 }
 
+func TestApplyTextToolFallback_SynthesizesMissingID(t *testing.T) {
+	t.Parallel()
+
+	resp := &llm.ChatResponse{
+		Message: llm.Message{
+			Content: `{"name":"echo","arguments":{"text":"probe"}}`,
+		},
+	}
+	if err := applyTextToolFallback(resp, []string{"echo"}); err != nil {
+		t.Fatalf("applyTextToolFallback() error = %v", err)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].ID; !strings.HasPrefix(got, "call_") {
+		t.Fatalf("tool call ID = %q, want generated call_ prefix", got)
+	}
+	if resp.Message.Content != "" {
+		t.Fatalf("content = %q, want empty after text fallback", resp.Message.Content)
+	}
+}
+
 func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	t.Parallel()
 

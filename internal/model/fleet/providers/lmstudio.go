@@ -366,7 +366,9 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 	result.Message.Role = normalizeLMStudioMessageRole(role)
 	result.Message.Content = contentBuilder.String()
 	result.Message.ToolCalls = toolCalls
-	applyTextToolFallback(result, validToolNames)
+	if err := applyTextToolFallback(result, validToolNames); err != nil {
+		return nil, err
+	}
 
 	c.logger.Debug("stream complete",
 		"model", result.Model,
@@ -407,7 +409,9 @@ func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validT
 	result.Message.Role = normalizeLMStudioMessageRole(wire.Choices[0].Message.Role)
 	result.Message.Content = lmStudioContentText(wire.Choices[0].Message.Content)
 	result.Message.ToolCalls = toolCalls
-	applyTextToolFallback(result, validToolNames)
+	if err := applyTextToolFallback(result, validToolNames); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
 		return nil, fmt.Errorf("LM Studio returned an empty assistant completion for model %q", wire.Model)
 	}

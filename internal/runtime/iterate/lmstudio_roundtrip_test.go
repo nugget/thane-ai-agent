@@ -32,6 +32,43 @@ type lmStudioFollowUpToolCall struct {
 func TestLMStudioMissingToolCallIDRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	tests := []struct {
+		name       string
+		firstDelta map[string]any
+	}{
+		{
+			name: "structured tool call",
+			firstDelta: map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"index": 0,
+					"type":  "function",
+					"function": map[string]any{
+						"name":      "echo",
+						"arguments": `{"text":"probe"}`,
+					},
+				}},
+			},
+		},
+		{
+			name: "text tool fallback",
+			firstDelta: map[string]any{
+				"role":    "assistant",
+				"content": `{"name":"echo","arguments":{"text":"probe"}}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			testLMStudioMissingToolCallIDRoundTrip(t, tt.firstDelta)
+		})
+	}
+}
+
+func testLMStudioMissingToolCallIDRoundTrip(t *testing.T, firstDelta map[string]any) {
+	t.Helper()
+
 	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req lmStudioFollowUpRequest
@@ -55,23 +92,13 @@ func TestLMStudioMissingToolCallIDRoundTrip(t *testing.T) {
 
 		switch requestCount.Add(1) {
 		case 1:
-			// Qwen tool parsing can produce a valid call without the id that
-			// LM Studio later requires when the call returns in history.
+			// Qwen can produce either a structured or text-parsed tool call
+			// without the ID LM Studio later requires in iteration history.
 			writeChunk(map[string]any{
 				"model": "qwen/qwen3-coder-next",
 				"choices": []any{map[string]any{
 					"index": 0,
-					"delta": map[string]any{
-						"role": "assistant",
-						"tool_calls": []any{map[string]any{
-							"index": 0,
-							"type":  "function",
-							"function": map[string]any{
-								"name":      "echo",
-								"arguments": `{"text":"probe"}`,
-							},
-						}},
-					},
+					"delta": firstDelta,
 				}},
 				"usage": map[string]any{"prompt_tokens": 12, "completion_tokens": 4},
 			})

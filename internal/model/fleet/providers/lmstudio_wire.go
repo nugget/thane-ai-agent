@@ -410,6 +410,17 @@ func lmStudioContentText(v any) string {
 	}
 }
 
-func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) {
+func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) error {
+	if resp == nil {
+		return nil
+	}
 	llm.ApplyTextToolCallFallback(resp, validToolNames, llm.DefaultToolCallTextProfile())
+	for i := range resp.Message.ToolCalls {
+		id, err := ensureLMStudioToolCallID(resp.Message.ToolCalls[i].ID)
+		if err != nil {
+			return err
+		}
+		resp.Message.ToolCalls[i].ID = id
+	}
+	return nil
 }
