@@ -36,12 +36,18 @@ type AccountConfig struct {
 	// Owner is the default repository owner for unqualified repo references.
 	Owner string `yaml:"owner"`
 
-	// Username is the forge username for commit attribution.
-	Username string `yaml:"username"`
-
 	// URL is the API base URL. Required for gitea. Optional for GitHub
 	// (defaults to https://api.github.com).
 	URL string `yaml:"url"`
+
+	// Description is an operator-authored note about what this account
+	// is for, surfaced to the model alongside the account name. Its
+	// purpose is to let an operator say what a token may do before the
+	// model discovers the boundary by being refused: "read-only
+	// observation token; writes are denied" spends a sentence to save
+	// a wasted turn and a misread failure. Optional; accounts without
+	// one are described only by their name and owner.
+	Description string `yaml:"description"`
 }
 
 // Configured reports whether at least one forge account is configured
@@ -126,7 +132,7 @@ func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
 				httpkit.WithTimeout(30*time.Second),
 				httpkit.WithTruthfulUserAgent(httpkit.AgentSurfaceForge),
 			)
-			provider, err = NewGitHub(httpClient, acct.Token, acct.URL, logger)
+			provider, err = NewGitHub(httpClient, acct.Name, acct.Token, acct.URL, logger)
 			if err != nil {
 				return nil, fmt.Errorf("forge account %q: %w", acct.Name, err)
 			}
@@ -187,6 +193,7 @@ type accountView struct {
 	Type         string `json:"type"`
 	URL          string `json:"url"`
 	DefaultOwner string `json:"default_owner,omitempty"`
+	Description  string `json:"description,omitempty"`
 }
 
 // Context returns a markdown block describing the configured forge
@@ -208,6 +215,7 @@ func (m *Manager) Context() string {
 			Type:         cfg.Provider,
 			URL:          cfg.URL,
 			DefaultOwner: cfg.Owner,
+			Description:  cfg.Description,
 		})
 	}
 
