@@ -1844,12 +1844,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
 	ctx = agentctx.WithPromptMode(ctx, req.PromptMode)
+	// Stamped on the run context, not just the prompt context, because
+	// the prompt is built more than once: OnIterationStart rebuilds it
+	// on every iteration after the first, from the iteration context
+	// rather than this function's local promptCtx. Binding only
+	// promptCtx narrowed iteration 0 and silently handed back the full
+	// account list from iteration 1 onward — the model was told about
+	// a credential its own tool calls would refuse, which is the
+	// painted door this narrowing exists to remove. Everything derived
+	// from ctx now inherits it.
+	ctx = loop.WithBindings(ctx, req.Bindings)
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
-	// Bound here as well as on tool calls: a context block that
-	// advertises a resource the tools will refuse teaches the model a
-	// door that is painted on.
-	promptCtx = loop.WithBindings(promptCtx, req.Bindings)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
 	promptCtx = tools.WithSuppressAlwaysContext(promptCtx, req.SuppressAlwaysContext)
 
