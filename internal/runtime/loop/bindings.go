@@ -123,10 +123,12 @@ func mergeBindings(sets ...map[string]string) map[string]string {
 	return out
 }
 
-// cloneBindings copies a binding map, returning nil for an empty input
+// CloneBindings copies a binding map, returning nil for an empty input
 // so callers can hand the result to a request without materializing an
-// empty map on every iteration.
-func cloneBindings(in map[string]string) map[string]string {
+// empty map on every iteration. Exported for callers that carry a
+// binding across a package boundary — the delegate executor hands the
+// caller's bindings to the loop it launches.
+func CloneBindings(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
 	}

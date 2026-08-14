@@ -511,22 +511,28 @@ type preparedExecution struct {
 	conversationID   string
 	archiveSessionID string
 	parentLoopID     string
-	channelBinding   *memory.ChannelBinding
-	runPolicy        *RunPolicy
-	routeHints       map[string]string
-	log              *slog.Logger
-	userMessage      string
-	model            string
-	scopeTags        []string
-	filterTags       []string
-	excludeTools     []string
-	tagFilterActive  bool
-	effectiveTags    []string
-	maxIterations    int
-	maxOutputTokens  int
-	maxDuration      time.Duration
-	toolTimeout      time.Duration
-	promptMode       agentctx.PromptMode
+	// bindings are the caller's resource bindings, captured from the
+	// invoking tool call's context. A delegate is the caller acting
+	// through another turn, so a boundary the caller is inside has to
+	// travel with the work; without this a bound loop could reach any
+	// account simply by asking a delegate to do it.
+	bindings        map[string]string
+	channelBinding  *memory.ChannelBinding
+	runPolicy       *RunPolicy
+	routeHints      map[string]string
+	log             *slog.Logger
+	userMessage     string
+	model           string
+	scopeTags       []string
+	filterTags      []string
+	excludeTools    []string
+	tagFilterActive bool
+	effectiveTags   []string
+	maxIterations   int
+	maxOutputTokens int
+	maxDuration     time.Duration
+	toolTimeout     time.Duration
+	promptMode      agentctx.PromptMode
 }
 
 func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (*Result, error) {
@@ -634,6 +640,11 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 			Completion:  completion,
 			MaxDuration: loopMaxDuration,
 			Tags:        append([]string(nil), prep.filterTags...),
+			// Declared on the spec rather than forced onto the request
+			// so the ordinary cascade still applies: a container
+			// ancestor's binding outranks the caller's, and the
+			// delegate has no way to declare its own.
+			Bindings: looppkg.CloneBindings(prep.bindings),
 			Profile: router.LoopProfile{
 				Model:            prep.model,
 				DelegationGating: "disabled",
@@ -895,6 +906,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		conversationID:   conversationID,
 		archiveSessionID: archiveSessionID,
 		parentLoopID:     tools.LoopIDFromContext(ctx),
+		bindings:         looppkg.BindingsFromContext(ctx),
 		channelBinding:   tools.ChannelBindingFromContext(ctx),
 		runPolicy:        policy,
 		routeHints:       e.effectiveDelegateRouterHints(ctx, policy),

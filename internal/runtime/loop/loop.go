@@ -700,7 +700,7 @@ func (l *Loop) Status() Status {
 	// an aliased binding map lets a Status() caller rewrite the active
 	// account boundary without the loop lock, racing an iteration that
 	// is reading it.
-	cfgCopy.Bindings = cloneBindings(l.config.Bindings)
+	cfgCopy.Bindings = CloneBindings(l.config.Bindings)
 	if l.config.RoutingFactors != nil {
 		cfgCopy.RoutingFactors = make(map[string]string, len(l.config.RoutingFactors))
 		for k, v := range l.config.RoutingFactors {
@@ -1055,7 +1055,7 @@ func (l *Loop) promoteRetuneLocked() bool {
 	// stay in force behind that answer until the next relaunch. Cloned
 	// so the running loop never aliases the stored spec's map, and
 	// assigned unconditionally so clearing every binding is expressible.
-	l.config.Bindings = cloneBindings(fresh.Bindings)
+	l.config.Bindings = CloneBindings(fresh.Bindings)
 	// Rebuild the profile-derived request shaping, but keep the spawn-time
 	// InitialTags and RuntimeTools: tags are a structural (relaunch-tier)
 	// field and runtime tools are compiled by hydration — the raw stored
@@ -1123,7 +1123,7 @@ func (l *Loop) excludeToolsSnapshot() []string {
 func (l *Loop) bindingsSnapshot() map[string]string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return cloneBindings(l.config.Bindings)
+	return CloneBindings(l.config.Bindings)
 }
 
 // routingFactorsSnapshot returns the loop's effective routing

@@ -164,7 +164,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Conditions:       cloneConditions(wire.Conditions),
 		Tags:             append([]string(nil), wire.Tags...),
 		ExcludeTools:     append([]string(nil), wire.ExcludeTools...),
-		Bindings:         cloneBindings(wire.Bindings),
+		Bindings:         CloneBindings(wire.Bindings),
 		SleepMin:         sleepMin,
 		SleepMax:         sleepMax,
 		SleepDefault:     sleepDefault,

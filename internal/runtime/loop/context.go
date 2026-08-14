@@ -76,7 +76,7 @@ func WithBindings(ctx context.Context, bindings map[string]string) context.Conte
 	if len(bindings) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, bindingsKey{}, cloneBindings(bindings))
+	return context.WithValue(ctx, bindingsKey{}, CloneBindings(bindings))
 }
 
 // BindingsFromContext returns every binding on the context, or nil
@@ -86,7 +86,7 @@ func BindingsFromContext(ctx context.Context) map[string]string {
 	if !ok {
 		return nil
 	}
-	return cloneBindings(bindings)
+	return CloneBindings(bindings)
 }
 
 // BindingFromContext returns the value bound to key, or "" when the

@@ -560,7 +560,7 @@ func (s *Spec) ToConfig() Config {
 		Subscriptions:        cloneEntitySubscriptions(ns.Subscriptions),
 		Tags:                 append([]string(nil), ns.Tags...),
 		ExcludeTools:         append([]string(nil), ns.ExcludeTools...),
-		Bindings:             cloneBindings(ns.Bindings),
+		Bindings:             CloneBindings(ns.Bindings),
 		SleepMin:             ns.SleepMin,
 		SleepMax:             ns.SleepMax,
 		SleepDefault:         ns.SleepDefault,
