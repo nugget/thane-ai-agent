@@ -147,6 +147,17 @@ func (s *Service) SubscriptionPollingEnabled() bool {
 	return s != nil && s.poller != nil
 }
 
+// EnableSubscriptionPollingForTest marks polling live without standing
+// up a real poller. Exported for tests in this package that exercise
+// behavior only meaningful when polling runs — a local checkout, for
+// instance, is populated by the poller and nothing else.
+func (s *Service) EnableSubscriptionPollingForTest(p *SubscriptionPoller) {
+	if s == nil {
+		return
+	}
+	s.poller = p
+}
+
 // CheckSubscriptions polls followed repositories and delivers any resulting
 // event wakes. Repository failures remain isolated by [SubscriptionPoller].
 func (s *Service) CheckSubscriptions(ctx context.Context) (int, error) {

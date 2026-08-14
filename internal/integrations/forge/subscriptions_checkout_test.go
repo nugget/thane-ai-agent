@@ -35,6 +35,8 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	}
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = store
+	// A local checkout is only meaningful when the poller runs.
+	tools.service.EnableSubscriptionPollingForTest(&SubscriptionPoller{})
 
 	raw, err := tools.HandleRepoFollow(context.Background(), map[string]any{
 		"repo":           "repo",
@@ -144,6 +146,8 @@ func TestHandleRepoFollowRejectsLocalCheckoutWithoutCloneURL(t *testing.T) {
 	}
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = store
+	// A local checkout is only meaningful when the poller runs.
+	tools.service.EnableSubscriptionPollingForTest(&SubscriptionPoller{})
 
 	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
 		"repo":           "repo",
