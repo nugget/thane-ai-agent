@@ -25,6 +25,13 @@ type repoFollowResponse struct {
 	LatestRelease  string                  `json:"latest_release,omitempty"`
 	LatestCommit   string                  `json:"latest_commit,omitempty"`
 	LastSyncedSHA  string                  `json:"last_synced_sha,omitempty"`
+
+	// Warning names a condition that makes this subscription inert.
+	// It is part of the success payload rather than an error because
+	// the record is real and becomes live the moment the condition is
+	// fixed — but a caller told only "ok" would reasonably expect
+	// wakes that will never arrive.
+	Warning string `json:"warning,omitempty"`
 }
 
 type repoSubscriptionEntry struct {
@@ -96,6 +103,17 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	checkoutRemoteURL := ""
 	subscriptionID := SubscriptionID(acct, repo, branch, wakeTarget)
 	if localCheckout != "" {
+		// A local checkout is populated by the subscription poller, so
+		// with polling disabled this argument promises a directory
+		// nothing will ever create. Refused rather than recorded: the
+		// operator goes looking for a working tree, finds nothing, and
+		// has no way to tell a missing clone from a broken one. The
+		// bare subscription is still allowed below with a warning,
+		// because a record that becomes live when polling is enabled
+		// is different from a path that silently never appears.
+		if !t.service.SubscriptionPollingEnabled() {
+			return "", fmt.Errorf("local_checkout cannot be honored: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), and the checkout is only ever populated by the poller. Set subscription_check_interval to enable polling, or follow the repository without local_checkout")
+		}
 		if branch == "" {
 			return "", fmt.Errorf("local_checkout requires branch because repository %s has no default branch; set branch", repo)
 		}
@@ -181,6 +199,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		LatestRelease:  sub.LatestRelease,
 		LatestCommit:   sub.LatestCommit,
 		LastSyncedSHA:  sub.LastSyncedSHA,
+		Warning:        subscriptionInertWarning(t.service),
 	})
 }
 
@@ -284,4 +303,19 @@ func repositoryCheckoutRemoteURL(meta *Repository) string {
 		return ""
 	}
 	return strings.TrimSpace(meta.CloneURL)
+}
+
+// subscriptionInertWarning returns the caveat to attach to a stored
+// subscription that cannot currently do anything, or "" when polling
+// is live.
+//
+// A subscription's only effect is delivered by the poller: it wakes a
+// loop on new releases and commits, and syncs any local checkout. With
+// polling disabled the record is durable and correct and completely
+// silent, which is the shape most likely to be mistaken for working.
+func subscriptionInertWarning(service *Service) string {
+	if service.SubscriptionPollingEnabled() {
+		return ""
+	}
+	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop or sync anything until an operator enables it. The record persists and becomes live at that point."
 }
