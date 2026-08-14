@@ -21,6 +21,24 @@ import (
 // stale spec, and both should refuse the boot rather than be silently
 // ignored — a binding that quietly does nothing is worse than no
 // binding at all, because it reads like a boundary while being none.
+//
+// Naming: a key is <subsystem>_<what the value names>, not the
+// subsystem alone. "forge_account" rather than "forge", because the
+// value is an account and "forge: github-readonly" asserts something
+// that is not true. The rule is not cosmetic — subsystems have more
+// than one bindable dimension. Companion tools already select on both
+// an account and a client_id, so subsystem-named keys would produce
+// "companion" meaning the account beside "companion_client_id" meaning
+// the device: one key named for the subsystem and its sibling named
+// for the value, in the same map. Naming for the value also matches
+// the config path the value is read from (forge.accounts[].name) and
+// the tool argument it fills in (every forge tool's "account"), so a
+// bound loop can connect the three without an inference step.
+//
+// Keys deliberately do not match capability-tag names, even where a
+// subsystem has both. Tags and bindings answer different questions,
+// and spelling them identically invites the reading that a binding is
+// a kind of tag.
 const (
 	// BindingForgeAccount names the forge account (from forge.accounts
 	// in config) this loop's forge tools resolve to. Its value is an
