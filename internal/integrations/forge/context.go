@@ -100,8 +100,23 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 	output := forgeContextJSON{Forges: views}
 
 	// Recent operations (if log is available and non-empty).
+	//
+	// The operation log is instance-wide, so a bound caller must not
+	// read it whole: repository and ref names from another account are
+	// exactly the activity the binding exists to keep out of this
+	// loop's context, and narrowing the account list while leaking the
+	// operations underneath it would be a boundary in name only.
 	if p.opLog != nil {
 		ops := p.opLog.Recent(10)
+		if bound != "" {
+			filtered := make([]Operation, 0, len(ops))
+			for _, op := range ops {
+				if op.Account == bound {
+					filtered = append(filtered, op)
+				}
+			}
+			ops = filtered
+		}
 		if len(ops) > 0 {
 			output.RecentOps = make([]recentOpJSON, len(ops))
 			for i, op := range ops {

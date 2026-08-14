@@ -1042,6 +1042,15 @@ func (l *Loop) promoteRetuneLocked() bool {
 	l.config.Supervisor = fresh.Supervisor
 	l.config.SupervisorProb = fresh.SupervisorProb
 	l.config.SupervisorProfile = fresh.SupervisorProfile
+	// Bindings promote live. They carry no structural coupling — each
+	// turn re-resolves them through mergeBindings — so there is nothing
+	// to rebuild, and the direction that matters is the tightening one:
+	// an operator moving a loop from a write account to a read-only one
+	// gets "retune: applied" back, and the write credential must not
+	// stay in force behind that answer until the next relaunch. Cloned
+	// so the running loop never aliases the stored spec's map, and
+	// assigned unconditionally so clearing every binding is expressible.
+	l.config.Bindings = cloneBindings(fresh.Bindings)
 	// Rebuild the profile-derived request shaping, but keep the spawn-time
 	// InitialTags and RuntimeTools: tags are a structural (relaunch-tier)
 	// field and runtime tools are compiled by hydration — the raw stored

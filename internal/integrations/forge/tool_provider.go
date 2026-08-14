@@ -6,7 +6,7 @@ import (
 	toolpkg "github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-const forgeAccountDescription = "Forge account name. Omit to use the primary configured account."
+const forgeAccountDescription = "Forge account name. Omit to use this loop's bound account, or the primary account when unbound; naming a different account than the one you are bound to is refused."
 
 // Name implements [tools.Provider].
 func (t *Tools) Name() string { return "forge" }

@@ -531,3 +531,80 @@ func TestQueueRetuneRejectsInvalidSpec(t *testing.T) {
 		t.Errorf("config mutated by rejected retune: task = %q", got)
 	}
 }
+
+// TestQueueRetunePromotesBindings pins the direction that matters for a
+// boundary. An operator moving a loop from a write account to a
+// read-only one is told "retune: applied"; if the old binding stayed in
+// force until relaunch, the write credential would remain live behind
+// that answer, and the stored definition would show the safer account
+// while the running loop kept the riskier one.
+func TestQueueRetunePromotesBindings(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "retune-target",
+		Task:         "old task",
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       Float64Ptr(0),
+		Bindings:     map[string]string{BindingForgeAccount: "github-primary"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req, err := l.prepareAgentTurnRequest(Request{}, "conv-0", false)
+	if err != nil {
+		t.Fatalf("prepareAgentTurnRequest: %v", err)
+	}
+	if got := req.Bindings[BindingForgeAccount]; got != "github-primary" {
+		t.Fatalf("pre-retune binding = %q, want %q", got, "github-primary")
+	}
+
+	retuned := retuneSpec("old task", time.Minute, 0)
+	retuned.Bindings = map[string]string{BindingForgeAccount: "github-readonly"}
+	if err := l.QueueRetune(retuned); err != nil {
+		t.Fatalf("QueueRetune: %v", err)
+	}
+
+	req, err = l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+	if err != nil {
+		t.Fatalf("prepareAgentTurnRequest: %v", err)
+	}
+	if got := req.Bindings[BindingForgeAccount]; got != "github-readonly" {
+		t.Errorf("binding after retune = %q, want the tightened %q to take effect without relaunch", got, "github-readonly")
+	}
+}
+
+// TestQueueRetuneClearsBindings covers the other end: a retune that
+// declares no bindings must actually remove them rather than leave the
+// previous boundary silently in force.
+func TestQueueRetuneClearsBindings(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "retune-target",
+		Task:         "old task",
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       Float64Ptr(0),
+		Bindings:     map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := l.QueueRetune(retuneSpec("old task", time.Minute, 0)); err != nil {
+		t.Fatalf("QueueRetune: %v", err)
+	}
+
+	req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+	if err != nil {
+		t.Fatalf("prepareAgentTurnRequest: %v", err)
+	}
+	if got := req.Bindings[BindingForgeAccount]; got != "" {
+		t.Errorf("binding after clearing retune = %q, want it removed", got)
+	}
+}

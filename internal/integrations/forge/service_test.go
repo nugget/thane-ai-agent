@@ -76,6 +76,12 @@ func TestNewServiceOwnsForgeRuntime(t *testing.T) {
 	}
 
 	accountParameters := 0
+	if !strings.Contains(forgeAccountDescription, "bound account") {
+		t.Fatalf("forge account description does not teach binding behavior: %q", forgeAccountDescription)
+	}
+	if strings.Contains(forgeAccountDescription, "default: primary") {
+		t.Fatalf("forge account description promises the primary account unconditionally: %q", forgeAccountDescription)
+	}
 	seen := make(map[string]bool, len(provider.Tools()))
 	for _, tool := range provider.Tools() {
 		if tool == nil {

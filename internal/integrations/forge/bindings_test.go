@@ -199,3 +199,49 @@ func TestContextProviderNarrowsToBoundAccount(t *testing.T) {
 		}
 	})
 }
+
+// TestContextProviderFiltersRecentOpsByBinding covers the half of the
+// context block that is not the account list. The operation log is
+// instance-wide, so narrowing the roster while rendering every
+// account's operations underneath it would name repositories and refs
+// the binding exists to keep out of this loop's context — a boundary
+// in name only.
+func TestContextProviderFiltersRecentOpsByBinding(t *testing.T) {
+	t.Parallel()
+
+	tools := newMultiAccountTools()
+	opLog := NewOperationLog()
+	opLog.Record(Operation{Tool: "forge_pr_merge", Account: "github-primary", Repo: "nugget/secret-thing", Ref: "42"})
+	opLog.Record(Operation{Tool: "forge_issue_list", Account: "github-readonly", Repo: "nugget/thane", Ref: ""})
+	provider := NewContextProvider(tools.manager, opLog)
+
+	t.Run("unbound sees the whole log", func(t *testing.T) {
+		t.Parallel()
+		out, err := provider.TagContext(context.Background(), agentctx.ContextRequest{})
+		if err != nil {
+			t.Fatalf("TagContext() unexpected error: %v", err)
+		}
+		for _, want := range []string{"nugget/secret-thing", "nugget/thane"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("context = %q\nmissing operation on %q", out, want)
+			}
+		}
+	})
+
+	t.Run("bound sees only its own account's operations", func(t *testing.T) {
+		t.Parallel()
+		out, err := provider.TagContext(boundCtx("github-readonly"), agentctx.ContextRequest{})
+		if err != nil {
+			t.Fatalf("TagContext() unexpected error: %v", err)
+		}
+		if !strings.Contains(out, "nugget/thane") {
+			t.Errorf("context = %q\nmissing this account's own operation", out)
+		}
+		if strings.Contains(out, "nugget/secret-thing") {
+			t.Errorf("context = %q\nleaks a repository touched by another account", out)
+		}
+		if strings.Contains(out, "github-primary") {
+			t.Errorf("context = %q\nnames an account the binding hides", out)
+		}
+	})
+}

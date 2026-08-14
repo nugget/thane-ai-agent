@@ -680,6 +680,17 @@ func (a *App) commitLoopDefinition(ctx context.Context, spec looppkg.Spec, updat
 	// later updates/replaces.
 	spec.Origin = a.authoritativeOrigin(ctx, spec.Name, updatedAt)
 
+	// Bindings resolve against live configuration before anything is
+	// written. Hydration checks this too, but hydration only runs when a
+	// loop starts: reconciling an already-running definition returns
+	// early, so an update naming a nonexistent account would otherwise
+	// be accepted, stored durably, and surface as a boot failure much
+	// later. A boundary that cannot be resolved is refused where it is
+	// authored.
+	if err := a.validateLoopBindings(spec); err != nil {
+		return &looppkg.CommitError{Stage: looppkg.CommitStagePersist, Err: err}
+	}
+
 	if err := a.persistLoopDefinition(spec, updatedAt); err != nil {
 		return &looppkg.CommitError{Stage: looppkg.CommitStagePersist, Err: err}
 	}
