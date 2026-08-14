@@ -70,9 +70,24 @@ func TestRuntimePrepareExplicitModel_LoadsLMStudioContext(t *testing.T) {
 
 	var mu sync.Mutex
 	loadedContext := 4096
+	var ops []string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/v1/models/unload":
+			var req struct {
+				InstanceID string `json:"instance_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode unload request: %v", err)
+			}
+			if req.InstanceID != "google/gemma-3-4b" {
+				t.Fatalf("unload instance_id = %q, want google/gemma-3-4b", req.InstanceID)
+			}
+			mu.Lock()
+			ops = append(ops, "unload")
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": req.InstanceID})
 		case "/api/v1/models":
 			mu.Lock()
 			current := loadedContext
@@ -113,6 +128,7 @@ func TestRuntimePrepareExplicitModel_LoadsLMStudioContext(t *testing.T) {
 			}
 			mu.Lock()
 			loadedContext = req.ContextLength
+			ops = append(ops, "load")
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
 				Type:       "llm",
@@ -161,6 +177,16 @@ func TestRuntimePrepareExplicitModel_LoadsLMStudioContext(t *testing.T) {
 	}
 	if prep.Resolved != "deepslate/google/gemma-3-4b" {
 		t.Fatalf("prep.Resolved = %q, want deepslate/google/gemma-3-4b", prep.Resolved)
+	}
+
+	// The resident instance has to be released first: a load always starts a
+	// new one, so loading over a live instance asks the runner to hold two
+	// copies of the weights and is refused wherever there is not room.
+	mu.Lock()
+	gotOps := strings.Join(ops, ",")
+	mu.Unlock()
+	if gotOps != "unload,load" {
+		t.Fatalf("provider calls = %q, want \"unload,load\"", gotOps)
 	}
 
 	dep, err = runtime.Registry().Catalog().ResolveDeploymentRef("deepslate/google/gemma-3-4b")
@@ -240,4 +266,228 @@ func TestRuntime_SetLogger_NilGuards(t *testing.T) {
 
 	rt = &Runtime{bundle: &ClientBundle{}}
 	rt.SetLogger(nil) // nil logger
+}
+
+// Unloading before loading opens a window where the deployment is serving
+// nothing. If the larger load is then refused — which is exactly what a
+// memory-constrained runner does — the previous window has to go back, or a
+// failed expansion would cost the operator a working model.
+func TestRuntimePrepareExplicitModel_RestoresPreviousWindowWhenLoadFails(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	loadedContext := 4096
+	loadedInstance := "google/gemma-3-4b"
+	var loadSizes []int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/models/unload":
+			mu.Lock()
+			loadedContext = 0
+			loadedInstance = ""
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": "google/gemma-3-4b"})
+		case "/api/v1/models":
+			mu.Lock()
+			current, instance := loadedContext, loadedInstance
+			mu.Unlock()
+			model := map[string]any{
+				"key":                "google/gemma-3-4b",
+				"type":               "llm",
+				"architecture":       "gemma3",
+				"format":             "mlx",
+				"max_context_length": 131072,
+			}
+			if instance != "" {
+				model["loaded_instances"] = []map[string]any{{
+					"id":     instance,
+					"config": map[string]any{"context_length": current},
+				}}
+			}
+			_ = json.NewEncoder(w).Encode(struct {
+				Models []map[string]any `json:"models"`
+			}{Models: []map[string]any{model}})
+		case "/api/v1/models/load":
+			var req struct {
+				ContextLength int `json:"context_length"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode load request: %v", err)
+			}
+			mu.Lock()
+			loadSizes = append(loadSizes, req.ContextLength)
+			mu.Unlock()
+			// The runner refuses the expansion but can still hold what it
+			// had, the shape of a resource guardrail on a busy host.
+			if req.ContextLength > 4096 {
+				http.Error(w, `{"error":{"message":"Model loading was stopped due to insufficient system resources"}}`, http.StatusInternalServerError)
+				return
+			}
+			mu.Lock()
+			loadedContext = req.ContextLength
+			loadedInstance = "google/gemma-3-4b"
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
+				Type:       "llm",
+				InstanceID: "google/gemma-3-4b",
+				Status:     "loaded",
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Resources: map[string]config.ModelServerConfig{
+				"deepslate": {URL: srv.URL, Provider: "lmstudio"},
+			},
+		},
+	}
+	base, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+	runtime, err := NewRuntime(context.Background(), base, cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+
+	if _, err := runtime.PrepareExplicitModel(context.Background(), "deepslate/google/gemma-3-4b", 65536); err == nil {
+		t.Fatal("PrepareExplicitModel error = nil, want the refused expansion reported")
+	}
+
+	mu.Lock()
+	gotSizes := loadSizes
+	gotContext := loadedContext
+	gotInstance := loadedInstance
+	mu.Unlock()
+
+	if len(gotSizes) != 2 || gotSizes[0] != 65536 || gotSizes[1] != 4096 {
+		t.Fatalf("load sizes = %v, want [65536 4096] — the attempt then the restore", gotSizes)
+	}
+	if gotContext != 4096 || gotInstance == "" {
+		t.Fatalf("runner left at context=%d instance=%q, want the previous 4096 window serving again", gotContext, gotInstance)
+	}
+
+	dep, err := runtime.Registry().Catalog().ResolveDeploymentRef("deepslate/google/gemma-3-4b")
+	if err != nil {
+		t.Fatalf("ResolveDeploymentRef after failed prepare: %v", err)
+	}
+	if dep.LoadedContextWindow != 4096 {
+		t.Fatalf("LoadedContextWindow = %d, want the registry to reflect the restored 4096", dep.LoadedContextWindow)
+	}
+}
+
+// The commonest reason for an expansion to fail is that the request's
+// context was canceled or timed out. If the rollback ran on that same
+// context it would fail on the spot, so the very situation most likely to
+// trigger a rollback would also be the one where it never happens.
+func TestRuntimePrepareExplicitModel_RestoresPreviousWindowAfterContextCancel(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	loadedContext := 4096
+	loadedInstance := "google/gemma-3-4b"
+	var loadSizes []int
+	cancelRequest := func() {}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/models/unload":
+			mu.Lock()
+			loadedContext = 0
+			loadedInstance = ""
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": "google/gemma-3-4b"})
+		case "/api/v1/models":
+			mu.Lock()
+			current, instance := loadedContext, loadedInstance
+			mu.Unlock()
+			model := map[string]any{
+				"key":                "google/gemma-3-4b",
+				"type":               "llm",
+				"architecture":       "gemma3",
+				"format":             "mlx",
+				"max_context_length": 131072,
+			}
+			if instance != "" {
+				model["loaded_instances"] = []map[string]any{{
+					"id":     instance,
+					"config": map[string]any{"context_length": current},
+				}}
+			}
+			_ = json.NewEncoder(w).Encode(struct {
+				Models []map[string]any `json:"models"`
+			}{Models: []map[string]any{model}})
+		case "/api/v1/models/load":
+			var req struct {
+				ContextLength int `json:"context_length"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode load request: %v", err)
+			}
+			mu.Lock()
+			loadSizes = append(loadSizes, req.ContextLength)
+			mu.Unlock()
+			if req.ContextLength > 4096 {
+				// The caller gives up while the expansion is in flight — a
+				// canceled turn, a deadline, an operator interrupt.
+				cancelRequest()
+				http.Error(w, `{"error":{"message":"insufficient system resources"}}`, http.StatusInternalServerError)
+				return
+			}
+			mu.Lock()
+			loadedContext = req.ContextLength
+			loadedInstance = "google/gemma-3-4b"
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
+				Type:       "llm",
+				InstanceID: "google/gemma-3-4b",
+				Status:     "loaded",
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Resources: map[string]config.ModelServerConfig{
+				"deepslate": {URL: srv.URL, Provider: "lmstudio"},
+			},
+		},
+	}
+	base, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+	runtime, err := NewRuntime(context.Background(), base, cfg, nil)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelRequest = cancel
+
+	if _, err := runtime.PrepareExplicitModel(ctx, "deepslate/google/gemma-3-4b", 65536); err == nil {
+		t.Fatal("PrepareExplicitModel error = nil, want the failed expansion reported")
+	}
+
+	mu.Lock()
+	gotSizes := loadSizes
+	gotContext := loadedContext
+	gotInstance := loadedInstance
+	mu.Unlock()
+
+	if len(gotSizes) != 2 || gotSizes[1] != 4096 {
+		t.Fatalf("load sizes = %v, want the 4096 restore attempted despite the canceled context", gotSizes)
+	}
+	if gotContext != 4096 || gotInstance == "" {
+		t.Fatalf("runner left at context=%d instance=%q, want the previous window serving again", gotContext, gotInstance)
+	}
 }

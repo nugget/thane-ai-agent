@@ -475,6 +475,10 @@ func TestRun_ExplicitModelPreparesLoadedContextAndRetries(t *testing.T) {
 					}},
 				}},
 			})
+		case "/api/v1/models/unload":
+			// The resident instance is released before its replacement is
+			// loaded; see TestRuntimePrepareExplicitModel_LoadsLMStudioContext.
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": "google/gemma-3-4b"})
 		case "/api/v1/models/load":
 			var req struct {
 				Model         string `json:"model"`
@@ -735,6 +739,8 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 					}},
 				}},
 			})
+		case "/api/v1/models/unload":
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": "google/gemma-3-4b"})
 		case "/api/v1/models/load":
 			var req struct {
 				Model         string `json:"model"`
@@ -746,8 +752,12 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 			if req.Model != "google/gemma-3-4b" {
 				t.Fatalf("load model = %q, want google/gemma-3-4b", req.Model)
 			}
-			if req.ContextLength != 131072 {
-				t.Fatalf("context_length = %d, want 131072", req.ContextLength)
+			// Recovery doubles the window that failed rather than jumping to
+			// the advertised 131072 maximum: the estimate is known to be low,
+			// but not known to be twenty times low, and a window costs load
+			// time and resident memory in proportion to its size.
+			if req.ContextLength != 48000 {
+				t.Fatalf("context_length = %d, want 48000 — twice the 24000 window that failed", req.ContextLength)
 			}
 			mu.Lock()
 			loadedContext = req.ContextLength
@@ -771,7 +781,10 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 			chatCalls++
 			lastToolCount = len(req.Tools)
 			mu.Unlock()
-			if current < 131072 {
+			// The starting window is what fails; any window larger than it
+			// serves. The recovery is not required to reach the advertised
+			// maximum, only to grow past what was rejected.
+			if current <= 24000 {
 				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
 				return
 			}
@@ -864,8 +877,8 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	if gotChatCalls != 3 {
 		t.Fatalf("chat calls = %d, want 3", gotChatCalls)
 	}
-	if gotLoadedContext != 131072 {
-		t.Fatalf("loadedContext = %d, want 131072", gotLoadedContext)
+	if gotLoadedContext != 48000 {
+		t.Fatalf("loadedContext = %d, want 48000 — grown past the failed window, not to the maximum", gotLoadedContext)
 	}
 	if gotLastToolCount != 0 {
 		t.Fatalf("last tool count = %d, want 0 on final retry", gotLastToolCount)
@@ -875,8 +888,8 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	if err != nil {
 		t.Fatalf("ResolveDeploymentRef after retry: %v", err)
 	}
-	if dep.LoadedContextWindow != 131072 || dep.ContextWindow != 131072 {
-		t.Fatalf("deployment context after retry = loaded:%d context:%d, want 131072/131072", dep.LoadedContextWindow, dep.ContextWindow)
+	if dep.LoadedContextWindow != 48000 || dep.ContextWindow != 48000 {
+		t.Fatalf("deployment context after retry = loaded:%d context:%d, want 48000/48000", dep.LoadedContextWindow, dep.ContextWindow)
 	}
 	if dep.TrainedForToolUse {
 		t.Fatal("dep.TrainedForToolUse = true, want false from LM Studio inventory")
@@ -1441,5 +1454,176 @@ func TestRun_ExplicitModelPreflightDoesNotRequireOutputHeadroom(t *testing.T) {
 	}
 	if len(mock.calls) == 0 {
 		t.Fatal("llm calls = 0, want the provider reached rather than preflight-rejected")
+	}
+}
+
+// After the runner rejects a request the estimate said would fit, the
+// estimate is known to be low — so it may only floor the retry, and the
+// growth has to come from the window that actually failed. Jumping to the
+// advertised maximum would recover too, at the cost of a load proportional
+// to a window the request never needed.
+func TestGrowLoadContextTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		required int
+		loaded   int
+		max      int
+		want     int
+	}{
+		{
+			name: "doubles the window that failed",
+			// The 12732 window that failed in production, with an estimate
+			// that had said ~12769 would fit.
+			required: 12769, loaded: 12732, max: 262144, want: 25464,
+		},
+		{
+			name:     "estimate floors the retry when it exceeds the doubling",
+			required: 100000, loaded: 12732, max: 262144, want: 100000 + reservedOutputContextTokens,
+		},
+		{
+			name:     "never exceeds the advertised maximum",
+			required: 200000, loaded: 200000, max: 262144, want: 262144,
+		},
+		{
+			name:     "cold deployment falls back to the estimate",
+			required: 12769, loaded: 0, max: 262144, want: 12769 + reservedOutputContextTokens,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := growLoadContextTokens(tt.required, tt.loaded, tt.max)
+			if got != tt.want {
+				t.Fatalf("growLoadContextTokens(%d, %d, %d) = %d, want %d", tt.required, tt.loaded, tt.max, got, tt.want)
+			}
+			if tt.max > 0 && got > tt.max {
+				t.Fatalf("growLoadContextTokens() = %d, exceeds max %d", got, tt.max)
+			}
+			if got <= tt.loaded && tt.loaded < tt.max {
+				t.Fatalf("growLoadContextTokens() = %d, must exceed the failed window %d", got, tt.loaded)
+			}
+		})
+	}
+}
+
+// Doubling is a guess, and a guess can be wrong by more than a factor of
+// two. When the runner rejects the doubled window as well, the recovery has
+// to fall back to the deployment's advertised maximum — the answer this path
+// always reached for before the growth was bounded — rather than giving up
+// with a window it merely hoped would be enough.
+func TestRun_ExplicitModelEscalatesToMaxWhenDoublingIsNotEnough(t *testing.T) {
+	var mu sync.Mutex
+	loadedContext := 24000
+	var loadSizes []int
+	chatCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/models/unload":
+			_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": "google/gemma-3-4b"})
+		case "/api/v1/models":
+			mu.Lock()
+			current := loadedContext
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(struct {
+				Models []map[string]any `json:"models"`
+			}{
+				Models: []map[string]any{{
+					"key":                "google/gemma-3-4b",
+					"type":               "llm",
+					"architecture":       "gemma3",
+					"format":             "mlx",
+					"max_context_length": 131072,
+					"capabilities":       map[string]any{"trained_for_tool_use": true},
+					"loaded_instances": []map[string]any{{
+						"id":     "google/gemma-3-4b",
+						"config": map[string]any{"context_length": current},
+					}},
+				}},
+			})
+		case "/api/v1/models/load":
+			var req struct {
+				ContextLength int `json:"context_length"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode load request: %v", err)
+			}
+			mu.Lock()
+			loadSizes = append(loadSizes, req.ContextLength)
+			loadedContext = req.ContextLength
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
+				Type:       "llm",
+				InstanceID: "google/gemma-3-4b",
+				Status:     "loaded",
+			})
+		case "/v1/chat/completions":
+			mu.Lock()
+			current := loadedContext
+			chatCalls++
+			mu.Unlock()
+			// Only the full 131072 window can serve this request, so the
+			// doubling to 48000 is rejected exactly as the original was.
+			if current < 131072 {
+				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": "deepslate/google/gemma-3-4b",
+				"choices": []map[string]any{{
+					"index":   0,
+					"message": map[string]any{"role": "assistant", "content": "ok"},
+				}},
+				"usage": map[string]any{"prompt_tokens": 12, "completion_tokens": 2},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: srv.URL, Provider: "lmstudio"},
+			},
+			Available: []config.ModelConfig{
+				{Name: "gpt-oss:20b", Resource: "spark", SupportsTools: true, ContextWindow: 8192},
+			},
+		},
+	}
+	cat, err := fleet.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("fleet.BuildCatalog: %v", err)
+	}
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
+	if err != nil {
+		t.Fatalf("fleet.NewRuntime: %v", err)
+	}
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"ha_get_state"})
+	loop.UseModelRegistry(runtime.Registry())
+	loop.UseModelRuntime(runtime)
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Model:    "deepslate/google/gemma-3-4b",
+		Messages: []Message{{Role: "user", Content: "Reply with exactly ok"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the escalation to reach a window that serves", err)
+	}
+	if strings.TrimSpace(resp.Content) != "ok" {
+		t.Fatalf("resp.Content = %q, want ok", resp.Content)
+	}
+
+	mu.Lock()
+	gotSizes := loadSizes
+	mu.Unlock()
+	if len(gotSizes) != 2 || gotSizes[0] != 48000 || gotSizes[1] != 131072 {
+		t.Fatalf("load sizes = %v, want [48000 131072] — the doubling, then the maximum", gotSizes)
 	}
 }
