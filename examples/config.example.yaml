@@ -989,8 +989,14 @@ compaction:
 #       provider: github
 #       token: ghp_your-token
 #       owner: your-username
-#       username: ""
 #       url: https://api.github.com
+#       description: 'Full-access account: issues, pull requests, reviews, merges.'
+#     - name: github-readonly
+#       provider: github
+#       token: ghp_your-read-only-token
+#       owner: your-username
+#       url: https://api.github.com
+#       description: Observation only — this token's policy denies writes. Reads succeed; issue and review calls are refused.
 #   subscription_check_interval: 3600
 #   max_subscriptions: 50
 #

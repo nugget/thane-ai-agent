@@ -75,6 +75,7 @@ func (p *ContextProvider) buildContext() (string, error) {
 			Type:         cfg.Provider,
 			URL:          cfg.URL,
 			DefaultOwner: cfg.Owner,
+			Description:  cfg.Description,
 		})
 	}
 

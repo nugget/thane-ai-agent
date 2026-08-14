@@ -296,7 +296,7 @@ func TestAccountConfig(t *testing.T) {
 
 	cfg := Config{
 		Accounts: []AccountConfig{
-			{Name: "primary", Provider: "github", Token: "tok", URL: "https://api.github.com", Owner: "myorg", Username: "myuser"},
+			{Name: "primary", Provider: "github", Token: "tok", URL: "https://api.github.com", Owner: "myorg"},
 		},
 	}
 
