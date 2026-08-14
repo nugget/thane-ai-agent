@@ -74,9 +74,16 @@ func (v *documentRootProvenanceVerifier) storeFilename(filename string) string {
 }
 
 func documentSignatureVerificationFromProvenance(result provenance.VerificationResult) documents.SignatureVerification {
+	// Three outcomes, not two. Collapsing "could not check" into
+	// "failed" is what made a killed git subprocess read as a signature
+	// problem, and the document layer words its refusal differently for
+	// each — so the distinction has to survive this boundary.
 	status := documents.SignatureFailed
-	if result.Status == provenance.VerificationTrusted {
+	switch result.Status {
+	case provenance.VerificationTrusted:
 		status = documents.SignatureTrusted
+	case provenance.VerificationUnavailable:
+		status = documents.SignatureUnavailable
 	}
 	return documents.SignatureVerification{
 		Status:  status,
