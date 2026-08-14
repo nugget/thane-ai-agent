@@ -137,11 +137,11 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		}
 		return a.hydrateLoopOutputs(spec)
 	case forgeSubPollerDefinitionName:
-		if a.forgeSubPoller == nil {
+		if a.forgeService == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires forge subscription poller runtime", forgeSubPollerDefinitionName)
 		}
 		spec.Handler = func(ctx context.Context, _ any) error {
-			wakes, err := a.forgeSubPoller.CheckSubscriptions(ctx)
+			wakes, err := a.forgeService.CheckSubscriptions(ctx)
 			if err != nil {
 				return err
 			}

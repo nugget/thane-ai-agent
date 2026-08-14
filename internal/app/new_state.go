@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 
-	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -35,7 +34,4 @@ type newState struct {
 
 	// Built in initChannels, used by initAwareness.
 	embClient knowledge.EmbeddingClient
-
-	// Built in initChannels, used by initDelegation.
-	forgeOpLog *forge.OperationLog
 }

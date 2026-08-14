@@ -304,23 +304,20 @@ func (t *Tools) resolveAccountAndRepo(args map[string]any) (ForgeProvider, strin
 		return nil, "", "", fmt.Errorf("repo is required")
 	}
 
-	// Resolve empty account to primary.
-	resolvedAccount := account
-	if resolvedAccount == "" && len(t.manager.order) > 0 {
-		resolvedAccount = t.manager.order[0]
-	}
-
-	provider, err := t.manager.Account(account)
+	resolved, err := t.manager.ResolveAccount(account)
 	if err != nil {
 		return nil, "", "", err
 	}
 
-	fullRepo, err := t.manager.ResolveRepo(account, repo)
-	if err != nil {
-		return nil, "", "", err
+	fullRepo := repo
+	if !strings.Contains(fullRepo, "/") {
+		if resolved.Config.Owner == "" {
+			return nil, "", "", fmt.Errorf("repo %q requires an owner but account %q has no default owner configured", repo, resolved.Name)
+		}
+		fullRepo = resolved.Config.Owner + "/" + repo
 	}
 
-	return provider, fullRepo, resolvedAccount, nil
+	return resolved.Provider, fullRepo, resolved.Name, nil
 }
 
 // --- Issue handlers ---
@@ -1041,11 +1038,7 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 // HandleSearch performs a forge-native search.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
 	account := stringArg(args, "account")
-	resolvedAcct := account
-	if resolvedAcct == "" && len(t.manager.order) > 0 {
-		resolvedAcct = t.manager.order[0]
-	}
-	provider, err := t.manager.Account(account)
+	resolved, err := t.manager.ResolveAccount(account)
 	if err != nil {
 		return "", err
 	}
@@ -1062,13 +1055,13 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 
 	limit := intArg(args, "limit")
 
-	results, err := provider.Search(ctx, query, SearchKind(kindStr), limit)
+	results, err := resolved.Provider.Search(ctx, query, SearchKind(kindStr), limit)
 	if err != nil {
 		return "", err
 	}
 
 	if len(results) == 0 {
-		t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
+		t.recordOp("forge_search", resolved.Name, "", kindStr+": "+query)
 		return marshalResponse(searchResponse{Count: 0, Results: []searchResultEntry{}})
 	}
 
@@ -1082,7 +1075,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		})
 	}
 
-	t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
+	t.recordOp("forge_search", resolved.Name, "", kindStr+": "+query)
 	return marshalResponse(searchResponse{
 		Count:   len(entries),
 		Results: entries,

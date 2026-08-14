@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -159,8 +158,8 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	// Register forge as a tag context provider so its account config
 	// and recent operations appear/disappear with the forge capability
 	// tag.
-	if a.forgeMgr != nil {
-		a.loop.RegisterTagContextProvider("forge", forge.NewContextProvider(a.forgeMgr, s.forgeOpLog))
+	if a.forgeService != nil {
+		a.loop.RegisterTagContextProvider("forge", a.forgeService.ContextProvider())
 	}
 
 	// Build manifest entries with enriched context info.

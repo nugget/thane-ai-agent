@@ -75,7 +75,6 @@ type Registry struct {
 	notifRouter        *notifications.NotificationRouter
 	notifDispatcher    CallbackDispatcher
 	companionCaller    companionCallFunc
-	forgeTools         forgeHandler
 	fileTools          *FileTools
 	shellExec          *ShellExec
 	attachmentTools    *attachments.Tools
