@@ -1991,10 +1991,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	} else {
 		rebuildSystemPromptForModel(model)
-		// This value is handed to runners that load a model at the size we
-		// ask for, so it has to cover the tool schemas and the generation
-		// headroom too — not just the messages.
-		contextSize = estimateLoadContextTokens(llmMessages, visibleTools.List())
+		// What the request requires, tool schemas included — not just the
+		// messages. Generation headroom is added when a load size is chosen,
+		// so that wanting room to answer never makes a servable request look
+		// incompatible here.
+		contextSize = estimateRequestContextTokens(llmMessages, visibleTools.List())
 		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
 			return nil, prepErr
 		}

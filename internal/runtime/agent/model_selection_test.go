@@ -1292,7 +1292,7 @@ func TestRun_RoutedImageRequestRejectsWhenNoEligibleImageCapableDeploymentExists
 // production loop into a nudge-and-fallback cycle: the window was loaded at
 // exactly the estimated prompt size, and the tool schemas that travel beside
 // the prompt pushed the real request past it every time.
-func TestEstimateLoadContextTokens_CountsToolsAndHeadroom(t *testing.T) {
+func TestEstimateRequestContextTokens_CountsToolSchemas(t *testing.T) {
 	t.Parallel()
 
 	msgs := []llm.Message{
@@ -1318,17 +1318,128 @@ func TestEstimateLoadContextTokens_CountsToolsAndHeadroom(t *testing.T) {
 	}
 
 	messagesOnly := estimateLLMMessagesContextTokens(msgs)
-	withTools := estimateLoadContextTokens(msgs, toolDefs)
+	if got := estimateRequestContextTokens(msgs, nil); got != messagesOnly {
+		t.Fatalf("estimateRequestContextTokens(msgs, nil) = %d, want %d", got, messagesOnly)
+	}
+	if got := estimateRequestContextTokens(msgs, toolDefs); got <= messagesOnly {
+		t.Fatalf("estimateRequestContextTokens() = %d, want it to exceed the messages-only estimate %d once tools are attached",
+			got, messagesOnly)
+	}
+}
 
-	if got := estimateLoadContextTokens(msgs, nil); got != messagesOnly+reservedOutputContextTokens {
-		t.Fatalf("estimateLoadContextTokens(msgs, nil) = %d, want %d", got, messagesOnly+reservedOutputContextTokens)
+// Tool-call metadata is part of the message on the wire — the call id, the
+// function name, and the JSON arguments — so a conversation that has been
+// calling tools holds more context than its prose accounts for.
+func TestEstimateLLMMessagesContextTokens_CountsToolCallMetadata(t *testing.T) {
+	t.Parallel()
+
+	plain := []llm.Message{
+		{Role: "user", Content: "check the sensor"},
+		{Role: "assistant", Content: ""},
+		{Role: "tool", Content: "ok"},
 	}
-	if withTools <= messagesOnly+reservedOutputContextTokens {
-		t.Fatalf("estimateLoadContextTokens() = %d, want it to exceed messages+headroom (%d) once tools are attached",
-			withTools, messagesOnly+reservedOutputContextTokens)
+
+	call := llm.ToolCall{ID: "call_9f2c1ab4"}
+	call.Function.Name = "archive_search"
+	call.Function.Arguments = map[string]any{
+		"query": strings.Repeat("a long historical search argument ", 200),
+		"limit": 50,
 	}
-	if withTools <= messagesOnly {
-		t.Fatalf("estimateLoadContextTokens() = %d, must never size a window at or below the prompt estimate %d",
-			withTools, messagesOnly)
+	withCalls := []llm.Message{
+		{Role: "user", Content: "check the sensor"},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{call}},
+		{Role: "tool", Content: "ok", ToolCallID: "call_9f2c1ab4"},
+	}
+
+	base := estimateLLMMessagesContextTokens(plain)
+	got := estimateLLMMessagesContextTokens(withCalls)
+
+	// The arguments alone are ~6800 characters, so the gap must be large;
+	// counting only the ids and names would be a near-invisible difference.
+	if got-base < 1000 {
+		t.Fatalf("estimate with tool calls = %d, without = %d (gap %d), want the serialized arguments counted",
+			got, base, got-base)
+	}
+}
+
+// Headroom is a preference. Adding it to the figure that judges
+// compatibility would reject requests a model can actually serve — a 7000
+// token request on an 8192 token model is servable, and must not be turned
+// away for wanting 4096 tokens of room on top.
+func TestDesiredLoadContextTokens_ClampsToMaxAndStaysAPreference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		required int
+		max      int
+		want     int
+	}{
+		{name: "headroom fits", required: 20000, max: 262144, want: 20000 + reservedOutputContextTokens},
+		{name: "headroom clamped to max", required: 7000, max: 8192, want: 8192},
+		{name: "required already at max", required: 8192, max: 8192, want: 8192},
+		{name: "unknown max leaves headroom", required: 7000, max: 0, want: 7000 + reservedOutputContextTokens},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := desiredLoadContextTokens(tt.required, tt.max); got != tt.want {
+				t.Fatalf("desiredLoadContextTokens(%d, %d) = %d, want %d", tt.required, tt.max, got, tt.want)
+			}
+		})
+	}
+}
+
+// Preflight judges a deployment on what the request requires, not on what
+// would be comfortable. A model whose window holds the request but not the
+// request plus generation headroom can still answer, and must not be
+// rejected before the provider is ever called — a rejection here also skips
+// the provider-error and tool-removal recovery paths downstream.
+func TestRun_ExplicitModelPreflightDoesNotRequireOutputHeadroom(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:       "gemma-local",
+				Message:     llm.Message{Role: "assistant", Content: "ok"},
+				InputTokens: 100, OutputTokens: 2,
+			},
+		},
+	}
+	loop := buildTestLoop(mock, nil)
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gemma-local",
+			Resources: map[string]config.ModelServerConfig{
+				"local": {URL: "http://localhost:11434", Provider: "ollama"},
+			},
+			Available: []config.ModelConfig{
+				{Name: "gemma-local", Resource: "local"},
+			},
+		},
+	}
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
+
+	userMessage := "please inspect the loaded memory timeline"
+	reqMessages := []Message{{Role: "user", Content: userMessage}}
+	prompt, sections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, loop.modelInteractionProfileForModel("gemma-local"))
+	required := estimateRequestContextTokens(
+		buildInitialLLMMessages(prompt, sections, nil, reqMessages, "default", time.Time{}),
+		loop.tools.List(),
+	)
+
+	// A window that fits the request exactly, and cannot fit the headroom.
+	cfg.Models.Available[0].ContextWindow = required
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
+
+	_, err := loop.Run(context.Background(), &Request{
+		Model:    "gemma-local",
+		Messages: reqMessages,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the request served on a window that fits it", err)
+	}
+	if len(mock.calls) == 0 {
+		t.Fatal("llm calls = 0, want the provider reached rather than preflight-rejected")
 	}
 }

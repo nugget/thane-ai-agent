@@ -134,7 +134,12 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		return false, nil
 	}
-	if !fleet.CanExpandLoadedContext(dep, contextSize) {
+	// contextSize is what the request requires; the window worth loading for
+	// it also holds the answer. Headroom is folded in here rather than by the
+	// caller because the same figure feeds preflight, which must judge the
+	// deployment on the requirement alone.
+	loadSize := desiredLoadContextTokens(contextSize, dep.MaxContextWindow)
+	if !fleet.CanExpandLoadedContext(dep, loadSize) {
 		return false, nil
 	}
 	if needsTools {
@@ -152,7 +157,7 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 		return false, nil
 	}
 
-	prep, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, contextSize)
+	prep, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, loadSize)
 	if err != nil {
 		return false, err
 	}
