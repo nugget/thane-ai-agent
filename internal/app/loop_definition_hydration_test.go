@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -467,6 +468,19 @@ func TestHydrateLoopDefinitionSpec_UnifiPoller(t *testing.T) {
 	}
 	if updater.updates != 0 {
 		t.Fatalf("updates = %d, want 0 on first debounce pass", updater.updates)
+	}
+}
+
+func TestHydrateLoopDefinitionSpec_RejectsDisabledForgePoller(t *testing.T) {
+	t.Parallel()
+
+	a := &App{forgeService: &forge.Service{}}
+	_, err := a.hydrateLoopDefinitionSpec(looppkg.Spec{Name: forgeSubPollerDefinitionName})
+	if err == nil {
+		t.Fatal("hydrateLoopDefinitionSpec accepted disabled forge polling")
+	}
+	if !strings.Contains(err.Error(), "requires forge subscription poller runtime") {
+		t.Fatalf("hydrateLoopDefinitionSpec error = %q, want disabled poller runtime error", err)
 	}
 }
 

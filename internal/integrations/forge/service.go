@@ -64,12 +64,15 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 	forgeTools := NewTools(manager, opLog, deps.Logger, subscriptions)
 	forgeTools.SetLoopResolver(deps.LoopResolver)
 
-	return &Service{
+	service := &Service{
 		manager:         manager,
 		tools:           forgeTools,
 		contextProvider: NewContextProvider(manager, opLog),
-		poller:          NewSubscriptionPoller(manager, subscriptions, deps.MessageBus, deps.Logger),
-	}, nil
+	}
+	if cfg.SubscriptionCheckInterval > 0 {
+		service.poller = NewSubscriptionPoller(manager, subscriptions, deps.MessageBus, deps.Logger)
+	}
+	return service, nil
 }
 
 // ToolProvider returns the forge-owned model tool provider.
@@ -96,11 +99,21 @@ func (s *Service) ResolveAccount(name string) (ResolvedAccount, error) {
 	return s.manager.ResolveAccount(name)
 }
 
+// SubscriptionPollingEnabled reports whether repository polling is enabled by
+// configuration. Dynamic loop definitions must honor this policy rather than
+// recreating a poller when subscription_check_interval is zero.
+func (s *Service) SubscriptionPollingEnabled() bool {
+	return s != nil && s.poller != nil
+}
+
 // CheckSubscriptions polls followed repositories and delivers any resulting
 // event wakes. Repository failures remain isolated by [SubscriptionPoller].
 func (s *Service) CheckSubscriptions(ctx context.Context) (int, error) {
-	if s == nil || s.poller == nil {
+	if s == nil {
 		return 0, fmt.Errorf("forge service is not configured")
+	}
+	if s.poller == nil {
+		return 0, fmt.Errorf("forge subscription polling is disabled")
 	}
 	return s.poller.CheckSubscriptions(ctx)
 }

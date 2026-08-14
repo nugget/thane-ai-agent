@@ -24,6 +24,7 @@ func TestNewServiceOwnsForgeRuntime(t *testing.T) {
 	}
 
 	service, err := NewService(Config{
+		SubscriptionCheckInterval: 60,
 		Accounts: []AccountConfig{{
 			Name:     "primary",
 			Provider: "github",
@@ -56,6 +57,9 @@ func TestNewServiceOwnsForgeRuntime(t *testing.T) {
 	}
 	if service.ContextProvider() == nil {
 		t.Fatal("ContextProvider() returned nil")
+	}
+	if !service.SubscriptionPollingEnabled() {
+		t.Fatal("SubscriptionPollingEnabled() = false, want true for positive interval")
 	}
 
 	registry := toolpkg.NewEmptyRegistry()
@@ -97,6 +101,37 @@ func TestNewServiceOwnsForgeRuntime(t *testing.T) {
 	}
 	if accountParameters == 0 {
 		t.Fatal("forge provider declared no account-bearing tools")
+	}
+}
+
+func TestNewServiceDisablesSubscriptionPollingAtZero(t *testing.T) {
+	t.Parallel()
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	state, err := opstate.NewStore(db, discardLogger())
+	if err != nil {
+		t.Fatalf("create operational state: %v", err)
+	}
+
+	service, err := NewService(Config{
+		Accounts: []AccountConfig{{Name: "primary", Provider: "github", Token: "test-token"}},
+	}, ServiceDependencies{
+		State:      state,
+		MessageBus: messages.NewBus(discardLogger()),
+		Logger:     discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if service.SubscriptionPollingEnabled() {
+		t.Fatal("SubscriptionPollingEnabled() = true, want false for zero interval")
+	}
+	if _, err := service.CheckSubscriptions(t.Context()); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("CheckSubscriptions error = %v, want disabled error", err)
 	}
 }
 
