@@ -233,6 +233,12 @@ muddle them and the loop drifts.
   opposite of how `routing_factors` resolve. Binding to an account
   that does not exist refuses the definition rather than failing later
   at the first call.
+  A bound caller carries that boundary into `thane_loop_create` and
+  `loop_definition_set`; it cannot override the value, omit it, or nest the
+  new loop under an incompatible container. Launching or activating a stored
+  definition is likewise refused when its effective binding does not match
+  the caller. An unbound operator can still author and launch independently
+  bound definitions.
 
 ## Changing a loop that's already running
 

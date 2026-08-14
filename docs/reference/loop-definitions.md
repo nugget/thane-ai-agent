@@ -133,6 +133,13 @@ restriction the container imposed, and a child that could rebind it would
 turn a boundary into advice. A child may still bind a key no ancestor
 mentions.
 
+Bindings also follow the caller across model-authored loop creation. A bound
+caller cannot omit its binding, replace it in a submitted spec, or launch a
+stored definition whose effective binding is different or absent. Nesting a
+new loop under a container with a conflicting binding is refused rather than
+silently changing which resource the child can reach. Unbound operator and API
+callers remain free to author and launch independently bound definitions.
+
 A binding restricts *which* credential is used, not what that credential
 may do. The account's own token policy is what makes a read-only account
 harmless; the binding is what makes the choice of account non-negotiable.

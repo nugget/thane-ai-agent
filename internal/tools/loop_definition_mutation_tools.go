@@ -18,6 +18,10 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if err != nil {
 		return "", err
 	}
+	spec, err = r.applyCallerBindingsToAuthoredSpec(ctx, spec)
+	if err != nil {
+		return "", err
+	}
 	stale, err := r.persistLoopSpec(ctx, spec)
 	if err != nil {
 		return "", err
@@ -189,7 +193,8 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	if _, found := looppkg.FindDefinition(snapshot, name); !found {
+	snapshotDef, found := looppkg.FindDefinition(snapshot, name)
+	if !found {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
 	clearOverride, _ := args["clear_override"].(bool)
@@ -199,6 +204,11 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 	}
 	if !clearOverride && stateRaw == "" {
 		return "", fmt.Errorf("state is required unless clear_override=true")
+	}
+	if (clearOverride && snapshotDef.Spec.Enabled) || stateRaw == string(looppkg.DefinitionPolicyStateActive) {
+		if err := r.requireCallerBindingsForDefinition(ctx, name, "activate definition"); err != nil {
+			return "", err
+		}
 	}
 
 	if clearOverride {
@@ -269,6 +279,9 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
+	}
+	if err := r.requireCallerBindingsForDefinition(ctx, name, "launch definition"); err != nil {
+		return "", err
 	}
 	launch = applyLoopLaunchContextDefaults(ctx, def, launch)
 	// Captured before the launch so the running-durable short-circuit
@@ -411,6 +424,9 @@ func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) 
 	spec := def.Spec
 	spec.ParentName = newParent
 	spec.ParentID = ""
+	if err := r.requireCallerBindingsForSpec(ctx, spec); err != nil {
+		return "", err
+	}
 	updatedAt := time.Now().UTC()
 	if r.commitLoopDefinitionSpec != nil {
 		if err := r.commitLoopDefinitionSpec(ctx, spec, updatedAt); err != nil {

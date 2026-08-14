@@ -198,7 +198,7 @@ type Config struct {
 
 	// Bindings name the specific instances of shared resources this
 	// loop may reach — see [Spec.Bindings] for the grammar and
-	// [mergeBindings] for the ancestors-win cascade.
+	// [MergeBindings] for the ancestors-win cascade.
 	Bindings map[string]string
 
 	// SleepMin is the minimum sleep duration between iterations.

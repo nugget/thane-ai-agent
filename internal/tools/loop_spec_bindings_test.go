@@ -7,9 +7,9 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// TestDecodeLoopSpecArgPreservesBindings covers the path the agent
-// itself authors through. thane_loop_create and loop_definition_set
-// decode their spec argument as JSON, so the same wire type that
+// TestDecodeLoopSpecArgPreservesBindings covers the full-spec path the
+// agent authors through. loop_definition_set decodes its spec argument
+// as JSON, so the same wire type that
 // carries a binding into storage also carries it in from the model.
 // The schema advertises `bindings`; a decode that dropped the field
 // would let the model declare a boundary, report success, and run

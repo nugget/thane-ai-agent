@@ -106,10 +106,10 @@ func ValidateBindings(bindings map[string]string) error {
 // loop carries no binding rather than an empty map.
 //
 // Exported because the same precedence governs every mechanism that
-// starts a new turn, not just the ancestor walk: the ad-hoc launch
-// path merges a launching caller's bindings over a model-authored
-// spec, and the caller has to win there for the same reason an
-// ancestor wins here.
+// starts a new turn, not just the ancestor walk: guided creation,
+// full-spec definition authoring, and ad-hoc launch all merge a
+// caller's bindings over a model-authored spec, and the caller has to
+// win there for the same reason an ancestor wins here.
 func MergeBindings(sets ...map[string]string) map[string]string {
 	var out map[string]string
 	for _, set := range sets {
