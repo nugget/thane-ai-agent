@@ -233,3 +233,53 @@ func TestFollowCreatesCheckoutEvenWithPollingDisabled(t *testing.T) {
 		t.Errorf("warning = %q, want it to say the checkout will not stay current", resp.Warning)
 	}
 }
+
+// TestSubscriptionListingWarnsWhenInert covers the reader who did not
+// create these rows. The listing is where someone goes to find out
+// whether a subscription is working, and without the caveat there it
+// shows a healthy-looking set of records that will never fire.
+func TestSubscriptionListingWarnsWhenInert(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		polling     bool
+		wantWarning bool
+	}{
+		{name: "polling disabled warns", polling: false, wantWarning: true},
+		{name: "polling live stays quiet", polling: true, wantWarning: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tools := newPollingTestTools(t, tc.polling)
+			tools.checkoutSync = func(_ context.Context, _ ProjectSubscription) (string, error) {
+				return "deadbeef", nil
+			}
+			if _, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+				"repo":          "repo",
+				"track_commits": true,
+				"wake_loop":     map[string]any{"name": "repo_curator"},
+			}); err != nil {
+				t.Fatalf("HandleRepoFollow: %v", err)
+			}
+
+			raw, err := tools.HandleRepoSubscriptions(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("HandleRepoSubscriptions: %v", err)
+			}
+			var resp struct {
+				Count   int    `json:"count"`
+				Warning string `json:"warning"`
+			}
+			if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if resp.Count != 1 {
+				t.Fatalf("count = %d, want the stored subscription listed", resp.Count)
+			}
+			if got := resp.Warning != ""; got != tc.wantWarning {
+				t.Errorf("warning present = %v, want %v (warning=%q)", got, tc.wantWarning, resp.Warning)
+			}
+		})
+	}
+}

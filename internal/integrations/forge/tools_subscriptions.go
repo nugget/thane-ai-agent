@@ -55,6 +55,12 @@ type repoSubscriptionEntry struct {
 type repoSubscriptionsResponse struct {
 	Count         int                     `json:"count"`
 	Subscriptions []repoSubscriptionEntry `json:"subscriptions"`
+
+	// Warning repeats the inert-subscription caveat on the listing.
+	// A reader who did not make these rows has no other way to learn
+	// that none of them will fire, and the listing is where someone
+	// goes to find out whether a subscription is working.
+	Warning string `json:"warning,omitempty"`
 }
 
 type repoUnfollowResponse struct {
@@ -180,6 +186,10 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	// Synced before the record is stored: a subscription pointing at a
 	// checkout that could not be made is the phantom path this fixes,
 	// so a failed clone fails the call instead of persisting a promise.
+	// Doing it here also keeps the failure attached to the moment that
+	// can act on it — the caller still holds the repository, the path,
+	// and the reason it asked. Deferred to the first poll, the same
+	// error surfaces hours later in a loop that knows none of that.
 	if strings.TrimSpace(sub.CheckoutPath) != "" && t.checkoutSync != nil {
 		head, err := t.checkoutSync(ctx, sub)
 		if err != nil {
@@ -193,6 +203,19 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	}
 
 	t.recordOp("forge_repo_follow", acct, repo, sub.ID)
+	// The agent gets this in its response; the operator gets it here.
+	// Whoever set subscription_check_interval to zero is not the one
+	// reading tool output, and a subscription that quietly does nothing
+	// is exactly what they would want to know they just created.
+	if warning := subscriptionInertWarning(t.service); warning != "" && t.logger != nil {
+		t.logger.Warn("forge subscription created while repository polling is disabled",
+			"subscription_id", sub.ID,
+			"repo", sub.Repo,
+			"account", sub.Account,
+			"local_checkout", sub.CheckoutPath,
+			"detail", warning)
+	}
+
 	return marshalResponse(repoFollowResponse{
 		SubscriptionID: sub.ID,
 		Account:        sub.Account,
@@ -291,6 +314,7 @@ func (t *Tools) HandleRepoSubscriptions(ctx context.Context, _ map[string]any) (
 	return marshalResponse(repoSubscriptionsResponse{
 		Count:         len(entries),
 		Subscriptions: entries,
+		Warning:       subscriptionInertWarning(t.service),
 	})
 }
 
