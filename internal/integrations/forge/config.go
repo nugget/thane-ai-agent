@@ -45,8 +45,8 @@ type AccountConfig struct {
 	// purpose is to let an operator say what a token may do before the
 	// model discovers the boundary by being refused: "read-only
 	// observation token; writes are denied" spends a sentence to save
-	// a wasted turn and a misread failure. Optional; accounts without
-	// one are described only by their name and owner.
+	// a wasted turn and a misread failure. Optional; the field is
+	// simply omitted for accounts that do not set one.
 	Description string `yaml:"description"`
 }
 
@@ -199,8 +199,9 @@ type accountView struct {
 // Context returns a markdown block describing the configured forge
 // accounts for injection into a system prompt. The output is structured
 // JSON wrapped in a fenced code block so the model can immediately
-// identify available accounts, their types, and default owners without
-// guessing. Returns an empty string when no accounts are configured.
+// identify available accounts, their types, default owners, and any
+// operator-authored description without guessing. Returns an empty
+// string when no accounts are configured.
 // Tokens are never included.
 func (m *Manager) Context() string {
 	if len(m.order) == 0 {

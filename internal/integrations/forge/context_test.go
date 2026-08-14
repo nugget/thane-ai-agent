@@ -14,7 +14,7 @@ func TestContextProvider_AccountConfig(t *testing.T) {
 
 	mgr := &Manager{
 		configs: map[string]AccountConfig{
-			"github-primary": {Name: "github-primary", Provider: "github", URL: "https://api.github.com", Owner: "nugget"},
+			"github-primary": {Name: "github-primary", Provider: "github", URL: "https://api.github.com", Owner: "nugget", Description: "Full access — issues, PRs, reviews."},
 		},
 		order: []string{"github-primary"},
 	}
@@ -30,6 +30,12 @@ func TestContextProvider_AccountConfig(t *testing.T) {
 	}
 	if !strings.Contains(got, `"default_owner":"nugget"`) {
 		t.Error("should contain default owner")
+	}
+	// The operator's note about what a token may do is the whole point
+	// of the field: without it the model learns an account's limits by
+	// being refused. Assert it reaches the block.
+	if !strings.Contains(got, `"description":"Full access — issues, PRs, reviews."`) {
+		t.Errorf("should carry the operator-authored description, got: %s", got)
 	}
 
 	// Heading frames the block; the payload after it is valid JSON.
