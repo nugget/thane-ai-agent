@@ -187,24 +187,22 @@ func (a *App) initChannels(s *newState) error {
 	}
 
 	// --- Forge integration ---
-	// Native GitHub (and future Gitea/GitLab) integration. Replaces the
-	// MCP github server with direct API calls via go-github.
-	var forgeOpLog *forge.OperationLog
+	// Native GitHub (and future forge providers) integration. The forge
+	// service owns account routing, tools, context, and subscriptions.
 	if a.cfg.Forge.Configured() {
 		var err error
-		a.forgeMgr, err = forge.NewManager(a.cfg.Forge, a.logger)
+		a.forgeService, err = forge.NewService(a.cfg.Forge, forge.ServiceDependencies{
+			State:        a.opStore,
+			MessageBus:   a.messageBus,
+			LoopResolver: a.loopRegistry,
+			Logger:       a.logger,
+		})
 		if err != nil {
-			return fmt.Errorf("create forge manager: %w", err)
+			return fmt.Errorf("create forge service: %w", err)
 		}
-
-		forgeOpLog = forge.NewOperationLog()
-		forgeSubStore := forge.NewSubscriptionStore(a.opStore, a.logger, a.cfg.Forge.MaxSubscriptions)
-		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger, forgeSubStore)
-		forgeTools.SetLoopResolver(a.loopRegistry)
-		a.loop.Tools().SetForgeTools(forgeTools)
+		a.loop.Tools().RegisterProvider(a.forgeService.ToolProvider())
 
 		if a.cfg.Forge.SubscriptionCheckInterval > 0 {
-			a.forgeSubPoller = forge.NewSubscriptionPoller(a.forgeMgr, forgeSubStore, a.messageBus, a.logger)
 			a.logger.Info("forge subscription polling enabled",
 				"interval", time.Duration(a.cfg.Forge.SubscriptionCheckInterval)*time.Second,
 				"max_subscriptions", a.cfg.Forge.MaxSubscriptions,
@@ -215,7 +213,6 @@ func (a *App) initChannels(s *newState) error {
 	} else {
 		a.logger.Info("forge disabled (not configured)")
 	}
-	s.forgeOpLog = forgeOpLog
 
 	// --- Working memory tool ---
 	// Gives the agent a read/write scratchpad for experiential context

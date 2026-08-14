@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
-	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
@@ -333,10 +332,10 @@ func ExampleConfig() *Config {
 			},
 		},
 
-		Forge: forge.Config{
+		Forge: ForgeConfig{
 			SubscriptionCheckInterval: 3600,
 			MaxSubscriptions:          50,
-			Accounts: []forge.AccountConfig{
+			Accounts: []ForgeAccountConfig{
 				{
 					Name:        "github",
 					Provider:    "github",
