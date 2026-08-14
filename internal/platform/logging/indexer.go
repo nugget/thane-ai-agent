@@ -364,6 +364,14 @@ func (h *IndexHandler) Close() {
 
 // Migrate creates or upgrades the log_entries table and indexes.
 // Call this once after opening the database and before logging begins.
+//
+// The schema runs one statement at a time, each failure naming its
+// statement, and finishes by verifying every declared log_entries index
+// against sqlite_master. The 2026-08 telemetry outage was a production
+// database missing half its declared indexes while Migrate reported
+// success at every boot — a state whose mechanism tests could not
+// reproduce. Verification makes any recurrence a loud, named error at
+// the next boot instead of years of silent full-table scans.
 func Migrate(db *sql.DB) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS log_entries (
@@ -397,7 +405,10 @@ func Migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_log_loop_id ON log_entries(loop_id);
 	CREATE INDEX IF NOT EXISTS idx_log_loop_name ON log_entries(loop_name);
 	`
-	if _, err := db.Exec(schema); err != nil {
+	if err := execStatements(db, schema); err != nil {
+		return fmt.Errorf("migrate log index: %w", err)
+	}
+	if err := verifyLogEntryIndexes(db); err != nil {
 		return fmt.Errorf("migrate log index: %w", err)
 	}
 
@@ -447,7 +458,7 @@ func Migrate(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_tool_content_request ON log_tool_content(request_id);
 	`
-	if _, err := db.Exec(contentSchema); err != nil {
+	if err := execStatements(db, contentSchema); err != nil {
 		return fmt.Errorf("migrate content retention: %w", err)
 	}
 	if err := database.AddColumn(db, "log_request_content", "messages_json", "TEXT"); err != nil {
@@ -947,4 +958,86 @@ func levelsAtOrAbove(minLevel string) []string {
 	default:
 		return nil
 	}
+}
+
+// execStatements runs a semicolon-separated schema script one statement
+// at a time, so a failure names the statement that caused it instead of
+// vanishing into a multi-statement Exec whose partial-execution behavior
+// is the driver's business, not ours. Line comments are stripped before
+// splitting (a comment may legally contain a semicolon); the splitter
+// assumes the scripts carry no string literals — true of every schema
+// here, and cheap to keep true.
+func execStatements(db *sql.DB, script string) error {
+	var stripped strings.Builder
+	for _, line := range strings.Split(script, "\n") {
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			line = line[:idx]
+		}
+		stripped.WriteString(line)
+		stripped.WriteByte('\n')
+	}
+	for _, stmt := range strings.Split(stripped.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.Exec(stmt); err != nil {
+			first := stmt
+			if idx := strings.IndexByte(first, '\n'); idx > 0 {
+				first = first[:idx]
+			}
+			return fmt.Errorf("%s: %w", strings.TrimSpace(first), err)
+		}
+	}
+	return nil
+}
+
+// logEntryIndexNames is every index Migrate declares on log_entries,
+// in schema order. Verification reads this list; a new index added to
+// the schema without a matching entry here fails the pinning test.
+var logEntryIndexNames = []string{
+	"idx_log_timestamp",
+	"idx_log_level",
+	"idx_log_request",
+	"idx_log_session",
+	"idx_log_conversation",
+	"idx_log_subsystem",
+	"idx_log_tool",
+	"idx_log_model",
+	"idx_log_loop_id",
+	"idx_log_loop_name",
+}
+
+// verifyLogEntryIndexes confirms every declared log_entries index
+// exists after migration. A migration that claims success while
+// declared indexes are missing leaves windowed queries full-scanning a
+// growing table — silently, until the scans outgrow their callers'
+// deadlines.
+func verifyLogEntryIndexes(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='log_entries'`)
+	if err != nil {
+		return fmt.Errorf("verify indexes: %w", err)
+	}
+	defer rows.Close()
+	present := make(map[string]bool, len(logEntryIndexNames))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("verify indexes: %w", err)
+		}
+		present[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verify indexes: %w", err)
+	}
+	var missing []string
+	for _, want := range logEntryIndexNames {
+		if !present[want] {
+			missing = append(missing, want)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("declared indexes missing after migration: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
