@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"testing"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -50,4 +51,59 @@ func TestDecodeLoopSpecArgPreservesBindings(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAdHocLaunchCannotEscapeCallerBinding covers spawn_loop, the
+// other way a bound loop can start a new turn. The spec here is
+// model-written, so the caller's boundary has to be merged over it —
+// and merged caller-first, or a loop bound to a read-only account
+// could spawn one naming the write account and reach it that way.
+//
+// The registry cascade does not cover this: a spawning service loop
+// is not a container ancestor, so the spawned loop would inherit
+// nothing from it.
+func TestAdHocLaunchCannotEscapeCallerBinding(t *testing.T) {
+	t.Parallel()
+
+	boundCtx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingForgeAccount: "github-readonly",
+	})
+
+	t.Run("an unbound spec inherits the caller's binding", func(t *testing.T) {
+		t.Parallel()
+		launch, _ := applyAdHocLoopLaunchContextDefaults(boundCtx, looppkg.Launch{
+			Spec: looppkg.Spec{Name: "spawned", Operation: looppkg.OperationBackgroundTask},
+		})
+		if got := launch.Spec.Bindings[looppkg.BindingForgeAccount]; got != "github-readonly" {
+			t.Errorf("spawned binding = %q, want the caller's %q", got, "github-readonly")
+		}
+	})
+
+	t.Run("a spec naming another account cannot override the caller", func(t *testing.T) {
+		t.Parallel()
+		launch, _ := applyAdHocLoopLaunchContextDefaults(boundCtx, looppkg.Launch{
+			Spec: looppkg.Spec{
+				Name:      "spawned",
+				Operation: looppkg.OperationBackgroundTask,
+				Bindings:  map[string]string{looppkg.BindingForgeAccount: "github-primary"},
+			},
+		})
+		if got := launch.Spec.Bindings[looppkg.BindingForgeAccount]; got != "github-readonly" {
+			t.Errorf("spawned binding = %q; a model-authored spec overrode the caller's boundary", got)
+		}
+	})
+
+	t.Run("an unbound caller leaves the spec alone", func(t *testing.T) {
+		t.Parallel()
+		launch, _ := applyAdHocLoopLaunchContextDefaults(context.Background(), looppkg.Launch{
+			Spec: looppkg.Spec{
+				Name:      "spawned",
+				Operation: looppkg.OperationBackgroundTask,
+				Bindings:  map[string]string{looppkg.BindingForgeAccount: "github-primary"},
+			},
+		})
+		if got := launch.Spec.Bindings[looppkg.BindingForgeAccount]; got != "github-primary" {
+			t.Errorf("spawned binding = %q, want the spec's own %q when the caller is unbound", got, "github-primary")
+		}
+	})
 }

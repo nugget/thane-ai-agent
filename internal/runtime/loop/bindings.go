@@ -91,7 +91,7 @@ func ValidateBindings(bindings map[string]string) error {
 	return nil
 }
 
-// mergeBindings resolves the effective bindings for an iteration.
+// MergeBindings resolves the effective bindings for an iteration.
 //
 // Ancestors win. This is the opposite of the routing-factor cascade,
 // and deliberately so: a routing factor is a preference a child may
@@ -104,7 +104,13 @@ func ValidateBindings(bindings map[string]string) error {
 // Later arguments are closer to the leaf, so earlier arguments win on
 // collision. Returns nil when nothing declares anything, so an unbound
 // loop carries no binding rather than an empty map.
-func mergeBindings(sets ...map[string]string) map[string]string {
+//
+// Exported because the same precedence governs every mechanism that
+// starts a new turn, not just the ancestor walk: the ad-hoc launch
+// path merges a launching caller's bindings over a model-authored
+// spec, and the caller has to win there for the same reason an
+// ancestor wins here.
+func MergeBindings(sets ...map[string]string) map[string]string {
 	var out map[string]string
 	for _, set := range sets {
 		for key, value := range set {

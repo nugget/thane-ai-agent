@@ -2331,7 +2331,7 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	// and a per-request override is weakest of all. A restriction that
 	// a caller could lift by passing a Request field would not be a
 	// restriction.
-	req.Bindings = mergeBindings(cascade.Bindings, l.config.Bindings, req.Bindings, l.requestOverride.Bindings)
+	req.Bindings = MergeBindings(cascade.Bindings, l.config.Bindings, req.Bindings, l.requestOverride.Bindings)
 	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
 	req.RoutingFactors = hints
 	// Inherited gating is the weakest priority — own config and

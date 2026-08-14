@@ -118,13 +118,13 @@ func TestMergeBindingsAncestorsWin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := mergeBindings(tt.sets...)
+			got := MergeBindings(tt.sets...)
 			if len(got) != len(tt.want) {
-				t.Fatalf("mergeBindings() = %v, want %v", got, tt.want)
+				t.Fatalf("MergeBindings() = %v, want %v", got, tt.want)
 			}
 			for k, v := range tt.want {
 				if got[k] != v {
-					t.Errorf("mergeBindings()[%q] = %q, want %q", k, got[k], v)
+					t.Errorf("MergeBindings()[%q] = %q, want %q", k, got[k], v)
 				}
 			}
 		})
