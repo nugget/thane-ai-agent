@@ -696,6 +696,11 @@ func (l *Loop) Status() Status {
 		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
 		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
 	}
+	// Cloned for the same reason as the maps below, with a sharper edge:
+	// an aliased binding map lets a Status() caller rewrite the active
+	// account boundary without the loop lock, racing an iteration that
+	// is reading it.
+	cfgCopy.Bindings = cloneBindings(l.config.Bindings)
 	if l.config.RoutingFactors != nil {
 		cfgCopy.RoutingFactors = make(map[string]string, len(l.config.RoutingFactors))
 		for k, v := range l.config.RoutingFactors {

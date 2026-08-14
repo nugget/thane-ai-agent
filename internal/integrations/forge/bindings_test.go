@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -242,6 +244,89 @@ func TestContextProviderFiltersRecentOpsByBinding(t *testing.T) {
 		}
 		if strings.Contains(out, "github-primary") {
 			t.Errorf("context = %q\nnames an account the binding hides", out)
+		}
+	})
+}
+
+// TestSubscriptionToolsHonorBinding covers the two subscription tools
+// that address rows by opaque ID rather than by account. Enforcing the
+// binding only where an account argument happens to exist leaves the
+// rest of the surface open: the listing is an inventory of every
+// account's repositories, and unfollow is destructive against any row
+// whose ID the caller can name.
+func TestSubscriptionToolsHonorBinding(t *testing.T) {
+	t.Parallel()
+
+	newTools := func(t *testing.T) *Tools {
+		t.Helper()
+		tools := newMultiAccountTools()
+		store := newTestSubscriptionStore(t)
+		for _, sub := range []ProjectSubscription{
+			{ID: "sub-ro", Account: "github-readonly", Repo: "nugget/thane", TrackReleases: true,
+				WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+			{ID: "sub-rw", Account: "github-primary", Repo: "nugget/secret-thing", TrackReleases: true,
+				WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		} {
+			if err := store.Add(sub); err != nil {
+				t.Fatalf("seed %s: %v", sub.ID, err)
+			}
+		}
+		tools.subscriptions = store
+		return tools
+	}
+
+	t.Run("listing hides other accounts", func(t *testing.T) {
+		t.Parallel()
+		tools := newTools(t)
+		out, err := tools.HandleRepoSubscriptions(boundCtx("github-readonly"), nil)
+		if err != nil {
+			t.Fatalf("HandleRepoSubscriptions: %v", err)
+		}
+		if !strings.Contains(out, "nugget/thane") {
+			t.Errorf("listing = %q\nmissing this account's own subscription", out)
+		}
+		if strings.Contains(out, "nugget/secret-thing") || strings.Contains(out, "github-primary") {
+			t.Errorf("listing = %q\nnames another account's subscription", out)
+		}
+	})
+
+	t.Run("unbound listing is unchanged", func(t *testing.T) {
+		t.Parallel()
+		tools := newTools(t)
+		out, err := tools.HandleRepoSubscriptions(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("HandleRepoSubscriptions: %v", err)
+		}
+		for _, want := range []string{"nugget/thane", "nugget/secret-thing"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("unbound listing = %q\nmissing %q", out, want)
+			}
+		}
+	})
+
+	t.Run("unfollow refuses another account's subscription", func(t *testing.T) {
+		t.Parallel()
+		tools := newTools(t)
+		_, err := tools.HandleRepoUnfollow(boundCtx("github-readonly"),
+			map[string]any{"subscription_id": "sub-rw"})
+		if err == nil {
+			t.Fatal("HandleRepoUnfollow() removed another account's subscription")
+		}
+		if !strings.Contains(err.Error(), "github-primary") {
+			t.Errorf("error = %q, want it to name the owning account", err.Error())
+		}
+		// And the row must still be there.
+		if _, err := tools.subscriptions.Get("sub-rw"); err != nil {
+			t.Errorf("subscription was removed despite the refusal: %v", err)
+		}
+	})
+
+	t.Run("unfollow allows its own subscription", func(t *testing.T) {
+		t.Parallel()
+		tools := newTools(t)
+		if _, err := tools.HandleRepoUnfollow(boundCtx("github-readonly"),
+			map[string]any{"subscription_id": "sub-ro"}); err != nil {
+			t.Fatalf("HandleRepoUnfollow on own subscription: %v", err)
 		}
 	})
 }

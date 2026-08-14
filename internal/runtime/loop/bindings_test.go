@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -219,5 +220,81 @@ func TestSpecToConfigCarriesBindings(t *testing.T) {
 	spec.Bindings[BindingForgeAccount] = "github-primary"
 	if got := cfg.Bindings[BindingForgeAccount]; got != "github-readonly" {
 		t.Errorf("Config.Bindings[%q] = %q after mutating the spec; want an independent copy", BindingForgeAccount, got)
+	}
+}
+
+// TestBindingsSurviveJSONRoundTrip guards the path that carries a
+// binding across a restart. Spec marshals through the specJSON wire
+// type, and definitions persist as JSON in opstate — so a field absent
+// from that wire type is silently dropped on save and comes back empty
+// on load. For a boundary, that failure is the worst-shaped one
+// available: the loop restarts unbound, reaching every configured
+// account, with the stored definition still showing the restriction
+// and nothing anywhere reporting that it stopped applying.
+func TestBindingsSurviveJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	spec := Spec{
+		Name:      "watcher",
+		Operation: OperationService,
+		Task:      "watch",
+		Bindings:  map[string]string{BindingForgeAccount: "github-readonly"},
+	}
+
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), "bindings") {
+		t.Fatalf("marshalled spec omits bindings entirely: %s", data)
+	}
+
+	var back Spec
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got := back.Bindings[BindingForgeAccount]; got != "github-readonly" {
+		t.Fatalf("binding after round-trip = %q, want %q — a persisted loop would restart unbound", got, "github-readonly")
+	}
+
+	// The decoded spec must own its map, not alias the wire value.
+	back.Bindings[BindingForgeAccount] = "github-primary"
+	var second Spec
+	if err := json.Unmarshal(data, &second); err != nil {
+		t.Fatalf("Unmarshal (second): %v", err)
+	}
+	if got := second.Bindings[BindingForgeAccount]; got != "github-readonly" {
+		t.Errorf("second decode = %q, want an independent map", got)
+	}
+}
+
+// TestStatusDoesNotAliasBindings covers the deep-copy contract on
+// Status(). An aliased map lets a caller rewrite the active account
+// boundary without the loop lock, racing an iteration that is reading
+// it — a data race and a security hole in one.
+func TestStatusDoesNotAliasBindings(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:     "bound",
+		Task:     "t",
+		Bindings: map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	snapshot := l.Status()
+	if got := snapshot.Config.Bindings[BindingForgeAccount]; got != "github-readonly" {
+		t.Fatalf("Status().Config.Bindings = %q, want the live binding", got)
+	}
+	snapshot.Config.Bindings[BindingForgeAccount] = "github-primary"
+
+	req, err := l.prepareAgentTurnRequest(Request{}, "conv-1", false)
+	if err != nil {
+		t.Fatalf("prepareAgentTurnRequest: %v", err)
+	}
+	if got := req.Bindings[BindingForgeAccount]; got != "github-readonly" {
+		t.Errorf("binding = %q after mutating a Status() snapshot; the snapshot aliased live state", got)
 	}
 }
