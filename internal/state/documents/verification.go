@@ -218,6 +218,15 @@ func (s *Store) handleVerificationFailure(root, relPath, consumer string, result
 		s.logger.Warn("document root signature verification warning", fields...)
 		return nil
 	}
+	// A check that could not run is not a check that failed. Both still
+	// refuse the read — failing closed is the point of a trust boundary
+	// — but they send the reader to different places, and saying
+	// "blocked by signature policy" when git was killed buys an
+	// investigation into signers and history that were never involved.
+	if result.Status == SignatureUnavailable {
+		return fmt.Errorf("document %s:%s could not be verified for %s (refused because this root requires verification, not because the content failed it): %s",
+			root, relPath, consumer, message)
+	}
 	return fmt.Errorf("document %s:%s blocked by signature policy for %s: %s", root, relPath, consumer, message)
 }
 

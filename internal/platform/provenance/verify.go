@@ -24,6 +24,14 @@ const (
 	// VerificationFailed means the path could not be tied to trusted
 	// signed history.
 	VerificationFailed VerificationStatus = "failed"
+
+	// VerificationUnavailable marks a check that could not be
+	// completed — git was killed, timed out, or could not be run at
+	// all. It is deliberately not [VerificationFailed]: a check that
+	// did not finish says nothing about whether the content is
+	// trustworthy, and reporting the two identically sends a reader
+	// hunting for a trust problem that may not exist.
+	VerificationUnavailable VerificationStatus = "unavailable"
 )
 
 // VerificationResult summarizes one provenance verification check.
@@ -139,14 +147,14 @@ func (v *Verifier) verifyPathspec(ctx context.Context, pathspec string, requireT
 		statusArgs = append(statusArgs, v.statusExclusions(target)...)
 	}
 	if status, err := v.gitOutput(ctx, false, statusArgs...); err != nil {
-		return failedVerification("", fmt.Sprintf("git status failed: %v", err))
+		return unavailableVerification("", fmt.Sprintf("git status failed: %v", err))
 	} else if strings.TrimSpace(status) != "" {
 		return failedVerification("", "worktree has uncommitted changes for "+target)
 	}
 
 	var commit string
 	if out, err := v.gitOutput(ctx, false, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
-		return failedVerification("", fmt.Sprintf("git HEAD lookup failed: %v", err))
+		return unavailableVerification("", fmt.Sprintf("git HEAD lookup failed: %v", err))
 	} else {
 		commit = strings.TrimSpace(out)
 	}
@@ -157,7 +165,7 @@ func (v *Verifier) verifyPathspec(ctx context.Context, pathspec string, requireT
 	if requireTracked {
 		out, err := v.gitOutput(ctx, false, "ls-tree", "-r", "--name-only", "HEAD", "--", pathspec)
 		if err != nil {
-			return failedVerification(commit, fmt.Sprintf("git tracked-file lookup failed: %v", err))
+			return unavailableVerification(commit, fmt.Sprintf("git tracked-file lookup failed: %v", err))
 		}
 		if !pathspecListed(out, pathspec) {
 			return failedVerification(commit, "file is not tracked in HEAD: "+pathspec)
@@ -228,6 +236,20 @@ func pathspecIncludes(target, candidate string) bool {
 func failedVerification(commit string, message string) (VerificationResult, error) {
 	result := VerificationResult{
 		Status:  VerificationFailed,
+		Commit:  commit,
+		Message: strings.TrimSpace(message),
+	}
+	return result, errors.New(result.Message)
+}
+
+// unavailableVerification reports that the check could not be run to a
+// verdict. The distinction from [failedVerification] is the whole
+// point: "we asked git and it said no" and "we could not ask git" lead
+// a reader to opposite places, and collapsing them costs a forensic
+// detour every time the host is briefly unwell.
+func unavailableVerification(commit string, message string) (VerificationResult, error) {
+	result := VerificationResult{
+		Status:  VerificationUnavailable,
 		Commit:  commit,
 		Message: strings.TrimSpace(message),
 	}

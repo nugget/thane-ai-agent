@@ -106,14 +106,28 @@ func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_read"); err != nil {
-		return nil, err
-	}
+	// Existence is settled before trust. This function already answers
+	// "document not found" correctly — it simply never reached those
+	// branches, because verification ran first and a path that was
+	// never written answers "file is not tracked in HEAD". That reads
+	// as a signature problem and sends the reader to check signers,
+	// policy, and root health, all of which are fine; production spent
+	// real forensic effort there for documents that did not exist.
+	//
+	// Only the read path is reordered. The shared verifier still runs
+	// first for writes and injection, where a not-yet-existing file
+	// must be checked rather than waved through — skipping policy for
+	// absent paths would be a bypass, not a courtesy. No content is
+	// served ahead of the trust check either: resolving a path reads
+	// nothing, and readDocumentFile still runs after verification.
 	absPath, err := s.resolveDocumentPath(root, relPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", ref)
 		}
+		return nil, err
+	}
+	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_read"); err != nil {
 		return nil, err
 	}
 	record, _, _, err := s.readDocumentFile(absPath, root, relPath)
