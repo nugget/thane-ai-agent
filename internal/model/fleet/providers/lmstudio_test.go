@@ -690,3 +690,38 @@ func TestLMStudioChatStream_ChunklessStreamErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestLMStudioUnloadModel(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotInstance string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var req struct {
+			InstanceID string `json:"instance_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode unload request: %v", err)
+		}
+		gotInstance = req.InstanceID
+		_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": req.InstanceID})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	if err := client.UnloadModel(context.Background(), "google/gemma-3-4b:2"); err != nil {
+		t.Fatalf("UnloadModel() error = %v", err)
+	}
+	if gotPath != "/api/v1/models/unload" {
+		t.Fatalf("path = %q, want /api/v1/models/unload", gotPath)
+	}
+	if gotInstance != "google/gemma-3-4b:2" {
+		t.Fatalf("instance_id = %q, want google/gemma-3-4b:2", gotInstance)
+	}
+
+	// An instance id is required: LM Studio releases an instance, not a
+	// model, and a model may have several loaded at once.
+	if err := client.UnloadModel(context.Background(), "  "); err == nil {
+		t.Fatal("UnloadModel(blank) error = nil, want instance id required")
+	}
+}

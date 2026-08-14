@@ -224,8 +224,13 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	if refreshErr := refreshResolvedModel(); refreshErr != nil {
 		return nil, "", refreshErr, true
 	}
-	if dep.MaxContextWindow > dep.LoadedContextWindow && dep.MaxContextWindow > 0 {
-		prep, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
+	retryContext := growLoadContextTokens(
+		estimateRequestContextTokens(msgs, toolDefs),
+		dep.LoadedContextWindow,
+		dep.MaxContextWindow,
+	)
+	if dep.MaxContextWindow > dep.LoadedContextWindow && dep.MaxContextWindow > 0 && retryContext > dep.LoadedContextWindow {
+		prep, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, retryContext)
 		if prepErr != nil {
 			return nil, "", prepErr, true
 		}

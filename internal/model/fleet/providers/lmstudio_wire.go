@@ -33,6 +33,12 @@ type lmStudioLoadRequest struct {
 	EchoLoadConfig bool   `json:"echo_load_config,omitempty"`
 }
 
+// lmStudioUnloadRequest releases one loaded instance. LM Studio identifies
+// the instance rather than the model, since a model may have several.
+type lmStudioUnloadRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
 type LMStudioLoadResponse struct {
 	Type            string         `json:"type,omitempty"`
 	InstanceID      string         `json:"instance_id,omitempty"`

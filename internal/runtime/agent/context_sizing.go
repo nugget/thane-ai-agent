@@ -96,6 +96,27 @@ func desiredLoadContextTokens(requiredTokens, maxContextWindow int) int {
 	return desired
 }
 
+// growLoadContextTokens sizes a reload after the runner has rejected a
+// request the estimate said would fit.
+//
+// The estimate cannot be trusted here — the runner has just demonstrated it
+// was low — so it serves only as a floor, and the growth comes from doubling
+// the window that actually failed. That is deliberately not a jump straight
+// to the advertised maximum: on local runners a window costs load time and
+// resident memory in proportion to its size, and the maximum can be twenty
+// times what the request needs. Doubling recovers from an estimate that was
+// somewhat wrong without paying for one that was catastrophically wrong.
+func growLoadContextTokens(requiredTokens, loadedWindow, maxContextWindow int) int {
+	target := desiredLoadContextTokens(requiredTokens, maxContextWindow)
+	if doubled := loadedWindow * 2; doubled > target {
+		target = doubled
+	}
+	if maxContextWindow > 0 && target > maxContextWindow {
+		target = maxContextWindow
+	}
+	return target
+}
+
 func roughTokenCount(s string) int {
 	s = strings.TrimSpace(s)
 	if s == "" {

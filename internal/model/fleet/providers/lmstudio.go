@@ -234,6 +234,48 @@ func (c *LMStudioClient) LoadModel(ctx context.Context, model string, contextLen
 	return &result, nil
 }
 
+// UnloadModel asks LM Studio to release a loaded model instance.
+//
+// LM Studio has no reconfigure-in-place operation: every load starts a new
+// instance, so growing a model's context window means holding two copies of
+// its weights unless the resident one is released first. A host without room
+// for the second copy refuses the load outright — and refuses a smaller
+// window as readily as a larger one, because what does not fit is the
+// weights, not the window.
+func (c *LMStudioClient) UnloadModel(ctx context.Context, instanceID string) error {
+	reqBody := lmStudioUnloadRequest{InstanceID: strings.TrimSpace(instanceID)}
+	if reqBody.InstanceID == "" {
+		return fmt.Errorf("instance id is required")
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v1/models/unload", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.setAuth(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		c.logger.Error("unload model API error", "status", resp.StatusCode, "body", errBody, "instance_id", reqBody.InstanceID)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
+	}
+
+	c.logger.Info("model unloaded", "instance_id", reqBody.InstanceID)
+	return nil
+}
+
 func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
