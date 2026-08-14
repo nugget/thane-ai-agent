@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // VerificationStatus describes whether git history currently vouches for
@@ -173,9 +174,25 @@ func (v *Verifier) verifyPathspec(ctx context.Context, pathspec string, requireT
 	}
 
 	if out, err := v.gitOutput(ctx, true, "verify-commit", commit); err != nil {
+		// git verify-commit exits non-zero for a bad or absent signature,
+		// which is a verdict, and also when the process is killed or the
+		// deadline expires, which is not. Only the first belongs in the
+		// seed fallback: running trustedBySeed under a dead context asks
+		// a question that cannot be answered and reads the silence as a
+		// no. Production reported exactly this as "commit signature
+		// verification failed: signal: killed".
+		if interrupted, why := executionInterrupted(ctx, err); interrupted {
+			return unavailableVerification(commit, "commit signature verification could not complete: "+why)
+		}
+
 		// The root's own trust file does not vouch for this commit. Fall back
 		// to the seed set, which the root cannot withdraw — see trustedBySeed.
 		if !trustedBySeed(ctx, v.path, v.seedSigners, commit) {
+			// The fallback itself can be cut short. A seed check that
+			// never finished is not a seed check that said no.
+			if interrupted, why := executionInterrupted(ctx, nil); interrupted {
+				return unavailableVerification(commit, "seed-signer fallback could not complete: "+why)
+			}
 			msg := strings.TrimSpace(out)
 			if msg == "" {
 				msg = err.Error()
@@ -295,4 +312,35 @@ func (v *Verifier) gitOutput(ctx context.Context, verify bool, args ...string) (
 	}
 	combined := strings.TrimSpace(strings.Join([]string{stdout.String(), stderr.String()}, "\n"))
 	return combined, nil
+}
+
+// executionInterrupted reports whether err (or the context) shows that
+// a git invocation was prevented from reaching a verdict, and returns a
+// short reason for the message.
+//
+// The distinction is the whole point of [VerificationUnavailable]. A
+// non-zero exit from git is an answer — a bad signature, an untracked
+// path — and must stay [VerificationFailed]. A process killed by a
+// signal, or a context that expired, produced no answer at all, and
+// reporting that as a failed signature sends the reader hunting a
+// trust problem that may not exist.
+func executionInterrupted(ctx context.Context, err error) (bool, string) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return true, ctxErr.Error()
+	}
+	if err == nil {
+		return false, ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true, err.Error()
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		// A signal means something killed git mid-flight; an ordinary
+		// non-zero exit code means git decided.
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return true, exitErr.Error()
+		}
+	}
+	return false, ""
 }
