@@ -6,6 +6,11 @@ import (
 	toolpkg "github.com/nugget/thane-ai-agent/internal/tools"
 )
 
+// forgeAccountDescription is the model-facing text for every forge
+// tool's account parameter. It has to state the binding rule, not just
+// the primary-account default: a bound loop reads both this and its
+// spec, and of the two it is likelier to act on the one attached to
+// the tool it is about to call.
 const forgeAccountDescription = "Forge account name. Omit to use this loop's bound account, or the primary account when unbound; naming a different account than the one you are bound to is refused."
 
 // Name implements [tools.Provider].

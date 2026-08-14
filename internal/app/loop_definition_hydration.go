@@ -277,11 +277,11 @@ func (a *App) validateLoopBindings(spec looppkg.Spec) error {
 	if !ok {
 		return nil
 	}
-	if a.forgeMgr == nil {
+	if a.forgeService == nil {
 		return fmt.Errorf("loop %q binds %s=%q but no forge accounts are configured at this site",
 			spec.Name, looppkg.BindingForgeAccount, account)
 	}
-	if _, err := a.forgeMgr.AccountConfig(account); err != nil {
+	if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
 		return fmt.Errorf("loop %q binds %s=%q: %w",
 			spec.Name, looppkg.BindingForgeAccount, account, err)
 	}

@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestNewServiceOwnsForgeRuntime(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	resolved, err := service.ResolveAccount("")
+	resolved, err := service.ResolveAccount(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ResolveAccount: %v", err)
 	}
@@ -52,11 +53,18 @@ func TestNewServiceOwnsForgeRuntime(t *testing.T) {
 	if provider == nil || provider.Name() != "forge" {
 		t.Fatalf("ToolProvider() = %#v, want forge provider", provider)
 	}
+	if provider.service != service {
+		t.Fatal("ToolProvider() does not share its owning forge service")
+	}
 	if got := len(provider.Tools()); got != 21 {
 		t.Fatalf("ToolProvider declared %d tools, want 21", got)
 	}
-	if service.ContextProvider() == nil {
+	contextProvider := service.ContextProvider()
+	if contextProvider == nil {
 		t.Fatal("ContextProvider() returned nil")
+	}
+	if contextProvider.service != service {
+		t.Fatal("ContextProvider() does not share its owning forge service")
 	}
 	if !service.SubscriptionPollingEnabled() {
 		t.Fatal("SubscriptionPollingEnabled() = false, want true for positive interval")

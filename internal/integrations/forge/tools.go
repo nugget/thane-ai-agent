@@ -10,7 +10,6 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // Tools holds forge tool dependencies. Each Handle* method takes the
@@ -19,20 +18,28 @@ import (
 // handled universally by the tool registry's ContentResolver before
 // handlers run — individual handlers receive already-resolved content.
 type Tools struct {
-	manager       *Manager
+	service       *Service
 	opLog         *OperationLog
 	logger        *slog.Logger
 	subscriptions *SubscriptionStore
 	loopResolver  messages.LoopResolver
 }
 
-// NewTools creates forge tools backed by the given manager. The opLog
-// records successful operations for context injection; pass nil to
-// disable operation tracking. subscriptions may be nil to disable the
-// repository-subscription surface.
+// NewTools creates standalone forge tools backed by the given manager. New
+// application runtimes should construct [Service] so account policy, context,
+// and subscriptions share one owner. The opLog records successful operations
+// for context injection; pass nil to disable operation tracking. subscriptions
+// may be nil to disable the repository-subscription surface.
 func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return newTools(&Service{manager: mgr, logger: logger}, opLog, logger, subscriptions)
+}
+
+func newTools(service *Service, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
 	return &Tools{
-		manager:       mgr,
+		service:       service,
 		opLog:         opLog,
 		logger:        logger,
 		subscriptions: subscriptions,
@@ -295,65 +302,17 @@ type searchResponse struct {
 
 // --- Common helpers ---
 
-// boundAccount returns the forge account this caller is scoped to, or
-// "" when the caller is unbound. A loop declares the binding in its
-// spec; the runtime carries it on the execution context.
-func boundAccount(ctx context.Context) string {
-	return looppkg.BindingFromContext(ctx, looppkg.BindingForgeAccount)
-}
-
-// resolveAccountArg turns the model-supplied account argument into the
-// account name to use, honoring any binding on the context.
-//
-// This is where a binding stops being a preference. Every forge tool
-// takes an account argument, which means without this check the choice
-// of credential belongs to the model: a loop bound in spirit to a
-// read-only account could name the primary account and wear the write
-// token. An empty argument resolves to the binding rather than to the
-// primary account, and a mismatched argument is refused outright.
-//
-// The refusal teaches rather than scolds. A model that asked for the
-// wrong account is usually working from the account list in its
-// context, so the error names the account it does have and says the
-// restriction is structural, which is the difference between
-// re-planning and retrying.
-func (t *Tools) resolveAccountArg(ctx context.Context, account string) (string, error) {
-	bound := boundAccount(ctx)
-	if bound == "" {
-		return account, nil
-	}
-	if account != "" && account != bound {
-		// Logged as well as refused. A bound caller reaching for another
-		// account is the event the binding exists to stop, and it should
-		// leave a trace an operator can find later rather than living
-		// only in one turn's tool result.
-		if t.logger != nil {
-			t.logger.Warn("forge account request refused by binding",
-				"requested_account", account,
-				"bound_account", bound,
-				"loop_id", looppkg.LoopIDFromContext(ctx))
-		}
-		return "", fmt.Errorf("forge account %q is not available here: this loop is bound to account %q, and the binding is part of its definition rather than something a tool call can change. Retry with account=%q or omit the argument, and if the work genuinely requires %q, say so instead of routing around it",
-			account, bound, bound, account)
-	}
-	return bound, nil
-}
-
 // resolveAccountAndRepo extracts the account and repo from args,
 // resolves the repo to owner/repo format, and returns the provider
 // along with the resolved account name. Any account binding on the
 // context is applied first.
 func (t *Tools) resolveAccountAndRepo(ctx context.Context, args map[string]any) (ForgeProvider, string, string, error) {
-	account, err := t.resolveAccountArg(ctx, stringArg(args, "account"))
-	if err != nil {
-		return nil, "", "", err
-	}
 	repo := stringArg(args, "repo")
 	if repo == "" {
 		return nil, "", "", fmt.Errorf("repo is required")
 	}
 
-	resolved, err := t.manager.ResolveAccount(account)
+	resolved, err := t.service.ResolveAccount(ctx, stringArg(args, "account"))
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -1086,11 +1045,7 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 
 // HandleSearch performs a forge-native search.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
-	account, err := t.resolveAccountArg(ctx, stringArg(args, "account"))
-	if err != nil {
-		return "", err
-	}
-	resolved, err := t.manager.ResolveAccount(account)
+	resolved, err := t.service.ResolveAccount(ctx, stringArg(args, "account"))
 	if err != nil {
 		return "", err
 	}

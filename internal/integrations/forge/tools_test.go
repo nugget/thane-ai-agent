@@ -187,10 +187,7 @@ func newTestTools(provider ForgeProvider, owner string) *Tools {
 		order:     []string{"test"},
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	return &Tools{
-		manager: mgr,
-		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
+	return NewTools(mgr, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 }
 
 func baseArgs(repo string) map[string]any {

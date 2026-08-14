@@ -30,7 +30,7 @@ func newMultiAccountTools() *Tools {
 		order:  []string{"github-primary", "github-readonly"},
 		logger: logger,
 	}
-	return &Tools{manager: mgr, logger: logger}
+	return NewTools(mgr, nil, logger, nil)
 }
 
 func boundCtx(account string) context.Context {
@@ -39,7 +39,7 @@ func boundCtx(account string) context.Context {
 	})
 }
 
-func TestResolveAccountArgHonorsBinding(t *testing.T) {
+func TestServiceResolveAccountHonorsBinding(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -56,7 +56,7 @@ func TestResolveAccountArgHonorsBinding(t *testing.T) {
 			name:        "unbound caller keeps its own choice",
 			ctx:         context.Background(),
 			account:     "",
-			wantAccount: "",
+			wantAccount: "github-primary",
 		},
 		{
 			name:        "unbound caller may still name an account",
@@ -93,10 +93,10 @@ func TestResolveAccountArgHonorsBinding(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			tools := newMultiAccountTools()
-			got, err := tools.resolveAccountArg(tt.ctx, tt.account)
+			got, err := tools.service.ResolveAccount(tt.ctx, tt.account)
 			if len(tt.wantErr) > 0 {
 				if err == nil {
-					t.Fatalf("resolveAccountArg() = %q, want an error", got)
+					t.Fatalf("ResolveAccount() = %#v, want an error", got)
 				}
 				for _, want := range tt.wantErr {
 					if !strings.Contains(err.Error(), want) {
@@ -106,10 +106,10 @@ func TestResolveAccountArgHonorsBinding(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("resolveAccountArg() unexpected error: %v", err)
+				t.Fatalf("ResolveAccount() unexpected error: %v", err)
 			}
-			if got != tt.wantAccount {
-				t.Errorf("resolveAccountArg() = %q, want %q", got, tt.wantAccount)
+			if got.Name != tt.wantAccount {
+				t.Errorf("ResolveAccount().Name = %q, want %q", got.Name, tt.wantAccount)
 			}
 		})
 	}
@@ -156,7 +156,7 @@ func TestContextProviderNarrowsToBoundAccount(t *testing.T) {
 	t.Parallel()
 
 	tools := newMultiAccountTools()
-	provider := NewContextProvider(tools.manager, nil)
+	provider := newContextProvider(tools.service, nil)
 
 	t.Run("unbound sees every account", func(t *testing.T) {
 		t.Parallel()
@@ -215,7 +215,7 @@ func TestContextProviderFiltersRecentOpsByBinding(t *testing.T) {
 	opLog := NewOperationLog()
 	opLog.Record(Operation{Tool: "forge_pr_merge", Account: "github-primary", Repo: "nugget/secret-thing", Ref: "42"})
 	opLog.Record(Operation{Tool: "forge_issue_list", Account: "github-readonly", Repo: "nugget/thane", Ref: ""})
-	provider := NewContextProvider(tools.manager, opLog)
+	provider := newContextProvider(tools.service, opLog)
 
 	t.Run("unbound sees the whole log", func(t *testing.T) {
 		t.Parallel()

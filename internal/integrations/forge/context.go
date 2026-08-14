@@ -19,15 +19,19 @@ import (
 // call to TagContext includes the latest operation history with
 // delta-annotated timestamps.
 type ContextProvider struct {
-	manager *Manager
+	service *Service
 	opLog   *OperationLog
 }
 
 // NewContextProvider creates a forge context provider. When opLog is
 // non-nil, recent operations are included in the context each turn.
 func NewContextProvider(mgr *Manager, opLog *OperationLog) *ContextProvider {
+	return newContextProvider(&Service{manager: mgr}, opLog)
+}
+
+func newContextProvider(service *Service, opLog *OperationLog) *ContextProvider {
 	return &ContextProvider{
-		manager: mgr,
+		service: service,
 		opLog:   opLog,
 	}
 }
@@ -65,19 +69,20 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 // is painted on — the reader spends a turn discovering by refusal what
 // the prompt could have told it for free.
 func (p *ContextProvider) buildContext(bound string) (string, error) {
-	if p.manager == nil || len(p.manager.order) == 0 {
+	if p.service == nil || p.service.manager == nil || len(p.service.manager.order) == 0 {
 		return "", nil
 	}
+	manager := p.service.manager
 
 	now := time.Now()
 
 	// Account config.
-	views := make([]accountView, 0, len(p.manager.order))
-	for _, name := range p.manager.order {
+	views := make([]accountView, 0, len(manager.order))
+	for _, name := range manager.order {
 		if bound != "" && name != bound {
 			continue
 		}
-		cfg := p.manager.configs[name]
+		cfg := manager.configs[name]
 		views = append(views, accountView{
 			Account:      cfg.Name,
 			Type:         cfg.Provider,
