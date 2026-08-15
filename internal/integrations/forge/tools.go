@@ -603,8 +603,15 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 		// the number exists and the caller is one tool call away from
 		// what it wanted. Production hit exactly this on #1385 and
 		// went looking for a permissions problem.
-		if issue, issueErr := provider.GetIssue(ctx, repo, number); issueErr == nil {
-			return marshalIssueAsPRMiss(issue, repo, number)
+		// Only a classified not-found is worth a second lookup. A rate
+		// limit, a bad credential, or a killed request says nothing
+		// about whether the number is an issue, and spending another
+		// call to ask would add load exactly when the forge is already
+		// refusing — and bury the real failure behind a second one.
+		if DenialKindOf(err) == DenialInvisible {
+			if issue, issueErr := provider.GetIssue(ctx, repo, number); issueErr == nil {
+				return marshalIssueAsPRMiss(issue, repo, number)
+			}
 		}
 		return "", err
 	}
@@ -1120,13 +1127,29 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 // key:value qualifiers. GitHub accepts those for issue and code search
 // and rejects them for commits, which is the sort of asymmetry a
 // caller should not have to learn by being refused.
+// commitSearchQualifiers are the keys GitHub recognizes on a commit
+// search. Matching against a known set rather than "contains a colon"
+// keeps a URL or an ordinary term like foo:bar from reading as a
+// qualifier, which would refuse a search the forge would have
+// accepted. The guard errs toward letting a call through: an
+// unrecognized key means this is search text, not a qualifier.
+var commitSearchQualifiers = map[string]bool{
+	"repo": true, "org": true, "user": true, "author": true,
+	"committer": true, "author-name": true, "committer-name": true,
+	"author-email": true, "committer-email": true,
+	"author-date": true, "committer-date": true,
+	"merge": true, "hash": true, "parent": true, "tree": true,
+	"is": true, "in": true, "language": true,
+}
+
 func qualifiersOnly(query string) bool {
 	fields := strings.Fields(query)
 	if len(fields) == 0 {
 		return false
 	}
 	for _, field := range fields {
-		if !strings.Contains(field, ":") {
+		key, _, found := strings.Cut(field, ":")
+		if !found || !commitSearchQualifiers[strings.ToLower(key)] {
 			return false
 		}
 	}
