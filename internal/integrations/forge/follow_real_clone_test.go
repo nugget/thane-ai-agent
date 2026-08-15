@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // TestFollowReallyClonesWorkingTree exercises the unstubbed path
@@ -51,13 +53,16 @@ func TestFollowReallyClonesWorkingTree(t *testing.T) {
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = newTestSubscriptionStore(t)
 	enablePollingForTest(tools.service)
+	workspace := t.TempDir()
+	tools.service.workspacePath = workspace
+	tools.service.rootResolver = paths.New(map[string]string{"core": workspace})
 
-	dest := filepath.Join(t.TempDir(), "checkout")
+	dest := filepath.Join(workspace, repositoryCheckoutDirectory, "thanecode")
 	raw, err := tools.HandleRepoFollow(context.Background(), map[string]any{
-		"repo":           "repo",
-		"branch":         "main",
-		"local_checkout": dest,
-		"wake_loop":      map[string]any{"name": "repo_curator"},
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
 	})
 	if err != nil {
 		t.Fatalf("HandleRepoFollow: %v", err)

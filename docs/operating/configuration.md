@@ -207,10 +207,6 @@ roots:
     path: ~/Thane/scratchpad
     indexing: false
     authoring: managed
-  thanecode:
-    path: ~/Thane/checkouts/thane
-    indexing: false
-    authoring: read_only
 ```
 
 Each entry under `roots:` names one local collection Thane keeps track
@@ -235,31 +231,21 @@ is the default and allows document tools and loop-declared output tools
 to write the root. `read_only` blocks managed writes. `restricted`
 reserves the root for narrower future flows.
 
-Code checkouts that are maintained by forge subscriptions are good
-read-only roots. Point `forge_repo_follow.local_checkout` at the same
-path, set `indexing: false` because source trees are not markdown
-corpora, and use file tools such as `file_read`, `file_search`, and
-`file_grep` with the root prefix:
+Forge-maintained source checkouts use the same named-root resolver but do
+not need a `roots:` entry. Pass a handle such as `repo_root: thanecode` to
+`forge_repo_follow`; Thane derives a checkout location beneath
+`workspace.path`, clones it before returning, and registers `thanecode:` as
+a read-only repository root. The host path remains internal. File tools can
+then read `thanecode:internal/app/new.go`, while the scoped `repo_git_*`
+tools expose commit history without shell access. Repository roots are not
+document corpora: they are neither indexed nor subjected to document
+signature policy.
 
-```yaml
-roots:
-  thanecode:
-    path: ~/Thane/checkouts/thane
-    indexing: false
-    authoring: read_only
-```
-
-A checkout only stays maintained while repository polling runs.
-`forge_repo_follow` performs the initial clone itself, so the tree
-exists as soon as the follow succeeds, but it is the subscription
-poller that refreshes it — set `forge.subscription_check_interval` to
-a positive number of seconds, or the root above silently serves the
-snapshot taken when it was first followed.
-
-With that configuration, `thanecode:internal/app/new.go` resolves to the
-maintained checkout. Keep checkout roots under `workspace.path`; if a
-read-only root must live elsewhere, also include that directory in
-`workspace.read_only_dirs` so raw file tools can traverse it.
+A repository root only stays current while repository polling runs. Set
+`forge.subscription_check_interval` to a positive number of seconds. When
+polling is disabled the initial clone still succeeds, but the root remains
+at that snapshot and the subscription wakes no loop; the tool response
+calls this out.
 
 `git.sign_commits` turns each managed document write/delete into a
 signed git commit. By default the root itself is the repository; set

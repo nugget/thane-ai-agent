@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -270,6 +273,36 @@ func TestContextProviderFiltersRecentOpsByBinding(t *testing.T) {
 	})
 }
 
+func TestContextProviderPreservesAccountsWhenSubscriptionStoreFails(t *testing.T) {
+	t.Parallel()
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	state, err := opstate.NewStore(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewStore: %v", err)
+	}
+	store := NewSubscriptionStore(state, slog.New(slog.NewTextHandler(io.Discard, nil)), 10)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	tools := newMultiAccountTools()
+	tools.service.subscriptions = store
+	out, err := newContextProvider(tools.service, nil).TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	for _, want := range []string{"github-primary", "github-readonly", `"repository_roots_error"`, "Forge account tools remain available"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("context = %q\nmissing %q", out, want)
+		}
+	}
+}
+
 // TestSubscriptionToolsHonorBinding covers the two subscription tools
 // that address rows by opaque ID rather than by account. Enforcing the
 // binding only where an account argument happens to exist leaves the
@@ -351,4 +384,134 @@ func TestSubscriptionToolsHonorBinding(t *testing.T) {
 			t.Fatalf("HandleRepoUnfollow on own subscription: %v", err)
 		}
 	})
+}
+
+func TestRepositoryRootBindingNarrowsContextAndSubscriptionTools(t *testing.T) {
+	t.Parallel()
+
+	newTools := func(t *testing.T) (*Tools, *OperationLog) {
+		t.Helper()
+		tools := newMultiAccountTools()
+		store := newTestSubscriptionStore(t)
+		for _, sub := range []ProjectSubscription{
+			{ID: "sub-thane", Account: "github-readonly", Repo: "nugget/thane", RepositoryRoot: "thanecode", CheckoutPath: "/internal/repos/thanecode", CheckoutRemoteURL: "https://token@example.invalid/thane.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, LastSyncedSHA: "aaa", LastSyncedAt: time.Now().Add(-2 * time.Minute), CreatedAt: time.Now()},
+			{ID: "sub-other", Account: "github-readonly", Repo: "nugget/other", RepositoryRoot: "othercode", CheckoutPath: "/internal/repos/othercode", CheckoutRemoteURL: "https://example.invalid/other.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, LastSyncedSHA: "bbb", LastSyncedAt: time.Now().Add(-3 * time.Minute), CreatedAt: time.Now()},
+		} {
+			if err := store.Add(sub); err != nil {
+				t.Fatalf("seed %s: %v", sub.ID, err)
+			}
+		}
+		tools.subscriptions = store
+		tools.service.subscriptions = store
+		resolver := paths.New(map[string]string{"core": "/internal/core"})
+		for _, sub := range []ProjectSubscription{
+			{ID: "sub-thane", RepositoryRoot: "thanecode", CheckoutPath: "/internal/repos/thanecode"},
+			{ID: "sub-other", RepositoryRoot: "othercode", CheckoutPath: "/internal/repos/othercode"},
+		} {
+			if err := resolver.Register(paths.Root{Name: sub.RepositoryRoot, Path: sub.CheckoutPath, Kind: paths.RootKindRepository, ReadOnly: true, Owner: sub.ID}); err != nil {
+				t.Fatalf("register %s: %v", sub.RepositoryRoot, err)
+			}
+		}
+		tools.service.rootResolver = resolver
+		opLog := NewOperationLog()
+		opLog.Record(Operation{Tool: "forge_pr_get", Account: "github-readonly", Repo: "nugget/other", Ref: "12"})
+		opLog.Record(Operation{Tool: "forge_pr_get", Account: "github-readonly", Repo: "nugget/thane", Ref: "13"})
+		return tools, opLog
+	}
+	ctx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingForgeAccount:   "github-readonly",
+		looppkg.BindingRepositoryRoot: "thanecode",
+	})
+
+	t.Run("context advertises only the bound root and its operations", func(t *testing.T) {
+		t.Parallel()
+		tools, opLog := newTools(t)
+		out, err := newContextProvider(tools.service, opLog).TagContext(ctx, agentctx.ContextRequest{})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		for _, forbidden := range []string{"othercode", "nugget/other", "/internal/repos", "token@"} {
+			if strings.Contains(out, forbidden) {
+				t.Errorf("context = %q\nleaks %q outside the root binding", out, forbidden)
+			}
+		}
+		for _, want := range []string{`"root":"thanecode"`, `"repo":"nugget/thane"`, `"remote":"https://example.invalid/thane.git"`, `"commit":"aaa"`, `"last_synced_age":"-`} {
+			if !strings.Contains(out, want) {
+				t.Errorf("context = %q\nmissing %q", out, want)
+			}
+		}
+	})
+
+	t.Run("listing and unfollow cannot cross the root binding", func(t *testing.T) {
+		t.Parallel()
+		tools, _ := newTools(t)
+		out, err := tools.HandleRepoSubscriptions(ctx, nil)
+		if err != nil {
+			t.Fatalf("HandleRepoSubscriptions: %v", err)
+		}
+		if !strings.Contains(out, "thanecode") || strings.Contains(out, "othercode") {
+			t.Fatalf("bound listing = %q", out)
+		}
+		if _, err := tools.HandleRepoUnfollow(ctx, map[string]any{"subscription_id": "sub-other"}); err == nil || !strings.Contains(err.Error(), "othercode") {
+			t.Fatalf("cross-root unfollow error = %v", err)
+		}
+		if _, err := tools.subscriptions.Get("sub-other"); err != nil {
+			t.Fatalf("cross-root subscription was removed: %v", err)
+		}
+	})
+}
+
+func TestValidateRepositoryRootBindingKeepsAccountAndRootAligned(t *testing.T) {
+	t.Parallel()
+
+	tools := newMultiAccountTools()
+	store := newTestSubscriptionStore(t)
+	sub := ProjectSubscription{
+		ID:             "sub-thane",
+		Account:        "github-readonly",
+		Repo:           "nugget/thane",
+		RepositoryRoot: "thanecode",
+		CheckoutPath:   "/internal/repos/thanecode",
+		TrackCommits:   true,
+		WakeTarget:     messages.LoopWakeTarget{Name: "watcher"},
+		CreatedAt:      time.Now(),
+	}
+	if err := store.Add(sub); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+	resolver := paths.New(map[string]string{"core": "/internal/core"})
+	if err := resolver.Register(paths.Root{
+		Name: sub.RepositoryRoot, Path: sub.CheckoutPath, Kind: paths.RootKindRepository, ReadOnly: true, Owner: sub.ID,
+	}); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+	tools.service.subscriptions = store
+	tools.service.rootResolver = resolver
+
+	tests := []struct {
+		name    string
+		root    string
+		account string
+		wantErr string
+	}{
+		{name: "matching account and root", root: "thanecode", account: "github-readonly"},
+		{name: "root without account binding", root: "thanecode"},
+		{name: "trailing colon is not canonical", root: "thanecode:", account: "github-readonly", wantErr: `use "thanecode"`},
+		{name: "uppercase is not canonical", root: "ThaneCode", account: "github-readonly", wantErr: `use "thanecode"`},
+		{name: "crossed account and root", root: "thanecode", account: "github-primary", wantErr: `belongs to forge account "github-readonly"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tools.service.ValidateRepositoryRootBinding(tt.root, tt.account)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateRepositoryRootBinding: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateRepositoryRootBinding error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
 }

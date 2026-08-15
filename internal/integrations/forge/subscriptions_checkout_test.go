@@ -5,18 +5,20 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
-func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
+func TestHandleRepoFollowRegistersNamedRoot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSubscriptionStore(t)
-	checkoutPath := t.TempDir()
+	workspace := t.TempDir()
 	provider := &mockProvider{
 		name: "test",
 		getRepositoryResult: &Repository{
@@ -35,6 +37,8 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	}
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = store
+	tools.service.workspacePath = workspace
+	tools.service.rootResolver = paths.New(map[string]string{"core": workspace})
 	// A local checkout is only meaningful when the poller runs.
 	enablePollingForTest(tools.service)
 	// The follow now creates the checkout; stub the clone so these
@@ -50,7 +54,7 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 		"repo":           "repo",
 		"track_releases": false,
 		"track_commits":  true,
-		"local_checkout": checkoutPath,
+		"repo_root":      "ThaneCode",
 		"wake_loop":      map[string]any{"name": "repo_curator"},
 	})
 	if err != nil {
@@ -60,9 +64,10 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &follow); err != nil {
 		t.Fatalf("decode follow response: %v", err)
 	}
-	if follow.LocalCheckout != checkoutPath {
-		t.Fatalf("response local_checkout = %q, want %q", follow.LocalCheckout, checkoutPath)
+	if follow.RepositoryRoot != "thanecode" {
+		t.Fatalf("response repo_root = %q, want thanecode", follow.RepositoryRoot)
 	}
+	checkoutPath := filepath.Join(workspace, repositoryCheckoutDirectory, "thanecode")
 
 	subs, err := store.List()
 	if err != nil {
@@ -73,6 +78,12 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	}
 	if subs[0].CheckoutPath != checkoutPath {
 		t.Fatalf("CheckoutPath = %q, want %q", subs[0].CheckoutPath, checkoutPath)
+	}
+	if subs[0].RepositoryRoot != "thanecode" {
+		t.Fatalf("RepositoryRoot = %q, want thanecode", subs[0].RepositoryRoot)
+	}
+	if root, ok := tools.service.RepositoryRoot("thanecode"); !ok || root.Path != checkoutPath || !root.ReadOnly {
+		t.Fatalf("registered root = %+v, ok=%v", root, ok)
 	}
 	if subs[0].CheckoutRemoteURL != "https://github.com/owner/repo.git" {
 		t.Fatalf("CheckoutRemoteURL = %q, want clone URL", subs[0].CheckoutRemoteURL)
@@ -86,8 +97,11 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &list); err != nil {
 		t.Fatalf("decode subscriptions response: %v", err)
 	}
-	if len(list.Subscriptions) != 1 || list.Subscriptions[0].LocalCheckout != checkoutPath {
-		t.Fatalf("list local_checkout = %+v, want %q", list.Subscriptions, checkoutPath)
+	if len(list.Subscriptions) != 1 || list.Subscriptions[0].RepositoryRoot != "thanecode" {
+		t.Fatalf("list repo_root = %+v, want thanecode", list.Subscriptions)
+	}
+	if strings.Contains(raw, checkoutPath) || strings.Contains(raw, "local_checkout") {
+		t.Fatalf("model-facing listing leaked checkout path: %s", raw)
 	}
 
 	raw, err = tools.HandleRepoUnfollow(context.Background(), map[string]any{
@@ -100,8 +114,11 @@ func TestHandleRepoFollowStoresLocalCheckout(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &unfollow); err != nil {
 		t.Fatalf("decode unfollow response: %v", err)
 	}
-	if unfollow.LocalCheckout != checkoutPath || !unfollow.CheckoutRetained {
-		t.Fatalf("unfollow checkout response = %+v, want retained %q", unfollow, checkoutPath)
+	if unfollow.RepositoryRoot != "thanecode" || !unfollow.CheckoutRetained {
+		t.Fatalf("unfollow checkout response = %+v, want retained named root", unfollow)
+	}
+	if _, ok := tools.service.RepositoryRoot("thanecode"); ok {
+		t.Fatal("repository root remained registered after unfollow")
 	}
 }
 
@@ -116,11 +133,13 @@ func TestSubscriptionStoreLocalCheckoutRoundTrip(t *testing.T) {
 		Repo:              "owner/repo",
 		Name:              "owner/repo",
 		Branch:            "main",
+		RepositoryRoot:    "thanecode",
 		CheckoutPath:      t.TempDir(),
 		CheckoutRemoteURL: "https://github.com/owner/repo.git",
 		TrackCommits:      true,
 		WakeTarget:        messages.LoopWakeTarget{Name: "repo_curator"},
 		LastSyncedSHA:     "abc123",
+		LastSyncedAt:      now,
 		CreatedAt:         now,
 	}
 	if err := store.Add(sub); err != nil {
@@ -131,7 +150,7 @@ func TestSubscriptionStoreLocalCheckoutRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.CheckoutPath != sub.CheckoutPath || got.CheckoutRemoteURL != sub.CheckoutRemoteURL || got.LastSyncedSHA != sub.LastSyncedSHA {
+	if got.RepositoryRoot != sub.RepositoryRoot || got.CheckoutPath != sub.CheckoutPath || got.CheckoutRemoteURL != sub.CheckoutRemoteURL || got.LastSyncedSHA != sub.LastSyncedSHA || !got.LastSyncedAt.Equal(sub.LastSyncedAt) {
 		t.Fatalf("checkout fields = path:%q remote:%q sha:%q, want path:%q remote:%q sha:%q",
 			got.CheckoutPath, got.CheckoutRemoteURL, got.LastSyncedSHA,
 			sub.CheckoutPath, sub.CheckoutRemoteURL, sub.LastSyncedSHA,
@@ -139,7 +158,7 @@ func TestSubscriptionStoreLocalCheckoutRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHandleRepoFollowRejectsLocalCheckoutWithoutCloneURL(t *testing.T) {
+func TestHandleRepoFollowRejectsNamedRootWithoutCloneURL(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSubscriptionStore(t)
@@ -154,6 +173,9 @@ func TestHandleRepoFollowRejectsLocalCheckoutWithoutCloneURL(t *testing.T) {
 	}
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = store
+	workspace := t.TempDir()
+	tools.service.workspacePath = workspace
+	tools.service.rootResolver = paths.New(map[string]string{"core": workspace})
 	// A local checkout is only meaningful when the poller runs.
 	enablePollingForTest(tools.service)
 	// The follow now creates the checkout; stub the clone so these
@@ -169,11 +191,11 @@ func TestHandleRepoFollowRejectsLocalCheckoutWithoutCloneURL(t *testing.T) {
 		"repo":           "repo",
 		"track_releases": false,
 		"track_commits":  true,
-		"local_checkout": t.TempDir(),
+		"repo_root":      "thanecode",
 		"wake_loop":      map[string]any{"name": "repo_curator"},
 	})
 	if err == nil {
-		t.Fatal("expected local_checkout without clone URL to fail")
+		t.Fatal("expected repo_root without clone URL to fail")
 	}
 	if !strings.Contains(err.Error(), "requires a clone URL") {
 		t.Fatalf("error = %q, want clone URL guidance", err)
@@ -210,6 +232,7 @@ func TestSubscriptionPollerSyncsLocalCheckoutBeforeWake(t *testing.T) {
 		Repo:              "owner/repo",
 		Name:              "owner/repo",
 		Branch:            "main",
+		RepositoryRoot:    "thanecode",
 		CheckoutPath:      t.TempDir(),
 		CheckoutRemoteURL: "https://github.com/owner/repo.git",
 		TrackCommits:      true,
@@ -263,8 +286,8 @@ func TestSubscriptionPollerSyncsLocalCheckoutBeforeWake(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload type = %T, want LoopNotifyPayload", delivered.Payload)
 	}
-	if got := payload.Events[0].Metadata["local_checkout"]; got != sub.CheckoutPath {
-		t.Fatalf("event local_checkout = %q, want %q", got, sub.CheckoutPath)
+	if got := payload.Events[0].Metadata["repo_root"]; got != sub.RepositoryRoot {
+		t.Fatalf("event repo_root = %q, want %q", got, sub.RepositoryRoot)
 	}
 	if got := payload.Events[0].Metadata["last_synced_sha"]; got != "syncedsha" {
 		t.Fatalf("event last_synced_sha = %q, want syncedsha", got)
@@ -279,6 +302,142 @@ func TestSubscriptionPollerSyncsLocalCheckoutBeforeWake(t *testing.T) {
 	}
 	if subs[0].LastSyncedSHA != "syncedsha" {
 		t.Fatalf("LastSyncedSHA = %q, want syncedsha", subs[0].LastSyncedSHA)
+	}
+}
+
+func TestRegisterPersistedRepositoryRootsMigratesLegacyCheckouts(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	workspace := t.TempDir()
+	for _, sub := range []ProjectSubscription{
+		{ID: "legacy-a", Account: "primary", Repo: "owner/repo", CheckoutPath: filepath.Join(workspace, "old", "repo-a"), CheckoutRemoteURL: "https://example.invalid/owner/repo.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "legacy-b", Account: "primary", Repo: "another/repo", CheckoutPath: filepath.Join(workspace, "old", "repo-b"), CheckoutRemoteURL: "https://example.invalid/another/repo.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+	} {
+		if err := store.Add(sub); err != nil {
+			t.Fatalf("seed %s: %v", sub.ID, err)
+		}
+	}
+	service := &Service{
+		subscriptions: store,
+		workspacePath: workspace,
+		rootResolver:  paths.New(map[string]string{"core": filepath.Join(workspace, "core")}),
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		t.Fatalf("registerPersistedRepositoryRoots: %v", err)
+	}
+
+	first, err := store.Get("legacy-a")
+	if err != nil {
+		t.Fatalf("Get legacy-a: %v", err)
+	}
+	second, err := store.Get("legacy-b")
+	if err != nil {
+		t.Fatalf("Get legacy-b: %v", err)
+	}
+	if first.RepositoryRoot != "repo" {
+		t.Fatalf("first migrated root = %q, want repo", first.RepositoryRoot)
+	}
+	if second.RepositoryRoot != "repo-legacy-b" {
+		t.Fatalf("collision root = %q, want repo-legacy-b", second.RepositoryRoot)
+	}
+	for _, sub := range []ProjectSubscription{first, second} {
+		root, ok := service.RepositoryRoot(sub.RepositoryRoot)
+		if !ok || root.Path != sub.CheckoutPath || root.Owner != sub.ID || !root.ReadOnly || root.Kind != paths.RootKindRepository {
+			t.Errorf("registered root for %s = %+v, ok=%v", sub.ID, root, ok)
+		}
+	}
+
+	// A second restore is idempotent and keeps the durable names rather than
+	// inventing another collision suffix.
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		t.Fatalf("second registerPersistedRepositoryRoots: %v", err)
+	}
+}
+
+func TestRegisterPersistedRepositoryRootsWithoutResolverSkipsRoot(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	workspace := t.TempDir()
+	if err := store.Add(ProjectSubscription{
+		ID:                "persisted",
+		Account:           "primary",
+		Repo:              "owner/repo",
+		RepositoryRoot:    "repo",
+		CheckoutPath:      filepath.Join(workspace, "repos", "repo"),
+		CheckoutRemoteURL: "https://example.invalid/owner/repo.git",
+		Branch:            "main",
+		TrackCommits:      true,
+		WakeTarget:        messages.LoopWakeTarget{Name: "watcher"},
+		CreatedAt:         time.Now(),
+	}); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+
+	service := &Service{
+		subscriptions: store,
+		workspacePath: workspace,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		t.Fatalf("registerPersistedRepositoryRoots: %v", err)
+	}
+	if _, ok := service.RepositoryRoot("repo"); ok {
+		t.Fatal("repository root registered without a resolver")
+	}
+}
+
+func TestRegisterPersistedRepositoryRootsIsolatesUnavailableEntries(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	subs := []ProjectSubscription{
+		{ID: "collision", Account: "primary", Repo: "owner/collision", RepositoryRoot: "core", CheckoutPath: filepath.Join(workspace, "repos", "collision"), CheckoutRemoteURL: "https://example.invalid/owner/collision.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "outside", Account: "primary", Repo: "owner/outside", CheckoutPath: filepath.Join(outside, "repo"), CheckoutRemoteURL: "https://example.invalid/owner/outside.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "good", Account: "primary", Repo: "owner/good", RepositoryRoot: "GOOD", CheckoutPath: filepath.Join(workspace, "repos", "good"), CheckoutRemoteURL: "https://example.invalid/owner/good.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+	}
+	for _, sub := range subs {
+		if err := store.Add(sub); err != nil {
+			t.Fatalf("seed %s: %v", sub.ID, err)
+		}
+	}
+
+	resolver := paths.New(map[string]string{"core": filepath.Join(workspace, "core")})
+	service := &Service{
+		subscriptions: store,
+		workspacePath: workspace,
+		rootResolver:  resolver,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		t.Fatalf("registerPersistedRepositoryRoots: %v", err)
+	}
+	if root, ok := service.RepositoryRoot("good"); !ok || root.Owner != "good" {
+		t.Fatalf("good root = %+v, ok=%v", root, ok)
+	}
+	goodSub, err := store.Get("good")
+	if err != nil {
+		t.Fatalf("Get good: %v", err)
+	}
+	if goodSub.RepositoryRoot != "good" {
+		t.Fatalf("canonical repo_root = %q, want good", goodSub.RepositoryRoot)
+	}
+	if root, ok := resolver.Root("core"); !ok || root.Kind != paths.RootKindDocument {
+		t.Fatalf("configured core root was replaced: %+v, ok=%v", root, ok)
+	}
+	if _, ok := service.RepositoryRoot("outside"); ok {
+		t.Fatal("legacy checkout outside workspace became a repository root")
+	}
+	outsideSub, err := store.Get("outside")
+	if err != nil {
+		t.Fatalf("Get outside: %v", err)
+	}
+	if outsideSub.RepositoryRoot != "" {
+		t.Fatalf("outside repo_root = %q, want migration left unapplied", outsideSub.RepositoryRoot)
 	}
 }
 

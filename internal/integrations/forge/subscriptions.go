@@ -48,6 +48,11 @@ type ProjectSubscription struct {
 	// repository's default branch.
 	Branch string `json:"branch,omitempty"`
 
+	// RepositoryRoot is the model-facing handle for the optional checkout.
+	// The filesystem path remains internal; file and git tools resolve this
+	// name through the shared root registry.
+	RepositoryRoot string `json:"repo_root,omitempty"`
+
 	// CheckoutPath is the absolute path of the local read-only mirror
 	// checkout. Empty disables the checkout features for this
 	// subscription.
@@ -89,6 +94,10 @@ type ProjectSubscription struct {
 	// mirror-checkout sync. Empty when no checkout is configured or no
 	// sync has completed yet.
 	LastSyncedSHA string `json:"last_synced_sha,omitempty"`
+
+	// LastSyncedAt records when the mirror most recently matched
+	// LastSyncedSHA. Model-facing projections render it as an exact delta.
+	LastSyncedAt time.Time `json:"last_synced_at,omitempty"`
 
 	// LastChecked is when the poller last completed a poll for this
 	// subscription, successful or not. Zero before the first poll.
@@ -257,14 +266,18 @@ func (s *SubscriptionStore) List() ([]ProjectSubscription, error) {
 	if s.state == nil {
 		return nil, fmt.Errorf("nil opstate store")
 	}
-	ids, err := s.loadIndex()
+	records, err := s.state.List(subscriptionNamespace)
 	if err != nil {
-		return nil, fmt.Errorf("load subscription index: %w", err)
+		return nil, fmt.Errorf("load subscriptions: %w", err)
+	}
+	ids, err := decodeSubscriptionIndex(records[subscriptionIndexKey])
+	if err != nil {
+		return nil, err
 	}
 
 	subs := make([]ProjectSubscription, 0, len(ids))
 	for _, id := range ids {
-		sub, err := s.read(id)
+		sub, err := decodeSubscription(id, records[subscriptionKey(id)])
 		if err != nil {
 			s.logger.Warn("skipping invalid forge subscription", "id", id, "error", err)
 			continue
@@ -290,6 +303,9 @@ func validateSubscription(sub ProjectSubscription) error {
 	if sub.WakeTarget.Empty() {
 		return fmt.Errorf("wake_loop is required")
 	}
+	if strings.TrimSpace(sub.RepositoryRoot) != "" && strings.TrimSpace(sub.CheckoutPath) == "" {
+		return fmt.Errorf("repo_root requires a checkout path")
+	}
 	return nil
 }
 
@@ -313,6 +329,10 @@ func (s *SubscriptionStore) read(id string) (ProjectSubscription, error) {
 	if err != nil {
 		return ProjectSubscription{}, err
 	}
+	return decodeSubscription(id, raw)
+}
+
+func decodeSubscription(id, raw string) (ProjectSubscription, error) {
 	if strings.TrimSpace(raw) == "" {
 		return ProjectSubscription{}, fmt.Errorf("subscription %q not found", id)
 	}
@@ -343,6 +363,10 @@ func (s *SubscriptionStore) loadIndex() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeSubscriptionIndex(raw)
+}
+
+func decodeSubscriptionIndex(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}

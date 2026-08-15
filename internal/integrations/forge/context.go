@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -46,6 +47,8 @@ func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
 type forgeContextJSON struct {
 	Forges []accountView `json:"forges"`
 
+	RepositoryRoots []repositoryRootView `json:"repository_roots,omitempty"`
+
 	// BindingError explains an empty account list that is a
 	// misconfiguration rather than an absence of forges. It rides
 	// inside the JSON rather than as prose beside it because the block
@@ -53,6 +56,9 @@ type forgeContextJSON struct {
 	// learned to parse what follows the header should not meet a
 	// different shape on the one path that reports a broken boundary.
 	BindingError string `json:"binding_error,omitempty"`
+
+	RepositoryRootBindingError string `json:"repository_root_binding_error,omitempty"`
+	RepositoryRootsError       string `json:"repository_roots_error,omitempty"`
 
 	RecentOps []recentOpJSON `json:"recent_operations,omitempty"`
 }
@@ -66,10 +72,21 @@ type recentOpJSON struct {
 	Ago     string `json:"ago"`
 }
 
+type repositoryRootView struct {
+	Root          string `json:"root"`
+	Account       string `json:"account"`
+	Repo          string `json:"repo"`
+	Remote        string `json:"remote"`
+	Branch        string `json:"branch"`
+	Commit        string `json:"commit,omitempty"`
+	LastSyncedAge string `json:"last_synced_age,omitempty"`
+	Bound         bool   `json:"bound,omitempty"`
+}
+
 // TagContext returns the forge context block for tag-gated injection.
 // Implements [agent.TagContextProvider].
 func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
-	return p.buildContext(boundAccount(ctx))
+	return p.buildContext(boundAccount(ctx), boundRepositoryRoot(ctx))
 }
 
 // buildContext renders the account block. When bound is non-empty the
@@ -77,7 +94,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 // and advertising an account the caller cannot use teaches a door that
 // is painted on — the reader spends a turn discovering by refusal what
 // the prompt could have told it for free.
-func (p *ContextProvider) buildContext(bound string) (string, error) {
+func (p *ContextProvider) buildContext(bound, boundRoot string) (string, error) {
 	accounts := p.service.AccountsInConfigOrder()
 	if len(accounts) == 0 {
 		return "", nil
@@ -102,6 +119,8 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 	}
 
 	output := forgeContextJSON{Forges: views}
+	allowedRootAccount := ""
+	allowedRootRepo := ""
 
 	// A binding naming an account that is not configured would
 	// otherwise render an empty list, which reads as "no forge here"
@@ -112,21 +131,67 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 			", which is not configured at this site. No forge operation can succeed until the operator restores the account or changes the binding."
 	}
 
+	repositoryRootsAvailable := true
+	if p.service.subscriptions != nil {
+		subs, err := p.service.subscriptions.List()
+		if err != nil {
+			repositoryRootsAvailable = false
+			output.RepositoryRootsError = "Repository roots are temporarily unavailable because subscription state could not be read. Forge account tools remain available."
+		}
+		for _, sub := range subs {
+			if sub.RepositoryRoot == "" {
+				continue
+			}
+			if _, registered := p.service.RepositoryRoot(sub.RepositoryRoot); !registered {
+				continue
+			}
+			if bound != "" && sub.Account != bound {
+				continue
+			}
+			if boundRoot != "" && sub.RepositoryRoot != boundRoot {
+				continue
+			}
+			view := repositoryRootView{
+				Root:    sub.RepositoryRoot,
+				Account: sub.Account,
+				Repo:    sub.Repo,
+				Remote:  modelFacingRepositoryRemote(sub.CheckoutRemoteURL),
+				Branch:  sub.Branch,
+				Commit:  sub.LastSyncedSHA,
+				Bound:   boundRoot != "",
+			}
+			if !sub.LastSyncedAt.IsZero() {
+				view.LastSyncedAge = promptfmt.FormatDeltaOnly(sub.LastSyncedAt, now)
+			}
+			output.RepositoryRoots = append(output.RepositoryRoots, view)
+			if boundRoot != "" {
+				allowedRootAccount = sub.Account
+				allowedRootRepo = sub.Repo
+			}
+		}
+	}
+	if boundRoot != "" && repositoryRootsAvailable && len(output.RepositoryRoots) == 0 {
+		output.RepositoryRootBindingError = "This loop is bound to repository root " + boundRoot +
+			", which is not available under its current forge-account binding. No file or repository-history operation can succeed until the operator restores the subscription or changes the binding."
+	}
+
 	// Recent operations (if log is available and non-empty).
 	//
-	// The operation log is instance-wide, so a bound caller must not
-	// read it whole: repository and ref names from another account are
-	// exactly the activity the binding exists to keep out of this
-	// loop's context, and narrowing the account list while leaking the
-	// operations underneath it would be a boundary in name only.
+	// The operation log is instance-wide, so a bound caller must not read it
+	// whole. Account bindings exclude other credentials; root bindings also
+	// exclude operations for sibling repositories on the same account.
 	if p.opLog != nil {
 		ops := p.opLog.Recent(10)
-		if bound != "" {
+		if bound != "" || boundRoot != "" {
 			filtered := make([]Operation, 0, len(ops))
 			for _, op := range ops {
-				if op.Account == bound {
-					filtered = append(filtered, op)
+				if bound != "" && op.Account != bound {
+					continue
 				}
+				if boundRoot != "" && (op.Account != allowedRootAccount || op.Repo != allowedRootRepo) {
+					continue
+				}
+				filtered = append(filtered, op)
 			}
 			ops = filtered
 		}
@@ -149,4 +214,13 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 		return "", fmt.Errorf("marshal forge context: %w", err)
 	}
 	return "### Forge Accounts\n\n" + string(data) + "\n", nil
+}
+
+func modelFacingRepositoryRemote(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User == nil {
+		return raw
+	}
+	parsed.User = nil
+	return parsed.String()
 }

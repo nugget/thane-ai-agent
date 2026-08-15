@@ -6,6 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // enablePollingForTest marks polling live without standing up a real
@@ -31,6 +34,9 @@ func newPollingTestTools(t *testing.T, pollingEnabled bool) *Tools {
 	}
 	tools := newTestTools(provider, "owner")
 	tools.subscriptions = newTestSubscriptionStore(t)
+	workspace := t.TempDir()
+	tools.service.workspacePath = workspace
+	tools.service.rootResolver = paths.New(map[string]string{"core": workspace})
 	if pollingEnabled {
 		enablePollingForTest(tools.service)
 	}
@@ -124,12 +130,11 @@ func TestFollowCreatesTheCheckoutItPromises(t *testing.T) {
 		return "deadbeef", nil
 	}
 
-	dir := t.TempDir()
 	raw, err := tools.HandleRepoFollow(context.Background(), map[string]any{
-		"repo":           "repo",
-		"branch":         "main",
-		"local_checkout": dir,
-		"wake_loop":      map[string]any{"name": "repo_curator"},
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
 	})
 	if err != nil {
 		t.Fatalf("HandleRepoFollow: %v", err)
@@ -146,7 +151,7 @@ func TestFollowCreatesTheCheckoutItPromises(t *testing.T) {
 	// history as new.
 	var resp struct {
 		SubscriptionID string `json:"subscription_id"`
-		LocalCheckout  string `json:"local_checkout"`
+		RepositoryRoot string `json:"repo_root"`
 	}
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -158,8 +163,8 @@ func TestFollowCreatesTheCheckoutItPromises(t *testing.T) {
 	if stored.LastSyncedSHA != "deadbeef" {
 		t.Errorf("LastSyncedSHA = %q, want the initial sync head", stored.LastSyncedSHA)
 	}
-	if resp.LocalCheckout == "" {
-		t.Error("response omits the checkout path")
+	if resp.RepositoryRoot != "thanecode" {
+		t.Errorf("response repo_root = %q, want thanecode", resp.RepositoryRoot)
 	}
 }
 
@@ -171,21 +176,24 @@ func TestFollowDoesNotPersistWhenCheckoutFails(t *testing.T) {
 	t.Parallel()
 
 	tools := newPollingTestTools(t, true)
-	tools.checkoutSync = func(_ context.Context, _ ProjectSubscription) (string, error) {
-		return "", errors.New("remote: Repository not found")
+	tools.checkoutSync = func(_ context.Context, sub ProjectSubscription) (string, error) {
+		return "", errors.New("checkout " + sub.CheckoutPath + ": remote repository not found")
 	}
 
 	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
-		"repo":           "repo",
-		"branch":         "main",
-		"local_checkout": t.TempDir(),
-		"wake_loop":      map[string]any{"name": "repo_curator"},
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
 	})
 	if err == nil {
 		t.Fatal("HandleRepoFollow() reported success after the checkout failed")
 	}
-	if !strings.Contains(err.Error(), "create local checkout") {
-		t.Errorf("error = %q, want it to name the checkout as the failure", err)
+	if !strings.Contains(err.Error(), "repository root") {
+		t.Errorf("error = %q, want it to name the repository root as the failure", err)
+	}
+	if strings.Contains(err.Error(), tools.service.workspacePath) {
+		t.Errorf("error leaked the internal checkout path: %q", err)
 	}
 	subs, listErr := tools.subscriptions.List()
 	if listErr != nil {
@@ -193,6 +201,37 @@ func TestFollowDoesNotPersistWhenCheckoutFails(t *testing.T) {
 	}
 	if len(subs) != 0 {
 		t.Errorf("stored %d subscriptions after a failed checkout; want none", len(subs))
+	}
+	if _, ok := tools.service.RepositoryRoot("thanecode"); ok {
+		t.Error("failed checkout left its repository root registered")
+	}
+}
+
+func TestFollowRollbackKeepsIdenticalRootCreatedByConcurrentWinner(t *testing.T) {
+	t.Parallel()
+
+	tools := newPollingTestTools(t, true)
+	wakeTarget := messages.LoopWakeTarget{Name: "repo_curator"}
+	subscriptionID := SubscriptionID("test", "owner/repo", "main", wakeTarget)
+
+	tools.checkoutSync = func(_ context.Context, sub ProjectSubscription) (string, error) {
+		if err := tools.subscriptions.Add(sub); err != nil {
+			t.Fatalf("persist concurrent winner: %v", err)
+		}
+		return "deadbeef", nil
+	}
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("losing follow error = %v, want duplicate", err)
+	}
+	root, ok := tools.service.RepositoryRoot("thanecode")
+	if !ok || root.Owner != subscriptionID {
+		t.Fatalf("concurrent winner root was removed: %+v, ok=%v", root, ok)
 	}
 }
 
@@ -212,10 +251,10 @@ func TestFollowCreatesCheckoutEvenWithPollingDisabled(t *testing.T) {
 	}
 
 	raw, err := tools.HandleRepoFollow(context.Background(), map[string]any{
-		"repo":           "repo",
-		"branch":         "main",
-		"local_checkout": t.TempDir(),
-		"wake_loop":      map[string]any{"name": "repo_curator"},
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
 	})
 	if err != nil {
 		t.Fatalf("HandleRepoFollow: %v", err)
@@ -300,10 +339,10 @@ func TestFollowDoesNotTouchDiskWhenRejected(t *testing.T) {
 	}
 
 	args := map[string]any{
-		"repo":           "repo",
-		"branch":         "main",
-		"local_checkout": t.TempDir(),
-		"wake_loop":      map[string]any{"name": "repo_curator"},
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
 	}
 
 	if _, err := tools.HandleRepoFollow(context.Background(), args); err != nil {
