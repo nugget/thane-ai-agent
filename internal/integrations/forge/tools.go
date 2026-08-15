@@ -595,6 +595,24 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 
 	pr, err := provider.GetPR(ctx, repo, number)
 	if err != nil {
+		// Issues and pull requests share one number space, so asking
+		// for a PR by an issue's number is an ordinary mistake with a
+		// useful answer available. The forge reports it as a plain
+		// not-found, which the classifier then reads as "absent or
+		// invisible" — technically true and actively misleading, since
+		// the number exists and the caller is one tool call away from
+		// what it wanted. Production hit exactly this on #1385 and
+		// went looking for a permissions problem.
+		// Only a classified not-found is worth a second lookup. A rate
+		// limit, a bad credential, or a killed request says nothing
+		// about whether the number is an issue, and spending another
+		// call to ask would add load exactly when the forge is already
+		// refusing — and bury the real failure behind a second one.
+		if DenialKindOf(err) == DenialInvisible {
+			if issue, issueErr := provider.GetIssue(ctx, repo, number); issueErr == nil {
+				return marshalIssueAsPRMiss(issue, repo, number)
+			}
+		}
 		return "", err
 	}
 
@@ -1068,6 +1086,14 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", fmt.Errorf("kind is required (issues, code, commits)")
 	}
 
+	// GitHub refuses a commit search that carries only qualifiers, with
+	// a 422 the caller can neither predict nor act on without knowing
+	// the rule. Caught here so the answer names the missing piece
+	// rather than arriving as a validation failure from the far side.
+	if SearchKind(kindStr) == SearchCommits && qualifiersOnly(query) {
+		return "", fmt.Errorf("commit search needs search text, not qualifiers alone: %q has only qualifiers, and the forge rejects that. Add the words to look for (e.g. %q), or use forge_pr_commits to list a pull request's commits and forge_repo_subscriptions for what is already tracked", query, query+" <text to find>")
+	}
+
 	limit := intArg(args, "limit")
 
 	results, err := resolved.Provider.Search(ctx, query, SearchKind(kindStr), limit)
@@ -1094,5 +1120,56 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 	return marshalResponse(searchResponse{
 		Count:   len(entries),
 		Results: entries,
+	})
+}
+
+// qualifiersOnly reports whether a search query carries nothing but
+// key:value qualifiers. GitHub accepts those for issue and code search
+// and rejects them for commits, which is the sort of asymmetry a
+// caller should not have to learn by being refused.
+// commitSearchQualifiers are the keys GitHub recognizes on a commit
+// search. Matching against a known set rather than "contains a colon"
+// keeps a URL or an ordinary term like foo:bar from reading as a
+// qualifier, which would refuse a search the forge would have
+// accepted. The guard errs toward letting a call through: an
+// unrecognized key means this is search text, not a qualifier.
+var commitSearchQualifiers = map[string]bool{
+	"repo": true, "org": true, "user": true, "author": true,
+	"committer": true, "author-name": true, "committer-name": true,
+	"author-email": true, "committer-email": true,
+	"author-date": true, "committer-date": true,
+	"merge": true, "hash": true, "parent": true, "tree": true,
+	"is": true, "in": true, "language": true,
+}
+
+func qualifiersOnly(query string) bool {
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return false
+	}
+	for _, field := range fields {
+		key, _, found := strings.Cut(field, ":")
+		if !found || !commitSearchQualifiers[strings.ToLower(key)] {
+			return false
+		}
+	}
+	return true
+}
+
+// marshalIssueAsPRMiss answers a pull-request lookup that landed on an
+// issue. It returns what the caller almost certainly wanted, labelled
+// clearly enough that the model does not record it as a pull request.
+func marshalIssueAsPRMiss(issue *Issue, repo string, number int) (string, error) {
+	return marshalResponse(map[string]any{
+		"note": fmt.Sprintf("%s#%d is an issue, not a pull request. Issues and pull requests share one number space on this forge, so forge_pr_get cannot fetch it. The issue is returned below; use forge_issue_get for issues.",
+			repo, number),
+		"kind":   "issue",
+		"number": issue.Number,
+		"title":  issue.Title,
+		"state":  issue.State,
+		"author": issue.Author,
+		"labels": issue.Labels,
+		"url":    issue.URL,
+		"body":   truncate(issue.Body, 4000),
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/go-github/v69/github"
 )
@@ -871,9 +872,28 @@ func mapGitHubPR(gp *github.PullRequest) *PullRequest {
 	return pr
 }
 
+// truncate shortens s to at most maxLen bytes, ellipsis included.
+//
+// Byte slicing alone splits multi-byte runes, and appending an
+// ellipsis after slicing to maxLen overruns the budget the caller
+// asked for. Both matter here because the strings are issue and commit
+// bodies written by people, and a body cut mid-rune reaches the model
+// as replacement characters.
 func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	const ellipsis = "..."
+	if maxLen <= len(ellipsis) {
+		return ellipsis[:maxLen]
+	}
+	cut := maxLen - len(ellipsis)
+	// Back up to a rune boundary so the cut never lands mid-character.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ellipsis
 }
