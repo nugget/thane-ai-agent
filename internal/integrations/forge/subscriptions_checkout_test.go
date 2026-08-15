@@ -356,6 +356,36 @@ func TestRegisterPersistedRepositoryRootsMigratesLegacyCheckouts(t *testing.T) {
 	}
 }
 
+func TestRegisterPersistedRepositoryRootsWithoutResolverReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	workspace := t.TempDir()
+	if err := store.Add(ProjectSubscription{
+		ID:                "persisted",
+		Account:           "primary",
+		Repo:              "owner/repo",
+		RepositoryRoot:    "repo",
+		CheckoutPath:      filepath.Join(workspace, "repos", "repo"),
+		CheckoutRemoteURL: "https://example.invalid/owner/repo.git",
+		Branch:            "main",
+		TrackCommits:      true,
+		WakeTarget:        messages.LoopWakeTarget{Name: "watcher"},
+		CreatedAt:         time.Now(),
+	}); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+
+	service := &Service{
+		subscriptions: store,
+		workspacePath: workspace,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := service.registerPersistedRepositoryRoots(); err == nil || !strings.Contains(err.Error(), "named-root resolver is unavailable") {
+		t.Fatalf("registerPersistedRepositoryRoots error = %v, want unavailable-resolver error", err)
+	}
+}
+
 type recordingSubscriptionCheckoutSyncer struct {
 	sha   string
 	err   error

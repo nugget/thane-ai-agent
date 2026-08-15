@@ -1133,6 +1133,19 @@ func TestFileToolsRepositoryRootBindingDefaultsAndRefusesEscape(t *testing.T) {
 	}
 }
 
+func TestFileToolsRepositoryRootBindingWithoutResolverReturnsError(t *testing.T) {
+	t.Parallel()
+
+	ft := NewFileTools(t.TempDir(), nil)
+	ctx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingRepositoryRoot: "thanecode",
+	})
+
+	if _, err := ft.Read(ctx, "go.mod", 0, 0); err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("bound Read error = %v, want unavailable-root error", err)
+	}
+}
+
 func TestFileToolsGrepFilePatternFiltersBeforeReading(t *testing.T) {
 	t.Parallel()
 
