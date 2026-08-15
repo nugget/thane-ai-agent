@@ -75,7 +75,7 @@ func loopSpecSchema(description string) map[string]any {
 			"bindings": map[string]any{
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
-				"description":          "Resource instances this loop is scoped to. Tags decide whether a surface is available; bindings decide which instance of it you get. Recognized key: \"forge_account\" — the forge account name every forge tool resolves to, refusing the others. Keys are a closed set and an unknown one refuses the definition. A container's binding cannot be overridden by its children.",
+				"description":          "Resource instances this loop is scoped to. Tags decide whether a surface is available; bindings decide which instance of it you get. Recognized keys: \"forge_account\" — the forge account every forge tool resolves to; \"repo_root\" — the named repository root file and repository-history tools resolve to. Omitted selectors default to their binding and other instances are refused. Keys are a closed set and an unknown one refuses the definition. A container's binding cannot be overridden by its children.",
 			},
 			"sleep_min": map[string]any{
 				"type":        "string",

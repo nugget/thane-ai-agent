@@ -16,7 +16,7 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 		{
 			Name: "forge_repo_follow",
 			Description: "Follow a code forge repository for new releases and/or commits, delivering structured event-source wakes to an existing loop. " +
-				"Use this after creating or identifying a thane_loop_create service loop that owns the output document/corpus strategy.",
+				"Use this after creating or identifying a thane_loop_create service loop that owns the output document/corpus strategy. Set repo_root when the loop needs source access; Thane creates and maintains the checkout without exposing a host filesystem path.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -41,9 +41,9 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 						"type":        "boolean",
 						"description": "Whether to report new commits on branch/ref. Defaults to true.",
 					},
-					"local_checkout": map[string]any{
+					"repo_root": map[string]any{
 						"type":        "string",
-						"description": "Optional absolute or working-directory-relative path to keep as a read-only mirror checkout. The follow clones into this path before returning, so the working tree exists when the call succeeds and a failed clone fails the call. The poller keeps it current afterwards; with polling disabled it is created but never refreshed. The path must be empty or an existing Thane-owned mirror checkout; non-empty directories and unmarked git checkouts are refused. The subscription poller syncs this path before waking the loop and leaves it on disk when unfollowed.",
+						"description": "Optional named root handle for a read-only source mirror, such as 'thanecode'. A loop with a repo_root binding should omit this argument to use its binding; another root is refused. Use letters, digits, '.', '_', or '-', starting with a letter or digit. Thane chooses the checkout path under its workspace, clones it before returning, keeps it current before wakes, and leaves the checkout on disk when unfollowed. Address files as '<repo_root>:path'; never supply a host path.",
 					},
 					"wake_loop": forgeWakeLoopDefinition(),
 				},
@@ -74,7 +74,7 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 
 		{
 			Name:        "forge_repo_subscriptions",
-			Description: "List code forge repository event subscriptions with tracking settings, target loop, and latest observed release/commit.",
+			Description: "List code forge repository event subscriptions with tracking settings, target loop, named repository root, latest observed release/commit, and checkout freshness.",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},

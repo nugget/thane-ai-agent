@@ -21,10 +21,11 @@ type repoFollowResponse struct {
 	TrackReleases  bool                    `json:"track_releases"`
 	TrackCommits   bool                    `json:"track_commits"`
 	WakeLoop       messages.LoopWakeTarget `json:"wake_loop"`
-	LocalCheckout  string                  `json:"local_checkout,omitempty"`
+	RepositoryRoot string                  `json:"repo_root,omitempty"`
 	LatestRelease  string                  `json:"latest_release,omitempty"`
 	LatestCommit   string                  `json:"latest_commit,omitempty"`
 	LastSyncedSHA  string                  `json:"last_synced_sha,omitempty"`
+	LastSyncedAge  string                  `json:"last_synced_age,omitempty"`
 
 	// Warning names a condition that makes this subscription inert.
 	// It is part of the success payload rather than an error because
@@ -44,10 +45,11 @@ type repoSubscriptionEntry struct {
 	TrackReleases  bool                    `json:"track_releases"`
 	TrackCommits   bool                    `json:"track_commits"`
 	WakeLoop       messages.LoopWakeTarget `json:"wake_loop"`
-	LocalCheckout  string                  `json:"local_checkout,omitempty"`
+	RepositoryRoot string                  `json:"repo_root,omitempty"`
 	LatestRelease  string                  `json:"latest_release,omitempty"`
 	LatestCommit   string                  `json:"latest_commit,omitempty"`
 	LastSyncedSHA  string                  `json:"last_synced_sha,omitempty"`
+	LastSyncedAge  string                  `json:"last_synced_age,omitempty"`
 	LastChecked    string                  `json:"last_checked,omitempty"`
 	Created        string                  `json:"created,omitempty"`
 }
@@ -66,7 +68,7 @@ type repoSubscriptionsResponse struct {
 type repoUnfollowResponse struct {
 	Action           string `json:"action"`
 	SubscriptionID   string `json:"subscription_id"`
-	LocalCheckout    string `json:"local_checkout,omitempty"`
+	RepositoryRoot   string `json:"repo_root,omitempty"`
 	CheckoutRetained bool   `json:"checkout_retained,omitempty"`
 }
 
@@ -105,16 +107,34 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	if branch == "" {
 		branch = meta.DefaultBranch
 	}
-	localCheckout := strings.TrimSpace(stringArg(args, "local_checkout"))
+	if legacyPath := strings.TrimSpace(stringArg(args, "local_checkout")); legacyPath != "" {
+		return "", fmt.Errorf("local_checkout is no longer accepted because models cannot safely choose host paths; set repo_root to a named handle and Thane will choose the checkout location")
+	}
+	repositoryRoot := strings.TrimSpace(stringArg(args, "repo_root"))
+	if bound := boundRepositoryRoot(ctx); bound != "" {
+		if repositoryRoot != "" && strings.TrimSuffix(repositoryRoot, ":") != bound {
+			return "", fmt.Errorf("repository root %q is not available here: this loop is bound to root %q; retry with repo_root=%q or omit the argument", repositoryRoot, bound, bound)
+		}
+		repositoryRoot = bound
+	}
+	localCheckout := ""
 	checkoutRemoteURL := ""
 	subscriptionID := SubscriptionID(acct, repo, branch, wakeTarget)
-	if localCheckout != "" {
+	if repositoryRoot != "" {
+		repositoryRoot, err = repositoryRootName(repositoryRoot)
+		if err != nil {
+			return "", err
+		}
 		if branch == "" {
-			return "", fmt.Errorf("local_checkout requires branch because repository %s has no default branch; set branch", repo)
+			return "", fmt.Errorf("repo_root requires branch because repository %s has no default branch; set branch", repo)
 		}
 		checkoutRemoteURL = repositoryCheckoutRemoteURL(meta)
 		if checkoutRemoteURL == "" {
-			return "", fmt.Errorf("local_checkout requires a clone URL for repository %s", repo)
+			return "", fmt.Errorf("repo_root requires a clone URL for repository %s", repo)
+		}
+		localCheckout, err = t.service.repositoryCheckoutPath(repositoryRoot)
+		if err != nil {
+			return "", err
 		}
 		mirror, err := checkout.OpenMirror(checkout.MirrorSpec{
 			Name:         "forge subscription " + subscriptionID,
@@ -122,7 +142,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 			Logger:       t.logger,
 		})
 		if err != nil {
-			return "", err
+			return "", hideRepositoryCheckoutPath(err, localCheckout)
 		}
 		localCheckout = mirror.WorktreePath
 	}
@@ -145,6 +165,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		Name:              name,
 		URL:               meta.URL,
 		Branch:            branch,
+		RepositoryRoot:    repositoryRoot,
 		CheckoutPath:      localCheckout,
 		CheckoutRemoteURL: checkoutRemoteURL,
 		TrackReleases:     trackReleases,
@@ -175,8 +196,8 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		}
 	}
 
-	// Asking for a local checkout is asking for a working tree, so the
-	// follow makes one rather than filing an intention. OpenMirror is
+	// Asking for a repository root is asking for a usable working tree, so
+	// the follow creates one rather than merely filing an intention. OpenMirror is
 	// lazy by contract — it resolves a path and touches no disk, which
 	// is right for constructing many mirrors at startup and wrong here
 	// — so nothing created the checkout until the first poll, and where
@@ -184,7 +205,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	// got ok, and found no directory.
 	//
 	// Synced before the record is stored: a subscription pointing at a
-	// checkout that could not be made is the phantom path this fixes,
+	// root that could not be made is the phantom state this prevents,
 	// so a failed clone fails the call instead of persisting a promise.
 	// Doing it here also keeps the failure attached to the moment that
 	// can act on it — the caller still holds the repository, the path,
@@ -199,18 +220,38 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	if err := t.subscriptions.CheckAdmission(sub); err != nil {
 		return "", err
 	}
+	rootRegistered := false
+	if sub.RepositoryRoot != "" {
+		if err := t.service.registerRepositoryRoot(sub.RepositoryRoot, sub.CheckoutPath, sub.ID); err != nil {
+			return "", err
+		}
+		rootRegistered = true
+	}
+	rollbackRoot := func() {
+		if rootRegistered {
+			t.service.unregisterRepositoryRoot(sub.RepositoryRoot, sub.ID)
+		}
+	}
 
-	if strings.TrimSpace(sub.CheckoutPath) != "" && t.checkoutSync != nil {
-		head, err := t.checkoutSync(ctx, sub)
+	if strings.TrimSpace(sub.CheckoutPath) != "" {
+		checkoutSync := t.checkoutSync
+		if checkoutSync == nil {
+			checkoutSync = mirrorSubscriptionCheckoutSyncer{logger: t.logger}.Sync
+		}
+		head, err := checkoutSync(ctx, sub)
 		if err != nil {
-			return "", fmt.Errorf("create local checkout at %s: %w", sub.CheckoutPath, err)
+			rollbackRoot()
+			return "", fmt.Errorf("create repository root %q: %w", sub.RepositoryRoot, hideRepositoryCheckoutPath(err, sub.CheckoutPath))
 		}
 		sub.LastSyncedSHA = head
+		sub.LastSyncedAt = time.Now().UTC()
 	}
 
 	if err := t.subscriptions.Add(sub); err != nil {
+		rollbackRoot()
 		return "", err
 	}
+	rootRegistered = false
 
 	t.recordOp("forge_repo_follow", acct, repo, sub.ID)
 	// The agent gets this in its response; the operator gets it here.
@@ -222,11 +263,11 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 			"subscription_id", sub.ID,
 			"repo", sub.Repo,
 			"account", sub.Account,
-			"local_checkout", sub.CheckoutPath,
+			"repo_root", sub.RepositoryRoot,
 			"detail", warning)
 	}
 
-	return marshalResponse(repoFollowResponse{
+	response := repoFollowResponse{
 		SubscriptionID: sub.ID,
 		Account:        sub.Account,
 		Repo:           sub.Repo,
@@ -236,12 +277,16 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		TrackReleases:  sub.TrackReleases,
 		TrackCommits:   sub.TrackCommits,
 		WakeLoop:       sub.WakeTarget,
-		LocalCheckout:  sub.CheckoutPath,
+		RepositoryRoot: sub.RepositoryRoot,
 		LatestRelease:  sub.LatestRelease,
 		LatestCommit:   sub.LatestCommit,
 		LastSyncedSHA:  sub.LastSyncedSHA,
 		Warning:        subscriptionInertWarning(t.service),
-	})
+	}
+	if !sub.LastSyncedAt.IsZero() {
+		response.LastSyncedAge = promptfmt.FormatDeltaOnly(sub.LastSyncedAt, time.Now())
+	}
+	return marshalResponse(response)
 }
 
 // HandleRepoUnfollow removes a repository subscription.
@@ -265,13 +310,18 @@ func (t *Tools) HandleRepoUnfollow(ctx context.Context, args map[string]any) (st
 		return "", fmt.Errorf("subscription %q belongs to forge account %q, and this loop is bound to %q; it is not yours to remove",
 			id, sub.Account, bound)
 	}
+	if bound := boundRepositoryRoot(ctx); bound != "" && sub.RepositoryRoot != bound {
+		return "", fmt.Errorf("subscription %q owns repository root %q, and this loop is bound to root %q; it is not yours to remove",
+			id, sub.RepositoryRoot, bound)
+	}
 	if err := t.subscriptions.Remove(id); err != nil {
 		return "", err
 	}
+	t.service.unregisterRepositoryRoot(sub.RepositoryRoot, sub.ID)
 	return marshalResponse(repoUnfollowResponse{
 		Action:           "unfollowed",
 		SubscriptionID:   id,
-		LocalCheckout:    sub.CheckoutPath,
+		RepositoryRoot:   sub.RepositoryRoot,
 		CheckoutRetained: sub.CheckoutPath != "",
 	})
 }
@@ -290,11 +340,15 @@ func (t *Tools) HandleRepoSubscriptions(ctx context.Context, _ map[string]any) (
 	// listing hands a bound caller exactly the inventory of other
 	// accounts its binding exists to withhold.
 	bound := boundAccount(ctx)
+	boundRoot := boundRepositoryRoot(ctx)
 
 	now := time.Now()
 	entries := make([]repoSubscriptionEntry, 0, len(subs))
 	for _, sub := range subs {
 		if bound != "" && sub.Account != bound {
+			continue
+		}
+		if boundRoot != "" && sub.RepositoryRoot != boundRoot {
 			continue
 		}
 		entry := repoSubscriptionEntry{
@@ -307,13 +361,16 @@ func (t *Tools) HandleRepoSubscriptions(ctx context.Context, _ map[string]any) (
 			TrackReleases:  sub.TrackReleases,
 			TrackCommits:   sub.TrackCommits,
 			WakeLoop:       sub.WakeTarget,
-			LocalCheckout:  sub.CheckoutPath,
+			RepositoryRoot: sub.RepositoryRoot,
 			LatestRelease:  sub.LatestRelease,
 			LatestCommit:   sub.LatestCommit,
 			LastSyncedSHA:  sub.LastSyncedSHA,
 		}
 		if !sub.LastChecked.IsZero() {
 			entry.LastChecked = promptfmt.FormatDeltaOnly(sub.LastChecked, now)
+		}
+		if !sub.LastSyncedAt.IsZero() {
+			entry.LastSyncedAge = promptfmt.FormatDeltaOnly(sub.LastSyncedAt, now)
 		}
 		if !sub.CreatedAt.IsZero() {
 			entry.Created = promptfmt.FormatDeltaOnly(sub.CreatedAt, now)
@@ -365,12 +422,12 @@ func subscriptionListingInertWarning(service *Service, listed int) string {
 	if listed == 0 || service.SubscriptionPollingEnabled() {
 		return ""
 	}
-	return "Repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so none of these subscriptions will wake a loop, and any local checkout reflects its last successful sync rather than the current remote. The records persist and become live when polling is enabled."
+	return "Repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so none of these subscriptions will wake a loop, and any repository root reflects its last successful sync rather than the current remote. The records persist and become live when polling is enabled."
 }
 
 func subscriptionInertWarning(service *Service) string {
 	if service.SubscriptionPollingEnabled() {
 		return ""
 	}
-	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop until an operator enables it. Any local checkout was created now and is current as of this moment, but it will not refresh. The record persists and becomes live when polling is enabled."
+	return "Stored, but inert: repository polling is disabled at this site (forge.subscription_check_interval is unset or zero), so this subscription will not wake any loop until an operator enables it. Any repository root was created now and is current as of this moment, but it will not refresh. The record persists and becomes live when polling is enabled."
 }

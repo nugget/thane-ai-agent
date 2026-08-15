@@ -568,17 +568,16 @@ func (a *TagContextAssembler) resolveContextRef(ref string) (string, bool) {
 	}
 	rootRef := prefix + ":"
 	if a.resolver != nil && a.resolver.HasPrefix(ref) {
-		path, err := a.resolver.Resolve(ref)
-		if err != nil {
-			a.logger.Warn("failed to resolve session origin context ref", "ref", ref, "error", err)
+		path, matchedRoot, matched := a.resolver.ResolveRoot(ref)
+		if !matched {
+			a.logger.Warn("failed to resolve session origin context ref", "ref", ref)
 			return "", false
 		}
-		root, err := a.resolver.Resolve(rootRef)
-		if err != nil {
-			a.logger.Warn("failed to resolve session origin context root", "ref", ref, "root", rootRef, "error", err)
+		if matchedRoot.Kind == paths.RootKindRepository {
+			a.logger.Warn("repository root cannot be used as managed session origin context", "ref", ref, "root", matchedRoot.Name)
 			return "", false
 		}
-		return safeManagedRefPath(root, path)
+		return safeManagedRefPath(matchedRoot.Path, path)
 	}
 	if rootRef == "kb:" && a.kbDir != "" {
 		path := filepath.Join(a.kbDir, strings.TrimPrefix(ref, "kb:"))

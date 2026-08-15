@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func TestFileTools_ResolvePath(t *testing.T) {
@@ -37,7 +38,7 @@ func TestFileTools_ResolvePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := ft.resolvePath(tt.path)
+			_, _, err := ft.resolvePath(context.Background(), tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolvePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
@@ -530,7 +531,7 @@ func TestFileTools_Grep(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ft.Grep(ctx, tt.dir, tt.pattern, tt.maxDepth, tt.caseInsensitive)
+			result, err := ft.Grep(ctx, tt.dir, tt.pattern, "", tt.maxDepth, tt.caseInsensitive)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Grep() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -715,7 +716,7 @@ func TestFileTools_SearchDisabled(t *testing.T) {
 		t.Error("Search should fail when disabled")
 	}
 
-	_, err = ft.Grep(ctx, ".", "test", 0, false)
+	_, err = ft.Grep(ctx, ".", "test", "", 0, false)
 	if err == nil {
 		t.Error("Grep should fail when disabled")
 	}
@@ -821,7 +822,7 @@ func TestFileTools_GrepSkipsDirs(t *testing.T) {
 	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
-	result, err := ft.Grep(ctx, ".", "FINDME", 0, false)
+	result, err := ft.Grep(ctx, ".", "FINDME", "", 0, false)
 	if err != nil {
 		t.Fatalf("Grep() error: %v", err)
 	}
@@ -905,7 +906,7 @@ func TestFileTools_GrepTimeout(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	result, err := ft.Grep(ctx, ".", "hello", 0, false)
+	result, err := ft.Grep(ctx, ".", "hello", "", 0, false)
 	if err != nil {
 		t.Fatalf("Grep() should not return error on expired deadline, got: %v", err)
 	}
@@ -966,7 +967,7 @@ func TestResolvePath_KBPrefix(t *testing.T) {
 	resolver := paths.New(map[string]string{"kb": kbDir})
 	ft.SetResolver(resolver)
 
-	resolved, readOnly, err := ft.resolvePath("kb:dossiers/cat.md")
+	resolved, readOnly, err := ft.resolvePath(context.Background(), "kb:dossiers/cat.md")
 	if err != nil {
 		t.Fatalf("resolvePath(kb:dossiers/cat.md): %v", err)
 	}
@@ -991,7 +992,7 @@ func TestResolvePath_PrefixNoResolver(t *testing.T) {
 	ft := NewFileTools(workspace, nil)
 	// No SetResolver call.
 
-	_, _, err = ft.resolvePath("kb:dossiers/cat.md")
+	_, _, err = ft.resolvePath(context.Background(), "kb:dossiers/cat.md")
 	if err == nil {
 		t.Fatal("expected error for prefixed path without resolver")
 	}
@@ -1062,16 +1063,98 @@ func TestFileTools_CodeRootPrefixReadSearchAndGrep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search(thanecode:, *.go): %v", err)
 	}
-	if !strings.Contains(found, filepath.Join("checkouts", "thane", "internal", "tools", "file_tools.go")) {
+	if !strings.Contains(found, "thanecode:internal/tools/file_tools.go") {
 		t.Fatalf("search result = %q, want code root file", found)
 	}
 
-	grep, err := ft.Grep(ctx, "thanecode:", "NewFileTools", 5, false)
+	grep, err := ft.Grep(ctx, "thanecode:", "NewFileTools", "*.go", 5, false)
 	if err != nil {
 		t.Fatalf("Grep(thanecode:, NewFileTools): %v", err)
 	}
-	if !strings.Contains(grep, "file_tools.go:3:func NewFileTools() {}") {
+	if !strings.Contains(grep, "thanecode:internal/tools/file_tools.go:3:func NewFileTools() {}") {
 		t.Fatalf("grep result = %q, want matching source line", grep)
+	}
+}
+
+func TestFileToolsRepositoryRootBindingDefaultsAndRefusesEscape(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	rootA := filepath.Join(workspace, "repos", "thanecode")
+	rootB := filepath.Join(workspace, "repos", "othercode")
+	for _, dir := range []string{rootA, rootB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(rootA, "go.mod"), []byte("module thane\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "go.mod"), []byte("module other\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "secret.txt"), []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	resolver := paths.New(map[string]string{"core": filepath.Join(workspace, "core")})
+	for _, root := range []paths.Root{
+		{Name: "thanecode", Path: rootA, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub-a"},
+		{Name: "othercode", Path: rootB, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub-b"},
+	} {
+		if err := resolver.Register(root); err != nil {
+			t.Fatalf("Register(%s): %v", root.Name, err)
+		}
+	}
+	ft := NewFileTools(workspace, nil)
+	ft.SetResolver(resolver)
+	ctx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingRepositoryRoot: "thanecode",
+	})
+
+	content, err := ft.Read(ctx, "go.mod", 0, 0)
+	if err != nil {
+		t.Fatalf("bound relative Read: %v", err)
+	}
+	if content != "module thane\n" {
+		t.Fatalf("bound relative Read = %q", content)
+	}
+	if _, err := ft.Read(ctx, "othercode:go.mod", 0, 0); err == nil || !strings.Contains(err.Error(), "bound to root") {
+		t.Fatalf("different root error = %v, want binding refusal", err)
+	}
+	if _, err := ft.Read(ctx, filepath.Join(workspace, "secret.txt"), 0, 0); err == nil || !strings.Contains(err.Error(), "outside repository root") {
+		t.Fatalf("absolute escape error = %v, want root boundary", err)
+	}
+	if err := ft.Write(ctx, "new.txt", "nope"); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("bound Write error = %v, want read-only refusal", err)
+	}
+	if err := ft.Write(context.Background(), "thanecode:new.txt", "nope"); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("unbound prefixed Write error = %v, want read-only refusal", err)
+	}
+}
+
+func TestFileToolsGrepFilePatternFiltersBeforeReading(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	for name, content := range map[string]string{
+		"main.go":   "package main\n// NEEDLE\n",
+		"README.md": "NEEDLE\n",
+	} {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+	ft := NewFileTools(workspace, nil)
+	out, err := ft.Grep(context.Background(), ".", "NEEDLE", "*.go", 5, false)
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if !strings.Contains(out, "main.go") || strings.Contains(out, "README.md") {
+		t.Fatalf("Grep with file_pattern = %q", out)
+	}
+	if _, err := ft.Grep(context.Background(), ".", "NEEDLE", "[", 5, false); err == nil || !strings.Contains(err.Error(), "file_pattern") {
+		t.Fatalf("invalid file_pattern error = %v", err)
 	}
 }
 

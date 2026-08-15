@@ -15,6 +15,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // errResultLimit is a sentinel returned from WalkDir callbacks to stop
@@ -146,20 +147,38 @@ func (ft *FileTools) verifyMutationPath(ctx context.Context, absPath, consumer s
 	return ft.verifier.VerifyMutationPath(ctx, absPath, consumer)
 }
 
-// resolvePath converts a relative path to an absolute path within allowed directories.
-// Returns the resolved path and whether it's read-only.
-func (ft *FileTools) resolvePath(path string) (string, bool, error) {
+// resolvePath converts a relative path to an absolute path within allowed
+// directories. A repo_root binding changes the default base from the workspace
+// to that repository root and refuses every other root. Returns the resolved
+// path and whether it is read-only.
+func (ft *FileTools) resolvePath(ctx context.Context, path string) (string, bool, error) {
 	if ft.workspacePath == "" {
 		return "", false, fmt.Errorf("workspace not configured")
 	}
 
-	// Resolve registered prefixes (kb:, scratchpad:, etc.)
-	if ft.resolver != nil {
-		resolved, err := ft.resolver.Resolve(path)
-		if err != nil {
-			return "", false, fmt.Errorf("resolve prefix: %w", err)
+	boundName := looppkg.BindingFromContext(ctx, looppkg.BindingRepositoryRoot)
+	var boundRoot paths.Root
+	if boundName != "" {
+		var ok bool
+		boundRoot, ok = ft.resolver.Root(boundName)
+		if !ok || boundRoot.Kind != paths.RootKindRepository {
+			return "", false, fmt.Errorf("this loop is bound to repository root %q, but that root is not registered at this site", boundName)
 		}
-		path = resolved
+	}
+
+	// Resolve registered prefixes (kb:, scratchpad:, repository roots, etc.).
+	var matchedRoot paths.Root
+	var matched bool
+	if ft.resolver != nil {
+		resolved, root, ok := ft.resolver.ResolveRoot(path)
+		if ok {
+			if boundName != "" && root.Name != boundRoot.Name {
+				return "", false, fmt.Errorf("repository root %q is not available here: this loop is bound to root %q; retry with %s: or omit the root prefix", root.Name, boundRoot.Name, boundRoot.Name)
+			}
+			path, matchedRoot, matched = resolved, root, true
+		} else if boundName != "" && !filepath.IsAbs(path) && path != "~" && !strings.HasPrefix(path, "~/") {
+			path, matchedRoot, matched = filepath.Join(boundRoot.Path, path), boundRoot, true
+		}
 	} else if hasPrefixColon(path) {
 		return "", false, fmt.Errorf("no path resolver configured for prefixed path: %s", path)
 	}
@@ -192,13 +211,32 @@ func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 		}
 	}
 
+	if boundName != "" && (!paths.ContainsPath(boundRoot.Path, absPath) || !paths.ContainsPath(boundRoot.Path, realPath)) {
+		return "", false, fmt.Errorf("path is outside repository root %q; this loop's repo_root binding restricts file tools to root %q", boundRoot.Name, boundRoot.Name)
+	}
+	if matched && (!paths.ContainsPath(matchedRoot.Path, absPath) || !paths.ContainsPath(matchedRoot.Path, realPath)) {
+		return "", false, fmt.Errorf("path escapes named root %q through a symlink", matchedRoot.Name)
+	}
+
+	readOnly := matched && matchedRoot.ReadOnly
+	if root, ok := ft.resolver.RootForPath(realPath); ok && root.ReadOnly {
+		readOnly = true
+	}
+	// A dynamically registered read-only root is itself an allowed read
+	// boundary, including migrated checkouts that predate the workspace-owned
+	// repos directory. The resolver is trusted Go configuration, not a path the
+	// model supplied.
+	if readOnly {
+		return realPath, true, nil
+	}
+
 	// Check workspace (read-write)
 	workspaceAbs, err := filepath.Abs(ft.workspacePath)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to resolve workspace: %w", err)
 	}
-	if strings.HasPrefix(absPath, workspaceAbs) || strings.HasPrefix(realPath, workspaceAbs) {
-		return realPath, false, nil
+	if paths.ContainsPath(workspaceAbs, absPath) || paths.ContainsPath(workspaceAbs, realPath) {
+		return realPath, readOnly, nil
 	}
 
 	// Check read-only directories
@@ -207,7 +245,7 @@ func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(absPath, dirAbs) || strings.HasPrefix(realPath, dirAbs) {
+		if paths.ContainsPath(dirAbs, absPath) || paths.ContainsPath(dirAbs, realPath) {
 			return realPath, true, nil
 		}
 	}
@@ -217,7 +255,7 @@ func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 
 // Read reads the contents of a file.
 func (ft *FileTools) Read(ctx context.Context, path string, offset, limit int) (string, error) {
-	absPath, _, err := ft.resolvePath(path)
+	absPath, _, err := ft.resolvePath(ctx, path)
 	if err != nil {
 		return "", err
 	}
@@ -265,7 +303,7 @@ func (ft *FileTools) Read(ctx context.Context, path string, offset, limit int) (
 	// Truncate very large content
 	const maxBytes = 50 * 1024 // 50KB
 	if len(content) > maxBytes {
-		content = content[:maxBytes] + "\n\n[... truncated, use offset/limit for more ...]"
+		content = truncateUTF8(content, maxBytes) + "\n\n[... truncated, use offset/limit for more ...]"
 	}
 
 	return content, nil
@@ -273,7 +311,7 @@ func (ft *FileTools) Read(ctx context.Context, path string, offset, limit int) (
 
 // Write writes content to a file, creating directories as needed.
 func (ft *FileTools) Write(ctx context.Context, path, content string) error {
-	absPath, readOnly, err := ft.resolvePath(path)
+	absPath, readOnly, err := ft.resolvePath(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -301,7 +339,7 @@ func (ft *FileTools) Write(ctx context.Context, path, content string) error {
 
 // Edit performs a surgical text replacement in a file.
 func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) error {
-	absPath, readOnly, err := ft.resolvePath(path)
+	absPath, readOnly, err := ft.resolvePath(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -328,7 +366,7 @@ func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) er
 	if !strings.Contains(content, oldText) {
 		// Provide helpful error with context
 		if len(oldText) > 100 {
-			return fmt.Errorf("old text not found in file (first 100 chars: %q...)", oldText[:100])
+			return fmt.Errorf("old text not found in file (first 100 bytes: %q...)", truncateUTF8(oldText, 100))
 		}
 		return fmt.Errorf("old text not found in file: %q", oldText)
 	}
@@ -352,7 +390,7 @@ func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) er
 
 // List lists files in a directory.
 func (ft *FileTools) List(ctx context.Context, path string) ([]string, error) {
-	absPath, _, err := ft.resolvePath(path)
+	absPath, _, err := ft.resolvePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -378,9 +416,10 @@ func (ft *FileTools) List(ctx context.Context, path string) ([]string, error) {
 }
 
 // Search finds files matching a glob pattern within a directory tree.
-// Results are returned as workspace-relative paths, one per line.
+// Results inside a named root use root-prefixed paths; other results are
+// workspace-relative.
 func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth int) (string, error) {
-	absDir, _, err := ft.resolvePath(dir)
+	absDir, _, err := ft.resolvePath(ctx, dir)
 	if err != nil {
 		return "", err
 	}
@@ -394,11 +433,6 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 	}
 	if maxDepth > 20 {
 		maxDepth = 20
-	}
-
-	workspaceAbs, err := filepath.Abs(ft.workspacePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve workspace: %w", err)
 	}
 
 	searchCtx, cancel := context.WithTimeout(ctx, searchTimeout)
@@ -441,11 +475,7 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 
 		matched, _ := filepath.Match(pattern, d.Name())
 		if matched {
-			displayPath := path
-			if r, err := filepath.Rel(workspaceAbs, path); err == nil {
-				displayPath = r
-			}
-			matches = append(matches, displayPath)
+			matches = append(matches, ft.displayPath(path))
 			if len(matches) >= maxResults {
 				return errResultLimit
 			}
@@ -479,10 +509,11 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 	return strings.Join(matches, "\n") + warning, nil
 }
 
-// Grep searches file contents for a regular expression pattern.
+// Grep searches file contents for a regular expression pattern. When
+// filePattern is non-empty, only basenames matching that glob are read.
 // Results are formatted as path:line_number:matching_line.
-func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int, caseInsensitive bool) (string, error) {
-	absDir, _, err := ft.resolvePath(dir)
+func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string, maxDepth int, caseInsensitive bool) (string, error) {
+	absDir, _, err := ft.resolvePath(ctx, dir)
 	if err != nil {
 		return "", err
 	}
@@ -495,17 +526,17 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 	if err != nil {
 		return "", fmt.Errorf("invalid regex pattern: %w", err)
 	}
+	if filePattern != "" {
+		if _, err := filepath.Match(filePattern, "test"); err != nil {
+			return "", fmt.Errorf("invalid file_pattern glob: %w", err)
+		}
+	}
 
 	if maxDepth <= 0 {
 		maxDepth = 10
 	}
 	if maxDepth > 20 {
 		maxDepth = 20
-	}
-
-	workspaceAbs, err := filepath.Abs(ft.workspacePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve workspace: %w", err)
 	}
 
 	grepCtx, cancel := context.WithTimeout(ctx, searchTimeout)
@@ -548,6 +579,12 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 		if d.IsDir() || !d.Type().IsRegular() {
 			return nil
 		}
+		if filePattern != "" {
+			matched, _ := filepath.Match(filePattern, d.Name())
+			if !matched {
+				return nil
+			}
+		}
 
 		// Skip large files
 		info, err := d.Info()
@@ -569,10 +606,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 			return nil
 		}
 
-		displayPath := path
-		if r, err := filepath.Rel(workspaceAbs, path); err == nil {
-			displayPath = r
-		}
+		displayPath := ft.displayPath(path)
 
 		scanner := bufio.NewScanner(bytes.NewReader(data))
 		// Increase buffer to handle long lines up to the file-size cap.
@@ -584,7 +618,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 			if re.MatchString(line) {
 				// Truncate very long matching lines
 				if len(line) > 200 {
-					line = line[:200] + "..."
+					line = truncateUTF8(line, 200) + "..."
 				}
 				results = append(results, fmt.Sprintf("%s:%d:%s", displayPath, lineNum, line))
 				matchCount++
@@ -626,6 +660,23 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 	return strings.Join(results, "\n") + warning, nil
 }
 
+func (ft *FileTools) displayPath(path string) string {
+	if root, ok := ft.resolver.RootForPath(path); ok {
+		if rel, contained := paths.RelativePath(root.Path, path); contained {
+			if rel == "." {
+				return root.Name + ":"
+			}
+			return root.Name + ":" + filepath.ToSlash(rel)
+		}
+	}
+	if workspaceAbs, err := filepath.Abs(ft.workspacePath); err == nil {
+		if rel, relErr := filepath.Rel(workspaceAbs, path); relErr == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return path
+}
+
 // Stat returns detailed information about one or more files or directories.
 // Paths should be comma-separated. Each path is resolved through the workspace sandbox.
 func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
@@ -643,7 +694,7 @@ func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
 			continue
 		}
 
-		absPath, _, err := ft.resolvePath(p)
+		absPath, _, err := ft.resolvePath(ctx, p)
 		if err != nil {
 			results = append(results, fmt.Sprintf("%s: %s", p, err))
 			continue
@@ -678,7 +729,7 @@ func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
 // Tree renders a directory tree with indentation.
 // The output includes a summary of total directories and files.
 func (ft *FileTools) Tree(ctx context.Context, dir string, maxDepth int) (string, error) {
-	absDir, _, err := ft.resolvePath(dir)
+	absDir, _, err := ft.resolvePath(ctx, dir)
 	if err != nil {
 		return "", err
 	}
@@ -711,7 +762,7 @@ func (ft *FileTools) Tree(ctx context.Context, dir string, maxDepth int) (string
 	result := buf.String()
 	const maxBytes = 50 * 1024
 	if len(result) > maxBytes {
-		result = result[:maxBytes] + "\n\n[... truncated ...]"
+		result = truncateUTF8(result, maxBytes) + "\n\n[... truncated ...]"
 	}
 
 	return result, nil

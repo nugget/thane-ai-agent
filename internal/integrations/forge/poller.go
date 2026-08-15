@@ -195,9 +195,10 @@ func (p *SubscriptionPoller) checkSubscription(ctx context.Context, sub ProjectS
 		}
 		remoteHead, err := checkoutSync(ctx, sub)
 		if err != nil {
-			return sub, nil, 0, 0, fmt.Errorf("sync local checkout: %w", err)
+			return sub, nil, 0, 0, fmt.Errorf("sync repository root %q: %w", sub.RepositoryRoot, hideRepositoryCheckoutPath(err, sub.CheckoutPath))
 		}
 		sub.LastSyncedSHA = remoteHead
+		sub.LastSyncedAt = time.Now().UTC()
 		annotateSubscriptionEvents(events, sub)
 	}
 
@@ -249,6 +250,7 @@ func initialBatchProgress(sub, final ProjectSubscription, events []messages.Loop
 	progress.CheckoutPath = final.CheckoutPath
 	progress.CheckoutRemoteURL = final.CheckoutRemoteURL
 	progress.LastSyncedSHA = final.LastSyncedSHA
+	progress.LastSyncedAt = final.LastSyncedAt
 	hasReleaseEvents := false
 	hasCommitEvents := false
 	for _, event := range events {

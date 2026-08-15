@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // ContentResolver resolves bare prefix references (temp:LABEL, kb:file.md,
@@ -57,7 +58,7 @@ func (cr *ContentResolver) ResolveArgs(ctx context.Context, args map[string]any)
 	}
 	convID := ConversationIDFromContext(ctx)
 	for key, val := range args {
-		resolved, err := cr.resolveArgValue(convID, val)
+		resolved, err := cr.resolveArgValue(ctx, convID, val)
 		if err != nil {
 			return fmt.Errorf("resolve parameter %q: %w", key, err)
 		}
@@ -69,13 +70,13 @@ func (cr *ContentResolver) ResolveArgs(ctx context.Context, args map[string]any)
 // resolveArgValue recursively resolves prefix references in a single
 // argument value. Strings are checked for bare prefix references; maps
 // and slices are traversed recursively; other types pass through.
-func (cr *ContentResolver) resolveArgValue(convID string, val any) (any, error) {
+func (cr *ContentResolver) resolveArgValue(ctx context.Context, convID string, val any) (any, error) {
 	switch v := val.(type) {
 	case string:
 		if v == "" || strings.ContainsAny(v, " \t\n\r") {
 			return v, nil
 		}
-		resolved, didResolve, err := cr.resolveToContent(convID, v)
+		resolved, didResolve, err := cr.resolveToContent(ctx, convID, v)
 		if err != nil {
 			return nil, err
 		}
@@ -85,7 +86,7 @@ func (cr *ContentResolver) resolveArgValue(convID string, val any) (any, error) 
 		return v, nil
 	case map[string]any:
 		for key, elem := range v {
-			resolved, err := cr.resolveArgValue(convID, elem)
+			resolved, err := cr.resolveArgValue(ctx, convID, elem)
 			if err != nil {
 				return nil, fmt.Errorf("key %q: %w", key, err)
 			}
@@ -94,7 +95,7 @@ func (cr *ContentResolver) resolveArgValue(convID string, val any) (any, error) 
 		return v, nil
 	case []any:
 		for i, elem := range v {
-			resolved, err := cr.resolveArgValue(convID, elem)
+			resolved, err := cr.resolveArgValue(ctx, convID, elem)
 			if err != nil {
 				return nil, fmt.Errorf("index %d: %w", i, err)
 			}
@@ -115,7 +116,7 @@ func (cr *ContentResolver) resolveArgValue(convID string, val any) (any, error) 
 // TempFileStore is configured, since the caller clearly intended a
 // temp: reference. For path prefixes, failures pass through silently
 // (returns empty string, false, nil).
-func (cr *ContentResolver) resolveToContent(convID, value string) (string, bool, error) {
+func (cr *ContentResolver) resolveToContent(ctx context.Context, convID, value string) (string, bool, error) {
 	// Try temp: first (most specific, per-conversation).
 	// Failures here are always errors — temp labels are intentional references.
 	if strings.HasPrefix(value, "temp:") {
@@ -144,13 +145,18 @@ func (cr *ContentResolver) resolveToContent(convID, value string) (string, bool,
 	// Try path prefixes (kb:, scratchpad:, etc.).
 	// Failures here pass through — a missing file is valid state.
 	if cr.pathResolver != nil && cr.pathResolver.HasPrefix(value) {
-		absPath, err := cr.pathResolver.Resolve(value)
-		if err != nil {
-			cr.logger.Debug("path prefix resolution failed, passing through",
-				"value", value,
-				"error", err,
-			)
+		absPath, root, matched := cr.pathResolver.ResolveRoot(value)
+		if !matched {
 			return "", false, nil
+		}
+		if !paths.ContainsPath(root.Path, absPath) {
+			return "", false, fmt.Errorf("reference %q escapes named root %q", value, root.Name)
+		}
+		if root.Kind == paths.RootKindRepository {
+			bound := looppkg.BindingFromContext(ctx, looppkg.BindingRepositoryRoot)
+			if bound != "" && root.Name != bound {
+				return "", false, fmt.Errorf("repository root %q is not available here: this loop is bound to root %q", root.Name, bound)
+			}
 		}
 		data, err := os.ReadFile(absPath)
 		if err != nil {

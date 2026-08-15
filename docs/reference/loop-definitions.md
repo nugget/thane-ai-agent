@@ -115,16 +115,19 @@ tags:
     - forge
 bindings:
     forge_account: github-readonly
+    repo_root: thanecode
 ```
 
-With that binding, forge tools resolve an empty `account` argument to
-`github-readonly` and refuse any other account by name. The forge account
-block injected into the prompt narrows to the bound account as well, so
-the loop is never shown a door the tools will not open.
+With those bindings, forge tools resolve an empty `account` argument to
+`github-readonly`, while file and repository-history tools resolve an omitted
+root to `thanecode`. Naming another account or root is refused. Injected forge
+context narrows in both dimensions, so the loop is never shown a door the tools
+will not open.
 
 | Binding | Meaning |
 |---|---|
 | `forge_account` | Forge account name (from `forge.accounts`) that this loop's forge tools resolve to. The account must exist at hydration, or the definition refuses |
+| `repo_root` | Named repository root registered by `forge_repo_follow` that file and `repo_git_*` tools resolve to. The root must exist at hydration, or the definition refuses |
 
 Bindings cascade from container ancestors, and on a key collision the
 **ancestor wins** — the inverse of `routing_factors`. A routing factor is
@@ -140,7 +143,9 @@ new loop under a container with a conflicting binding is refused rather than
 silently changing which resource the child can reach. Unbound operator and API
 callers remain free to author and launch independently bound definitions.
 
-A binding restricts *which* credential is used, not what that credential
-may do. The account's own token policy is what makes a read-only account
-harmless; the binding is what makes the choice of account non-negotiable.
-Both layers are needed, and neither substitutes for the other.
+A binding restricts which resource Thane's own tools serve. It does not add a
+process or filesystem sandbox. The account's token policy is what limits a
+bound forge credential, and a `repo_root` binding does not constrain a loop
+that also has the host `exec` tool: that process can reach anything allowed to
+the service account. Bindings scope tools; enclosure scopes processes. Both
+layers are needed, and neither substitutes for the other.

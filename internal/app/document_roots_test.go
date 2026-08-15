@@ -52,6 +52,13 @@ func TestBuildDocumentRootsOnlyIncludesExistingDirectories(t *testing.T) {
 		"kb":      kbDir,
 		"missing": filepath.Join(rootDir, "missing"),
 	})
+	repositoryDir := filepath.Join(rootDir, "repos", "thanecode")
+	if err := os.MkdirAll(repositoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll repository: %v", err)
+	}
+	if err := resolver.Register(paths.Root{Name: "thanecode", Path: repositoryDir, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub"}); err != nil {
+		t.Fatalf("Register repository root: %v", err)
+	}
 
 	roots := buildDocumentRoots(resolver)
 	if len(roots) != 1 {
@@ -62,6 +69,9 @@ func TestBuildDocumentRootsOnlyIncludesExistingDirectories(t *testing.T) {
 	}
 	if _, ok := roots["missing"]; ok {
 		t.Fatalf("missing root included: %#v", roots)
+	}
+	if _, ok := roots["thanecode"]; ok {
+		t.Fatalf("repository root entered the document index: %#v", roots)
 	}
 }
 

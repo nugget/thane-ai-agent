@@ -268,29 +268,36 @@ func hydrateHAStateWatcherSpec(spec looppkg.Spec, watcher *homeassistant.StateWa
 //
 // The check belongs at hydration because that is the last moment
 // before a loop starts running with a boundary that does not resolve.
-// A binding to a misspelled account would otherwise surface as a
-// refusal on the loop's first forge call — days later, in a loop whose
-// whole purpose is unattended operation, reported as an ordinary tool
-// failure rather than as the misconfiguration it is.
+// A misspelled account or repository root would otherwise surface on the
+// first unattended tool call, days after the definition was accepted.
 func (a *App) validateLoopBindings(spec looppkg.Spec) error {
-	account, ok := spec.Bindings[looppkg.BindingForgeAccount]
-	if !ok {
-		return nil
+	if account, ok := spec.Bindings[looppkg.BindingForgeAccount]; ok {
+		if a.forgeService == nil {
+			return fmt.Errorf("loop %q binds %s=%q but no forge accounts are configured at this site",
+				spec.Name, looppkg.BindingForgeAccount, account)
+		}
+		// Deliberately unbound. ResolveAccount honors a binding carried by
+		// ctx, so threading the caller's context here would redirect the
+		// lookup to the caller's account and report a binding refusal for
+		// a spec that merely names an account this site does not have —
+		// turning a plain configuration error into a confusing one. The
+		// question being asked is "does this account exist", not "may this
+		// caller use it".
+		if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
+			return fmt.Errorf("loop %q binds %s=%q: %w",
+				spec.Name, looppkg.BindingForgeAccount, account, err)
+		}
 	}
-	if a.forgeService == nil {
-		return fmt.Errorf("loop %q binds %s=%q but no forge accounts are configured at this site",
-			spec.Name, looppkg.BindingForgeAccount, account)
-	}
-	// Deliberately unbound. ResolveAccount honors a binding carried by
-	// ctx, so threading the caller's context here would redirect the
-	// lookup to the caller's account and report a binding refusal for
-	// a spec that merely names an account this site does not have —
-	// turning a plain configuration error into a confusing one. The
-	// question being asked is "does this account exist", not "may this
-	// caller use it".
-	if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
-		return fmt.Errorf("loop %q binds %s=%q: %w",
-			spec.Name, looppkg.BindingForgeAccount, account, err)
+
+	if rootName, ok := spec.Bindings[looppkg.BindingRepositoryRoot]; ok {
+		if a.forgeService == nil {
+			return fmt.Errorf("loop %q binds %s=%q but no forge repository roots are configured at this site",
+				spec.Name, looppkg.BindingRepositoryRoot, rootName)
+		}
+		if _, exists := a.forgeService.RepositoryRoot(rootName); !exists {
+			return fmt.Errorf("loop %q binds %s=%q but no repository subscription exposes that named root",
+				spec.Name, looppkg.BindingRepositoryRoot, rootName)
+		}
 	}
 	return nil
 }

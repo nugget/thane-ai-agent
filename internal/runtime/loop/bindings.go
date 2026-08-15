@@ -44,6 +44,12 @@ const (
 	// in config) this loop's forge tools resolve to. Its value is an
 	// account name, and the account must exist at hydration.
 	BindingForgeAccount = "forge_account"
+
+	// BindingRepositoryRoot names the forge-maintained repository root this
+	// loop's file and repository-history tools may resolve. Its value is the
+	// root handle without a trailing colon, and the root must exist at
+	// hydration.
+	BindingRepositoryRoot = "repo_root"
 )
 
 // registeredBindings is the closed set of binding keys, each with the
@@ -51,7 +57,8 @@ const (
 // belong here the moment a subsystem learns to honor one — the
 // registry is what makes an unknown key an error rather than a guess.
 var registeredBindings = map[string]string{
-	BindingForgeAccount: "Forge account name this loop's forge tools resolve to. Empty account arguments default to it, and other accounts are refused.",
+	BindingForgeAccount:   "Forge account name this loop's forge tools resolve to. Empty account arguments default to it, and other accounts are refused.",
+	BindingRepositoryRoot: "Repository root name this loop's file and repository-history tools resolve to. Omitted roots default to it, and other roots are refused.",
 }
 
 // BindingKeys returns the registered binding keys in sorted order, for

@@ -98,6 +98,12 @@ func buildDocumentRoots(resolver *paths.Resolver) map[string]string {
 	}
 	documentRoots := make(map[string]string)
 	for _, root := range resolver.Prefixes() {
+		rootEntry, ok := resolver.Root(root)
+		if ok && rootEntry.Kind == paths.RootKindRepository {
+			// Repository roots stay outside the document index: their assertion is
+			// remote, branch, commit, and sync freshness—not document signatures.
+			continue
+		}
 		rootPath, err := resolver.Resolve(root + ":")
 		if err != nil {
 			continue

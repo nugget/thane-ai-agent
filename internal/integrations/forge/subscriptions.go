@@ -48,6 +48,11 @@ type ProjectSubscription struct {
 	// repository's default branch.
 	Branch string `json:"branch,omitempty"`
 
+	// RepositoryRoot is the model-facing handle for the optional checkout.
+	// The filesystem path remains internal; file and git tools resolve this
+	// name through the shared root registry.
+	RepositoryRoot string `json:"repo_root,omitempty"`
+
 	// CheckoutPath is the absolute path of the local read-only mirror
 	// checkout. Empty disables the checkout features for this
 	// subscription.
@@ -89,6 +94,10 @@ type ProjectSubscription struct {
 	// mirror-checkout sync. Empty when no checkout is configured or no
 	// sync has completed yet.
 	LastSyncedSHA string `json:"last_synced_sha,omitempty"`
+
+	// LastSyncedAt records when the mirror most recently matched
+	// LastSyncedSHA. Model-facing projections render it as an exact delta.
+	LastSyncedAt time.Time `json:"last_synced_at,omitempty"`
 
 	// LastChecked is when the poller last completed a poll for this
 	// subscription, successful or not. Zero before the first poll.
@@ -289,6 +298,9 @@ func validateSubscription(sub ProjectSubscription) error {
 	}
 	if sub.WakeTarget.Empty() {
 		return fmt.Errorf("wake_loop is required")
+	}
+	if strings.TrimSpace(sub.RepositoryRoot) != "" && strings.TrimSpace(sub.CheckoutPath) == "" {
+		return fmt.Errorf("repo_root requires a checkout path")
 	}
 	return nil
 }

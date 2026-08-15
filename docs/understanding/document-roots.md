@@ -112,24 +112,19 @@ Policy is deliberately attached to the root, not to individual tools or
 prompts. A loop-declared output, a direct document write, and the
 corpus-aware intake flow should all meet the same root contract.
 
-Source checkouts can also be named roots, even though they are not
-document corpora. For a forge-maintained local checkout, use a read-only
-root with indexing disabled:
+Source checkouts can also be named roots, even though they are not document
+corpora. `forge_repo_follow` registers them automatically when given a
+handle such as `repo_root: thanecode`; Go chooses the physical checkout
+location beneath `workspace.path`. Raw file tools then resolve the prefix:
+`file_read` can read `thanecode:go.mod`, while `file_tree`, `file_search`, and
+`file_grep` can traverse the checkout. Repository roots are always read-only
+to these tools and never enter the `doc_*` index.
 
-```yaml
-roots:
-  thanecode:
-    path: ~/Thane/checkouts/thane
-    indexing: false
-    authoring: read_only
-```
-
-Point `forge_repo_follow.local_checkout` at the same path. The `doc_*`
-tools will not browse or search that source tree when `indexing: false`,
-but raw file tools resolve the prefix: `file_read` can read
-`thanecode:go.mod`, while `file_search` and `file_grep` can traverse the
-checkout. Keep these roots under `workspace.path`, or add their directory
-to `workspace.read_only_dirs` if they live elsewhere.
+Trust has a deliberately different meaning here. Document roots may assert
+signed history and reject unattested worktree bytes. A repository mirror
+instead asserts its remote, branch, synced commit, and sync age. The forge
+context carries those facts; document signature verification is not applied
+to the mirror.
 
 The current policy fields are:
 

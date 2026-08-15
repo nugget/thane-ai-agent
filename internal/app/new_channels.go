@@ -192,10 +192,12 @@ func (a *App) initChannels(s *newState) error {
 	if a.cfg.Forge.Configured() {
 		var err error
 		a.forgeService, err = forge.NewService(a.cfg.Forge, forge.ServiceDependencies{
-			State:        a.opStore,
-			MessageBus:   a.messageBus,
-			LoopResolver: a.loopRegistry,
-			Logger:       a.logger,
+			State:         a.opStore,
+			MessageBus:    a.messageBus,
+			LoopResolver:  a.loopRegistry,
+			Logger:        a.logger,
+			WorkspacePath: a.cfg.Workspace.Path,
+			RootResolver:  s.resolver,
 		})
 		if err != nil {
 			return fmt.Errorf("create forge service: %w", err)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -25,6 +26,13 @@ type ServiceDependencies struct {
 
 	// Logger receives forge account, subscription, and provider diagnostics.
 	Logger *slog.Logger `json:"-"`
+
+	// WorkspacePath anchors repository subscription checkouts. The model names
+	// a root; the service derives its physical path beneath this workspace.
+	WorkspacePath string `json:"-"`
+
+	// RootResolver is the shared named-root registry used by file tools.
+	RootResolver *paths.Resolver `json:"-"`
 }
 
 // Service owns the configured forge runtime: account resolution, model-facing
@@ -36,6 +44,9 @@ type Service struct {
 	tools           *Tools
 	contextProvider *ContextProvider
 	poller          *SubscriptionPoller
+	subscriptions   *SubscriptionStore
+	workspacePath   string
+	rootResolver    *paths.Resolver
 }
 
 // NewService creates a complete forge runtime from configuration and shared
@@ -65,8 +76,14 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 	subscriptions := NewSubscriptionStore(deps.State, deps.Logger, cfg.MaxSubscriptions)
 
 	service := &Service{
-		manager: manager,
-		logger:  deps.Logger,
+		manager:       manager,
+		logger:        deps.Logger,
+		subscriptions: subscriptions,
+		workspacePath: deps.WorkspacePath,
+		rootResolver:  deps.RootResolver,
+	}
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		return nil, err
 	}
 	service.tools = newTools(service, opLog, deps.Logger, subscriptions)
 	service.tools.SetLoopResolver(deps.LoopResolver)
@@ -122,6 +139,12 @@ func (s *Service) ResolveAccount(ctx context.Context, requested string) (Resolve
 // string when the caller is unbound.
 func boundAccount(ctx context.Context) string {
 	return looppkg.BindingFromContext(ctx, looppkg.BindingForgeAccount)
+}
+
+// boundRepositoryRoot returns the repository root this caller is scoped to,
+// or an empty string when the caller is unbound.
+func boundRepositoryRoot(ctx context.Context) string {
+	return looppkg.BindingFromContext(ctx, looppkg.BindingRepositoryRoot)
 }
 
 // AccountsInConfigOrder returns the configured accounts in declaration

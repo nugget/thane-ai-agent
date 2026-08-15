@@ -352,3 +352,68 @@ func TestSubscriptionToolsHonorBinding(t *testing.T) {
 		}
 	})
 }
+
+func TestRepositoryRootBindingNarrowsContextAndSubscriptionTools(t *testing.T) {
+	t.Parallel()
+
+	newTools := func(t *testing.T) (*Tools, *OperationLog) {
+		t.Helper()
+		tools := newMultiAccountTools()
+		store := newTestSubscriptionStore(t)
+		for _, sub := range []ProjectSubscription{
+			{ID: "sub-thane", Account: "github-readonly", Repo: "nugget/thane", RepositoryRoot: "thanecode", CheckoutPath: "/internal/repos/thanecode", CheckoutRemoteURL: "https://token@example.invalid/thane.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, LastSyncedSHA: "aaa", LastSyncedAt: time.Now().Add(-2 * time.Minute), CreatedAt: time.Now()},
+			{ID: "sub-other", Account: "github-readonly", Repo: "nugget/other", RepositoryRoot: "othercode", CheckoutPath: "/internal/repos/othercode", CheckoutRemoteURL: "https://example.invalid/other.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, LastSyncedSHA: "bbb", LastSyncedAt: time.Now().Add(-3 * time.Minute), CreatedAt: time.Now()},
+		} {
+			if err := store.Add(sub); err != nil {
+				t.Fatalf("seed %s: %v", sub.ID, err)
+			}
+		}
+		tools.subscriptions = store
+		tools.service.subscriptions = store
+		opLog := NewOperationLog()
+		opLog.Record(Operation{Tool: "forge_pr_get", Account: "github-readonly", Repo: "nugget/other", Ref: "12"})
+		opLog.Record(Operation{Tool: "forge_pr_get", Account: "github-readonly", Repo: "nugget/thane", Ref: "13"})
+		return tools, opLog
+	}
+	ctx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingForgeAccount:   "github-readonly",
+		looppkg.BindingRepositoryRoot: "thanecode",
+	})
+
+	t.Run("context advertises only the bound root and its operations", func(t *testing.T) {
+		t.Parallel()
+		tools, opLog := newTools(t)
+		out, err := newContextProvider(tools.service, opLog).TagContext(ctx, agentctx.ContextRequest{})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		for _, forbidden := range []string{"othercode", "nugget/other", "/internal/repos", "token@"} {
+			if strings.Contains(out, forbidden) {
+				t.Errorf("context = %q\nleaks %q outside the root binding", out, forbidden)
+			}
+		}
+		for _, want := range []string{`"root":"thanecode"`, `"repo":"nugget/thane"`, `"remote":"https://example.invalid/thane.git"`, `"commit":"aaa"`, `"last_synced_age":"-`} {
+			if !strings.Contains(out, want) {
+				t.Errorf("context = %q\nmissing %q", out, want)
+			}
+		}
+	})
+
+	t.Run("listing and unfollow cannot cross the root binding", func(t *testing.T) {
+		t.Parallel()
+		tools, _ := newTools(t)
+		out, err := tools.HandleRepoSubscriptions(ctx, nil)
+		if err != nil {
+			t.Fatalf("HandleRepoSubscriptions: %v", err)
+		}
+		if !strings.Contains(out, "thanecode") || strings.Contains(out, "othercode") {
+			t.Fatalf("bound listing = %q", out)
+		}
+		if _, err := tools.HandleRepoUnfollow(ctx, map[string]any{"subscription_id": "sub-other"}); err == nil || !strings.Contains(err.Error(), "othercode") {
+			t.Fatalf("cross-root unfollow error = %v", err)
+		}
+		if _, err := tools.subscriptions.Get("sub-other"); err != nil {
+			t.Fatalf("cross-root subscription was removed: %v", err)
+		}
+	})
+}
