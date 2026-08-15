@@ -43,7 +43,7 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 					},
 					"local_checkout": map[string]any{
 						"type":        "string",
-						"description": "Optional absolute or working-directory-relative path to keep as a read-only mirror checkout. The follow clones into this path before returning, so the working tree exists when the call succeeds and a failed clone fails the call. The poller keeps it current afterwards; with polling disabled it is created but never refreshed. The path must be empty or an existing Thane-owned mirror checkout; non-empty directories and unmarked git checkouts are refused. The subscription poller syncs this path before waking the loop and leaves it on disk when unfollowed.",
+						"description": "Optional path to keep as a read-only mirror checkout. Absolute, working-directory-relative, or ~-prefixed. A leading ~ is expanded against the account Thane runs as, so prefer the ~ form over guessing a home directory: an absolute path under the wrong user is not an error, it is a real location nobody intended. The follow clones into this path before returning, so the working tree exists when the call succeeds and a failed clone fails the call. The poller keeps it current afterwards; with polling disabled it is created but never refreshed. The path must be empty or an existing Thane-owned mirror checkout; non-empty directories and unmarked git checkouts are refused. The subscription poller syncs this path before waking the loop and leaves it on disk when unfollowed.",
 					},
 					"wake_loop": forgeWakeLoopDefinition(),
 				},

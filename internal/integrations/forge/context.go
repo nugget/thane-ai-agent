@@ -55,6 +55,30 @@ type forgeContextJSON struct {
 	BindingError string `json:"binding_error,omitempty"`
 
 	RecentOps []recentOpJSON `json:"recent_operations,omitempty"`
+
+	// Subscriptions are the repositories already followed. Without
+	// them a tagged loop has no way to know what it is subscribed to
+	// short of calling forge_repo_subscriptions, so the reasonable
+	// opening move on every wake is "make sure I am subscribed" — which
+	// is a wasted call at best. Production did exactly that: a watcher
+	// re-followed a repository it already had, and invented a home
+	// directory for the checkout while it was at it.
+	Subscriptions []contextSubscriptionJSON `json:"subscriptions,omitempty"`
+}
+
+// contextSubscriptionJSON is the compact view of a followed repository.
+// Deliberately smaller than the forge_repo_subscriptions payload: this
+// rides in every prompt that carries the forge tag, and its job is to
+// answer "am I already watching this, and where is the checkout" — not
+// to replace the tool.
+type contextSubscriptionJSON struct {
+	SubscriptionID string `json:"subscription_id"`
+	Account        string `json:"account"`
+	Repo           string `json:"repo"`
+	Branch         string `json:"branch,omitempty"`
+	LocalCheckout  string `json:"local_checkout,omitempty"`
+	WakeLoop       string `json:"wake_loop,omitempty"`
+	LastSyncedSHA  string `json:"last_synced_sha,omitempty"`
 }
 
 // recentOpJSON is a single recent operation with delta timestamp.
@@ -102,6 +126,23 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 	}
 
 	output := forgeContextJSON{Forges: views}
+
+	// Narrowed by the same binding as the account list: a bound loop
+	// should not be shown subscriptions it could not act on.
+	for _, sub := range p.service.Subscriptions() {
+		if bound != "" && sub.Account != bound {
+			continue
+		}
+		output.Subscriptions = append(output.Subscriptions, contextSubscriptionJSON{
+			SubscriptionID: sub.ID,
+			Account:        sub.Account,
+			Repo:           sub.Repo,
+			Branch:         sub.Branch,
+			LocalCheckout:  sub.CheckoutPath,
+			WakeLoop:       sub.WakeTarget.Name,
+			LastSyncedSHA:  sub.LastSyncedSHA,
+		})
+	}
 
 	// A binding naming an account that is not configured would
 	// otherwise render an empty list, which reads as "no forge here"

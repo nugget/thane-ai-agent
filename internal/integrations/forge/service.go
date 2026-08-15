@@ -36,6 +36,7 @@ type Service struct {
 	tools           *Tools
 	contextProvider *ContextProvider
 	poller          *SubscriptionPoller
+	subscriptions   *SubscriptionStore
 }
 
 // NewService creates a complete forge runtime from configuration and shared
@@ -65,8 +66,9 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 	subscriptions := NewSubscriptionStore(deps.State, deps.Logger, cfg.MaxSubscriptions)
 
 	service := &Service{
-		manager: manager,
-		logger:  deps.Logger,
+		manager:       manager,
+		logger:        deps.Logger,
+		subscriptions: subscriptions,
 	}
 	service.tools = newTools(service, opLog, deps.Logger, subscriptions)
 	service.tools.SetLoopResolver(deps.LoopResolver)
@@ -138,6 +140,19 @@ func (s *Service) AccountsInConfigOrder() []AccountConfig {
 		out = append(out, s.manager.configs[name])
 	}
 	return out
+}
+
+// Subscriptions returns the repository subscriptions this instance
+// holds, or nil when the surface is disabled.
+func (s *Service) Subscriptions() []ProjectSubscription {
+	if s == nil || s.subscriptions == nil {
+		return nil
+	}
+	subs, err := s.subscriptions.List()
+	if err != nil {
+		return nil
+	}
+	return subs
 }
 
 // SubscriptionPollingEnabled reports whether repository polling is enabled by

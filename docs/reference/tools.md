@@ -378,7 +378,11 @@ Repository subscriptions require `wake_loop` so event handling is owned by
 an existing loop, usually one created with `thane_loop_create`
 (`operation: service`) for a specific managed document. Pass
 `local_checkout` when the loop should read a local mirror checkout; the
-poller syncs that checkout before delivering repository events. The path
+poller syncs that checkout before delivering repository events. The
+path may be absolute, working-directory-relative, or `~`-prefixed; a
+leading `~` expands against the account Thane runs as, which is the
+form to prefer — an agent that guesses at a home directory can write a
+real path under the wrong user. The path
 must be empty or an existing Thane-owned mirror checkout; non-empty
 directories and unmarked git checkouts are refused. Unfollowing leaves
 the checkout on disk. The follow performs the initial clone itself, so

@@ -352,3 +352,58 @@ func TestSubscriptionToolsHonorBinding(t *testing.T) {
 		}
 	})
 }
+
+// TestContextCarriesExistingSubscriptions covers the gap that made a
+// production loop re-follow a repository it already had. Nothing in the
+// injected forge block named its subscriptions, so the reasonable
+// opening move on every wake was to subscribe again — and while doing
+// so it guessed a home directory that does not exist on that host.
+func TestContextCarriesExistingSubscriptions(t *testing.T) {
+	t.Parallel()
+
+	tools := newMultiAccountTools()
+	store := newTestSubscriptionStore(t)
+	for _, sub := range []ProjectSubscription{
+		{ID: "sub-ro", Account: "github-readonly", Repo: "nugget/thane", Branch: "main",
+			CheckoutPath: "/srv/checkouts/thane", LastSyncedSHA: "abc123",
+			TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "sub-rw", Account: "github-primary", Repo: "nugget/secret-thing", Branch: "main",
+			TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+	} {
+		if err := store.Add(sub); err != nil {
+			t.Fatalf("seed %s: %v", sub.ID, err)
+		}
+	}
+	tools.service.subscriptions = store
+	provider := newContextProvider(tools.service, nil)
+
+	t.Run("a bound loop sees its own and can tell it is already following", func(t *testing.T) {
+		t.Parallel()
+		out, err := provider.TagContext(boundCtx("github-readonly"), agentctx.ContextRequest{})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		for _, want := range []string{"nugget/thane", "sub-ro", "/srv/checkouts/thane", "abc123"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("context = %q\nmissing %q", out, want)
+			}
+		}
+		// The binding narrows subscriptions the same way it narrows accounts.
+		if strings.Contains(out, "nugget/secret-thing") {
+			t.Errorf("context = %q\nleaks a subscription on another account", out)
+		}
+	})
+
+	t.Run("an unbound reader sees all of them", func(t *testing.T) {
+		t.Parallel()
+		out, err := provider.TagContext(context.Background(), agentctx.ContextRequest{})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		for _, want := range []string{"nugget/thane", "nugget/secret-thing"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("context = %q\nmissing %q", out, want)
+			}
+		}
+	})
+}
