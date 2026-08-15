@@ -16,7 +16,7 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 		{
 			Name: "forge_repo_follow",
 			Description: "Follow a code forge repository for new releases and/or commits, delivering structured event-source wakes to an existing loop. " +
-				"Use this after creating or identifying a thane_loop_create service loop that owns the output document/corpus strategy. Set repo_root when the loop needs source access; Thane creates and maintains the checkout without exposing a host filesystem path.",
+				"Use this after creating or identifying a thane_loop_create service loop that owns the output document/corpus strategy. Set repo_root when the loop needs source access; omit it for event-only tracking. Thane creates and maintains requested checkouts without exposing a host filesystem path.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -43,7 +43,7 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 					},
 					"repo_root": map[string]any{
 						"type":        "string",
-						"description": "Optional named root handle for a read-only source mirror, such as 'thanecode'. A loop with a repo_root binding should omit this argument to use its binding; another root is refused. Use letters, digits, '.', '_', or '-', starting with a letter or digit. Thane chooses the checkout path under its workspace, clones it before returning, keeps it current before wakes, and leaves the checkout on disk when unfollowed. Address files as '<repo_root>:path'; never supply a host path.",
+						"description": "Optional named root handle for a read-only source mirror, such as 'thanecode'. Omit it to follow events without creating a checkout. A loop with a repo_root binding may name only that root; omission remains event-only and does not synthesize a checkout request. Use letters, digits, '.', '_', or '-', starting with a letter or digit. Thane chooses the checkout path under its workspace, clones it before returning, keeps it current before wakes, and leaves the checkout on disk when unfollowed. Address files as '<repo_root>:path'; never supply a host path.",
 					},
 					"wake_loop": forgeWakeLoopDefinition(),
 				},

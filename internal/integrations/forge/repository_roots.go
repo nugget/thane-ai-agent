@@ -54,6 +54,20 @@ func (s *Service) repositoryCheckoutPath(rootName string) (string, error) {
 	return filepath.Join(absWorkspace, repositoryCheckoutDirectory, rootName), nil
 }
 
+func (s *Service) validatePersistedRepositoryCheckout(checkoutPath string) error {
+	if strings.TrimSpace(s.workspacePath) == "" {
+		return fmt.Errorf("workspace.path is not configured")
+	}
+	absWorkspace, err := filepath.Abs(paths.ExpandHome(s.workspacePath))
+	if err != nil {
+		return fmt.Errorf("resolve workspace: %w", err)
+	}
+	if !paths.ContainsPath(absWorkspace, checkoutPath) {
+		return fmt.Errorf("checkout is outside workspace.path")
+	}
+	return nil
+}
+
 func (s *Service) registerRepositoryRoot(name, checkoutPath, owner string) error {
 	if s.rootResolver == nil {
 		return fmt.Errorf("repo_root %q cannot be registered because the named-root resolver is unavailable", name)
@@ -87,23 +101,10 @@ func (s *Service) RepositoryRoot(name string) (paths.Root, bool) {
 // the durable subscription store before loop definitions hydrate. Legacy
 // subscriptions that predate repo_root receive a deterministic handle and are
 // rewritten once so subsequent boots keep the same model-facing name.
-func (s *Service) registerPersistedRepositoryRoots() (err error) {
+func (s *Service) registerPersistedRepositoryRoots() error {
 	if s == nil || s.subscriptions == nil {
 		return nil
 	}
-	type registration struct {
-		name  string
-		owner string
-	}
-	registered := make([]registration, 0)
-	defer func() {
-		if err == nil {
-			return
-		}
-		for i := len(registered) - 1; i >= 0; i-- {
-			s.unregisterRepositoryRoot(registered[i].name, registered[i].owner)
-		}
-	}()
 
 	subs, err := s.subscriptions.List()
 	if err != nil {
@@ -111,6 +112,10 @@ func (s *Service) registerPersistedRepositoryRoots() (err error) {
 	}
 	for _, sub := range subs {
 		if strings.TrimSpace(sub.CheckoutPath) == "" {
+			continue
+		}
+		if err := s.validatePersistedRepositoryCheckout(sub.CheckoutPath); err != nil {
+			s.logSkippedRepositoryRoot(sub, sub.RepositoryRoot, err)
 			continue
 		}
 		name := strings.TrimSpace(sub.RepositoryRoot)
@@ -122,18 +127,21 @@ func (s *Service) registerPersistedRepositoryRoots() (err error) {
 		}
 		name, err = repositoryRootName(name)
 		if err != nil {
-			return fmt.Errorf("restore repository root for subscription %q: %w", sub.ID, err)
+			s.logSkippedRepositoryRoot(sub, name, err)
+			continue
 		}
 		_, existed := s.rootResolver.Root(name)
 		if err := s.registerRepositoryRoot(name, sub.CheckoutPath, sub.ID); err != nil {
-			return fmt.Errorf("restore repository root %q for subscription %q: %w", name, sub.ID, err)
-		}
-		if !existed {
-			registered = append(registered, registration{name: name, owner: sub.ID})
+			s.logSkippedRepositoryRoot(sub, name, err)
+			continue
 		}
 		if migrated {
 			if err := s.subscriptions.Update(sub); err != nil {
-				return fmt.Errorf("persist migrated repository root %q for subscription %q: %w", name, sub.ID, err)
+				if !existed {
+					s.unregisterRepositoryRoot(name, sub.ID)
+				}
+				s.logSkippedRepositoryRoot(sub, name, fmt.Errorf("persist migrated root: %w", err))
+				continue
 			}
 			if s.logger != nil {
 				s.logger.Info("migrated forge checkout to named repository root",
@@ -144,6 +152,17 @@ func (s *Service) registerPersistedRepositoryRoots() (err error) {
 		}
 	}
 	return nil
+}
+
+func (s *Service) logSkippedRepositoryRoot(sub ProjectSubscription, name string, err error) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Warn("skipping unavailable persisted repository root",
+		"subscription_id", sub.ID,
+		"repo", sub.Repo,
+		"repo_root", strings.TrimSpace(name),
+		"error", err)
 }
 
 func (s *Service) legacyRepositoryRootName(sub ProjectSubscription) string {

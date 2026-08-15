@@ -113,9 +113,8 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	repositoryRoot := strings.TrimSpace(stringArg(args, "repo_root"))
 	if bound := boundRepositoryRoot(ctx); bound != "" {
 		if repositoryRoot != "" && strings.TrimSuffix(repositoryRoot, ":") != bound {
-			return "", fmt.Errorf("repository root %q is not available here: this loop is bound to root %q; retry with repo_root=%q or omit the argument", repositoryRoot, bound, bound)
+			return "", fmt.Errorf("repository root %q is not available here: this loop is bound to root %q; retry with repo_root=%q, or omit repo_root to follow events without creating a checkout", repositoryRoot, bound, bound)
 		}
-		repositoryRoot = bound
 	}
 	localCheckout := ""
 	checkoutRemoteURL := ""

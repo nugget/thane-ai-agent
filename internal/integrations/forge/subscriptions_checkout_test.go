@@ -356,7 +356,7 @@ func TestRegisterPersistedRepositoryRootsMigratesLegacyCheckouts(t *testing.T) {
 	}
 }
 
-func TestRegisterPersistedRepositoryRootsWithoutResolverReturnsError(t *testing.T) {
+func TestRegisterPersistedRepositoryRootsWithoutResolverSkipsRoot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSubscriptionStore(t)
@@ -381,8 +381,56 @@ func TestRegisterPersistedRepositoryRootsWithoutResolverReturnsError(t *testing.
 		workspacePath: workspace,
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	if err := service.registerPersistedRepositoryRoots(); err == nil || !strings.Contains(err.Error(), "named-root resolver is unavailable") {
-		t.Fatalf("registerPersistedRepositoryRoots error = %v, want unavailable-resolver error", err)
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		t.Fatalf("registerPersistedRepositoryRoots: %v", err)
+	}
+	if _, ok := service.RepositoryRoot("repo"); ok {
+		t.Fatal("repository root registered without a resolver")
+	}
+}
+
+func TestRegisterPersistedRepositoryRootsIsolatesUnavailableEntries(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	subs := []ProjectSubscription{
+		{ID: "collision", Account: "primary", Repo: "owner/collision", RepositoryRoot: "core", CheckoutPath: filepath.Join(workspace, "repos", "collision"), CheckoutRemoteURL: "https://example.invalid/owner/collision.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "outside", Account: "primary", Repo: "owner/outside", CheckoutPath: filepath.Join(outside, "repo"), CheckoutRemoteURL: "https://example.invalid/owner/outside.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "good", Account: "primary", Repo: "owner/good", RepositoryRoot: "good", CheckoutPath: filepath.Join(workspace, "repos", "good"), CheckoutRemoteURL: "https://example.invalid/owner/good.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+	}
+	for _, sub := range subs {
+		if err := store.Add(sub); err != nil {
+			t.Fatalf("seed %s: %v", sub.ID, err)
+		}
+	}
+
+	resolver := paths.New(map[string]string{"core": filepath.Join(workspace, "core")})
+	service := &Service{
+		subscriptions: store,
+		workspacePath: workspace,
+		rootResolver:  resolver,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := service.registerPersistedRepositoryRoots(); err != nil {
+		t.Fatalf("registerPersistedRepositoryRoots: %v", err)
+	}
+	if root, ok := service.RepositoryRoot("good"); !ok || root.Owner != "good" {
+		t.Fatalf("good root = %+v, ok=%v", root, ok)
+	}
+	if root, ok := resolver.Root("core"); !ok || root.Kind != paths.RootKindDocument {
+		t.Fatalf("configured core root was replaced: %+v, ok=%v", root, ok)
+	}
+	if _, ok := service.RepositoryRoot("outside"); ok {
+		t.Fatal("legacy checkout outside workspace became a repository root")
+	}
+	outsideSub, err := store.Get("outside")
+	if err != nil {
+		t.Fatalf("Get outside: %v", err)
+	}
+	if outsideSub.RepositoryRoot != "" {
+		t.Fatalf("outside repo_root = %q, want migration left unapplied", outsideSub.RepositoryRoot)
 	}
 }
 

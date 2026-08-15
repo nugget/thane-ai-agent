@@ -304,10 +304,12 @@ repository roots such as `thanecode:` before applying workspace policy. A
 forge subscription registers a repository root from its `repo_root` handle;
 the host checkout path is not model-facing. Repository roots are read-only.
 When a loop carries a `repo_root` binding, an unprefixed relative file path
-defaults to that root and any other root is refused. The `repo_git_*` tools
-have the same boundary: an omitted `root` uses the binding, while unbound
-callers must name a repository root. `file_stat` reports modification recency
-as `modified_delta`.
+defaults to that root and every other named root—including document roots—is
+refused. The `repo_git_*` tools have the same boundary: an omitted `root` uses
+the binding, while unbound callers must name a repository root. This defaulting
+does not apply to `forge_repo_follow`: omitting `repo_root` there requests
+event-only tracking because the tool creates rather than reads a root.
+`file_stat` reports modification recency as `modified_delta`.
 
 ## `shell` — host command execution
 
@@ -390,6 +392,9 @@ the initial clone, and registers the handle as read-only; a failed clone
 fails the call rather than storing a root that does not exist. The poller
 syncs the root before delivering repository events, and event metadata carries
 `repo_root` plus `last_synced_sha`. Unfollowing leaves the checkout on disk.
+Omit `repo_root` for event-only tracking. A caller carrying a `repo_root`
+binding may explicitly name only that root, but omission still remains
+event-only rather than implicitly creating another checkout.
 With `forge.subscription_check_interval` unset or zero the checkout is still
 created and is accurate as of that moment, but nothing refreshes it and the
 subscription wakes no loop; the response says so.

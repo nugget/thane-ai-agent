@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -270,6 +273,36 @@ func TestContextProviderFiltersRecentOpsByBinding(t *testing.T) {
 	})
 }
 
+func TestContextProviderPreservesAccountsWhenSubscriptionStoreFails(t *testing.T) {
+	t.Parallel()
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	state, err := opstate.NewStore(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewStore: %v", err)
+	}
+	store := NewSubscriptionStore(state, slog.New(slog.NewTextHandler(io.Discard, nil)), 10)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	tools := newMultiAccountTools()
+	tools.service.subscriptions = store
+	out, err := newContextProvider(tools.service, nil).TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	for _, want := range []string{"github-primary", "github-readonly", `"repository_roots_error"`, "Forge account tools remain available"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("context = %q\nmissing %q", out, want)
+		}
+	}
+}
+
 // TestSubscriptionToolsHonorBinding covers the two subscription tools
 // that address rows by opaque ID rather than by account. Enforcing the
 // binding only where an account argument happens to exist leaves the
@@ -370,6 +403,16 @@ func TestRepositoryRootBindingNarrowsContextAndSubscriptionTools(t *testing.T) {
 		}
 		tools.subscriptions = store
 		tools.service.subscriptions = store
+		resolver := paths.New(map[string]string{"core": "/internal/core"})
+		for _, sub := range []ProjectSubscription{
+			{ID: "sub-thane", RepositoryRoot: "thanecode", CheckoutPath: "/internal/repos/thanecode"},
+			{ID: "sub-other", RepositoryRoot: "othercode", CheckoutPath: "/internal/repos/othercode"},
+		} {
+			if err := resolver.Register(paths.Root{Name: sub.RepositoryRoot, Path: sub.CheckoutPath, Kind: paths.RootKindRepository, ReadOnly: true, Owner: sub.ID}); err != nil {
+				t.Fatalf("register %s: %v", sub.RepositoryRoot, err)
+			}
+		}
+		tools.service.rootResolver = resolver
 		opLog := NewOperationLog()
 		opLog.Record(Operation{Tool: "forge_pr_get", Account: "github-readonly", Repo: "nugget/other", Ref: "12"})
 		opLog.Record(Operation{Tool: "forge_pr_get", Account: "github-readonly", Repo: "nugget/thane", Ref: "13"})

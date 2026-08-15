@@ -124,6 +124,14 @@ root to `thanecode`. Naming another account or root is refused. Injected forge
 context narrows in both dimensions, so the loop is never shown a door the tools
 will not open.
 
+`repo_root` scopes the entire raw file-tool surface, not only repository-root
+prefixes. A bound loop cannot use `file_read`, `file_grep`, or the other file
+tools against document roots such as `core:` or `scratchpad:`; use an unbound
+loop for work that must cross from the repository into those corpora. On
+`forge_repo_follow`, omission has different semantics because that tool creates
+a root: an omitted `repo_root` means event-only tracking and does not synthesize
+a checkout request from the caller's binding.
+
 | Binding | Meaning |
 |---|---|
 | `forge_account` | Forge account name (from `forge.accounts`) that this loop's forge tools resolve to. The account must exist at hydration, or the definition refuses |

@@ -104,7 +104,9 @@ opstate. A subscription may also expose a named repository root by setting
 `repo_root` to a stable handle such as `thanecode`. Thane derives the physical
 checkout path beneath `workspace.path`, registers the root as read-only, and
 maintains the mirror before event delivery. Host filesystem paths are not part
-of the model-facing contract.
+of the model-facing contract. Omitting `repo_root` creates an event-only
+subscription, even when the caller itself carries a `repo_root` binding; a
+binding constrains an explicitly named new root but does not synthesize one.
 
 `forge_repo_follow` performs the initial clone itself, so a checkout
 exists on disk when the call returns; a clone that fails fails the

@@ -58,6 +58,7 @@ type forgeContextJSON struct {
 	BindingError string `json:"binding_error,omitempty"`
 
 	RepositoryRootBindingError string `json:"repository_root_binding_error,omitempty"`
+	RepositoryRootsError       string `json:"repository_roots_error,omitempty"`
 
 	RecentOps []recentOpJSON `json:"recent_operations,omitempty"`
 }
@@ -130,13 +131,18 @@ func (p *ContextProvider) buildContext(bound, boundRoot string) (string, error) 
 			", which is not configured at this site. No forge operation can succeed until the operator restores the account or changes the binding."
 	}
 
+	repositoryRootsAvailable := true
 	if p.service.subscriptions != nil {
 		subs, err := p.service.subscriptions.List()
 		if err != nil {
-			return "", fmt.Errorf("list repository roots for forge context: %w", err)
+			repositoryRootsAvailable = false
+			output.RepositoryRootsError = "Repository roots are temporarily unavailable because subscription state could not be read. Forge account tools remain available."
 		}
 		for _, sub := range subs {
 			if sub.RepositoryRoot == "" {
+				continue
+			}
+			if _, registered := p.service.RepositoryRoot(sub.RepositoryRoot); !registered {
 				continue
 			}
 			if bound != "" && sub.Account != bound {
@@ -164,7 +170,7 @@ func (p *ContextProvider) buildContext(bound, boundRoot string) (string, error) 
 			}
 		}
 	}
-	if boundRoot != "" && len(output.RepositoryRoots) == 0 {
+	if boundRoot != "" && repositoryRootsAvailable && len(output.RepositoryRoots) == 0 {
 		output.RepositoryRootBindingError = "This loop is bound to repository root " + boundRoot +
 			", which is not available under its current forge-account binding. No file or repository-history operation can succeed until the operator restores the subscription or changes the binding."
 	}

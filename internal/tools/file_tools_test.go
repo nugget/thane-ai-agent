@@ -1082,7 +1082,8 @@ func TestFileToolsRepositoryRootBindingDefaultsAndRefusesEscape(t *testing.T) {
 	workspace := t.TempDir()
 	rootA := filepath.Join(workspace, "repos", "thanecode")
 	rootB := filepath.Join(workspace, "repos", "othercode")
-	for _, dir := range []string{rootA, rootB} {
+	documentRoot := filepath.Join(workspace, "scratchpad")
+	for _, dir := range []string{rootA, rootB, documentRoot} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
@@ -1096,8 +1097,14 @@ func TestFileToolsRepositoryRootBindingDefaultsAndRefusesEscape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "secret.txt"), []byte("outside\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(documentRoot, "notes.md"), []byte("notes\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
-	resolver := paths.New(map[string]string{"core": filepath.Join(workspace, "core")})
+	resolver := paths.New(map[string]string{
+		"core":       filepath.Join(workspace, "core"),
+		"scratchpad": documentRoot,
+	})
 	for _, root := range []paths.Root{
 		{Name: "thanecode", Path: rootA, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub-a"},
 		{Name: "othercode", Path: rootB, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub-b"},
@@ -1119,8 +1126,13 @@ func TestFileToolsRepositoryRootBindingDefaultsAndRefusesEscape(t *testing.T) {
 	if content != "module thane\n" {
 		t.Fatalf("bound relative Read = %q", content)
 	}
-	if _, err := ft.Read(ctx, "othercode:go.mod", 0, 0); err == nil || !strings.Contains(err.Error(), "bound to root") {
+	if _, err := ft.Read(ctx, "othercode:go.mod", 0, 0); err == nil || !strings.Contains(err.Error(), "restricts all file tools") {
 		t.Fatalf("different root error = %v, want binding refusal", err)
+	}
+	if _, err := ft.Read(ctx, "scratchpad:notes.md", 0, 0); err == nil || !strings.Contains(err.Error(), `named root "scratchpad"`) || !strings.Contains(err.Error(), "restricts all file tools") {
+		t.Fatalf("document root error = %v, want explicit repo_root boundary", err)
+	} else if strings.Contains(err.Error(), `repository root "scratchpad"`) {
+		t.Fatalf("document root was mislabeled as a repository root: %v", err)
 	}
 	if _, err := ft.Read(ctx, filepath.Join(workspace, "secret.txt"), 0, 0); err == nil || !strings.Contains(err.Error(), "outside repository root") {
 		t.Fatalf("absolute escape error = %v, want root boundary", err)
@@ -1130,6 +1142,34 @@ func TestFileToolsRepositoryRootBindingDefaultsAndRefusesEscape(t *testing.T) {
 	}
 	if err := ft.Write(context.Background(), "thanecode:new.txt", "nope"); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("unbound prefixed Write error = %v, want read-only refusal", err)
+	}
+}
+
+func TestFileToolsReadOnlyRootDoesNotExpandSandbox(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "README.md"), []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	resolver := paths.New(map[string]string{"core": filepath.Join(workspace, "core")})
+	if err := resolver.Register(paths.Root{
+		Name: "legacy", Path: outside, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ft.SetResolver(resolver)
+	if _, err := ft.Read(context.Background(), "legacy:README.md", 0, 0); err == nil || !strings.Contains(err.Error(), "escapes allowed directories") {
+		t.Fatalf("outside root Read error = %v, want sandbox refusal", err)
+	}
+
+	allowed := NewFileTools(workspace, []string{outside})
+	allowed.SetResolver(resolver)
+	if got, err := allowed.Read(context.Background(), "legacy:README.md", 0, 0); err != nil || got != "outside\n" {
+		t.Fatalf("explicit read_only_dirs Read = %q, %v", got, err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -173,7 +174,7 @@ func (ft *FileTools) resolvePath(ctx context.Context, path string) (string, bool
 		resolved, root, ok := ft.resolver.ResolveRoot(path)
 		if ok {
 			if boundName != "" && root.Name != boundRoot.Name {
-				return "", false, fmt.Errorf("repository root %q is not available here: this loop is bound to root %q; retry with %s: or omit the root prefix", root.Name, boundRoot.Name, boundRoot.Name)
+				return "", false, fmt.Errorf("named root %q is not available here: this loop is bound to repository root %q, and repo_root restricts all file tools to that repository; use an unbound loop to access %q", root.Name, boundRoot.Name, root.Name)
 			}
 			path, matchedRoot, matched = resolved, root, true
 		} else if boundName != "" && !filepath.IsAbs(path) && path != "~" && !strings.HasPrefix(path, "~/") {
@@ -222,15 +223,10 @@ func (ft *FileTools) resolvePath(ctx context.Context, path string) (string, bool
 	if root, ok := ft.resolver.RootForPath(realPath); ok && root.ReadOnly {
 		readOnly = true
 	}
-	// A dynamically registered read-only root is itself an allowed read
-	// boundary, including migrated checkouts that predate the workspace-owned
-	// repos directory. The resolver is trusted Go configuration, not a path the
-	// model supplied.
-	if readOnly {
-		return realPath, true, nil
-	}
 
-	// Check workspace (read-write)
+	// A named root carries mutation policy, not filesystem admission. Keep the
+	// workspace/read_only_dirs boundary independent so registering a legacy or
+	// otherwise misplaced root cannot expand what file tools may read.
 	workspaceAbs, err := filepath.Abs(ft.workspacePath)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to resolve workspace: %w", err)
@@ -442,6 +438,7 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 	var matches []string
 	visited := 0
 	limit := ft.visitedLimit()
+	displayPath := ft.newDisplayPathFormatter()
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -475,7 +472,7 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 
 		matched, _ := filepath.Match(pattern, d.Name())
 		if matched {
-			matches = append(matches, ft.displayPath(path))
+			matches = append(matches, displayPath(path))
 			if len(matches) >= maxResults {
 				return errResultLimit
 			}
@@ -551,6 +548,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string,
 	matchCount := 0
 	visited := 0
 	limit := ft.visitedLimit()
+	displayPath := ft.newDisplayPathFormatter()
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -606,7 +604,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string,
 			return nil
 		}
 
-		displayPath := ft.displayPath(path)
+		formattedPath := displayPath(path)
 
 		scanner := bufio.NewScanner(bytes.NewReader(data))
 		// Increase buffer to handle long lines up to the file-size cap.
@@ -620,7 +618,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string,
 				if len(line) > 200 {
 					line = truncateUTF8(line, 200) + "..."
 				}
-				results = append(results, fmt.Sprintf("%s:%d:%s", displayPath, lineNum, line))
+				results = append(results, fmt.Sprintf("%s:%d:%s", formattedPath, lineNum, line))
 				matchCount++
 				if matchCount >= maxMatches {
 					return errResultLimit
@@ -660,21 +658,68 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string,
 	return strings.Join(results, "\n") + warning, nil
 }
 
-func (ft *FileTools) displayPath(path string) string {
-	if root, ok := ft.resolver.RootForPath(path); ok {
-		if rel, contained := paths.RelativePath(root.Path, path); contained {
-			if rel == "." {
-				return root.Name + ":"
-			}
-			return root.Name + ":" + filepath.ToSlash(rel)
+type displayRoot struct {
+	name string
+	path string
+}
+
+// newDisplayPathFormatter snapshots and canonicalizes the small root roster
+// once per search. Match formatting then needs only lexical filepath.Rel calls
+// instead of resolving symlinks for every root for every matched file.
+func (ft *FileTools) newDisplayPathFormatter() func(string) string {
+	roots := make([]displayRoot, 0)
+	for _, name := range ft.resolver.Prefixes() {
+		root, ok := ft.resolver.Root(name)
+		if !ok {
+			continue
 		}
+		roots = append(roots, displayRoot{name: root.Name, path: canonicalDisplayBase(root.Path)})
 	}
-	if workspaceAbs, err := filepath.Abs(ft.workspacePath); err == nil {
-		if rel, relErr := filepath.Rel(workspaceAbs, path); relErr == nil {
+	sort.Slice(roots, func(i, j int) bool {
+		if len(roots[i].path) == len(roots[j].path) {
+			return roots[i].name < roots[j].name
+		}
+		return len(roots[i].path) > len(roots[j].path)
+	})
+	workspace := canonicalDisplayBase(ft.workspacePath)
+
+	return func(path string) string {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return path
+		}
+		for _, root := range roots {
+			if rel, contained := lexicalRelativePath(root.path, absPath); contained {
+				if rel == "." {
+					return root.name + ":"
+				}
+				return root.name + ":" + filepath.ToSlash(rel)
+			}
+		}
+		if rel, contained := lexicalRelativePath(workspace, absPath); contained {
 			return filepath.ToSlash(rel)
 		}
+		return path
 	}
-	return path
+}
+
+func canonicalDisplayBase(path string) string {
+	absPath, err := filepath.Abs(paths.ExpandHome(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		return resolved
+	}
+	return absPath
+}
+
+func lexicalRelativePath(root, candidate string) (string, bool) {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 // Stat returns detailed information about one or more files or directories.
