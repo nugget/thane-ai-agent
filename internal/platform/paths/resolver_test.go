@@ -201,6 +201,46 @@ func TestResolverDynamicRepositoryRootLifecycle(t *testing.T) {
 	}
 }
 
+func TestResolverRegisterCreatedReportsInsertionOwnership(t *testing.T) {
+	t.Parallel()
+
+	r := New(map[string]string{"core": t.TempDir()})
+	root := Root{Name: "thanecode", Path: t.TempDir(), Kind: RootKindRepository, ReadOnly: true, Owner: "sub"}
+	created, err := r.RegisterCreated(root)
+	if err != nil || !created {
+		t.Fatalf("first RegisterCreated = %v, %v; want created", created, err)
+	}
+	created, err = r.RegisterCreated(root)
+	if err != nil || created {
+		t.Fatalf("second RegisterCreated = %v, %v; want existing", created, err)
+	}
+}
+
+func TestRootForPathUsesNormalizedSpecificity(t *testing.T) {
+	outer, err := os.MkdirTemp(".", ".resolver-roots-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outer) })
+	absOuter, err := filepath.Abs(outer)
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	inner := filepath.Join(absOuter, "knowledge")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	r := New(map[string]string{
+		"outer": absOuter,
+		"inner": filepath.Join(".", filepath.Base(absOuter), "knowledge"),
+	})
+	root, ok := r.RootForPath(filepath.Join(inner, "note.md"))
+	if !ok || root.Name != "inner" {
+		t.Fatalf("RootForPath = %+v, ok=%v; want normalized inner root", root, ok)
+	}
+}
+
 func TestContainsPathResolvesSymlinkedAncestorsForMissingDescendant(t *testing.T) {
 	root := t.TempDir()
 	linkParent := t.TempDir()

@@ -392,6 +392,9 @@ the initial clone, and registers the handle as read-only; a failed clone
 fails the call rather than storing a root that does not exist. The poller
 syncs the root before delivering repository events, and event metadata carries
 `repo_root` plus `last_synced_sha`. Unfollowing leaves the checkout on disk.
+Handles use lowercase ASCII letters, digits, `.`, `_`, and `-`; uppercase
+input is canonicalized to lowercase so two spellings cannot select the same
+checkout on a case-insensitive filesystem.
 Omit `repo_root` for event-only tracking. A caller carrying a `repo_root`
 binding may explicitly name only that root, but omission still remains
 event-only rather than implicitly creating another checkout.

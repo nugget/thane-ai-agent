@@ -79,16 +79,24 @@ func New(prefixes map[string]string) *Resolver {
 // Register adds a dynamic named root. Register is concurrency-safe and
 // refuses to replace an existing name with a different root.
 func (r *Resolver) Register(root Root) error {
+	_, err := r.RegisterCreated(root)
+	return err
+}
+
+// RegisterCreated adds a dynamic named root and reports whether this call
+// inserted it. An identical existing root is successful with created=false,
+// allowing callers to roll back only state they own.
+func (r *Resolver) RegisterCreated(root Root) (created bool, err error) {
 	if r == nil {
-		return fmt.Errorf("path resolver is not configured")
+		return false, fmt.Errorf("path resolver is not configured")
 	}
 	root.Name = canonicalName(root.Name)
 	root.Path = ExpandHome(strings.TrimSpace(root.Path))
 	if root.Name == "" {
-		return fmt.Errorf("root name is required")
+		return false, fmt.Errorf("root name is required")
 	}
 	if root.Path == "" {
-		return fmt.Errorf("root %q path is required", root.Name)
+		return false, fmt.Errorf("root %q path is required", root.Name)
 	}
 	if root.Kind == "" {
 		root.Kind = RootKindDocument
@@ -98,13 +106,13 @@ func (r *Resolver) Register(root Root) error {
 	defer r.mu.Unlock()
 	if existing, ok := r.roots[root.Name]; ok {
 		if existing == root {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("root %q is already registered", root.Name)
+		return false, fmt.Errorf("root %q is already registered", root.Name)
 	}
 	r.registerLocked(root)
 	r.sortLocked()
-	return nil
+	return true, nil
 }
 
 // Unregister removes a dynamic root only when owner matches the owner that
@@ -224,14 +232,25 @@ func (r *Resolver) RootForPath(path string) (Root, bool) {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	candidate, err := normalizedAbsolutePath(path)
+	if err != nil {
+		return Root{}, false
+	}
 	var best Root
 	bestLen := -1
 	for _, root := range r.roots {
-		if !ContainsPath(root.Path, path) || len(root.Path) <= bestLen {
+		normalizedRoot, err := normalizedAbsolutePath(root.Path)
+		if err != nil {
+			continue
+		}
+		if _, contained := lexicalRelative(normalizedRoot, candidate); !contained {
+			continue
+		}
+		if len(normalizedRoot) < bestLen || (len(normalizedRoot) == bestLen && best.Name != "" && root.Name >= best.Name) {
 			continue
 		}
 		best = root
-		bestLen = len(root.Path)
+		bestLen = len(normalizedRoot)
 	}
 	return best, bestLen >= 0
 }
@@ -248,17 +267,27 @@ func ContainsPath(root, candidate string) bool {
 // itself or a descendant. Both sides are normalized through existing symlink
 // ancestors so macOS aliases such as /var and /private/var compare correctly.
 func RelativePath(root, candidate string) (string, bool) {
-	rootAbs, err := filepath.Abs(ExpandHome(root))
+	rootAbs, err := normalizedAbsolutePath(root)
 	if err != nil {
 		return "", false
 	}
-	rootAbs = resolveSymlinksBestEffort(rootAbs)
-	candidateAbs, err := filepath.Abs(ExpandHome(candidate))
+	candidateAbs, err := normalizedAbsolutePath(candidate)
 	if err != nil {
 		return "", false
 	}
-	candidateAbs = resolveSymlinksBestEffort(candidateAbs)
-	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	return lexicalRelative(rootAbs, candidateAbs)
+}
+
+func normalizedAbsolutePath(path string) (string, error) {
+	absPath, err := filepath.Abs(ExpandHome(path))
+	if err != nil {
+		return "", err
+	}
+	return resolveSymlinksBestEffort(absPath), nil
+}
+
+func lexicalRelative(root, candidate string) (string, bool) {
+	rel, err := filepath.Rel(root, candidate)
 	if err != nil {
 		return "", false
 	}

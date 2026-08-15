@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
@@ -203,6 +204,34 @@ func TestFollowDoesNotPersistWhenCheckoutFails(t *testing.T) {
 	}
 	if _, ok := tools.service.RepositoryRoot("thanecode"); ok {
 		t.Error("failed checkout left its repository root registered")
+	}
+}
+
+func TestFollowRollbackKeepsIdenticalRootCreatedByConcurrentWinner(t *testing.T) {
+	t.Parallel()
+
+	tools := newPollingTestTools(t, true)
+	wakeTarget := messages.LoopWakeTarget{Name: "repo_curator"}
+	subscriptionID := SubscriptionID("test", "owner/repo", "main", wakeTarget)
+
+	tools.checkoutSync = func(_ context.Context, sub ProjectSubscription) (string, error) {
+		if err := tools.subscriptions.Add(sub); err != nil {
+			t.Fatalf("persist concurrent winner: %v", err)
+		}
+		return "deadbeef", nil
+	}
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":      "repo",
+		"branch":    "main",
+		"repo_root": "thanecode",
+		"wake_loop": map[string]any{"name": "repo_curator"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("losing follow error = %v, want duplicate", err)
+	}
+	root, ok := tools.service.RepositoryRoot("thanecode")
+	if !ok || root.Owner != subscriptionID {
+		t.Fatalf("concurrent winner root was removed: %+v, ok=%v", root, ok)
 	}
 }
 

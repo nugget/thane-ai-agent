@@ -43,7 +43,7 @@ func (t *Tools) subscriptionToolDefinitions() []*toolpkg.Tool {
 					},
 					"repo_root": map[string]any{
 						"type":        "string",
-						"description": "Optional named root handle for a read-only source mirror, such as 'thanecode'. Omit it to follow events without creating a checkout. A loop with a repo_root binding may name only that root; omission remains event-only and does not synthesize a checkout request. Use letters, digits, '.', '_', or '-', starting with a letter or digit. Thane chooses the checkout path under its workspace, clones it before returning, keeps it current before wakes, and leaves the checkout on disk when unfollowed. Address files as '<repo_root>:path'; never supply a host path.",
+						"description": "Optional named root handle for a read-only source mirror, such as 'thanecode'. Omit it to follow events without creating a checkout. A loop with a repo_root binding may name only that root; omission remains event-only and does not synthesize a checkout request. Use lowercase ASCII letters, digits, '.', '_', or '-', starting with a letter or digit; Thane canonicalizes uppercase input to lowercase so handles remain portable across filesystems. Thane chooses the checkout path under its workspace, clones it before returning, keeps it current before wakes, and leaves the checkout on disk when unfollowed. Address files as '<repo_root>:path'; never supply a host path.",
 					},
 					"wake_loop": forgeWakeLoopDefinition(),
 				},

@@ -54,7 +54,7 @@ func TestHandleRepoFollowRegistersNamedRoot(t *testing.T) {
 		"repo":           "repo",
 		"track_releases": false,
 		"track_commits":  true,
-		"repo_root":      "thanecode",
+		"repo_root":      "ThaneCode",
 		"wake_loop":      map[string]any{"name": "repo_curator"},
 	})
 	if err != nil {
@@ -398,7 +398,7 @@ func TestRegisterPersistedRepositoryRootsIsolatesUnavailableEntries(t *testing.T
 	subs := []ProjectSubscription{
 		{ID: "collision", Account: "primary", Repo: "owner/collision", RepositoryRoot: "core", CheckoutPath: filepath.Join(workspace, "repos", "collision"), CheckoutRemoteURL: "https://example.invalid/owner/collision.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
 		{ID: "outside", Account: "primary", Repo: "owner/outside", CheckoutPath: filepath.Join(outside, "repo"), CheckoutRemoteURL: "https://example.invalid/owner/outside.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
-		{ID: "good", Account: "primary", Repo: "owner/good", RepositoryRoot: "good", CheckoutPath: filepath.Join(workspace, "repos", "good"), CheckoutRemoteURL: "https://example.invalid/owner/good.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
+		{ID: "good", Account: "primary", Repo: "owner/good", RepositoryRoot: "GOOD", CheckoutPath: filepath.Join(workspace, "repos", "good"), CheckoutRemoteURL: "https://example.invalid/owner/good.git", Branch: "main", TrackCommits: true, WakeTarget: messages.LoopWakeTarget{Name: "watcher"}, CreatedAt: time.Now()},
 	}
 	for _, sub := range subs {
 		if err := store.Add(sub); err != nil {
@@ -418,6 +418,13 @@ func TestRegisterPersistedRepositoryRootsIsolatesUnavailableEntries(t *testing.T
 	}
 	if root, ok := service.RepositoryRoot("good"); !ok || root.Owner != "good" {
 		t.Fatalf("good root = %+v, ok=%v", root, ok)
+	}
+	goodSub, err := store.Get("good")
+	if err != nil {
+		t.Fatalf("Get good: %v", err)
+	}
+	if goodSub.RepositoryRoot != "good" {
+		t.Fatalf("canonical repo_root = %q, want good", goodSub.RepositoryRoot)
 	}
 	if root, ok := resolver.Root("core"); !ok || root.Kind != paths.RootKindDocument {
 		t.Fatalf("configured core root was replaced: %+v, ok=%v", root, ok)

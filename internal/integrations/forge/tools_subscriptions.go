@@ -111,8 +111,14 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		return "", fmt.Errorf("local_checkout is no longer accepted because models cannot safely choose host paths; set repo_root to a named handle and Thane will choose the checkout location")
 	}
 	repositoryRoot := strings.TrimSpace(stringArg(args, "repo_root"))
+	if repositoryRoot != "" {
+		repositoryRoot, err = repositoryRootName(repositoryRoot)
+		if err != nil {
+			return "", err
+		}
+	}
 	if bound := boundRepositoryRoot(ctx); bound != "" {
-		if repositoryRoot != "" && strings.TrimSuffix(repositoryRoot, ":") != bound {
+		if repositoryRoot != "" && repositoryRoot != bound {
 			return "", fmt.Errorf("repository root %q is not available here: this loop is bound to root %q; retry with repo_root=%q, or omit repo_root to follow events without creating a checkout", repositoryRoot, bound, bound)
 		}
 	}
@@ -120,10 +126,6 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	checkoutRemoteURL := ""
 	subscriptionID := SubscriptionID(acct, repo, branch, wakeTarget)
 	if repositoryRoot != "" {
-		repositoryRoot, err = repositoryRootName(repositoryRoot)
-		if err != nil {
-			return "", err
-		}
 		if branch == "" {
 			return "", fmt.Errorf("repo_root requires branch because repository %s has no default branch; set branch", repo)
 		}
@@ -219,17 +221,29 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	if err := t.subscriptions.CheckAdmission(sub); err != nil {
 		return "", err
 	}
-	rootRegistered := false
+	rootCreated := false
 	if sub.RepositoryRoot != "" {
-		if err := t.service.registerRepositoryRoot(sub.RepositoryRoot, sub.CheckoutPath, sub.ID); err != nil {
+		rootCreated, err = t.service.registerRepositoryRoot(sub.RepositoryRoot, sub.CheckoutPath, sub.ID)
+		if err != nil {
 			return "", err
 		}
-		rootRegistered = true
 	}
 	rollbackRoot := func() {
-		if rootRegistered {
-			t.service.unregisterRepositoryRoot(sub.RepositoryRoot, sub.ID)
+		if !rootCreated {
+			return
 		}
+		// Another identical follow can persist the subscription after this
+		// call creates the shared root but before this call reaches Add. Keep
+		// that winner's now-durable root when this call loses the final race.
+		persisted, getErr := t.subscriptions.Get(sub.ID)
+		if getErr == nil &&
+			persisted.RepositoryRoot == sub.RepositoryRoot &&
+			persisted.CheckoutPath == sub.CheckoutPath {
+			rootCreated = false
+			return
+		}
+		t.service.unregisterRepositoryRoot(sub.RepositoryRoot, sub.ID)
+		rootCreated = false
 	}
 
 	if strings.TrimSpace(sub.CheckoutPath) != "" {
@@ -250,7 +264,7 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		rollbackRoot()
 		return "", err
 	}
-	rootRegistered = false
+	rootCreated = false
 
 	t.recordOp("forge_repo_follow", acct, repo, sub.ID)
 	// The agent gets this in its response; the operator gets it here.

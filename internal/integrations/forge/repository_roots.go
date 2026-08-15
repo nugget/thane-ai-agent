@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
@@ -27,18 +26,19 @@ func hideRepositoryCheckoutPath(err error, checkoutPath string) error {
 // root handle. The conservative alphabet keeps the root unambiguous in the
 // existing name:path grammar on every supported platform.
 func repositoryRootName(name string) (string, error) {
-	name = strings.TrimSuffix(strings.TrimSpace(name), ":")
+	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), ":"))
 	if name == "" {
 		return "", fmt.Errorf("repo_root is required")
 	}
 	if len(name) > 64 {
 		return "", fmt.Errorf("repo_root %q is too long; use at most 64 characters", name)
 	}
-	for i, r := range name {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || (i > 0 && (r == '.' || r == '_' || r == '-')) {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (i > 0 && (c == '.' || c == '_' || c == '-')) {
 			continue
 		}
-		return "", fmt.Errorf("repo_root %q is invalid; use letters, digits, '.', '_', or '-', starting with a letter or digit", name)
+		return "", fmt.Errorf("repo_root %q is invalid; use lowercase ASCII letters, digits, '.', '_', or '-', starting with a letter or digit", name)
 	}
 	return name, nil
 }
@@ -68,11 +68,11 @@ func (s *Service) validatePersistedRepositoryCheckout(checkoutPath string) error
 	return nil
 }
 
-func (s *Service) registerRepositoryRoot(name, checkoutPath, owner string) error {
+func (s *Service) registerRepositoryRoot(name, checkoutPath, owner string) (bool, error) {
 	if s.rootResolver == nil {
-		return fmt.Errorf("repo_root %q cannot be registered because the named-root resolver is unavailable", name)
+		return false, fmt.Errorf("repo_root %q cannot be registered because the named-root resolver is unavailable", name)
 	}
-	return s.rootResolver.Register(paths.Root{
+	return s.rootResolver.RegisterCreated(paths.Root{
 		Name:     name,
 		Path:     checkoutPath,
 		Kind:     paths.RootKindRepository,
@@ -122,22 +122,26 @@ func (s *Service) registerPersistedRepositoryRoots() error {
 		migrated := false
 		if name == "" {
 			name = s.legacyRepositoryRootName(sub)
-			sub.RepositoryRoot = name
 			migrated = true
 		}
+		storedName := strings.TrimSuffix(name, ":")
 		name, err = repositoryRootName(name)
 		if err != nil {
 			s.logSkippedRepositoryRoot(sub, name, err)
 			continue
 		}
-		_, existed := s.rootResolver.Root(name)
-		if err := s.registerRepositoryRoot(name, sub.CheckoutPath, sub.ID); err != nil {
+		if name != storedName {
+			migrated = true
+		}
+		sub.RepositoryRoot = name
+		created, err := s.registerRepositoryRoot(name, sub.CheckoutPath, sub.ID)
+		if err != nil {
 			s.logSkippedRepositoryRoot(sub, name, err)
 			continue
 		}
 		if migrated {
 			if err := s.subscriptions.Update(sub); err != nil {
-				if !existed {
+				if created {
 					s.unregisterRepositoryRoot(name, sub.ID)
 				}
 				s.logSkippedRepositoryRoot(sub, name, fmt.Errorf("persist migrated root: %w", err))
@@ -198,7 +202,7 @@ func sanitizeLegacyRootComponent(value string) string {
 	lastDash := false
 	for _, r := range value {
 		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			b.WriteRune(r)
 			lastDash = false
 		case r == '.' || r == '_' || r == '-':
