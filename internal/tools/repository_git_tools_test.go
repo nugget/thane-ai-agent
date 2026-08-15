@@ -58,6 +58,9 @@ func TestRepositoryGitToolsReadHistoryWithinBoundRoot(t *testing.T) {
 	if logResult.Commits[0].Subject != "update value" || logResult.Commits[0].Age == "" {
 		t.Fatalf("log commit = %+v", logResult.Commits[0])
 	}
+	if strings.Contains(logRaw, "authored_at") {
+		t.Fatalf("log result exposes an absolute authored timestamp: %s", logRaw)
+	}
 
 	diffRaw, err := ft.RepositoryGitDiff(ctx, "", first, second, "main.go", "patch")
 	if err != nil {
@@ -92,6 +95,9 @@ func TestRepositoryGitToolsReadHistoryWithinBoundRoot(t *testing.T) {
 	}
 	if showResult.Revision != second || !strings.Contains(showResult.Body, "update value") {
 		t.Fatalf("show result = %+v", showResult)
+	}
+	if !strings.Contains(showResult.Body, "Authored: -") || strings.Contains(showResult.Body, "AuthorDate:") || strings.Contains(showResult.Body, "CommitDate:") {
+		t.Fatalf("show result does not use delta-only commit time: %+v", showResult)
 	}
 
 	blameRaw, err := ft.RepositoryGitBlame(ctx, "", second, "main.go", 3, 3)

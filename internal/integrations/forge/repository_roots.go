@@ -97,6 +97,41 @@ func (s *Service) RepositoryRoot(name string) (paths.Root, bool) {
 	return root, ok && root.Kind == paths.RootKindRepository
 }
 
+// ValidateRepositoryRootBinding verifies that name is a canonical live
+// repository root and, when account is non-empty, that the subscription which
+// owns the root uses that forge account. Loop hydration uses this to keep its
+// account, context, file, and repository-history boundaries aligned.
+func (s *Service) ValidateRepositoryRootBinding(name, account string) error {
+	canonical, err := repositoryRootName(name)
+	if err != nil {
+		return err
+	}
+	if name != canonical {
+		return fmt.Errorf("repo_root %q is not canonical; use %q", name, canonical)
+	}
+	root, ok := s.RepositoryRoot(canonical)
+	if !ok {
+		return fmt.Errorf("no repository subscription exposes named root %q", canonical)
+	}
+	if account == "" {
+		return nil
+	}
+	if s.subscriptions == nil {
+		return fmt.Errorf("repository subscription state is unavailable")
+	}
+	sub, err := s.subscriptions.Get(root.Owner)
+	if err != nil {
+		return fmt.Errorf("load subscription owning repo_root %q: %w", canonical, err)
+	}
+	if sub.RepositoryRoot != root.Name || sub.CheckoutPath != root.Path {
+		return fmt.Errorf("repo_root %q is not backed by its owning repository subscription", canonical)
+	}
+	if sub.Account != account {
+		return fmt.Errorf("repo_root %q belongs to forge account %q, not bound account %q", canonical, sub.Account, account)
+	}
+	return nil
+}
+
 // registerPersistedRepositoryRoots restores the in-memory root registry from
 // the durable subscription store before loop definitions hydrate. Legacy
 // subscriptions that predate repo_root receive a deterministic handle and are

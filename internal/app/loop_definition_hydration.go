@@ -294,9 +294,9 @@ func (a *App) validateLoopBindings(spec looppkg.Spec) error {
 			return fmt.Errorf("loop %q binds %s=%q but no forge repository roots are configured at this site",
 				spec.Name, looppkg.BindingRepositoryRoot, rootName)
 		}
-		if _, exists := a.forgeService.RepositoryRoot(rootName); !exists {
-			return fmt.Errorf("loop %q binds %s=%q but no repository subscription exposes that named root",
-				spec.Name, looppkg.BindingRepositoryRoot, rootName)
+		if err := a.forgeService.ValidateRepositoryRootBinding(rootName, spec.Bindings[looppkg.BindingForgeAccount]); err != nil {
+			return fmt.Errorf("loop %q binds %s=%q: %w",
+				spec.Name, looppkg.BindingRepositoryRoot, rootName, err)
 		}
 	}
 	return nil

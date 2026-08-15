@@ -460,3 +460,58 @@ func TestRepositoryRootBindingNarrowsContextAndSubscriptionTools(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateRepositoryRootBindingKeepsAccountAndRootAligned(t *testing.T) {
+	t.Parallel()
+
+	tools := newMultiAccountTools()
+	store := newTestSubscriptionStore(t)
+	sub := ProjectSubscription{
+		ID:             "sub-thane",
+		Account:        "github-readonly",
+		Repo:           "nugget/thane",
+		RepositoryRoot: "thanecode",
+		CheckoutPath:   "/internal/repos/thanecode",
+		TrackCommits:   true,
+		WakeTarget:     messages.LoopWakeTarget{Name: "watcher"},
+		CreatedAt:      time.Now(),
+	}
+	if err := store.Add(sub); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+	resolver := paths.New(map[string]string{"core": "/internal/core"})
+	if err := resolver.Register(paths.Root{
+		Name: sub.RepositoryRoot, Path: sub.CheckoutPath, Kind: paths.RootKindRepository, ReadOnly: true, Owner: sub.ID,
+	}); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+	tools.service.subscriptions = store
+	tools.service.rootResolver = resolver
+
+	tests := []struct {
+		name    string
+		root    string
+		account string
+		wantErr string
+	}{
+		{name: "matching account and root", root: "thanecode", account: "github-readonly"},
+		{name: "root without account binding", root: "thanecode"},
+		{name: "trailing colon is not canonical", root: "thanecode:", account: "github-readonly", wantErr: `use "thanecode"`},
+		{name: "uppercase is not canonical", root: "ThaneCode", account: "github-readonly", wantErr: `use "thanecode"`},
+		{name: "crossed account and root", root: "thanecode", account: "github-primary", wantErr: `belongs to forge account "github-readonly"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tools.service.ValidateRepositoryRootBinding(tt.root, tt.account)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateRepositoryRootBinding: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateRepositoryRootBinding error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}

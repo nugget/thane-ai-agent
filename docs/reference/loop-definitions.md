@@ -113,6 +113,7 @@ write token instead.
 ```yaml
 tags:
     - forge
+    - files
 bindings:
     forge_account: github-readonly
     repo_root: thanecode
@@ -122,7 +123,9 @@ With those bindings, forge tools resolve an empty `account` argument to
 `github-readonly`, while file and repository-history tools resolve an omitted
 root to `thanecode`. Naming another account or root is refused. Injected forge
 context narrows in both dimensions, so the loop is never shown a door the tools
-will not open.
+will not open. When both bindings are present, the named repository root must
+belong to a subscription using that forge account; hydration refuses a crossed
+pair rather than leaving the tool and context boundaries in disagreement.
 
 `repo_root` scopes the entire raw file-tool surface, not only repository-root
 prefixes. A bound loop cannot use `file_read`, `file_grep`, or the other file

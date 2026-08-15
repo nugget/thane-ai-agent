@@ -28,7 +28,6 @@ type repositoryGitCommit struct {
 	ShortSHA    string `json:"short_sha"`
 	AuthorName  string `json:"author_name,omitempty"`
 	AuthorEmail string `json:"author_email,omitempty"`
-	AuthoredAt  string `json:"authored_at,omitempty"`
 	Age         string `json:"age,omitempty"`
 	Subject     string `json:"subject,omitempty"`
 }
@@ -120,7 +119,7 @@ func (ft *FileTools) RepositoryGitLog(ctx context.Context, requestedRoot, from, 
 		if len(parts) != 5 {
 			continue
 		}
-		commit := repositoryGitCommit{SHA: parts[0], ShortSHA: shortSHA(parts[0]), AuthorName: parts[1], AuthorEmail: parts[2], AuthoredAt: parts[3], Subject: parts[4]}
+		commit := repositoryGitCommit{SHA: parts[0], ShortSHA: shortSHA(parts[0]), AuthorName: parts[1], AuthorEmail: parts[2], Subject: parts[4]}
 		if authored, parseErr := time.Parse(time.RFC3339, parts[3]); parseErr == nil {
 			commit.Age = promptfmt.FormatDeltaOnly(authored, now)
 		}
@@ -186,7 +185,11 @@ func (ft *FileTools) RepositoryGitShow(ctx context.Context, requestedRoot, revis
 	if err != nil {
 		return "", err
 	}
-	args := []string{"show", "--no-ext-diff", "--no-textconv", "--no-color", "--format=fuller", sha, "--"}
+	showFormat, err := repositoryGitShowFormat(ctx, root.Path, sha, time.Now())
+	if err != nil {
+		return "", err
+	}
+	args := []string{"show", "--no-ext-diff", "--no-textconv", "--no-color", "--format=" + showFormat, sha, "--"}
 	if path != "" {
 		args = append(args, path)
 	}
@@ -197,7 +200,7 @@ func (ft *FileTools) RepositoryGitShow(ctx context.Context, requestedRoot, revis
 	note := ""
 	format := "patch"
 	if truncated {
-		args = []string{"show", "--no-ext-diff", "--no-textconv", "--no-color", "--format=fuller", "--stat", sha, "--"}
+		args = []string{"show", "--no-ext-diff", "--no-textconv", "--no-color", "--format=" + showFormat, "--stat", sha, "--"}
 		if path != "" {
 			args = append(args, path)
 		}
@@ -289,6 +292,22 @@ func resolveRepositoryRevision(ctx context.Context, repoPath, selector string) (
 		return "", fmt.Errorf("revision %q resolved to an invalid commit id", selector)
 	}
 	return sha, nil
+}
+
+func repositoryGitShowFormat(ctx context.Context, repoPath, sha string, now time.Time) (string, error) {
+	raw, truncated, err := runRepositoryGit(ctx, repoPath, 64, "show", "-s", "--format=%at", sha, "--")
+	if err != nil {
+		return "", fmt.Errorf("read commit authored time: %w", err)
+	}
+	if truncated {
+		return "", fmt.Errorf("read commit authored time: output exceeded limit")
+	}
+	seconds, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("read commit authored time: %w", err)
+	}
+	age := promptfmt.FormatDeltaOnly(time.Unix(seconds, 0), now)
+	return "commit %H%nAuthor: %an <%ae>%nAuthored: " + age + "%n%n    %s", nil
 }
 
 func repositoryRelativePath(path string, required bool) (string, error) {
