@@ -985,13 +985,44 @@ compaction:
 # (optional) Forge configures code forge integrations (GitHub, Gitea). When
 # forge:
 #   accounts:
-#     - name: github
+#     - # Name is a short identifier (e.g., "github-primary").
+#       name: github
+#       Provider selects the forge backend: "github" or "gitea".
 #       provider: github
+#       Token is the API authentication token.
 #       token: ghp_your-token
+#       Owner is the default repository owner for unqualified repo references.
 #       owner: your-username
-#       username: ""
+#       URL is the API base URL. Required for gitea. Optional for GitHub
+#       (defaults to https://api.github.com).
 #       url: https://api.github.com
+#       Description is an operator-authored note about what this account is for,
+#       surfaced to the model alongside the account name. It lets the operator
+#       explain an account's intended boundary before the model discovers it by
+#       being refused; for example, "read-only observation token; writes are
+#       denied" avoids a wasted turn and a misread failure.
+#       description: 'Full-access account: issues, pull requests, reviews, merges.'
+#     - # Name is a short identifier (e.g., "github-primary").
+#       name: github-readonly
+#       Provider selects the forge backend: "github" or "gitea".
+#       provider: github
+#       Token is the API authentication token.
+#       token: ghp_your-read-only-token
+#       Owner is the default repository owner for unqualified repo references.
+#       owner: your-username
+#       URL is the API base URL. Required for gitea. Optional for GitHub
+#       (defaults to https://api.github.com).
+#       url: https://api.github.com
+#       Description is an operator-authored note about what this account is for,
+#       surfaced to the model alongside the account name. It lets the operator
+#       explain an account's intended boundary before the model discovers it by
+#       being refused; for example, "read-only observation token; writes are
+#       denied" avoids a wasted turn and a misread failure.
+#       description: Observation only — this token's policy denies writes. Reads succeed; issue and review calls are refused.
+#   SubscriptionCheckInterval is how often (in seconds) to poll followed
+#   repositories for releases and commits. Zero disables polling.
 #   subscription_check_interval: 3600
+#   MaxSubscriptions limits runtime-managed repository event subscriptions.
 #   max_subscriptions: 50
 #
 # (optional) Email configures native IMAP email access. When configured, Thane
@@ -1334,6 +1365,7 @@ archivist:
 #       tags:
 #         - ha
 #       exclude_tools: []
+#       bindings: {}
 #       sleep_min: 2m
 #       sleep_max: 10m
 #       sleep_default: 5m

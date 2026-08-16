@@ -34,11 +34,12 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
 			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. Better than the placeholder skeleton: output.initial authors the first publish at create time from the survey you just did (same arguments as the publish tool; see the parameter). A document that already exists is preserved rather than re-scaffolded or seeded (document_state / working_notes_state in the result report which happened). Document-owning loops carry the read-side doc tools regardless of tags (doc_read — which returns this loop's own outputs whole, even when large — plus doc_outline/doc_section for paging other large documents, and doc_history/doc_diff/doc_at for revision history). Omit output for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
+			"bindings restricts which named shared resources the loop may reach (forge_account and repo_root); a caller already inside a binding carries it into the new loop and cannot override it or place the loop under an incompatible container. " +
 			"prompt_mode picks the system-prompt shape: set \"task\" for a mechanical maintainer/watcher/poller (fetch a source, check a state, update a document) — the compact worker prompt drops the reflective identity stack, the largest single prompt cost in a background loop; leave it unset for a loop that reflects on the agent or composes messages in its voice. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, facets when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
 		ContentResolveExempt: []string{
-			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
+			"name", "intent", "operation", "parent_name", "output", "entities", "tags", "bindings",
 			"instructions", "sleep_min", "sleep_max", "sleep_default", "jitter",
 			"quality_floor", "exclude_tools", "metadata", "replace", "dry_run",
 			"prompt_mode",
@@ -88,6 +89,10 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 	parentName := toolargs.TrimmedString(args, "parent_name")
 	replace, _ := args["replace"].(bool)
 	tags := parseLoopCreateTags(args)
+	bindings, err := parseLoopCreateBindings(args)
+	if err != nil {
+		return "", err
+	}
 
 	existing, found, err := ensureDefinitionMutable(deps.Registry.Snapshot(), name)
 	if err != nil {
@@ -112,7 +117,12 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		Operation:  looppkg.OperationContainer,
 		Intent:     intent,
 		Tags:       tags,
+		Bindings:   bindings,
 		ParentName: parentName,
+	}
+	spec, err = r.applyCallerBindingsToAuthoredSpec(ctx, spec)
+	if err != nil {
+		return "", err
 	}
 	if err := spec.ValidatePersistable(); err != nil {
 		return "", fmt.Errorf("derived container spec invalid: %w", err)
@@ -198,7 +208,7 @@ type executingLoopPlan struct {
 // planExecutingLoop derives the plan without writing anything. It reads
 // registry state — whether this name is taken, whether the named parent
 // exists — because those decide whether a plan is possible at all.
-func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, op looppkg.Operation) (*executingLoopPlan, error) {
+func (r *Registry) planExecutingLoop(ctx context.Context, args map[string]any, name, intent string, op looppkg.Operation) (*executingLoopPlan, error) {
 	deps := r.loopIntentDeps
 	if op == looppkg.OperationEventDriven {
 		if err := rejectArgsForOperation(args, op, "sleep_min", "sleep_max", "sleep_default", "jitter"); err != nil {
@@ -228,6 +238,10 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		return nil, err
 	}
 	metadata, err := parseLoopCreateMetadata(args)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := parseLoopCreateBindings(args)
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +336,7 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 		Outputs:       outputs,
 		Subscriptions: curateEntitiesToSubscriptions(entities, now),
 		ExcludeTools:  excludeTools,
+		Bindings:      bindings,
 		ParentName:    parentName,
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
@@ -329,6 +344,10 @@ func (r *Registry) planExecutingLoop(args map[string]any, name, intent string, o
 			Instructions:     instructions,
 		},
 		Metadata: metadata,
+	}
+	spec, err = r.applyCallerBindingsToAuthoredSpec(ctx, spec)
+	if err != nil {
+		return nil, err
 	}
 	if op == looppkg.OperationService {
 		jitter := envelope.jitter
@@ -455,7 +474,7 @@ func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.Fac
 
 func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any, name, intent string, op looppkg.Operation) (string, error) {
 	deps := r.loopIntentDeps
-	plan, err := r.planExecutingLoop(args, name, intent, op)
+	plan, err := r.planExecutingLoop(ctx, args, name, intent, op)
 	if err != nil {
 		return "", err
 	}
@@ -733,13 +752,21 @@ func parseLoopCreateQualityFloor(args map[string]any) (int, error) {
 }
 
 func parseLoopCreateMetadata(args map[string]any) (map[string]string, error) {
-	raw, present := args["metadata"]
+	return parseLoopCreateStringMap(args, "metadata")
+}
+
+func parseLoopCreateBindings(args map[string]any) (map[string]string, error) {
+	return parseLoopCreateStringMap(args, "bindings")
+}
+
+func parseLoopCreateStringMap(args map[string]any, key string) (map[string]string, error) {
+	raw, present := args[key]
 	if !present || raw == nil {
 		return nil, nil
 	}
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("metadata must be an object with string values")
+		return nil, fmt.Errorf("%s must be an object with string values", key)
 	}
 	if len(m) == 0 {
 		return nil, nil
@@ -748,7 +775,7 @@ func parseLoopCreateMetadata(args map[string]any) (map[string]string, error) {
 	for k, v := range m {
 		s, ok := v.(string)
 		if !ok {
-			return nil, fmt.Errorf("metadata[%q] must be a string, got %T", k, v)
+			return nil, fmt.Errorf("%s[%q] must be a string, got %T", key, k, v)
 		}
 		out[k] = s
 	}
@@ -929,6 +956,11 @@ func thaneLoopCreateSchema() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Optional capability tags. Each tag binds two things into the loop: its tool surface, AND every KB doc whose frontmatter carries that tag (injected into the loop's context each wake). For containers, every descendant inherits them; for executing loops, they scope the tool surface and pull in tagged knowledge. A knowledge-only tag (no tools, just docs) works too and needs no catalog entry. Omit to use only core tags.",
+			},
+			"bindings": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description":          "Optional resource instances this loop is restricted to. Recognized keys: forge_account names the forge account every forge tool resolves to; repo_root names the repository root every file and repository-history tool resolves to. Omitted selectors default to their binding and other instances are refused. Bindings inherit from containers with outermost-ancestor-wins semantics. A caller already inside a binding cannot omit or override it, and cannot create the loop under a container that resolves that binding differently.",
 			},
 			"instructions": map[string]any{
 				"type":        "string",

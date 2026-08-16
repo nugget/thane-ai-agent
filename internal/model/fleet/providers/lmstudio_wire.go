@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
@@ -31,6 +32,12 @@ type lmStudioLoadRequest struct {
 	Model          string `json:"model"`
 	ContextLength  int    `json:"context_length,omitempty"`
 	EchoLoadConfig bool   `json:"echo_load_config,omitempty"`
+}
+
+// lmStudioUnloadRequest releases one loaded instance. LM Studio identifies
+// the instance rather than the model, since a model may have several.
+type lmStudioUnloadRequest struct {
+	InstanceID string `json:"instance_id"`
 }
 
 type LMStudioLoadResponse struct {
@@ -89,6 +96,44 @@ type lmStudioChatResponse struct {
 	Model   string               `json:"model,omitempty"`
 	Choices []lmStudioChatChoice `json:"choices"`
 	Usage   *lmStudioUsage       `json:"usage,omitempty"`
+}
+
+// lmStudioStreamErrorText returns the human-readable failure LM Studio
+// encoded in an SSE data frame, or "" when the frame is an ordinary chunk.
+//
+// A streaming request that LM Studio cannot serve does not fail the way its
+// non-streaming sibling does. The non-streaming call answers 4xx with the
+// reason in the body; the streaming call answers HTTP 200, opens the stream,
+// and delivers the reason as an `event: error` frame. Both shapes of the
+// `error` field are accepted: a bare string (as the 4xx body uses) and an
+// object carrying `message` (as the stream frame uses).
+func lmStudioStreamErrorText(data string) string {
+	var probe struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(data), &probe); err != nil {
+		return ""
+	}
+	if len(probe.Error) == 0 || string(probe.Error) == "null" {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(probe.Error, &text); err == nil && strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text)
+	}
+
+	var object struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(probe.Error, &object); err == nil && strings.TrimSpace(object.Message) != "" {
+		return strings.TrimSpace(object.Message)
+	}
+	if strings.TrimSpace(probe.Message) != "" {
+		return strings.TrimSpace(probe.Message)
+	}
+	return "LM Studio reported an unspecified stream error"
 }
 
 type lmStudioChatChoice struct {
@@ -285,12 +330,31 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolC
 		if err != nil {
 			return nil, err
 		}
-		call := llm.ToolCall{ID: acc.ID}
+		callID, err := ensureLMStudioToolCallID(acc.ID)
+		if err != nil {
+			return nil, err
+		}
+		call := llm.ToolCall{ID: callID}
 		call.Function.Name = acc.Name
 		call.Function.Arguments = args
 		out = append(out, call)
 	}
 	return out, nil
+}
+
+// ensureLMStudioToolCallID repairs a runner omission before the assistant
+// message enters iteration history. LM Studio rejects that same historical
+// tool call on the next request when its id is empty, even though its Qwen
+// parser can produce tool calls without assigning one.
+func ensureLMStudioToolCallID(id string) (string, error) {
+	if strings.TrimSpace(id) != "" {
+		return id, nil
+	}
+	generated, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("generate fallback LM Studio tool call ID: %w", err)
+	}
+	return "call_" + generated.String(), nil
 }
 
 func decodeLMStudioToolCallsFromSlice(in []lmStudioToolCallDelta) ([]llm.ToolCall, error) {
@@ -352,6 +416,17 @@ func lmStudioContentText(v any) string {
 	}
 }
 
-func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) {
+func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) error {
+	if resp == nil {
+		return nil
+	}
 	llm.ApplyTextToolCallFallback(resp, validToolNames, llm.DefaultToolCallTextProfile())
+	for i := range resp.Message.ToolCalls {
+		id, err := ensureLMStudioToolCallID(resp.Message.ToolCalls[i].ID)
+		if err != nil {
+			return err
+		}
+		resp.Message.ToolCalls[i].ID = id
+	}
+	return nil
 }

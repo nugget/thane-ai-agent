@@ -134,8 +134,13 @@ type LoopView struct {
 	TotalInputTokens  *int `json:"total_input_tokens"`
 	TotalOutputTokens *int `json:"total_output_tokens"`
 	LastInputTokens   *int `json:"last_input_tokens"`
-	ContextWindow     *int `json:"context_window"`
-	ContextFillPct    *int `json:"context_fill_pct"`
+	// LastPeakInputTokens is the largest single model call of the last
+	// turn. ContextFillPct is this over ContextWindow — never
+	// LastInputTokens, which sums the whole turn and would report a
+	// five-call turn as five times as full as the same prompt sent once.
+	LastPeakInputTokens *int `json:"last_peak_input_tokens"`
+	ContextWindow       *int `json:"context_window"`
+	ContextFillPct      *int `json:"context_fill_pct"`
 
 	// ---- error state ----
 	ConsecutiveErrors *int    `json:"consecutive_errors"`
@@ -157,6 +162,7 @@ type LoopView struct {
 	EffectiveTags             []EffectiveTag             `json:"effective_tags"`
 	EffectiveSubscriptions    []EffectiveSubscription    `json:"effective_subscriptions"`
 	EffectiveExcludeTools     []EffectiveExcludeTool     `json:"effective_exclude_tools"`
+	EffectiveBindings         []EffectiveBinding         `json:"effective_bindings"`
 	EffectiveRoutingFactors   []EffectiveRoutingFactor   `json:"effective_routing_factors"`
 	EffectiveDelegationGating *EffectiveDelegationGating `json:"effective_delegation_gating"`
 }
@@ -547,14 +553,20 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 		totalIn := s.TotalInputTokens
 		totalOut := s.TotalOutputTokens
 		lastIn := s.LastInputTokens
+		lastPeak := s.LastPeakInputTokens
 		v.TotalInputTokens = &totalIn
 		v.TotalOutputTokens = &totalOut
 		v.LastInputTokens = &lastIn
+		v.LastPeakInputTokens = &lastPeak
 		if s.ContextWindow > 0 {
 			cw := s.ContextWindow
 			v.ContextWindow = &cw
-			if s.LastInputTokens > 0 {
-				pct := s.LastInputTokens * 100 / s.ContextWindow
+			// Fill is the peak single call over the window. Turns
+			// recorded before peak was tracked carry 0, and reporting no
+			// fill is the honest answer there — the old cumulative
+			// number was not a fill percentage at all.
+			if s.LastPeakInputTokens > 0 {
+				pct := s.LastPeakInputTokens * 100 / s.ContextWindow
 				v.ContextFillPct = &pct
 			}
 		}
@@ -590,6 +602,7 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	v.EffectiveTags = orEmptyLoopSlice(s.EffectiveTags)
 	v.EffectiveSubscriptions = orEmptyLoopSlice(s.EffectiveSubscriptions)
 	v.EffectiveExcludeTools = orEmptyLoopSlice(s.EffectiveExcludeTools)
+	v.EffectiveBindings = orEmptyLoopSlice(s.EffectiveBindings)
 	v.EffectiveRoutingFactors = orEmptyLoopSlice(s.EffectiveRoutingFactors)
 	v.EffectiveDelegationGating = s.EffectiveDelegationGating
 }

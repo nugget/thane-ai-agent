@@ -11,6 +11,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -1179,6 +1180,31 @@ func TestKBArticleTags_CountsTagsAll(t *testing.T) {
 	}
 	if len(counts) != len(expect) {
 		t.Errorf("unexpected extra tags in counts: %v", counts)
+	}
+}
+
+func TestBuildRefsExcludesRepositoryRootsFromManagedDocumentContext(t *testing.T) {
+	t.Parallel()
+
+	documentRoot := t.TempDir()
+	repositoryRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(documentRoot, "note.md"), []byte("document body"), 0o644); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryRoot, "README.md"), []byte("repository body"), 0o644); err != nil {
+		t.Fatalf("write repository file: %v", err)
+	}
+	resolver := paths.New(map[string]string{"kb": documentRoot})
+	if err := resolver.Register(paths.Root{Name: "thanecode", Path: repositoryRoot, Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub"}); err != nil {
+		t.Fatalf("register repository root: %v", err)
+	}
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{Resolver: resolver})
+	got := assembler.BuildRefs(context.Background(), []string{"kb:note.md", "thanecode:README.md"})
+	if !strings.Contains(got, "document body") {
+		t.Fatalf("managed document missing from refs: %q", got)
+	}
+	if strings.Contains(got, "repository body") || strings.Contains(got, "thanecode:README.md") {
+		t.Fatalf("repository root entered managed document context: %q", got)
 	}
 }
 

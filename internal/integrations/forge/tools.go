@@ -18,23 +18,39 @@ import (
 // handled universally by the tool registry's ContentResolver before
 // handlers run — individual handlers receive already-resolved content.
 type Tools struct {
-	manager       *Manager
+	service       *Service
 	opLog         *OperationLog
 	logger        *slog.Logger
 	subscriptions *SubscriptionStore
 	loopResolver  messages.LoopResolver
+
+	// checkoutSync performs the initial mirror sync when a follow
+	// requests a local checkout. Injectable so tests can exercise the
+	// follow path without a network clone; production uses the same
+	// syncer the poller does, so the checkout a follow creates and the
+	// one the poller maintains are made by identical code.
+	checkoutSync func(context.Context, ProjectSubscription) (string, error)
 }
 
-// NewTools creates forge tools backed by the given manager. The opLog
-// records successful operations for context injection; pass nil to
-// disable operation tracking. subscriptions may be nil to disable the
-// repository-subscription surface.
+// NewTools creates standalone forge tools backed by the given manager. New
+// application runtimes should construct [Service] so account policy, context,
+// and subscriptions share one owner. The opLog records successful operations
+// for context injection; pass nil to disable operation tracking. subscriptions
+// may be nil to disable the repository-subscription surface.
 func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return newTools(&Service{manager: mgr, logger: logger}, opLog, logger, subscriptions)
+}
+
+func newTools(service *Service, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
 	return &Tools{
-		manager:       mgr,
+		service:       service,
 		opLog:         opLog,
 		logger:        logger,
 		subscriptions: subscriptions,
+		checkoutSync:  mirrorSubscriptionCheckoutSyncer{logger: logger}.Sync,
 	}
 }
 
@@ -296,38 +312,35 @@ type searchResponse struct {
 
 // resolveAccountAndRepo extracts the account and repo from args,
 // resolves the repo to owner/repo format, and returns the provider
-// along with the resolved account name.
-func (t *Tools) resolveAccountAndRepo(args map[string]any) (ForgeProvider, string, string, error) {
-	account := stringArg(args, "account")
+// along with the resolved account name. Any account binding on the
+// context is applied first.
+func (t *Tools) resolveAccountAndRepo(ctx context.Context, args map[string]any) (ForgeProvider, string, string, error) {
 	repo := stringArg(args, "repo")
 	if repo == "" {
 		return nil, "", "", fmt.Errorf("repo is required")
 	}
 
-	// Resolve empty account to primary.
-	resolvedAccount := account
-	if resolvedAccount == "" && len(t.manager.order) > 0 {
-		resolvedAccount = t.manager.order[0]
-	}
-
-	provider, err := t.manager.Account(account)
+	resolved, err := t.service.ResolveAccount(ctx, stringArg(args, "account"))
 	if err != nil {
 		return nil, "", "", err
 	}
 
-	fullRepo, err := t.manager.ResolveRepo(account, repo)
-	if err != nil {
-		return nil, "", "", err
+	fullRepo := repo
+	if !strings.Contains(fullRepo, "/") {
+		if resolved.Config.Owner == "" {
+			return nil, "", "", fmt.Errorf("repo %q requires an owner but account %q has no default owner configured", repo, resolved.Name)
+		}
+		fullRepo = resolved.Config.Owner + "/" + repo
 	}
 
-	return provider, fullRepo, resolvedAccount, nil
+	return resolved.Provider, fullRepo, resolved.Name, nil
 }
 
 // --- Issue handlers ---
 
 // HandleIssueCreate creates a new issue on a forge repository.
 func (t *Tools) HandleIssueCreate(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -361,7 +374,7 @@ func (t *Tools) HandleIssueCreate(ctx context.Context, args map[string]any) (str
 // HandleIssueUpdate updates an existing issue. Body REPLACES the
 // entire issue body when provided — it does not append.
 func (t *Tools) HandleIssueUpdate(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -401,7 +414,7 @@ func (t *Tools) HandleIssueUpdate(ctx context.Context, args map[string]any) (str
 
 // HandleIssueGet retrieves a single issue by number.
 func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -446,7 +459,7 @@ func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string
 
 // HandleIssueList lists issues matching the given filters.
 func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -492,7 +505,7 @@ func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (strin
 
 // HandleIssueComment posts a comment on an issue or pull request.
 func (t *Tools) HandleIssueComment(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -524,7 +537,7 @@ func (t *Tools) HandleIssueComment(ctx context.Context, args map[string]any) (st
 
 // HandlePRList lists pull requests matching the given filters.
 func (t *Tools) HandlePRList(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -570,7 +583,7 @@ func (t *Tools) HandlePRList(ctx context.Context, args map[string]any) (string, 
 
 // HandlePRGet retrieves a single pull request by number.
 func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -582,6 +595,24 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 
 	pr, err := provider.GetPR(ctx, repo, number)
 	if err != nil {
+		// Issues and pull requests share one number space, so asking
+		// for a PR by an issue's number is an ordinary mistake with a
+		// useful answer available. The forge reports it as a plain
+		// not-found, which the classifier then reads as "absent or
+		// invisible" — technically true and actively misleading, since
+		// the number exists and the caller is one tool call away from
+		// what it wanted. Production hit exactly this on #1385 and
+		// went looking for a permissions problem.
+		// Only a classified not-found is worth a second lookup. A rate
+		// limit, a bad credential, or a killed request says nothing
+		// about whether the number is an issue, and spending another
+		// call to ask would add load exactly when the forge is already
+		// refusing — and bury the real failure behind a second one.
+		if DenialKindOf(err) == DenialInvisible {
+			if issue, issueErr := provider.GetIssue(ctx, repo, number); issueErr == nil {
+				return marshalIssueAsPRMiss(issue, repo, number)
+			}
+		}
 		return "", err
 	}
 
@@ -651,7 +682,7 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 // HandlePRDiff returns the unified diff for a pull request, truncated
 // at max_lines (default 2000).
 func (t *Tools) HandlePRDiff(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -684,7 +715,7 @@ func (t *Tools) HandlePRDiff(ctx context.Context, args map[string]any) (string, 
 
 // HandlePRFiles returns the files changed in a pull request.
 func (t *Tools) HandlePRFiles(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -723,7 +754,7 @@ func (t *Tools) HandlePRFiles(ctx context.Context, args map[string]any) (string,
 
 // HandlePRCommits returns commits in a pull request.
 func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -768,7 +799,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 
 // HandlePRReviews returns reviews for a pull request with inline comments.
 func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -819,7 +850,7 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 
 // HandlePRReview submits a review on a pull request.
 func (t *Tools) HandlePRReview(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -856,7 +887,7 @@ func (t *Tools) HandlePRReview(ctx context.Context, args map[string]any) (string
 
 // HandlePRReviewComment posts an inline comment on a pull request diff.
 func (t *Tools) HandlePRReviewComment(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -902,7 +933,7 @@ func (t *Tools) HandlePRReviewComment(ctx context.Context, args map[string]any) 
 
 // HandlePRChecks returns CI check runs for a pull request.
 func (t *Tools) HandlePRChecks(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -941,7 +972,7 @@ func (t *Tools) HandlePRChecks(ctx context.Context, args map[string]any) (string
 
 // HandlePRMerge merges a pull request.
 func (t *Tools) HandlePRMerge(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -975,7 +1006,7 @@ func (t *Tools) HandlePRMerge(ctx context.Context, args map[string]any) (string,
 
 // HandleReact adds an emoji reaction to an issue, PR, or comment.
 func (t *Tools) HandleReact(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -1009,7 +1040,7 @@ func (t *Tools) HandleReact(ctx context.Context, args map[string]any) (string, e
 
 // HandleRequestReview requests reviews from specified users.
 func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (string, error) {
-	provider, repo, acct, err := t.resolveAccountAndRepo(args)
+	provider, repo, acct, err := t.resolveAccountAndRepo(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -1040,12 +1071,7 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 
 // HandleSearch performs a forge-native search.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
-	account := stringArg(args, "account")
-	resolvedAcct := account
-	if resolvedAcct == "" && len(t.manager.order) > 0 {
-		resolvedAcct = t.manager.order[0]
-	}
-	provider, err := t.manager.Account(account)
+	resolved, err := t.service.ResolveAccount(ctx, stringArg(args, "account"))
 	if err != nil {
 		return "", err
 	}
@@ -1060,15 +1086,23 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", fmt.Errorf("kind is required (issues, code, commits)")
 	}
 
+	// GitHub refuses a commit search that carries only qualifiers, with
+	// a 422 the caller can neither predict nor act on without knowing
+	// the rule. Caught here so the answer names the missing piece
+	// rather than arriving as a validation failure from the far side.
+	if SearchKind(kindStr) == SearchCommits && qualifiersOnly(query) {
+		return "", fmt.Errorf("commit search needs search text, not qualifiers alone: %q has only qualifiers, and the forge rejects that. Add the words to look for (e.g. %q), or use forge_pr_commits to list a pull request's commits and forge_repo_subscriptions for what is already tracked", query, query+" <text to find>")
+	}
+
 	limit := intArg(args, "limit")
 
-	results, err := provider.Search(ctx, query, SearchKind(kindStr), limit)
+	results, err := resolved.Provider.Search(ctx, query, SearchKind(kindStr), limit)
 	if err != nil {
 		return "", err
 	}
 
 	if len(results) == 0 {
-		t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
+		t.recordOp("forge_search", resolved.Name, "", kindStr+": "+query)
 		return marshalResponse(searchResponse{Count: 0, Results: []searchResultEntry{}})
 	}
 
@@ -1082,9 +1116,60 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		})
 	}
 
-	t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
+	t.recordOp("forge_search", resolved.Name, "", kindStr+": "+query)
 	return marshalResponse(searchResponse{
 		Count:   len(entries),
 		Results: entries,
+	})
+}
+
+// qualifiersOnly reports whether a search query carries nothing but
+// key:value qualifiers. GitHub accepts those for issue and code search
+// and rejects them for commits, which is the sort of asymmetry a
+// caller should not have to learn by being refused.
+// commitSearchQualifiers are the keys GitHub recognizes on a commit
+// search. Matching against a known set rather than "contains a colon"
+// keeps a URL or an ordinary term like foo:bar from reading as a
+// qualifier, which would refuse a search the forge would have
+// accepted. The guard errs toward letting a call through: an
+// unrecognized key means this is search text, not a qualifier.
+var commitSearchQualifiers = map[string]bool{
+	"repo": true, "org": true, "user": true, "author": true,
+	"committer": true, "author-name": true, "committer-name": true,
+	"author-email": true, "committer-email": true,
+	"author-date": true, "committer-date": true,
+	"merge": true, "hash": true, "parent": true, "tree": true,
+	"is": true, "in": true, "language": true,
+}
+
+func qualifiersOnly(query string) bool {
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return false
+	}
+	for _, field := range fields {
+		key, _, found := strings.Cut(field, ":")
+		if !found || !commitSearchQualifiers[strings.ToLower(key)] {
+			return false
+		}
+	}
+	return true
+}
+
+// marshalIssueAsPRMiss answers a pull-request lookup that landed on an
+// issue. It returns what the caller almost certainly wanted, labelled
+// clearly enough that the model does not record it as a pull request.
+func marshalIssueAsPRMiss(issue *Issue, repo string, number int) (string, error) {
+	return marshalResponse(map[string]any{
+		"note": fmt.Sprintf("%s#%d is an issue, not a pull request. Issues and pull requests share one number space on this forge, so forge_pr_get cannot fetch it. The issue is returned below; use forge_issue_get for issues.",
+			repo, number),
+		"kind":   "issue",
+		"number": issue.Number,
+		"title":  issue.Title,
+		"state":  issue.State,
+		"author": issue.Author,
+		"labels": issue.Labels,
+		"url":    issue.URL,
+		"body":   truncate(issue.Body, 4000),
 	})
 }

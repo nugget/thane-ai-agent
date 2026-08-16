@@ -24,6 +24,7 @@ type specJSON struct {
 	Conditions     Conditions           `json:"conditions,omitempty"`
 	Tags           []string             `json:"tags,omitempty"`
 	ExcludeTools   []string             `json:"exclude_tools,omitempty"`
+	Bindings       map[string]string    `json:"bindings,omitempty"`
 	SleepMin       string               `json:"sleep_min,omitempty"`
 	SleepMax       string               `json:"sleep_max,omitempty"`
 	SleepDefault   string               `json:"sleep_default,omitempty"`
@@ -81,6 +82,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Conditions:        s.Conditions,
 		Tags:              s.Tags,
 		ExcludeTools:      s.ExcludeTools,
+		Bindings:          s.Bindings,
 		SleepMin:          durationString(s.SleepMin),
 		SleepMax:          durationString(s.SleepMax),
 		SleepDefault:      durationString(s.SleepDefault),
@@ -162,6 +164,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Conditions:       cloneConditions(wire.Conditions),
 		Tags:             append([]string(nil), wire.Tags...),
 		ExcludeTools:     append([]string(nil), wire.ExcludeTools...),
+		Bindings:         CloneBindings(wire.Bindings),
 		SleepMin:         sleepMin,
 		SleepMax:         sleepMax,
 		SleepDefault:     sleepDefault,

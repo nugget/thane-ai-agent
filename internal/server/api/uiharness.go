@@ -96,7 +96,7 @@ func harnessLoops() []looppkg.Status {
 			StartedAt: boot, LastWakeAt: now.Add(-2 * time.Second),
 			Iterations: 1423, Attempts: 1440,
 			TotalInputTokens: 9_200_000, TotalOutputTokens: 1_100_000,
-			LastInputTokens: 7400, LastOutputTokens: 820, ContextWindow: 200000,
+			LastInputTokens: 7400, LastPeakInputTokens: 5100, LastOutputTokens: 820, ContextWindow: 200000,
 			RecentConvIDs: []string{"conv-supervisor"},
 		},
 		{
@@ -116,7 +116,7 @@ func harnessLoops() []looppkg.Status {
 		{
 			ID: "signal/aimee", Name: "signal/aimee", State: looppkg.StateProcessing, ParentID: "signal",
 			StartedAt: now.Add(-90 * time.Minute), LastWakeAt: now.Add(-1 * time.Second),
-			Iterations: 12, Attempts: 12, LastInputTokens: 5200, LastOutputTokens: 640, ContextWindow: 200000,
+			Iterations: 12, Attempts: 12, LastInputTokens: 5200, LastPeakInputTokens: 5200, LastOutputTokens: 640, ContextWindow: 200000,
 			RecentConvIDs: []string{"conv-aimee"},
 		},
 		{
@@ -136,7 +136,7 @@ func harnessLoops() []looppkg.Status {
 		{
 			ID: "hor_conditions", Name: "hor_conditions", State: looppkg.StateSleeping, ParentID: "temporal",
 			StartedAt: boot, Iterations: 2, Attempts: 2,
-			TotalInputTokens: 309_853, TotalOutputTokens: 5_252, LastInputTokens: 29_702,
+			TotalInputTokens: 309_853, TotalOutputTokens: 5_252, LastInputTokens: 29_702, LastPeakInputTokens: 14_310,
 			ContextWindow: 131072, RecentConvIDs: []string{"conv-hor"},
 		},
 	}

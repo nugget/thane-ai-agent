@@ -163,6 +163,17 @@ iteration — costlier than a normal wake. Reserve it for concerns
 that genuinely warrant the extra capacity, not as a routine
 notification channel.
 
+The return leg is yours to close. When a loop wakes you asking for a
+determination, its notification carries a `reply_to.loop_id`, and
+`loop_wake` addressed there is how your conclusion reaches it — with
+`force_supervisor: true` when you are asking it to re-reason rather
+than to record a fact. The requester is asleep by then and cannot
+see what you decided, so a determination you reach and never send is
+one it never receives; the same concern comes back unchanged on its
+next pass. Escalating to a person is one available outcome, not the
+expected one, and "nothing needs to happen" is a real determination
+that still gets sent back with the reasoning behind it.
+
 Natural-language timing inside a task does not schedule a service loop.
 Pick a sleep envelope (sleep_min, sleep_max) tight enough to catch what
 matters and loose enough to cost nothing when quiet; the running loop
@@ -216,6 +227,29 @@ muddle them and the loop drifts.
   the agent itself, or composing messages in the agent's own voice.
   The mode is per-loop and never inherited; when in doubt, leave it
   unset and trim later — it retunes live via `loop_definition_update`.
+
+- **`tags` say whether; `bindings` say which.** A tag decides what
+  surface a loop can reach — granting `forge` turns on the forge
+  tools. It does not decide which forge account those tools use,
+  because every forge tool takes an `account` argument that the model
+  fills in, so a tagged loop reaches every configured account by
+  default. When a site has more than one account and they differ in
+  what their tokens may do, declare `bindings: {forge_account:
+  "<name>"}`. An omitted `account` argument then resolves to the bound
+  account instead of the primary, any other account is refused by
+  name, and the account block in context narrows to the one account
+  you can actually use. Bindings inherit from container parents, and
+  on collision the *ancestor* wins — a container's binding is a
+  boundary its children cannot declare their way out of, which is the
+  opposite of how `routing_factors` resolve. Binding to an account
+  that does not exist refuses the definition rather than failing later
+  at the first call.
+  A bound caller carries that boundary into `thane_loop_create` and
+  `loop_definition_set`; it cannot override the value, omit it, or nest the
+  new loop under an incompatible container. Launching or activating a stored
+  definition is likewise refused when its effective binding does not match
+  the caller. An unbound operator can still author and launch independently
+  bound definitions.
 
 ## Changing a loop that's already running
 

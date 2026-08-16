@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func newTestGitHub(t *testing.T, handler http.Handler) *GitHub {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	gh, err := NewGitHub(ts.Client(), "test-token", ts.URL, logger)
+	gh, err := NewGitHub(ts.Client(), "test-account", "test-token", ts.URL, logger)
 	if err != nil {
 		t.Fatalf("NewGitHub: %v", err)
 	}
@@ -551,6 +552,85 @@ func TestSplitRepo(t *testing.T) {
 			}
 			if name != tt.wantName {
 				t.Errorf("name = %q, want %q", name, tt.wantName)
+			}
+		})
+	}
+}
+
+// TestGitHubProviderErrorClassification exercises the whole path a real
+// denial takes: the API refuses, go-github builds its error, and the
+// provider hands back a classified failure naming the account whose
+// token hit the wall. A read-only token attempting a write is the
+// scenario multi-account deployments are built for, so it is the
+// scenario the provider must describe accurately.
+func TestGitHubProviderErrorClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantKind   DenialKind
+		wantDenied bool
+		wantText   []string
+	}{
+		{
+			name:       "read-only token refused a write",
+			status:     http.StatusForbidden,
+			body:       `{"message":"Resource not accessible by personal access token"}`,
+			wantKind:   DenialForbidden,
+			wantDenied: true,
+			wantText:   []string{`"test-account"`, "access policy", "create issue"},
+		},
+		{
+			name:       "scoped token sees a phantom-missing repo",
+			status:     http.StatusNotFound,
+			body:       `{"message":"Not Found"}`,
+			wantKind:   DenialInvisible,
+			wantDenied: false,
+			wantText:   []string{`"test-account"`, "outside this token's visibility"},
+		},
+		{
+			name:       "revoked token",
+			status:     http.StatusUnauthorized,
+			body:       `{"message":"Bad credentials"}`,
+			wantKind:   DenialUnauthenticated,
+			wantDenied: true,
+			wantText:   []string{`"test-account"`, "replaces the credential"},
+		},
+		{
+			name:       "upstream fault stays unclassified",
+			status:     http.StatusInternalServerError,
+			body:       `{"message":"Server Error"}`,
+			wantKind:   DenialNone,
+			wantDenied: false,
+			wantText:   []string{"create issue"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /api/v3/repos/owner/repo/issues", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			})
+
+			gh := newTestGitHub(t, mux)
+			_, err := gh.CreateIssue(context.Background(), "owner/repo", &Issue{Title: "t", Body: "b"})
+			if err == nil {
+				t.Fatal("CreateIssue() succeeded, want an error")
+			}
+
+			if got := DenialKindOf(err); got != tt.wantKind {
+				t.Errorf("DenialKindOf() = %q, want %q", got, tt.wantKind)
+			}
+			if got := Denied(err); got != tt.wantDenied {
+				t.Errorf("Denied() = %v, want %v", got, tt.wantDenied)
+			}
+			for _, want := range tt.wantText {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error text = %q\nmissing substring %q", err.Error(), want)
+				}
 			}
 		})
 	}

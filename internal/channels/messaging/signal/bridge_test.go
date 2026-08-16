@@ -1985,3 +1985,78 @@ func TestFormatMessage_AttachmentOnlyNoText(t *testing.T) {
 		t.Errorf("should not end with double newline for attachment-only, got: %q", got)
 	}
 }
+
+// TestBridge_BuildSignalTurnMergesWakeTags pins the tag path that makes
+// a core-attention reply possible: loop_wake sits behind the loops tag,
+// so a wake that asks this loop for a determination has to arrive with
+// the tag that makes the answering tool callable. The turn's own signal
+// tag survives the merge.
+func TestBridge_BuildSignalTurnMergesWakeTags(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	notify, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityLoop, ID: "loop-42", Name: "garage-watch"},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   "signal",
+			Selector: messages.SelectorName,
+		},
+		Type:    messages.TypeSignal,
+		Scope:   []string{loop.CoreAttentionScope},
+		Payload: messages.LoopNotifyPayload{Kind: loop.CoreAttentionRequestKind, Concern: "The reading looks wrong."},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("normalize notification: %v", err)
+	}
+
+	turn, err := bridge.buildSignalTurn(context.Background(), "+15551234567", loop.TurnInput{
+		NotifyEnvelopes: []messages.Envelope{notify},
+		WakeTags:        []string{"loops", "signal"},
+	})
+	if err != nil {
+		t.Fatalf("buildSignalTurn: %v", err)
+	}
+	if turn == nil {
+		t.Fatal("turn is nil")
+	}
+	want := []string{"signal", "loops"}
+	if len(turn.Request.InitialTags) != len(want) {
+		t.Fatalf("initial tags = %#v, want %#v", turn.Request.InitialTags, want)
+	}
+	for i, tag := range want {
+		if turn.Request.InitialTags[i] != tag {
+			t.Fatalf("initial tags = %#v, want %#v", turn.Request.InitialTags, want)
+		}
+	}
+	if !strings.Contains(turn.Request.Messages[0].Content, `"reply_to"`) {
+		t.Errorf("notification turn missing reply address: %q", turn.Request.Messages[0].Content)
+	}
+}
+
+func TestMergeInitialTags(t *testing.T) {
+	tests := []struct {
+		name string
+		own  []string
+		wake []string
+		want []string
+	}{
+		{name: "no wake tags returns own untouched", own: []string{"signal"}, wake: nil, want: []string{"signal"}},
+		{name: "wake tags append after own", own: []string{"signal"}, wake: []string{"loops"}, want: []string{"signal", "loops"}},
+		{name: "duplicates collapse", own: []string{"signal"}, wake: []string{"signal", "loops"}, want: []string{"signal", "loops"}},
+		{name: "blanks drop", own: []string{"signal"}, wake: []string{"  ", "loops"}, want: []string{"signal", "loops"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeInitialTags(tt.own, tt.wake)
+			if len(got) != len(tt.want) {
+				t.Fatalf("mergeInitialTags = %#v, want %#v", got, tt.want)
+			}
+			for i, tag := range tt.want {
+				if got[i] != tag {
+					t.Fatalf("mergeInitialTags = %#v, want %#v", got, tt.want)
+				}
+			}
+		})
+	}
+}

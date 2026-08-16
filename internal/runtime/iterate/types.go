@@ -63,7 +63,20 @@ type Result struct {
 	UpstreamRequestID string
 
 	// InputTokens is the cumulative input token count across all iterations.
+	// It answers "what did this turn cost", which is why usage accounting
+	// reads it. It is the wrong number for "how full was the context":
+	// summing every call in a tool-calling turn double-counts the system
+	// prompt and tool definitions once per iteration, so a turn that took
+	// five cheap round-trips reports more input than a single call that
+	// genuinely filled the window. Use PeakInputTokens for anything
+	// compared against a context window.
 	InputTokens int
+
+	// PeakInputTokens is the largest single-call input token count among
+	// the iterations — the closest this turn came to the model's context
+	// limit, and the only one of the two that is comparable to a context
+	// window. Zero when no iteration reported usage.
+	PeakInputTokens int
 
 	// OutputTokens is the cumulative output token count across all iterations.
 	OutputTokens int

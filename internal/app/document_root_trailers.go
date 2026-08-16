@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
@@ -33,6 +34,7 @@ func (w *documentRootProvenanceWriter) withTurnProvenance(ctx context.Context, m
 	}
 
 	add(documents.TrailerModel, tools.ModelFromContext(ctx))
+	add(documents.TrailerVersion, buildinfo.Version)
 	add(documents.TrailerLoopID, tools.LoopIDFromContext(ctx))
 	// ConversationIDFromContext reports "default" outside a conversation, which
 	// identifies nothing worth committing.

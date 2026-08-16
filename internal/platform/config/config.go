@@ -38,7 +38,6 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
-	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
@@ -381,7 +380,7 @@ type Config struct {
 	// Forge configures code forge integrations (GitHub, Gitea). When
 	// configured, Thane can interact with issues, pull requests, and
 	// code review directly without an MCP forge server subprocess.
-	Forge forge.Config `yaml:"forge"`
+	Forge ForgeConfig `yaml:"forge"`
 
 	// Email configures native IMAP email access. When configured, Thane
 	// can list, read, search, and manage email directly without an MCP

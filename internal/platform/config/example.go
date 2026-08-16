@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
-	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
@@ -333,16 +332,25 @@ func ExampleConfig() *Config {
 			},
 		},
 
-		Forge: forge.Config{
+		Forge: ForgeConfig{
 			SubscriptionCheckInterval: 3600,
 			MaxSubscriptions:          50,
-			Accounts: []forge.AccountConfig{
+			Accounts: []ForgeAccountConfig{
 				{
-					Name:     "github",
-					Provider: "github",
-					URL:      "https://api.github.com",
-					Token:    "ghp_your-token",
-					Owner:    "your-username",
+					Name:        "github",
+					Provider:    "github",
+					URL:         "https://api.github.com",
+					Token:       "ghp_your-token",
+					Owner:       "your-username",
+					Description: "Full-access account: issues, pull requests, reviews, merges.",
+				},
+				{
+					Name:        "github-readonly",
+					Provider:    "github",
+					URL:         "https://api.github.com",
+					Token:       "ghp_your-read-only-token",
+					Owner:       "your-username",
+					Description: "Observation only — this token's policy denies writes. Reads succeed; issue and review calls are refused.",
 				},
 			},
 		},

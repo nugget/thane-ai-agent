@@ -48,6 +48,11 @@ type ProjectSubscription struct {
 	// repository's default branch.
 	Branch string `json:"branch,omitempty"`
 
+	// RepositoryRoot is the model-facing handle for the optional checkout.
+	// The filesystem path remains internal; file and git tools resolve this
+	// name through the shared root registry.
+	RepositoryRoot string `json:"repo_root,omitempty"`
+
 	// CheckoutPath is the absolute path of the local read-only mirror
 	// checkout. Empty disables the checkout features for this
 	// subscription.
@@ -90,6 +95,10 @@ type ProjectSubscription struct {
 	// sync has completed yet.
 	LastSyncedSHA string `json:"last_synced_sha,omitempty"`
 
+	// LastSyncedAt records when the mirror most recently matched
+	// LastSyncedSHA. Model-facing projections render it as an exact delta.
+	LastSyncedAt time.Time `json:"last_synced_at,omitempty"`
+
 	// LastChecked is when the poller last completed a poll for this
 	// subscription, successful or not. Zero before the first poll.
 	LastChecked time.Time `json:"last_checked,omitempty"`
@@ -131,6 +140,43 @@ func SubscriptionID(account, repo, branch string, target messages.LoopWakeTarget
 	return hex.EncodeToString(h[:6])
 }
 
+// CheckAdmission reports whether sub would be accepted by [Add],
+// without writing anything.
+//
+// It exists so a caller can find out before doing something it cannot
+// take back. forge_repo_follow clones a working tree for a requested
+// local_checkout, and Mirror.Sync resets that tree hard — discarding
+// local modifications by design. Learning about a duplicate ID or a
+// full subscription table only after that reset means a rejected
+// follow can still have destroyed a directory it then declines to
+// track. Add re-runs these checks itself; this is an early look, not
+// a substitute.
+func (s *SubscriptionStore) CheckAdmission(sub ProjectSubscription) error {
+	if s == nil || s.state == nil {
+		return fmt.Errorf("nil opstate store")
+	}
+	return s.checkAdmission(sub)
+}
+
+func (s *SubscriptionStore) checkAdmission(sub ProjectSubscription) error {
+	if err := validateSubscription(sub); err != nil {
+		return err
+	}
+	ids, err := s.loadIndex()
+	if err != nil {
+		return fmt.Errorf("load subscription index: %w", err)
+	}
+	for _, id := range ids {
+		if id == sub.ID {
+			return fmt.Errorf("subscription %q already exists", sub.ID)
+		}
+	}
+	if len(ids) >= s.maxItems {
+		return fmt.Errorf("forge subscription limit reached (%d/%d)", len(ids), s.maxItems)
+	}
+	return nil
+}
+
 // Add persists a new subscription and appends it to the index.
 func (s *SubscriptionStore) Add(sub ProjectSubscription) error {
 	if s.state == nil {
@@ -143,17 +189,12 @@ func (s *SubscriptionStore) Add(sub ProjectSubscription) error {
 		sub.CreatedAt = time.Now().UTC()
 	}
 
+	if err := s.checkAdmission(sub); err != nil {
+		return err
+	}
 	ids, err := s.loadIndex()
 	if err != nil {
 		return fmt.Errorf("load subscription index: %w", err)
-	}
-	for _, id := range ids {
-		if id == sub.ID {
-			return fmt.Errorf("subscription %q already exists", sub.ID)
-		}
-	}
-	if len(ids) >= s.maxItems {
-		return fmt.Errorf("forge subscription limit reached (%d/%d)", len(ids), s.maxItems)
 	}
 
 	if err := s.write(sub); err != nil {
@@ -225,14 +266,18 @@ func (s *SubscriptionStore) List() ([]ProjectSubscription, error) {
 	if s.state == nil {
 		return nil, fmt.Errorf("nil opstate store")
 	}
-	ids, err := s.loadIndex()
+	records, err := s.state.List(subscriptionNamespace)
 	if err != nil {
-		return nil, fmt.Errorf("load subscription index: %w", err)
+		return nil, fmt.Errorf("load subscriptions: %w", err)
+	}
+	ids, err := decodeSubscriptionIndex(records[subscriptionIndexKey])
+	if err != nil {
+		return nil, err
 	}
 
 	subs := make([]ProjectSubscription, 0, len(ids))
 	for _, id := range ids {
-		sub, err := s.read(id)
+		sub, err := decodeSubscription(id, records[subscriptionKey(id)])
 		if err != nil {
 			s.logger.Warn("skipping invalid forge subscription", "id", id, "error", err)
 			continue
@@ -258,6 +303,9 @@ func validateSubscription(sub ProjectSubscription) error {
 	if sub.WakeTarget.Empty() {
 		return fmt.Errorf("wake_loop is required")
 	}
+	if strings.TrimSpace(sub.RepositoryRoot) != "" && strings.TrimSpace(sub.CheckoutPath) == "" {
+		return fmt.Errorf("repo_root requires a checkout path")
+	}
 	return nil
 }
 
@@ -281,6 +329,10 @@ func (s *SubscriptionStore) read(id string) (ProjectSubscription, error) {
 	if err != nil {
 		return ProjectSubscription{}, err
 	}
+	return decodeSubscription(id, raw)
+}
+
+func decodeSubscription(id, raw string) (ProjectSubscription, error) {
 	if strings.TrimSpace(raw) == "" {
 		return ProjectSubscription{}, fmt.Errorf("subscription %q not found", id)
 	}
@@ -311,6 +363,10 @@ func (s *SubscriptionStore) loadIndex() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeSubscriptionIndex(raw)
+}
+
+func decodeSubscriptionIndex(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}

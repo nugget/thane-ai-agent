@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -203,6 +204,55 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 	}
 }
 
+func TestDecodeLMStudioToolCalls_SynthesizesUniqueMissingIDs(t *testing.T) {
+	t.Parallel()
+
+	calls, err := decodeLMStudioToolCalls(map[int]*lmStudioToolAccumulator{
+		0: {Name: "first"},
+		1: {Name: "second"},
+		2: {ID: "runner_call_3", Name: "third"},
+	})
+	if err != nil {
+		t.Fatalf("decodeLMStudioToolCalls() error = %v", err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("tool calls = %d, want 3", len(calls))
+	}
+	for i := range 2 {
+		if !strings.HasPrefix(calls[i].ID, "call_") {
+			t.Errorf("tool call %d ID = %q, want generated call_ prefix", i, calls[i].ID)
+		}
+	}
+	if calls[0].ID == calls[1].ID {
+		t.Errorf("generated tool call IDs are not unique: %q", calls[0].ID)
+	}
+	if calls[2].ID != "runner_call_3" {
+		t.Errorf("runner-supplied tool call ID = %q, want runner_call_3", calls[2].ID)
+	}
+}
+
+func TestApplyTextToolFallback_SynthesizesMissingID(t *testing.T) {
+	t.Parallel()
+
+	resp := &llm.ChatResponse{
+		Message: llm.Message{
+			Content: `{"name":"echo","arguments":{"text":"probe"}}`,
+		},
+	}
+	if err := applyTextToolFallback(resp, []string{"echo"}); err != nil {
+		t.Fatalf("applyTextToolFallback() error = %v", err)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].ID; !strings.HasPrefix(got, "call_") {
+		t.Fatalf("tool call ID = %q, want generated call_ prefix", got)
+	}
+	if resp.Message.Content != "" {
+		t.Fatalf("content = %q, want empty after text fallback", resp.Message.Content)
+	}
+}
+
 func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	t.Parallel()
 
@@ -267,6 +317,9 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	}
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].ID; got != "call_1" {
+		t.Fatalf("tool ID = %q, want call_1", got)
 	}
 	if got := resp.Message.ToolCalls[0].Function.Name; got != "ha_get_state" {
 		t.Fatalf("tool name = %q, want ha_get_state", got)
@@ -542,6 +595,9 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
 	}
+	if got := resp.Message.ToolCalls[0].ID; got != "call_1" {
+		t.Fatalf("tool ID = %q, want call_1", got)
+	}
 	if got := resp.Message.ToolCalls[0].Function.Name; got != "ha_get_state" {
 		t.Fatalf("tool name = %q, want ha_get_state", got)
 	}
@@ -600,5 +656,127 @@ func TestLMStudioChatStream_DefaultsAssistantRoleWhenStreamOmitsIt(t *testing.T)
 	}
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+}
+
+// The failure this guards against was observed in production: LM Studio
+// answers a streaming request it cannot serve with HTTP 200 and an
+// `event: error` frame, where the non-streaming call would have answered
+// 400. The frame decodes cleanly into lmStudioChatResponse, so before this
+// was handled the upstream failure surfaced as a successful zero-token
+// completion and the agent's context-reload recovery never fired.
+func TestLMStudioChatStream_SurfacesErrorFrame(t *testing.T) {
+	t.Parallel()
+
+	const upstream = "The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "event error frame with object payload",
+			body: "event: error\ndata: {\"error\":{\"message\":" + strconv.Quote(upstream) + "},\"message\":" + strconv.Quote(upstream) + "}\n\n",
+		},
+		{
+			name: "data frame with string payload",
+			body: "data: {\"error\":" + strconv.Quote(upstream) + "}\n\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tt.body)
+			}))
+			defer srv.Close()
+
+			client := NewLMStudioClient(srv.URL, "", nil)
+			resp, err := client.ChatStream(context.Background(), "qwen/qwen3-coder-next",
+				[]llm.Message{{Role: "user", Content: "summarize the repository"}}, nil,
+				func(llm.StreamEvent) {})
+			if err == nil {
+				t.Fatalf("ChatStream() error = nil, want stream error (resp = %+v)", resp)
+			}
+			if !strings.Contains(err.Error(), upstream) {
+				t.Fatalf("ChatStream() error = %q, want it to carry the upstream text verbatim", err)
+			}
+		})
+	}
+}
+
+// A stream can also close cleanly having delivered nothing at all. That is
+// not a completion either, and reporting success would hand the caller a
+// well-formed zero-token response.
+func TestLMStudioChatStream_ChunklessStreamErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty body", body: ""},
+		{name: "done with no chunks", body: "data: [DONE]\n\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tt.body)
+			}))
+			defer srv.Close()
+
+			client := NewLMStudioClient(srv.URL, "", nil)
+			_, err := client.ChatStream(context.Background(), "qwen/qwen3-coder-next",
+				[]llm.Message{{Role: "user", Content: "summarize the repository"}}, nil,
+				func(llm.StreamEvent) {})
+			if err == nil {
+				t.Fatal("ChatStream() error = nil, want empty stream error")
+			}
+			if !strings.Contains(err.Error(), "empty stream") {
+				t.Fatalf("ChatStream() error = %q, want empty stream message", err)
+			}
+		})
+	}
+}
+
+func TestLMStudioUnloadModel(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotInstance string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var req struct {
+			InstanceID string `json:"instance_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode unload request: %v", err)
+		}
+		gotInstance = req.InstanceID
+		_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": req.InstanceID})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	if err := client.UnloadModel(context.Background(), "google/gemma-3-4b:2"); err != nil {
+		t.Fatalf("UnloadModel() error = %v", err)
+	}
+	if gotPath != "/api/v1/models/unload" {
+		t.Fatalf("path = %q, want /api/v1/models/unload", gotPath)
+	}
+	if gotInstance != "google/gemma-3-4b:2" {
+		t.Fatalf("instance_id = %q, want google/gemma-3-4b:2", gotInstance)
+	}
+
+	// An instance id is required: LM Studio releases an instance, not a
+	// model, and a model may have several loaded at once.
+	if err := client.UnloadModel(context.Background(), "  "); err == nil {
+		t.Fatal("UnloadModel(blank) error = nil, want instance id required")
 	}
 }

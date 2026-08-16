@@ -8,11 +8,8 @@ import (
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
-	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
-
-const estimatedImageContextTokens = 1536
 
 // IncompatibleModelError reports that an explicit deployment cannot
 // satisfy the request's required capabilities.
@@ -136,7 +133,12 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		return false, nil
 	}
-	if !fleet.CanExpandLoadedContext(dep, contextSize) {
+	// contextSize is what the request requires; the window worth loading for
+	// it also holds the answer. Headroom is folded in here rather than by the
+	// caller because the same figure feeds preflight, which must judge the
+	// deployment on the requirement alone.
+	loadSize := desiredLoadContextTokens(contextSize, dep.MaxContextWindow)
+	if !fleet.CanExpandLoadedContext(dep, loadSize) {
 		return false, nil
 	}
 	if needsTools {
@@ -154,7 +156,7 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 		return false, nil
 	}
 
-	prep, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, contextSize)
+	prep, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, loadSize)
 	if err != nil {
 		return false, err
 	}
@@ -164,121 +166,6 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	return prep != nil && prep.Changed, nil
 }
 
-func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
-	ctx context.Context,
-	model string,
-	err error,
-	msgs []llm.Message,
-	toolDefs []map[string]any,
-	stream llm.StreamCallback,
-) (*llm.ChatResponse, string, error, bool) {
-	if l == nil || l.modelRuntime == nil || err == nil {
-		return nil, "", nil, false
-	}
-	if !isLMStudioLoadedContextError(err) {
-		return nil, "", nil, false
-	}
-
-	cat := l.currentModelCatalog()
-	if cat == nil {
-		return nil, "", nil, false
-	}
-	dep, resolveErr := cat.ResolveDeploymentRef(model)
-	if resolveErr != nil {
-		return nil, "", nil, false
-	}
-	if strings.TrimSpace(dep.Provider) != "lmstudio" {
-		return nil, "", nil, false
-	}
-
-	changed := false
-	retryModel := dep.ID
-	retryUpstreamModel := strings.TrimSpace(dep.LoadedInstanceID)
-	refreshResolvedModel := func() error {
-		result, refreshErr := l.modelRuntime.Refresh(ctx)
-		if refreshErr != nil {
-			return refreshErr
-		}
-		if result != nil && result.Changed {
-			changed = true
-			if l.router != nil && l.modelRegistry != nil {
-				l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
-			}
-		}
-		refreshedCat := l.currentModelCatalog()
-		if refreshedCat == nil {
-			return nil
-		}
-		refreshedDep, resolveErr := refreshedCat.ResolveDeploymentRef(model)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		dep = refreshedDep
-		retryModel = dep.ID
-		retryUpstreamModel = strings.TrimSpace(dep.LoadedInstanceID)
-		return nil
-	}
-	if refreshErr := refreshResolvedModel(); refreshErr != nil {
-		return nil, "", refreshErr, true
-	}
-	if dep.MaxContextWindow > dep.LoadedContextWindow && dep.MaxContextWindow > 0 {
-		prep, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
-		if prepErr != nil {
-			return nil, "", prepErr, true
-		}
-		if prep != nil {
-			changed = prep.Changed
-			if strings.TrimSpace(prep.Resolved) != "" {
-				retryModel = prep.Resolved
-			}
-			if strings.TrimSpace(prep.Instance) != "" {
-				retryUpstreamModel = strings.TrimSpace(prep.Instance)
-			}
-			if changed && l.router != nil && l.modelRegistry != nil {
-				l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
-			}
-		}
-	}
-
-	retryCall := func(tools []map[string]any) (*llm.ChatResponse, error) {
-		if retryUpstreamModel != "" {
-			if client := l.modelRuntime.LMStudioClient(dep.ResourceID); client != nil {
-				resp, err := client.ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
-				if resp != nil {
-					resp.Model = retryModel
-				}
-				return resp, err
-			}
-		}
-		return l.llm.ChatStream(ctx, retryModel, msgs, tools, stream)
-	}
-
-	if changed {
-		resp, retryErr := retryCall(toolDefs)
-		if retryErr == nil {
-			return resp, retryModel, nil, true
-		}
-		if len(toolDefs) == 0 || dep.TrainedForToolUse || !isLMStudioLoadedContextError(retryErr) {
-			return nil, "", retryErr, true
-		}
-	}
-
-	if len(toolDefs) > 0 && !dep.TrainedForToolUse && strings.TrimSpace(retryModel) != "" {
-		resp, retryErr := retryCall(nil)
-		if retryErr == nil {
-			return resp, retryModel, nil, true
-		}
-		if changed || isLMStudioLoadedContextError(retryErr) {
-			return nil, "", retryErr, true
-		}
-	}
-
-	if !changed {
-		return nil, "", nil, false
-	}
-	return nil, "", nil, false
-}
-
 func messagesNeedImages(msgs []Message) bool {
 	for _, msg := range msgs {
 		if len(msg.Images) > 0 {
@@ -286,32 +173,6 @@ func messagesNeedImages(msgs []Message) bool {
 		}
 	}
 	return false
-}
-
-func estimateLLMMessagesContextTokens(msgs []llm.Message) int {
-	total := 0
-	for _, msg := range msgs {
-		total += roughTokenCount(msg.Content)
-		total += len(msg.Images) * estimatedImageContextTokens
-	}
-	return total
-}
-
-func roughTokenCount(s string) int {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	return (len(s) + 3) / 4
-}
-
-func isLMStudioLoadedContextError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(msg, "tokens to keep from the initial prompt is greater than the context length") &&
-		strings.Contains(msg, "load the model with a larger context length")
 }
 
 func isContextWindowIncompatible(err error) bool {

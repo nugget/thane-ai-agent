@@ -218,7 +218,11 @@ type modelRevision struct {
 // composed it. They answer different questions and a root that reports both is
 // materially better evidence than one reporting either alone.
 type modelRevisionAuthorship struct {
-	Model        string `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
+	// Version is the build that performed the write, machine-stamped at
+	// commit time — the authoritative answer to "which thane wrote this,"
+	// so no document body ever needs to carry a hand-copied version claim.
+	Version      string `json:"version,omitempty"`
 	LoopID       string `json:"loop_id,omitempty"`
 	Conversation string `json:"conversation,omitempty"`
 	Session      string `json:"session,omitempty"`
@@ -297,6 +301,7 @@ func splitRevisionTrailers(trailers map[string]string) (*modelRevisionAuthorship
 	}
 	authored := modelRevisionAuthorship{
 		Model:        trailers[TrailerModel],
+		Version:      trailers[TrailerVersion],
 		LoopID:       trailers[TrailerLoopID],
 		Conversation: trailers[TrailerConversation],
 		Session:      trailers[TrailerSession],
@@ -306,9 +311,9 @@ func splitRevisionTrailers(trailers map[string]string) (*modelRevisionAuthorship
 		CoreHead:     trailers[TrailerCoreHead],
 	}
 	promoted := map[string]bool{
-		TrailerModel: true, TrailerLoopID: true, TrailerConversation: true,
-		TrailerSession: true, TrailerRequest: true, TrailerToolCall: true,
-		TrailerIteration: true, TrailerCoreHead: true,
+		TrailerModel: true, TrailerVersion: true, TrailerLoopID: true,
+		TrailerConversation: true, TrailerSession: true, TrailerRequest: true,
+		TrailerToolCall: true, TrailerIteration: true, TrailerCoreHead: true,
 	}
 	var rest map[string]string
 	for key, value := range trailers {

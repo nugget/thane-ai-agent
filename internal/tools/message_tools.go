@@ -43,17 +43,20 @@ func (r *Registry) registerMessageTools() {
 		Name: "request_core_attention",
 		Description: "Ask the designated core/owner loop to review a concern. Use this from delegate, service, or subsystem loops when a human-facing alert, message, or strategic decision may be needed. " +
 			"This call forces the core loop's next iteration into a supervisor turn — costlier than a normal wake — so reserve it for concerns that genuinely warrant the extra capacity, not as a routine notification channel. " +
-			"Do not include recipients, phone numbers, delivery channels, or instructions to send immediately; the core loop decides whether to deliver, defer, or ignore the concern.",
+			"Do not include recipients, phone numbers, delivery channels, or instructions to send immediately; the core loop decides whether to deliver, defer, or ignore the concern. " +
+			"Returning now with the ask sent is the complete action either way: nothing comes back as a return value here, so do not block on an answer or re-send the same concern while waiting. " +
+			"If you are a running loop, the core loop's determination reaches you as a wake on a later iteration, sometimes a supervisor turn when it wants you to re-reason rather than record a fact — so leave a note to yourself about what you asked. If you are a delegate or a one-shot turn, there is no later iteration to deliver to and this is a one-way escalation: say what you know now, because you will not see the reply.",
 		Parameters: coreAttentionToolParameters(),
 		Handler:    r.handleRequestCoreAttention,
 		Core:       true,
 	})
 
 	r.Register(&Tool{
-		Name:        "loop_wake",
-		Description: "Wake a specific live loop now and hand its next iteration a one-shot context message. Use this to tell a running watcher or service loop a fact it needs before its own schedule would surface it — correct a reading, deliver an event, hand off a decision — addressing the loop by name or loop_id from loop_status. If the loop is sleeping it wakes immediately; if it is mid-iteration the message is queued for its next turn. Set force_supervisor to promote that next iteration to a supervisor turn when the update warrants more capable handling. The message reaches only that one loop's next iteration; this is a directed signal between loops, not a broadcast or a channel for delivering to a human.",
-		Parameters:  wakeToolParameters(),
-		Handler:     r.handleLoopWake,
+		Name: "loop_wake",
+		Description: "Wake a specific live loop now and hand its next iteration a one-shot context message. Use this to tell a running watcher or service loop a fact it needs before its own schedule would surface it — correct a reading, deliver an event, hand off a decision — addressing the loop by name or loop_id from loop_status. If the loop is sleeping it wakes immediately; if it is mid-iteration the message is queued for its next turn. Set force_supervisor to promote that next iteration to a supervisor turn when the update warrants more capable handling. The message reaches only that one loop's next iteration; this is a directed signal between loops, not a broadcast or a channel for delivering to a human. " +
+			"This is also the return path when a loop asked you for a determination: address the reply_to.loop_id on its notification, say what you concluded and what should change, and set force_supervisor when your answer asks it to re-reason rather than record a fact.",
+		Parameters: wakeToolParameters(),
+		Handler:    r.handleLoopWake,
 	})
 }
 

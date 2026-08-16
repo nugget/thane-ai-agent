@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
+
+// restoreLoadTimeout bounds the rollback that puts a deployment's previous
+// context window back after a failed expansion. It is generous because it
+// covers a model load, and it exists only so a rollback running outside the
+// request's cancellation cannot hang indefinitely.
+const restoreLoadTimeout = 5 * time.Minute
 
 // RefreshResult describes the outcome of a runtime inventory refresh.
 type RefreshResult struct {
@@ -34,8 +41,17 @@ type Runtime struct {
 	registry *Registry
 	bundle   *ClientBundle
 	client   *llm.DynamicClient
+	log      *slog.Logger
 
 	refreshMu sync.Mutex
+}
+
+// logger returns the runtime's logger, defaulting when one was not supplied.
+func (r *Runtime) logger() *slog.Logger {
+	if r == nil || r.log == nil {
+		return slog.Default()
+	}
+	return r.log
 }
 
 // AnthropicRateLimitSnapshot is a JSON-friendly view of the latest
@@ -86,6 +102,7 @@ func NewRuntime(ctx context.Context, base *Catalog, cfg *config.Config, logger *
 		registry: registry,
 		bundle:   bundle,
 		client:   llm.NewDynamicClient(client),
+		log:      logger,
 	}
 	if _, err := rt.Refresh(ctx); err != nil {
 		return nil, err
@@ -107,6 +124,10 @@ func (r *Runtime) SetLogger(logger *slog.Logger) {
 	if r == nil || r.bundle == nil || logger == nil {
 		return
 	}
+	// The runtime logs on its own account too — context expansion warnings,
+	// rollback notices — so it has to move off the bootstrap handler with
+	// the provider clients rather than keeping the logger it started with.
+	r.log = logger
 	for id, oc := range r.bundle.OllamaClients {
 		oc.SetLogger(logger.With("resource", id))
 	}
@@ -281,8 +302,56 @@ func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextS
 	if client == nil {
 		return nil, fmt.Errorf("lmstudio resource %q is unavailable", dep.ResourceID)
 	}
+
+	// Release the resident instance before loading its replacement. A load
+	// always starts a new instance, so without this the runner is asked to
+	// hold two copies of the weights and refuses on any host that cannot —
+	// which is to say expansion would work only when the model is not
+	// already loaded, the one case where it is not needed.
+	previousWindow := dep.LoadedContextWindow
+	unloaded := false
+	if instanceID := strings.TrimSpace(dep.LoadedInstanceID); instanceID != "" {
+		if unloadErr := client.UnloadModel(ctx, instanceID); unloadErr != nil {
+			// Not fatal: the load may still succeed where there is room for
+			// both, and failing here would be strictly worse than today.
+			r.logger().Warn("unload before context expansion failed, loading anyway",
+				"resource", dep.ResourceID,
+				"deployment", dep.ID,
+				"instance_id", instanceID,
+				"error", unloadErr,
+			)
+		} else {
+			unloaded = true
+		}
+	}
+
 	loadResp, err := client.LoadModel(ctx, dep.ModelName, contextSize)
 	if err != nil {
+		// The unload succeeded and the load did not, so the deployment is
+		// now serving nothing. Put back what was there rather than leaving
+		// a working model unloaded because a larger window was unavailable.
+		if unloaded && previousWindow > 0 {
+			// Deliberately not the request's context. The commonest reason
+			// for the load to have failed is that ctx was canceled or timed
+			// out, and reusing it would make the rollback fail on the spot —
+			// turning a refused expansion into an unloaded deployment every
+			// time, which is the one outcome this is here to prevent.
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreLoadTimeout)
+			defer cancel()
+
+			if _, restoreErr := client.LoadModel(restoreCtx, dep.ModelName, previousWindow); restoreErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("restore previous context window %d: %w", previousWindow, restoreErr))
+			}
+			r.logger().Warn("context expansion failed, restored previous window",
+				"resource", dep.ResourceID,
+				"deployment", dep.ID,
+				"requested", contextSize,
+				"restored", previousWindow,
+			)
+			if _, refreshErr := r.refreshLocked(restoreCtx); refreshErr != nil {
+				return nil, errors.Join(err, refreshErr)
+			}
+		}
 		return nil, err
 	}
 

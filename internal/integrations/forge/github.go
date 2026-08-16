@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/go-github/v69/github"
 )
@@ -18,14 +19,20 @@ const rateLimitWarningThreshold = 100
 // GitHub implements [ForgeProvider] for GitHub.com and GitHub Enterprise
 // using the google/go-github SDK.
 type GitHub struct {
-	client *github.Client
-	logger *slog.Logger
+	client  *github.Client
+	account string
+	logger  *slog.Logger
 }
 
 // NewGitHub creates a GitHub forge provider. The httpClient should be
 // constructed via httpkit.NewClient. If baseURL is non-empty and not
 // the default GitHub API URL, Enterprise URLs are configured.
-func NewGitHub(httpClient *http.Client, token, baseURL string, logger *slog.Logger) (*GitHub, error) {
+//
+// account is the configured account name this provider speaks for. It
+// carries no authority — the token decides what the provider may do —
+// but every failure this provider returns names it, so a denial says
+// which credential hit the wall.
+func NewGitHub(httpClient *http.Client, account, token, baseURL string, logger *slog.Logger) (*GitHub, error) {
 	client := github.NewClient(httpClient).WithAuthToken(token)
 
 	if baseURL != "" && baseURL != "https://api.github.com" {
@@ -36,11 +43,26 @@ func NewGitHub(httpClient *http.Client, token, baseURL string, logger *slog.Logg
 		}
 	}
 
-	return &GitHub{client: client, logger: logger}, nil
+	return &GitHub{client: client, account: account, logger: logger}, nil
 }
 
 // Name returns "github".
 func (g *GitHub) Name() string { return "github" }
+
+// opErr wraps a failed API call as a [ProviderError] carrying this
+// account's name and the failure's classification. Every provider
+// method routes its API errors through here, so callers — tools, the
+// subscription poller, anything else holding a provider — get the same
+// classified failure without each having to recognize go-github's
+// error types.
+func (g *GitHub) opErr(op string, err error) error {
+	return &ProviderError{
+		Account: g.account,
+		Op:      op,
+		Kind:    classifyGitHubError(err),
+		Err:     err,
+	}
+}
 
 // splitRepo splits "owner/repo" into its components.
 func splitRepo(repo string) (owner, name string, err error) {
@@ -77,7 +99,7 @@ func (g *GitHub) GetRepository(ctx context.Context, repo string) (*Repository, e
 
 	ghRepo, resp, err := g.client.Repositories.Get(ctx, owner, name)
 	if err != nil {
-		return nil, fmt.Errorf("get repository: %w", err)
+		return nil, g.opErr("get repository", err)
 	}
 	g.checkRate(resp)
 
@@ -104,7 +126,7 @@ func (g *GitHub) ListReleases(ctx context.Context, repo string, limit int) ([]*R
 
 	ghReleases, resp, err := g.client.Repositories.ListReleases(ctx, owner, name, &github.ListOptions{PerPage: limit})
 	if err != nil {
-		return nil, fmt.Errorf("list releases: %w", err)
+		return nil, g.opErr("list releases", err)
 	}
 	g.checkRate(resp)
 
@@ -147,7 +169,7 @@ func (g *GitHub) ListCommits(ctx context.Context, repo, branch string, limit int
 	}
 	ghCommits, resp, err := g.client.Repositories.ListCommits(ctx, owner, name, opts)
 	if err != nil {
-		return nil, fmt.Errorf("list commits: %w", err)
+		return nil, g.opErr("list commits", err)
 	}
 	g.checkRate(resp)
 
@@ -192,7 +214,7 @@ func (g *GitHub) CreateIssue(ctx context.Context, repo string, issue *Issue) (*I
 
 	ghIssue, resp, err := g.client.Issues.Create(ctx, owner, name, req)
 	if err != nil {
-		return nil, fmt.Errorf("create issue: %w", err)
+		return nil, g.opErr("create issue", err)
 	}
 	g.checkRate(resp)
 
@@ -225,7 +247,7 @@ func (g *GitHub) UpdateIssue(ctx context.Context, repo string, number int, updat
 
 	ghIssue, resp, err := g.client.Issues.Edit(ctx, owner, name, number, req)
 	if err != nil {
-		return nil, fmt.Errorf("update issue #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("update issue #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -241,7 +263,7 @@ func (g *GitHub) GetIssue(ctx context.Context, repo string, number int) (*Issue,
 
 	ghIssue, resp, err := g.client.Issues.Get(ctx, owner, name, number)
 	if err != nil {
-		return nil, fmt.Errorf("get issue #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("get issue #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -287,7 +309,7 @@ func (g *GitHub) ListIssues(ctx context.Context, repo string, opts *ListOptions)
 
 	ghIssues, resp, err := g.client.Issues.ListByRepo(ctx, owner, name, ghOpts)
 	if err != nil {
-		return nil, fmt.Errorf("list issues: %w", err)
+		return nil, g.opErr("list issues", err)
 	}
 	g.checkRate(resp)
 
@@ -314,7 +336,7 @@ func (g *GitHub) AddComment(ctx context.Context, repo string, number int, body s
 		Body: &body,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("add comment to #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("add comment to #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -362,7 +384,7 @@ func (g *GitHub) ListPRs(ctx context.Context, repo string, opts *ListOptions) ([
 
 	ghPRs, resp, err := g.client.PullRequests.List(ctx, owner, name, ghOpts)
 	if err != nil {
-		return nil, fmt.Errorf("list PRs: %w", err)
+		return nil, g.opErr("list PRs", err)
 	}
 	g.checkRate(resp)
 
@@ -383,7 +405,7 @@ func (g *GitHub) GetPR(ctx context.Context, repo string, number int) (*PullReque
 
 	ghPR, resp, err := g.client.PullRequests.Get(ctx, owner, name, number)
 	if err != nil {
-		return nil, fmt.Errorf("get PR #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("get PR #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -399,7 +421,7 @@ func (g *GitHub) GetPRFiles(ctx context.Context, repo string, number int) ([]*Ch
 
 	ghFiles, resp, err := g.client.PullRequests.ListFiles(ctx, owner, name, number, nil)
 	if err != nil {
-		return nil, fmt.Errorf("list PR #%d files: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("list PR #%d files", number), err)
 	}
 	g.checkRate(resp)
 
@@ -428,7 +450,7 @@ func (g *GitHub) GetPRDiff(ctx context.Context, repo string, number int) (string
 		Type: github.Diff,
 	})
 	if err != nil {
-		return "", fmt.Errorf("get PR #%d diff: %w", number, err)
+		return "", g.opErr(fmt.Sprintf("get PR #%d diff", number), err)
 	}
 	g.checkRate(resp)
 
@@ -444,7 +466,7 @@ func (g *GitHub) ListPRCommits(ctx context.Context, repo string, number int) ([]
 
 	ghCommits, resp, err := g.client.PullRequests.ListCommits(ctx, owner, name, number, nil)
 	if err != nil {
-		return nil, fmt.Errorf("list PR #%d commits: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("list PR #%d commits", number), err)
 	}
 	g.checkRate(resp)
 
@@ -478,7 +500,7 @@ func (g *GitHub) ListPRReviews(ctx context.Context, repo string, number int) ([]
 
 	ghReviews, resp, err := g.client.PullRequests.ListReviews(ctx, owner, name, number, nil)
 	if err != nil {
-		return nil, fmt.Errorf("list PR #%d reviews: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("list PR #%d reviews", number), err)
 	}
 	g.checkRate(resp)
 
@@ -532,7 +554,7 @@ func (g *GitHub) SubmitReview(ctx context.Context, repo string, number int, revi
 		Body:  &review.Body,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("submit review on PR #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("submit review on PR #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -563,7 +585,7 @@ func (g *GitHub) AddReviewComment(ctx context.Context, repo string, number int, 
 		Side: &side,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("add review comment on PR #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("add review comment on PR #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -586,7 +608,7 @@ func (g *GitHub) ListChecks(ctx context.Context, repo string, number int) ([]*Ch
 	// Get the PR to find the head SHA.
 	pr, resp, err := g.client.PullRequests.Get(ctx, owner, name, number)
 	if err != nil {
-		return nil, fmt.Errorf("get PR #%d for checks: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("get PR #%d for checks", number), err)
 	}
 	g.checkRate(resp)
 
@@ -597,7 +619,7 @@ func (g *GitHub) ListChecks(ctx context.Context, repo string, number int) ([]*Ch
 
 	result, checkResp, err := g.client.Checks.ListCheckRunsForRef(ctx, owner, name, headSHA, nil)
 	if err != nil {
-		return nil, fmt.Errorf("list checks for PR #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("list checks for PR #%d", number), err)
 	}
 	g.checkRate(checkResp)
 
@@ -649,7 +671,7 @@ func (g *GitHub) MergePR(ctx context.Context, repo string, number int, opts *Mer
 
 	result, resp, err := g.client.PullRequests.Merge(ctx, owner, name, number, commitMsg, ghOpts)
 	if err != nil {
-		return nil, fmt.Errorf("merge PR #%d: %w", number, err)
+		return nil, g.opErr(fmt.Sprintf("merge PR #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -671,13 +693,13 @@ func (g *GitHub) AddReaction(ctx context.Context, repo string, number int, comme
 	if commentID > 0 {
 		_, resp, err := g.client.Reactions.CreateIssueCommentReaction(ctx, owner, name, commentID, emoji)
 		if err != nil {
-			return fmt.Errorf("add reaction to comment %d: %w", commentID, err)
+			return g.opErr(fmt.Sprintf("add reaction to comment %d", commentID), err)
 		}
 		g.checkRate(resp)
 	} else {
 		_, resp, err := g.client.Reactions.CreateIssueReaction(ctx, owner, name, number, emoji)
 		if err != nil {
-			return fmt.Errorf("add reaction to #%d: %w", number, err)
+			return g.opErr(fmt.Sprintf("add reaction to #%d", number), err)
 		}
 		g.checkRate(resp)
 	}
@@ -698,7 +720,7 @@ func (g *GitHub) RequestReview(ctx context.Context, repo string, number int, rev
 		Reviewers: reviewers,
 	})
 	if err != nil {
-		return fmt.Errorf("request review on PR #%d: %w", number, err)
+		return g.opErr(fmt.Sprintf("request review on PR #%d", number), err)
 	}
 	g.checkRate(resp)
 
@@ -721,7 +743,7 @@ func (g *GitHub) Search(ctx context.Context, query string, kind SearchKind, limi
 	case SearchIssues:
 		result, resp, err := g.client.Search.Issues(ctx, query, opts)
 		if err != nil {
-			return nil, fmt.Errorf("search issues: %w", err)
+			return nil, g.opErr("search issues", err)
 		}
 		g.checkRate(resp)
 
@@ -739,7 +761,7 @@ func (g *GitHub) Search(ctx context.Context, query string, kind SearchKind, limi
 	case SearchCode:
 		result, resp, err := g.client.Search.Code(ctx, query, opts)
 		if err != nil {
-			return nil, fmt.Errorf("search code: %w", err)
+			return nil, g.opErr("search code", err)
 		}
 		g.checkRate(resp)
 
@@ -756,7 +778,7 @@ func (g *GitHub) Search(ctx context.Context, query string, kind SearchKind, limi
 	case SearchCommits:
 		result, resp, err := g.client.Search.Commits(ctx, query, opts)
 		if err != nil {
-			return nil, fmt.Errorf("search commits: %w", err)
+			return nil, g.opErr("search commits", err)
 		}
 		g.checkRate(resp)
 
@@ -850,9 +872,28 @@ func mapGitHubPR(gp *github.PullRequest) *PullRequest {
 	return pr
 }
 
+// truncate shortens s to at most maxLen bytes, ellipsis included.
+//
+// Byte slicing alone splits multi-byte runes, and appending an
+// ellipsis after slicing to maxLen overruns the budget the caller
+// asked for. Both matter here because the strings are issue and commit
+// bodies written by people, and a body cut mid-rune reaches the model
+// as replacement characters.
 func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	const ellipsis = "..."
+	if maxLen <= len(ellipsis) {
+		return ellipsis[:maxLen]
+	}
+	cut := maxLen - len(ellipsis)
+	// Back up to a rune boundary so the cut never lands mid-character.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ellipsis
 }

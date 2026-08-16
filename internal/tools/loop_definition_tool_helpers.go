@@ -436,6 +436,17 @@ func applyAdHocLoopLaunchContextDefaults(ctx context.Context, launch looppkg.Lau
 	if launch.ChannelBinding == nil {
 		launch.ChannelBinding = ChannelBindingFromContext(ctx)
 	}
+	// A bound caller cannot author its way out of a binding. This path
+	// launches a model-written spec, so without the caller's bindings
+	// merged over it a loop bound to a read-only account could spawn an
+	// unbound one and reach anything through it — the same escape the
+	// delegate path had, and not covered by the registry cascade because
+	// a spawning service loop is not a container ancestor. Caller-first,
+	// so a spec naming a different account loses to the boundary the
+	// caller is already inside.
+	if callerBindings := looppkg.BindingsFromContext(ctx); len(callerBindings) > 0 {
+		launch.Spec.Bindings = looppkg.MergeBindings(callerBindings, launch.Spec.Bindings)
+	}
 	naturalMode, conversationID, target := LoopCompletionTargetFromContext(ctx)
 	if launch.Spec.Operation == looppkg.OperationBackgroundTask && launch.Spec.Completion == "" {
 		launch.Spec.Completion = naturalMode

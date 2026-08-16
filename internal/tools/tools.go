@@ -75,7 +75,6 @@ type Registry struct {
 	notifRouter        *notifications.NotificationRouter
 	notifDispatcher    CallbackDispatcher
 	companionCaller    companionCallFunc
-	forgeTools         forgeHandler
 	fileTools          *FileTools
 	shellExec          *ShellExec
 	attachmentTools    *attachments.Tools
@@ -586,7 +585,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_grep",
 		SkipContentResolve: true,
-		Description:        "Search file contents for a regular expression pattern. Recursively searches files and returns matching lines with file paths and line numbers. Skips binary files and files larger than 1MB.",
+		Description:        "Search file contents for a regular expression pattern. Recursively searches files and returns matching lines with file paths and line numbers. Use file_pattern to keep source searches inside a filename glob such as '*.go'. Skips binary files and files larger than 1MB.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -596,7 +595,11 @@ func (r *Registry) registerFileTools() {
 				},
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Directory to search in (relative to workspace root, default '.')",
+					"description": "Directory to search in (named-root prefix or relative path; default is the bound repo_root when present, otherwise the workspace root)",
+				},
+				"file_pattern": map[string]any{
+					"type":        "string",
+					"description": "Optional glob matched against each filename before reading it (for example '*.go', '*_test.py', or 'package.json')",
 				},
 				"max_depth": map[string]any{
 					"type":        "integer",
@@ -623,7 +626,8 @@ func (r *Registry) registerFileTools() {
 			if ci, ok := args["case_insensitive"].(bool); ok {
 				caseInsensitive = ci
 			}
-			return r.fileTools.Grep(ctx, path, pattern, maxDepth, caseInsensitive)
+			filePattern, _ := args["file_pattern"].(string)
+			return r.fileTools.Grep(ctx, path, pattern, filePattern, maxDepth, caseInsensitive)
 		},
 	})
 
@@ -676,6 +680,8 @@ func (r *Registry) registerFileTools() {
 			return r.fileTools.Tree(ctx, path, maxDepth)
 		},
 	})
+
+	r.registerRepositoryGitTools()
 }
 
 func (r *Registry) registerShellExec() {

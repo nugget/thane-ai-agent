@@ -100,20 +100,32 @@ tagging strategy.
 Repository event subscriptions are managed with `forge_repo_follow`,
 `forge_repo_unfollow`, and `forge_repo_subscriptions`. Each subscription
 tracks new releases, commits, or both with high-water marks stored in
-opstate. A subscription may also carry `local_checkout`, a path maintained
-as a read-only mirror checkout by the poller before event delivery. That
-path must be empty or an existing Thane-owned mirror checkout; non-empty
-directories and unmarked git checkouts are refused.
+opstate. A subscription may also expose a named repository root by setting
+`repo_root` to a stable handle such as `thanecode`. Thane derives the physical
+checkout path beneath `workspace.path`, registers the root as read-only, and
+maintains the mirror before event delivery. Host filesystem paths are not part
+of the model-facing contract. Omitting `repo_root` creates an event-only
+subscription, even when the caller itself carries a `repo_root` binding; a
+binding constrains an explicitly named new root but does not synthesize one.
+
+`forge_repo_follow` performs the initial clone itself, so a checkout
+exists on disk when the call returns; a clone that fails fails the
+call rather than storing a path nothing will ever create. The poller
+keeps it current thereafter. With `forge.subscription_check_interval`
+unset or zero the checkout is still created and accurate as of that
+moment, but nothing refreshes it and the subscription wakes no loop —
+the tool says so in its response.
 
 Unlike legacy pollers that start a fresh generic conversation, forge
 subscriptions require `wake_loop`. New `release` and `commit` events are
 delivered to the named loop as structured event-source notifications, so the
 receiving `thane_loop_create` or other `thane_` loop remains the owner of durable
-documents and corpus conventions. When a local checkout is configured,
-event metadata includes `local_checkout` and `last_synced_sha`, and
+documents and corpus conventions. When a repository root is configured,
+event metadata includes `repo_root` and `last_synced_sha`, and
 unfollowing the subscription leaves the checkout on disk.
 
-To make the checkout easy for the receiving loop to read, declare the
-same path as a read-only root such as `thanecode:` with `indexing: false`.
-The loop can then use `file_read`, `file_search`, and `file_grep` against
-that prefix while the subscription keeps the worktree current.
+The receiving loop can use `file_read`, `file_tree`, `file_search`, and
+`file_grep` against the root prefix, and `repo_git_log`, `repo_git_diff`,
+`repo_git_show`, and `repo_git_blame` for scoped history. Binding the loop
+with `repo_root: thanecode` makes unqualified relative file paths and omitted
+git-tool roots resolve to `thanecode` and refuses every other root.
