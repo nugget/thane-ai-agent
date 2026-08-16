@@ -109,9 +109,26 @@ func CoreWakeEnvelope(target CoreAttentionTarget, req CoreWakeRequest) messages.
 			Context:         req.Context,
 			ForceSupervisor: req.ForceSupervisor,
 			Events:          cloneLoopEvents(req.Events),
-			Tags:            []string{coreAttentionReplyTag},
+			// The reply tag rides only on wakes that can be replied to.
+			// It exists to make loop_wake callable for the return leg,
+			// and it carries the whole loops catalog — definition and
+			// lifecycle mutation included — so granting it to a wake
+			// from system, delegate, or interactive code would widen
+			// the recipient's tool surface to serve a reply that has
+			// nowhere to go.
+			Tags: coreWakeTags(req.From),
 		},
 	}
+}
+
+// coreWakeTags returns the iteration-scoped capability tags a core wake
+// asks the recipient to load. Only a wake from a loop that can be woken
+// back earns the reply tag; see [WakeableLoopSender].
+func coreWakeTags(from messages.Identity) []string {
+	if !WakeableLoopSender(from) {
+		return nil
+	}
+	return []string{coreAttentionReplyTag}
 }
 
 func coreWakeScope(extra []string) []string {

@@ -62,7 +62,12 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 	determinationRequested := false
 	for _, env := range ordered {
 		payload, _ := decodeLoopNotifyPayload(env.Payload)
-		determinationRequested = determinationRequested || requestsDetermination(env, payload)
+		// A determination request from an unanswerable sender gets no
+		// reply contract: the contract's whole instruction is to wake
+		// the requester back, and naming a return path that does not
+		// exist is worse than saying nothing.
+		determinationRequested = determinationRequested ||
+			(requestsDetermination(env, payload) && WakeableLoopSender(env.From))
 		view := notifyView{
 			ID:       env.ID,
 			From:     env.From,
@@ -129,6 +134,20 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 	return summary
 }
 
+// WakeableLoopSender reports whether an envelope's sender is a loop the
+// recipient could wake back. It is the precondition for every part of
+// the reply round trip — the rendered reply address, the reply contract,
+// and the capability tag that makes loop_wake callable — so the three
+// are gated on one predicate and cannot disagree about who is
+// answerable.
+//
+// System, delegate, and interactive senders fail it. They can ask for a
+// determination (document-root sync does), but there is no later
+// iteration of theirs to deliver one to.
+func WakeableLoopSender(from messages.Identity) bool {
+	return from.Kind == messages.IdentityLoop && strings.TrimSpace(from.ID) != ""
+}
+
 // replyTarget renders the exact loop_wake arguments that reach the
 // sender of one notification, or nil when the sender is not a loop the
 // recipient can wake back: a delegate, an interactive conversation, or
@@ -142,14 +161,10 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 // move; suppressing the field would instead teach that no reply was
 // ever possible.
 func replyTarget(from messages.Identity) map[string]any {
-	if from.Kind != messages.IdentityLoop {
+	if !WakeableLoopSender(from) {
 		return nil
 	}
-	id := strings.TrimSpace(from.ID)
-	if id == "" {
-		return nil
-	}
-	target := map[string]any{"tool": "loop_wake", "loop_id": id}
+	target := map[string]any{"tool": "loop_wake", "loop_id": strings.TrimSpace(from.ID)}
 	if name := strings.TrimSpace(from.Name); name != "" {
 		target["loop_name"] = name
 	}

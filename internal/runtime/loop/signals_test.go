@@ -922,6 +922,10 @@ func TestSummarizeNotifyEnvelopesReplyContract(t *testing.T) {
 			wantContract: false,
 		},
 		{
+			// document_root_syncer sends a real determination request as
+			// IdentitySystem. It gets no reply address, and so no reply
+			// contract either — the contract's only instruction is to
+			// wake the requester back, and there is nothing to wake.
 			name: "system sender has no loop to wake back",
 			envelope: messages.Envelope{
 				From:    systemSender,
@@ -929,7 +933,18 @@ func TestSummarizeNotifyEnvelopesReplyContract(t *testing.T) {
 				Payload: messages.LoopNotifyPayload{Kind: CoreAttentionRequestKind, Concern: "Sync is stalled."},
 			},
 			wantReplyTo:  false,
-			wantContract: true,
+			wantContract: false,
+		},
+		{
+			// A loop identity with no ID cannot be addressed either.
+			name: "loop sender without an id is not answerable",
+			envelope: messages.Envelope{
+				From:    messages.Identity{Kind: messages.IdentityLoop, Name: "anonymous"},
+				Scope:   []string{CoreAttentionScope},
+				Payload: messages.LoopNotifyPayload{Kind: CoreAttentionRequestKind, Concern: "Something looks wrong."},
+			},
+			wantReplyTo:  false,
+			wantContract: false,
 		},
 	}
 

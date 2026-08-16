@@ -44,7 +44,8 @@ func (r *Registry) registerMessageTools() {
 		Description: "Ask the designated core/owner loop to review a concern. Use this from delegate, service, or subsystem loops when a human-facing alert, message, or strategic decision may be needed. " +
 			"This call forces the core loop's next iteration into a supervisor turn — costlier than a normal wake — so reserve it for concerns that genuinely warrant the extra capacity, not as a routine notification channel. " +
 			"Do not include recipients, phone numbers, delivery channels, or instructions to send immediately; the core loop decides whether to deliver, defer, or ignore the concern. " +
-			"Its determination comes back as a wake on a later iteration of yours, not as a return value here, and may arrive as a supervisor turn when it wants you to re-reason rather than record a fact. Returning now with the ask sent is the complete action; do not block on the answer or re-send the same concern while waiting for it.",
+			"Returning now with the ask sent is the complete action either way: nothing comes back as a return value here, so do not block on an answer or re-send the same concern while waiting. " +
+			"If you are a running loop, the core loop's determination reaches you as a wake on a later iteration, sometimes a supervisor turn when it wants you to re-reason rather than record a fact — so leave a note to yourself about what you asked. If you are a delegate or a one-shot turn, there is no later iteration to deliver to and this is a one-way escalation: say what you know now, because you will not see the reply.",
 		Parameters: coreAttentionToolParameters(),
 		Handler:    r.handleRequestCoreAttention,
 		Core:       true,

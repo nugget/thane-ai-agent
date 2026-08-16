@@ -63,10 +63,65 @@ func TestWakeCoreLoopDeliversSharedCoreAttentionEnvelope(t *testing.T) {
 	if payload.Kind != CoreAttentionRequestKind || !payload.ForceSupervisor {
 		t.Fatalf("payload = %#v, want default core attention supervisor wake", payload)
 	}
-	// The reply path the recipient is instructed to use lives behind
-	// the loops tag; the wake carries it so the answering tool is
-	// callable on the turn that is asked to answer.
-	if len(payload.Tags) != 1 || payload.Tags[0] != coreAttentionReplyTag {
-		t.Fatalf("payload tags = %#v, want [%q]", payload.Tags, coreAttentionReplyTag)
+	// This request comes from system code, which has no later iteration
+	// to receive a reply — so it earns no reply tag, and the recipient's
+	// tool surface is not widened to serve a return leg that cannot run.
+	if len(payload.Tags) != 0 {
+		t.Fatalf("payload tags = %#v, want none for a system sender", payload.Tags)
+	}
+}
+
+// TestCoreWakeEnvelopeReplyTagFollowsAnswerability pins the tag to the
+// one case that can use it. The loops tag carries definition and
+// lifecycle mutation tools, so it is granted to make the return leg
+// callable — never as a side effect of asking for a determination.
+func TestCoreWakeEnvelopeReplyTagFollowsAnswerability(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		from     messages.Identity
+		wantTags []string
+	}{
+		{
+			name:     "live loop can be woken back",
+			from:     messages.Identity{Kind: messages.IdentityLoop, ID: "loop-42", Name: "garage-watch"},
+			wantTags: []string{coreAttentionReplyTag},
+		},
+		{
+			name: "loop identity without an id is unaddressable",
+			from: messages.Identity{Kind: messages.IdentityLoop, Name: "anonymous"},
+		},
+		{
+			name: "system sender has no later iteration",
+			from: messages.Identity{Kind: messages.IdentitySystem, Name: "document_root_syncer"},
+		},
+		{
+			name: "delegate is a one-shot",
+			from: messages.Identity{Kind: messages.IdentityDelegate, Name: "delegate"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := CoreWakeEnvelope(CoreAttentionTarget{LoopID: "core"}, CoreWakeRequest{
+				From:    tt.from,
+				Concern: "Something deserves a decision.",
+			})
+			payload, ok := env.Payload.(messages.LoopNotifyPayload)
+			if !ok {
+				t.Fatalf("payload type = %T, want LoopNotifyPayload", env.Payload)
+			}
+			if len(payload.Tags) != len(tt.wantTags) {
+				t.Fatalf("payload tags = %#v, want %#v", payload.Tags, tt.wantTags)
+			}
+			for i, tag := range tt.wantTags {
+				if payload.Tags[i] != tag {
+					t.Fatalf("payload tags = %#v, want %#v", payload.Tags, tt.wantTags)
+				}
+			}
+		})
 	}
 }
