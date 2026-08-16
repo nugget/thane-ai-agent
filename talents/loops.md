@@ -163,6 +163,17 @@ iteration — costlier than a normal wake. Reserve it for concerns
 that genuinely warrant the extra capacity, not as a routine
 notification channel.
 
+The return leg is yours to close. When a loop wakes you asking for a
+determination, its notification carries a `reply_to.loop_id`, and
+`loop_wake` addressed there is how your conclusion reaches it — with
+`force_supervisor: true` when you are asking it to re-reason rather
+than to record a fact. The requester is asleep by then and cannot
+see what you decided, so a determination you reach and never send is
+one it never receives; the same concern comes back unchanged on its
+next pass. Escalating to a person is one available outcome, not the
+expected one, and "nothing needs to happen" is a real determination
+that still gets sent back with the reasoning behind it.
+
 Natural-language timing inside a task does not schedule a service loop.
 Pick a sleep envelope (sleep_min, sleep_max) tight enough to catch what
 matters and loose enough to cost nothing when quiet; the running loop

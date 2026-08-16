@@ -16,6 +16,14 @@ const (
 	// CoreAttentionRequestKind is the default payload kind for direct
 	// loop-to-core attention requests.
 	CoreAttentionRequestKind = "core_attention_request"
+	// coreAttentionReplyTag is activated on the recipient's next
+	// iteration by every core-attention wake. The reply path that wake
+	// asks the recipient to use — loop_wake — sits behind the loops
+	// tag, so the request that wants a determination also hands over
+	// the tool that returns one. Without it the recipient is told to
+	// answer with a tool its turn cannot call, and the runtime contract
+	// correctly forbids calling it anyway.
+	coreAttentionReplyTag = "loops"
 )
 
 // CoreAttentionTarget identifies the live loop that should receive
@@ -101,8 +109,26 @@ func CoreWakeEnvelope(target CoreAttentionTarget, req CoreWakeRequest) messages.
 			Context:         req.Context,
 			ForceSupervisor: req.ForceSupervisor,
 			Events:          cloneLoopEvents(req.Events),
+			// The reply tag rides only on wakes that can be replied to.
+			// It exists to make loop_wake callable for the return leg,
+			// and it carries the whole loops catalog — definition and
+			// lifecycle mutation included — so granting it to a wake
+			// from system, delegate, or interactive code would widen
+			// the recipient's tool surface to serve a reply that has
+			// nowhere to go.
+			Tags: coreWakeTags(req.From),
 		},
 	}
+}
+
+// coreWakeTags returns the iteration-scoped capability tags a core wake
+// asks the recipient to load. Only a wake from a loop that can be woken
+// back earns the reply tag; see [WakeableLoopSender].
+func coreWakeTags(from messages.Identity) []string {
+	if !WakeableLoopSender(from) {
+		return nil
+	}
+	return []string{coreAttentionReplyTag}
 }
 
 func coreWakeScope(extra []string) []string {
