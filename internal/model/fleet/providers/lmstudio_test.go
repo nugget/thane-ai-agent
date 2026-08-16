@@ -166,9 +166,9 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 		{Role: "tool", Content: "", ToolCallID: "tc1"},                  // empty tool result
 	}
 
-	wire, err := toLMStudioMessages(msgs)
+	wire, err := toOpenAICompatMessages(msgs)
 	if err != nil {
-		t.Fatalf("toLMStudioMessages: %v", err)
+		t.Fatalf("toOpenAICompatMessages: %v", err)
 	}
 	b, err := json.Marshal(wire)
 	if err != nil {
@@ -207,13 +207,13 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 func TestDecodeLMStudioToolCalls_SynthesizesUniqueMissingIDs(t *testing.T) {
 	t.Parallel()
 
-	calls, err := decodeLMStudioToolCalls(map[int]*openAICompatToolAccumulator{
+	calls, err := decodeOpenAICompatToolCalls(map[int]*openAICompatToolAccumulator{
 		0: {Name: "first"},
 		1: {Name: "second"},
 		2: {ID: "runner_call_3", Name: "third"},
 	})
 	if err != nil {
-		t.Fatalf("decodeLMStudioToolCalls() error = %v", err)
+		t.Fatalf("decodeOpenAICompatToolCalls() error = %v", err)
 	}
 	if len(calls) != 3 {
 		t.Fatalf("tool calls = %d, want 3", len(calls))

@@ -111,3 +111,98 @@ func TestOpenAICompatModelInfoContextCeiling(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAICompatEmptyStreamIsNotSuccess covers the gap a frame counter
+// leaves open. A role-only opening frame and a usage-only trailer are
+// both well-formed and both increment the count, so a stream carrying
+// nothing but scaffolding would pass a chunks>0 check and be reported as
+// a completed turn with zero tokens — the same fabricated success an
+// undetected error frame produces, arriving by a quieter route.
+func TestOpenAICompatEmptyStreamIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		frames []string
+		wantOK bool
+	}{
+		{
+			name:   "role-only frame then clean close",
+			frames: []string{`{"choices":[{"delta":{"role":"assistant"}}]}`, "[DONE]"},
+		},
+		{
+			name: "usage-only trailer, no content",
+			frames: []string{
+				`{"choices":[{"delta":{"role":"assistant"}}]}`,
+				`{"choices":[],"usage":{"prompt_tokens":41,"completion_tokens":0}}`,
+				"[DONE]",
+			},
+		},
+		{
+			name:   "no frames at all",
+			frames: []string{"[DONE]"},
+		},
+		{
+			name:   "real content is a real completion",
+			frames: []string{`{"choices":[{"delta":{"content":"hello"}}]}`, "[DONE]"},
+			wantOK: true,
+		},
+		{
+			name:   "tool call with no text is a real completion",
+			frames: []string{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"ha_get_state","arguments":"{}"}}]}}]}`, "[DONE]"},
+			wantOK: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, f := range tt.frames {
+					_, _ = w.Write([]byte("data: " + f + "\n\n"))
+				}
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("ChatStream: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("empty stream reported success: content=%q tools=%d tokens=%d/%d",
+					resp.Message.Content, len(resp.Message.ToolCalls), resp.InputTokens, resp.OutputTokens)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatCapturesFinishReason pins the provider termination
+// signal that the iteration layer records. Without it a truncated answer
+// ("length") is indistinguishable from a complete one.
+func TestOpenAICompatCapturesFinishReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"truncated\"}}]}\n\n"))
+		// The terminating frame carries finish_reason with an empty delta.
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.StopReason != "length" {
+		t.Errorf("StopReason = %q, want \"length\"", resp.StopReason)
+	}
+}

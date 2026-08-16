@@ -104,6 +104,42 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					),
 				})
 			}
+		case "openai_compat":
+			ri.Attempted = true
+			client := bundle.OpenAICompatClients[res.ID]
+			if client == nil {
+				ri.Error = "missing openai_compat client"
+				inv.Resources = append(inv.Resources, ri)
+				continue
+			}
+			models, err := client.ListModelInfos(ctx)
+			if err != nil {
+				ri.Error = err.Error()
+				inv.Resources = append(inv.Resources, ri)
+				continue
+			}
+			sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+			for _, m := range models {
+				// The OpenAI schema carries only an id, so most of this
+				// is what the server volunteered beyond it. A ceiling of
+				// zero means the server did not report one — the
+				// deployment then keeps its configured window rather
+				// than inheriting a fabricated zero.
+				ceiling := m.ContextCeiling()
+				ri.Models = append(ri.Models, DiscoveredModel{
+					SupportsChat:      modelproviders.SupportsChatForModel(ri.Provider, m.Type, ri.Capabilities),
+					Name:              m.ID,
+					Family:            m.Arch,
+					Quantization:      m.Quantization,
+					SupportsTools:     ri.Capabilities.SupportsTools,
+					SupportsStreaming: ri.Capabilities.SupportsStreaming,
+					SupportsImages: modelproviders.SupportsImagesForModel(
+						ri.Provider, m.ID, m.Arch, nil, ri.Capabilities,
+					),
+					ContextWindow:    ceiling,
+					MaxContextWindow: ceiling,
+				})
+			}
 		case "lmstudio":
 			ri.Attempted = true
 			client := bundle.LMStudioClients[res.ID]

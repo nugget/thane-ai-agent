@@ -271,7 +271,7 @@ type openAICompatToolAccumulator struct {
 	Args strings.Builder
 }
 
-func toLMStudioMessages(msgs []llm.Message) ([]openAICompatMessage, error) {
+func toOpenAICompatMessages(msgs []llm.Message) ([]openAICompatMessage, error) {
 	out := make([]openAICompatMessage, 0, len(msgs))
 	for _, m := range msgs {
 		wire := openAICompatMessage{
@@ -325,7 +325,7 @@ func toLMStudioMessages(msgs []llm.Message) ([]openAICompatMessage, error) {
 	return out, nil
 }
 
-func normalizeLMStudioMessageRole(role string) string {
+func normalizeOpenAICompatMessageRole(role string) string {
 	role = strings.TrimSpace(role)
 	if role == "" {
 		return "assistant"
@@ -333,7 +333,7 @@ func normalizeLMStudioMessageRole(role string) string {
 	return role
 }
 
-func decodeLMStudioToolCalls(accs map[int]*openAICompatToolAccumulator) ([]llm.ToolCall, error) {
+func decodeOpenAICompatToolCalls(accs map[int]*openAICompatToolAccumulator) ([]llm.ToolCall, error) {
 	if len(accs) == 0 {
 		return nil, nil
 	}
@@ -349,11 +349,11 @@ func decodeLMStudioToolCalls(accs map[int]*openAICompatToolAccumulator) ([]llm.T
 		if acc == nil || acc.Name == "" {
 			continue
 		}
-		args, err := parseLMStudioToolArguments(acc.Name, acc.Args.String())
+		args, err := parseOpenAICompatToolArguments(acc.Name, acc.Args.String())
 		if err != nil {
 			return nil, err
 		}
-		callID, err := ensureLMStudioToolCallID(acc.ID)
+		callID, err := ensureOpenAICompatToolCallID(acc.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -365,11 +365,11 @@ func decodeLMStudioToolCalls(accs map[int]*openAICompatToolAccumulator) ([]llm.T
 	return out, nil
 }
 
-// ensureLMStudioToolCallID repairs a runner omission before the assistant
+// ensureOpenAICompatToolCallID repairs a runner omission before the assistant
 // message enters iteration history. LM Studio rejects that same historical
 // tool call on the next request when its id is empty, even though its Qwen
 // parser can produce tool calls without assigning one.
-func ensureLMStudioToolCallID(id string) (string, error) {
+func ensureOpenAICompatToolCallID(id string) (string, error) {
 	if strings.TrimSpace(id) != "" {
 		return id, nil
 	}
@@ -380,7 +380,7 @@ func ensureLMStudioToolCallID(id string) (string, error) {
 	return "call_" + generated.String(), nil
 }
 
-func decodeLMStudioToolCallsFromSlice(in []openAICompatToolCallDelta) ([]llm.ToolCall, error) {
+func decodeOpenAICompatToolCallsFromSlice(in []openAICompatToolCallDelta) ([]llm.ToolCall, error) {
 	if len(in) == 0 {
 		return nil, nil
 	}
@@ -399,10 +399,10 @@ func decodeLMStudioToolCallsFromSlice(in []openAICompatToolCallDelta) ([]llm.Too
 		acc.Name = tc.Function.Name
 		acc.Args.WriteString(tc.Function.Arguments)
 	}
-	return decodeLMStudioToolCalls(accs)
+	return decodeOpenAICompatToolCalls(accs)
 }
 
-func parseLMStudioToolArguments(name, raw string) (map[string]any, error) {
+func parseOpenAICompatToolArguments(name, raw string) (map[string]any, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return map[string]any{}, nil
@@ -445,7 +445,7 @@ func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) erro
 	}
 	llm.ApplyTextToolCallFallback(resp, validToolNames, llm.DefaultToolCallTextProfile())
 	for i := range resp.Message.ToolCalls {
-		id, err := ensureLMStudioToolCallID(resp.Message.ToolCalls[i].ID)
+		id, err := ensureOpenAICompatToolCallID(resp.Message.ToolCalls[i].ID)
 		if err != nil {
 			return err
 		}

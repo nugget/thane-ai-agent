@@ -134,7 +134,7 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, model string, messages []
 func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
-	wireMessages, err := toLMStudioMessages(messages)
+	wireMessages, err := toOpenAICompatMessages(messages)
 	if err != nil {
 		return nil, fmt.Errorf("encode messages: %w", err)
 	}
@@ -226,6 +226,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		toolAcc        = make(map[int]*openAICompatToolAccumulator)
 		done           bool
 		chunks         int
+		finishReason   string
 	)
 
 	processEvent := func(data string) error {
@@ -258,6 +259,15 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 			usage = *chunk.Usage
 		}
 		for _, choice := range chunk.Choices {
+			// The terminating frame carries finish_reason with an empty
+			// delta, so read it before the delta guard skips the choice.
+			// This is the provider's own termination signal — "length",
+			// "tool_calls", "stop", and the pause_turn family — which
+			// the iteration layer records and operators read to tell a
+			// truncated answer from a complete one.
+			if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
+				finishReason = strings.TrimSpace(*choice.FinishReason)
+			}
 			if choice.Delta == nil {
 				continue
 			}
@@ -320,28 +330,32 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		}
 	}
 
-	// A stream that carried no chunks at all never produced a completion,
-	// however cleanly it closed. Reporting success here would hand the
-	// caller a well-formed zero-token response and hide the failure; the
-	// non-streaming path rejects its equivalent for the same reason.
-	if chunks == 0 {
-		return nil, fmt.Errorf("%s returned an empty stream for model %q", c.provider, requestedModel)
-	}
-
-	toolCalls, err := decodeLMStudioToolCalls(toolAcc)
+	toolCalls, err := decodeOpenAICompatToolCalls(toolAcc)
 	if err != nil {
 		return nil, err
+	}
+
+	// Frame count is not evidence of a completion. A role-only opening
+	// frame or a usage-only trailer both increment it, so a stream that
+	// carried nothing but scaffolding and then closed cleanly would pass
+	// a chunks>0 check and return Done:true with no content, no tool
+	// calls, and zero tokens — the fabricated success this client exists
+	// to refuse. Judge the same thing the non-streaming path judges:
+	// whether an assistant actually said or did anything.
+	if strings.TrimSpace(contentBuilder.String()) == "" && len(toolCalls) == 0 {
+		return nil, fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks)
 	}
 
 	result := &llm.ChatResponse{
 		Model:         model,
 		CreatedAt:     createdAt,
 		Done:          true,
+		StopReason:    finishReason,
 		InputTokens:   usage.PromptTokens,
 		OutputTokens:  usage.CompletionTokens,
 		TotalDuration: 0,
 	}
-	result.Message.Role = normalizeLMStudioMessageRole(role)
+	result.Message.Role = normalizeOpenAICompatMessageRole(role)
 	result.Message.Content = contentBuilder.String()
 	result.Message.ToolCalls = toolCalls
 	if err := applyTextToolFallback(result, validToolNames); err != nil {
@@ -367,7 +381,7 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		return nil, fmt.Errorf("response contained no choices")
 	}
 
-	toolCalls, err := decodeLMStudioToolCallsFromSlice(wire.Choices[0].Message.ToolCalls)
+	toolCalls, err := decodeOpenAICompatToolCallsFromSlice(wire.Choices[0].Message.ToolCalls)
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +391,9 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		InputTokens:  0,
 		OutputTokens: 0,
 	}
+	if fr := wire.Choices[0].FinishReason; fr != nil {
+		result.StopReason = strings.TrimSpace(*fr)
+	}
 	if wire.Created > 0 {
 		result.CreatedAt = time.Unix(wire.Created, 0).UTC()
 	}
@@ -384,7 +401,7 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		result.InputTokens = wire.Usage.PromptTokens
 		result.OutputTokens = wire.Usage.CompletionTokens
 	}
-	result.Message.Role = normalizeLMStudioMessageRole(wire.Choices[0].Message.Role)
+	result.Message.Role = normalizeOpenAICompatMessageRole(wire.Choices[0].Message.Role)
 	result.Message.Content = openAICompatContentText(wire.Choices[0].Message.Content)
 	result.Message.ToolCalls = toolCalls
 	if err := applyTextToolFallback(result, validToolNames); err != nil {
