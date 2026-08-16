@@ -134,6 +134,9 @@ func (r *Runtime) SetLogger(logger *slog.Logger) {
 	for id, lc := range r.bundle.LMStudioClients {
 		lc.SetLogger(logger.With("resource", id))
 	}
+	for id, oc := range r.bundle.OpenAICompatClients {
+		oc.SetLogger(logger.With("resource", id))
+	}
 	if r.bundle.AnthropicClient != nil {
 		r.bundle.AnthropicClient.SetLogger(logger)
 	}
@@ -188,7 +191,7 @@ func (r *Runtime) InventoryClientCount() int {
 	if r == nil || r.bundle == nil {
 		return 0
 	}
-	return len(r.bundle.OllamaClients) + len(r.bundle.LMStudioClients)
+	return len(r.bundle.OllamaClients) + len(r.bundle.LMStudioClients) + len(r.bundle.OpenAICompatClients)
 }
 
 // AnthropicRateLimitSnapshot returns the latest captured Anthropic

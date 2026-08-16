@@ -246,7 +246,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			if provider == "" {
 				provider = "ollama"
 			}
-			if provider == "ollama" || provider == "lmstudio" {
+			if isSelfHostedProvider(provider) {
 				providerResourceIDs := resourceIDsByProvider[provider]
 				switch {
 				case hasProviderResource(resourceByID, "default", provider):
@@ -528,4 +528,17 @@ func (c *Catalog) RouterConfig(maxAuditLog int) router.Config {
 		})
 	}
 	return cfg
+}
+
+// isSelfHostedProvider reports whether a provider names an endpoint the
+// operator runs. These are the providers whose models can be inferred
+// onto a single configured resource, and the ones that default to cost
+// tier 0 — a model you host has no per-token price.
+func isSelfHostedProvider(provider string) bool {
+	switch provider {
+	case "ollama", "lmstudio", "openai_compat":
+		return true
+	default:
+		return false
+	}
 }

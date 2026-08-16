@@ -23,27 +23,27 @@ func TestLMStudioPingAndListModelInfos(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/models":
-			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+			_ = json.NewEncoder(w).Encode(openAICompatModelsResponse{
 				Data: []LMStudioModelInfo{{ID: "gpt-oss:20b"}, {ID: "qwen3:8b"}},
 			})
 		case "/api/v1/models":
-			_ = json.NewEncoder(w).Encode(lmStudioV1ModelsResponse{
-				Models: []lmStudioV1ModelInfo{
+			_ = json.NewEncoder(w).Encode(openAICompatV1ModelsResponse{
+				Models: []openAICompatV1ModelInfo{
 					{
 						Type:             "vlm",
 						Publisher:        "google",
 						Key:              "google/gemma-3-4b",
 						Architecture:     "gemma3",
-						Quantization:     &lmStudioV1Quantization{Name: "4bit"},
+						Quantization:     &openAICompatV1Quantization{Name: "4bit"},
 						MaxContextLength: 131072,
 						Format:           "mlx",
-						Capabilities: &lmStudioV1ModelCapabilities{
+						Capabilities: &openAICompatV1ModelCapabilities{
 							Vision:            true,
 							TrainedForToolUse: false,
 						},
-						LoadedInstances: []lmStudioV1LoadedInstance{
-							{ID: "google/gemma-3-4b", Config: lmStudioV1LoadConfig{ContextLength: 4096}},
-							{ID: "google/gemma-3-4b:2", Config: lmStudioV1LoadConfig{ContextLength: 24000}},
+						LoadedInstances: []openAICompatV1LoadedInstance{
+							{ID: "google/gemma-3-4b", Config: openAICompatV1LoadConfig{ContextLength: 4096}},
+							{ID: "google/gemma-3-4b:2", Config: openAICompatV1LoadConfig{ContextLength: 24000}},
 						},
 					},
 					{
@@ -51,7 +51,7 @@ func TestLMStudioPingAndListModelInfos(t *testing.T) {
 						Publisher:        "nomic-ai",
 						Key:              "text-embedding-nomic-embed-text-v1.5",
 						Architecture:     "nomic-bert",
-						Quantization:     &lmStudioV1Quantization{Name: "Q4_K_M"},
+						Quantization:     &openAICompatV1Quantization{Name: "Q4_K_M"},
 						MaxContextLength: 2048,
 						Format:           "gguf",
 					},
@@ -97,11 +97,11 @@ func TestLMStudioListModelInfos_FallsBackToV0Endpoint(t *testing.T) {
 		case "/api/v1/models":
 			http.Error(w, `{"error":"Unexpected endpoint or method."}`, http.StatusNotFound)
 		case "/api/v0/models":
-			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+			_ = json.NewEncoder(w).Encode(openAICompatModelsResponse{
 				Data: []LMStudioModelInfo{{ID: "qwen3:8b", Type: "llm"}},
 			})
 		case "/v1/models":
-			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+			_ = json.NewEncoder(w).Encode(openAICompatModelsResponse{
 				Data: []LMStudioModelInfo{{ID: "qwen3:8b"}},
 			})
 		default:
@@ -128,7 +128,7 @@ func TestLMStudioListModelInfos_FallsBackToOpenAIEndpoint(t *testing.T) {
 		case "/api/v1/models", "/api/v0/models":
 			http.Error(w, `{"error":"Unexpected endpoint or method."}`, http.StatusNotFound)
 		case "/v1/models":
-			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+			_ = json.NewEncoder(w).Encode(openAICompatModelsResponse{
 				Data: []LMStudioModelInfo{{ID: "qwen3:8b"}},
 			})
 		default:
@@ -166,9 +166,9 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 		{Role: "tool", Content: "", ToolCallID: "tc1"},                  // empty tool result
 	}
 
-	wire, err := toLMStudioMessages(msgs)
+	wire, err := toOpenAICompatMessages(msgs)
 	if err != nil {
-		t.Fatalf("toLMStudioMessages: %v", err)
+		t.Fatalf("toOpenAICompatMessages: %v", err)
 	}
 	b, err := json.Marshal(wire)
 	if err != nil {
@@ -207,13 +207,13 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 func TestDecodeLMStudioToolCalls_SynthesizesUniqueMissingIDs(t *testing.T) {
 	t.Parallel()
 
-	calls, err := decodeLMStudioToolCalls(map[int]*lmStudioToolAccumulator{
+	calls, err := decodeOpenAICompatToolCalls(map[int]*openAICompatToolAccumulator{
 		0: {Name: "first"},
 		1: {Name: "second"},
 		2: {ID: "runner_call_3", Name: "third"},
 	})
 	if err != nil {
-		t.Fatalf("decodeLMStudioToolCalls() error = %v", err)
+		t.Fatalf("decodeOpenAICompatToolCalls() error = %v", err)
 	}
 	if len(calls) != 3 {
 		t.Fatalf("tool calls = %d, want 3", len(calls))
@@ -263,7 +263,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
 			t.Fatalf("Authorization = %q, want Bearer token", got)
 		}
-		var req lmStudioChatRequest
+		var req openAICompatChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
@@ -276,19 +276,19 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 		if req.TTL != 600 {
 			t.Fatalf("req.TTL = %d, want 600", req.TTL)
 		}
-		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+		_ = json.NewEncoder(w).Encode(openAICompatChatResponse{
 			Model:   "deepslate/qwen3:8b",
 			Created: 1712160000,
-			Choices: []lmStudioChatChoice{
+			Choices: []openAICompatChatChoice{
 				{
 					Index: 0,
-					Message: &lmStudioMessageResponse{
+					Message: &openAICompatMessageResponse{
 						Role: "assistant",
-						ToolCalls: []lmStudioToolCallDelta{
+						ToolCalls: []openAICompatToolCallDelta{
 							{
 								ID:   "call_1",
 								Type: "function",
-								Function: lmStudioToolFunctionDelta{
+								Function: openAICompatToolFunctionDelta{
 									Name:      "ha_get_state",
 									Arguments: `{"entity_id":"sun.sun"}`,
 								},
@@ -297,7 +297,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 					},
 				},
 			},
-			Usage: &lmStudioUsage{PromptTokens: 42, CompletionTokens: 5},
+			Usage: &openAICompatUsage{PromptTokens: 42, CompletionTokens: 5},
 		})
 	}))
 	defer srv.Close()
@@ -340,11 +340,11 @@ func TestLMStudioChat_DefaultIdleTTLOmitsRequestField(t *testing.T) {
 		if strings.Contains(string(body), `"ttl":`) {
 			t.Fatalf("request body unexpectedly contained ttl field: %s", string(body))
 		}
-		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+		_ = json.NewEncoder(w).Encode(openAICompatChatResponse{
 			Model: "deepslate/qwen3:8b",
-			Choices: []lmStudioChatChoice{{
+			Choices: []openAICompatChatChoice{{
 				Index: 0,
-				Message: &lmStudioMessageResponse{
+				Message: &openAICompatMessageResponse{
 					Role:    "assistant",
 					Content: "ok",
 				},
@@ -370,19 +370,19 @@ func TestLMStudioChat_NonStreamingContent(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("path = %q, want /v1/chat/completions", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+		_ = json.NewEncoder(w).Encode(openAICompatChatResponse{
 			Model:   "deepslate/google/gemma-3-4b",
 			Created: 1712160000,
-			Choices: []lmStudioChatChoice{
+			Choices: []openAICompatChatChoice{
 				{
 					Index: 0,
-					Message: &lmStudioMessageResponse{
+					Message: &openAICompatMessageResponse{
 						Role:    "assistant",
 						Content: "ok\n",
 					},
 				},
 			},
-			Usage: &lmStudioUsage{PromptTokens: 13, CompletionTokens: 3},
+			Usage: &openAICompatUsage{PromptTokens: 13, CompletionTokens: 3},
 		})
 	}))
 	defer srv.Close()
@@ -461,12 +461,12 @@ func TestLMStudioChat_NonStreamingEmptyCompletionErrors(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+		_ = json.NewEncoder(w).Encode(openAICompatChatResponse{
 			Model: "deepslate/google/gemma-3-4b",
-			Choices: []lmStudioChatChoice{
+			Choices: []openAICompatChatChoice{
 				{
 					Index: 0,
-					Message: &lmStudioMessageResponse{
+					Message: &openAICompatMessageResponse{
 						Role:    "assistant",
 						Content: "",
 					},
@@ -493,7 +493,7 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("path = %q, want /v1/chat/completions", r.URL.Path)
 		}
-		var req lmStudioChatRequest
+		var req openAICompatChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
@@ -506,7 +506,7 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
-		writeChunk := func(chunk lmStudioChatResponse) {
+		writeChunk := func(chunk openAICompatChatResponse) {
 			data, err := json.Marshal(chunk)
 			if err != nil {
 				t.Fatalf("marshal chunk: %v", err)
@@ -515,30 +515,30 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 			flusher.Flush()
 		}
 
-		writeChunk(lmStudioChatResponse{
+		writeChunk(openAICompatChatResponse{
 			Model:   "deepslate/qwen3:8b",
 			Created: 1712160000,
-			Choices: []lmStudioChatChoice{{
+			Choices: []openAICompatChatChoice{{
 				Index: 0,
-				Delta: &lmStudioChatDelta{Role: "assistant", Content: "hel"},
+				Delta: &openAICompatChatDelta{Role: "assistant", Content: "hel"},
 			}},
 		})
-		writeChunk(lmStudioChatResponse{
+		writeChunk(openAICompatChatResponse{
 			Model: "deepslate/qwen3:8b",
-			Choices: []lmStudioChatChoice{{
+			Choices: []openAICompatChatChoice{{
 				Index: 0,
-				Delta: &lmStudioChatDelta{Content: "lo"},
+				Delta: &openAICompatChatDelta{Content: "lo"},
 			}},
 		})
-		writeChunk(lmStudioChatResponse{
-			Choices: []lmStudioChatChoice{{
+		writeChunk(openAICompatChatResponse{
+			Choices: []openAICompatChatChoice{{
 				Index: 0,
-				Delta: &lmStudioChatDelta{
-					ToolCalls: []lmStudioToolCallDelta{{
+				Delta: &openAICompatChatDelta{
+					ToolCalls: []openAICompatToolCallDelta{{
 						Index: 0,
 						ID:    "call_1",
 						Type:  "function",
-						Function: lmStudioToolFunctionDelta{
+						Function: openAICompatToolFunctionDelta{
 							Name:      "ha_get_state",
 							Arguments: `{"entity_id":"`,
 						},
@@ -546,19 +546,19 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 				},
 			}},
 		})
-		writeChunk(lmStudioChatResponse{
-			Choices: []lmStudioChatChoice{{
+		writeChunk(openAICompatChatResponse{
+			Choices: []openAICompatChatChoice{{
 				Index: 0,
-				Delta: &lmStudioChatDelta{
-					ToolCalls: []lmStudioToolCallDelta{{
+				Delta: &openAICompatChatDelta{
+					ToolCalls: []openAICompatToolCallDelta{{
 						Index: 0,
-						Function: lmStudioToolFunctionDelta{
+						Function: openAICompatToolFunctionDelta{
 							Arguments: `sun.sun"}`,
 						},
 					}},
 				},
 			}},
-			Usage: &lmStudioUsage{PromptTokens: 11, CompletionTokens: 7},
+			Usage: &openAICompatUsage{PromptTokens: 11, CompletionTokens: 7},
 		})
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
@@ -612,7 +612,7 @@ func TestLMStudioChatStream_DefaultsAssistantRoleWhenStreamOmitsIt(t *testing.T)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
-		writeChunk := func(chunk lmStudioChatResponse) {
+		writeChunk := func(chunk openAICompatChatResponse) {
 			data, err := json.Marshal(chunk)
 			if err != nil {
 				t.Fatalf("marshal chunk: %v", err)
@@ -621,23 +621,23 @@ func TestLMStudioChatStream_DefaultsAssistantRoleWhenStreamOmitsIt(t *testing.T)
 			flusher.Flush()
 		}
 
-		writeChunk(lmStudioChatResponse{
+		writeChunk(openAICompatChatResponse{
 			Model: "deepslate/google/gemma-3-4b",
-			Choices: []lmStudioChatChoice{{
+			Choices: []openAICompatChatChoice{{
 				Index: 0,
-				Delta: &lmStudioChatDelta{
-					ToolCalls: []lmStudioToolCallDelta{{
+				Delta: &openAICompatChatDelta{
+					ToolCalls: []openAICompatToolCallDelta{{
 						Index: 0,
 						ID:    "call_1",
 						Type:  "function",
-						Function: lmStudioToolFunctionDelta{
+						Function: openAICompatToolFunctionDelta{
 							Name:      "set_next_sleep",
 							Arguments: `{"duration":"5m"}`,
 						},
 					}},
 				},
 			}},
-			Usage: &lmStudioUsage{PromptTokens: 9, CompletionTokens: 4},
+			Usage: &openAICompatUsage{PromptTokens: 9, CompletionTokens: 4},
 		})
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
@@ -662,7 +662,7 @@ func TestLMStudioChatStream_DefaultsAssistantRoleWhenStreamOmitsIt(t *testing.T)
 // The failure this guards against was observed in production: LM Studio
 // answers a streaming request it cannot serve with HTTP 200 and an
 // `event: error` frame, where the non-streaming call would have answered
-// 400. The frame decodes cleanly into lmStudioChatResponse, so before this
+// 400. The frame decodes cleanly into openAICompatChatResponse, so before this
 // was handled the upstream failure surfaced as a successful zero-token
 // completion and the agent's context-reload recovery never fired.
 func TestLMStudioChatStream_SurfacesErrorFrame(t *testing.T) {

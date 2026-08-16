@@ -10,9 +10,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
-// LMStudioModelInfo describes one model from /v1/models.
-type LMStudioModelInfo struct {
-	ID                  string `json:"id"`
+// OpenAICompatModelInfo describes one model from /v1/models. The OpenAI
+// schema defines only id/object/owned_by; every other field here is an
+// extension some server offers and most omit — LM Studio's native
+// inventory fills the state and context fields, vLLM reports
+// max_model_len, and a plain OpenAI-compatible server sends none of it.
+// Zero means "not reported", never "zero".
+type OpenAICompatModelInfo struct {
+	ID string `json:"id"`
+	// MaxModelLen is vLLM's spelling of the context ceiling.
+	// MaxContextLength is LM Studio's. Read them through
+	// [OpenAICompatModelInfo.ContextCeiling] rather than picking one.
+	MaxModelLen         int    `json:"max_model_len,omitempty"`
 	Object              string `json:"object,omitempty"`
 	OwnedBy             string `json:"owned_by,omitempty"`
 	Type                string `json:"type,omitempty"`
@@ -26,6 +35,20 @@ type LMStudioModelInfo struct {
 	LoadedInstanceID    string `json:"loaded_instance_id,omitempty"`
 	Vision              bool   `json:"vision,omitempty"`
 	TrainedForToolUse   bool   `json:"trained_for_tool_use,omitempty"`
+}
+
+// LMStudioModelInfo is the name this type carried when LM Studio was its
+// only source. Retained so LM Studio call sites keep reading naturally.
+type LMStudioModelInfo = OpenAICompatModelInfo
+
+// ContextCeiling returns the largest context the server said this model
+// supports, reconciling the two spellings different servers use, or 0
+// when none reported one.
+func (m OpenAICompatModelInfo) ContextCeiling() int {
+	if m.MaxContextLength > 0 {
+		return m.MaxContextLength
+	}
+	return m.MaxModelLen
 }
 
 type lmStudioLoadRequest struct {
@@ -48,58 +71,59 @@ type LMStudioLoadResponse struct {
 	LoadConfig      map[string]any `json:"load_config,omitempty"`
 }
 
-type lmStudioChatRequest struct {
-	Model         string                 `json:"model"`
-	Messages      []lmStudioMessage      `json:"messages"`
-	Stream        bool                   `json:"stream,omitempty"`
-	Tools         []map[string]any       `json:"tools,omitempty"`
-	TTL           int                    `json:"ttl,omitempty"`
-	StreamOptions *lmStudioStreamOptions `json:"stream_options,omitempty"`
+type openAICompatChatRequest struct {
+	Model         string                     `json:"model"`
+	Messages      []openAICompatMessage      `json:"messages"`
+	Stream        bool                       `json:"stream,omitempty"`
+	Tools         []map[string]any           `json:"tools,omitempty"`
+	TTL           int                        `json:"ttl,omitempty"`
+	StreamOptions *openAICompatStreamOptions `json:"stream_options,omitempty"`
 }
 
-type lmStudioStreamOptions struct {
+type openAICompatStreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
-type lmStudioMessage struct {
-	Role       string                `json:"role"`
-	Content    any                   `json:"content,omitempty"`
-	ToolCallID string                `json:"tool_call_id,omitempty"`
-	ToolCalls  []lmStudioToolCallReq `json:"tool_calls,omitempty"`
+type openAICompatMessage struct {
+	Role       string                    `json:"role"`
+	Content    any                       `json:"content,omitempty"`
+	ToolCallID string                    `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAICompatToolCallReq `json:"tool_calls,omitempty"`
 }
 
-type lmStudioContentPart struct {
-	Type     string                 `json:"type"`
-	Text     string                 `json:"text,omitempty"`
-	ImageURL *lmStudioImageURLBlock `json:"image_url,omitempty"`
+type openAICompatContentPart struct {
+	Type     string                     `json:"type"`
+	Text     string                     `json:"text,omitempty"`
+	ImageURL *openAICompatImageURLBlock `json:"image_url,omitempty"`
 }
 
-type lmStudioImageURLBlock struct {
+type openAICompatImageURLBlock struct {
 	URL string `json:"url"`
 }
 
-type lmStudioToolCallReq struct {
-	ID       string                    `json:"id,omitempty"`
-	Type     string                    `json:"type"`
-	Function lmStudioToolFunctionDelta `json:"function"`
+type openAICompatToolCallReq struct {
+	ID       string                        `json:"id,omitempty"`
+	Type     string                        `json:"type"`
+	Function openAICompatToolFunctionDelta `json:"function"`
 }
 
-type lmStudioToolFunctionDelta struct {
+type openAICompatToolFunctionDelta struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 }
 
-type lmStudioChatResponse struct {
-	ID      string               `json:"id,omitempty"`
-	Object  string               `json:"object,omitempty"`
-	Created int64                `json:"created,omitempty"`
-	Model   string               `json:"model,omitempty"`
-	Choices []lmStudioChatChoice `json:"choices"`
-	Usage   *lmStudioUsage       `json:"usage,omitempty"`
+type openAICompatChatResponse struct {
+	ID      string                   `json:"id,omitempty"`
+	Object  string                   `json:"object,omitempty"`
+	Created int64                    `json:"created,omitempty"`
+	Model   string                   `json:"model,omitempty"`
+	Choices []openAICompatChatChoice `json:"choices"`
+	Usage   *openAICompatUsage       `json:"usage,omitempty"`
 }
 
-// lmStudioStreamErrorText returns the human-readable failure LM Studio
-// encoded in an SSE data frame, or "" when the frame is an ordinary chunk.
+// openAICompatStreamErrorText returns the human-readable failure the
+// server encoded in an SSE data frame, or "" when the frame is an
+// ordinary chunk.
 //
 // A streaming request that LM Studio cannot serve does not fail the way its
 // non-streaming sibling does. The non-streaming call answers 4xx with the
@@ -107,7 +131,7 @@ type lmStudioChatResponse struct {
 // and delivers the reason as an `event: error` frame. Both shapes of the
 // `error` field are accepted: a bare string (as the 4xx body uses) and an
 // object carrying `message` (as the stream frame uses).
-func lmStudioStreamErrorText(data string) string {
+func openAICompatStreamErrorText(data string) string {
 	var probe struct {
 		Error   json.RawMessage `json:"error"`
 		Message string          `json:"message"`
@@ -133,81 +157,81 @@ func lmStudioStreamErrorText(data string) string {
 	if strings.TrimSpace(probe.Message) != "" {
 		return strings.TrimSpace(probe.Message)
 	}
-	return "LM Studio reported an unspecified stream error"
+	return "the endpoint reported an unspecified stream error"
 }
 
-type lmStudioChatChoice struct {
-	Index        int                      `json:"index"`
-	Message      *lmStudioMessageResponse `json:"message,omitempty"`
-	Delta        *lmStudioChatDelta       `json:"delta,omitempty"`
-	FinishReason *string                  `json:"finish_reason,omitempty"`
+type openAICompatChatChoice struct {
+	Index        int                          `json:"index"`
+	Message      *openAICompatMessageResponse `json:"message,omitempty"`
+	Delta        *openAICompatChatDelta       `json:"delta,omitempty"`
+	FinishReason *string                      `json:"finish_reason,omitempty"`
 }
 
-type lmStudioMessageResponse struct {
-	Role      string                  `json:"role,omitempty"`
-	Content   any                     `json:"content,omitempty"`
-	ToolCalls []lmStudioToolCallDelta `json:"tool_calls,omitempty"`
+type openAICompatMessageResponse struct {
+	Role      string                      `json:"role,omitempty"`
+	Content   any                         `json:"content,omitempty"`
+	ToolCalls []openAICompatToolCallDelta `json:"tool_calls,omitempty"`
 }
 
-type lmStudioChatDelta struct {
-	Role      string                  `json:"role,omitempty"`
-	Content   string                  `json:"content,omitempty"`
-	ToolCalls []lmStudioToolCallDelta `json:"tool_calls,omitempty"`
+type openAICompatChatDelta struct {
+	Role      string                      `json:"role,omitempty"`
+	Content   string                      `json:"content,omitempty"`
+	ToolCalls []openAICompatToolCallDelta `json:"tool_calls,omitempty"`
 }
 
-type lmStudioToolCallDelta struct {
-	Index    int                       `json:"index,omitempty"`
-	ID       string                    `json:"id,omitempty"`
-	Type     string                    `json:"type,omitempty"`
-	Function lmStudioToolFunctionDelta `json:"function,omitempty"`
+type openAICompatToolCallDelta struct {
+	Index    int                           `json:"index,omitempty"`
+	ID       string                        `json:"id,omitempty"`
+	Type     string                        `json:"type,omitempty"`
+	Function openAICompatToolFunctionDelta `json:"function,omitempty"`
 }
 
-type lmStudioUsage struct {
+type openAICompatUsage struct {
 	PromptTokens     int `json:"prompt_tokens,omitempty"`
 	CompletionTokens int `json:"completion_tokens,omitempty"`
 	TotalTokens      int `json:"total_tokens,omitempty"`
 }
 
-type lmStudioModelsResponse struct {
+type openAICompatModelsResponse struct {
 	Data []LMStudioModelInfo `json:"data"`
 }
 
-type lmStudioV1ModelsResponse struct {
-	Models []lmStudioV1ModelInfo `json:"models"`
+type openAICompatV1ModelsResponse struct {
+	Models []openAICompatV1ModelInfo `json:"models"`
 }
 
-type lmStudioV1ModelInfo struct {
-	Type             string                       `json:"type,omitempty"`
-	Publisher        string                       `json:"publisher,omitempty"`
-	Key              string                       `json:"key,omitempty"`
-	Architecture     string                       `json:"architecture,omitempty"`
-	Quantization     *lmStudioV1Quantization      `json:"quantization,omitempty"`
-	ParamsString     string                       `json:"params_string,omitempty"`
-	LoadedInstances  []lmStudioV1LoadedInstance   `json:"loaded_instances,omitempty"`
-	MaxContextLength int                          `json:"max_context_length,omitempty"`
-	Format           string                       `json:"format,omitempty"`
-	Capabilities     *lmStudioV1ModelCapabilities `json:"capabilities,omitempty"`
+type openAICompatV1ModelInfo struct {
+	Type             string                           `json:"type,omitempty"`
+	Publisher        string                           `json:"publisher,omitempty"`
+	Key              string                           `json:"key,omitempty"`
+	Architecture     string                           `json:"architecture,omitempty"`
+	Quantization     *openAICompatV1Quantization      `json:"quantization,omitempty"`
+	ParamsString     string                           `json:"params_string,omitempty"`
+	LoadedInstances  []openAICompatV1LoadedInstance   `json:"loaded_instances,omitempty"`
+	MaxContextLength int                              `json:"max_context_length,omitempty"`
+	Format           string                           `json:"format,omitempty"`
+	Capabilities     *openAICompatV1ModelCapabilities `json:"capabilities,omitempty"`
 }
 
-type lmStudioV1Quantization struct {
+type openAICompatV1Quantization struct {
 	Name string `json:"name,omitempty"`
 }
 
-type lmStudioV1LoadedInstance struct {
-	ID     string               `json:"id,omitempty"`
-	Config lmStudioV1LoadConfig `json:"config"`
+type openAICompatV1LoadedInstance struct {
+	ID     string                   `json:"id,omitempty"`
+	Config openAICompatV1LoadConfig `json:"config"`
 }
 
-type lmStudioV1LoadConfig struct {
+type openAICompatV1LoadConfig struct {
 	ContextLength int `json:"context_length,omitempty"`
 }
 
-type lmStudioV1ModelCapabilities struct {
+type openAICompatV1ModelCapabilities struct {
 	Vision            bool `json:"vision,omitempty"`
 	TrainedForToolUse bool `json:"trained_for_tool_use,omitempty"`
 }
 
-func (m lmStudioV1ModelInfo) toModelInfo() LMStudioModelInfo {
+func (m openAICompatV1ModelInfo) toModelInfo() LMStudioModelInfo {
 	loadedContext := 0
 	loadedInstanceID := ""
 	state := ""
@@ -242,29 +266,29 @@ func (m lmStudioV1ModelInfo) toModelInfo() LMStudioModelInfo {
 	return info
 }
 
-type lmStudioToolAccumulator struct {
+type openAICompatToolAccumulator struct {
 	ID   string
 	Name string
 	Args strings.Builder
 }
 
-func toLMStudioMessages(msgs []llm.Message) ([]lmStudioMessage, error) {
-	out := make([]lmStudioMessage, 0, len(msgs))
+func toOpenAICompatMessages(msgs []llm.Message) ([]openAICompatMessage, error) {
+	out := make([]openAICompatMessage, 0, len(msgs))
 	for _, m := range msgs {
-		wire := lmStudioMessage{
+		wire := openAICompatMessage{
 			Role:       m.Role,
 			ToolCallID: m.ToolCallID,
 		}
 		switch {
 		case len(m.Images) > 0:
-			parts := make([]lmStudioContentPart, 0, len(m.Images)+1)
+			parts := make([]openAICompatContentPart, 0, len(m.Images)+1)
 			if m.Content != "" {
-				parts = append(parts, lmStudioContentPart{Type: "text", Text: m.Content})
+				parts = append(parts, openAICompatContentPart{Type: "text", Text: m.Content})
 			}
 			for _, img := range m.Images {
-				parts = append(parts, lmStudioContentPart{
+				parts = append(parts, openAICompatContentPart{
 					Type: "image_url",
-					ImageURL: &lmStudioImageURLBlock{
+					ImageURL: &openAICompatImageURLBlock{
 						URL: "data:" + img.MediaType + ";base64," + img.Data,
 					},
 				})
@@ -281,16 +305,16 @@ func toLMStudioMessages(msgs []llm.Message) ([]lmStudioMessage, error) {
 			wire.Content = m.Content
 		}
 		if len(m.ToolCalls) > 0 {
-			wire.ToolCalls = make([]lmStudioToolCallReq, 0, len(m.ToolCalls))
+			wire.ToolCalls = make([]openAICompatToolCallReq, 0, len(m.ToolCalls))
 			for _, tc := range m.ToolCalls {
 				argsJSON, err := json.Marshal(tc.Function.Arguments)
 				if err != nil {
 					return nil, fmt.Errorf("marshal tool call arguments for %q: %w", tc.Function.Name, err)
 				}
-				wire.ToolCalls = append(wire.ToolCalls, lmStudioToolCallReq{
+				wire.ToolCalls = append(wire.ToolCalls, openAICompatToolCallReq{
 					ID:   tc.ID,
 					Type: "function",
-					Function: lmStudioToolFunctionDelta{
+					Function: openAICompatToolFunctionDelta{
 						Name:      tc.Function.Name,
 						Arguments: string(argsJSON),
 					},
@@ -302,7 +326,7 @@ func toLMStudioMessages(msgs []llm.Message) ([]lmStudioMessage, error) {
 	return out, nil
 }
 
-func normalizeLMStudioMessageRole(role string) string {
+func normalizeOpenAICompatMessageRole(role string) string {
 	role = strings.TrimSpace(role)
 	if role == "" {
 		return "assistant"
@@ -310,7 +334,7 @@ func normalizeLMStudioMessageRole(role string) string {
 	return role
 }
 
-func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolCall, error) {
+func decodeOpenAICompatToolCalls(accs map[int]*openAICompatToolAccumulator) ([]llm.ToolCall, error) {
 	if len(accs) == 0 {
 		return nil, nil
 	}
@@ -326,11 +350,11 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolC
 		if acc == nil || acc.Name == "" {
 			continue
 		}
-		args, err := parseLMStudioToolArguments(acc.Name, acc.Args.String())
+		args, err := parseOpenAICompatToolArguments(acc.Name, acc.Args.String())
 		if err != nil {
 			return nil, err
 		}
-		callID, err := ensureLMStudioToolCallID(acc.ID)
+		callID, err := ensureOpenAICompatToolCallID(acc.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -342,44 +366,45 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolC
 	return out, nil
 }
 
-// ensureLMStudioToolCallID repairs a runner omission before the assistant
+// ensureOpenAICompatToolCallID repairs a runner omission before the assistant
 // message enters iteration history. LM Studio rejects that same historical
 // tool call on the next request when its id is empty, even though its Qwen
 // parser can produce tool calls without assigning one.
-func ensureLMStudioToolCallID(id string) (string, error) {
+func ensureOpenAICompatToolCallID(id string) (string, error) {
 	if strings.TrimSpace(id) != "" {
 		return id, nil
 	}
 	generated, err := uuid.NewV7()
 	if err != nil {
-		return "", fmt.Errorf("generate fallback LM Studio tool call ID: %w", err)
+		return "", fmt.Errorf("generate fallback tool call ID: %w", err)
 	}
 	return "call_" + generated.String(), nil
 }
 
-func decodeLMStudioToolCallsFromSlice(in []lmStudioToolCallDelta) ([]llm.ToolCall, error) {
+func decodeOpenAICompatToolCallsFromSlice(in []openAICompatToolCallDelta) ([]llm.ToolCall, error) {
 	if len(in) == 0 {
 		return nil, nil
 	}
-	accs := make(map[int]*lmStudioToolAccumulator, len(in))
+	// Key by slice position, never by tc.Index. `index` exists to
+	// reassemble deltas that arrive out of order in a *stream*; a
+	// non-streaming response has no such field, so every element decodes
+	// with Index 0. Keying on it collapsed parallel tool calls into one
+	// accumulator, where the last id and name won and the arguments were
+	// concatenated into JSON that then failed to parse — turning a
+	// perfectly good two-call turn into an error. The array order is the
+	// identity here, and vLLM emits parallel calls by default.
+	accs := make(map[int]*openAICompatToolAccumulator, len(in))
 	for i, tc := range in {
-		idx := tc.Index
-		if idx == 0 && tc.ID == "" && tc.Function.Name == "" && tc.Function.Arguments == "" && len(in) == 1 {
-			idx = i
-		}
-		acc := accs[idx]
-		if acc == nil {
-			acc = &lmStudioToolAccumulator{}
-			accs[idx] = acc
-		}
+		acc := &openAICompatToolAccumulator{}
 		acc.ID = tc.ID
 		acc.Name = tc.Function.Name
 		acc.Args.WriteString(tc.Function.Arguments)
+		accs[i] = acc
 	}
-	return decodeLMStudioToolCalls(accs)
+	return decodeOpenAICompatToolCalls(accs)
 }
 
-func parseLMStudioToolArguments(name, raw string) (map[string]any, error) {
+func parseOpenAICompatToolArguments(name, raw string) (map[string]any, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return map[string]any{}, nil
@@ -391,7 +416,7 @@ func parseLMStudioToolArguments(name, raw string) (map[string]any, error) {
 	return args, nil
 }
 
-func lmStudioContentText(v any) string {
+func openAICompatContentText(v any) string {
 	switch content := v.(type) {
 	case nil:
 		return ""
@@ -422,7 +447,7 @@ func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) erro
 	}
 	llm.ApplyTextToolCallFallback(resp, validToolNames, llm.DefaultToolCallTextProfile())
 	for i := range resp.Message.ToolCalls {
-		id, err := ensureLMStudioToolCallID(resp.Message.ToolCalls[i].ID)
+		id, err := ensureOpenAICompatToolCallID(resp.Message.ToolCalls[i].ID)
 		if err != nil {
 			return err
 		}

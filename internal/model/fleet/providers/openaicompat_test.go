@@ -1,0 +1,356 @@
+package providers
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+)
+
+// TestOpenAICompatStreamErrorIsNotSuccess pins the defect that motivated
+// this client. Ollama's native adapter had no error field on its chunk
+// type, so a mid-stream failure decoded as an empty chunk and the turn
+// was reported as a successful completion with zero tokens — a
+// fabricated success the loop and its telemetry both believed. An error
+// frame must end the stream as an error, in either shape servers send.
+func TestOpenAICompatStreamErrorIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		frame string
+		want  string
+	}{
+		{name: "object error", frame: `{"error":{"message":"CUDA out of memory"}}`, want: "CUDA out of memory"},
+		{name: "bare string error", frame: `{"error":"model runner exited"}`, want: "model runner exited"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				// A normal chunk lands first, so the failure arrives
+				// mid-stream exactly as it does in production.
+				_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+				_, _ = w.Write([]byte("data: " + tt.frame + "\n\n"))
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+			if err == nil {
+				t.Fatalf("ChatStream returned success on an error frame: %#v", resp)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to name %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatRequestsUsageAndOmitsTTL pins the two request-shape
+// facts the generic path depends on: streaming asks for usage (without
+// it there are no token counts, and the context-fill gauge has nothing
+// to read), and the LM Studio-only ttl field stays off the wire for
+// servers that would not recognize it.
+func TestOpenAICompatRequestsUsageAndOmitsTTL(t *testing.T) {
+	t.Parallel()
+
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	if _, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {}); err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+
+	opts, ok := body["stream_options"].(map[string]any)
+	if !ok || opts["include_usage"] != true {
+		t.Errorf("stream_options = %#v, want include_usage true", body["stream_options"])
+	}
+	if _, present := body["ttl"]; present {
+		t.Errorf("ttl present for a non-LM-Studio endpoint: %#v", body["ttl"])
+	}
+}
+
+// TestOpenAICompatModelInfoContextCeiling pins the reconciliation of the
+// two spellings servers use, and that silence reads as "not reported"
+// rather than as a zero-size window.
+func TestOpenAICompatModelInfoContextCeiling(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		info OpenAICompatModelInfo
+		want int
+	}{
+		{name: "lmstudio spelling", info: OpenAICompatModelInfo{MaxContextLength: 8192}, want: 8192},
+		{name: "vllm spelling", info: OpenAICompatModelInfo{MaxModelLen: 131072}, want: 131072},
+		{name: "lmstudio wins when both present", info: OpenAICompatModelInfo{MaxContextLength: 8192, MaxModelLen: 4096}, want: 8192},
+		{name: "plain openai server reports neither", info: OpenAICompatModelInfo{ID: "m"}, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.info.ContextCeiling(); got != tt.want {
+				t.Errorf("ContextCeiling() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatEmptyStreamIsNotSuccess covers the gap a frame counter
+// leaves open. A role-only opening frame and a usage-only trailer are
+// both well-formed and both increment the count, so a stream carrying
+// nothing but scaffolding would pass a chunks>0 check and be reported as
+// a completed turn with zero tokens — the same fabricated success an
+// undetected error frame produces, arriving by a quieter route.
+func TestOpenAICompatEmptyStreamIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		frames []string
+		wantOK bool
+	}{
+		{
+			name:   "role-only frame then clean close",
+			frames: []string{`{"choices":[{"delta":{"role":"assistant"}}]}`, "[DONE]"},
+		},
+		{
+			name: "usage-only trailer, no content",
+			frames: []string{
+				`{"choices":[{"delta":{"role":"assistant"}}]}`,
+				`{"choices":[],"usage":{"prompt_tokens":41,"completion_tokens":0}}`,
+				"[DONE]",
+			},
+		},
+		{
+			name:   "no frames at all",
+			frames: []string{"[DONE]"},
+		},
+		{
+			name:   "real content is a real completion",
+			frames: []string{`{"choices":[{"delta":{"content":"hello"}}]}`, "[DONE]"},
+			wantOK: true,
+		},
+		{
+			name:   "tool call with no text is a real completion",
+			frames: []string{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"ha_get_state","arguments":"{}"}}]}}]}`, "[DONE]"},
+			wantOK: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, f := range tt.frames {
+					_, _ = w.Write([]byte("data: " + f + "\n\n"))
+				}
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("ChatStream: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("empty stream reported success: content=%q tools=%d tokens=%d/%d",
+					resp.Message.Content, len(resp.Message.ToolCalls), resp.InputTokens, resp.OutputTokens)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatCapturesFinishReason pins the provider termination
+// signal that the iteration layer records. Without it a truncated answer
+// ("length") is indistinguishable from a complete one.
+func TestOpenAICompatCapturesFinishReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"truncated\"}}]}\n\n"))
+		// The terminating frame carries finish_reason with an empty delta.
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if resp.StopReason != "length" {
+		t.Errorf("StopReason = %q, want \"length\"", resp.StopReason)
+	}
+}
+
+// TestOpenAICompatParallelToolCallsNonStreaming pins the identity of a
+// tool call in a non-streaming response. `index` is a streaming-delta
+// field for reassembling out-of-order chunks; a non-streaming array
+// carries none, so every element decodes with Index 0. Keying on it
+// collapsed parallel calls into one accumulator — last id and name won,
+// and the arguments concatenated into JSON that failed to parse, so a
+// good two-call turn became an error. vLLM emits parallel calls by
+// default, which makes this the common case, not the exotic one.
+func TestOpenAICompatParallelToolCallsNonStreaming(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-abc123",
+			"model": "m",
+			"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+				{"id": "call_1", "type": "function", "function": {"name": "ha_get_state", "arguments": "{\"entity_id\":\"light.office\"}"}},
+				{"id": "call_2", "type": "function", "function": {"name": "doc_read", "arguments": "{\"path\":\"kb:a.md\"}"}}
+			]}, "finish_reason": "tool_calls"}]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	resp, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(resp.Message.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %d, want 2: %#v", len(resp.Message.ToolCalls), resp.Message.ToolCalls)
+	}
+	byName := map[string]llm.ToolCall{}
+	for _, tc := range resp.Message.ToolCalls {
+		byName[tc.Function.Name] = tc
+	}
+	if got, ok := byName["ha_get_state"]; !ok || got.ID != "call_1" {
+		t.Errorf("ha_get_state = %#v, want id call_1", got)
+	}
+	if got, ok := byName["doc_read"]; !ok || got.ID != "call_2" {
+		t.Errorf("doc_read = %#v, want id call_2", got)
+	}
+	if resp.StopReason != "tool_calls" {
+		t.Errorf("StopReason = %q, want tool_calls", resp.StopReason)
+	}
+	if resp.UpstreamRequestID != "chatcmpl-abc123" {
+		t.Errorf("UpstreamRequestID = %q, want chatcmpl-abc123", resp.UpstreamRequestID)
+	}
+}
+
+// TestOpenAICompatTruncatedStreamIsNotSuccess pins the terminal-evidence
+// rule. A runner or proxy that dies mid-generation closes the connection
+// cleanly, so the scanner sees an ordinary EOF and the content received
+// so far looks like a finished answer. Without a [DONE] sentinel or a
+// finish_reason, it is a truncation, and reporting it as complete is the
+// fabricated-success bug wearing better clothes.
+func TestOpenAICompatTruncatedStreamIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
+	content := `{"choices":[{"delta":{"content":"half an ans"}}]}`
+	tests := []struct {
+		name   string
+		frames []string
+		wantOK bool
+	}{
+		{name: "content then silent close", frames: []string{content}},
+		{name: "content then [DONE]", frames: []string{content, "[DONE]"}, wantOK: true},
+		{
+			name:   "finish_reason without [DONE] is enough",
+			frames: []string{content, `{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
+			wantOK: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, f := range tt.frames {
+					_, _ = w.Write([]byte("data: " + f + "\n\n"))
+				}
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("ChatStream: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("truncated stream reported success with content %q", resp.Message.Content)
+			}
+			if !strings.Contains(err.Error(), "truncated") {
+				t.Errorf("error = %q, want it to name the truncation", err)
+			}
+		})
+	}
+}
+
+// TestNormalizeOpenAICompatBaseURL pins that both documented spellings
+// of a base URL reach the same endpoint. vLLM's own examples end in /v1
+// and LM Studio's do not; this client appends /v1 itself, so accepting
+// only the bare form turned a reasonable config into /v1/v1/... and a
+// 404 naming nothing useful.
+func TestNormalizeOpenAICompatBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ in, want string }{
+		{"http://spark:8000", "http://spark:8000"},
+		{"http://spark:8000/", "http://spark:8000"},
+		{"http://spark:8000/v1", "http://spark:8000"},
+		{"http://spark:8000/v1/", "http://spark:8000"},
+		{"  http://spark:8000/v1  ", "http://spark:8000"},
+	}
+	for _, tt := range tests {
+		if got := normalizeOpenAICompatBaseURL(tt.in); got != tt.want {
+			t.Errorf("normalizeOpenAICompatBaseURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestOpenAICompatCapabilities pins that the provider advertises what
+// the shared client actually implements. Declared-but-unwired was the
+// shape of the earlier gap: the provider existed in the construction
+// switch while the capability table still returned the zero set, so
+// every deployment inherited SupportsStreaming false.
+func TestOpenAICompatCapabilities(t *testing.T) {
+	t.Parallel()
+
+	caps := CapabilitiesForProvider("openai_compat")
+	if !caps.SupportsChat || !caps.SupportsStreaming || !caps.SupportsTools || !caps.SupportsInventory {
+		t.Fatalf("capabilities = %#v, want chat/streaming/tools/inventory", caps)
+	}
+	// Image support is a transport capability; the per-model gate still
+	// decides whether a given model is treated as vision-capable.
+	if !SupportsImagesForModel("openai_compat", "qwen3-vl:4b", "qwen3vl", nil, caps) {
+		t.Error("a vision model on an image-capable transport should be vision-capable")
+	}
+	if SupportsImagesForModel("openai_compat", "gpt-oss:120b", "gptoss", nil, caps) {
+		t.Error("a text model should not be treated as vision-capable")
+	}
+}

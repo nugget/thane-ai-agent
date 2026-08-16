@@ -33,6 +33,19 @@ func CapabilitiesForProvider(provider string) Capabilities {
 			SupportsImages:    true,
 			SupportsInventory: true,
 		}
+	case "openai_compat":
+		// The shared OpenAI-protocol client implements all of these;
+		// inventory is /v1/models, which the protocol requires. Images
+		// ride the same content-array encoding LM Studio uses, and
+		// SupportsImagesForModel still gates per model so a text-only
+		// model on an image-capable transport is not mistaken for vision.
+		return Capabilities{
+			SupportsChat:      true,
+			SupportsStreaming: true,
+			SupportsTools:     true,
+			SupportsImages:    true,
+			SupportsInventory: true,
+		}
 	case "anthropic":
 		return Capabilities{
 			SupportsChat:      true,
@@ -59,7 +72,7 @@ func SupportsImagesForModel(provider, name, family string, families []string, ca
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "anthropic":
 		return true
-	case "ollama", "lmstudio":
+	case "ollama", "lmstudio", "openai_compat":
 		return looksLikeVisionModel(name, family, families)
 	default:
 		return false

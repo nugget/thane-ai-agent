@@ -222,6 +222,9 @@ func TestRuntime_SetLogger_RebindsAllProviderClients(t *testing.T) {
 		LMStudioClients: map[string]*modelproviders.LMStudioClient{
 			"deepslate": modelproviders.NewLMStudioClient("http://127.0.0.1:1234", "", bootLogger.With("resource", "deepslate")),
 		},
+		OpenAICompatClients: map[string]*modelproviders.OpenAICompatClient{
+			"spark": modelproviders.NewOpenAICompatClient("http://127.0.0.1:8000", "", "openai_compat", bootLogger.With("resource", "spark"), 0),
+		},
 		AnthropicClient: modelproviders.NewAnthropicClient("k", bootLogger),
 	}
 	rt := &Runtime{bundle: bundle}
@@ -235,12 +238,14 @@ func TestRuntime_SetLogger_RebindsAllProviderClients(t *testing.T) {
 	// provider attribute restored on every client.
 	bundle.OllamaClients["hearth"].Logger().Debug("ollama probe")
 	bundle.LMStudioClients["deepslate"].Logger().Debug("lmstudio probe")
+	bundle.OpenAICompatClients["spark"].Logger().Debug("openai_compat probe")
 	bundle.AnthropicClient.Logger().Debug("anthropic probe")
 
 	out := prodBuf.String()
 	for _, want := range []string{
 		`"msg":"ollama probe"`, `"resource":"hearth"`, `"provider":"ollama"`,
 		`"msg":"lmstudio probe"`, `"resource":"deepslate"`, `"provider":"lmstudio"`,
+		`"msg":"openai_compat probe"`, `"resource":"spark"`, `"provider":"openai_compat"`,
 		`"msg":"anthropic probe"`, `"provider":"anthropic"`,
 	} {
 		if !strings.Contains(out, want) {

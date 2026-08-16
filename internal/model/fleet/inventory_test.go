@@ -126,3 +126,62 @@ func TestDiscoverInventoryIncludesLMStudioResources(t *testing.T) {
 		t.Fatalf("embedding model = %+v, want non-chat capabilities disabled", inv.Resources[0].Models[2])
 	}
 }
+
+// TestDiscoverInventory_OpenAICompat pins the discovery branch added for
+// the shared client. The gap it closes was that a provider can be fully
+// declared — construction switch, capability table, config docs — and
+// still be invisible to discovery, so /v1/models is never queried and no
+// context ceiling ever reaches a deployment.
+func TestDiscoverInventory_OpenAICompat(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// vLLM spells the ceiling max_model_len; a plain server sends none.
+		_, _ = w.Write([]byte(`{"object":"list","data":[
+			{"id":"gpt-oss:120b","max_model_len":131072},
+			{"id":"plain-model"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	cat := &Catalog{Resources: []Resource{{ID: "spark", Provider: "openai_compat", URL: srv.URL}}}
+	bundle := &ClientBundle{
+		OpenAICompatClients: map[string]*modelproviders.OpenAICompatClient{
+			"spark": modelproviders.NewOpenAICompatClient(srv.URL, "", "openai_compat", nil, 0),
+		},
+	}
+
+	inv := DiscoverInventory(context.Background(), cat, bundle)
+	if len(inv.Resources) != 1 {
+		t.Fatalf("resources = %d, want 1", len(inv.Resources))
+	}
+	ri := inv.Resources[0]
+	if ri.Error != "" {
+		t.Fatalf("discovery error: %s", ri.Error)
+	}
+	if len(ri.Models) != 2 {
+		t.Fatalf("models = %d, want 2", len(ri.Models))
+	}
+
+	byName := map[string]DiscoveredModel{}
+	for _, m := range ri.Models {
+		byName[m.Name] = m
+	}
+	if got := byName["gpt-oss:120b"]; got.ContextWindow != 131072 || got.MaxContextWindow != 131072 {
+		t.Errorf("gpt-oss context = %d/%d, want 131072", got.ContextWindow, got.MaxContextWindow)
+	}
+	// A server that reports no ceiling yields zero meaning "not
+	// reported" — the deployment keeps its configured window rather than
+	// inheriting a fabricated one.
+	if got := byName["plain-model"]; got.ContextWindow != 0 {
+		t.Errorf("unreported ceiling = %d, want 0", got.ContextWindow)
+	}
+	if !byName["gpt-oss:120b"].SupportsStreaming {
+		t.Error("discovered model should inherit streaming support from the provider capabilities")
+	}
+}
