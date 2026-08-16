@@ -213,6 +213,12 @@ actually loop-side concerns better routed via
 activation needed; appears under the `loops` tag in the catalog
 but isn't gated by it). That tool wakes the core/owner loop's next iteration
 to review your concern; no actions, no recipient, no wait. It is
+not fire-and-forget, though it looks like it from here: the call
+returns as soon as the ask is delivered, and the determination
+arrives later as a wake on one of your own iterations, sometimes a
+supervisor turn when core wants you to re-reason rather than record
+a fact. Send the ask, finish the turn, and let the answer find you.
+It is
 the canonical service-loop → operator attention path and the
 default escalation shape for metacog, ego, and other internal
 loops.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
@@ -871,4 +872,84 @@ func waitForLoopState(t *testing.T, l *Loop, want State) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("state = %q, want %q", l.Status().State, want)
+}
+
+// TestSummarizeNotifyEnvelopesReplyContract pins the two facts a
+// recipient needs to answer a loop that asked it to judge something:
+// the exact wake arguments that reach the requester, and the contract
+// saying the answer is owed. Both are conditional — an ordinary
+// notification from a non-loop sender should carry neither, since a
+// reply address that cannot be woken and a contract for a question
+// nobody asked are both misleading.
+func TestSummarizeNotifyEnvelopesReplyContract(t *testing.T) {
+	t.Parallel()
+
+	loopSender := messages.Identity{Kind: messages.IdentityLoop, ID: "loop-42", Name: "garage-watch"}
+	systemSender := messages.Identity{Kind: messages.IdentitySystem, Name: "document_root_sync"}
+
+	tests := []struct {
+		name         string
+		envelope     messages.Envelope
+		wantReplyTo  bool
+		wantContract bool
+	}{
+		{
+			name: "core attention request from a live loop",
+			envelope: messages.Envelope{
+				From:    loopSender,
+				Scope:   []string{CoreAttentionScope},
+				Payload: messages.LoopNotifyPayload{Kind: CoreAttentionRequestKind, Concern: "The reading looks wrong."},
+			},
+			wantReplyTo:  true,
+			wantContract: true,
+		},
+		{
+			name: "kind alone marks a determination request",
+			envelope: messages.Envelope{
+				From:    loopSender,
+				Payload: messages.LoopNotifyPayload{Kind: CoreAttentionRequestKind, Concern: "The reading looks wrong."},
+			},
+			wantReplyTo:  true,
+			wantContract: true,
+		},
+		{
+			name: "plain loop_wake carries a reply address but no contract",
+			envelope: messages.Envelope{
+				From:    loopSender,
+				Payload: messages.LoopNotifyPayload{Kind: "loop_wake", Message: "That reading is CPU temperature."},
+			},
+			wantReplyTo:  true,
+			wantContract: false,
+		},
+		{
+			name: "system sender has no loop to wake back",
+			envelope: messages.Envelope{
+				From:    systemSender,
+				Scope:   []string{CoreAttentionScope},
+				Payload: messages.LoopNotifyPayload{Kind: CoreAttentionRequestKind, Concern: "Sync is stalled."},
+			},
+			wantReplyTo:  false,
+			wantContract: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			summary := summarizeNotifyEnvelopes([]messages.Envelope{tt.envelope})
+			if summary == "" {
+				t.Fatal("summary is empty")
+			}
+			if got := strings.Contains(summary, `"reply_to"`); got != tt.wantReplyTo {
+				t.Errorf("reply_to present = %t, want %t\n%s", got, tt.wantReplyTo, summary)
+			}
+			if tt.wantReplyTo && !strings.Contains(summary, `"loop_id":"loop-42"`) {
+				t.Errorf("reply_to missing sender loop id\n%s", summary)
+			}
+			if got := strings.Contains(summary, prompts.CoreAttentionReplyContract); got != tt.wantContract {
+				t.Errorf("reply contract present = %t, want %t\n%s", got, tt.wantContract, summary)
+			}
+		})
+	}
 }

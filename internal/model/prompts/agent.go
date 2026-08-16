@@ -17,7 +17,34 @@ const EmptyResponseFallback = "I processed your request but wasn't able to compo
 // the turn without content.
 const InteractiveEmptyResponseFallback = "I hit a problem before I could finish that. Please try again."
 
-const coreAttentionSignalWakeInstruction = "A delegated or subsystem loop requested core attention through the loop bus. Review the notification(s), then decide whether any human-facing message is appropriate now. If no immediate Signal reply should be sent, leave the final response empty."
+// CoreAttentionReplyContract is the normative block rendered beside
+// loop notifications whenever one of them asks its recipient to judge
+// something. By the time it is read the requester is asleep again, so
+// the reply is the only channel its question has.
+//
+// The block exists because the recipient's default reading of "review
+// this concern" is "decide whether to tell the human" — a binary that
+// ends the turn holding a determination nobody receives. Every rule
+// here carries its reason: a bare imperative invites literal
+// compliance, and the situations these loops actually meet are not the
+// ones this text anticipates.
+const CoreAttentionReplyContract = `A loop asked you for a determination. Reaching one is the work of this turn; sending it back is how the work lands.
+
+That loop is not blocked waiting on you — it returned to its own schedule and cannot see what you concluded. A determination you reach and never send is one it never receives, and the same concern arrives again unchanged on its next pass.
+
+- Reply with loop_wake, addressed to the reply_to.loop_id on its notification. Say what you concluded and what should change because of it; a requester that hears only "acknowledged" learns nothing and asks again.
+- Set force_supervisor: true when your reply asks the requester to re-reason — a judgement that revises its read, a hypothesis worth testing, analysis it should fold into its own thinking. Leave it off when you are handing back a fact it can simply record.
+- Escalating to a person is one available outcome, not the expected one. Most of these resolve between the two of you, and a concern that looks human-facing usually still needs your determination first.
+- "Nothing needs to happen" is a determination. Send it, with the reasoning that got you there. Silence is indistinguishable from a dropped thread.`
+
+// coreAttentionSignalWakeInstruction frames a loop-bus wake delivered
+// to a Signal owner loop. Two decisions live in this turn and the
+// prompt keeps them apart: what the requesting loop is owed, and what
+// (if anything) the person on the thread should see. The empty-final-
+// response mechanic is scoped explicitly to the second, because read
+// as a statement about the whole turn it licenses exactly the silence
+// this prompt exists to prevent.
+const coreAttentionSignalWakeInstruction = "A loop woke you through the loop bus. Read the notification(s) and act on what they need: when one asks for a determination, reaching it and sending it back to the requester with loop_wake (its reply_to.loop_id) is the work of this turn, not an optional courtesy.\n\nWhether anything reaches the person on this Signal thread is a separate decision, and yours to make. Your final response text is that Signal message — leave it empty when nothing should reach them right now. An empty final response ends only the Signal message. It never stands in for a reply a requesting loop is owed."
 
 // CoreAttentionSignalWakePrompt returns the model-facing prompt used when a
 // Signal owner loop is woken by a core-attention notification.

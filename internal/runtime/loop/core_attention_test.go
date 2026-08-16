@@ -63,4 +63,10 @@ func TestWakeCoreLoopDeliversSharedCoreAttentionEnvelope(t *testing.T) {
 	if payload.Kind != CoreAttentionRequestKind || !payload.ForceSupervisor {
 		t.Fatalf("payload = %#v, want default core attention supervisor wake", payload)
 	}
+	// The reply path the recipient is instructed to use lives behind
+	// the loops tag; the wake carries it so the answering tool is
+	// callable on the turn that is asked to answer.
+	if len(payload.Tags) != 1 || payload.Tags[0] != coreAttentionReplyTag {
+		t.Fatalf("payload tags = %#v, want [%q]", payload.Tags, coreAttentionReplyTag)
+	}
 }

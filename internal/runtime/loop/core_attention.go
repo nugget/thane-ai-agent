@@ -16,6 +16,14 @@ const (
 	// CoreAttentionRequestKind is the default payload kind for direct
 	// loop-to-core attention requests.
 	CoreAttentionRequestKind = "core_attention_request"
+	// coreAttentionReplyTag is activated on the recipient's next
+	// iteration by every core-attention wake. The reply path that wake
+	// asks the recipient to use — loop_wake — sits behind the loops
+	// tag, so the request that wants a determination also hands over
+	// the tool that returns one. Without it the recipient is told to
+	// answer with a tool its turn cannot call, and the runtime contract
+	// correctly forbids calling it anyway.
+	coreAttentionReplyTag = "loops"
 )
 
 // CoreAttentionTarget identifies the live loop that should receive
@@ -101,6 +109,7 @@ func CoreWakeEnvelope(target CoreAttentionTarget, req CoreWakeRequest) messages.
 			Context:         req.Context,
 			ForceSupervisor: req.ForceSupervisor,
 			Events:          cloneLoopEvents(req.Events),
+			Tags:            []string{coreAttentionReplyTag},
 		},
 	}
 }
