@@ -84,7 +84,7 @@ func TestHandleLoops_IncludesLoopView(t *testing.T) {
 	s := quietServer(fakeLoopReg{statuses: []looppkg.Status{
 		{ID: "p", Name: "parent", State: looppkg.StateSleeping},
 		{ID: "c", Name: "child", State: looppkg.StateSleeping, ParentID: "p",
-			ContextWindow: 200000, LastInputTokens: 100000},
+			ContextWindow: 200000, LastInputTokens: 180000, LastPeakInputTokens: 100000},
 	}})
 
 	rr := httptest.NewRecorder()
@@ -117,7 +117,9 @@ func TestHandleLoops_IncludesLoopView(t *testing.T) {
 	if child.View.ParentName == nil || *child.View.ParentName != "parent" {
 		t.Errorf("child parent_name = %v, want \"parent\"", child.View.ParentName)
 	}
-	// Precomputed so the client never divides.
+	// Precomputed so the client never divides, and derived from the peak
+	// single call (100000) rather than the turn's cumulative input
+	// (180000) — the latter is spend, not occupancy.
 	if child.View.ContextFillPct == nil || *child.View.ContextFillPct != 50 {
 		t.Errorf("child context_fill_pct = %v, want 50", child.View.ContextFillPct)
 	}

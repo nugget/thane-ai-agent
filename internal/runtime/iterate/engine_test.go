@@ -1169,3 +1169,40 @@ func TestLatestUpstreamRequestID(t *testing.T) {
 		})
 	}
 }
+
+// TestPeakInputTokens pins the distinction the fill gauge depends on:
+// InputTokens sums a turn's spend, while PeakInputTokens reports the
+// largest single call — the only one comparable to a context window.
+func TestPeakInputTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   []IterationRecord
+		want int
+	}{
+		{name: "no iterations", in: nil, want: 0},
+		{name: "single call", in: []IterationRecord{{InputTokens: 24000}}, want: 24000},
+		{
+			// The production shape: each call resends system prompt and
+			// tool defs, so the sum (112316) far exceeds any one call.
+			name: "growing tool-calling turn",
+			in:   []IterationRecord{{InputTokens: 35000}, {InputTokens: 37316}, {InputTokens: 40000}},
+			want: 40000,
+		},
+		{
+			name: "peak is not the last call",
+			in:   []IterationRecord{{InputTokens: 40000}, {InputTokens: 12000}},
+			want: 40000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := peakInputTokens(tt.in); got != tt.want {
+				t.Errorf("peakInputTokens = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
