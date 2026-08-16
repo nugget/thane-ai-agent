@@ -125,6 +125,7 @@ type Response struct {
 	Model                    string                              `yaml:"model,omitempty" json:"model,omitempty"`
 	FinishReason             string                              `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
 	InputTokens              int                                 `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	PeakInputTokens          int                                 `yaml:"peak_input_tokens,omitempty" json:"peak_input_tokens,omitempty"`
 	OutputTokens             int                                 `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
 	CacheCreationInputTokens int                                 `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int                                 `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
@@ -224,9 +225,13 @@ type Loop struct {
 	totalInputTokens  int
 	totalOutputTokens int
 	lastInputTokens   int
-	lastOutputTokens  int
-	contextWindow     int
-	lastError         string
+	// lastPeakInputTokens is the largest single model call of the most
+	// recent turn. It is the only token figure comparable to
+	// contextWindow; lastInputTokens sums every call in the turn.
+	lastPeakInputTokens int
+	lastOutputTokens    int
+	contextWindow       int
+	lastError           string
 
 	// sleepUntil is the scheduled wake instant while the loop is in a
 	// timer-based sleep (zero when processing or event-driven); currentSleep
@@ -783,6 +788,7 @@ func (l *Loop) Status() Status {
 		TotalInputTokens:      l.totalInputTokens,
 		TotalOutputTokens:     l.totalOutputTokens,
 		LastInputTokens:       l.lastInputTokens,
+		LastPeakInputTokens:   l.lastPeakInputTokens,
 		LastOutputTokens:      l.lastOutputTokens,
 		ContextWindow:         l.contextWindow,
 		LastError:             l.lastError,
@@ -1658,6 +1664,10 @@ func (l *Loop) run(ctx context.Context) {
 				result.InputTokens = inputTokens
 				delete(summary, "input_tokens")
 			}
+			if peakInputTokens, ok := summary["peak_input_tokens"].(int); ok && result != nil {
+				result.PeakInputTokens = peakInputTokens
+				delete(summary, "peak_input_tokens")
+			}
 			if outputTokens, ok := summary["output_tokens"].(int); ok && result != nil {
 				result.OutputTokens = outputTokens
 				delete(summary, "output_tokens")
@@ -1880,6 +1890,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.totalInputTokens += result.InputTokens
 				l.totalOutputTokens += result.OutputTokens
 				l.lastInputTokens = result.InputTokens
+				l.lastPeakInputTokens = result.PeakInputTokens
 				l.lastOutputTokens = result.OutputTokens
 				if result.ContextWindow > 0 {
 					l.contextWindow = result.ContextWindow
@@ -2388,6 +2399,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 		Model:              resp.Model,
 		FinishReason:       resp.FinishReason,
 		InputTokens:        resp.InputTokens,
+		PeakInputTokens:    resp.PeakInputTokens,
 		OutputTokens:       resp.OutputTokens,
 		ContextWindow:      resp.ContextWindow,
 		ToolsUsed:          resp.ToolsUsed,

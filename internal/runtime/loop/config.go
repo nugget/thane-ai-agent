@@ -470,8 +470,15 @@ type IterationResult struct {
 	// FinishReason is the agent runner's terminal reason. Values other than
 	// "stop" expose semantic exhaustion such as illegal_tool or token_budget.
 	FinishReason string
-	// InputTokens is the number of input tokens consumed.
+	// InputTokens is the number of input tokens consumed across every
+	// model call this iteration made — the iteration's input spend, not
+	// the size of any one prompt.
 	InputTokens int
+	// PeakInputTokens is the largest single call's input token count in
+	// this iteration. Compare this against ContextWindow; InputTokens
+	// sums the system prompt and tool definitions once per model call
+	// and so exceeds the window long before any prompt approaches it.
+	PeakInputTokens int
 	// OutputTokens is the number of output tokens produced.
 	OutputTokens int
 	// ContextWindow is the maximum context size (in tokens) of the model used.
@@ -639,8 +646,14 @@ type Status struct {
 	TotalInputTokens int `json:"total_input_tokens"`
 	// TotalOutputTokens is the cumulative output tokens across all iterations.
 	TotalOutputTokens int `json:"total_output_tokens"`
-	// LastInputTokens is the input token count from the most recent iteration.
+	// LastInputTokens is the input tokens the most recent iteration spent
+	// in total, summed over every model call it made. It is a spend
+	// figure, not a prompt size.
 	LastInputTokens int `json:"last_input_tokens,omitempty"`
+	// LastPeakInputTokens is the largest single model call within that
+	// iteration — how close the turn actually came to the context
+	// window, and the figure ContextFillPct is derived from.
+	LastPeakInputTokens int `json:"last_peak_input_tokens,omitempty"`
 	// LastOutputTokens is the output token count from the most recent iteration.
 	LastOutputTokens int `json:"last_output_tokens,omitempty"`
 	// ContextWindow is the maximum context size (in tokens) of the model used.

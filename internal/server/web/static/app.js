@@ -1439,6 +1439,7 @@ function buildLoopEntity(loop) {
     iterations: loop.iterations || 0,
     attempts: loop.attempts || 0,
     lastInputTokens: loop.last_input_tokens || 0,
+    lastPeakInputTokens: loop.last_peak_input_tokens || 0,
     lastOutputTokens: loop.last_output_tokens || 0,
     totalInputTokens: loop.total_input_tokens || 0,
     totalOutputTokens: loop.total_output_tokens || 0,
@@ -3149,9 +3150,13 @@ function renderNode(loop) {
     }
   }
 
-  // Ring thickness represents context utilization percentage.
-  const ctxPct = (capacity.contextWindow > 0 && loop.last_input_tokens > 0)
-    ? Math.min(1, loop.last_input_tokens / capacity.contextWindow)
+  // Ring thickness represents context utilization percentage. Peak is
+  // the largest single model call of the turn — last_input_tokens sums
+  // every call and would thicken the ring for a chatty turn that never
+  // came near the window.
+  const ctxPeak = loop.last_peak_input_tokens || 0;
+  const ctxPct = (capacity.contextWindow > 0 && ctxPeak > 0)
+    ? Math.min(1, ctxPeak / capacity.contextWindow)
     : 0;
   const minStroke = 2;
   const maxStroke = 8;
@@ -4157,7 +4162,9 @@ function renderLoopGlanceHeader(loop) {
   }));
 
   const cw = loop.context_window || view.context_window || 0;
-  const used = loop.last_input_tokens || (loop._llmContext && loop._llmContext.est_tokens) || 0;
+  // Peak single call, not the turn's cumulative input: this figure is
+  // rendered against the context window.
+  const used = loop.last_peak_input_tokens || (loop._llmContext && loop._llmContext.est_tokens) || 0;
   const pct = (view.context_fill_pct != null) ? view.context_fill_pct
     : (cw > 0 && used > 0 ? Math.round((used * 100) / cw) : null);
   if (pct != null) {

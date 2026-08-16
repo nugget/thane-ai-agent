@@ -29,6 +29,7 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 		TotalInputTokens:      2104882,
 		TotalOutputTokens:     51440,
 		LastInputTokens:       18000,
+		LastPeakInputTokens:   12000,
 		ContextWindow:         200000,
 		ConsecutiveErrors:     0,
 		LastError:             "",
@@ -59,8 +60,11 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 		t.Errorf("Attempts = %v, want 141", v.Attempts)
 	}
 	// Precomputed so the model never divides: 18000*100/200000 = 9.
-	if v.ContextFillPct == nil || *v.ContextFillPct != 9 {
-		t.Errorf("ContextFillPct = %v, want 9", v.ContextFillPct)
+	// Fill is the peak single call (12000) over the window, not the
+	// turn's cumulative input (18000) — a turn that made several calls
+	// is not proportionally closer to overflowing.
+	if v.ContextFillPct == nil || *v.ContextFillPct != 6 {
+		t.Errorf("ContextFillPct = %v, want 6", v.ContextFillPct)
 	}
 	// 138 - 135 = 3 successful turns since the last supervisor pass.
 	if v.SupervisorItersAgo == nil || *v.SupervisorItersAgo != 3 {
@@ -259,7 +263,7 @@ func TestDefinitionViewResolver_FromDefinition_RunningOverlaysLive(t *testing.T)
 	live := Status{
 		ID: "lp_res", Name: "reservoir", State: State("sleeping"),
 		StartedAt: now.Add(-2 * time.Hour), Iterations: 50, Attempts: 51,
-		TotalInputTokens: 1000, ContextWindow: 200000, LastInputTokens: 20000,
+		TotalInputTokens: 1000, ContextWindow: 200000, LastInputTokens: 32000, LastPeakInputTokens: 20000,
 		EffectiveTags: []EffectiveTag{{Tag: "water", From: "self"}},
 		Config:        Config{Operation: OperationService},
 	}
@@ -576,3 +580,68 @@ func TestDefinitionViewResolver_FromDefinition_LiveEnvelopeWins(t *testing.T) {
 		t.Errorf("envelope = %#v, want the live 1h/24h/6h, not the stored spec's", v.SleepEnvelope)
 	}
 }
+
+// TestLoopViewResolver_ContextFillUsesPeakNotCumulative pins the bug this
+// metric had in production: a metacognitive turn reported 85% fill on a
+// 131072 window while no single call exceeded ~29% of it, because the
+// gauge divided the turn's summed input by a per-call window. The
+// reported number tracked how many tool-calling round-trips a turn took,
+// not context pressure.
+func TestLoopViewResolver_ContextFillUsesPeakNotCumulative(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		lastIn   int
+		peakIn   int
+		window   int
+		wantPct  *int
+		wantPeak int
+	}{
+		{
+			name: "production metacognitive turn", lastIn: 112316, peakIn: 38000,
+			window: 131072, wantPct: intPtr(28), wantPeak: 38000,
+		},
+		{
+			name: "single-call turn reports the same either way", lastIn: 24000, peakIn: 24000,
+			window: 131072, wantPct: intPtr(18), wantPeak: 24000,
+		},
+		{
+			// Turns recorded before peak was tracked report no fill
+			// rather than resurrecting the cumulative figure.
+			name: "no peak recorded yields no fill", lastIn: 112316, peakIn: 0,
+			window: 131072, wantPct: nil, wantPeak: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			st := Status{
+				ID: "l1", Name: "metacognitive", State: StateSleeping,
+				LastInputTokens:     tt.lastIn,
+				LastPeakInputTokens: tt.peakIn,
+				ContextWindow:       tt.window,
+			}
+			v := NewLoopViewResolver([]Status{st}, nil, time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)).FromStatus(st)
+
+			switch {
+			case tt.wantPct == nil && v.ContextFillPct != nil:
+				t.Errorf("ContextFillPct = %d, want nil", *v.ContextFillPct)
+			case tt.wantPct != nil && v.ContextFillPct == nil:
+				t.Errorf("ContextFillPct = nil, want %d", *tt.wantPct)
+			case tt.wantPct != nil && *v.ContextFillPct != *tt.wantPct:
+				t.Errorf("ContextFillPct = %d, want %d", *v.ContextFillPct, *tt.wantPct)
+			}
+			if v.LastPeakInputTokens == nil || *v.LastPeakInputTokens != tt.wantPeak {
+				t.Errorf("LastPeakInputTokens = %v, want %d", v.LastPeakInputTokens, tt.wantPeak)
+			}
+			if v.LastInputTokens == nil || *v.LastInputTokens != tt.lastIn {
+				t.Errorf("LastInputTokens = %v, want %d (cumulative spend is preserved)", v.LastInputTokens, tt.lastIn)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }

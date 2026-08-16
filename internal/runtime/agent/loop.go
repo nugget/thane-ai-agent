@@ -144,6 +144,7 @@ type Response struct {
 	Model                    string                              `json:"model"`
 	FinishReason             string                              `json:"finish_reason"`
 	InputTokens              int                                 `json:"input_tokens,omitempty"`
+	PeakInputTokens          int                                 `json:"peak_input_tokens,omitempty"`
 	OutputTokens             int                                 `json:"output_tokens,omitempty"`
 	CacheCreationInputTokens int                                 `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int                                 `json:"cache_read_input_tokens,omitempty"`
@@ -2563,6 +2564,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		Model:                    iterResult.Model,
 		FinishReason:             finishReason,
 		InputTokens:              iterResult.InputTokens,
+		PeakInputTokens:          iterResult.PeakInputTokens,
 		OutputTokens:             iterResult.OutputTokens,
 		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
 		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
