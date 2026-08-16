@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -2192,6 +2193,15 @@ func (l *Loop) buildTaskTurn(ctx context.Context, input TurnInput) (*AgentTurn, 
 		}
 	}
 	if signalSummary := summarizeNotifyEnvelopes(input.NotifyEnvelopes); signalSummary != "" {
+		// A loop that maintains documents is the one that wakes
+		// amnesiac, so it is the one that has to be told a
+		// notification only reaches the iteration reading it. Loops
+		// with no declared outputs have nowhere to write a
+		// disposition and would only be reading advice about a
+		// document they do not keep.
+		if len(l.config.Outputs) > 0 {
+			signalSummary += "\n\n" + prompts.NotificationDurableRecordNote
+		}
 		task = signalSummary + "\n\n" + task
 	}
 

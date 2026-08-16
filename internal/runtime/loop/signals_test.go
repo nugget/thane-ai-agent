@@ -953,3 +953,63 @@ func TestSummarizeNotifyEnvelopesReplyContract(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildTaskTurnDurableRecordNote pins the amnesiac half of the
+// round trip. A loop whose only memory is the documents it maintains
+// must be told that a notification reaches one iteration and nothing
+// more, or a disposition it reads here is gone by its next wake — the
+// production shape where a concern sat at "escalated, awaiting
+// response" forever because nothing could record that core had
+// answered. A loop with no declared outputs has nowhere to write and
+// should not be handed advice about a document it does not keep.
+func TestBuildTaskTurnDurableRecordNote(t *testing.T) {
+	t.Parallel()
+
+	notify, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityLoop, ID: "loop-core", Name: "signal/owner"},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   "watcher",
+			Selector: messages.SelectorName,
+		},
+		Type:    messages.TypeSignal,
+		Payload: messages.LoopNotifyPayload{Kind: "loop_wake", Message: "Closed. Nugget has the settle-window fix."},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		outputs  []OutputSpec
+		wantNote bool
+	}{
+		{name: "loop with durable outputs is told to record", outputs: []OutputSpec{{Name: "state", Type: OutputTypeMaintainedDocument, Ref: "kb:state.md"}}, wantNote: true},
+		{name: "loop without outputs has nowhere to write", outputs: nil, wantNote: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			l, err := New(Config{
+				Name:    "watcher",
+				Task:    "Watch the thing.",
+				Outputs: tt.outputs,
+			}, Deps{Runner: &noopRunner{}})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			turn, err := l.buildTaskTurn(context.Background(), TurnInput{
+				NotifyEnvelopes: []messages.Envelope{notify},
+			})
+			if err != nil {
+				t.Fatalf("buildTaskTurn: %v", err)
+			}
+			content := turn.Request.Messages[0].Content
+			if got := strings.Contains(content, prompts.NotificationDurableRecordNote); got != tt.wantNote {
+				t.Errorf("durable record note present = %t, want %t\n%s", got, tt.wantNote, content)
+			}
+		})
+	}
+}

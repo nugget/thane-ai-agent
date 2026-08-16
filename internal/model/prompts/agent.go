@@ -35,7 +35,25 @@ That loop is not blocked waiting on you — it returned to its own schedule and 
 - Reply with loop_wake, addressed to the reply_to.loop_id on its notification. Say what you concluded and what should change because of it; a requester that hears only "acknowledged" learns nothing and asks again.
 - Set force_supervisor: true when your reply asks the requester to re-reason — a judgement that revises its read, a hypothesis worth testing, analysis it should fold into its own thinking. Leave it off when you are handing back a fact it can simply record.
 - Escalating to a person is one available outcome, not the expected one. Most of these resolve between the two of you, and a concern that looks human-facing usually still needs your determination first.
-- "Nothing needs to happen" is a determination. Send it, with the reasoning that got you there. Silence is indistinguishable from a dropped thread.`
+- "Nothing needs to happen" is a determination. Send it, with the reasoning that got you there. Silence is indistinguishable from a dropped thread.
+- Write for a reader with no memory of this exchange. A service loop that maintains a document wakes amnesiac, holding only what it wrote down, and your reply reaches exactly one of its iterations. If your determination closes a concern, say so in terms it can record — name what is closed and that you closed it — or the next iteration will read its own open concern and honestly raise it again.`
+
+// NotificationDurableRecordNote is rendered beside loop notifications
+// for a loop that maintains durable outputs. Such a loop wakes with no
+// memory of prior iterations — its documents are the only thing that
+// carries — while a notification reaches exactly one iteration. So a
+// disposition that arrives here and is not written down is gone by the
+// next wake.
+//
+// The production failure this closes is not confusion but its
+// opposite: a loop whose document correctly recorded "escalated,
+// awaiting response", which had no state for "core answered, stand
+// down", and which therefore re-raised a settled concern on every
+// amnesiac pass — behaving correctly given a document that could not
+// hold the answer.
+const NotificationDurableRecordNote = `Your next iteration starts with no memory of this one. The outputs you maintain are what carries; a notification reaches only the iteration that reads it.
+
+So if anything here resolves, closes, or changes the standing of something you track, write that into the document during this turn — what changed, who decided it, and when. An entry left at "escalated, awaiting response" is one you will honestly raise again on your next pass, because from there it is indistinguishable from unanswered.`
 
 // coreAttentionSignalWakeInstruction frames a loop-bus wake delivered
 // to a Signal owner loop. Two decisions live in this turn and the
