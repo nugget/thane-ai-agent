@@ -46,11 +46,16 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages         []Message                           `json:"messages"`
-	Model            string                              `json:"model,omitempty"`
-	ConversationID   string                              `json:"conversation_id,omitempty"`
-	ChannelBinding   *memory.ChannelBinding              `json:"channel_binding,omitempty"`
-	RoutingFactors   map[string]string                   `json:"routing_factors,omitempty"`   // Caller-supplied routing factors the router weights (see router.Factor* constants)
+	Messages       []Message              `json:"messages"`
+	Model          string                 `json:"model,omitempty"`
+	ConversationID string                 `json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding `json:"channel_binding,omitempty"`
+	RoutingFactors map[string]string      `json:"routing_factors,omitempty"` // Caller-supplied routing factors the router weights (see router.Factor* constants)
+	// Bindings scope this turn to specific instances of shared
+	// resources (see loop.Spec.Bindings). They reach tool handlers and
+	// context providers through the execution context, where each
+	// subsystem reads its own key.
+	Bindings         map[string]string                   `json:"bindings,omitempty"`
 	DelegationGating string                              `json:"delegation_gating,omitempty"` // Typed feature switch: "disabled" gives the model direct access to all tools instead of the orchestrator-and-delegate gating pattern
 	SkipContext      bool                                `json:"-"`                           // Skip memory, tools, and context injection (for lightweight completions)
 	AllowedTools     []string                            `json:"-"`                           // Optional allowlist of tools visible for this run
@@ -1839,6 +1844,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
 	ctx = agentctx.WithPromptMode(ctx, req.PromptMode)
+	// Stamped on the run context, not just the prompt context, because
+	// the prompt is built more than once: OnIterationStart rebuilds it
+	// on every iteration after the first, from the iteration context
+	// rather than this function's local promptCtx. Binding only
+	// promptCtx narrowed iteration 0 and silently handed back the full
+	// account list from iteration 1 onward — the model was told about
+	// a credential its own tool calls would refuse, which is the
+	// painted door this narrowing exists to remove. Everything derived
+	// from ctx now inherits it.
+	ctx = loop.WithBindings(ctx, req.Bindings)
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
@@ -1976,7 +1991,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	} else {
 		rebuildSystemPromptForModel(model)
-		contextSize = estimateLLMMessagesContextTokens(llmMessages)
+		// What the request requires, tool schemas included — not just the
+		// messages. Generation headroom is added when a load size is chosen,
+		// so that wanting room to answer never makes a servable request look
+		// incompatible here.
+		contextSize = estimateRequestContextTokens(llmMessages, visibleTools.List())
 		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
 			return nil, prepErr
 		}
@@ -2321,6 +2340,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCtx := tools.WithConversationID(iterCtx, convID)
 			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
 			toolCtx = tools.WithHints(toolCtx, req.RoutingFactors)
+			toolCtx = loop.WithBindings(toolCtx, req.Bindings)
 			if scope != nil {
 				toolCtx = tools.WithInheritableCapabilityTags(toolCtx, scope.InheritableTags())
 			}

@@ -10,6 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	_ "modernc.org/sqlite"
 )
@@ -538,6 +539,45 @@ func TestContentResolver_FilterPropagation(t *testing.T) {
 			t.Error("FilterByTags (with tags) did not propagate contentResolver")
 		}
 	})
+}
+
+func TestContentResolverHonorsRepositoryRootBinding(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	resolver := paths.New(map[string]string{"core": filepath.Join(workspace, "core")})
+	for _, root := range []paths.Root{
+		{Name: "thanecode", Path: filepath.Join(workspace, "thanecode"), Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub-a"},
+		{Name: "othercode", Path: filepath.Join(workspace, "othercode"), Kind: paths.RootKindRepository, ReadOnly: true, Owner: "sub-b"},
+	} {
+		if err := os.MkdirAll(root.Path, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root.Path, "README.md"), []byte(root.Name), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := resolver.Register(root); err != nil {
+			t.Fatalf("Register(%s): %v", root.Name, err)
+		}
+	}
+	cr := NewContentResolver(resolver, nil, nil)
+	ctx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingRepositoryRoot: "thanecode",
+	})
+
+	args := map[string]any{"body": "thanecode:README.md"}
+	if err := cr.ResolveArgs(ctx, args); err != nil {
+		t.Fatalf("ResolveArgs bound root: %v", err)
+	}
+	if args["body"] != "thanecode" {
+		t.Fatalf("resolved body = %#v", args["body"])
+	}
+	if err := cr.ResolveArgs(ctx, map[string]any{"body": "othercode:README.md"}); err == nil || !strings.Contains(err.Error(), "bound to root") {
+		t.Fatalf("cross-root error = %v", err)
+	}
+	if err := cr.ResolveArgs(ctx, map[string]any{"body": "thanecode:../othercode/README.md"}); err == nil || !strings.Contains(err.Error(), "escapes named root") {
+		t.Fatalf("escape error = %v", err)
+	}
 }
 
 func TestNewContentResolver_NilDeps(t *testing.T) {

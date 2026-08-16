@@ -400,6 +400,20 @@ type EffectiveExcludeTool struct {
 	From string `yaml:"from" json:"from"`
 }
 
+// EffectiveBinding is one resource binding annotated with its origin
+// in the loop graph. Bindings cascade with ANCESTOR-wins semantics on
+// key collision, the inverse of routing factors: a container's binding
+// is a restriction its descendants cannot declare their way out of.
+// Returned by [Registry.EffectiveBindings].
+type EffectiveBinding struct {
+	// Key is the registered binding key, e.g. loop.BindingForgeAccount.
+	Key string `yaml:"key" json:"key"`
+	// Value is the bound resource instance, e.g. a forge account name.
+	Value string `yaml:"value" json:"value"`
+	// From follows the same provenance contract as [EffectiveTag.From].
+	From string `yaml:"from" json:"from"`
+}
+
 // EffectiveRoutingFactor is one routing-factor entry annotated with
 // its origin in the loop graph. RoutingFactors cascade with
 // child-wins semantics on key collision — a descendant's value

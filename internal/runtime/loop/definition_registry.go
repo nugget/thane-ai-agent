@@ -420,6 +420,7 @@ func cloneSpec(s Spec) Spec {
 	clone.Subscriptions = cloneEntitySubscriptions(s.Subscriptions)
 	clone.Jitter = cloneFloat64Ptr(s.Jitter)
 	clone.RoutingFactors = cloneStringMap(s.RoutingFactors)
+	clone.Bindings = CloneBindings(s.Bindings)
 	clone.Metadata = cloneStringMap(s.Metadata)
 	clone.Profile = s.Profile
 	clone.Profile.ExcludeTools = append([]string(nil), s.Profile.ExcludeTools...)

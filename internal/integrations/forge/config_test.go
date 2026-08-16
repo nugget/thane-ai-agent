@@ -235,6 +235,19 @@ func TestNewManager(t *testing.T) {
 	if p.Name() != "github" {
 		t.Errorf("Account(\"\").Name() = %q, want %q", p.Name(), "github")
 	}
+	resolved, err := m.ResolveAccount("")
+	if err != nil {
+		t.Fatalf("ResolveAccount(\"\") unexpected error: %v", err)
+	}
+	if resolved.Name != "primary" {
+		t.Errorf("ResolveAccount(\"\").Name = %q, want %q", resolved.Name, "primary")
+	}
+	if resolved.Config.Owner != "myorg" {
+		t.Errorf("ResolveAccount(\"\").Config.Owner = %q, want %q", resolved.Config.Owner, "myorg")
+	}
+	if resolved.Provider != p {
+		t.Error("ResolveAccount and Account returned different provider instances")
+	}
 
 	// Named account returns correct provider.
 	p2, err := m.Account("secondary")
@@ -296,7 +309,7 @@ func TestAccountConfig(t *testing.T) {
 
 	cfg := Config{
 		Accounts: []AccountConfig{
-			{Name: "primary", Provider: "github", Token: "tok", URL: "https://api.github.com", Owner: "myorg", Username: "myuser"},
+			{Name: "primary", Provider: "github", Token: "tok", URL: "https://api.github.com", Owner: "myorg"},
 		},
 	}
 

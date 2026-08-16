@@ -290,17 +290,26 @@ Owner channel activity recency is reported with delta fields such as
 | `file_edit` | Targeted edit with a diff preview. |
 | `file_list` | List directory contents. |
 | `file_search` | Search for files by name. |
-| `file_grep` | Search file contents with regex. |
+| `file_grep` | Search file contents with regex, optionally filtering filenames with `file_pattern` glob syntax. |
 | `file_stat` | Get file metadata. |
 | `file_tree` | Render a directory tree. |
 | `create_temp_file` | Create a temp file with a labelled path. |
+| `repo_git_log` | Read bounded commit history from one named repository root. |
+| `repo_git_diff` | Read a bounded patch or diffstat between commits in one named repository root. |
+| `repo_git_show` | Show one commit and its bounded patch from one named repository root. |
+| `repo_git_blame` | Read structured line attribution for one file in one named repository root. |
 
-File tools resolve configured root prefixes such as `kb:` or
-`thanecode:` before applying the workspace sandbox. A forge-maintained
-checkout is searchable through these tools when its `local_checkout` path
-is also declared as a read-only root under `workspace.path` or included
-in `workspace.read_only_dirs`. `file_stat` reports modification recency
-as `modified_delta`.
+File tools resolve configured roots such as `kb:` and dynamically registered
+repository roots such as `thanecode:` before applying workspace policy. A
+forge subscription registers a repository root from its `repo_root` handle;
+the host checkout path is not model-facing. Repository roots are read-only.
+When a loop carries a `repo_root` binding, an unprefixed relative file path
+defaults to that root and every other named root—including document roots—is
+refused. The `repo_git_*` tools have the same boundary: an omitted `root` uses
+the binding, while unbound callers must name a repository root. This defaulting
+does not apply to `forge_repo_follow`: omitting `repo_root` there requests
+event-only tracking because the tool creates rather than reads a root.
+`file_stat` reports modification recency as `modified_delta`.
 
 ## `shell` — host command execution
 
@@ -370,18 +379,28 @@ Attachment list and search results report arrival recency as
 | `forge_pr_request_review` | Request reviewers on a PR. |
 | `forge_react` | Add an emoji reaction to an issue/PR/comment. |
 | `forge_search` | Search code and issues across the forge. |
-| `forge_repo_follow` | Follow a repository for release/commit events, optionally maintain a local mirror checkout, and wake an existing loop. |
+| `forge_repo_follow` | Follow a repository for release/commit events, optionally expose a named read-only repository root, and wake an existing loop. |
 | `forge_repo_unfollow` | Stop following a repository event subscription. |
 | `forge_repo_subscriptions` | List repository event subscriptions and target loops. |
 
 Repository subscriptions require `wake_loop` so event handling is owned by
 an existing loop, usually one created with `thane_loop_create`
-(`operation: service`) for a specific managed document. Pass
-`local_checkout` when the loop should read a local mirror checkout; the
-poller syncs that checkout before delivering repository events. The path
-must be empty or an existing Thane-owned mirror checkout; non-empty
-directories and unmarked git checkouts are refused. Unfollowing leaves
-the checkout on disk.
+(`operation: service`) for a specific managed document. Pass a stable
+`repo_root` handle such as `thanecode` when the loop should read a local
+mirror. Thane chooses the physical path beneath `workspace.path`, performs
+the initial clone, and registers the handle as read-only; a failed clone
+fails the call rather than storing a root that does not exist. The poller
+syncs the root before delivering repository events, and event metadata carries
+`repo_root` plus `last_synced_sha`. Unfollowing leaves the checkout on disk.
+Handles use lowercase ASCII letters, digits, `.`, `_`, and `-`; uppercase
+input is canonicalized to lowercase so two spellings cannot select the same
+checkout on a case-insensitive filesystem.
+Omit `repo_root` for event-only tracking. A caller carrying a `repo_root`
+binding may explicitly name only that root, but omission still remains
+event-only rather than implicitly creating another checkout.
+With `forge.subscription_check_interval` unset or zero the checkout is still
+created and is accurate as of that moment, but nothing refreshes it and the
+subscription wakes no loop; the response says so.
 
 ## `scheduler` — time-based tasks
 

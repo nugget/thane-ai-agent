@@ -22,8 +22,8 @@ func subscriptionMetadata(sub ProjectSubscription) map[string]string {
 	if sub.Name != "" {
 		metadata["name"] = sub.Name
 	}
-	if sub.CheckoutPath != "" {
-		metadata["local_checkout"] = sub.CheckoutPath
+	if sub.RepositoryRoot != "" {
+		metadata["repo_root"] = sub.RepositoryRoot
 	}
 	if sub.LastSyncedSHA != "" {
 		metadata["last_synced_sha"] = sub.LastSyncedSHA
@@ -36,8 +36,8 @@ func annotateSubscriptionEvents(events []messages.LoopEventPayload, sub ProjectS
 		if events[i].Metadata == nil {
 			events[i].Metadata = map[string]string{}
 		}
-		if sub.CheckoutPath != "" {
-			events[i].Metadata["local_checkout"] = sub.CheckoutPath
+		if sub.RepositoryRoot != "" {
+			events[i].Metadata["repo_root"] = sub.RepositoryRoot
 		}
 		if sub.LastSyncedSHA != "" {
 			events[i].Metadata["last_synced_sha"] = sub.LastSyncedSHA
@@ -56,11 +56,11 @@ func (s mirrorSubscriptionCheckoutSyncer) Sync(ctx context.Context, sub ProjectS
 	}
 	remoteURL := strings.TrimSpace(sub.CheckoutRemoteURL)
 	if remoteURL == "" {
-		return "", fmt.Errorf("subscription %s has local_checkout=%q but no checkout_remote_url", sub.ID, localCheckout)
+		return "", fmt.Errorf("subscription %s has an internal checkout but no checkout_remote_url", sub.ID)
 	}
 	branch := strings.TrimSpace(sub.Branch)
 	if branch == "" {
-		return "", fmt.Errorf("subscription %s has local_checkout=%q but no branch", sub.ID, localCheckout)
+		return "", fmt.Errorf("subscription %s has an internal checkout but no branch", sub.ID)
 	}
 
 	mirror, err := checkout.OpenMirror(checkout.MirrorSpec{
@@ -69,14 +69,14 @@ func (s mirrorSubscriptionCheckoutSyncer) Sync(ctx context.Context, sub ProjectS
 		Logger:       s.logger,
 	})
 	if err != nil {
-		return "", err
+		return "", hideRepositoryCheckoutPath(err, localCheckout)
 	}
 	result, err := mirror.Sync(ctx, checkout.MirrorSyncRequest{
 		RemoteURL: remoteURL,
 		Branch:    branch,
 	})
 	if err != nil {
-		return "", err
+		return "", hideRepositoryCheckoutPath(err, localCheckout)
 	}
 	return result.RemoteHead, nil
 }

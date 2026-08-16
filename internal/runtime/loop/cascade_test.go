@@ -339,3 +339,164 @@ func TestLoopStatusReportsCascadeFields(t *testing.T) {
 		t.Errorf("EffectiveDelegationGating = %+v, want {disabled ctx}", st.EffectiveDelegationGating)
 	}
 }
+
+// TestEffectiveBindingsAncestorWins covers the inverted cascade.
+// Bindings are the one field where the ancestor's declaration beats
+// the leaf's: a container's binding is a restriction it imposed, and a
+// descendant that could rebind the key would turn that boundary into a
+// suggestion. Provenance names the container so an operator reading a
+// refusal can find where the restriction was declared.
+func TestEffectiveBindingsAncestorWins(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	root, err := New(Config{
+		Name:      "root",
+		Operation: OperationContainer,
+		Bindings:  map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("new root: %v", err)
+	}
+	if err := r.Register(root); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+
+	leaf, err := New(Config{
+		Name:     "leaf",
+		Task:     "t",
+		ParentID: root.ID(),
+		Bindings: map[string]string{BindingForgeAccount: "github-primary"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new leaf: %v", err)
+	}
+	if err := r.Register(leaf); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+
+	got := r.EffectiveBindings(leaf.ID())
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1: %+v", len(got), got)
+	}
+	if got[0].Key != BindingForgeAccount {
+		t.Errorf("Key = %q, want %q", got[0].Key, BindingForgeAccount)
+	}
+	if got[0].Value != "github-readonly" {
+		t.Errorf("Value = %q, want the container's binding to survive the child's attempt to rebind it", got[0].Value)
+	}
+	if got[0].From != "root" {
+		t.Errorf("From = %q, want %q so a refusal can be traced to its declaration", got[0].From, "root")
+	}
+}
+
+// TestEffectiveBindingsLeafMayBindUnclaimedKey confirms the cascade
+// restricts rather than forbids: a descendant can still bind a key no
+// ancestor mentions.
+func TestEffectiveBindingsLeafMayBindUnclaimedKey(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	root, err := New(Config{Name: "root", Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new root: %v", err)
+	}
+	if err := r.Register(root); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+
+	leaf, err := New(Config{
+		Name:     "leaf",
+		Task:     "t",
+		ParentID: root.ID(),
+		Bindings: map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new leaf: %v", err)
+	}
+	if err := r.Register(leaf); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+
+	got := r.EffectiveBindings(leaf.ID())
+	if len(got) != 1 || got[0].Value != "github-readonly" {
+		t.Fatalf("EffectiveBindings = %+v, want the leaf's own binding to apply", got)
+	}
+	if got[0].From != EffectiveOriginSelf {
+		t.Errorf("From = %q, want %q", got[0].From, EffectiveOriginSelf)
+	}
+}
+
+// TestInheritableBindingsExcludesNonContainerParentsOwn pins the
+// distinction the launch guard depends on. A parent's own effective
+// bindings are not what its child inherits: the cascade skips
+// non-container ancestors, so a service loop's own declaration stops
+// at itself while its container ancestors still reach the child.
+// Conflating the two would refuse launches that are actually safe.
+func TestInheritableBindingsExcludesNonContainerParentsOwn(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	container, err := New(Config{
+		Name:      "root",
+		Operation: OperationContainer,
+		Bindings:  map[string]string{BindingForgeAccount: "github-readonly"},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("new container: %v", err)
+	}
+	if err := r.Register(container); err != nil {
+		t.Fatalf("register container: %v", err)
+	}
+
+	service, err := New(Config{
+		Name:     "service",
+		Task:     "t",
+		ParentID: container.ID(),
+		Bindings: map[string]string{"unregistered_but_harmless": "x"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	if err := r.Register(service); err != nil {
+		t.Fatalf("register service: %v", err)
+	}
+
+	// The service's OWN effective bindings include its declaration.
+	var sawOwn bool
+	for _, b := range r.EffectiveBindings(service.ID()) {
+		if b.Key == "unregistered_but_harmless" {
+			sawOwn = true
+		}
+	}
+	if !sawOwn {
+		t.Fatal("EffectiveBindings should include the loop's own declaration")
+	}
+
+	// A child of the service inherits the container's, not the
+	// service's own.
+	inherited := r.InheritableBindings(service.ID())
+	for _, b := range inherited {
+		if b.Key == "unregistered_but_harmless" {
+			t.Errorf("a non-container parent's own binding must not cascade to its child: %+v", b)
+		}
+	}
+	var sawContainer bool
+	for _, b := range inherited {
+		if b.Key == BindingForgeAccount && b.Value == "github-readonly" {
+			sawContainer = true
+		}
+	}
+	if !sawContainer {
+		t.Errorf("InheritableBindings = %+v, want the container ancestor's binding to reach the child", inherited)
+	}
+
+	// A container parent passes its own down.
+	if got := r.InheritableBindings(container.ID()); len(got) != 1 || got[0].Value != "github-readonly" {
+		t.Errorf("InheritableBindings(container) = %+v, want its own binding", got)
+	}
+
+	if got := r.InheritableBindings("no-such-loop"); got != nil {
+		t.Errorf("InheritableBindings(unknown) = %+v, want nil", got)
+	}
+}

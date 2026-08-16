@@ -7,96 +7,15 @@ import (
 	"strings"
 	"time"
 
+	platformconfig "github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 )
 
-// Config holds all forge account configurations.
-type Config struct {
-	Accounts []AccountConfig `yaml:"accounts"`
+// Config is the serialized forge configuration contract.
+type Config = platformconfig.ForgeConfig
 
-	// SubscriptionCheckInterval is how often (in seconds) to poll followed
-	// repositories for releases and commits. Zero disables polling.
-	SubscriptionCheckInterval int `yaml:"subscription_check_interval"`
-
-	// MaxSubscriptions limits runtime-managed repository event subscriptions.
-	MaxSubscriptions int `yaml:"max_subscriptions"`
-}
-
-// AccountConfig describes a single forge account.
-type AccountConfig struct {
-	// Name is a short identifier (e.g., "github-primary").
-	Name string `yaml:"name"`
-
-	// Provider selects the forge backend: "github" or "gitea".
-	Provider string `yaml:"provider"`
-
-	// Token is the API authentication token.
-	Token string `yaml:"token"`
-
-	// Owner is the default repository owner for unqualified repo references.
-	Owner string `yaml:"owner"`
-
-	// Username is the forge username for commit attribution.
-	Username string `yaml:"username"`
-
-	// URL is the API base URL. Required for gitea. Optional for GitHub
-	// (defaults to https://api.github.com).
-	URL string `yaml:"url"`
-}
-
-// Configured reports whether at least one forge account is configured
-// with a provider and token.
-func (c Config) Configured() bool {
-	for _, acct := range c.Accounts {
-		if acct.Provider != "" && acct.Token != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// Validate checks that the configuration is internally consistent.
-func (c Config) Validate() error {
-	if c.SubscriptionCheckInterval < 0 {
-		return fmt.Errorf("forge.subscription_check_interval must be >= 0")
-	}
-	if c.MaxSubscriptions < 0 {
-		return fmt.Errorf("forge.max_subscriptions must be >= 0")
-	}
-	seen := make(map[string]bool, len(c.Accounts))
-	for i, acct := range c.Accounts {
-		if acct.Name == "" {
-			return fmt.Errorf("forge account %d: name is required", i)
-		}
-		if seen[acct.Name] {
-			return fmt.Errorf("forge account %q: duplicate name", acct.Name)
-		}
-		seen[acct.Name] = true
-
-		if acct.Provider == "" {
-			return fmt.Errorf("forge account %q: provider is required", acct.Name)
-		}
-		if acct.Token == "" {
-			return fmt.Errorf("forge account %q: token is required", acct.Name)
-		}
-		if acct.Provider == "gitea" && acct.URL == "" {
-			return fmt.Errorf("forge account %q: url is required for gitea provider", acct.Name)
-		}
-	}
-	return nil
-}
-
-// ApplyDefaults fills in missing optional fields with sensible values.
-func (c *Config) ApplyDefaults() {
-	if c.MaxSubscriptions == 0 {
-		c.MaxSubscriptions = 50
-	}
-	for i := range c.Accounts {
-		if c.Accounts[i].Provider == "github" && c.Accounts[i].URL == "" {
-			c.Accounts[i].URL = "https://api.github.com"
-		}
-	}
-}
+// AccountConfig is the serialized configuration for one forge account.
+type AccountConfig = platformconfig.ForgeAccountConfig
 
 // Manager holds configured forge providers and routes operations to
 // the appropriate account. The first account is the primary (default).
@@ -107,9 +26,21 @@ type Manager struct {
 	logger    *slog.Logger
 }
 
+// ResolvedAccount is the provider and configuration selected for one forge
+// operation. Name is always explicit, including when the caller selected the
+// primary account by omitting an account name.
+type ResolvedAccount struct {
+	Name     string        `json:"-"`
+	Provider ForgeProvider `json:"-"`
+	Config   AccountConfig `json:"-"`
+}
+
 // NewManager creates a forge manager from the given configuration.
 // Each account is instantiated with its provider-specific implementation.
 func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	m := &Manager{
 		providers: make(map[string]ForgeProvider, len(cfg.Accounts)),
 		configs:   make(map[string]AccountConfig, len(cfg.Accounts)),
@@ -126,7 +57,7 @@ func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
 				httpkit.WithTimeout(30*time.Second),
 				httpkit.WithTruthfulUserAgent(httpkit.AgentSurfaceForge),
 			)
-			provider, err = NewGitHub(httpClient, acct.Token, acct.URL, logger)
+			provider, err = NewGitHub(httpClient, acct.Name, acct.Token, acct.URL, logger)
 			if err != nil {
 				return nil, fmt.Errorf("forge account %q: %w", acct.Name, err)
 			}
@@ -148,35 +79,44 @@ func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
 	return m, nil
 }
 
-// Account returns the forge provider for the named account. If name is
-// empty, the primary (first configured) account is used.
-func (m *Manager) Account(name string) (ForgeProvider, error) {
+// ResolveAccount selects a configured account. If name is empty, the primary
+// (first configured) account is used. It is the account-selection choke point
+// for tools, subscriptions, and future provider-specific policy.
+func (m *Manager) ResolveAccount(name string) (ResolvedAccount, error) {
 	if len(m.order) == 0 {
-		return nil, fmt.Errorf("no forge accounts configured")
+		return ResolvedAccount{}, fmt.Errorf("no forge accounts configured")
 	}
 	if name == "" {
 		name = m.order[0]
 	}
 	p, ok := m.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("forge account %q not found; available accounts: %s", name, strings.Join(m.order, ", "))
+		return ResolvedAccount{}, fmt.Errorf("forge account %q not found; available accounts: %s", name, strings.Join(m.order, ", "))
 	}
-	return p, nil
+	return ResolvedAccount{
+		Name:     name,
+		Provider: p,
+		Config:   m.configs[name],
+	}, nil
+}
+
+// Account returns the forge provider for the named account. If name is
+// empty, the primary (first configured) account is used.
+func (m *Manager) Account(name string) (ForgeProvider, error) {
+	resolved, err := m.ResolveAccount(name)
+	if err != nil {
+		return nil, err
+	}
+	return resolved.Provider, nil
 }
 
 // AccountConfig returns the configuration for the named account.
 func (m *Manager) AccountConfig(name string) (AccountConfig, error) {
-	if len(m.order) == 0 {
-		return AccountConfig{}, fmt.Errorf("no forge accounts configured")
+	resolved, err := m.ResolveAccount(name)
+	if err != nil {
+		return AccountConfig{}, err
 	}
-	if name == "" {
-		name = m.order[0]
-	}
-	cfg, ok := m.configs[name]
-	if !ok {
-		return AccountConfig{}, fmt.Errorf("forge account %q not found; available accounts: %s", name, strings.Join(m.order, ", "))
-	}
-	return cfg, nil
+	return resolved.Config, nil
 }
 
 // accountView is the JSON-serializable representation of a forge
@@ -187,13 +127,20 @@ type accountView struct {
 	Type         string `json:"type"`
 	URL          string `json:"url"`
 	DefaultOwner string `json:"default_owner,omitempty"`
+	Description  string `json:"description,omitempty"`
+
+	// Bound marks the account as the one this caller is restricted to,
+	// so the model reads the narrowed list as a boundary rather than as
+	// the whole of what the site has configured.
+	Bound bool `json:"bound,omitempty"`
 }
 
 // Context returns a markdown block describing the configured forge
 // accounts for injection into a system prompt. The output is structured
 // JSON wrapped in a fenced code block so the model can immediately
-// identify available accounts, their types, and default owners without
-// guessing. Returns an empty string when no accounts are configured.
+// identify available accounts, their types, default owners, and any
+// operator-authored description without guessing. Returns an empty
+// string when no accounts are configured.
 // Tokens are never included.
 func (m *Manager) Context() string {
 	if len(m.order) == 0 {
@@ -208,6 +155,7 @@ func (m *Manager) Context() string {
 			Type:         cfg.Provider,
 			URL:          cfg.URL,
 			DefaultOwner: cfg.Owner,
+			Description:  cfg.Description,
 		})
 	}
 
@@ -233,12 +181,12 @@ func (m *Manager) ResolveRepo(accountName, repo string) (string, error) {
 		return repo, nil
 	}
 
-	cfg, err := m.AccountConfig(accountName)
+	account, err := m.ResolveAccount(accountName)
 	if err != nil {
 		return "", err
 	}
-	if cfg.Owner == "" {
-		return "", fmt.Errorf("repo %q requires an owner but account %q has no default owner configured", repo, cfg.Name)
+	if account.Config.Owner == "" {
+		return "", fmt.Errorf("repo %q requires an owner but account %q has no default owner configured", repo, account.Name)
 	}
-	return cfg.Owner + "/" + repo, nil
+	return account.Config.Owner + "/" + repo, nil
 }

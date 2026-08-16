@@ -95,6 +95,9 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 	if a == nil {
 		return spec, nil
 	}
+	if err := a.validateLoopBindings(spec); err != nil {
+		return looppkg.Spec{}, err
+	}
 	name := strings.TrimSpace(spec.Name)
 	// Core model-facing service loops dispatch through their shared
 	// registration descriptor (see [coreServiceLoops]); each one's
@@ -137,11 +140,11 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		}
 		return a.hydrateLoopOutputs(spec)
 	case forgeSubPollerDefinitionName:
-		if a.forgeSubPoller == nil {
+		if a.forgeService == nil || !a.forgeService.SubscriptionPollingEnabled() {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires forge subscription poller runtime", forgeSubPollerDefinitionName)
 		}
 		spec.Handler = func(ctx context.Context, _ any) error {
-			wakes, err := a.forgeSubPoller.CheckSubscriptions(ctx)
+			wakes, err := a.forgeService.CheckSubscriptions(ctx)
 			if err != nil {
 				return err
 			}
@@ -256,4 +259,45 @@ func hydrateHAStateWatcherSpec(spec looppkg.Spec, watcher *homeassistant.StateWa
 		return nil
 	}
 	return spec
+}
+
+// validateLoopBindings resolves a spec's bindings against live
+// configuration. [looppkg.ValidateBindings] has already checked that
+// every key is registered and every value non-empty; what it cannot
+// know is whether the value names something this site actually has.
+//
+// The check belongs at hydration because that is the last moment
+// before a loop starts running with a boundary that does not resolve.
+// A misspelled account or repository root would otherwise surface on the
+// first unattended tool call, days after the definition was accepted.
+func (a *App) validateLoopBindings(spec looppkg.Spec) error {
+	if account, ok := spec.Bindings[looppkg.BindingForgeAccount]; ok {
+		if a.forgeService == nil {
+			return fmt.Errorf("loop %q binds %s=%q but no forge accounts are configured at this site",
+				spec.Name, looppkg.BindingForgeAccount, account)
+		}
+		// Deliberately unbound. ResolveAccount honors a binding carried by
+		// ctx, so threading the caller's context here would redirect the
+		// lookup to the caller's account and report a binding refusal for
+		// a spec that merely names an account this site does not have —
+		// turning a plain configuration error into a confusing one. The
+		// question being asked is "does this account exist", not "may this
+		// caller use it".
+		if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
+			return fmt.Errorf("loop %q binds %s=%q: %w",
+				spec.Name, looppkg.BindingForgeAccount, account, err)
+		}
+	}
+
+	if rootName, ok := spec.Bindings[looppkg.BindingRepositoryRoot]; ok {
+		if a.forgeService == nil {
+			return fmt.Errorf("loop %q binds %s=%q but no forge repository roots are configured at this site",
+				spec.Name, looppkg.BindingRepositoryRoot, rootName)
+		}
+		if err := a.forgeService.ValidateRepositoryRootBinding(rootName, spec.Bindings[looppkg.BindingForgeAccount]); err != nil {
+			return fmt.Errorf("loop %q binds %s=%q: %w",
+				spec.Name, looppkg.BindingRepositoryRoot, rootName, err)
+		}
+	}
+	return nil
 }

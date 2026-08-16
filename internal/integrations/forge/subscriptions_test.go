@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	_ "modernc.org/sqlite"
 )
 
@@ -99,6 +100,54 @@ func TestHandleRepoFollowStoresWakeTarget(t *testing.T) {
 	}
 	if subs[0].Repo != "owner/repo" || subs[0].Branch != "main" {
 		t.Fatalf("subscription repo/branch = %s/%s", subs[0].Repo, subs[0].Branch)
+	}
+}
+
+func TestHandleRepoFollowBoundRootOmissionRemainsEventOnly(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/other",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/other",
+		},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+	ctx := looppkg.WithBindings(context.Background(), map[string]string{
+		looppkg.BindingRepositoryRoot: "thanecode",
+	})
+
+	if _, err := tools.HandleRepoFollow(ctx, map[string]any{
+		"repo":           "other",
+		"track_releases": true,
+		"track_commits":  false,
+		"wake_loop":      map[string]any{"name": "release_watcher"},
+	}); err != nil {
+		t.Fatalf("event-only HandleRepoFollow: %v", err)
+	}
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions len = %d, want 1", len(subs))
+	}
+	if subs[0].RepositoryRoot != "" || subs[0].CheckoutPath != "" {
+		t.Fatalf("bound omission created checkout state: %+v", subs[0])
+	}
+
+	if _, err := tools.HandleRepoFollow(ctx, map[string]any{
+		"repo":           "other",
+		"repo_root":      "othercode",
+		"track_releases": true,
+		"track_commits":  false,
+		"wake_loop":      map[string]any{"name": "release_watcher"},
+	}); err == nil || !strings.Contains(err.Error(), "bound to root \"thanecode\"") {
+		t.Fatalf("different repo_root error = %v", err)
 	}
 }
 

@@ -149,11 +149,21 @@ const (
 	// SignatureTrusted means the checked content is clean and covered by
 	// trusted signed git history.
 	SignatureTrusted SignatureStatus = "trusted"
-	// SignatureFailed means signature policy could not verify the checked
-	// content.
+	// SignatureFailed means verification ran and returned a verdict the
+	// policy rejects: an absent or untrusted signature, a dirty
+	// worktree, content not covered by signed history. The check
+	// completed; the content did not pass it.
 	SignatureFailed SignatureStatus = "failed"
-	// SignatureUnavailable means signature verification was requested but
-	// no verifier could be configured.
+	// SignatureUnavailable means verification could not reach a verdict.
+	// That covers both configuration (verification is required but no
+	// verifier could be built) and execution (git was killed, timed
+	// out, or the caller's context expired mid-check).
+	//
+	// It is deliberately distinct from [SignatureFailed]. Both refuse
+	// the content — failing closed is the point of a trust boundary —
+	// but they mean opposite things about the content itself, and a
+	// reader told "failed" for a killed subprocess goes hunting a trust
+	// problem that may not exist.
 	SignatureUnavailable SignatureStatus = "unavailable"
 )
 

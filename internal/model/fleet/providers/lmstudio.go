@@ -234,6 +234,50 @@ func (c *LMStudioClient) LoadModel(ctx context.Context, model string, contextLen
 	return &result, nil
 }
 
+// UnloadModel asks LM Studio to release a loaded model instance.
+//
+// LM Studio has no reconfigure-in-place operation: every load starts a new
+// instance, so growing a model's context window means holding two copies of
+// its weights unless the resident one is released first. A host without room
+// for the second copy refuses the load outright — and refuses a smaller
+// window as readily as a larger one, because what does not fit is the
+// weights, not the window.
+func (c *LMStudioClient) UnloadModel(ctx context.Context, instanceID string) error {
+	reqBody := lmStudioUnloadRequest{InstanceID: strings.TrimSpace(instanceID)}
+	if reqBody.InstanceID == "" {
+		return fmt.Errorf("instance id is required")
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v1/models/unload", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.setAuth(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	// The success body is not read for its content, but it still has to be
+	// drained for the connection to return to this shared client's pool.
+	defer httpkit.DrainAndClose(resp.Body, 4096)
+
+	if resp.StatusCode != http.StatusOK {
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		c.logger.Error("unload model API error", "status", resp.StatusCode, "body", errBody, "instance_id", reqBody.InstanceID)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
+	}
+
+	c.logger.Info("model unloaded", "instance_id", reqBody.InstanceID)
+	return nil
+}
+
 func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
@@ -247,6 +291,7 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		usage          lmStudioUsage
 		toolAcc        = make(map[int]*lmStudioToolAccumulator)
 		done           bool
+		chunks         int
 	)
 
 	processEvent := func(data string) error {
@@ -256,11 +301,19 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		if data == "[DONE]" {
 			return io.EOF
 		}
+		// An error frame decodes cleanly into lmStudioChatResponse — every
+		// field it carries is unknown to that type — so it would otherwise
+		// pass through as a chunk contributing nothing, turning an upstream
+		// failure into a silently empty completion. Check for it first.
+		if errText := lmStudioStreamErrorText(data); errText != "" {
+			return fmt.Errorf("stream error: %s", errText)
+		}
 
 		var chunk lmStudioChatResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return fmt.Errorf("decode stream chunk: %w", err)
 		}
+		chunks++
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
@@ -333,6 +386,14 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		}
 	}
 
+	// A stream that carried no chunks at all never produced a completion,
+	// however cleanly it closed. Reporting success here would hand the
+	// caller a well-formed zero-token response and hide the failure; the
+	// non-streaming path rejects its equivalent for the same reason.
+	if chunks == 0 {
+		return nil, fmt.Errorf("LM Studio returned an empty stream for model %q", requestedModel)
+	}
+
 	toolCalls, err := decodeLMStudioToolCalls(toolAcc)
 	if err != nil {
 		return nil, err
@@ -349,7 +410,9 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 	result.Message.Role = normalizeLMStudioMessageRole(role)
 	result.Message.Content = contentBuilder.String()
 	result.Message.ToolCalls = toolCalls
-	applyTextToolFallback(result, validToolNames)
+	if err := applyTextToolFallback(result, validToolNames); err != nil {
+		return nil, err
+	}
 
 	c.logger.Debug("stream complete",
 		"model", result.Model,
@@ -390,7 +453,9 @@ func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validT
 	result.Message.Role = normalizeLMStudioMessageRole(wire.Choices[0].Message.Role)
 	result.Message.Content = lmStudioContentText(wire.Choices[0].Message.Content)
 	result.Message.ToolCalls = toolCalls
-	applyTextToolFallback(result, validToolNames)
+	if err := applyTextToolFallback(result, validToolNames); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
 		return nil, fmt.Errorf("LM Studio returned an empty assistant completion for model %q", wire.Model)
 	}
