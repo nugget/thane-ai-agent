@@ -2668,7 +2668,13 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					"recovery_model", l.recoveryModel,
 				)
 				recoveryMessages := buildRecoveryPrompt(msgs, toolsUsedFromMessages(msgs))
-				recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), timeoutRecoveryDeadline)
+				// Detached from the parent on purpose — the deadline
+				// that just expired must not cancel the recovery — but
+				// detaching drops context values with it, and the output
+				// budget is one of them. Re-attach it so the recovery
+				// generation is bounded like every other call.
+				recoveryBase := llm.WithMaxOutputTokens(context.Background(), llm.MaxOutputTokensFromContext(iterCtx))
+				recoveryCtx, recoveryCancel := context.WithTimeout(recoveryBase, timeoutRecoveryDeadline)
 				resp, recoveryErr := l.llm.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
 				if recoveryErr != nil {
