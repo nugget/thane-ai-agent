@@ -1,12 +1,10 @@
 package providers
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // OpenAICompatClient speaks the OpenAI chat-completions protocol to any
@@ -50,16 +49,20 @@ type OpenAICompatClient struct {
 	// disables the guard, which is what the pre-existing behavior was
 	// and what a test wanting to hold a stream open asks for.
 	streamIdleTimeout time.Duration
-	httpClient        *http.Client
-	logger            *slog.Logger
-	watcher           llm.ReadyWatcher
+	// resource names the configured endpoint this client serves. Kept
+	// as a value, not only baked into c.logger, so it can be re-applied
+	// onto the request-scoped logger from context.
+	resource   string
+	httpClient *http.Client
+	logger     *slog.Logger
+	watcher    llm.ReadyWatcher
 }
 
 // NewOpenAICompatClient creates a client for an OpenAI-compatible
 // endpoint. provider is a label for logs (e.g. "vllm", "ollama"); it does
 // not change the wire protocol. Pass idleTTLSeconds only for servers that
 // honor the LM Studio `ttl` extension.
-func NewOpenAICompatClient(baseURL, apiKey, provider string, logger *slog.Logger, idleTTLSeconds int) *OpenAICompatClient {
+func NewOpenAICompatClient(baseURL, apiKey, provider, resource string, logger *slog.Logger, idleTTLSeconds int) *OpenAICompatClient {
 	if baseURL == "" {
 		baseURL = "http://localhost:1234"
 	}
@@ -84,6 +87,7 @@ func NewOpenAICompatClient(baseURL, apiKey, provider string, logger *slog.Logger
 		baseURL:           normalizeOpenAICompatBaseURL(baseURL),
 		apiKey:            strings.TrimSpace(apiKey),
 		provider:          strings.TrimSpace(provider),
+		resource:          strings.TrimSpace(resource),
 		idleTTLSeconds:    idleTTLSeconds,
 		streamIdleTimeout: DefaultStreamIdleTimeout,
 		logger:            logger.With("provider", strings.TrimSpace(provider)),
@@ -186,10 +190,25 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	c.setAuth(httpReq)
+	// Claim an identity upstream. A request that dies at the network
+	// layer never receives a server-side id, and that is exactly the
+	// failure worth correlating; a header the caller set is the only
+	// handle that exists on both sides of it.
+	clientRequestID := logging.RequestIDFromContext(ctx)
+	if clientRequestID != "" {
+		httpReq.Header.Set("X-Client-Request-Id", clientRequestID)
+	}
+
+	log := c.callLogger(ctx).With("model", model, "stream", stream)
+	started := time.Now()
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		cancelReq()
+		log.Error("request failed",
+			"error", err,
+			"elapsed_ms", time.Since(started).Milliseconds(),
+		)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	// Guard both shapes of response. A non-streaming call can stall
@@ -199,9 +218,19 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	resp.Body = newStreamIdleGuard(resp.Body, cancelReq, c.streamIdleTimeout)
 	defer resp.Body.Close()
 
+	// The header is the better handle when a server sets one: it exists
+	// on error responses too, where there is no completion object to
+	// carry an id.
+	headerRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
+
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
-		c.logger.Error("API error", "status", resp.StatusCode, "body", errBody)
+		log.Error("API error",
+			"status", resp.StatusCode,
+			"body", errBody,
+			"upstream_request_id", headerRequestID,
+			"elapsed_ms", time.Since(started).Milliseconds(),
+		)
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
 	}
 
@@ -215,201 +244,33 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		if err != nil {
 			return nil, err
 		}
-		c.logger.Debug("response received",
+		if headerRequestID != "" {
+			result.UpstreamRequestID = headerRequestID
+		}
+		log.Debug("response received",
 			"model", result.Model,
 			"input_tokens", result.InputTokens,
 			"output_tokens", result.OutputTokens,
 			"tool_calls", len(result.Message.ToolCalls),
+			"finish_reason", result.StopReason,
+			"upstream_request_id", result.UpstreamRequestID,
+			"total_ms", time.Since(started).Milliseconds(),
 		)
 		c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 		return result, nil
 	}
 
-	return c.handleStreaming(ctx, model, validToolNames, resp.Body, callback)
+	return c.handleStreaming(ctx, model, validToolNames, resp.Body, callback, streamTrace{
+		log:        log,
+		started:    started,
+		upstreamID: headerRequestID,
+	})
 }
 
 func (c *OpenAICompatClient) setAuth(req *http.Request) {
 	if strings.TrimSpace(c.apiKey) != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
-}
-
-func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-
-	var (
-		eventLines     []string
-		contentBuilder strings.Builder
-		model          = requestedModel
-		role           = "assistant"
-		createdAt      time.Time
-		usage          openAICompatUsage
-		toolAcc        = make(map[int]*openAICompatToolAccumulator)
-		done           bool
-		chunks         int
-		finishReason   string
-		upstreamID     string
-	)
-
-	processEvent := func(data string) error {
-		if data == "" {
-			return nil
-		}
-		if data == "[DONE]" {
-			return io.EOF
-		}
-		// An error frame decodes cleanly into openAICompatChatResponse — every
-		// field it carries is unknown to that type — so it would otherwise
-		// pass through as a chunk contributing nothing, turning an upstream
-		// failure into a silently empty completion. Check for it first.
-		if errText := openAICompatStreamErrorText(data); errText != "" {
-			return fmt.Errorf("stream error: %s", errText)
-		}
-
-		var chunk openAICompatChatResponse
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return fmt.Errorf("decode stream chunk: %w", err)
-		}
-		chunks++
-		if chunk.Model != "" {
-			model = chunk.Model
-		}
-		if chunk.ID != "" {
-			upstreamID = chunk.ID
-		}
-		if chunk.Created > 0 {
-			createdAt = time.Unix(chunk.Created, 0).UTC()
-		}
-		if chunk.Usage != nil {
-			usage = *chunk.Usage
-		}
-		for _, choice := range chunk.Choices {
-			// The terminating frame carries finish_reason with an empty
-			// delta, so read it before the delta guard skips the choice.
-			// This is the provider's own termination signal — "length",
-			// "tool_calls", "stop", and the pause_turn family — which
-			// the iteration layer records and operators read to tell a
-			// truncated answer from a complete one.
-			if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
-				finishReason = strings.TrimSpace(*choice.FinishReason)
-			}
-			if choice.Delta == nil {
-				continue
-			}
-			if choice.Delta.Role != "" {
-				role = choice.Delta.Role
-			}
-			if choice.Delta.Content != "" {
-				contentBuilder.WriteString(choice.Delta.Content)
-				callback(llm.StreamEvent{Kind: llm.KindToken, Token: choice.Delta.Content})
-			}
-			for _, tc := range choice.Delta.ToolCalls {
-				acc := toolAcc[tc.Index]
-				if acc == nil {
-					acc = &openAICompatToolAccumulator{}
-					toolAcc[tc.Index] = acc
-				}
-				if tc.ID != "" {
-					acc.ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					acc.Name = tc.Function.Name
-				}
-				if tc.Function.Arguments != "" {
-					acc.Args.WriteString(tc.Function.Arguments)
-				}
-			}
-		}
-		return nil
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		switch {
-		case line == "":
-			if len(eventLines) == 0 {
-				continue
-			}
-			err := processEvent(strings.Join(eventLines, "\n"))
-			eventLines = eventLines[:0]
-			if err == io.EOF {
-				done = true
-				break
-			}
-			if err != nil {
-				return nil, err
-			}
-		case strings.HasPrefix(line, "data:"):
-			eventLines = append(eventLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		}
-		if done {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read stream: %w", err)
-	}
-	if len(eventLines) > 0 {
-		if err := processEvent(strings.Join(eventLines, "\n")); err != nil && err != io.EOF {
-			return nil, err
-		}
-	}
-
-	toolCalls, err := decodeOpenAICompatToolCalls(toolAcc)
-	if err != nil {
-		return nil, err
-	}
-
-	// Frame count is not evidence of a completion. A role-only opening
-	// frame or a usage-only trailer both increment it, so a stream that
-	// carried nothing but scaffolding and then closed cleanly would pass
-	// a chunks>0 check and return Done:true with no content, no tool
-	// calls, and zero tokens — the fabricated success this client exists
-	// to refuse. Judge the same thing the non-streaming path judges:
-	// whether an assistant actually said or did anything.
-	if strings.TrimSpace(contentBuilder.String()) == "" && len(toolCalls) == 0 {
-		return nil, fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks)
-	}
-
-	// Content alone does not mean the answer finished. A proxy or runner
-	// that dies mid-generation closes the connection cleanly, so the
-	// scanner sees an ordinary EOF and everything received so far looks
-	// like a completion — a truncated answer presented as a whole one,
-	// which is the same lie as a fabricated success wearing better
-	// clothes. Require the server to have said it was done: either the
-	// [DONE] sentinel or a finish_reason on some choice. Servers vary in
-	// which they send, so either suffices; neither is silence.
-	if !done && finishReason == "" {
-		return nil, fmt.Errorf("%s ended the stream for model %q without a terminal marker after %d frames (truncated response)", c.provider, requestedModel, chunks)
-	}
-
-	result := &llm.ChatResponse{
-		Model:             model,
-		CreatedAt:         createdAt,
-		Done:              true,
-		StopReason:        finishReason,
-		UpstreamRequestID: upstreamID,
-		InputTokens:       usage.PromptTokens,
-		OutputTokens:      usage.CompletionTokens,
-		TotalDuration:     0,
-	}
-	result.Message.Role = normalizeOpenAICompatMessageRole(role)
-	result.Message.Content = contentBuilder.String()
-	result.Message.ToolCalls = toolCalls
-	if err := applyTextToolFallback(result, validToolNames); err != nil {
-		return nil, err
-	}
-
-	c.logger.Debug("stream complete",
-		"model", result.Model,
-		"input_tokens", result.InputTokens,
-		"output_tokens", result.OutputTokens,
-		"content_len", len(result.Message.Content),
-		"tool_calls", len(result.Message.ToolCalls),
-	)
-	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", result.Message.Content)
-	return result, nil
 }
 
 func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse, validToolNames []string) (*llm.ChatResponse, error) {
@@ -474,4 +335,22 @@ func (c *OpenAICompatClient) SetStreamIdleTimeout(d time.Duration) {
 		return
 	}
 	c.streamIdleTimeout = d
+}
+
+// callLogger returns the logger for one request, preferring the
+// request-scoped logger the caller put on the context so provider lines
+// carry request_id, conversation_id, and session_id and can be grepped
+// as one cycle. The client's own identity is re-applied on top, because
+// the caller's logger knows the request and this client knows which
+// endpoint is answering it — a line needs both to be worth reading.
+func (c *OpenAICompatClient) callLogger(ctx context.Context) *slog.Logger {
+	log := logging.Logger(ctx)
+	if log == nil {
+		log = c.logger
+	}
+	log = log.With("provider", c.provider)
+	if c.resource != "" {
+		log = log.With("resource", c.resource)
+	}
+	return log
 }

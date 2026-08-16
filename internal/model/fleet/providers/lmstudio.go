@@ -25,14 +25,16 @@ type LMStudioClient struct {
 
 // NewLMStudioClient creates a new LM Studio client.
 func NewLMStudioClient(baseURL, apiKey string, logger *slog.Logger) *LMStudioClient {
-	return NewLMStudioClientWithTTL(baseURL, apiKey, logger, 0)
+	return NewLMStudioClientWithTTL(baseURL, apiKey, "", logger, 0)
 }
 
-// NewLMStudioClientWithTTL creates a new LM Studio client with a
-// resource-level idle TTL hint for inference requests.
-func NewLMStudioClientWithTTL(baseURL, apiKey string, logger *slog.Logger, idleTTLSeconds int) *LMStudioClient {
+// NewLMStudioClientWithTTL creates an LM Studio client bound to a named
+// resource, with a resource-level idle TTL hint for inference requests.
+// resource may be empty for ad-hoc clients that no configured endpoint
+// backs; it only names the endpoint in log lines.
+func NewLMStudioClientWithTTL(baseURL, apiKey, resource string, logger *slog.Logger, idleTTLSeconds int) *LMStudioClient {
 	return &LMStudioClient{
-		OpenAICompatClient: NewOpenAICompatClient(baseURL, apiKey, "lmstudio", logger, idleTTLSeconds),
+		OpenAICompatClient: NewOpenAICompatClient(baseURL, apiKey, "lmstudio", resource, logger, idleTTLSeconds),
 	}
 }
 

@@ -1557,6 +1557,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"conversation_id", convID,
 	)
 	ctx = logging.WithLogger(ctx, log)
+	// The id travels as a value as well as a log attribute: providers
+	// send it upstream as a client request header, which is what lets a
+	// network-level failure — the case with no response body to carry a
+	// server id — be matched against the server's own record.
+	ctx = logging.WithRequestID(ctx, requestID)
 	runStarted := time.Now()
 	defer func() {
 		attrs := []any{
