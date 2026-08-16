@@ -84,7 +84,15 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterStart := time.Now()
 
 		// --- LLM call ---
-		llmResp, err := cfg.LLM.ChatStream(iterCtx, model, messages, toolDefs, cfg.Stream)
+		// Spend the budget forward: what is left is this call's ceiling.
+		// Without it the run can only notice an overrun after paying for
+		// it in full, which on a runner generating single-digit tokens
+		// per second is minutes of work discarded on arrival.
+		callCtx := iterCtx
+		if cfg.MaxOutputTokens > 0 {
+			callCtx = llm.WithMaxOutputTokens(iterCtx, cfg.MaxOutputTokens-totalOutput)
+		}
+		llmResp, err := cfg.LLM.ChatStream(callCtx, model, messages, toolDefs, cfg.Stream)
 		if err != nil {
 			if cfg.OnLLMError != nil {
 				var newModel string
@@ -528,7 +536,22 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 	if len(messages) > 0 && messages[len(messages)-1].Role == "tool" {
 		log.Warn("forcing text response", "reason", partial.ExhaustReason, "model", model)
 
-		resp, err := cfg.LLM.ChatStream(ctx, model, messages, nil, cfg.Stream)
+		// The recovery call is a real generation against the same
+		// budget, and it is the one most likely to run when the budget
+		// is already spent. Unbounded here would reopen the hole this
+		// budget closes, at exactly the moment the run has proven it
+		// overruns. When nothing is left, a small floor still buys a
+		// closing message — returning nothing at all is a worse answer
+		// than a short one.
+		recoveryCtx := ctx
+		if cfg.MaxOutputTokens > 0 {
+			remaining := cfg.MaxOutputTokens - partial.OutputTokens
+			if remaining < forceTextFloorTokens {
+				remaining = forceTextFloorTokens
+			}
+			recoveryCtx = llm.WithMaxOutputTokens(ctx, remaining)
+		}
+		resp, err := cfg.LLM.ChatStream(recoveryCtx, model, messages, nil, cfg.Stream)
 		if err != nil {
 			log.Error("force-text LLM call failed", "model", model, "reason", partial.ExhaustReason, "error", err)
 			if partial.Content == "" {
@@ -615,3 +638,9 @@ func peakInputTokens(iters []IterationRecord) int {
 	}
 	return peak
 }
+
+// forceTextFloorTokens is the smallest ceiling the force-text recovery
+// call will be given. A run that exhausted its budget still needs to say
+// something to its caller, and a closing sentence is cheaper than the
+// silence — or the fallback string — the caller gets otherwise.
+const forceTextFloorTokens = 512

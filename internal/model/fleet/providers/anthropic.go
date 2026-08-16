@@ -358,7 +358,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		Model:        model,
 		Messages:     anthropicMsgs,
 		System:       systemPayload,
-		MaxTokens:    anthropicMaxTokens(model),
+		MaxTokens:    llm.ClampMaxOutputTokens(ctx, anthropicMaxTokens(model)),
 		Stream:       stream,
 		Tools:        anthropicTools,
 		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, explicitCaching),

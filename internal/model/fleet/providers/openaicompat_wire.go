@@ -78,6 +78,15 @@ type openAICompatChatRequest struct {
 	Tools         []map[string]any           `json:"tools,omitempty"`
 	TTL           int                        `json:"ttl,omitempty"`
 	StreamOptions *openAICompatStreamOptions `json:"stream_options,omitempty"`
+	// MaxTokens is the output ceiling, omitted when the caller set no
+	// budget. Spelled max_tokens rather than OpenAI's newer
+	// max_completion_tokens because the servers this client exists for
+	// are self-hosted: vLLM, SGLang, llama-server, LM Studio, and
+	// Ollama's /v1 all implement max_tokens, while support for the newer
+	// name is uneven and a rejected field costs the whole turn. Which
+	// spelling a resource wants is a dialect question, and dialect
+	// belongs in per-resource policy rather than hardcoded here.
+	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
 type openAICompatStreamOptions struct {

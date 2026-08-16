@@ -354,3 +354,54 @@ func TestOpenAICompatCapabilities(t *testing.T) {
 		t.Error("a text model should not be treated as vision-capable")
 	}
 }
+
+// TestOpenAICompatSendsRemainingBudget pins that a caller's remaining
+// output budget reaches the wire. Before this, MaxOutputTokens was only
+// checked after a response had fully arrived, so it bounded accounting
+// rather than generation: one runaway completion was produced and paid
+// for in full before anything noticed — minutes of wall clock on a
+// runner generating single-digit tokens per second.
+func TestOpenAICompatSendsRemainingBudget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		budget  int
+		wantSet bool
+		want    float64
+	}{
+		{name: "budget reaches the wire", budget: 700, wantSet: true, want: 700},
+		{name: "no budget leaves the field off", budget: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+			}))
+			defer srv.Close()
+
+			ctx := llm.WithMaxOutputTokens(context.Background(), tt.budget)
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			if _, err := c.Chat(ctx, "m", []llm.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+
+			got, present := body["max_tokens"]
+			if !tt.wantSet {
+				if present {
+					t.Errorf("max_tokens sent without a budget: %#v", got)
+				}
+				return
+			}
+			if !present || got != tt.want {
+				t.Errorf("max_tokens = %#v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -202,6 +202,12 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		Stream:   stream,
 		Tools:    tools,
 	}
+	// num_predict is Ollama's spelling of the output ceiling. This
+	// client sent no options at all, so a runaway generation ran to the
+	// model's own limit however little budget the caller had left.
+	if budget := llm.MaxOutputTokensFromContext(ctx); budget > 0 {
+		req.Options = &Options{NumPredict: budget}
+	}
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {

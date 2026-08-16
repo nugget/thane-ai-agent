@@ -1206,3 +1206,72 @@ func TestPeakInputTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestEngineSpendsBudgetForward pins that each call's ceiling is what
+// the run has left, not the whole allowance. CheckBudget still stops the
+// run after the fact; this is what keeps a single generation from
+// overshooting before that check can run.
+func TestEngineSpendsBudgetForward(t *testing.T) {
+	t.Parallel()
+
+	var seen []int
+	llmClient := &budgetRecordingClient{
+		onCall:              func(ctx context.Context) { seen = append(seen, llm.MaxOutputTokensFromContext(ctx)) },
+		outputTokensPerCall: 300,
+	}
+
+	e := &Engine{}
+	_, err := e.Run(context.Background(), Config{
+		Model:           "m",
+		LLM:             llmClient,
+		MaxIterations:   3,
+		MaxOutputTokens: 1000,
+		CheckBudget:     func(total int) bool { return total >= 1000 },
+		Executor:        &DirectExecutor{Exec: func(context.Context, string, string) (string, error) { return "done", nil }},
+	}, []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// 1000 to start, then 700 after the first 300-token response, then
+	// 400. The fourth is the force-text recovery call after max
+	// iterations: 1000-900=100 is below the floor, so it gets the floor
+	// rather than a ceiling too small to close with.
+	want := []int{1000, 700, 400, forceTextFloorTokens}
+	if len(seen) != len(want) {
+		t.Fatalf("budgets seen = %v, want %v", seen, want)
+	}
+	for i, w := range want {
+		if seen[i] != w {
+			t.Fatalf("budgets seen = %v, want %v", seen, want)
+		}
+	}
+}
+
+// budgetRecordingClient answers with tool calls so the engine keeps
+// iterating, recording the budget it was handed each time.
+type budgetRecordingClient struct {
+	onCall              func(context.Context)
+	outputTokensPerCall int
+	calls               int
+}
+
+func (c *budgetRecordingClient) Chat(ctx context.Context, model string, msgs []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
+	return c.ChatStream(ctx, model, msgs, tools, nil)
+}
+
+func (c *budgetRecordingClient) Ping(context.Context) error { return nil }
+
+func (c *budgetRecordingClient) ChatStream(ctx context.Context, _ string, _ []llm.Message, _ []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
+	c.onCall(ctx)
+	c.calls++
+	resp := &llm.ChatResponse{Model: "m", Done: true, OutputTokens: c.outputTokensPerCall}
+	resp.Message.Role = "assistant"
+	// Keep asking for a tool so the engine keeps iterating and the
+	// budget has more than one call to be spent across.
+	tc := llm.ToolCall{ID: fmt.Sprintf("call_%d", c.calls)}
+	tc.Function.Name = "noop"
+	tc.Function.Arguments = map[string]any{}
+	resp.Message.ToolCalls = []llm.ToolCall{tc}
+	return resp, nil
+}

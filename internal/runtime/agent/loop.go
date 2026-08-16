@@ -2204,6 +2204,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			return repaired
 		},
 
+		MaxOutputTokens: req.MaxOutputTokens,
+
 		CheckBudget: func(totalOut int) bool {
 			return req.MaxOutputTokens > 0 && totalOut >= req.MaxOutputTokens
 		},

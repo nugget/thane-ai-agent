@@ -145,6 +145,10 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		Stream:   stream,
 		Tools:    tools,
 		TTL:      c.idleTTLSeconds,
+		// No ceiling of our own to defend: these servers enforce what
+		// their launch configured, so the only limit worth sending is
+		// the caller's remaining budget, and 0 leaves the field off.
+		MaxTokens: llm.MaxOutputTokensFromContext(ctx),
 	}
 	if stream {
 		req.StreamOptions = &openAICompatStreamOptions{IncludeUsage: true}
