@@ -1417,7 +1417,7 @@ type ModelsConfig struct {
 // request.
 type ModelConfig struct {
 	Name              string `yaml:"name"`               // Model identifier (e.g., "claude-opus-4-8")
-	Provider          string `yaml:"provider"`           // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
+	Provider          string `yaml:"provider"`           // Provider name: openai_compat, lmstudio, anthropic, ollama. Defaults to ollama when no resource is set
 	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
 	SupportsTools     bool   `yaml:"supports_tools"`     // Optional per-deployment tool-use override. When omitted, runtime/provider capability is used.
 	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits observed runtime/provider capability.
@@ -1463,7 +1463,14 @@ func (m *ModelConfig) UnmarshalYAML(node *yaml.Node) error {
 // ModelServerConfig describes a named model provider resource.
 type ModelServerConfig struct {
 	URL string `yaml:"url"`
-	// Provider name for this resource. Default: ollama.
+	// Provider name for this resource: "openai_compat" for any server
+	// speaking the OpenAI chat protocol (vLLM, SGLang, llama-server,
+	// NIM, and Ollama's own /v1 surface), "lmstudio" to add LM Studio's
+	// load/unload and native inventory on top of that protocol,
+	// "anthropic" for the hosted API, or "ollama" for Ollama's native
+	// /api surface. Prefer "openai_compat" for new self-hosted
+	// resources: the native Ollama client is retained for existing
+	// deployments and does not receive new work. Default: ollama.
 	Provider string `yaml:"provider"`
 	// APIKey is an optional bearer/API key for providers that require auth.
 	APIKey string `yaml:"api_key"`

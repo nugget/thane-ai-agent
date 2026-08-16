@@ -20,6 +20,9 @@ type ClientBundle struct {
 	HealthClients   map[string]ResourceHealthClient
 	OllamaClients   map[string]*modelproviders.OllamaClient
 	LMStudioClients map[string]*modelproviders.LMStudioClient
+	// OpenAICompatClients holds clients for provider-agnostic
+	// OpenAI-protocol endpoints, keyed by resource ID.
+	OpenAICompatClients map[string]*modelproviders.OpenAICompatClient
 	// AnthropicClient is the singleton Anthropic provider shared across
 	// all anthropic-backed resources, retained here so late-bind
 	// machinery (e.g., Runtime.SetLogger) can find it without scanning
@@ -46,6 +49,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 
 	ollamaClients := make(map[string]*modelproviders.OllamaClient)
 	lmstudioClients := make(map[string]*modelproviders.LMStudioClient)
+	openAICompatClients := make(map[string]*modelproviders.OpenAICompatClient)
 	resourceClients := make(map[string]llm.Client, len(cat.Resources))
 	healthClients := make(map[string]ResourceHealthClient, len(cat.Resources))
 
@@ -70,6 +74,19 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 				AttachWatcher: lc.AttachWatcher,
 			}
 			client = lc
+		case "openai_compat":
+			// Any server speaking the OpenAI chat protocol: vLLM,
+			// SGLang, llama-server, NIM, or Ollama's own /v1 surface.
+			// No idle TTL — that is an LM Studio extension, and sending
+			// it to a server that does not know the field is a needless
+			// compatibility risk.
+			oc := modelproviders.NewOpenAICompatClient(res.URL, serverAPIKey(cfg, res.ID), "openai_compat", logger.With("resource", res.ID), 0)
+			openAICompatClients[res.ID] = oc
+			healthClients[res.ID] = ResourceHealthClient{
+				Ping:          oc.Ping,
+				AttachWatcher: oc.AttachWatcher,
+			}
+			client = oc
 		case "anthropic":
 			if !cfg.Anthropic.Configured() {
 				return nil, fmt.Errorf("resource %q requires anthropic config", res.ID)
@@ -86,11 +103,12 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	}
 
 	bundle := &ClientBundle{
-		ResourceClients: resourceClients,
-		HealthClients:   healthClients,
-		OllamaClients:   ollamaClients,
-		LMStudioClients: lmstudioClients,
-		AnthropicClient: anthropicClient,
+		ResourceClients:     resourceClients,
+		HealthClients:       healthClients,
+		OllamaClients:       ollamaClients,
+		LMStudioClients:     lmstudioClients,
+		OpenAICompatClients: openAICompatClients,
+		AnthropicClient:     anthropicClient,
 	}
 	client, err := bundle.BuildRoutedClient(cat)
 	if err != nil {

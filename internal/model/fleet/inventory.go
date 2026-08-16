@@ -430,7 +430,10 @@ func deploymentKey(resourceID, modelName string) string {
 
 func defaultCostTier(provider string) int {
 	switch provider {
-	case "ollama", "lmstudio":
+	case "ollama", "lmstudio", "openai_compat":
+		// Self-hosted: no per-token price. An openai_compat resource
+		// pointed at a paid API should set cost_tier explicitly on its
+		// models rather than inherit this.
 		return 0
 	case "anthropic", "openai":
 		return 3
