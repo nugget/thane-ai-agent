@@ -1909,6 +1909,7 @@ func (l *Loop) run(ctx context.Context) {
 				snap.FinishReason = result.FinishReason
 				snap.RequestID = result.RequestID
 				snap.InputTokens = result.InputTokens
+				snap.PeakInputTokens = result.PeakInputTokens
 				snap.OutputTokens = result.OutputTokens
 				snap.ContextWindow = result.ContextWindow
 				snap.ElapsedMs = result.Elapsed.Milliseconds()
@@ -2010,17 +2011,18 @@ func (l *Loop) run(ctx context.Context) {
 			// per-iteration logger correlation.
 			if err == nil && l.config.PostIterate != nil {
 				postResult := IterationResult{
-					ConvID:         convID,
-					Model:          result.Model,
-					FinishReason:   result.FinishReason,
-					InputTokens:    result.InputTokens,
-					OutputTokens:   result.OutputTokens,
-					ToolsUsed:      result.ToolsUsed,
-					EffectiveTools: append([]string(nil), result.EffectiveTools...),
-					ActiveTags:     append([]string(nil), result.ActiveTags...),
-					Elapsed:        result.Elapsed,
-					Supervisor:     result.Supervisor,
-					Sleep:          sleep,
+					ConvID:          convID,
+					Model:           result.Model,
+					FinishReason:    result.FinishReason,
+					InputTokens:     result.InputTokens,
+					PeakInputTokens: result.PeakInputTokens,
+					OutputTokens:    result.OutputTokens,
+					ToolsUsed:       result.ToolsUsed,
+					EffectiveTools:  append([]string(nil), result.EffectiveTools...),
+					ActiveTags:      append([]string(nil), result.ActiveTags...),
+					Elapsed:         result.Elapsed,
+					Supervisor:      result.Supervisor,
+					Sleep:           sleep,
 				}
 				if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
 					iterLog.Warn("PostIterate callback failed", "error", postErr)

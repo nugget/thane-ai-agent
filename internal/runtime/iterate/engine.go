@@ -545,14 +545,6 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		partial.OutputTokens += resp.OutputTokens
 		partial.CacheCreationInputTokens += resp.CacheCreationInputTokens
 		partial.CacheReadInputTokens += resp.CacheReadInputTokens
-		// The recovery call is a real call against the same window, and
-		// it carries the whole accumulated message history — so it is
-		// frequently the largest of the turn. It records no
-		// IterationRecord, so peak has to be raised here or the turn
-		// most at risk of overflow is the one that under-reports.
-		if resp.InputTokens > partial.PeakInputTokens {
-			partial.PeakInputTokens = resp.InputTokens
-		}
 		messages = append(messages, resp.Message)
 
 		content := resp.Message.Content
@@ -585,7 +577,13 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		partial.Content = content
 	}
 
+	// partial was built before the recovery call, so both of these are
+	// stale by exactly that one iteration. Recomputing from the records
+	// covers it without a second accumulation path — and the recovery
+	// call matters most here: it carries the whole accumulated history,
+	// so it is frequently the largest single call of the turn.
 	partial.UpstreamRequestID = latestUpstreamRequestID(partial.Iterations)
+	partial.PeakInputTokens = peakInputTokens(partial.Iterations)
 	partial.Messages = messages
 	return partial, nil
 }
@@ -594,6 +592,15 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 // request ID across iterations, or "" when none captured one. Used to
 // surface the final iteration's provider-side ID on Result without
 // forcing every Result construction site to dig into Iterations.
+func latestUpstreamRequestID(iters []IterationRecord) string {
+	for i := len(iters) - 1; i >= 0; i-- {
+		if iters[i].UpstreamRequestID != "" {
+			return iters[i].UpstreamRequestID
+		}
+	}
+	return ""
+}
+
 // peakInputTokens returns the largest single-call input token count among
 // the recorded iterations. It reads the records rather than tracking a
 // running maximum beside totalInput so the two can never disagree: every
@@ -607,13 +614,4 @@ func peakInputTokens(iters []IterationRecord) int {
 		}
 	}
 	return peak
-}
-
-func latestUpstreamRequestID(iters []IterationRecord) string {
-	for i := len(iters) - 1; i >= 0; i-- {
-		if iters[i].UpstreamRequestID != "" {
-			return iters[i].UpstreamRequestID
-		}
-	}
-	return ""
 }

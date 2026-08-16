@@ -1036,7 +1036,12 @@ function getLoopContextFill(loop) {
   const recent = loop && loop.recent_iterations && loop.recent_iterations[0];
   if (!recent) return 0;
   const win = Number(recent.context_window) || getLoopContextWindow(loop);
-  const used = Number(recent.input_tokens) || 0;
+  // Peak single call, never the iteration's summed input: a turn that
+  // made five tool-calling round trips resends the system prompt and
+  // tool definitions each time, so the sum reaches the window long
+  // before any one prompt does — and this value drives the ring's
+  // pressure color, which is exactly where that lie turns red.
+  const used = Number(recent.peak_input_tokens) || 0;
   if (!(win > 0)) return 0;
   return Math.max(0, Math.min(1, used / win));
 }

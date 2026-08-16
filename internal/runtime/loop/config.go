@@ -528,8 +528,15 @@ type IterationSnapshot struct {
 	Model string `json:"model,omitempty"`
 	// FinishReason is the runner terminal reason for this iteration.
 	FinishReason string `json:"finish_reason,omitempty"`
-	// InputTokens consumed by this iteration.
+	// InputTokens consumed by this iteration, summed over every model
+	// call it made.
 	InputTokens int `json:"input_tokens,omitempty"`
+	// PeakInputTokens is the largest single model call within this
+	// iteration — the figure to compare against ContextWindow. Summing
+	// the calls counts the system prompt and tool definitions once per
+	// call, so InputTokens outruns the window without any prompt
+	// approaching it.
+	PeakInputTokens int `json:"peak_input_tokens,omitempty"`
 	// OutputTokens produced by this iteration.
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// ContextWindow is the model's maximum context size in tokens.

@@ -59,10 +59,10 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 	if v.Attempts == nil || *v.Attempts != 141 {
 		t.Errorf("Attempts = %v, want 141", v.Attempts)
 	}
-	// Precomputed so the model never divides: 18000*100/200000 = 9.
-	// Fill is the peak single call (12000) over the window, not the
-	// turn's cumulative input (18000) — a turn that made several calls
-	// is not proportionally closer to overflowing.
+	// Precomputed so the model never divides, from the peak single call
+	// rather than the turn's cumulative input: 12000*100/200000 = 6,
+	// not 18000*100/200000 = 9. A turn that made several calls is not
+	// proportionally closer to overflowing.
 	if v.ContextFillPct == nil || *v.ContextFillPct != 6 {
 		t.Errorf("ContextFillPct = %v, want 6", v.ContextFillPct)
 	}
