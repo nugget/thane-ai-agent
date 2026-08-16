@@ -206,3 +206,151 @@ func TestOpenAICompatCapturesFinishReason(t *testing.T) {
 		t.Errorf("StopReason = %q, want \"length\"", resp.StopReason)
 	}
 }
+
+// TestOpenAICompatParallelToolCallsNonStreaming pins the identity of a
+// tool call in a non-streaming response. `index` is a streaming-delta
+// field for reassembling out-of-order chunks; a non-streaming array
+// carries none, so every element decodes with Index 0. Keying on it
+// collapsed parallel calls into one accumulator — last id and name won,
+// and the arguments concatenated into JSON that failed to parse, so a
+// good two-call turn became an error. vLLM emits parallel calls by
+// default, which makes this the common case, not the exotic one.
+func TestOpenAICompatParallelToolCallsNonStreaming(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-abc123",
+			"model": "m",
+			"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+				{"id": "call_1", "type": "function", "function": {"name": "ha_get_state", "arguments": "{\"entity_id\":\"light.office\"}"}},
+				{"id": "call_2", "type": "function", "function": {"name": "doc_read", "arguments": "{\"path\":\"kb:a.md\"}"}}
+			]}, "finish_reason": "tool_calls"}]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	resp, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(resp.Message.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %d, want 2: %#v", len(resp.Message.ToolCalls), resp.Message.ToolCalls)
+	}
+	byName := map[string]llm.ToolCall{}
+	for _, tc := range resp.Message.ToolCalls {
+		byName[tc.Function.Name] = tc
+	}
+	if got, ok := byName["ha_get_state"]; !ok || got.ID != "call_1" {
+		t.Errorf("ha_get_state = %#v, want id call_1", got)
+	}
+	if got, ok := byName["doc_read"]; !ok || got.ID != "call_2" {
+		t.Errorf("doc_read = %#v, want id call_2", got)
+	}
+	if resp.StopReason != "tool_calls" {
+		t.Errorf("StopReason = %q, want tool_calls", resp.StopReason)
+	}
+	if resp.UpstreamRequestID != "chatcmpl-abc123" {
+		t.Errorf("UpstreamRequestID = %q, want chatcmpl-abc123", resp.UpstreamRequestID)
+	}
+}
+
+// TestOpenAICompatTruncatedStreamIsNotSuccess pins the terminal-evidence
+// rule. A runner or proxy that dies mid-generation closes the connection
+// cleanly, so the scanner sees an ordinary EOF and the content received
+// so far looks like a finished answer. Without a [DONE] sentinel or a
+// finish_reason, it is a truncation, and reporting it as complete is the
+// fabricated-success bug wearing better clothes.
+func TestOpenAICompatTruncatedStreamIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
+	content := `{"choices":[{"delta":{"content":"half an ans"}}]}`
+	tests := []struct {
+		name   string
+		frames []string
+		wantOK bool
+	}{
+		{name: "content then silent close", frames: []string{content}},
+		{name: "content then [DONE]", frames: []string{content, "[DONE]"}, wantOK: true},
+		{
+			name:   "finish_reason without [DONE] is enough",
+			frames: []string{content, `{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
+			wantOK: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, f := range tt.frames {
+					_, _ = w.Write([]byte("data: " + f + "\n\n"))
+				}
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("ChatStream: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("truncated stream reported success with content %q", resp.Message.Content)
+			}
+			if !strings.Contains(err.Error(), "truncated") {
+				t.Errorf("error = %q, want it to name the truncation", err)
+			}
+		})
+	}
+}
+
+// TestNormalizeOpenAICompatBaseURL pins that both documented spellings
+// of a base URL reach the same endpoint. vLLM's own examples end in /v1
+// and LM Studio's do not; this client appends /v1 itself, so accepting
+// only the bare form turned a reasonable config into /v1/v1/... and a
+// 404 naming nothing useful.
+func TestNormalizeOpenAICompatBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ in, want string }{
+		{"http://spark:8000", "http://spark:8000"},
+		{"http://spark:8000/", "http://spark:8000"},
+		{"http://spark:8000/v1", "http://spark:8000"},
+		{"http://spark:8000/v1/", "http://spark:8000"},
+		{"  http://spark:8000/v1  ", "http://spark:8000"},
+	}
+	for _, tt := range tests {
+		if got := normalizeOpenAICompatBaseURL(tt.in); got != tt.want {
+			t.Errorf("normalizeOpenAICompatBaseURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestOpenAICompatCapabilities pins that the provider advertises what
+// the shared client actually implements. Declared-but-unwired was the
+// shape of the earlier gap: the provider existed in the construction
+// switch while the capability table still returned the zero set, so
+// every deployment inherited SupportsStreaming false.
+func TestOpenAICompatCapabilities(t *testing.T) {
+	t.Parallel()
+
+	caps := CapabilitiesForProvider("openai_compat")
+	if !caps.SupportsChat || !caps.SupportsStreaming || !caps.SupportsTools || !caps.SupportsInventory {
+		t.Fatalf("capabilities = %#v, want chat/streaming/tools/inventory", caps)
+	}
+	// Image support is a transport capability; the per-model gate still
+	// decides whether a given model is treated as vision-capable.
+	if !SupportsImagesForModel("openai_compat", "qwen3-vl:4b", "qwen3vl", nil, caps) {
+		t.Error("a vision model on an image-capable transport should be vision-capable")
+	}
+	if SupportsImagesForModel("openai_compat", "gpt-oss:120b", "gptoss", nil, caps) {
+		t.Error("a text model should not be treated as vision-capable")
+	}
+}

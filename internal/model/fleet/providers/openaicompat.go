@@ -76,7 +76,7 @@ func NewOpenAICompatClient(baseURL, apiKey, provider string, logger *slog.Logger
 	t.ResponseHeaderTimeout = 5 * time.Minute
 
 	return &OpenAICompatClient{
-		baseURL:        strings.TrimRight(baseURL, "/"),
+		baseURL:        normalizeOpenAICompatBaseURL(baseURL),
 		apiKey:         strings.TrimSpace(apiKey),
 		provider:       strings.TrimSpace(provider),
 		idleTTLSeconds: idleTTLSeconds,
@@ -227,6 +227,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		done           bool
 		chunks         int
 		finishReason   string
+		upstreamID     string
 	)
 
 	processEvent := func(data string) error {
@@ -251,6 +252,9 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		chunks++
 		if chunk.Model != "" {
 			model = chunk.Model
+		}
+		if chunk.ID != "" {
+			upstreamID = chunk.ID
 		}
 		if chunk.Created > 0 {
 			createdAt = time.Unix(chunk.Created, 0).UTC()
@@ -346,14 +350,27 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		return nil, fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks)
 	}
 
+	// Content alone does not mean the answer finished. A proxy or runner
+	// that dies mid-generation closes the connection cleanly, so the
+	// scanner sees an ordinary EOF and everything received so far looks
+	// like a completion — a truncated answer presented as a whole one,
+	// which is the same lie as a fabricated success wearing better
+	// clothes. Require the server to have said it was done: either the
+	// [DONE] sentinel or a finish_reason on some choice. Servers vary in
+	// which they send, so either suffices; neither is silence.
+	if !done && finishReason == "" {
+		return nil, fmt.Errorf("%s ended the stream for model %q without a terminal marker after %d frames (truncated response)", c.provider, requestedModel, chunks)
+	}
+
 	result := &llm.ChatResponse{
-		Model:         model,
-		CreatedAt:     createdAt,
-		Done:          true,
-		StopReason:    finishReason,
-		InputTokens:   usage.PromptTokens,
-		OutputTokens:  usage.CompletionTokens,
-		TotalDuration: 0,
+		Model:             model,
+		CreatedAt:         createdAt,
+		Done:              true,
+		StopReason:        finishReason,
+		UpstreamRequestID: upstreamID,
+		InputTokens:       usage.PromptTokens,
+		OutputTokens:      usage.CompletionTokens,
+		TotalDuration:     0,
 	}
 	result.Message.Role = normalizeOpenAICompatMessageRole(role)
 	result.Message.Content = contentBuilder.String()
@@ -394,6 +411,7 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 	if fr := wire.Choices[0].FinishReason; fr != nil {
 		result.StopReason = strings.TrimSpace(*fr)
 	}
+	result.UpstreamRequestID = wire.ID
 	if wire.Created > 0 {
 		result.CreatedAt = time.Unix(wire.Created, 0).UTC()
 	}
@@ -411,4 +429,15 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		return nil, fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
 	}
 	return result, nil
+}
+
+// normalizeOpenAICompatBaseURL trims the trailing slash and the
+// conventional /v1 suffix. Every documented base URL for these servers
+// is written one way or the other — vLLM's own examples end in /v1,
+// LM Studio's do not — and this client appends /v1 itself, so accepting
+// only the bare form turns a reasonable config into requests for
+// /v1/v1/chat/completions and a 404 that names nothing useful.
+func normalizeOpenAICompatBaseURL(raw string) string {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	return strings.TrimSuffix(u, "/v1")
 }

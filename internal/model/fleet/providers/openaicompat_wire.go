@@ -121,8 +121,9 @@ type openAICompatChatResponse struct {
 	Usage   *openAICompatUsage       `json:"usage,omitempty"`
 }
 
-// openAICompatStreamErrorText returns the human-readable failure LM Studio
-// encoded in an SSE data frame, or "" when the frame is an ordinary chunk.
+// openAICompatStreamErrorText returns the human-readable failure the
+// server encoded in an SSE data frame, or "" when the frame is an
+// ordinary chunk.
 //
 // A streaming request that LM Studio cannot serve does not fail the way its
 // non-streaming sibling does. The non-streaming call answers 4xx with the
@@ -375,7 +376,7 @@ func ensureOpenAICompatToolCallID(id string) (string, error) {
 	}
 	generated, err := uuid.NewV7()
 	if err != nil {
-		return "", fmt.Errorf("generate fallback LM Studio tool call ID: %w", err)
+		return "", fmt.Errorf("generate fallback tool call ID: %w", err)
 	}
 	return "call_" + generated.String(), nil
 }
@@ -384,20 +385,21 @@ func decodeOpenAICompatToolCallsFromSlice(in []openAICompatToolCallDelta) ([]llm
 	if len(in) == 0 {
 		return nil, nil
 	}
+	// Key by slice position, never by tc.Index. `index` exists to
+	// reassemble deltas that arrive out of order in a *stream*; a
+	// non-streaming response has no such field, so every element decodes
+	// with Index 0. Keying on it collapsed parallel tool calls into one
+	// accumulator, where the last id and name won and the arguments were
+	// concatenated into JSON that then failed to parse — turning a
+	// perfectly good two-call turn into an error. The array order is the
+	// identity here, and vLLM emits parallel calls by default.
 	accs := make(map[int]*openAICompatToolAccumulator, len(in))
 	for i, tc := range in {
-		idx := tc.Index
-		if idx == 0 && tc.ID == "" && tc.Function.Name == "" && tc.Function.Arguments == "" && len(in) == 1 {
-			idx = i
-		}
-		acc := accs[idx]
-		if acc == nil {
-			acc = &openAICompatToolAccumulator{}
-			accs[idx] = acc
-		}
+		acc := &openAICompatToolAccumulator{}
 		acc.ID = tc.ID
 		acc.Name = tc.Function.Name
 		acc.Args.WriteString(tc.Function.Arguments)
+		accs[i] = acc
 	}
 	return decodeOpenAICompatToolCalls(accs)
 }

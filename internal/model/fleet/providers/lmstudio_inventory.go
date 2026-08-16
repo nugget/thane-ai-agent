@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -24,7 +25,10 @@ func (c *OpenAICompatClient) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	// Drain, not just close: an unread body keeps the connection out of
+	// the pool, and connwatch probes this endpoint every minute for the
+	// life of the process.
+	defer httpkit.DrainAndClose(resp.Body, 4096)
 
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
@@ -123,8 +127,14 @@ func (c *LMStudioClient) listModelInfosV0(ctx context.Context) ([]LMStudioModelI
 	}
 
 	var result openAICompatModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxModelListBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if len(result.Data) > maxModelListEntries {
+		// Reported, never silently clipped: a listing this long means
+		// the endpoint is not what the operator thinks it is, and a
+		// quietly truncated inventory would route against a fiction.
+		return nil, fmt.Errorf("model listing has %d entries, more than the %d this client accepts", len(result.Data), maxModelListEntries)
 	}
 	return result.Data, nil
 }
@@ -158,8 +168,14 @@ func (c *OpenAICompatClient) listModelInfosOpenAI(ctx context.Context) ([]OpenAI
 	}
 
 	var result openAICompatModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxModelListBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if len(result.Data) > maxModelListEntries {
+		// Reported, never silently clipped: a listing this long means
+		// the endpoint is not what the operator thinks it is, and a
+		// quietly truncated inventory would route against a fiction.
+		return nil, fmt.Errorf("model listing has %d entries, more than the %d this client accepts", len(result.Data), maxModelListEntries)
 	}
 	return result.Data, nil
 }
@@ -171,3 +187,12 @@ func lmStudioSupportsModelFallback(status int, body string) bool {
 	body = strings.ToLower(strings.TrimSpace(body))
 	return strings.Contains(body, "unexpected endpoint or method")
 }
+
+const (
+	// maxModelListBytes bounds a /v1/models body. Real listings are a
+	// few KB; anything near this is a misconfigured or hostile endpoint,
+	// and this host has been OOM-killed once already.
+	maxModelListBytes = 4 << 20
+	// maxModelListEntries bounds the model count for the same reason.
+	maxModelListEntries = 2048
+)
