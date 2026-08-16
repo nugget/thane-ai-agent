@@ -119,6 +119,15 @@ models:
       # this via the native `ttl` request field on inference endpoints.
       # Zero lets the runner use its default behavior.
       idle_ttl_seconds: 0
+      # StreamIdleTimeout bounds how long this endpoint may send nothing
+      # at all before a request is abandoned. It measures silence, not
+      # duration: a slow generation is still allowed to be slow, and the
+      # window resets on every byte received. Unset uses a default
+      # generous enough to cover prefill on a large prompt; zero disables
+      # the guard, which restores the older behavior where a server that
+      # went quiet after returning headers hung the request until the
+      # process restarted.
+      stream_idle_timeout: 0s
     edge:
       url: http://your-edge-ollama-server:11434
       # Provider name for this resource: "openai_compat" for any server
@@ -137,6 +146,15 @@ models:
       # this via the native `ttl` request field on inference endpoints.
       # Zero lets the runner use its default behavior.
       idle_ttl_seconds: 0
+      # StreamIdleTimeout bounds how long this endpoint may send nothing
+      # at all before a request is abandoned. It measures silence, not
+      # duration: a slow generation is still allowed to be slow, and the
+      # window resets on every byte received. Unset uses a default
+      # generous enough to cover prefill on a large prompt; zero disables
+      # the guard, which restores the older behavior where a server that
+      # went quiet after returning headers hung the request until the
+      # process restarted.
+      stream_idle_timeout: 0s
   # LocalFirst prefers local (cost_tier=0) models over cloud models
   # when routing decisions are made by the model router.
   local_first: true

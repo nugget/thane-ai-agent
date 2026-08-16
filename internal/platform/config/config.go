@@ -1479,6 +1479,15 @@ type ModelServerConfig struct {
 	// this via the native `ttl` request field on inference endpoints.
 	// Zero lets the runner use its default behavior.
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
+	// StreamIdleTimeout bounds how long this endpoint may send nothing
+	// at all before a request is abandoned. It measures silence, not
+	// duration: a slow generation is still allowed to be slow, and the
+	// window resets on every byte received. Unset uses a default
+	// generous enough to cover prefill on a large prompt; zero disables
+	// the guard, which restores the older behavior where a server that
+	// went quiet after returning headers hung the request until the
+	// process restarted.
+	StreamIdleTimeout time.Duration `yaml:"stream_idle_timeout"`
 }
 
 // PreferredOllamaURL returns the best available Ollama URL for callers

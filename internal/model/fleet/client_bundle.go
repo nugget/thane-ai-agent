@@ -68,6 +68,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			client = oc
 		case "lmstudio":
 			lc := modelproviders.NewLMStudioClientWithTTL(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID), res.IdleTTLSeconds)
+			applyStreamIdleTimeout(lc.OpenAICompatClient, cfg, res.ID)
 			lmstudioClients[res.ID] = lc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          lc.Ping,
@@ -81,6 +82,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			// it to a server that does not know the field is a needless
 			// compatibility risk.
 			oc := modelproviders.NewOpenAICompatClient(res.URL, serverAPIKey(cfg, res.ID), "openai_compat", logger.With("resource", res.ID), 0)
+			applyStreamIdleTimeout(oc, cfg, res.ID)
 			openAICompatClients[res.ID] = oc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          oc.Ping,
@@ -200,4 +202,19 @@ func (b *ClientBundle) fallbackClient(cat *Catalog) (llm.Client, error) {
 	}
 	sort.Strings(ids)
 	return b.ResourceClients[ids[0]], nil
+}
+
+// applyStreamIdleTimeout overrides a client's silence bound when the
+// resource configured one. An unset value keeps the client's default
+// rather than collapsing to zero, since zero means "never give up" and
+// an omitted config line does not mean that.
+func applyStreamIdleTimeout(c *modelproviders.OpenAICompatClient, cfg *config.Config, resourceID string) {
+	if c == nil || cfg == nil {
+		return
+	}
+	res, ok := cfg.Models.Resources[resourceID]
+	if !ok || res.StreamIdleTimeout == 0 {
+		return
+	}
+	c.SetStreamIdleTimeout(res.StreamIdleTimeout)
 }
