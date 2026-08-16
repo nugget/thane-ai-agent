@@ -1016,6 +1016,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, stream loopp
 		Model:                    resp.Model,
 		FinishReason:             resp.FinishReason,
 		InputTokens:              resp.InputTokens,
+		PeakInputTokens:          resp.PeakInputTokens,
 		OutputTokens:             resp.OutputTokens,
 		CacheCreationInputTokens: resp.CacheCreationInputTokens,
 		CacheReadInputTokens:     resp.CacheReadInputTokens,

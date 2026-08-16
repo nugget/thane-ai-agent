@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -125,6 +126,7 @@ type Response struct {
 	Model                    string                              `yaml:"model,omitempty" json:"model,omitempty"`
 	FinishReason             string                              `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
 	InputTokens              int                                 `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	PeakInputTokens          int                                 `yaml:"peak_input_tokens,omitempty" json:"peak_input_tokens,omitempty"`
 	OutputTokens             int                                 `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
 	CacheCreationInputTokens int                                 `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int                                 `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
@@ -224,9 +226,13 @@ type Loop struct {
 	totalInputTokens  int
 	totalOutputTokens int
 	lastInputTokens   int
-	lastOutputTokens  int
-	contextWindow     int
-	lastError         string
+	// lastPeakInputTokens is the largest single model call of the most
+	// recent turn. It is the only token figure comparable to
+	// contextWindow; lastInputTokens sums every call in the turn.
+	lastPeakInputTokens int
+	lastOutputTokens    int
+	contextWindow       int
+	lastError           string
 
 	// sleepUntil is the scheduled wake instant while the loop is in a
 	// timer-based sleep (zero when processing or event-driven); currentSleep
@@ -783,6 +789,7 @@ func (l *Loop) Status() Status {
 		TotalInputTokens:      l.totalInputTokens,
 		TotalOutputTokens:     l.totalOutputTokens,
 		LastInputTokens:       l.lastInputTokens,
+		LastPeakInputTokens:   l.lastPeakInputTokens,
 		LastOutputTokens:      l.lastOutputTokens,
 		ContextWindow:         l.contextWindow,
 		LastError:             l.lastError,
@@ -1658,6 +1665,10 @@ func (l *Loop) run(ctx context.Context) {
 				result.InputTokens = inputTokens
 				delete(summary, "input_tokens")
 			}
+			if peakInputTokens, ok := summary["peak_input_tokens"].(int); ok && result != nil {
+				result.PeakInputTokens = peakInputTokens
+				delete(summary, "peak_input_tokens")
+			}
 			if outputTokens, ok := summary["output_tokens"].(int); ok && result != nil {
 				result.OutputTokens = outputTokens
 				delete(summary, "output_tokens")
@@ -1880,6 +1891,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.totalInputTokens += result.InputTokens
 				l.totalOutputTokens += result.OutputTokens
 				l.lastInputTokens = result.InputTokens
+				l.lastPeakInputTokens = result.PeakInputTokens
 				l.lastOutputTokens = result.OutputTokens
 				if result.ContextWindow > 0 {
 					l.contextWindow = result.ContextWindow
@@ -1898,6 +1910,7 @@ func (l *Loop) run(ctx context.Context) {
 				snap.FinishReason = result.FinishReason
 				snap.RequestID = result.RequestID
 				snap.InputTokens = result.InputTokens
+				snap.PeakInputTokens = result.PeakInputTokens
 				snap.OutputTokens = result.OutputTokens
 				snap.ContextWindow = result.ContextWindow
 				snap.ElapsedMs = result.Elapsed.Milliseconds()
@@ -1999,17 +2012,18 @@ func (l *Loop) run(ctx context.Context) {
 			// per-iteration logger correlation.
 			if err == nil && l.config.PostIterate != nil {
 				postResult := IterationResult{
-					ConvID:         convID,
-					Model:          result.Model,
-					FinishReason:   result.FinishReason,
-					InputTokens:    result.InputTokens,
-					OutputTokens:   result.OutputTokens,
-					ToolsUsed:      result.ToolsUsed,
-					EffectiveTools: append([]string(nil), result.EffectiveTools...),
-					ActiveTags:     append([]string(nil), result.ActiveTags...),
-					Elapsed:        result.Elapsed,
-					Supervisor:     result.Supervisor,
-					Sleep:          sleep,
+					ConvID:          convID,
+					Model:           result.Model,
+					FinishReason:    result.FinishReason,
+					InputTokens:     result.InputTokens,
+					PeakInputTokens: result.PeakInputTokens,
+					OutputTokens:    result.OutputTokens,
+					ToolsUsed:       result.ToolsUsed,
+					EffectiveTools:  append([]string(nil), result.EffectiveTools...),
+					ActiveTags:      append([]string(nil), result.ActiveTags...),
+					Elapsed:         result.Elapsed,
+					Supervisor:      result.Supervisor,
+					Sleep:           sleep,
 				}
 				if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
 					iterLog.Warn("PostIterate callback failed", "error", postErr)
@@ -2235,6 +2249,15 @@ func (l *Loop) buildTaskTurn(ctx context.Context, input TurnInput) (*AgentTurn, 
 		}
 	}
 	if signalSummary := summarizeNotifyEnvelopes(input.NotifyEnvelopes); signalSummary != "" {
+		// A loop that maintains documents is the one that wakes
+		// amnesiac, so it is the one that has to be told a
+		// notification only reaches the iteration reading it. Loops
+		// with no declared outputs have nowhere to write a
+		// disposition and would only be reading advice about a
+		// document they do not keep.
+		if len(l.config.Outputs) > 0 {
+			signalSummary += "\n\n" + prompts.NotificationDurableRecordNote
+		}
 		task = signalSummary + "\n\n" + task
 	}
 
@@ -2388,6 +2411,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 		Model:              resp.Model,
 		FinishReason:       resp.FinishReason,
 		InputTokens:        resp.InputTokens,
+		PeakInputTokens:    resp.PeakInputTokens,
 		OutputTokens:       resp.OutputTokens,
 		ContextWindow:      resp.ContextWindow,
 		ToolsUsed:          resp.ToolsUsed,

@@ -494,13 +494,7 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) (string, s
 		Name:      loopName,
 		Operation: loop.OperationEventDriven,
 		TurnBuilder: func(tCtx context.Context, input loop.TurnInput) (*loop.AgentTurn, error) {
-			if len(input.MailboxItems) > 0 {
-				return b.prepareSignalMailboxTurn(tCtx, sender, input.MailboxItems, input.NotifyEnvelopes)
-			}
-			if len(input.NotifyEnvelopes) > 0 {
-				return b.prepareLoopNotificationTurn(tCtx, sender, input.NotifyEnvelopes)
-			}
-			return nil, nil
+			return b.buildSignalTurn(tCtx, sender, input)
 		},
 		ParentID:        parentID,
 		FallbackContent: prompts.InteractiveEmptyResponseFallback,
@@ -684,6 +678,61 @@ func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn f
 		return err
 	}
 	return nil
+}
+
+// buildSignalTurn routes one iteration of a Signal sender loop to the
+// turn shape its input calls for: durable mailbox traffic first (the
+// notify envelopes ride along so a wake that arrives beside inbound
+// messages is not silently dropped), then a pure loop-bus wake.
+//
+// Wake tags merge in here because they are the trigger source's
+// request for the tool surface this iteration needs — a core-attention
+// wake asks for loops so the reply path its prompt names is actually
+// callable. Task loops get that merge from the runtime's own turn
+// builder; a TurnBuilder owns its Request outright, so for this loop it
+// happens here or not at all.
+func (b *Bridge) buildSignalTurn(ctx context.Context, sender string, input loop.TurnInput) (*loop.AgentTurn, error) {
+	var (
+		turn *loop.AgentTurn
+		err  error
+	)
+	switch {
+	case len(input.MailboxItems) > 0:
+		turn, err = b.prepareSignalMailboxTurn(ctx, sender, input.MailboxItems, input.NotifyEnvelopes)
+	case len(input.NotifyEnvelopes) > 0:
+		turn, err = b.prepareLoopNotificationTurn(ctx, sender, input.NotifyEnvelopes)
+	default:
+		return nil, nil
+	}
+	if err != nil || turn == nil {
+		return turn, err
+	}
+	turn.Request.InitialTags = mergeInitialTags(turn.Request.InitialTags, input.WakeTags)
+	return turn, nil
+}
+
+// mergeInitialTags appends wake tags to a turn's own tags, dropping
+// blanks and duplicates and preserving the turn's ordering. The turn's
+// tags lead because they describe what the turn is; wake tags describe
+// what the trigger wants available on top of it.
+func mergeInitialTags(own, wake []string) []string {
+	if len(wake) == 0 {
+		return own
+	}
+	seen := make(map[string]struct{}, len(own)+len(wake))
+	merged := make([]string, 0, len(own)+len(wake))
+	for _, tag := range append(append([]string(nil), own...), wake...) {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		merged = append(merged, t)
+	}
+	return merged
 }
 
 func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {

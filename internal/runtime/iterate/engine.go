@@ -94,6 +94,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						Model:                      model,
 						UpstreamRequestID:          latestUpstreamRequestID(iterations),
 						InputTokens:                totalInput,
+						PeakInputTokens:            peakInputTokens(iterations),
 						OutputTokens:               totalOutput,
 						CacheCreationInputTokens:   totalCacheCreate,
 						CacheCreation5mInputTokens: totalCacheCreate5m,
@@ -114,6 +115,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					Model:                      model,
 					UpstreamRequestID:          latestUpstreamRequestID(iterations),
 					InputTokens:                totalInput,
+					PeakInputTokens:            peakInputTokens(iterations),
 					OutputTokens:               totalOutput,
 					CacheCreationInputTokens:   totalCacheCreate,
 					CacheCreation5mInputTokens: totalCacheCreate5m,
@@ -166,6 +168,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				Model:                      model,
 				UpstreamRequestID:          latestUpstreamRequestID(iterations),
 				InputTokens:                totalInput,
+				PeakInputTokens:            peakInputTokens(iterations),
 				OutputTokens:               totalOutput,
 				CacheCreationInputTokens:   totalCacheCreate,
 				CacheCreation5mInputTokens: totalCacheCreate5m,
@@ -477,6 +480,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			Model:                      model,
 			UpstreamRequestID:          latestUpstreamRequestID(iterations),
 			InputTokens:                totalInput,
+			PeakInputTokens:            peakInputTokens(iterations),
 			OutputTokens:               totalOutput,
 			CacheCreationInputTokens:   totalCacheCreate,
 			CacheCreation5mInputTokens: totalCacheCreate5m,
@@ -500,6 +504,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		Model:                      model,
 		UpstreamRequestID:          latestUpstreamRequestID(iterations),
 		InputTokens:                totalInput,
+		PeakInputTokens:            peakInputTokens(iterations),
 		OutputTokens:               totalOutput,
 		CacheCreationInputTokens:   totalCacheCreate,
 		CacheCreation5mInputTokens: totalCacheCreate5m,
@@ -572,7 +577,13 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		partial.Content = content
 	}
 
+	// partial was built before the recovery call, so both of these are
+	// stale by exactly that one iteration. Recomputing from the records
+	// covers it without a second accumulation path — and the recovery
+	// call matters most here: it carries the whole accumulated history,
+	// so it is frequently the largest single call of the turn.
 	partial.UpstreamRequestID = latestUpstreamRequestID(partial.Iterations)
+	partial.PeakInputTokens = peakInputTokens(partial.Iterations)
 	partial.Messages = messages
 	return partial, nil
 }
@@ -588,4 +599,19 @@ func latestUpstreamRequestID(iters []IterationRecord) string {
 		}
 	}
 	return ""
+}
+
+// peakInputTokens returns the largest single-call input token count among
+// the recorded iterations. It reads the records rather than tracking a
+// running maximum beside totalInput so the two can never disagree: every
+// Result site already derives from this slice, and a call that failed
+// before producing a record contributes no usage to either number.
+func peakInputTokens(iters []IterationRecord) int {
+	peak := 0
+	for _, it := range iters {
+		if it.InputTokens > peak {
+			peak = it.InputTokens
+		}
+	}
+	return peak
 }

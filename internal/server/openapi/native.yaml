@@ -1724,7 +1724,12 @@ components:
           example: 318204
         last_input_tokens:
           type: integer
-          description: Input token count from the most recent iteration.
+          description: Input tokens the most recent iteration spent in total, summed over every model call it made. A spend figure, not a prompt size — compare last_peak_input_tokens against context_window instead.
+          readOnly: true
+          example: 21480
+        last_peak_input_tokens:
+          type: integer
+          description: Largest single model call within the most recent iteration — how close that turn actually came to context_window, and the figure context_fill_pct derives from.
           readOnly: true
           example: 9123
         last_output_tokens:
@@ -1785,7 +1790,8 @@ components:
         attempts: 145
         total_input_tokens: 1284532
         total_output_tokens: 318204
-        last_input_tokens: 9123
+        last_input_tokens: 21480
+        last_peak_input_tokens: 9123
         last_output_tokens: 2048
         context_window: 200000
         consecutive_errors: 0
@@ -1868,9 +1874,12 @@ components:
         last_supervisor_delta:
           type: [string, "null"]
           description: Signed-second delta to the most recent supervisor review (e.g. "-15120s"); null when none has run. The wall-clock companion to supervisor_iters_ago, which counts turns rather than time.
+        last_peak_input_tokens:
+          type: [integer, "null"]
+          description: Largest single model call of the last turn; null for handler-only loops. The token figure comparable to context_window — last_input_tokens sums the whole turn.
         context_fill_pct:
           type: [integer, "null"]
-          description: Last input tokens as a percentage of the context window; null for handler-only loops.
+          description: last_peak_input_tokens as a percentage of the context window; null for handler-only loops and for turns recorded before peak tracking, since the cumulative figure was never a fill percentage.
         consecutive_errors:
           type: [integer, "null"]
           description: Length of the current error streak.
@@ -1898,6 +1907,7 @@ components:
           eligible: true
           next_wake_delta: "+5953s"
           current_sleep_duration: "5940s"
+          last_peak_input_tokens: 84000
           context_fill_pct: 42
           consecutive_errors: 0
           last_error: null
@@ -1927,7 +1937,12 @@ components:
           example: claude-opus-4-8
         input_tokens:
           type: integer
-          description: Input tokens consumed by this iteration.
+          description: Input tokens consumed by this iteration, summed over every model call it made.
+          readOnly: true
+          example: 21480
+        peak_input_tokens:
+          type: integer
+          description: Largest single model call within this iteration — the figure to compare against context_window.
           readOnly: true
           example: 9123
         output_tokens:
