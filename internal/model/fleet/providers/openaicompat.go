@@ -45,9 +45,14 @@ type OpenAICompatClient struct {
 	// server wants — they have no such field and reject unknown ones
 	// inconsistently.
 	idleTTLSeconds int
-	httpClient     *http.Client
-	logger         *slog.Logger
-	watcher        llm.ReadyWatcher
+	// streamIdleTimeout bounds silence, not duration: how long the
+	// server may send nothing before the request is abandoned. Zero
+	// disables the guard, which is what the pre-existing behavior was
+	// and what a test wanting to hold a stream open asks for.
+	streamIdleTimeout time.Duration
+	httpClient        *http.Client
+	logger            *slog.Logger
+	watcher           llm.ReadyWatcher
 }
 
 // NewOpenAICompatClient creates a client for an OpenAI-compatible
@@ -76,11 +81,12 @@ func NewOpenAICompatClient(baseURL, apiKey, provider string, logger *slog.Logger
 	t.ResponseHeaderTimeout = 5 * time.Minute
 
 	return &OpenAICompatClient{
-		baseURL:        normalizeOpenAICompatBaseURL(baseURL),
-		apiKey:         strings.TrimSpace(apiKey),
-		provider:       strings.TrimSpace(provider),
-		idleTTLSeconds: idleTTLSeconds,
-		logger:         logger.With("provider", strings.TrimSpace(provider)),
+		baseURL:           normalizeOpenAICompatBaseURL(baseURL),
+		apiKey:            strings.TrimSpace(apiKey),
+		provider:          strings.TrimSpace(provider),
+		idleTTLSeconds:    idleTTLSeconds,
+		streamIdleTimeout: DefaultStreamIdleTimeout,
+		logger:            logger.With("provider", strings.TrimSpace(provider)),
 		httpClient: httpkit.NewClient(
 			httpkit.WithTimeout(0),
 			httpkit.WithTransport(t),
@@ -145,6 +151,10 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		Stream:   stream,
 		Tools:    tools,
 		TTL:      c.idleTTLSeconds,
+		// No ceiling of our own to defend: these servers enforce what
+		// their launch configured, so the only limit worth sending is
+		// the caller's remaining budget, and 0 leaves the field off.
+		MaxTokens: llm.MaxOutputTokensFromContext(ctx),
 	}
 	if stream {
 		req.StreamOptions = &openAICompatStreamOptions{IncludeUsage: true}
@@ -164,8 +174,14 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(jsonData))
+	// The request context must be cancellable before the request is
+	// built: the idle guard unblocks a stalled read by cancelling this
+	// request, and cancelling any later-derived context would leave the
+	// read exactly where it was.
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(jsonData))
 	if err != nil {
+		cancelReq()
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -173,8 +189,14 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		cancelReq()
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
+	// Guard both shapes of response. A non-streaming call can stall
+	// after headers exactly as a streaming one can — the body just
+	// arrives through a json.Decoder instead of a scanner — so the guard
+	// wraps the reader rather than the loop that consumes it.
+	resp.Body = newStreamIdleGuard(resp.Body, cancelReq, c.streamIdleTimeout)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -440,4 +462,16 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 func normalizeOpenAICompatBaseURL(raw string) string {
 	u := strings.TrimRight(strings.TrimSpace(raw), "/")
 	return strings.TrimSuffix(u, "/v1")
+}
+
+// SetStreamIdleTimeout overrides how long this endpoint may go silent
+// before a request is abandoned. Zero disables the guard entirely.
+//
+// Not safe to call concurrently with in-flight requests; intended for
+// resource configuration during init, alongside SetLogger.
+func (c *OpenAICompatClient) SetStreamIdleTimeout(d time.Duration) {
+	if c == nil || d < 0 {
+		return
+	}
+	c.streamIdleTimeout = d
 }

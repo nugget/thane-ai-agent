@@ -84,11 +84,26 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterStart := time.Now()
 
 		// --- LLM call ---
-		llmResp, err := cfg.LLM.ChatStream(iterCtx, model, messages, toolDefs, cfg.Stream)
+		// Spend the budget forward: what is left is this call's ceiling.
+		// Without it the run can only notice an overrun after paying for
+		// it in full, which on a runner generating single-digit tokens
+		// per second is minutes of work discarded on arrival.
+		callCtx := iterCtx
+		if cfg.MaxOutputTokens > 0 {
+			callCtx = llm.WithMaxOutputTokens(iterCtx, cfg.MaxOutputTokens-totalOutput)
+		}
+		llmResp, err := cfg.LLM.ChatStream(callCtx, model, messages, toolDefs, cfg.Stream)
 		if err != nil {
 			if cfg.OnLLMError != nil {
 				var newModel string
-				llmResp, newModel, err = cfg.OnLLMError(iterCtx, err, model, messages, toolDefs, cfg.Stream)
+				// callCtx, not iterCtx: this handler retries, fails
+				// over, and downshifts to a recovery model, and each of
+				// those is a real generation against the same budget.
+				// Handing it the unbudgeted context left every recovery
+				// path free to run away — the exact behavior this change
+				// exists to stop, reached by the route taken when
+				// something has already gone wrong.
+				llmResp, newModel, err = cfg.OnLLMError(callCtx, err, model, messages, toolDefs, cfg.Stream)
 				if err != nil {
 					return &Result{
 						Model:                      model,
@@ -528,7 +543,29 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 	if len(messages) > 0 && messages[len(messages)-1].Role == "tool" {
 		log.Warn("forcing text response", "reason", partial.ExhaustReason, "model", model)
 
-		resp, err := cfg.LLM.ChatStream(ctx, model, messages, nil, cfg.Stream)
+		// The recovery call is a real generation against the same
+		// budget, and it is the one most likely to run when the budget
+		// is already spent — so it takes what remains and no more. An
+		// earlier version floored it at a few hundred tokens so a spent
+		// run could still close with a sentence, which quietly let the
+		// run finish past its stated ceiling. A budget that can be
+		// exceeded to say something nice about being over budget is not
+		// a budget; when nothing remains the caller gets the fallback
+		// content, which is what that path already exists to provide.
+		recoveryCtx := ctx
+		if cfg.MaxOutputTokens > 0 {
+			remaining := cfg.MaxOutputTokens - partial.OutputTokens
+			if remaining <= 0 {
+				log.Warn("skipping force-text recovery: output budget exhausted",
+					"max_output_tokens", cfg.MaxOutputTokens,
+					"output_tokens", partial.OutputTokens,
+				)
+				partial.Messages = messages
+				return partial, nil
+			}
+			recoveryCtx = llm.WithMaxOutputTokens(ctx, remaining)
+		}
+		resp, err := cfg.LLM.ChatStream(recoveryCtx, model, messages, nil, cfg.Stream)
 		if err != nil {
 			log.Error("force-text LLM call failed", "model", model, "reason", partial.ExhaustReason, "error", err)
 			if partial.Content == "" {

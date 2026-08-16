@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
@@ -352,5 +353,133 @@ func TestOpenAICompatCapabilities(t *testing.T) {
 	}
 	if SupportsImagesForModel("openai_compat", "gpt-oss:120b", "gptoss", nil, caps) {
 		t.Error("a text model should not be treated as vision-capable")
+	}
+}
+
+// TestOpenAICompatSendsRemainingBudget pins that a caller's remaining
+// output budget reaches the wire. Before this, MaxOutputTokens was only
+// checked after a response had fully arrived, so it bounded accounting
+// rather than generation: one runaway completion was produced and paid
+// for in full before anything noticed — minutes of wall clock on a
+// runner generating single-digit tokens per second.
+func TestOpenAICompatSendsRemainingBudget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		budget  int
+		wantSet bool
+		want    float64
+	}{
+		{name: "budget reaches the wire", budget: 700, wantSet: true, want: 700},
+		{name: "no budget leaves the field off", budget: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+			}))
+			defer srv.Close()
+
+			ctx := llm.WithMaxOutputTokens(context.Background(), tt.budget)
+			c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+			if _, err := c.Chat(ctx, "m", []llm.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+
+			got, present := body["max_tokens"]
+			if !tt.wantSet {
+				if present {
+					t.Errorf("max_tokens sent without a budget: %#v", got)
+				}
+				return
+			}
+			if !present || got != tt.want {
+				t.Errorf("max_tokens = %#v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatStreamIdleTimeout pins the bound on silence. A server
+// that accepts a request, returns headers, and then stops speaking used
+// to hang the read forever: ResponseHeaderTimeout no longer applies once
+// headers arrive, and these clients carry no total timeout because a
+// long generation is not a hung request. The iteration never completed
+// and the loop waiting on it never woke again.
+func TestOpenAICompatStreamIdleTimeout(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// One frame, then silence — the shape of a runner that dies
+		// mid-generation without closing the connection.
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	c.SetStreamIdleTimeout(150 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a stalled stream returned success")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stalled stream was never abandoned — the idle guard did not fire")
+	}
+}
+
+// TestOpenAICompatStreamIdleAllowsSlowGeneration pins the other half:
+// the guard measures silence, not duration. A server that keeps sending,
+// however slowly, must never be cut off — that is the behavior the
+// absent total timeout exists to protect.
+func TestOpenAICompatStreamIdleAllowsSlowGeneration(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		// Six frames at 60ms apart: 360ms total, comfortably past the
+		// 150ms idle window, with no single gap reaching it.
+		for i := 0; i < 6; i++ {
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"tok\"}}]}\n\n"))
+			if f != nil {
+				f.Flush()
+			}
+			time.Sleep(60 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", nil, 0)
+	c.SetStreamIdleTimeout(150 * time.Millisecond)
+
+	resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("slow but live stream was abandoned: %v", err)
+	}
+	if resp.Message.Content != "toktoktoktoktoktok" {
+		t.Errorf("content = %q, want all six tokens", resp.Message.Content)
 	}
 }

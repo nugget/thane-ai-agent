@@ -1206,3 +1206,143 @@ func TestPeakInputTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestEngineSpendsBudgetForward pins that each call's ceiling is what
+// the run has left, not the whole allowance. CheckBudget still stops the
+// run after the fact; this is what keeps a single generation from
+// overshooting before that check can run.
+func TestEngineSpendsBudgetForward(t *testing.T) {
+	t.Parallel()
+
+	var seen []int
+	llmClient := &budgetRecordingClient{
+		onCall:              func(ctx context.Context) { seen = append(seen, llm.MaxOutputTokensFromContext(ctx)) },
+		outputTokensPerCall: 300,
+	}
+
+	e := &Engine{}
+	_, err := e.Run(context.Background(), Config{
+		Model:           "m",
+		LLM:             llmClient,
+		MaxIterations:   3,
+		MaxOutputTokens: 1000,
+		CheckBudget:     func(total int) bool { return total >= 1000 },
+		Executor:        &DirectExecutor{Exec: func(context.Context, string, string) (string, error) { return "done", nil }},
+	}, []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// 1000 to start, then 700 after the first 300-token response, then
+	// 400. The fourth is the force-text recovery call after max
+	// iterations, which takes the 100 that actually remain — never more,
+	// however little that buys, because a budget that can be exceeded to
+	// apologize for being exceeded is not a budget.
+	want := []int{1000, 700, 400, 100}
+	if len(seen) != len(want) {
+		t.Fatalf("budgets seen = %v, want %v", seen, want)
+	}
+	for i, w := range want {
+		if seen[i] != w {
+			t.Fatalf("budgets seen = %v, want %v", seen, want)
+		}
+	}
+}
+
+// budgetRecordingClient answers with tool calls so the engine keeps
+// iterating, recording the budget it was handed each time.
+type budgetRecordingClient struct {
+	onCall              func(context.Context)
+	outputTokensPerCall int
+	calls               int
+	failFirst           bool
+}
+
+func (c *budgetRecordingClient) Chat(ctx context.Context, model string, msgs []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
+	return c.ChatStream(ctx, model, msgs, tools, nil)
+}
+
+func (c *budgetRecordingClient) Ping(context.Context) error { return nil }
+
+func (c *budgetRecordingClient) ChatStream(ctx context.Context, _ string, _ []llm.Message, _ []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
+	c.onCall(ctx)
+	c.calls++
+	if c.failFirst && c.calls == 1 {
+		return nil, errors.New("upstream exploded")
+	}
+	resp := &llm.ChatResponse{Model: "m", Done: true, OutputTokens: c.outputTokensPerCall}
+	resp.Message.Role = "assistant"
+	// Keep asking for a tool so the engine keeps iterating and the
+	// budget has more than one call to be spent across.
+	tc := llm.ToolCall{ID: fmt.Sprintf("call_%d", c.calls)}
+	tc.Function.Name = "noop"
+	tc.Function.Arguments = map[string]any{}
+	resp.Message.ToolCalls = []llm.ToolCall{tc}
+	return resp, nil
+}
+
+// TestEngineBudgetBoundsErrorRecovery pins that the paths taken when
+// something has already gone wrong are bounded too. Retry, failover, and
+// the recovery-model downshift all run real generations through
+// OnLLMError, and handing that handler an unbudgeted context left every
+// one of them free to run away — the exact behavior the budget exists to
+// stop, reached by the route nobody watches.
+func TestEngineBudgetBoundsErrorRecovery(t *testing.T) {
+	t.Parallel()
+
+	var handlerBudget int
+	failing := &budgetRecordingClient{onCall: func(context.Context) {}, failFirst: true}
+
+	e := &Engine{}
+	_, err := e.Run(context.Background(), Config{
+		Model:           "m",
+		LLM:             failing,
+		MaxIterations:   2,
+		MaxOutputTokens: 800,
+		Executor:        &DirectExecutor{Exec: func(context.Context, string, string) (string, error) { return "done", nil }},
+		OnLLMError: func(ctx context.Context, _ error, model string, _ []llm.Message, _ []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, string, error) {
+			handlerBudget = llm.MaxOutputTokensFromContext(ctx)
+			resp := &llm.ChatResponse{Model: model, Done: true, OutputTokens: 10}
+			resp.Message.Role = "assistant"
+			resp.Message.Content = "recovered"
+			return resp, model, nil
+		},
+	}, []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if handlerBudget != 800 {
+		t.Errorf("error handler budget = %d, want 800", handlerBudget)
+	}
+}
+
+// TestEngineSkipsRecoveryWhenBudgetSpent pins the hard-limit promise: a
+// run that has spent its allowance does not buy one more generation to
+// say so. The caller gets the fallback content that path already exists
+// to provide.
+func TestEngineSkipsRecoveryWhenBudgetSpent(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	client := &budgetRecordingClient{onCall: func(context.Context) { calls++ }, outputTokensPerCall: 600}
+
+	e := &Engine{}
+	result, err := e.Run(context.Background(), Config{
+		Model:           "m",
+		LLM:             client,
+		MaxIterations:   1,
+		MaxOutputTokens: 500,
+		FallbackContent: "budget spent",
+		Executor:        &DirectExecutor{Exec: func(context.Context, string, string) (string, error) { return "done", nil }},
+	}, []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// One generation, which overshot; no second one to apologize for it.
+	if calls != 1 {
+		t.Errorf("model calls = %d, want 1 (no recovery call past a spent budget)", calls)
+	}
+	if result.OutputTokens > 600 {
+		t.Errorf("output tokens = %d, want no generation beyond the overshooting one", result.OutputTokens)
+	}
+}

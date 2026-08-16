@@ -102,6 +102,17 @@ type Config struct {
 	// engine should force a text response. Nil means no budget.
 	CheckBudget func(totalOutput int) bool
 
+	// MaxOutputTokens is the output-token budget for the whole run, or 0
+	// for unlimited. CheckBudget already stops the run once a response
+	// has pushed the total past it; this exists because that check is
+	// necessarily after the fact and cannot bound the response that
+	// overshot. Carried to each provider as the remaining allowance so
+	// the server stops generating at the budget rather than at its own
+	// ceiling, which on a slow local runner is the difference between a
+	// cap and several minutes of wall clock spent producing tokens
+	// nobody will accept.
+	MaxOutputTokens int
+
 	// CheckToolAvail reports whether a tool is available in the current
 	// iteration. Return false if the tool should be treated as illegal.
 	// Nil means all tools are available.
