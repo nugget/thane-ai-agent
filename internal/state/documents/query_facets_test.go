@@ -8,7 +8,7 @@ import (
 
 // TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem pins the
 // #1250 read surface: a faceted document's search summary is its
-// authored teaser — or its status_line when no teaser is declared —
+// authored teaser — or its signal when no teaser is declared —
 // never a derived excerpt of the rendered sections, and the hit lists
 // the facets present so the next step is one deliberate doc_read with
 // level. An unfaceted document keeps the derived first paragraph and
@@ -17,12 +17,12 @@ func TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem(t *testing.T) {
 	store, _ := newMutationStore(t)
 	ctx := context.Background()
 
-	teasered := "## Status Line\n\nverdict line here\n\n## Teaser\n\nThe authored orangutan teaser, written for search snippets.\n\n## Details\n\nlong working memory body\n"
+	teasered := "## Signal\n\nverdict line here\n\n## Teaser\n\nThe authored orangutan teaser, written for search snippets.\n\n## Details\n\nlong working memory body\n"
 	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/teasered.md", Title: "Teasered", Body: stringPtr(teasered)}); err != nil {
 		t.Fatalf("write teasered: %v", err)
 	}
-	verdictOnly := "## Status Line\n\norangutan verdict, no teaser declared\n\n## Details\n\nbody\n"
-	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/verdict.md", Title: "VerdictOnly", Body: stringPtr(verdictOnly)}); err != nil {
+	signalOnly := "## Signal\n\norangutan verdict, no teaser declared\n\n## Details\n\nbody\n"
+	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/verdict.md", Title: "VerdictOnly", Body: stringPtr(signalOnly)}); err != nil {
 		t.Fatalf("write verdict: %v", err)
 	}
 	plain := "# Plain\n\nA plain orangutan document with a first paragraph.\n"
@@ -46,8 +46,8 @@ func TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem(t *testing.T) {
 	if teaseredHit.Summary != "The authored orangutan teaser, written for search snippets." {
 		t.Errorf("teasered summary = %q, want the authored teaser", teaseredHit.Summary)
 	}
-	if len(teaseredHit.Facets) != 2 || teaseredHit.Facets[0] != "status_line" || teaseredHit.Facets[1] != "teaser" {
-		t.Errorf("teasered facets = %v, want [status_line teaser]", teaseredHit.Facets)
+	if len(teaseredHit.Facets) != 2 || teaseredHit.Facets[0] != "signal" || teaseredHit.Facets[1] != "teaser" {
+		t.Errorf("teasered facets = %v, want [signal teaser]", teaseredHit.Facets)
 	}
 
 	verdictHit, ok := byRef["kb:zoo/verdict.md"]
@@ -55,7 +55,7 @@ func TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem(t *testing.T) {
 		t.Fatalf("verdict document missing from results: %v", byRef)
 	}
 	if verdictHit.Summary != "orangutan verdict, no teaser declared" {
-		t.Errorf("verdict summary = %q, want the status_line fallback", verdictHit.Summary)
+		t.Errorf("verdict summary = %q, want the signal fallback", verdictHit.Summary)
 	}
 
 	plainHit, ok := byRef["kb:zoo/plain.md"]
@@ -81,7 +81,7 @@ func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
 	store, _ := newMutationStore(t)
 	ctx := context.Background()
 
-	body := "## Status Line\n\nverdict line here\n\n## Teaser\n\nThe authored capybara teaser.\n\n## Details\n\nlong body\n"
+	body := "## Signal\n\nverdict line here\n\n## Teaser\n\nThe authored capybara teaser.\n\n## Details\n\nlong body\n"
 	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/faceted.md", Title: "Faceted", Body: stringPtr(body)}); err != nil {
 		t.Fatalf("write faceted: %v", err)
 	}
@@ -111,8 +111,8 @@ func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
 	if !ok {
 		t.Fatalf("faceted document missing from tool result: %s", out)
 	}
-	if len(got) != 2 || got[0] != "status_line" || got[1] != "teaser" {
-		t.Errorf("model-facing facets = %v, want [status_line teaser]", got)
+	if len(got) != 2 || got[0] != "signal" || got[1] != "teaser" {
+		t.Errorf("model-facing facets = %v, want [signal teaser]", got)
 	}
 	if plainFacets, ok := byRef["kb:zoo/plain.md"]; !ok {
 		t.Fatalf("plain document missing from tool result: %s", out)

@@ -12,13 +12,13 @@ import (
 // a field almost none of them set.
 func TestFacetSpecDecodesBothShapes(t *testing.T) {
 	var got []FacetSpec
-	if err := json.Unmarshal([]byte(`["status_line",{"name":"teaser","format":"plain"}]`), &got); err != nil {
+	if err := json.Unmarshal([]byte(`["signal",{"name":"teaser","format":"plain"}]`), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("facets = %d, want 2", len(got))
 	}
-	if got[0].Name != OutputFacetStatusLine || got[0].Format != "" {
+	if got[0].Name != OutputFacetSignal || got[0].Format != "" {
 		t.Errorf("bare name decoded as %+v", got[0])
 	}
 	if got[0].EffectiveFormat() != FacetFormatMarkdown {
@@ -36,13 +36,13 @@ func TestFacetSpecDecodesBothShapes(t *testing.T) {
 // a format in this package and would read as the subject of the test.
 func TestFacetSpecMarshalsBareNameWhenNoAttributes(t *testing.T) {
 	data, err := json.Marshal([]FacetSpec{
-		{Name: OutputFacetStatusLine},
+		{Name: OutputFacetSignal},
 		{Name: OutputFacetDigest, Format: FacetFormatJSON},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if want := `["status_line",{"name":"digest","format":"json"}]`; string(data) != want {
+	if want := `["signal",{"name":"digest","format":"json"}]`; string(data) != want {
 		t.Errorf("marshal = %s, want %s", data, want)
 	}
 }
@@ -52,24 +52,24 @@ func TestFacetSpecMarshalsBareNameWhenNoAttributes(t *testing.T) {
 func TestFacetFormatValidation(t *testing.T) {
 	out := OutputSpec{
 		Name: "status", Type: OutputTypeMaintainedDocument, Ref: "kb:s.md",
-		Facets: []FacetSpec{{Name: OutputFacetStatusLine, Format: "yaml"}},
+		Facets: []FacetSpec{{Name: OutputFacetSignal, Format: "yaml"}},
 	}
 	if err := out.Validate(); err == nil {
 		t.Error("an unsupported format should be refused at declaration")
 	}
 
-	out.Facets = []FacetSpec{{Name: OutputFacetStatusLine, Format: FacetFormatJSON}}
+	out.Facets = []FacetSpec{{Name: OutputFacetSignal, Format: FacetFormatJSON}}
 	if err := out.Validate(); err != nil {
 		t.Fatalf("json is a supported format: %v", err)
 	}
 
 	// json is the one format a consumer cannot recover from being wrong
 	// about, so it is the one enforced at publish.
-	err := out.ValidateFacetPayload(FacetPayload{StatusLine: `not json`, Full: "body"})
+	err := out.ValidateFacetPayload(FacetPayload{Signal: `not json`, Full: "body"})
 	if err == nil {
 		t.Fatal("prose in a json facet should be refused")
 	}
-	if err := out.ValidateFacetPayload(FacetPayload{StatusLine: `{"ok":true}`, Full: "body"}); err != nil {
+	if err := out.ValidateFacetPayload(FacetPayload{Signal: `{"ok":true}`, Full: "body"}); err != nil {
 		t.Errorf("valid JSON should pass: %v", err)
 	}
 }
@@ -96,14 +96,14 @@ func TestJSONFacetRoundTripsThroughTheDocument(t *testing.T) {
 	out := OutputSpec{
 		Name: "lake", Type: OutputTypeMaintainedDocument, Ref: "kb:lake.md",
 		Facets: []FacetSpec{
-			{Name: OutputFacetStatusLine},
+			{Name: OutputFacetSignal},
 			{Name: OutputFacetDigest, Format: FacetFormatJSON},
 		},
 	}
 	payload := FacetPayload{
-		StatusLine: "Canyon Lake 891.2 ft, down 0.3 this week.",
-		Digest:     `{"level_ft":891.2,"trend":"falling","pct_full":0.62}`,
-		Full:       "# Canyon Lake\n\nThe reservoir is falling steadily.",
+		Signal: "Canyon Lake 891.2 ft, down 0.3 this week.",
+		Digest: `{"level_ft":891.2,"trend":"falling","pct_full":0.62}`,
+		Full:   "# Canyon Lake\n\nThe reservoir is falling steadily.",
 	}
 
 	body := out.RenderFacetDocument(payload)
@@ -118,8 +118,8 @@ func TestJSONFacetRoundTripsThroughTheDocument(t *testing.T) {
 	if got.Digest != payload.Digest {
 		t.Errorf("digest did not survive the round trip:\n got %q\nwant %q", got.Digest, payload.Digest)
 	}
-	if got.StatusLine != payload.StatusLine {
-		t.Errorf("prose facet changed: %q", got.StatusLine)
+	if got.Signal != payload.Signal {
+		t.Errorf("prose facet changed: %q", got.Signal)
 	}
 	// The parsed value is the JSON that was published, so a consumer can
 	// decode it without knowing it passed through markdown.
@@ -136,18 +136,18 @@ func TestJSONFacetRoundTripsThroughTheDocument(t *testing.T) {
 // fence has to survive a value that spans lines, because a payload a
 // human is meant to read in the document usually will.
 func TestJSONFacetRoundTripsPrettyPrinted(t *testing.T) {
-	// digest, not status_line: status_line is SingleLine, so a multi-line
+	// digest, not signal: signal is SingleLine, so a multi-line
 	// payload there would be refused at publish and this would be testing
 	// a call that cannot happen.
 	out := OutputSpec{
 		Name: "bays", Type: OutputTypeMaintainedDocument, Ref: "kb:b.md",
 		Facets: []FacetSpec{
-			{Name: OutputFacetStatusLine},
+			{Name: OutputFacetSignal},
 			{Name: OutputFacetDigest, Format: FacetFormatJSON},
 		},
 	}
 	value := "{\n  \"bay_1\": \"empty\",\n  \"bay_2\": \"NC Miata\",\n  \"bay_3\": \"truck\"\n}"
-	payload := FacetPayload{StatusLine: "Bays 2 and 3 occupied.", Digest: value, Full: "body"}
+	payload := FacetPayload{Signal: "Bays 2 and 3 occupied.", Digest: value, Full: "body"}
 
 	// The publish path has to accept it, or the round trip is academic.
 	if err := out.ValidateFacetPayload(payload); err != nil {
@@ -165,10 +165,10 @@ func TestJSONFacetRoundTripsPrettyPrinted(t *testing.T) {
 func TestMarkdownFacetKeepsItsOwnFence(t *testing.T) {
 	out := OutputSpec{
 		Name: "doc", Type: OutputTypeMaintainedDocument, Ref: "kb:d.md",
-		Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetDigest}},
+		Facets: []FacetSpec{{Name: OutputFacetSignal}, {Name: OutputFacetDigest}},
 	}
 	example := "```json\n{\"example\": true}\n```"
-	payload := FacetPayload{StatusLine: "One line.", Digest: example, Full: "body"}
+	payload := FacetPayload{Signal: "One line.", Digest: example, Full: "body"}
 
 	got := out.ParseFacetDocument(out.RenderFacetDocument(payload))
 	if got.Digest != example {

@@ -62,7 +62,7 @@ func curateArgs(extra map[string]any) map[string]any {
 // important case, and dropped facets silently when asked.
 func TestGuidedCreateProducesFacetedOutput(t *testing.T) {
 	spec, result := dryRunSpec(t, curateArgs(map[string]any{
-		"facets": []any{"status_line", "teaser", "digest"},
+		"facets": []any{"signal", "teaser", "digest"},
 	}))
 
 	// The document plus the notes surface every document-owning loop gets.
@@ -93,7 +93,7 @@ func TestGuidedCreateWorkingNotes(t *testing.T) {
 	// No opt-in argument: the notes surface is unconditional, and passing a
 	// key the schema does not define would imply a flag that does not exist.
 	spec, result := dryRunSpec(t, curateArgs(map[string]any{
-		"facets": []any{"status_line"},
+		"facets": []any{"signal"},
 	}))
 
 	if len(spec.Outputs) != 2 {
@@ -163,7 +163,7 @@ func TestGuidedCreatePromptMode(t *testing.T) {
 // projections than its author asked for, with nothing to say so.
 func TestGuidedCreateRefusesUnknownFacet(t *testing.T) {
 	rig := newCurateTestRig(t)
-	args := curateArgs(map[string]any{"facets": []any{"status_line", "summary"}})
+	args := curateArgs(map[string]any{"facets": []any{"signal", "summary"}})
 	args["dry_run"] = true
 	if _, err := rig.tool.Handler(context.Background(), args); err == nil {
 		t.Fatal("unknown facet should be refused, not dropped")
@@ -178,17 +178,17 @@ func TestGuidedCreateRefusesUnknownFacet(t *testing.T) {
 // rather than the mistake.
 func TestGuidedCreateFacetInputShapes(t *testing.T) {
 	t.Run("[]string is accepted", func(t *testing.T) {
-		got, err := parseOutputFacets([]string{"status_line", "digest"})
+		got, err := parseOutputFacets([]string{"signal", "digest"})
 		if err != nil {
 			t.Fatalf("[]string: %v", err)
 		}
-		if len(got) != 2 || got[0].Name != looppkg.OutputFacetStatusLine {
+		if len(got) != 2 || got[0].Name != looppkg.OutputFacetSignal {
 			t.Errorf("facets = %v", got)
 		}
 	})
 
 	t.Run("non-string element is named by index and type", func(t *testing.T) {
-		_, err := parseOutputFacets([]any{"status_line", 7})
+		_, err := parseOutputFacets([]any{"signal", 7})
 		if err == nil {
 			t.Fatal("a numeric facet should be refused")
 		}
@@ -200,7 +200,7 @@ func TestGuidedCreateFacetInputShapes(t *testing.T) {
 	})
 
 	t.Run("a non-array is refused by type", func(t *testing.T) {
-		if _, err := parseOutputFacets("status_line"); err == nil {
+		if _, err := parseOutputFacets("signal"); err == nil {
 			t.Fatal("a bare string should be refused")
 		}
 	})
@@ -266,7 +266,7 @@ func TestGuidedCreateScaffoldsFacetSkeleton(t *testing.T) {
 	rig := newCurateTestRig(t)
 	ctx := context.Background()
 
-	args := curateArgs(map[string]any{"facets": []any{"status_line", "digest"}})
+	args := curateArgs(map[string]any{"facets": []any{"signal", "digest"}})
 	out, err := rig.tool.Handler(ctx, args)
 	if err != nil {
 		t.Fatalf("thane_loop_create: %v", err)
@@ -284,7 +284,7 @@ func TestGuidedCreateScaffoldsFacetSkeleton(t *testing.T) {
 		t.Fatalf("read scaffold: %v", err)
 	}
 	for _, want := range []string{
-		"## Status Line", "## Digest", "## Details",
+		"## Signal", "## Digest", "## Details",
 		"awaiting first cycle",
 		`"audience"`, `"published"`,
 		`"managed_by"`, `"publish_output_closet_guardian"`,
@@ -312,7 +312,7 @@ func TestGuidedCreateScaffoldsWorkingNotes(t *testing.T) {
 	rig := newCurateTestRig(t)
 	ctx := context.Background()
 
-	out, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line"}}))
+	out, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"signal"}}))
 	if err != nil {
 		t.Fatalf("thane_loop_create: %v", err)
 	}
@@ -350,11 +350,11 @@ func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
 	rig := newCurateTestRig(t)
 	ctx := context.Background()
 
-	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line"}})); err != nil {
+	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"signal"}})); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
 	// The loop has "run": both documents now hold real state.
-	docBody := "## Status Line\n\nCloset nominal.\n\n## Details\n\nAccumulated belief."
+	docBody := "## Signal\n\nCloset nominal.\n\n## Details\n\nAccumulated belief."
 	notesBody := "Current theory: the UPS fan is the noise."
 	for ref, body := range map[string]string{
 		"kb:dashboards/closet.md":       docBody,
@@ -366,7 +366,7 @@ func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
 		}
 	}
 
-	args := curateArgs(map[string]any{"facets": []any{"status_line"}})
+	args := curateArgs(map[string]any{"facets": []any{"signal"}})
 	args["replace"] = true
 	out, err := rig.tool.Handler(ctx, args)
 	if err != nil {
@@ -429,7 +429,7 @@ func TestGuidedCreateFailsClosedOnUnreadableOutputDoc(t *testing.T) {
 // complete output.initial seed.
 func seededArgs(initial map[string]any) map[string]any {
 	return curateArgs(map[string]any{
-		"facets":  []any{"status_line", "digest"},
+		"facets":  []any{"signal", "digest"},
 		"initial": initial,
 	})
 }
@@ -444,10 +444,10 @@ func TestGuidedCreateSeedsFirstPublish(t *testing.T) {
 	ctx := context.Background()
 
 	out, err := rig.tool.Handler(ctx, seededArgs(map[string]any{
-		"status_line": "Closet 21.4°C, UPS on mains.",
-		"digest":      "Environment stable all afternoon; dehumidifier idle.",
-		"full":        "Temperature 21.4°C and steady. UPS on mains, full charge.",
-		"notes":       "Starting theory: the UPS fan dominates the noise floor.",
+		"signal": "Closet 21.4°C, UPS on mains.",
+		"digest": "Environment stable all afternoon; dehumidifier idle.",
+		"full":   "Temperature 21.4°C and steady. UPS on mains, full charge.",
+		"notes":  "Starting theory: the UPS fan dominates the noise floor.",
 	}))
 	if err != nil {
 		t.Fatalf("thane_loop_create: %v", err)
@@ -468,7 +468,7 @@ func TestGuidedCreateSeedsFirstPublish(t *testing.T) {
 		t.Fatalf("read seeded doc: %v", err)
 	}
 	for _, want := range []string{
-		"## Status Line", "Closet 21.4°C, UPS on mains.",
+		"## Signal", "Closet 21.4°C, UPS on mains.",
 		"## Digest", "dehumidifier idle",
 		"## Details", "full charge",
 	} {
@@ -501,26 +501,26 @@ func TestGuidedCreateSeedValidation(t *testing.T) {
 		{
 			name: "missing declared facet",
 			initial: map[string]any{
-				"status_line": "One line.",
-				"full":        "Body.",
+				"signal": "One line.",
+				"full":   "Body.",
 			},
 			wantErr: "digest",
 		},
 		{
-			name: "over budget status line",
+			name: "over budget signal",
 			initial: map[string]any{
-				"status_line": strings.Repeat("x", 121),
-				"digest":      "Fine.",
-				"full":        "Fine.",
+				"signal": strings.Repeat("x", 121),
+				"digest": "Fine.",
+				"full":   "Fine.",
 			},
 			wantErr: "limit is 120",
 		},
 		{
 			name: "reserved heading inside content",
 			initial: map[string]any{
-				"status_line": "One line.",
-				"digest":      "Fine.",
-				"full":        "## Digest\n\nsmuggled section",
+				"signal": "One line.",
+				"digest": "Fine.",
+				"full":   "## Digest\n\nsmuggled section",
 			},
 			wantErr: "reserved section heading",
 		},
@@ -616,9 +616,9 @@ func TestGuidedCreateSeedUnfacetedTakesFullOnly(t *testing.T) {
 
 	rig2 := newCurateTestRig(t)
 	_, err = rig2.tool.Handler(ctx, curateArgs(map[string]any{
-		"initial": map[string]any{"status_line": "no ladder declared"},
+		"initial": map[string]any{"signal": "no ladder declared"},
 	}))
-	if err == nil || !strings.Contains(err.Error(), "output.initial.status_line") {
+	if err == nil || !strings.Contains(err.Error(), "output.initial.signal") {
 		t.Errorf("projection seed on an unfaceted output should refuse by key, got: %v", err)
 	}
 }
@@ -631,13 +631,13 @@ func TestGuidedCreateSeedRefusesExistingDocument(t *testing.T) {
 	rig := newCurateTestRig(t)
 	ctx := context.Background()
 
-	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line", "digest"}})); err != nil {
+	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"signal", "digest"}})); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
 	args := seededArgs(map[string]any{
-		"status_line": "Fresh.",
-		"digest":      "Fresh.",
-		"full":        "Fresh.",
+		"signal": "Fresh.",
+		"digest": "Fresh.",
+		"full":   "Fresh.",
 	})
 	args["replace"] = true
 	_, err := rig.tool.Handler(ctx, args)
@@ -656,10 +656,10 @@ func TestGuidedCreateSeedDryRunWritesNothing(t *testing.T) {
 	ctx := context.Background()
 
 	args := seededArgs(map[string]any{
-		"status_line": "One line.",
-		"digest":      "Enough to act on.",
-		"full":        "Everything.",
-		"notes":       "A theory.",
+		"signal": "One line.",
+		"digest": "Enough to act on.",
+		"full":   "Everything.",
+		"notes":  "A theory.",
 	})
 	args["dry_run"] = true
 	if _, err := rig.tool.Handler(ctx, args); err != nil {

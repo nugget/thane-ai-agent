@@ -104,22 +104,22 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetTeaser}, {Name: OutputFacetDigest}},
+				Facets: []FacetSpec{{Name: OutputFacetSignal}, {Name: OutputFacetTeaser}, {Name: OutputFacetDigest}},
 			},
 			wantTool: "publish_output_ranch_status",
 		},
 		{
-			name: "status line alone anchors the ladder",
+			name: "signal can be the only declared projection",
 			output: OutputSpec{
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []FacetSpec{{Name: OutputFacetStatusLine}},
+				Facets: []FacetSpec{{Name: OutputFacetSignal}},
 			},
 			wantTool: "publish_output_ranch_status",
 		},
 		{
-			name: "facets without status line rejected",
+			name: "facets without signal rejected",
 			output: OutputSpec{
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
@@ -134,7 +134,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacet("hud")}},
+				Facets: []FacetSpec{{Name: OutputFacetSignal}, {Name: OutputFacet("hud")}},
 			},
 			wantErr: true,
 		},
@@ -144,7 +144,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
-				Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetStatusLine}},
+				Facets: []FacetSpec{{Name: OutputFacetSignal}, {Name: OutputFacetSignal}},
 			},
 			wantErr: true,
 		},
@@ -154,7 +154,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Name:   "ranch notes",
 				Type:   OutputTypeWorkingNotes,
 				Ref:    "core:ranch-notes.md",
-				Facets: []FacetSpec{{Name: OutputFacetStatusLine}},
+				Facets: []FacetSpec{{Name: OutputFacetSignal}},
 			},
 			wantErr: true,
 		},
@@ -165,7 +165,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Type:     OutputTypeMaintainedDocument,
 				Ref:      "core:hypotheses.md",
 				Audience: OutputAudienceInternal,
-				Facets:   []FacetSpec{{Name: OutputFacetStatusLine}},
+				Facets:   []FacetSpec{{Name: OutputFacetSignal}},
 			},
 			wantErr: true,
 		},
@@ -222,7 +222,7 @@ func TestCloneOutputsDeepCopiesFacets(t *testing.T) {
 		Name:   "ranch status",
 		Type:   OutputTypeMaintainedDocument,
 		Ref:    "core:ranch.md",
-		Facets: []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetTeaser}},
+		Facets: []FacetSpec{{Name: OutputFacetSignal}, {Name: OutputFacetTeaser}},
 	}}
 	dst := cloneOutputs(src)
 	dst[0].Facets[1] = FacetSpec{Name: OutputFacetDigest}
@@ -287,7 +287,7 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 				Type:    OutputTypeMaintainedDocument,
 				Ref:     "generated:status.md",
 				Purpose: "Current status.",
-				Facets:  []FacetSpec{{Name: OutputFacetStatusLine}, {Name: OutputFacetTeaser}},
+				Facets:  []FacetSpec{{Name: OutputFacetSignal}, {Name: OutputFacetTeaser}},
 			},
 			{
 				Name: "notes",
@@ -318,8 +318,8 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	if got.Outputs[0].ToolName() != "publish_output_status" {
 		t.Fatalf("output tool = %q, want publish_output_status for a faceted output", got.Outputs[0].ToolName())
 	}
-	if len(got.Outputs[0].Facets) != 2 || got.Outputs[0].Facets[0].Name != OutputFacetStatusLine {
-		t.Fatalf("round-tripped facets = %v, want [status_line teaser]", got.Outputs[0].Facets)
+	if len(got.Outputs[0].Facets) != 2 || got.Outputs[0].Facets[0].Name != OutputFacetSignal {
+		t.Fatalf("round-tripped facets = %v, want [signal teaser]", got.Outputs[0].Facets)
 	}
 	if got.Outputs[1].EffectiveAudience() != OutputAudienceInternal {
 		t.Fatalf("working notes audience = %q, want internal", got.Outputs[1].EffectiveAudience())

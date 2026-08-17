@@ -117,16 +117,17 @@ and those publish the same understanding at several fidelities. Pass
 ```json
 {
   "ref": "kb:dashboards/server-closet.md",
-  "level": "status_line"
+  "level": "signal"
 }
 ```
 
-`status_line` is one line of what is true right now. `teaser` is a
-paragraph on why you would open the document. `digest` carries enough to
-act on without opening it. `full` is the whole body.
+`signal` is the compact outward-facing reason to spend attention.
+`teaser` is a roomier paragraph on why you would open the document.
+`digest` carries enough to act on without opening it. `full` is the whole
+body.
 
 This is not truncation — each level was written to stand alone at that
-size by the loop that owns the subject, so a status line is a sentence
+size by the loop that owns the subject, so a signal is a sentence
 someone composed, not the first hundred characters of a paragraph.
 
 The result reports `levels_available`, so one read tells you both the
@@ -134,7 +135,7 @@ answer and what else you could have asked for. A document nobody curates
 answers `faceted: false` and sends you back to an ordinary read.
 
 Read at the level your decision needs. Pulling `full` to answer a
-question a status line settles spends context you will want later in the
+question a signal settles spends context you will want later in the
 same turn — that judgment is yours to make, and nothing downstream will
 make it for you.
 

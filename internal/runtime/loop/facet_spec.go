@@ -12,7 +12,7 @@ import (
 // Format is a facet property rather than a binding one: it is part of
 // how the face is cut, not where it is mounted. A binding then checks
 // its own capacity against the facet's format and budget — an entity
-// state that holds 255 characters can carry a status_line and cannot
+// state that holds 255 characters can carry a signal and cannot
 // carry a digest — so a mismatch is refused where it is declared rather
 // than truncated where it is displayed.
 type FacetFormat string
@@ -32,11 +32,11 @@ const (
 // FacetSpec declares one facet and how it is cut.
 //
 // It decodes from either a bare name or an object, because the common
-// case is a name and nothing else — `facets: [status_line, teaser]`
+// case is a name and nothing else — `facets: [signal, teaser]`
 // stays readable, and an author who needs an attribute reaches for the
 // longer form only on the facet that needs it.
 type FacetSpec struct {
-	// Name is which face this is: status_line, teaser, or digest.
+	// Name is which face this is: signal, teaser, or digest.
 	Name OutputFacet `yaml:"name" json:"name"`
 	// Format is how the value is encoded. Empty means markdown.
 	Format FacetFormat `yaml:"format,omitempty" json:"format,omitempty"`
@@ -50,7 +50,7 @@ func (f FacetSpec) EffectiveFormat() FacetFormat {
 	return f.Format
 }
 
-// UnmarshalJSON accepts either "status_line" or {"name":"status_line"}.
+// UnmarshalJSON accepts either "signal" or {"name":"signal"}.
 func (f *FacetSpec) UnmarshalJSON(data []byte) error {
 	trimmed := strings.TrimSpace(string(data))
 	if strings.HasPrefix(trimmed, `"`) {

@@ -45,7 +45,7 @@ type modelDocumentSummary struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary,omitempty"`
 	// Facets lists the projections present in the document body
-	// (status_line, teaser, digest). doc_search's description promises
+	// (signal, teaser, digest). doc_search's description promises
 	// each faceted hit advertises them so the next step is one
 	// deliberate doc_read with level (#1250) — dropping the field here
 	// would break that promise at the model boundary.

@@ -24,7 +24,7 @@ func facetedSpec() looppkg.Spec {
 				Name:   "office status",
 				Type:   looppkg.OutputTypeMaintainedDocument,
 				Ref:    "core:office.md",
-				Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}, {Name: looppkg.OutputFacetTeaser}},
+				Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetSignal}, {Name: looppkg.OutputFacetTeaser}},
 			},
 			{
 				Name: "office notes",
@@ -59,7 +59,7 @@ func TestFacetedOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
 
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 	props, _ := publish.Parameters["properties"].(map[string]any)
-	for _, key := range []string{"status_line", "teaser", "full", "notes"} {
+	for _, key := range []string{"signal", "teaser", "full", "notes"} {
 		if _, ok := props[key]; !ok {
 			t.Fatalf("publish tool schema missing %q argument; got %v", key, props)
 		}
@@ -69,11 +69,11 @@ func TestFacetedOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
 	}
 
 	required, _ := publish.Parameters["required"].([]string)
-	if strings.Join(required, ",") != "status_line,teaser,full" {
+	if strings.Join(required, ",") != "signal,teaser,full" {
 		t.Fatalf("required = %v, want the declared projections and full but not note", required)
 	}
-	if !strings.Contains(props["status_line"].(map[string]any)["description"].(string), "120 characters") {
-		t.Fatalf("status_line description should state its budget: %v", props["status_line"])
+	if !strings.Contains(props["signal"].(map[string]any)["description"].(string), "120 characters") {
+		t.Fatalf("signal description should state its budget: %v", props["signal"])
 	}
 }
 
@@ -108,9 +108,9 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 
 	if _, err := publish.Handler(context.Background(), map[string]any{
-		"status_line": "Printer online; 2 packages waiting.",
-		"teaser":      "The desk is clear but two deliveries need signing.",
-		"full":        "# Office\n\n### Deliveries\n\nTwo packages.",
+		"signal": "Printer online; 2 packages waiting.",
+		"teaser": "The desk is clear but two deliveries need signing.",
+		"full":   "# Office\n\n### Deliveries\n\nTwo packages.",
 	}); err != nil {
 		t.Fatalf("publish handler: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 	}
 	written := string(raw)
 	for _, want := range []string{
-		"## Status Line",
+		"## Signal",
 		"Printer online; 2 packages waiting.",
 		"## Teaser",
 		"## Details",
@@ -144,8 +144,8 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 		t.Fatalf("managed_by frontmatter = %q, want the publish tool name", got)
 	}
 	payload := facetedSpec().Outputs[0].ParseFacetDocument(doc.Body)
-	if payload.StatusLine != "Printer online; 2 packages waiting." {
-		t.Fatalf("re-parsed status line = %q", payload.StatusLine)
+	if payload.Signal != "Printer online; 2 packages waiting." {
+		t.Fatalf("re-parsed signal = %q", payload.Signal)
 	}
 	if payload.Full != "# Office\n\n### Deliveries\n\nTwo packages." {
 		t.Fatalf("re-parsed full = %q", payload.Full)
@@ -164,12 +164,12 @@ func TestPublishToolRejectsOverBudgetWithoutWriting(t *testing.T) {
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 
 	_, err = publish.Handler(context.Background(), map[string]any{
-		"status_line": strings.Repeat("x", 200),
-		"teaser":      "Fine.",
-		"full":        "Fine.",
+		"signal": strings.Repeat("x", 200),
+		"teaser": "Fine.",
+		"full":   "Fine.",
 	})
 	if err == nil {
-		t.Fatal("publish handler error = nil for an over-budget status line")
+		t.Fatal("publish handler error = nil for an over-budget signal")
 	}
 	if !strings.Contains(err.Error(), "the limit is 120") {
 		t.Fatalf("error should teach the budget: %v", err)
@@ -191,10 +191,10 @@ func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 
 	result, err := publish.Handler(context.Background(), map[string]any{
-		"status_line": "Printer online.",
-		"teaser":      "Nothing needs attention.",
-		"full":        "# Office\n\nAll quiet.",
-		"notes":       "Current view: both packages signed for at 14:20, so the delivery warning no longer applies. Watching whether the 14:00 sweep is early enough.",
+		"signal": "Printer online.",
+		"teaser": "Nothing needs attention.",
+		"full":   "# Office\n\nAll quiet.",
+		"notes":  "Current view: both packages signed for at 14:20, so the delivery warning no longer applies. Watching whether the 14:00 sweep is early enough.",
 	})
 	if err != nil {
 		t.Fatalf("publish handler: %v", err)
@@ -292,7 +292,7 @@ func TestFacetedOutputContextAdvertisesProjections(t *testing.T) {
 	}
 	for _, want := range []string{
 		"publish_output_office_status",
-		`"status_line"`,
+		`"signal"`,
 		`"audience": "published"`,
 		`"audience": "internal"`,
 	} {
@@ -314,12 +314,12 @@ func TestPublishToolRejectsNonStringProjection(t *testing.T) {
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 
 	_, err = publish.Handler(context.Background(), map[string]any{
-		"status_line": 42,
-		"teaser":      "Fine.",
-		"full":        "Fine.",
+		"signal": 42,
+		"teaser": "Fine.",
+		"full":   "Fine.",
 	})
-	if err == nil || !strings.Contains(err.Error(), "status_line must be a string") {
-		t.Fatalf("error = %v, want a typed argument error naming status_line", err)
+	if err == nil || !strings.Contains(err.Error(), "signal must be a string") {
+		t.Fatalf("error = %v, want a typed argument error naming signal", err)
 	}
 }
 

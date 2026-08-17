@@ -579,7 +579,7 @@ func parseOutputFacets(raw any) ([]looppkg.FacetSpec, error) {
 		for i, item := range v {
 			name, ok := item.(string)
 			if !ok {
-				return nil, fmt.Errorf("output.facets[%d] is %T; facet names are strings — status_line, teaser, or digest", i, item)
+				return nil, fmt.Errorf("output.facets[%d] is %T; facet names are strings — signal, teaser, or digest", i, item)
 			}
 			names = append(names, name)
 		}
@@ -591,10 +591,10 @@ func parseOutputFacets(raw any) ([]looppkg.FacetSpec, error) {
 	for _, name := range names {
 		facet := looppkg.OutputFacet(strings.TrimSpace(name))
 		switch facet {
-		case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
+		case looppkg.OutputFacetSignal, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
 			out = append(out, looppkg.FacetSpec{Name: facet})
 		default:
-			return nil, fmt.Errorf("output.facets %q is not a projection; use status_line, teaser, or digest", name)
+			return nil, fmt.Errorf("output.facets %q is not a projection; use signal, teaser, or digest", name)
 		}
 	}
 	return out, nil

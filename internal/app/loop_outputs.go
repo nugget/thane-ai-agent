@@ -60,7 +60,7 @@ type facetProjection struct {
 
 // orderedProjections marshals as a JSON object whose keys ride in
 // declared-facet order. A plain map would serialize alphabetically
-// (digest before status_line), making this the one surface out of step
+// (digest before signal), making this the one surface out of step
 // with the ladder order every sibling rendering follows — the facets
 // array here, doc_read levels, and the rendered document headings.
 type orderedProjections []facetProjection

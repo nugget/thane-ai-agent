@@ -31,7 +31,7 @@ func (a *App) readSystemSelfAssessmentDocument(ctx context.Context) (string, tim
 		return "", time.Time{}, nil
 	}
 	// Select the verdict-bearing output: the maintained document that
-	// declares a status_line facet. Falling back to the first maintained
+	// declares a signal facet. Falling back to the first maintained
 	// document keeps the resolver working against a pre-facet spec,
 	// where the provider stays quiet on content anyway.
 	ref := ""
@@ -43,7 +43,7 @@ func (a *App) readSystemSelfAssessmentDocument(ctx context.Context) (string, tim
 			ref = output.Ref
 		}
 		for _, facet := range output.Facets {
-			if facet.Name == looppkg.OutputFacetStatusLine {
+			if facet.Name == looppkg.OutputFacetSignal {
 				ref = output.Ref
 			}
 		}

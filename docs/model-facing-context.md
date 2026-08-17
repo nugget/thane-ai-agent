@@ -310,6 +310,45 @@ instruction-document counterpart of the "cafeteria bullets" warning in
 Use brief framing when it removes ambiguity. Once the shape is clear,
 prefer compactness.
 
+## Context Advertisements
+
+Generated context is an attention market. A subsystem should offer what it
+has that matches the current request, then let one final discriminator rank,
+filter, and limit the combined set. It should not eagerly inject a payload or
+declare its own global importance.
+
+A context advertisement carries:
+
+- stable source identity and an optional document ref
+- the typed prompt bucket where selected content belongs
+- request-relative match evidence such as exact subject, alias, semantic,
+  lexical, or ambient relevance
+- the projections available for materialization, including their role,
+  format, and conservative byte estimate
+
+Projection roles describe what a consumer gets:
+
+- `signal` is the compact outward-facing reason to spend attention. A
+  document's `signal` facet is the canonical form; a roomier `teaser` can
+  serve the same role when a consumer can afford it. Whether either is
+  ambient or request-matched belongs to the advertisement's evidence, not
+  its prose.
+- `context` carries enough substance to use directly. A document `digest` is
+  the canonical form.
+- `detail` is the complete source. It is reached through an explicit read or
+  escalation, never selected automatically.
+
+Go owns evidence ordering, deduplication, projection choice, stable ties, and
+count and byte limits. Providers own domain matching and materialization. A
+model-authored facet can describe why it is useful, but it cannot grant itself
+injection or assign its own rank.
+
+Advertising should be cheaper than materializing. Do not read a full document
+or render an expensive view merely to discover that the discriminator will
+drop it. Estimates are admission hints, not permission to overflow: the
+materialized value must still fit whole and should be dropped rather than
+silently clipped when it does not.
+
 ## Anti-Patterns
 
 - Human-optimized terse names that make the model infer purpose
@@ -322,6 +361,8 @@ prefer compactness.
   clues
 - Presenting the same fact in multiple conflicting shapes
 - Silent truncation or unstable ordering
+- Providers that inject eagerly when they can advertise a bounded projection
+- Model-authored relevance scores treated as shared ranking authority
 - A "Guidelines" dumping ground where a hazard, a toolkit fact, and a
   style note share equal weight, far from the steps they govern
 

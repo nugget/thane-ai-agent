@@ -112,7 +112,7 @@ func TestCloneLoopOutputsDeepCopiesFacets(t *testing.T) {
 		Name:   "ranch status",
 		Type:   looppkg.OutputTypeMaintainedDocument,
 		Ref:    "kb:ranch.md",
-		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}, {Name: looppkg.OutputFacetTeaser}},
+		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetSignal}, {Name: looppkg.OutputFacetTeaser}},
 	}}
 	dst := cloneLoopOutputs(src)
 	dst[0].Facets[1] = looppkg.FacetSpec{Name: looppkg.OutputFacetDigest}
@@ -180,12 +180,12 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 		Ref:     "core:metacognitive.md",
 		Purpose: "Current metacognitive state.",
 		Facets: []looppkg.FacetSpec{
-			{Name: looppkg.OutputFacetStatusLine},
+			{Name: looppkg.OutputFacetSignal},
 			{Name: looppkg.OutputFacetDigest},
 		},
 	}
 
-	raw := "## Status Line\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns.\n\n## Details\n\nthe working memory body\n"
+	raw := "## Signal\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns.\n\n## Details\n\nthe working memory body\n"
 	if err := os.WriteFile(filepath.Join(coreDir, "metacognitive.md"), []byte(raw), 0o644); err != nil {
 		t.Fatalf("write metacognitive.md: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 	if !strings.Contains(ctx, "the working memory body") {
 		t.Fatalf("content missing the Details body:\n%s", ctx)
 	}
-	if strings.Contains(ctx, `## Status Line`) {
+	if strings.Contains(ctx, `## Signal`) {
 		t.Fatalf("content should not carry the rendered section structure:\n%s", ctx)
 	}
 	// full is unbudgeted and lives only in content; a "full" key under
@@ -232,17 +232,17 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 	if len(parsed.Outputs) != 1 {
 		t.Fatalf("outputs len = %d, want 1", len(parsed.Outputs))
 	}
-	if got, want := parsed.Outputs[0].Facets, []string{"status_line", "digest"}; !slices.Equal(got, want) {
+	if got, want := parsed.Outputs[0].Facets, []string{"signal", "digest"}; !slices.Equal(got, want) {
 		t.Fatalf("facets = %v, want %v (declared facets only)", got, want)
 	}
 	// Projections ride in declared-facet (ladder) order, not the
 	// alphabetical order a Go map would marshal in — every other surface
-	// renders status_line before digest, and this one reads the same.
+	// renders signal before digest, and this one reads the same.
 	projSection := ctx[strings.Index(ctx, `"projections"`):]
-	statusIdx := strings.Index(projSection, `"status_line":`)
+	signalIdx := strings.Index(projSection, `"signal":`)
 	digestIdx := strings.Index(projSection, `"digest":`)
-	if statusIdx == -1 || digestIdx == -1 || statusIdx > digestIdx {
-		t.Fatalf("projections not in declared ladder order (status_line before digest):\n%s", ctx)
+	if signalIdx == -1 || digestIdx == -1 || signalIdx > digestIdx {
+		t.Fatalf("projections not in declared ladder order (signal before digest):\n%s", ctx)
 	}
 
 	// A pre-facet body under a faceted spec — declared facets, first
@@ -478,7 +478,7 @@ func TestWrapOwnOutputDocRead(t *testing.T) {
 	}
 
 	// Own ref with level: native path (a projection never nears the cap).
-	if _, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:office.md", "level": "status_line"}); err != nil {
+	if _, err := wrapped[0].Handler(context.Background(), map[string]any{"ref": "core:office.md", "level": "signal"}); err != nil {
 		t.Fatalf("level read: %v", err)
 	}
 	if nativeCalls != 2 {

@@ -232,6 +232,19 @@ type TagContextProvider interface {
 	TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error)
 }
 
+// ContextAdvertiser offers cheap, structured candidates to prompt assembly
+// and materializes only the projection selected by the final discriminator.
+// During migration, advertisers also implement [TagContextProvider] so they
+// can use the existing tagged and gated registration paths; the assembler
+// prefers this contract when both are present.
+type ContextAdvertiser interface {
+	// ContextAdvertisements returns request-relative offers without reading or
+	// rendering their full payloads.
+	ContextAdvertisements(ctx context.Context, req agentctx.ContextRequest) ([]agentctx.ContextAdvertisement, error)
+	// MaterializeContextAdvertisement renders exactly the chosen projection.
+	MaterializeContextAdvertisement(ctx context.Context, req agentctx.ContextRequest, selection agentctx.ContextSelection) (string, error)
+}
+
 // SessionArchiver handles session lifecycle and message archiving.
 type SessionArchiver interface {
 	// ArchiveConversation archives all messages from a conversation before clearing.

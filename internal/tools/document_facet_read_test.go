@@ -21,14 +21,14 @@ func facetedBody(t *testing.T) string {
 		Type: looppkg.OutputTypeMaintainedDocument,
 		Ref:  "core:office.md",
 		Facets: []looppkg.FacetSpec{
-			{Name: looppkg.OutputFacetStatusLine},
+			{Name: looppkg.OutputFacetSignal},
 			{Name: looppkg.OutputFacetDigest},
 		},
 	}
 	payload := looppkg.FacetPayload{
-		StatusLine: "Printer online; 2 packages waiting.",
-		Digest:     "Two deliveries arrived this morning and both need signing.",
-		Full:       "# Office\n\n## Deliveries\n\nTwo packages.",
+		Signal: "Printer online; 2 packages waiting.",
+		Digest: "Two deliveries arrived this morning and both need signing.",
+		Full:   "# Office\n\n## Deliveries\n\nTwo packages.",
 	}
 	if err := out.ValidateFacetPayload(payload); err != nil {
 		t.Fatalf("fixture payload is not publishable: %v", err)
@@ -44,8 +44,8 @@ func TestParseFacetSectionsReadsWithoutASpec(t *testing.T) {
 	if !faceted {
 		t.Fatal("faceted body reported as unfaceted")
 	}
-	if got, ok := payload.FacetByKey("status_line"); !ok || got != "Printer online; 2 packages waiting." {
-		t.Errorf("status_line = %q (present=%v)", got, ok)
+	if got, ok := payload.FacetByKey("signal"); !ok || got != "Printer online; 2 packages waiting." {
+		t.Errorf("signal = %q (present=%v)", got, ok)
 	}
 	if got, ok := payload.FacetByKey("digest"); !ok || !strings.Contains(got, "need signing") {
 		t.Errorf("digest = %q (present=%v)", got, ok)
@@ -72,18 +72,18 @@ func TestParseFacetSectionsAdoptsAnOrdinaryDocument(t *testing.T) {
 
 // TestFacetLevelReadIsIndependentOfSectionStructure is the contract the
 // umbrella locked: agent tooling exposes the facet names, never the
-// headings Go renders them under. A caller asking for "status_line" must
+// headings Go renders them under. A caller asking for "signal" must
 // never have to know — or be able to depend on — that the answer lives
-// under "## Status Line".
+// under "## Signal".
 func TestFacetLevelReadIsIndependentOfSectionStructure(t *testing.T) {
 	body := facetedBody(t)
-	if !strings.Contains(body, "## Status Line") {
+	if !strings.Contains(body, "## Signal") {
 		t.Fatal("fixture does not render the section heading this test is about")
 	}
 	payload, _ := looppkg.ParseFacetSections(body)
-	value, ok := payload.FacetByKey("status_line")
+	value, ok := payload.FacetByKey("signal")
 	if !ok {
-		t.Fatal("status_line not readable by its contract name")
+		t.Fatal("signal not readable by its contract name")
 	}
 	if strings.Contains(value, "##") {
 		t.Errorf("the projection carries its own heading: %q", value)
@@ -91,7 +91,7 @@ func TestFacetLevelReadIsIndependentOfSectionStructure(t *testing.T) {
 }
 
 func TestFacetKeysAreTheCanonicalLadder(t *testing.T) {
-	want := []string{"status_line", "teaser", "digest", "full"}
+	want := []string{"signal", "teaser", "digest", "full"}
 	got := looppkg.FacetKeys()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("FacetKeys() = %v, want %v", got, want)
@@ -101,7 +101,7 @@ func TestFacetKeysAreTheCanonicalLadder(t *testing.T) {
 			t.Errorf("IsFacetKey(%q) = false", key)
 		}
 	}
-	if looppkg.IsFacetKey("Status Line") {
+	if looppkg.IsFacetKey("Signal") {
 		t.Error("IsFacetKey accepts a section heading; levels are contract names, not headings")
 	}
 }
@@ -139,7 +139,7 @@ func TestUnknownLevelNamesTheValidOnes(t *testing.T) {
 	if err == nil {
 		t.Fatal("readDocumentFacet error = nil for an unknown level")
 	}
-	for _, want := range []string{"summary", "status_line", "digest"} {
+	for _, want := range []string{"summary", "signal", "digest"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to mention %q", err, want)
 		}
@@ -207,20 +207,20 @@ func seedDocumentTools(t *testing.T, store *documents.Store, body string) *docum
 func TestDocReadAtALevelReturnsOnlyThatProjection(t *testing.T) {
 	dt := newFacetTestDocumentTools(t)
 
-	raw, err := readDocumentFacet(t.Context(), dt, "core:office.md", "status_line")
+	raw, err := readDocumentFacet(t.Context(), dt, "core:office.md", "signal")
 	if err != nil {
 		t.Fatalf("readDocumentFacet: %v", err)
 	}
 	result := decodeFacetRead(t, raw)
 	if result["content"] != "Printer online; 2 packages waiting." {
-		t.Errorf("content = %v, want the status line alone", result["content"])
+		t.Errorf("content = %v, want the signal alone", result["content"])
 	}
 	if result["faceted"] != true {
 		t.Errorf("faceted = %v, want true", result["faceted"])
 	}
 	// The point of reading at a level is not paying for the rest.
 	if strings.Contains(raw, "Two packages") {
-		t.Errorf("a status_line read carried the document body:\n%s", raw)
+		t.Errorf("a signal read carried the document body:\n%s", raw)
 	}
 
 	// Available levels are advertised so the next call is a choice
@@ -230,7 +230,7 @@ func TestDocReadAtALevelReturnsOnlyThatProjection(t *testing.T) {
 	for _, level := range levels {
 		got = append(got, level.(string))
 	}
-	if strings.Join(got, ",") != "status_line,digest,full" {
+	if strings.Join(got, ",") != "signal,digest,full" {
 		t.Errorf("levels_available = %v, want the declared ones in ladder order", got)
 	}
 }
@@ -248,7 +248,7 @@ func TestDocReadAtAnUndeclaredLevelSaysWhatIsThere(t *testing.T) {
 		t.Errorf("content = %v, want empty", result["content"])
 	}
 	note, _ := result["note"].(string)
-	for _, want := range []string{"status_line", "digest"} {
+	for _, want := range []string{"signal", "digest"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note = %q, want it to name the %q level as available", note, want)
 		}
@@ -263,12 +263,12 @@ func TestDocReadAtAnUndeclaredLevelSaysWhatIsThere(t *testing.T) {
 func TestOversizeFullReadPointsAtACheaperLevel(t *testing.T) {
 	out := looppkg.OutputSpec{
 		Name: "office status", Type: looppkg.OutputTypeMaintainedDocument, Ref: "core:office.md",
-		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}, {Name: looppkg.OutputFacetDigest}},
+		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetSignal}, {Name: looppkg.OutputFacetDigest}},
 	}
 	body := out.RenderFacetDocument(looppkg.FacetPayload{
-		StatusLine: "Printer online; 2 packages waiting.",
-		Digest:     "Two deliveries arrived and both need signing.",
-		Full:       "# Office\n\n" + strings.Repeat("Every delivery, in detail. ", 2000),
+		Signal: "Printer online; 2 packages waiting.",
+		Digest: "Two deliveries arrived and both need signing.",
+		Full:   "# Office\n\n" + strings.Repeat("Every delivery, in detail. ", 2000),
 	})
 
 	dt := newSeededDocumentTools(t, body)
@@ -282,7 +282,7 @@ func TestOversizeFullReadPointsAtACheaperLevel(t *testing.T) {
 		t.Fatalf("an oversized full read was not reported as truncated: %v", result)
 	}
 	note, _ := result["note"].(string)
-	for _, want := range []string{"status_line", "digest"} {
+	for _, want := range []string{"signal", "digest"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note = %q, want it to offer the %q level", note, want)
 		}
@@ -301,19 +301,19 @@ func TestOversizeFullReadPointsAtACheaperLevel(t *testing.T) {
 func TestCheaperLevelsStillReadableOnAnOversizeDocument(t *testing.T) {
 	out := looppkg.OutputSpec{
 		Name: "office status", Type: looppkg.OutputTypeMaintainedDocument, Ref: "core:office.md",
-		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}},
+		Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetSignal}},
 	}
 	body := out.RenderFacetDocument(looppkg.FacetPayload{
-		StatusLine: "Printer online; 2 packages waiting.",
-		Full:       strings.Repeat("Detail. ", 4000),
+		Signal: "Printer online; 2 packages waiting.",
+		Full:   strings.Repeat("Detail. ", 4000),
 	})
 
-	raw, err := readDocumentFacet(t.Context(), newSeededDocumentTools(t, body), "core:office.md", "status_line")
+	raw, err := readDocumentFacet(t.Context(), newSeededDocumentTools(t, body), "core:office.md", "signal")
 	if err != nil {
 		t.Fatalf("readDocumentFacet: %v", err)
 	}
 	if got := decodeFacetRead(t, raw)["content"]; got != "Printer online; 2 packages waiting." {
-		t.Errorf("content = %v, want the status line", got)
+		t.Errorf("content = %v, want the signal", got)
 	}
 }
 
@@ -328,7 +328,7 @@ func TestRefIsNormalizedTheSameWithAndWithoutALevel(t *testing.T) {
 	}
 	for _, args := range []map[string]any{
 		{"ref": "   "},
-		{"ref": "   ", "level": "status_line"},
+		{"ref": "   ", "level": "signal"},
 	} {
 		if _, err := tool.Handler(t.Context(), args); err == nil || !strings.Contains(err.Error(), "ref is required") {
 			t.Errorf("Handler(%v) error = %v, want \"ref is required\"", args, err)
@@ -338,7 +338,7 @@ func TestRefIsNormalizedTheSameWithAndWithoutALevel(t *testing.T) {
 	// And a padded real ref resolves on both paths rather than on one.
 	for _, args := range []map[string]any{
 		{"ref": " core:office.md "},
-		{"ref": " core:office.md ", "level": "status_line"},
+		{"ref": " core:office.md ", "level": "signal"},
 	} {
 		if _, err := tool.Handler(t.Context(), args); err != nil {
 			t.Errorf("Handler(%v) error = %v, want the padded ref to resolve", args, err)
