@@ -213,10 +213,9 @@ func (a *App) initAwareness(s *newState) error {
 	// window's annunciator of facts (#1351). Always-on (ambient
 	// interactive awareness) — worker loops don't carry the fleet's
 	// verdict; quiet until the metacognitive document publishes facets.
-	// Registered BEFORE the state window on purpose: both write the
-	// Live State bucket, cap priority is registration order, and the
-	// one-line verdict must survive a busy unbounded window — not the
-	// other way around.
+	// The provider advertises this signal before reading it. The final
+	// discriminator selects it and prepends the materialized projection to
+	// Live State, so a busy eager state window cannot starve the verdict.
 	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
 
 	stateWindowProvider := homeassistant.NewStateWindowProvider(
