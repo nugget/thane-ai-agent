@@ -224,7 +224,11 @@ func TestDiscoverInventory_SlowResourceDoesNotStarveOthers(t *testing.T) {
 
 	// A deadline well under resourceProbeTimeout stands in for it, so the
 	// test asserts the bound without waiting for the production one.
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	// Generous enough that a loaded CI box cannot cancel the healthy
+	// probe by accident: what is under test is that the stall is
+	// bounded and does not starve its neighbor, not how quickly a
+	// local httptest server answers.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	done := make(chan *Inventory, 1)

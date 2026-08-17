@@ -73,6 +73,11 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 	var wg sync.WaitGroup
 	for i, res := range cat.Resources {
 		wg.Add(1)
+		// i and res are per-iteration variables (go.mod declares go
+		// 1.25; this has held since 1.22), so the closure captures a
+		// distinct pair each time and each goroutine writes a distinct
+		// element of results. Concurrent writes to different elements of
+		// one slice do not race — the header is never touched.
 		go func() {
 			defer wg.Done()
 			probeCtx, cancel := context.WithTimeout(ctx, resourceProbeTimeout)
