@@ -1,0 +1,210 @@
+package agent
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+)
+
+type testContextAdvertiser struct {
+	advertisements []agentctx.ContextAdvertisement
+	content        map[string]string
+	legacyCalls    int
+	materialized   []string
+}
+
+func (p *testContextAdvertiser) TagContext(context.Context, agentctx.ContextRequest) (string, error) {
+	p.legacyCalls++
+	return "LEGACY_ADVERTISER_PATH", nil
+}
+
+func (p *testContextAdvertiser) ContextAdvertisements(context.Context, agentctx.ContextRequest) ([]agentctx.ContextAdvertisement, error) {
+	return append([]agentctx.ContextAdvertisement(nil), p.advertisements...), nil
+}
+
+func (p *testContextAdvertiser) MaterializeContextAdvertisement(_ context.Context, _ agentctx.ContextRequest, selection agentctx.ContextSelection) (string, error) {
+	key := selection.Advertisement.Source + "/" + selection.Advertisement.ID + "/" + selection.Projection.Name
+	p.materialized = append(p.materialized, key)
+	return p.content[key], nil
+}
+
+func testAdvertisement(source, id string, match agentctx.ContextMatchKind, strength float64, projections ...agentctx.ContextProjection) agentctx.ContextAdvertisement {
+	return agentctx.ContextAdvertisement{
+		ID:          id,
+		Source:      source,
+		Kind:        "test",
+		Bucket:      agentctx.ContextBucketRelated,
+		Summary:     "test advertisement " + id,
+		Matches:     []agentctx.ContextMatchSignal{{Kind: match, Strength: strength}},
+		Projections: projections,
+	}
+}
+
+func testProjection(name string, role agentctx.ContextProjectionRole, bytes int) agentctx.ContextProjection {
+	return agentctx.ContextProjection{Name: name, Role: role, Format: "text/markdown", EstimatedBytes: bytes}
+}
+
+func TestSelectContextAdvertisementsRanksEvidenceDeterministically(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	ads := []agentctx.ContextAdvertisement{
+		testAdvertisement("memory", "ambient", agentctx.ContextMatchAmbient, 1, testProjection("signal", agentctx.ContextRoleSignal, 100)),
+		testAdvertisement("memory", "semantic", agentctx.ContextMatchSemantic, 1, testProjection("digest", agentctx.ContextRoleContext, 100)),
+		testAdvertisement("memory", "exact", agentctx.ContextMatchExactSubject, 0.1, testProjection("digest", agentctx.ContextRoleContext, 100)),
+	}
+
+	orders := [][]agentctx.ContextAdvertisement{ads, {ads[2], ads[0], ads[1]}}
+	for i, order := range orders {
+		candidates := make([]contextAdvertisementCandidate, 0, len(order))
+		for _, ad := range order {
+			candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
+		}
+		selected := selectContextAdvertisements(candidates)
+		if len(selected) != 3 {
+			t.Fatalf("order %d selected %d advertisements, want 3", i, len(selected))
+		}
+		got := []string{
+			selected[0].selection.Advertisement.ID,
+			selected[1].selection.Advertisement.ID,
+			selected[2].selection.Advertisement.ID,
+		}
+		if strings.Join(got, ",") != "exact,semantic,ambient" {
+			t.Fatalf("order %d selection = %v, want [exact semantic ambient]", i, got)
+		}
+	}
+}
+
+func TestSelectContextAdvertisementsChoosesProjectionForMatchAndBudget(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	tests := []struct {
+		name  string
+		ad    agentctx.ContextAdvertisement
+		want  string
+		empty bool
+	}{
+		{
+			name: "request match gets actionable context",
+			ad: testAdvertisement("docs", "one", agentctx.ContextMatchSemantic, 0.8,
+				testProjection("signal", agentctx.ContextRoleSignal, 100),
+				testProjection("digest", agentctx.ContextRoleContext, 1000),
+				testProjection("full", agentctx.ContextRoleDetail, 2000)),
+			want: "digest",
+		},
+		{
+			name: "ambient match gets smallest signal",
+			ad: testAdvertisement("docs", "one", agentctx.ContextMatchAmbient, 1,
+				testProjection("teaser", agentctx.ContextRoleSignal, 500),
+				testProjection("status_line", agentctx.ContextRoleSignal, 120),
+				testProjection("digest", agentctx.ContextRoleContext, 1000)),
+			want: "status_line",
+		},
+		{
+			name: "request match gets roomiest signal when no digest exists",
+			ad: testAdvertisement("docs", "one", agentctx.ContextMatchLexical, 1,
+				testProjection("status_line", agentctx.ContextRoleSignal, 120),
+				testProjection("teaser", agentctx.ContextRoleSignal, 500)),
+			want: "teaser",
+		},
+		{
+			name: "oversized context falls back to signal",
+			ad: testAdvertisement("docs", "one", agentctx.ContextMatchExactSubject, 1,
+				testProjection("signal", agentctx.ContextRoleSignal, 200),
+				testProjection("digest", agentctx.ContextRoleContext, maxAdvertisedContextBytes+1)),
+			want: "signal",
+		},
+		{
+			name:  "detail is never automatic",
+			ad:    testAdvertisement("docs", "one", agentctx.ContextMatchExactSubject, 1, testProjection("full", agentctx.ContextRoleDetail, 100)),
+			empty: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selected := selectContextAdvertisements([]contextAdvertisementCandidate{{advertiser: provider, advertisement: tt.ad}})
+			if tt.empty {
+				if len(selected) != 0 {
+					t.Fatalf("selected = %#v, want none", selected)
+				}
+				return
+			}
+			if len(selected) != 1 || selected[0].selection.Projection.Name != tt.want {
+				t.Fatalf("selected = %#v, want projection %q", selected, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectContextAdvertisementsDeduplicatesAndLimits(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	duplicate := testAdvertisement("archive", "same", agentctx.ContextMatchExactSubject, 1, testProjection("signal", agentctx.ContextRoleSignal, 100))
+	candidates := []contextAdvertisementCandidate{
+		{advertiser: provider, advertisement: duplicate},
+		{advertiser: provider, advertisement: duplicate},
+	}
+	for i := 0; i < maxSelectedContextAdvertisements+3; i++ {
+		ad := testAdvertisement("archive", "subject-"+string(rune('a'+i)), agentctx.ContextMatchLexical, 0.5, testProjection("signal", agentctx.ContextRoleSignal, 100))
+		candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
+	}
+
+	selected := selectContextAdvertisements(candidates)
+	if len(selected) != maxSelectedContextAdvertisements {
+		t.Fatalf("selected %d advertisements, want cap %d", len(selected), maxSelectedContextAdvertisements)
+	}
+	seenSame := 0
+	for _, item := range selected {
+		if item.selection.Advertisement.ID == "same" {
+			seenSame++
+		}
+	}
+	if seenSame != 1 {
+		t.Fatalf("duplicate selected %d times, want once", seenSame)
+	}
+}
+
+func TestTagContextAssemblerUsesAdvertisementPathAndPrependsSelection(t *testing.T) {
+	provider := &testContextAdvertiser{}
+	provider.advertisements = []agentctx.ContextAdvertisement{
+		testAdvertisement("metacognition", "self", agentctx.ContextMatchAmbient, 1, testProjection("status_line", agentctx.ContextRoleSignal, 256)),
+	}
+	provider.advertisements[0].Bucket = agentctx.ContextBucketLiveState
+	provider.content = map[string]string{"metacognition/self/status_line": "SELECTED_SELF_SIGNAL"}
+
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{})
+	assembler.RegisterAlwaysProvider(&mockTagProvider{
+		content: "LEGACY_LIVE_STATE" + strings.Repeat("L", maxTagContextBytes),
+		bucket:  agentctx.ContextBucketLiveState,
+	})
+	assembler.RegisterAlwaysProvider(provider)
+	sections := assembler.BuildSections(context.Background(), agentctx.ContextRequest{IncludeAlways: true})
+
+	var live string
+	for _, section := range sections {
+		if section.Bucket == agentctx.ContextBucketLiveState {
+			live = section.Content
+			break
+		}
+	}
+	if live == "" {
+		t.Fatal("Live State section missing")
+	}
+	if signal, legacy := strings.Index(live, "SELECTED_SELF_SIGNAL"), strings.Index(live, "LEGACY_LIVE_STATE"); signal < 0 || legacy < 0 || signal > legacy {
+		t.Fatalf("advertised signal should precede eager context:\n%s", live)
+	}
+	if !strings.Contains(live, "Live State truncated: exceeded 64 KB bucket limit") {
+		t.Fatal("selected signal should survive while oversized eager context remains honestly truncated")
+	}
+	if provider.legacyCalls != 0 {
+		t.Fatalf("legacy TagContext called %d times, want 0", provider.legacyCalls)
+	}
+	if len(provider.materialized) != 1 || provider.materialized[0] != "metacognition/self/status_line" {
+		t.Fatalf("materialized = %v, want selected status_line only", provider.materialized)
+	}
+}

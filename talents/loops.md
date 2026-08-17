@@ -47,6 +47,14 @@ wants everything opens the document. Without facets, every consumer pays
 for the whole document or gets a blind truncation of it, so a curator
 whose value is being *consulted often* is the case for declaring them.
 
+`status_line` and `teaser` are two authored shapes of one consumer role:
+the document's outward-facing **signal**. A status line is the tight,
+single-line form for ambient surfaces; a teaser is the roomier form for a
+search result or cross-reference. Whether a signal is offered ambiently or
+because it matched a request is context policy, not something the prose gets
+to decide. `digest` is different: it is the payload selected when the match is
+strong enough to deserve enough context to act.
+
 Declaring facets changes the write interface: instead of
 `replace_output_*` taking a document body, the loop gets
 `publish_output_*` taking one argument per projection. Pass them all in
@@ -83,9 +91,11 @@ your mind — so the loop's private thinking opens with a belief to
 revise instead of a blank page. Author the seed from what you actually
 observed; when you have observed nothing, leave the placeholders.
 
-Declare `status_line` for any faceted output; add `teaser` when the
-output is something others search or link to, and `digest` when a
-reader should be able to act without opening the document.
+Declare only what the readers need. Use `status_line` for ambient current
+state, `teaser` for search and cross-reference signals, and `digest` when a
+reader should be able to act without opening the document. A dossier may
+reasonably declare `teaser` and `digest` without inventing an ambient status;
+a small live-state panel may need only `status_line`.
 
 What makes this concrete on the reading side: `doc_read` takes a `level`,
 so any consumer — another loop, a later turn of this one, you — can pull

@@ -2,10 +2,12 @@ package awareness
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
@@ -20,10 +22,10 @@ import (
 // buried in a document nobody read until a request_core_attention
 // fired (#1351).
 //
-// It is deliberately the seed crystal of the general pattern (every
-// faceted loop's status_line in a parent's context, the process-table
-// panel noted on #1341): one provider, one document, one line, so the
-// generalization has a proven shape when it comes due.
+// It is deliberately the seed crystal of the context-advertisement pattern:
+// one provider offers one faceted document's compact signal, and the shared
+// discriminator decides whether to materialize it. status_line and teaser
+// remain distinct document shapes but share that outward-facing signal role.
 //
 // Quiet by design in every degraded state: no document, no facet
 // sections (the document predates its faceted spec), or an empty
@@ -63,6 +65,50 @@ func NewSystemSelfAssessmentProvider(read func(ctx context.Context) (string, tim
 // reading of the system, not continuity material.
 func (p *SystemSelfAssessmentProvider) TagContextBucket() agentctx.ContextBucket {
 	return agentctx.ContextBucketLiveState
+}
+
+const systemSelfAssessmentAdvertisementID = "system_self_assessment"
+
+// ContextAdvertisements offers the metacognitive verdict as cheap ambient
+// context. Advertising does not read the document; only a selected projection
+// pays that cost.
+func (p *SystemSelfAssessmentProvider) ContextAdvertisements(context.Context, agentctx.ContextRequest) ([]agentctx.ContextAdvertisement, error) {
+	if p == nil || p.read == nil {
+		return nil, nil
+	}
+	field, ok := looppkg.FacetFieldByKey(string(looppkg.OutputFacetStatusLine))
+	if !ok {
+		return nil, fmt.Errorf("status_line facet metadata is unavailable")
+	}
+	return []agentctx.ContextAdvertisement{{
+		ID:      systemSelfAssessmentAdvertisementID,
+		Source:  "metacognition",
+		Kind:    "faceted_document",
+		Bucket:  agentctx.ContextBucketLiveState,
+		Summary: "The system's latest metacognitive verdict.",
+		Matches: []agentctx.ContextMatchSignal{{
+			Kind:     agentctx.ContextMatchAmbient,
+			Strength: 1,
+		}},
+		Projections: []agentctx.ContextProjection{{
+			Name:           field.Key,
+			Role:           field.ContextRole,
+			Format:         "text/markdown",
+			EstimatedBytes: field.MaxRunes*utf8.UTFMax + 256,
+		}},
+	}}, nil
+}
+
+// MaterializeContextAdvertisement renders the selected metacognitive signal
+// through the existing last-good and age-aware read path.
+func (p *SystemSelfAssessmentProvider) MaterializeContextAdvertisement(ctx context.Context, req agentctx.ContextRequest, selection agentctx.ContextSelection) (string, error) {
+	if selection.Advertisement.Source != "metacognition" || selection.Advertisement.ID != systemSelfAssessmentAdvertisementID {
+		return "", fmt.Errorf("unknown metacognitive context advertisement %q/%q", selection.Advertisement.Source, selection.Advertisement.ID)
+	}
+	if selection.Projection.Name != string(looppkg.OutputFacetStatusLine) {
+		return "", fmt.Errorf("unsupported metacognitive context projection %q", selection.Projection.Name)
+	}
+	return p.TagContext(ctx, req)
 }
 
 // TagContext implements the agent context-provider contract. It parses

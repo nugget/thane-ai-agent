@@ -414,7 +414,9 @@ runtime tools:
   `facets`: one typed argument per published projection
   (`status_line`, `teaser`, `digest`) plus the full body, written
   together in a single call. Thane renders the document sections from
-  the payload, so the loop supplies content and never structure.
+  the payload, so the loop supplies content and never structure. Declare
+  only the projections the document's readers need; `status_line` and
+  `teaser` are two shapes of the same outward-facing signal role.
 
 The loop sees a matching context block with the current document content
 or recent journal tail, so the document itself remains the durable source
