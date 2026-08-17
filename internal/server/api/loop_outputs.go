@@ -77,14 +77,14 @@ func parseAcceptClauses(header string) []acceptClause {
 // default markdown body, then JSON, then plain: the narrow speakable
 // line is served only to callers that actually singled it out.
 //
-// statusLineAvailable gates text/plain: when the document has published
-// no status_line the negotiation falls through to the caller's next
+// signalAvailable gates text/plain: when the document has published no
+// signal the negotiation falls through to the caller's next
 // acceptable type instead of 406ing past a servable one. The return is
 // one of the loopOutput* content types, or "" when nothing acceptable
 // is servable. A header naming none of the three (or no header at all)
 // gets markdown — this endpoint serves a document, not a 406 quiz —
 // unless the header explicitly refused it with q=0.
-func negotiateLoopOutputAccept(header string, statusLineAvailable bool) string {
+func negotiateLoopOutputAccept(header string, signalAvailable bool) string {
 	representations := []struct {
 		mediaType string
 		typ, sub  string
@@ -145,7 +145,7 @@ func negotiateLoopOutputAccept(header string, statusLineAvailable bool) string {
 		return candidates[i].preference > candidates[j].preference
 	})
 	for _, c := range candidates {
-		if c.mediaType == loopOutputPlain && !statusLineAvailable {
+		if c.mediaType == loopOutputPlain && !signalAvailable {
 			continue
 		}
 		return c.mediaType
@@ -170,14 +170,14 @@ type loopOutputJSON struct {
 
 // handleLoopOutputGet serves one declared loop output at the fidelity
 // the caller's Accept header asks for — the #1250 read surface at the
-// HTTP boundary. text/plain returns the status_line alone (speakable,
+// HTTP boundary. text/plain returns the signal alone (speakable,
 // no markup); application/json returns the typed contract;
 // text/markdown (and any unrecognized or absent Accept) returns the
 // document body. The header is negotiated for real — q-values,
 // wildcards, listed order; see [negotiateLoopOutputAccept] — so a
 // client listing several types gets the best one it asked for. A
 // plain-only request against a document that has published no
-// status_line is 406 with the available representations named, because
+// signal is 406 with the available representations named, because
 // inventing a one-liner would misrepresent the loop; a client that also
 // accepted another type gets that type instead of the 406.
 func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
@@ -233,10 +233,10 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		declared[string(facet.Name)] = true
 	}
 
-	verdict := ""
-	if faceted && declared[string(looppkg.OutputFacetStatusLine)] {
-		if line, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine)); ok {
-			verdict = strings.TrimSpace(line)
+	signal := ""
+	if faceted && declared[string(looppkg.OutputFacetSignal)] {
+		if line, ok := payload.FacetByKey(string(looppkg.OutputFacetSignal)); ok {
+			signal = strings.TrimSpace(line)
 		}
 	}
 
@@ -244,10 +244,10 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 	// caches must key on it.
 	w.Header().Set("Vary", "Accept")
 	accept := strings.Join(r.Header.Values("Accept"), ",")
-	switch negotiateLoopOutputAccept(accept, verdict != "") {
+	switch negotiateLoopOutputAccept(accept, signal != "") {
 	case loopOutputPlain:
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte(verdict + "\n"))
+		_, _ = w.Write([]byte(signal + "\n"))
 	case loopOutputJSONType:
 		out := loopOutputJSON{
 			Loop:       name,
@@ -276,14 +276,14 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Nothing acceptable is servable. The common shape is a
 		// plain-only request against a document with no published
-		// status_line; the degenerate shape is a header that q=0
+		// signal; the degenerate shape is a header that q=0
 		// refused everything. Either way, name what IS available.
 		available := "application/json, text/markdown"
-		if verdict != "" {
+		if signal != "" {
 			available = "text/plain, application/json, text/markdown"
 			s.errorResponse(w, http.StatusNotAcceptable, "the Accept header refuses every available representation: "+available)
 			return
 		}
-		s.errorResponse(w, http.StatusNotAcceptable, "output "+outputName+" declares or has published no status_line; available representations: "+available)
+		s.errorResponse(w, http.StatusNotAcceptable, "output "+outputName+" declares or has published no signal; available representations: "+available)
 	}
 }

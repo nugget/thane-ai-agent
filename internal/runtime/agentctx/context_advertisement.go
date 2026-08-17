@@ -14,7 +14,7 @@ type ContextProjectionRole string
 
 const (
 	// ContextRoleSignal is a compact outward-facing reason to spend more
-	// attention on an item. A document's status line and teaser are both
+	// attention on an item. A document's signal and teaser are both
 	// signal-shaped: ambient-versus-request relevance belongs to match
 	// evidence, not to two different consumer roles.
 	ContextRoleSignal ContextProjectionRole = "signal"

@@ -329,9 +329,10 @@ A context advertisement carries:
 Projection roles describe what a consumer gets:
 
 - `signal` is the compact outward-facing reason to spend attention. A
-  document's `status_line` and `teaser` are different authored shapes with
-  this same role. Whether the signal is ambient or request-matched belongs to
-  the advertisement's evidence, not its prose.
+  document's `signal` facet is the canonical form; a roomier `teaser` can
+  serve the same role when a consumer can afford it. Whether either is
+  ambient or request-matched belongs to the advertisement's evidence, not
+  its prose.
 - `context` carries enough substance to use directly. A document `digest` is
   the canonical form.
 - `detail` is the complete source. It is reached through an explicit read or

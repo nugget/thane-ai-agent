@@ -46,9 +46,9 @@ const (
 type OutputFacet string
 
 const (
-	// OutputFacetStatusLine is the ambient projection: current state in
-	// one standalone line, no markdown structure.
-	OutputFacetStatusLine OutputFacet = "status_line"
+	// OutputFacetSignal is the compact outward-facing projection: one
+	// standalone line that tells a reader what deserves attention.
+	OutputFacetSignal OutputFacet = "signal"
 	// OutputFacetTeaser is the interest hook: one short paragraph on why
 	// a reader would open the full document right now.
 	OutputFacetTeaser OutputFacet = "teaser"
@@ -108,10 +108,9 @@ type OutputSpec struct {
 	// Purpose is optional model-facing guidance for this output.
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 	// Facets declares which condensed views this output publishes for a
-	// maintained document: any needed subset of status_line, teaser, and
-	// digest alongside the full body. status_line and teaser are different
-	// shapes of one outward-facing signal role; digest is a context payload.
-	// Empty means no facets. The declaration is a set — element order
+	// maintained document: signal plus optional teaser and digest alongside
+	// the full body. Signal is the compact outward-facing projection; digest
+	// is a context payload. Empty means no facets. The declaration is a set — element order
 	// carries no meaning, because presentation order is fixed by the
 	// contract itself; renderers and consumers must not read anything into
 	// declaration order.
@@ -233,8 +232,8 @@ func (o OutputSpec) Validate() error {
 
 // validateOutputFacets checks a declared facet set. Facets are a
 // published-projection contract, so they attach only to published
-// maintained documents. Each document declares only the projections its
-// consumers need; full remains implicit and always present.
+// maintained documents, and signal anchors the projection ladder whenever
+// any facet is declared. Full remains implicit and always present.
 func validateOutputFacets(o OutputSpec) error {
 	if len(o.Facets) == 0 {
 		return nil
@@ -246,11 +245,12 @@ func validateOutputFacets(o OutputSpec) error {
 		return fmt.Errorf("facets declare published projections, but audience is %q; an internal output has no consumers to cut a facet for", OutputAudienceInternal)
 	}
 	seen := make(map[OutputFacet]struct{}, len(o.Facets))
+	hasSignal := false
 	for i, facet := range o.Facets {
 		switch facet.Name {
-		case OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest:
+		case OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest:
 		default:
-			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q (the full body is the document itself, not a declared facet)", i, facet.Name, OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+			return fmt.Errorf("facets[%d]: unsupported facet %q; use %q, %q, or %q (the full body is the document itself, not a declared facet)", i, facet.Name, OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest)
 		}
 		if _, ok := validFacetFormats[facet.EffectiveFormat()]; !ok {
 			return fmt.Errorf("facets[%d]: unsupported format %q for %q; use %q, %q, or %q", i, facet.Format, facet.Name, FacetFormatMarkdown, FacetFormatPlain, FacetFormatJSON)
@@ -259,6 +259,12 @@ func validateOutputFacets(o OutputSpec) error {
 			return fmt.Errorf("facets[%d]: duplicate facet %q", i, facet.Name)
 		}
 		seen[facet.Name] = struct{}{}
+		if facet.Name == OutputFacetSignal {
+			hasSignal = true
+		}
+	}
+	if !hasSignal {
+		return fmt.Errorf("facets must include %q; the compact projection is the one every surface can take (teaser and digest are optional)", OutputFacetSignal)
 	}
 	return nil
 }

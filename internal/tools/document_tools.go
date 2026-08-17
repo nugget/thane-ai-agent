@@ -36,7 +36,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 				"level": map[string]any{
 					"type":        "string",
 					"enum":        looppkg.FacetKeys(),
-					"description": "How much of a faceted document to read. status_line is a tight ambient signal; teaser is a roomier search or cross-reference signal; digest carries enough context to act; full is the whole body. Omit for the standard whole-document payload. Read at the level your decision actually needs — pulling full when a signal or digest would answer the question spends context you will want later.",
+					"description": "How much of a faceted document to read. signal is the compact outward-facing reason to spend attention; teaser is a roomier search or cross-reference hook; digest carries enough context to act; full is the whole body. Omit for the standard whole-document payload. Read at the level your decision actually needs — pulling full when a signal or digest would answer the question spends context you will want later.",
 				},
 			},
 			"required": []string{"ref"},
@@ -183,7 +183,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies. A faceted document’s summary is its authored outward-facing signal: teaser when present, otherwise status_line, rather than a derived excerpt. The hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies. A faceted document’s summary is its authored teaser when present, otherwise its signal, rather than a derived excerpt. The hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -412,9 +412,9 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 //
 // It deliberately reads the contract rather than the document's
 // structure. The facet sections are rendered by Go and parsed back by
-// Go; asking for "status_line" is asking the contract a question, and a
+// Go; asking for "signal" is asking the contract a question, and a
 // caller never needs to know — or be able to depend on — that the answer
-// is a section titled "Status Line".
+// is a section titled "Signal".
 func readDocumentFacet(ctx context.Context, dt *documents.Tools, ref, level string) (string, error) {
 	if !looppkg.IsFacetKey(level) {
 		return "", fmt.Errorf("unknown level %q; valid levels are %s", level, strings.Join(looppkg.FacetKeys(), ", "))

@@ -46,7 +46,7 @@ type DocumentSummary struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary,omitempty"`
 	// Facets lists the projections present in the document body
-	// (status_line, teaser, digest), advertised on search hits so the
+	// (signal, teaser, digest), advertised on search hits so the
 	// next step — doc_read with level — is one deliberate call (#1250).
 	Facets      []string            `json:"facets,omitempty"`
 	Tags        []string            `json:"tags,omitempty"`

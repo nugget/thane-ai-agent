@@ -117,7 +117,7 @@ teaser: "Curate a domain others consult: one document, published at several fide
 A loop that keeps an understanding current for other readers should
 publish it at more than one length. Declaring `facets` on a maintained
 output curates condensed views alongside the full body, so an ambient
-row takes `status_line`, a search snippet takes `teaser`, a digest row
+row takes `signal`, a search snippet takes `teaser`, a digest row
 takes `digest`, and a reader who wants everything opens the document.
 Without facets every consumer pays for the whole document or gets a
 blind truncation of it.
@@ -157,7 +157,7 @@ anything persists.
       "name": "closet_state",
       "type": "maintained_document",
       "ref": "kb:dashboards/server-closet.md",
-      "facets": ["status_line", "teaser", "digest"],
+      "facets": ["signal", "teaser", "digest"],
       "purpose": "Current state of the server closet for anyone who asks."
     },
     {
@@ -188,12 +188,12 @@ Declaring facets swaps the generated tool: instead of
 `replace_output_closet_state` taking a body, the loop gets
 `publish_output_closet_state` taking one argument per projection. Pass
 them all in one call — they are written together so no reader sees a
-status line describing a state the details have moved past. Do not write
+signal describing a state the details have moved past. Do not write
 the section headings; they are rendered for you.
 
 ```json
 {
-  "status_line": "Closet 21.4°C, 38% RH, UPS on mains, dehumidifier idle.",
+  "signal": "Closet 21.4°C, 38% RH, UPS on mains, dehumidifier idle.",
   "teaser": "Server closet is stable. Temperature and humidity have held inside normal range for six hours; the UPS is on mains power with a full charge, and the dehumidifier has not needed to run since morning.",
   "digest": "Environment: 21.4°C (range 20.8–22.1 over 24h), 38% RH, both comfortably inside bounds...",
   "full": "# Server Closet\n\n## Environment\n\n...",
@@ -201,7 +201,7 @@ the section headings; they are rendered for you.
 }
 ```
 
-Each projection has a rune budget — 120 for `status_line`, 500 for
+Each projection has a rune budget — 120 for `signal`, 500 for
 `teaser`, 2048 for `digest` — and an over-budget value is rejected
 rather than trimmed, because a clipped projection reads as a fragment
 with no sign that anything is missing. The budget is a ceiling, not
@@ -209,7 +209,7 @@ a target — compose comfortably under it; you cannot count runes
 precisely enough to graze a ceiling safely.
 
 Think about what each length is *for* rather than truncating the one
-above it. The status line is a glance: what is true right now. The
+above it. The signal is a glance: what deserves attention right now. The
 teaser is what a reader needs to decide whether to open the document.
 The digest is enough to act on without opening it.
 

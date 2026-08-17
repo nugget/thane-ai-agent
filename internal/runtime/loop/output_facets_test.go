@@ -29,23 +29,18 @@ func TestOutputSpecFacetFieldsFollowCanonicalOrder(t *testing.T) {
 	}{
 		{
 			name:   "every facet",
-			output: facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest),
-			want:   []string{"status_line", "teaser", "digest", "full"},
+			output: facetedOutput(OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest),
+			want:   []string{"signal", "teaser", "digest", "full"},
 		},
 		{
-			name:   "status line only still gets full",
-			output: facetedOutput(OutputFacetStatusLine),
-			want:   []string{"status_line", "full"},
-		},
-		{
-			name:   "request-facing facets need no ambient status",
-			output: facetedOutput(OutputFacetTeaser, OutputFacetDigest),
-			want:   []string{"teaser", "digest", "full"},
+			name:   "signal only still gets full",
+			output: facetedOutput(OutputFacetSignal),
+			want:   []string{"signal", "full"},
 		},
 		{
 			name:   "declaration order is ignored",
-			output: facetedOutput(OutputFacetDigest, OutputFacetStatusLine),
-			want:   []string{"status_line", "digest", "full"},
+			output: facetedOutput(OutputFacetDigest, OutputFacetSignal),
+			want:   []string{"signal", "digest", "full"},
 		},
 		{
 			name:   "unfaceted output has no fields",
@@ -72,10 +67,10 @@ func TestFacetContextRolesUnifyOutwardSignals(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]agentctx.ContextProjectionRole{
-		"status_line": agentctx.ContextRoleSignal,
-		"teaser":      agentctx.ContextRoleSignal,
-		"digest":      agentctx.ContextRoleContext,
-		"full":        agentctx.ContextRoleDetail,
+		"signal": agentctx.ContextRoleSignal,
+		"teaser": agentctx.ContextRoleSignal,
+		"digest": agentctx.ContextRoleContext,
+		"full":   agentctx.ContextRoleDetail,
 	}
 	for key, role := range want {
 		field, ok := FacetFieldByKey(key)
@@ -89,12 +84,12 @@ func TestFacetContextRolesUnifyOutwardSignals(t *testing.T) {
 }
 
 func TestValidateFacetPayload(t *testing.T) {
-	full := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+	full := facetedOutput(OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest)
 	good := FacetPayload{
-		StatusLine: "Sensors nominal; gate closed.",
-		Teaser:     "Two troughs trending low since the heat spike.",
-		Digest:     "Water levels are holding except troughs 2 and 5.",
-		Full:       "# Ranch\n\n### Water\n\nDetail.",
+		Signal: "Sensors nominal; gate closed.",
+		Teaser: "Two troughs trending low since the heat spike.",
+		Digest: "Water levels are holding except troughs 2 and 5.",
+		Full:   "# Ranch\n\n### Water\n\nDetail.",
 	}
 
 	tests := []struct {
@@ -107,58 +102,58 @@ func TestValidateFacetPayload(t *testing.T) {
 		{
 			name:    "missing declared facet",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Digest: good.Digest, Full: good.Full},
+			payload: FacetPayload{Signal: good.Signal, Digest: good.Digest, Full: good.Full},
 			wantErr: "teaser is required",
 		},
 		{
 			name:    "missing full",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: good.Teaser, Digest: good.Digest},
+			payload: FacetPayload{Signal: good.Signal, Teaser: good.Teaser, Digest: good.Digest},
 			wantErr: "full is required",
 		},
 		{
 			name:    "undeclared facet is not required",
-			output:  facetedOutput(OutputFacetStatusLine),
-			payload: FacetPayload{StatusLine: good.StatusLine, Full: good.Full},
+			output:  facetedOutput(OutputFacetSignal),
+			payload: FacetPayload{Signal: good.Signal, Full: good.Full},
 		},
 		{
-			name:    "status line rejects newline",
+			name:    "signal rejects newline",
 			output:  full,
-			payload: FacetPayload{StatusLine: "One line\nTwo line", Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
+			payload: FacetPayload{Signal: "One line\nTwo line", Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
 			wantErr: "single line",
 		},
 		{
-			name:    "over budget status line rejected",
+			name:    "over budget signal rejected",
 			output:  full,
-			payload: FacetPayload{StatusLine: strings.Repeat("a", statusLineMaxRunes+1), Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
+			payload: FacetPayload{Signal: strings.Repeat("a", signalMaxRunes+1), Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
 			wantErr: "the limit is 120",
 		},
 		{
 			name:    "budget counts runes not bytes",
 			output:  full,
-			payload: FacetPayload{StatusLine: strings.Repeat("é", statusLineMaxRunes), Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
+			payload: FacetPayload{Signal: strings.Repeat("é", signalMaxRunes), Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
 		},
 		{
 			name:    "over budget teaser rejected",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: strings.Repeat("b", teaserMaxRunes+1), Digest: good.Digest, Full: good.Full},
+			payload: FacetPayload{Signal: good.Signal, Teaser: strings.Repeat("b", teaserMaxRunes+1), Digest: good.Digest, Full: good.Full},
 			wantErr: "the limit is 500",
 		},
 		{
 			name:    "full is unbounded",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: good.Teaser, Digest: good.Digest, Full: strings.Repeat("c", digestMaxRunes*4)},
+			payload: FacetPayload{Signal: good.Signal, Teaser: good.Teaser, Digest: good.Digest, Full: strings.Repeat("c", digestMaxRunes*4)},
 		},
 		{
 			name:    "reserved heading in projection rejected",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: good.Teaser, Digest: "## Details\n\nsneaky", Full: good.Full},
+			payload: FacetPayload{Signal: good.Signal, Teaser: good.Teaser, Digest: "## Details\n\nsneaky", Full: good.Full},
 			wantErr: "reserved section heading",
 		},
 		{
 			name:    "deeper heading inside full is content",
 			output:  full,
-			payload: FacetPayload{StatusLine: good.StatusLine, Teaser: good.Teaser, Digest: good.Digest, Full: "### Teaser\n\nA subsection named like a facet is fine."},
+			payload: FacetPayload{Signal: good.Signal, Teaser: good.Teaser, Digest: good.Digest, Full: "### Teaser\n\nA subsection named like a facet is fine."},
 		},
 	}
 
@@ -189,15 +184,15 @@ func TestValidateFacetPayloadRejectsUnfacetedOutput(t *testing.T) {
 }
 
 func TestRenderFacetDocumentUsesCanonicalSections(t *testing.T) {
-	out := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser)
+	out := facetedOutput(OutputFacetSignal, OutputFacetTeaser)
 	body := out.RenderFacetDocument(FacetPayload{
-		StatusLine: "All clear.",
-		Teaser:     "Nothing needs attention today.",
-		Digest:     "This facet is not declared and must not render.",
-		Full:       "Everything is fine.",
+		Signal: "All clear.",
+		Teaser: "Nothing needs attention today.",
+		Digest: "This facet is not declared and must not render.",
+		Full:   "Everything is fine.",
 	})
 
-	want := "## Status Line\n\nAll clear.\n\n## Teaser\n\nNothing needs attention today.\n\n## Details\n\nEverything is fine."
+	want := "## Signal\n\nAll clear.\n\n## Teaser\n\nNothing needs attention today.\n\n## Details\n\nEverything is fine."
 	if body != want {
 		t.Fatalf("RenderFacetDocument() =\n%q\nwant\n%q", body, want)
 	}
@@ -214,29 +209,29 @@ func TestFacetDocumentRoundTrip(t *testing.T) {
 	}{
 		{
 			name:   "every facet",
-			output: facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest),
+			output: facetedOutput(OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest),
 			payload: FacetPayload{
-				StatusLine: "Sensors nominal; 2 waters below 40%.",
-				Teaser:     "Two troughs trending low since yesterday's heat spike.",
-				Digest:     "Troughs 2 and 5 are below 40%.\n\nRefill likely needed by Friday.",
-				Full:       "# Ranch Office\n\n### Water\n\nTrough detail.\n\n### Power\n\nStable.",
+				Signal: "Sensors nominal; 2 waters below 40%.",
+				Teaser: "Two troughs trending low since yesterday's heat spike.",
+				Digest: "Troughs 2 and 5 are below 40%.\n\nRefill likely needed by Friday.",
+				Full:   "# Ranch Office\n\n### Water\n\nTrough detail.\n\n### Power\n\nStable.",
 			},
 		},
 		{
-			name:   "status line only",
-			output: facetedOutput(OutputFacetStatusLine),
+			name:   "signal only",
+			output: facetedOutput(OutputFacetSignal),
 			payload: FacetPayload{
-				StatusLine: "All clear.",
-				Full:       "Nothing of note.",
+				Signal: "All clear.",
+				Full:   "Nothing of note.",
 			},
 		},
 		{
 			name:   "multibyte content survives",
-			output: facetedOutput(OutputFacetStatusLine, OutputFacetTeaser),
+			output: facetedOutput(OutputFacetSignal, OutputFacetTeaser),
 			payload: FacetPayload{
-				StatusLine: "Café météo: stable — 21°C.",
-				Teaser:     "Les capteurs sont à jour.",
-				Full:       "Détails complets.",
+				Signal: "Café météo: stable — 21°C.",
+				Teaser: "Les capteurs sont à jour.",
+				Full:   "Détails complets.",
 			},
 		},
 	}
@@ -259,20 +254,20 @@ func TestParseFacetDocumentAdoptsUnfacetedBody(t *testing.T) {
 	// contract has no recognized sections; its whole body is the full
 	// projection rather than being lost.
 	body := "# Ranch Office\n\nEverything written before facets existed."
-	got := facetedOutput(OutputFacetStatusLine).ParseFacetDocument(body)
+	got := facetedOutput(OutputFacetSignal).ParseFacetDocument(body)
 	if got.Full != body {
 		t.Fatalf("Full = %q, want the whole legacy body", got.Full)
 	}
-	if got.StatusLine != "" || got.Teaser != "" || got.Digest != "" {
+	if got.Signal != "" || got.Teaser != "" || got.Digest != "" {
 		t.Fatalf("legacy body should not populate projections: %#v", got)
 	}
 }
 
 func TestParseFacetDocumentFoldsPreambleIntoFull(t *testing.T) {
-	body := "Stray lead paragraph.\n\n## Status Line\n\nAll clear.\n\n## Details\n\nBody proper."
-	got := facetedOutput(OutputFacetStatusLine).ParseFacetDocument(body)
-	if got.StatusLine != "All clear." {
-		t.Fatalf("StatusLine = %q", got.StatusLine)
+	body := "Stray lead paragraph.\n\n## Signal\n\nAll clear.\n\n## Details\n\nBody proper."
+	got := facetedOutput(OutputFacetSignal).ParseFacetDocument(body)
+	if got.Signal != "All clear." {
+		t.Fatalf("Signal = %q", got.Signal)
 	}
 	if got.Full != "Stray lead paragraph.\n\nBody proper." {
 		t.Fatalf("Full = %q, want preamble folded ahead of the details body", got.Full)
@@ -281,14 +276,14 @@ func TestParseFacetDocumentFoldsPreambleIntoFull(t *testing.T) {
 
 func TestParseFacetDocumentAcceptsHeadingCaseDrift(t *testing.T) {
 	// An operator hand-editing the document may not match our casing.
-	got := facetedOutput(OutputFacetStatusLine).ParseFacetDocument("## status line\n\nAll clear.\n\n## DETAILS\n\nBody.")
-	if got.StatusLine != "All clear." || got.Full != "Body." {
+	got := facetedOutput(OutputFacetSignal).ParseFacetDocument("## signal\n\nAll clear.\n\n## DETAILS\n\nBody.")
+	if got.Signal != "All clear." || got.Full != "Body." {
 		t.Fatalf("case-insensitive heading match failed: %#v", got)
 	}
 }
 
 func TestFacetedOutputToolNameUsesPublishVerb(t *testing.T) {
-	faceted := facetedOutput(OutputFacetStatusLine)
+	faceted := facetedOutput(OutputFacetSignal)
 	if got := faceted.ToolName(); got != "publish_output_ranch_status" {
 		t.Fatalf("faceted ToolName() = %q, want publish_output_ranch_status", got)
 	}
@@ -347,13 +342,13 @@ func TestRenderFacetScaffold(t *testing.T) {
 	}{
 		{
 			name:         "every facet renders the whole ladder",
-			output:       facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest),
-			wantHeadings: []string{"## Status Line", "## Teaser", "## Digest", "## Details"},
+			output:       facetedOutput(OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest),
+			wantHeadings: []string{"## Signal", "## Teaser", "## Digest", "## Details"},
 		},
 		{
-			name:         "status line only still scaffolds full",
-			output:       facetedOutput(OutputFacetStatusLine),
-			wantHeadings: []string{"## Status Line", "## Details"},
+			name:         "signal only still scaffolds full",
+			output:       facetedOutput(OutputFacetSignal),
+			wantHeadings: []string{"## Signal", "## Details"},
 			wantAbsent:   []string{"## Teaser", "## Digest"},
 		},
 	}
@@ -386,20 +381,20 @@ func TestRenderFacetScaffold(t *testing.T) {
 
 // TestRenderFacetScaffoldRoundTrips confirms the scaffold parses back
 // through the same reader a published document does, with a placeholder
-// in every declared projection — a consumer asking for status_line
+// in every declared projection — a consumer asking for signal
 // before the first cycle gets an honest placeholder, not an empty
 // string or a parse failure.
 func TestRenderFacetScaffoldRoundTrips(t *testing.T) {
-	output := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+	output := facetedOutput(OutputFacetSignal, OutputFacetTeaser, OutputFacetDigest)
 	payload, found := ParseFacetSections(output.RenderFacetScaffold())
 	if !found {
 		t.Fatal("scaffold did not parse as a faceted document")
 	}
 	for key, value := range map[string]string{
-		"status_line": payload.StatusLine,
-		"teaser":      payload.Teaser,
-		"digest":      payload.Digest,
-		"full":        payload.Full,
+		"signal": payload.Signal,
+		"teaser": payload.Teaser,
+		"digest": payload.Digest,
+		"full":   payload.Full,
 	} {
 		if !strings.Contains(value, "awaiting first cycle") {
 			t.Errorf("%s placeholder = %q, want awaiting-first-cycle text", key, value)
@@ -420,15 +415,15 @@ func TestRenderFacetScaffoldJSONFacet(t *testing.T) {
 		Name:   "feed state",
 		Type:   OutputTypeMaintainedDocument,
 		Ref:    "core:feed.md",
-		Facets: []FacetSpec{{Name: OutputFacetStatusLine, Format: FacetFormatJSON}},
+		Facets: []FacetSpec{{Name: OutputFacetSignal, Format: FacetFormatJSON}},
 	}
 	body := output.RenderFacetScaffold()
 	if !strings.Contains(body, "```json") {
 		t.Fatalf("json facet scaffold missing fence:\n%s", body)
 	}
 	payload := output.ParseFacetDocument(body)
-	if !json.Valid([]byte(payload.StatusLine)) {
-		t.Errorf("json facet placeholder is not valid JSON: %q", payload.StatusLine)
+	if !json.Valid([]byte(payload.Signal)) {
+		t.Errorf("json facet placeholder is not valid JSON: %q", payload.Signal)
 	}
 }
 
@@ -456,10 +451,10 @@ func TestValidateOutputBodySize(t *testing.T) {
 // reaches the faceted contract: full is the only unbudgeted field, so
 // it alone can push the document past what the owner reads back whole.
 func TestValidateFacetPayloadRejectsOversizedFull(t *testing.T) {
-	output := facetedOutput(OutputFacetStatusLine)
+	output := facetedOutput(OutputFacetSignal)
 	payload := FacetPayload{
-		StatusLine: "One line.",
-		Full:       strings.Repeat("x", MaxOutputDocumentBytes+1),
+		Signal: "One line.",
+		Full:   strings.Repeat("x", MaxOutputDocumentBytes+1),
 	}
 	err := output.ValidateFacetPayload(payload)
 	if err == nil {
@@ -474,11 +469,11 @@ func TestValidateFacetPayloadRejectsOversizedFull(t *testing.T) {
 // the per-field check alone would miss: full inside the ceiling, but
 // the rendered document — projections plus headings — past it.
 func TestValidateFacetPayloadRejectsOversizedComposite(t *testing.T) {
-	output := facetedOutput(OutputFacetStatusLine, OutputFacetDigest)
+	output := facetedOutput(OutputFacetSignal, OutputFacetDigest)
 	payload := FacetPayload{
-		StatusLine: "One standalone line of current state.",
-		Digest:     strings.Repeat("d", 2000),
-		Full:       strings.Repeat("x", MaxOutputDocumentBytes-100),
+		Signal: "One standalone line of current state.",
+		Digest: strings.Repeat("d", 2000),
+		Full:   strings.Repeat("x", MaxOutputDocumentBytes-100),
 	}
 	err := output.ValidateFacetPayload(payload)
 	if err == nil {

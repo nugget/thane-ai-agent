@@ -189,18 +189,18 @@ func loopOutputSpecSchema() map[string]any {
 				"type": "array",
 				"items": map[string]any{
 					"oneOf": []any{
-						map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+						map[string]any{"type": "string", "enum": []string{"signal", "teaser", "digest"}},
 						map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"name":   map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+								"name":   map[string]any{"type": "string", "enum": []string{"signal", "teaser", "digest"}},
 								"format": map[string]any{"type": "string", "enum": []string{"markdown", "plain", "json"}, "description": "How this facet is encoded. markdown (default) suits a document section; plain has no markup and is safe to speak aloud or show where nothing renders; json is for consumers that are code, and a non-JSON value is rejected."},
 							},
 							"required": []string{"name"},
 						},
 					},
 				},
-				"description": "The facets this output publishes alongside its full body — views of the same understanding cut for different consumers: status_line is ambient current state, teaser advertises why to look, and digest is enough context to act. Declare only the projections this output's consumers need; full is always implicit. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per declared facet plus full. Write a bare name for the default encoding, or an object to set a format. Order carries no meaning.",
+				"description": "The facets this output publishes alongside its full body — views of the same understanding cut for different consumers: signal is the compact outward-facing reason to spend attention, teaser gives a roomier reason to look, and digest is enough context to act. signal is required whenever facets are declared; teaser and digest are optional, and full is always implicit. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per declared facet plus full. Write a bare name for the default encoding, or an object to set a format. Order carries no meaning.",
 			},
 			"audience": map[string]any{
 				"type":        "string",

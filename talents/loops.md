@@ -41,25 +41,24 @@ A loop that curates an understanding others consult — the state of a
 domain, a watchlist, a standing summary — should declare `facets` on its
 maintained document. The loop then curates condensed views of its own
 work alongside the full body, and each consuming surface takes the one
-it can afford: an ambient overview row takes `status_line`, a search
+it can afford: an ambient overview row takes `signal`, a search
 snippet takes `teaser`, a digest row takes `digest`, and a reader who
 wants everything opens the document. Without facets, every consumer pays
 for the whole document or gets a blind truncation of it, so a curator
 whose value is being *consulted often* is the case for declaring them.
 
-`status_line` and `teaser` are two authored shapes of one consumer role:
-the document's outward-facing **signal**. A status line is the tight,
-single-line form for ambient surfaces; a teaser is the roomier form for a
-search result or cross-reference. Whether a signal is offered ambiently or
-because it matched a request is context policy, not something the prose gets
-to decide. `digest` is different: it is the payload selected when the match is
-strong enough to deserve enough context to act.
+`signal` is the document's compact outward-facing reason to spend
+attention. `teaser` is the roomier form for a search result or
+cross-reference. Whether either projection is offered ambiently or because
+it matched a request is context policy, not something the prose gets to
+decide. `digest` is the payload selected when the match is strong enough to
+deserve enough context to act.
 
 Declaring facets changes the write interface: instead of
 `replace_output_*` taking a document body, the loop gets
 `publish_output_*` taking one argument per projection. Pass them all in
-one call — they are written together so no reader ever sees a status
-line describing a state the details have moved past. Do not write the
+one call — they are written together so no reader ever sees a signal
+describing a state the details have moved past. Do not write the
 section headings; they are rendered for you. Each projection has a size
 budget, and an over-budget value is rejected rather than trimmed,
 because a clipped teaser reads as a fragment with no sign that anything
@@ -91,15 +90,13 @@ your mind — so the loop's private thinking opens with a belief to
 revise instead of a blank page. Author the seed from what you actually
 observed; when you have observed nothing, leave the placeholders.
 
-Declare only what the readers need. Use `status_line` for ambient current
-state, `teaser` for search and cross-reference signals, and `digest` when a
-reader should be able to act without opening the document. A dossier may
-reasonably declare `teaser` and `digest` without inventing an ambient status;
-a small live-state panel may need only `status_line`.
+Every faceted output declares `signal`; add `teaser` for a roomier search or
+cross-reference hook and `digest` when a reader should be able to act without
+opening the document. A small live-state panel may need only `signal`.
 
 What makes this concrete on the reading side: `doc_read` takes a `level`,
 so any consumer — another loop, a later turn of this one, you — can pull
-`status_line` for a glance instead of the whole document. That is the
+`signal` for a glance instead of the whole document. That is the
 payoff for curating them. A projection nobody can ask for separately is
 just a longer document; a projection that answers a question at one line
 is why the loop wrote it.

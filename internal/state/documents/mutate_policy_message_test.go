@@ -6,10 +6,10 @@ import (
 )
 
 // TestDocumentWriteMessageBorrowsFacets pins the commit-message
-// contract: a faceted document's status_line joins the subject and its
+// contract: a faceted document's signal joins the subject and its
 // digest becomes the body, so the root's git log reads as a timeline
 // of the document's own verdicts; an unfaceted document keeps the
-// plain mechanical subject; and a runaway status_line (possible only
+// plain mechanical subject; and a runaway signal (possible only
 // through non-publish writes) is clamped rather than allowed to
 // swallow the subject line.
 func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
@@ -22,8 +22,8 @@ func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
 		}
 	})
 
-	t.Run("status_line joins the subject, digest becomes the body", func(t *testing.T) {
-		raw := "---\ntitle: X\n---\n## Status Line\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns; archivist backlog nominal.\n\n## Details\n\nworking memory\n"
+	t.Run("signal joins the subject, digest becomes the body", func(t *testing.T) {
+		raw := "---\ntitle: X\n---\n## Signal\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns; archivist backlog nominal.\n\n## Details\n\nworking memory\n"
 		msg := documentWriteMessage("doc_write", "self", "metacognitive.md", raw)
 		lines := strings.SplitN(msg, "\n", 3)
 		if lines[0] != "doc_write self:metacognitive.md — panel clean, baselines steady" {
@@ -34,9 +34,9 @@ func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
 		}
 	})
 
-	t.Run("multi-line status_line flattens, oversize clamps", func(t *testing.T) {
+	t.Run("multi-line signal flattens, oversize clamps", func(t *testing.T) {
 		long := strings.Repeat("verdict ", 40) // ~320 runes
-		raw := "## Status Line\n\n" + long + "\n\n## Details\n\nbody\n"
+		raw := "## Signal\n\n" + long + "\n\n## Details\n\nbody\n"
 		msg := documentWriteMessage("doc_write", "kb", "x.md", raw)
 		subject := strings.SplitN(msg, "\n", 2)[0]
 		if got := len([]rune(subject)); got > len([]rune("doc_write kb:x.md — "))+facetSubjectMaxRunes {
@@ -47,8 +47,8 @@ func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
 		}
 	})
 
-	t.Run("empty status_line stays mechanical, digest still becomes the body", func(t *testing.T) {
-		raw := "## Status Line\n\n\n## Digest\n\nsummary\n\n## Details\n\nbody\n"
+	t.Run("empty signal stays mechanical, digest still becomes the body", func(t *testing.T) {
+		raw := "## Signal\n\n\n## Digest\n\nsummary\n\n## Details\n\nbody\n"
 		msg := documentWriteMessage("doc_write", "kb", "x.md", raw)
 		if msg != "doc_write kb:x.md\n\nsummary" {
 			t.Fatalf("message = %q, want undecorated subject with digest body", msg)

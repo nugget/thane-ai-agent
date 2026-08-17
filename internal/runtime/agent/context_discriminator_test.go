@@ -99,14 +99,14 @@ func TestSelectContextAdvertisementsChoosesProjectionForMatchAndBudget(t *testin
 			name: "ambient match gets smallest signal",
 			ad: testAdvertisement("docs", "one", agentctx.ContextMatchAmbient, 1,
 				testProjection("teaser", agentctx.ContextRoleSignal, 500),
-				testProjection("status_line", agentctx.ContextRoleSignal, 120),
+				testProjection("signal", agentctx.ContextRoleSignal, 120),
 				testProjection("digest", agentctx.ContextRoleContext, 1000)),
-			want: "status_line",
+			want: "signal",
 		},
 		{
 			name: "request match gets roomiest signal when no digest exists",
 			ad: testAdvertisement("docs", "one", agentctx.ContextMatchLexical, 1,
-				testProjection("status_line", agentctx.ContextRoleSignal, 120),
+				testProjection("signal", agentctx.ContextRoleSignal, 120),
 				testProjection("teaser", agentctx.ContextRoleSignal, 500)),
 			want: "teaser",
 		},
@@ -172,10 +172,10 @@ func TestSelectContextAdvertisementsDeduplicatesAndLimits(t *testing.T) {
 func TestTagContextAssemblerUsesAdvertisementPathAndPrependsSelection(t *testing.T) {
 	provider := &testContextAdvertiser{}
 	provider.advertisements = []agentctx.ContextAdvertisement{
-		testAdvertisement("metacognition", "self", agentctx.ContextMatchAmbient, 1, testProjection("status_line", agentctx.ContextRoleSignal, 256)),
+		testAdvertisement("metacognition", "self", agentctx.ContextMatchAmbient, 1, testProjection("signal", agentctx.ContextRoleSignal, 256)),
 	}
 	provider.advertisements[0].Bucket = agentctx.ContextBucketLiveState
-	provider.content = map[string]string{"metacognition/self/status_line": "SELECTED_SELF_SIGNAL"}
+	provider.content = map[string]string{"metacognition/self/signal": "SELECTED_SELF_SIGNAL"}
 
 	assembler := NewTagContextAssembler(TagContextAssemblerConfig{})
 	assembler.RegisterAlwaysProvider(&mockTagProvider{
@@ -204,7 +204,7 @@ func TestTagContextAssemblerUsesAdvertisementPathAndPrependsSelection(t *testing
 	if provider.legacyCalls != 0 {
 		t.Fatalf("legacy TagContext called %d times, want 0", provider.legacyCalls)
 	}
-	if len(provider.materialized) != 1 || provider.materialized[0] != "metacognition/self/status_line" {
-		t.Fatalf("materialized = %v, want selected status_line only", provider.materialized)
+	if len(provider.materialized) != 1 || provider.materialized[0] != "metacognition/self/signal" {
+		t.Fatalf("materialized = %v, want selected signal only", provider.materialized)
 	}
 }

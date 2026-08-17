@@ -37,9 +37,9 @@ outputs:
       # teaser deliberately omitted: it exists for search snippets,
       # and this document is not discovery content.
       facets:
-        - status_line
+        - signal
         - digest
-      purpose: 'Current metacognitive state, published at three fidelities. The full body is the loop''s own working memory: operational baselines (what normal looks like, per subsystem and loop), active concerns with evidence and severity, incidents observed and escalated, and sleep reasoning that should persist across fresh loop iterations. The digest is the actionable summary a reader can act on without opening the document. The status_line is the verdict — the one sentence in the system that is a judgment about the whole system, injected into interactive context each turn.'
+      purpose: 'Current metacognitive state, published at three fidelities. The full body is the loop''s own working memory: operational baselines (what normal looks like, per subsystem and loop), active concerns with evidence and severity, incidents observed and escalated, and sleep reasoning that should persist across fresh loop iterations. The digest is the actionable summary a reader can act on without opening the document. The signal is the verdict — the one sentence in the system that is a judgment about the whole system, injected into interactive context each turn.'
 tags:
     - metacognitive
     - diagnostics
@@ -194,7 +194,7 @@ content go — purpose-built loops own that now.
    exactly as before: refreshed baselines, concerns opened or closed,
    incidents noted. The `digest` (2048 runes) is the actionable
    summary — open concerns with severity and evidence, anything core
-   should know before it has to ask. The `status_line` (120 runes) is
+   should know before it has to ask. The `signal` (120 runes) is
    the verdict: the one sentence a glance deserves — "panel clean,
    baselines steady" or "two concerns open: archivist backlog above
    baseline, ego churn climbing". A judgment about the whole system,
@@ -265,7 +265,7 @@ frontier model. In addition to the normal assessment, critically evaluate:
   same document with the numbers changed?
 - **Publish health** — Are the publishes landing? An over-budget
   projection is rejected whole, so a loop that keeps overshooting its
-  status_line budget starves every reader of both the verdict and the
+  signal budget starves every reader of both the verdict and the
   memory. If recent iterations show rejected publishes, the correction
   is a shorter verdict, not a retry of the same one.
 

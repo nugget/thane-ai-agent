@@ -14,7 +14,7 @@ import (
 )
 
 // TestHandleLoopOutputGetNegotiatesFidelity pins the #1250 HTTP read
-// surface: text/plain is the status_line alone, application/json is
+// surface: text/plain is the signal alone, application/json is
 // the typed contract, anything else is the document body — and a
 // plain-text request against a verdict-less document is 406 with the
 // alternatives named, never an invented one-liner.
@@ -31,7 +31,7 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 			Type: looppkg.OutputTypeMaintainedDocument,
 			Ref:  "self:metacognitive.md",
 			Facets: []looppkg.FacetSpec{
-				{Name: looppkg.OutputFacetStatusLine},
+				{Name: looppkg.OutputFacetSignal},
 				{Name: looppkg.OutputFacetDigest},
 			},
 		}},
@@ -40,7 +40,7 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 		t.Fatalf("NewDefinitionRegistry: %v", err)
 	}
 
-	body := "## Status Line\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns.\n\n## Details\n\nworking memory\n"
+	body := "## Signal\n\npanel clean, baselines steady\n\n## Digest\n\nNo open concerns.\n\n## Details\n\nworking memory\n"
 	s := &Server{logger: slog.Default()}
 	s.UseLoopDefinitionRegistry(reg)
 	s.UseDocumentReader(func(_ context.Context, ref string) (*documents.DocumentRecord, error) {
@@ -64,7 +64,7 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 
 	plain := get("text/plain")
 	if plain.Code != http.StatusOK || strings.TrimSpace(plain.Body.String()) != "panel clean, baselines steady" {
-		t.Errorf("text/plain = %d %q, want the bare status_line", plain.Code, plain.Body.String())
+		t.Errorf("text/plain = %d %q, want the bare signal", plain.Code, plain.Body.String())
 	}
 	if plain.Header().Get("Vary") != "Accept" {
 		t.Errorf("negotiated response missing Vary: Accept")
@@ -74,17 +74,17 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 	if typed.Code != http.StatusOK {
 		t.Fatalf("application/json status = %d", typed.Code)
 	}
-	for _, want := range []string{`"status_line":"panel clean, baselines steady"`, `"No open concerns."`, `"full":"working memory`} {
+	for _, want := range []string{`"signal":"panel clean, baselines steady"`, `"No open concerns."`, `"full":"working memory`} {
 		if !strings.Contains(typed.Body.String(), want) {
 			t.Errorf("json body missing %s:\n%s", want, typed.Body.String())
 		}
 	}
-	if strings.Contains(typed.Body.String(), "## Status Line") {
+	if strings.Contains(typed.Body.String(), "## Signal") {
 		t.Errorf("json body carries section markup:\n%s", typed.Body.String())
 	}
 
 	markdown := get("")
-	if markdown.Code != http.StatusOK || !strings.Contains(markdown.Body.String(), "## Status Line") {
+	if markdown.Code != http.StatusOK || !strings.Contains(markdown.Body.String(), "## Signal") {
 		t.Errorf("default representation should be the document body: %d %q", markdown.Code, markdown.Body.String())
 	}
 
@@ -92,7 +92,7 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 	// default lists text/plain, but names application/json first, so the
 	// typed contract wins.
 	axios := get("application/json, text/plain, */*")
-	if axios.Code != http.StatusOK || !strings.Contains(axios.Body.String(), `"status_line"`) {
+	if axios.Code != http.StatusOK || !strings.Contains(axios.Body.String(), `"signal"`) {
 		t.Errorf("axios default header should negotiate JSON: %d %q", axios.Code, axios.Body.String())
 	}
 	if ct := axios.Header().Get("Content-Type"); ct != "application/json" {
@@ -119,7 +119,7 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 	s2 := &Server{logger: slog.Default()}
 	s2.UseLoopDefinitionRegistry(regUndeclared)
 	s2.UseDocumentReader(func(context.Context, string) (*documents.DocumentRecord, error) {
-		return &documents.DocumentRecord{Ref: "self:notes.md", Body: "## Status Line\n\nan impostor verdict\n\n## Details\n\nbody\n"}, nil
+		return &documents.DocumentRecord{Ref: "self:notes.md", Body: "## Signal\n\nan impostor verdict\n\n## Details\n\nbody\n"}, nil
 	})
 	reqU := httptest.NewRequest(http.MethodGet, "/v1/loops/plainloop/outputs/notes", nil)
 	reqU.Header.Set("Accept", "text/plain")
@@ -131,17 +131,17 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 		t.Errorf("undeclared contract served text/plain: %d %q", recU.Code, recU.Body.String())
 	}
 
-	// A verdict-less document refuses the plain representation.
+	// A signal-less document refuses the plain representation.
 	body = "# State\n\nno facets yet\n"
 	refused := get("text/plain")
 	if refused.Code != http.StatusNotAcceptable {
-		t.Errorf("plain against verdict-less document = %d, want 406", refused.Code)
+		t.Errorf("plain against signal-less document = %d, want 406", refused.Code)
 	}
 	if !strings.Contains(refused.Body.String(), "application/json") {
 		t.Errorf("406 should name the available representations: %q", refused.Body.String())
 	}
 
-	// ...but a verdict-less document does NOT 406 a client that also
+	// ...but a signal-less document does NOT 406 a client that also
 	// accepted JSON: falling through to a servable representation beats
 	// refusing past one.
 	fallthroughJSON := get("text/plain, application/json;q=0.5")
@@ -152,15 +152,15 @@ func TestHandleLoopOutputGetNegotiatesFidelity(t *testing.T) {
 
 // TestNegotiateLoopOutputAccept pins the negotiation itself: q-values
 // (including q=0 refusals), specificity, listed order, wildcards, and
-// the servability fallthrough when no status_line is published.
+// the servability fallthrough when no signal is published.
 func TestNegotiateLoopOutputAccept(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		header     string
-		statusLine bool
-		want       string
+		name   string
+		header string
+		signal bool
+		want   string
 	}{
 		// The absent/empty/unrecognized header serves the document.
 		{"no header", "", true, loopOutputMarkdown},
@@ -191,21 +191,21 @@ func TestNegotiateLoopOutputAccept(t *testing.T) {
 		{"axios default", "application/json, text/plain, */*", true, loopOutputJSONType},
 		{"plain listed first", "text/plain, application/json", true, loopOutputPlain},
 
-		// No published status_line: plain falls through to the next
+		// No published signal: plain falls through to the next
 		// acceptable type rather than 406ing past a servable one, and
 		// 406s only when nothing else was acceptable.
-		{"axios default without status line", "application/json, text/plain, */*", false, loopOutputJSONType},
+		{"axios default without signal", "application/json, text/plain, */*", false, loopOutputJSONType},
 		{"plain first with json fallback", "text/plain, application/json", false, loopOutputJSONType},
 		{"plain first with wildcard fallback", "text/plain, */*", false, loopOutputMarkdown},
-		{"plain only without status line", "text/plain", false, ""},
-		{"no header without status line", "", false, loopOutputMarkdown},
+		{"plain only without signal", "text/plain", false, ""},
+		{"no header without signal", "", false, loopOutputMarkdown},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := negotiateLoopOutputAccept(tc.header, tc.statusLine); got != tc.want {
-				t.Fatalf("negotiateLoopOutputAccept(%q, %v) = %q, want %q", tc.header, tc.statusLine, got, tc.want)
+			if got := negotiateLoopOutputAccept(tc.header, tc.signal); got != tc.want {
+				t.Fatalf("negotiateLoopOutputAccept(%q, %v) = %q, want %q", tc.header, tc.signal, got, tc.want)
 			}
 		})
 	}

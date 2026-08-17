@@ -108,7 +108,7 @@ func documentMutationMessage(action, root, relPath string) string {
 	return action + " " + makeRef(root, relPath)
 }
 
-// facetSubjectMaxRunes clamps a status_line borrowed into a commit
+// facetSubjectMaxRunes clamps a signal borrowed into a commit
 // subject. Published projections are already budgeted below this, so
 // the clamp only fires on content that arrived through a non-publish
 // write (doc_write can put anything under a reserved heading) — and a
@@ -119,7 +119,7 @@ const facetSubjectMaxRunes = 120
 // documentWriteMessage composes the commit message for a document
 // write. For an unfaceted document it is the same mechanical subject
 // documentMutationMessage produces. When the content carries facet
-// sections, the message borrows them: the status_line joins the
+// sections, the message borrows them: the signal joins the
 // subject — so the root's git log reads as a timeline of the
 // document's own one-line verdicts — and the digest becomes the commit
 // body, the actionable summary at the moment of the write. No writer
@@ -133,8 +133,8 @@ func documentWriteMessage(action, root, relPath, raw string) string {
 	if !ok {
 		return subject
 	}
-	if verdict, ok := payload.FacetByKey("status_line"); ok {
-		if line := strings.TrimSpace(verdict); line != "" {
+	if signal, ok := payload.FacetByKey("signal"); ok {
+		if line := strings.TrimSpace(signal); line != "" {
 			line = strings.Join(strings.Fields(line), " ")
 			if runes := []rune(line); len(runes) > facetSubjectMaxRunes {
 				line = string(runes[:facetSubjectMaxRunes-1]) + "…"

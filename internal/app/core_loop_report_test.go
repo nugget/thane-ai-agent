@@ -30,7 +30,7 @@ const facetedCoreLoop = "# Metacognitive\n\n" +
 	"      type: maintained_document\n" +
 	"      ref: core:metacognitive.md\n" +
 	"      facets:\n" +
-	"        - name: status_line\n" +
+	"        - name: signal\n" +
 	"          format: plain\n" +
 	"        - digest\n" +
 	"    - name: metacognitive_notes\n" +

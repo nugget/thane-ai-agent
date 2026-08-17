@@ -16,9 +16,9 @@ import (
 // rather than clipped, because a clipped projection is an unreadable
 // fragment with nothing to signal that anything was dropped.
 const (
-	statusLineMaxRunes = 120
-	teaserMaxRunes     = 500
-	digestMaxRunes     = 2048
+	signalMaxRunes = 120
+	teaserMaxRunes = 500
+	digestMaxRunes = 2048
 )
 
 // MaxOutputDocumentBytes is the ceiling on a maintained document's
@@ -51,10 +51,10 @@ func ValidateOutputBodySize(body string) error {
 // updated payload would leave one projection describing a state the
 // others have moved past.
 type FacetPayload struct {
-	StatusLine string
-	Teaser     string
-	Digest     string
-	Full       string
+	Signal string
+	Teaser string
+	Digest string
+	Full   string
 }
 
 // FacetField describes one publishable field of a faceted output, as the
@@ -101,17 +101,17 @@ type facetSection struct {
 // spec's facets list carries no meaning.
 var facetSections = []facetSection{
 	{
-		Facet:   OutputFacetStatusLine,
-		Heading: "Status Line",
+		Facet:   OutputFacetSignal,
+		Heading: "Signal",
 		Field: FacetField{
-			Key:         "status_line",
-			MaxRunes:    statusLineMaxRunes,
+			Key:         "signal",
+			MaxRunes:    signalMaxRunes,
 			SingleLine:  true,
-			Guidance:    "The tight signal shape: one standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
+			Guidance:    "The compact outward-facing signal: one standalone line, no line breaks, that tells a reader what deserves attention. This is the only thing some surfaces show, so it must stand alone without the document around it.",
 			ContextRole: agentctx.ContextRoleSignal,
 		},
-		scaffoldHint: "one standalone line of what is true right now",
-		value:        func(p *FacetPayload) *string { return &p.StatusLine },
+		scaffoldHint: "one standalone line that says what deserves attention",
+		value:        func(p *FacetPayload) *string { return &p.Signal },
 	},
 	{
 		Facet:   OutputFacetTeaser,
@@ -153,7 +153,7 @@ var facetSections = []facetSection{
 // ladder order: each declared facet, then the always-present full
 // projection. Every returned field is required at publish time —
 // optionality lives in the declaration (a spec may declare only
-// status_line), not in the write.
+// signal), not in the write.
 func (o OutputSpec) FacetFields() []FacetField {
 	if len(o.Facets) == 0 {
 		return nil

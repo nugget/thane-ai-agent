@@ -62,7 +62,7 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 	}
 
 	// A faceted body carries its own authored snippet: the teaser is
-	// written for exactly this surface, the status_line is the authored
+	// written for exactly this surface, signal is the authored
 	// fallback when no teaser is declared, and only an unfaceted body
 	// falls back to the derived first paragraph. The present facets ride
 	// along so a search hit can advertise which projections doc_read can
@@ -83,8 +83,8 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 		}
 		if teaser, ok := payload.FacetByKey(string(looppkg.OutputFacetTeaser)); ok && strings.TrimSpace(teaser) != "" {
 			summary = strings.TrimSpace(teaser)
-		} else if verdict, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine)); ok && strings.TrimSpace(verdict) != "" {
-			summary = strings.TrimSpace(verdict)
+		} else if signal, ok := payload.FacetByKey(string(looppkg.OutputFacetSignal)); ok && strings.TrimSpace(signal) != "" {
+			summary = strings.TrimSpace(signal)
 		} else {
 			summary = firstParagraph(payload.Full)
 		}

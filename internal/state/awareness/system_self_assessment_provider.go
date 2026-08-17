@@ -15,7 +15,7 @@ import (
 )
 
 // SystemSelfAssessmentProvider injects the metacognitive loop's
-// published status_line — the one sentence in the system that is a
+// published signal — the one sentence in the system that is a
 // judgment about the whole system — into interactive context each turn.
 // system_health is the annunciator of facts; this line is the
 // annunciator of judgments, and until it existed the verdict lived
@@ -24,12 +24,11 @@ import (
 //
 // It is deliberately the seed crystal of the context-advertisement pattern:
 // one provider offers one faceted document's compact signal, and the shared
-// discriminator decides whether to materialize it. status_line and teaser
-// remain distinct document shapes but share that outward-facing signal role.
+// discriminator decides whether to materialize it.
 //
 // Quiet by design in every degraded state: no document, no facet
 // sections (the document predates its faceted spec), or an empty
-// status_line all render nothing rather than a placeholder — an absent
+// signal all render nothing rather than a placeholder — an absent
 // judgment is not a judgment.
 type SystemSelfAssessmentProvider struct {
 	// read returns the assessed document's body and last-write time.
@@ -76,9 +75,9 @@ func (p *SystemSelfAssessmentProvider) ContextAdvertisements(context.Context, ag
 	if p == nil || p.read == nil {
 		return nil, nil
 	}
-	field, ok := looppkg.FacetFieldByKey(string(looppkg.OutputFacetStatusLine))
+	field, ok := looppkg.FacetFieldByKey(string(looppkg.OutputFacetSignal))
 	if !ok {
-		return nil, fmt.Errorf("status_line facet metadata is unavailable")
+		return nil, fmt.Errorf("signal facet metadata is unavailable")
 	}
 	return []agentctx.ContextAdvertisement{{
 		ID:      systemSelfAssessmentAdvertisementID,
@@ -105,14 +104,14 @@ func (p *SystemSelfAssessmentProvider) MaterializeContextAdvertisement(ctx conte
 	if selection.Advertisement.Source != "metacognition" || selection.Advertisement.ID != systemSelfAssessmentAdvertisementID {
 		return "", fmt.Errorf("unknown metacognitive context advertisement %q/%q", selection.Advertisement.Source, selection.Advertisement.ID)
 	}
-	if selection.Projection.Name != string(looppkg.OutputFacetStatusLine) {
+	if selection.Projection.Name != string(looppkg.OutputFacetSignal) {
 		return "", fmt.Errorf("unsupported metacognitive context projection %q", selection.Projection.Name)
 	}
 	return p.TagContext(ctx, req)
 }
 
 // TagContext implements the agent context-provider contract. It parses
-// the status_line facet out of the document body spec-free — the facet
+// the signal facet out of the document body spec-free — the facet
 // headings are the contract, so the provider needs no knowledge of the
 // loop's spec — and renders it with a delta-formatted age so the reader
 // can weigh a fresh verdict differently from a stale one.
@@ -150,7 +149,7 @@ func (p *SystemSelfAssessmentProvider) TagContext(ctx context.Context, _ agentct
 		p.clearCache()
 		return "", nil
 	}
-	verdict, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine))
+	verdict, ok := payload.FacetByKey(string(looppkg.OutputFacetSignal))
 	if !ok || strings.TrimSpace(verdict) == "" {
 		// A successful read with nothing to say is a real quiet state
 		// (pre-facet document, empty verdict) — forget the cache so a

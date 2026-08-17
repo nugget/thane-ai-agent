@@ -209,7 +209,7 @@ func (a *App) initAwareness(s *newState) error {
 	// garage_door, not off→on — injected here because contextfmt imports
 	// the homeassistant package and the provider cannot import it back.
 	// The system's one-line self-assessment: metacog's published
-	// status_line facet, the annunciator of judgments beside the state
+	// signal facet, the annunciator of judgments beside the state
 	// window's annunciator of facts (#1351). Always-on (ambient
 	// interactive awareness) — worker loops don't carry the fleet's
 	// verdict; quiet until the metacognitive document publishes facets.
