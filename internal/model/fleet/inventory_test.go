@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 )
@@ -183,5 +184,71 @@ func TestDiscoverInventory_OpenAICompat(t *testing.T) {
 	}
 	if !byName["gpt-oss:120b"].SupportsStreaming {
 		t.Error("discovered model should inherit streaming support from the provider capabilities")
+	}
+}
+
+// TestDiscoverInventory_SlowResourceDoesNotStarveOthers pins the two
+// properties that make discovery survivable at boot: one unreachable
+// resource is bounded rather than unbounded, and it does not delay the
+// resources behind it. Sequential probing gave a runner that completes
+// its handshake and then goes quiet the power to hold up startup
+// entirely — the failure the stream-idle guard closes during
+// generation, one loop earlier.
+func TestDiscoverInventory_SlowResourceDoesNotStarveOthers(t *testing.T) {
+	t.Parallel()
+
+	// Defer order matters: httptest.Close waits for in-flight handlers,
+	// so the handler must be released before the server is closed. LIFO
+	// means close(release) has to be deferred last.
+	release := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer stalled.Close()
+	defer close(release)
+
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"live-model"}]}`))
+	}))
+	defer healthy.Close()
+
+	cat := &Catalog{Resources: []Resource{
+		{ID: "stalled", Provider: "openai_compat", URL: stalled.URL},
+		{ID: "healthy", Provider: "openai_compat", URL: healthy.URL},
+	}}
+	bundle := &ClientBundle{OpenAICompatClients: map[string]*modelproviders.OpenAICompatClient{
+		"stalled": modelproviders.NewOpenAICompatClient(stalled.URL, "", "openai_compat", "stalled", nil, 0),
+		"healthy": modelproviders.NewOpenAICompatClient(healthy.URL, "", "openai_compat", "healthy", nil, 0),
+	}}
+
+	// A deadline well under resourceProbeTimeout stands in for it, so the
+	// test asserts the bound without waiting for the production one.
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	done := make(chan *Inventory, 1)
+	go func() { done <- DiscoverInventory(ctx, cat, bundle) }()
+
+	var inv *Inventory
+	select {
+	case inv = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("discovery never returned — a stalled resource blocked the pass")
+	}
+
+	if len(inv.Resources) != 2 {
+		t.Fatalf("resources = %d, want both probed", len(inv.Resources))
+	}
+	// Catalog order is preserved regardless of completion order.
+	if inv.Resources[0].ResourceID != "stalled" || inv.Resources[1].ResourceID != "healthy" {
+		t.Errorf("resource order = %q, %q; want catalog order", inv.Resources[0].ResourceID, inv.Resources[1].ResourceID)
+	}
+	if inv.Resources[0].Error == "" {
+		t.Error("stalled resource reported no error")
+	}
+	// The healthy resource is not punished for its neighbor.
+	if len(inv.Resources[1].Models) != 1 || inv.Resources[1].Models[0].Name != "live-model" {
+		t.Errorf("healthy resource models = %#v, want the one it serves", inv.Resources[1].Models)
 	}
 }
