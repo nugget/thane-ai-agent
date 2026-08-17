@@ -65,10 +65,31 @@ func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
 // logger is present (or nil was stored), it returns [slog.Default]
 // as a safe fallback so callers never need nil checks.
 func Logger(ctx context.Context) *slog.Logger {
-	if l, ok := ctx.Value(contextKey{}).(*slog.Logger); ok && l != nil {
+	if l, ok := LoggerFrom(ctx); ok {
 		return l
 	}
 	return slog.Default()
+}
+
+// LoggerFrom returns the logger stored by [WithLogger] and whether one
+// was actually there.
+//
+// [Logger] answers "give me something I can log to", which is what
+// almost every caller wants. This answers "did the caller attach one",
+// which is a different question and the only one a component holding its
+// own configured logger can act on: without the distinction it cannot
+// tell a request carrying trace fields from a bare context, and
+// preferring slog.Default over its own handler silently discards the
+// configuration it was built with.
+func LoggerFrom(ctx context.Context) (*slog.Logger, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	l, ok := ctx.Value(contextKey{}).(*slog.Logger)
+	if !ok || l == nil {
+		return nil, false
+	}
+	return l, true
 }
 
 // requestIDKey carries the agent's request identifier.

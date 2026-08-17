@@ -1,8 +1,10 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -542,5 +544,81 @@ func TestOpenAICompatOmitsClientRequestIDWhenUnset(t *testing.T) {
 	}
 	if present {
 		t.Error("X-Client-Request-Id sent without a request id in context")
+	}
+}
+
+// TestOpenAICompatStreamLatencyMetrics pins the measurement this change
+// exists for. Total duration cannot separate a runner that is slow from
+// one that is busy — they look identical — so the completion line
+// reports first-token separately from generation. It also pins the
+// absence: a tool-call-only stream never produced a first token, and
+// emitting a zero there would read as an instant one.
+func TestOpenAICompatStreamLatencyMetrics(t *testing.T) {
+	t.Parallel()
+
+	contentFrames := []string{
+		`{"choices":[{"delta":{"role":"assistant"}}]}`,
+		`{"choices":[{"delta":{"content":"hello"}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		"[DONE]",
+	}
+	toolFrames := []string{
+		`{"choices":[{"delta":{"role":"assistant"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"ha_get_state","arguments":"{}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		"[DONE]",
+	}
+
+	tests := []struct {
+		name          string
+		frames        []string
+		wantFirstToke bool
+	}{
+		{name: "content stream reports first token", frames: contentFrames, wantFirstToke: true},
+		{name: "tool-only stream has no first token", frames: toolFrames},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				f, _ := w.(http.Flusher)
+				for _, fr := range tt.frames {
+					_, _ = w.Write([]byte("data: " + fr + "\n\n"))
+					if f != nil {
+						f.Flush()
+					}
+				}
+			}))
+			defer srv.Close()
+
+			buf := &bytes.Buffer{}
+			logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			ctx := logging.WithLogger(context.Background(), logger)
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+			if _, err := c.ChatStream(ctx, "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(llm.StreamEvent) {}); err != nil {
+				t.Fatalf("ChatStream: %v", err)
+			}
+
+			out := buf.String()
+			if !strings.Contains(out, `"msg":"stream complete"`) {
+				t.Fatalf("no completion line logged\n%s", out)
+			}
+			// The request-scoped logger must reach provider lines, or
+			// they cannot be grepped alongside the turn that caused them.
+			for _, want := range []string{`"total_ms"`, `"provider":"test"`, `"resource":"res"`, `"model":"m"`} {
+				if !strings.Contains(out, want) {
+					t.Errorf("completion line missing %s\n%s", want, out)
+				}
+			}
+			hasFirst := strings.Contains(out, `"first_token_ms"`)
+			hasGen := strings.Contains(out, `"generation_ms"`)
+			if hasFirst != tt.wantFirstToke || hasGen != tt.wantFirstToke {
+				t.Errorf("first_token_ms=%t generation_ms=%t, want both %t\n%s", hasFirst, hasGen, tt.wantFirstToke, out)
+			}
+		})
 	}
 }

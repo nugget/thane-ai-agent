@@ -169,20 +169,30 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	c.logger.Debug("preparing request",
-		"model", model,
+	// Built before the first line this call writes, so every one of them
+	// carries the same identity — the request and the endpoint together.
+	// A logger created after the early lines leaves them orphaned from
+	// the turn that produced them, which is the gap this change exists
+	// to close.
+	log := c.callLogger(ctx).With("model", model, "stream", stream)
+	started := time.Now()
+
+	log.Debug("preparing request",
 		"messages", len(messages),
 		"tools", len(tools),
-		"stream", stream,
 		"idle_ttl_seconds", c.idleTTLSeconds,
+		"max_tokens", req.MaxTokens,
 	)
-	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
+	log.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
 	// The request context must be cancellable before the request is
 	// built: the idle guard unblocks a stalled read by cancelling this
 	// request, and cancelling any later-derived context would leave the
-	// read exactly where it was.
-	reqCtx, cancelReq := context.WithCancel(ctx)
+	// read exactly where it was. The call logger rides along on it, so
+	// the retry transport — which only ever sees the request — logs with
+	// the same attributes rather than falling back to whatever handler
+	// it was constructed with.
+	reqCtx, cancelReq := context.WithCancel(logging.WithLogger(ctx, log))
 	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(jsonData))
 	if err != nil {
 		cancelReq()
@@ -194,13 +204,9 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	// layer never receives a server-side id, and that is exactly the
 	// failure worth correlating; a header the caller set is the only
 	// handle that exists on both sides of it.
-	clientRequestID := logging.RequestIDFromContext(ctx)
-	if clientRequestID != "" {
+	if clientRequestID := logging.RequestIDFromContext(ctx); clientRequestID != "" {
 		httpReq.Header.Set("X-Client-Request-Id", clientRequestID)
 	}
-
-	log := c.callLogger(ctx).With("model", model, "stream", stream)
-	started := time.Now()
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -256,7 +262,7 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 			"upstream_request_id", result.UpstreamRequestID,
 			"total_ms", time.Since(started).Milliseconds(),
 		)
-		c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
+		log.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 		return result, nil
 	}
 

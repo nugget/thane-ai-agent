@@ -464,7 +464,11 @@ func ReadErrorBody(rc io.ReadCloser, limit int64) string {
 // told about either.
 func (t *retryTransport) requestLogger(req *http.Request) *slog.Logger {
 	if req != nil {
-		if log := logging.Logger(req.Context()); log != nil {
+		// LoggerFrom, not Logger: the latter substitutes slog.Default
+		// when the context carries nothing, which would route every
+		// plain-context request away from the handler and attributes
+		// this transport was configured with.
+		if log, ok := logging.LoggerFrom(req.Context()); ok {
 			return log
 		}
 	}
