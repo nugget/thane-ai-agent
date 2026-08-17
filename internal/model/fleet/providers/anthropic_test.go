@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 func TestConvertToAnthropic(t *testing.T) {
@@ -614,7 +615,7 @@ func TestAnthropicClient_HandleNonStreamingCapturesUpstreamRequestID(t *testing.
 	}`)
 	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	resp, err := c.handleNonStreaming(context.Background(), body, "req_xyz789")
+	resp, err := c.handleNonStreaming(context.Background(), body, "req_xyz789", c.callLogger(context.Background()), time.Now())
 	if err != nil {
 		t.Fatalf("handleNonStreaming: %v", err)
 	}
@@ -636,7 +637,7 @@ func TestAnthropicClient_HandleStreamingCapturesUpstreamRequestID(t *testing.T) 
 	}, "\n")
 
 	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "req_streamed_999")
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "req_streamed_999", c.callLogger(context.Background()), time.Now())
 	if err != nil {
 		t.Fatalf("handleStreaming: %v", err)
 	}
@@ -659,7 +660,7 @@ func TestAnthropicClient_HandleStreamingPropagatesStopReason(t *testing.T) {
 	}, "\n")
 
 	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "", c.callLogger(context.Background()), time.Now())
 	if err != nil {
 		t.Fatalf("handleStreaming: %v", err)
 	}
@@ -685,7 +686,7 @@ func TestAnthropicClient_HandleStreamingPreservesStopReasonAcrossMessageDeltas(t
 	}, "\n")
 
 	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "", c.callLogger(context.Background()), time.Now())
 	if err != nil {
 		t.Fatalf("handleStreaming: %v", err)
 	}
@@ -724,7 +725,7 @@ func TestAnthropicClient_HandleStreamingAggregatesUsageAcrossSSEEvents(t *testin
 	}, "\n")
 
 	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "", c.callLogger(context.Background()), time.Now())
 	if err != nil {
 		t.Fatalf("handleStreaming: %v", err)
 	}
@@ -772,7 +773,7 @@ func TestAnthropicClient_HandleStreamingMessageDeltaWithoutUsage(t *testing.T) {
 	}, "\n")
 
 	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "", c.callLogger(context.Background()), time.Now())
 	if err != nil {
 		t.Fatalf("handleStreaming: %v", err)
 	}
@@ -1005,5 +1006,48 @@ func TestAnthropicMaxTokens(t *testing.T) {
 		if got := anthropicMaxTokens(tc.model); got != tc.want {
 			t.Errorf("anthropicMaxTokens(%q) = %d, want %d", tc.model, got, tc.want)
 		}
+	}
+}
+
+// TestAnthropicUsesRequestScopedLogger pins the property that keeps
+// provider telemetry answerable. The dataset classifier routes
+// subsystem=agent with a request_id into the requests dataset, so a
+// provider logging through its own client logger lands somewhere else.
+// That split was observable in production: the OpenAI-compatible client
+// wrote completion lines to requests while Anthropic wrote them to
+// events, so any query for "how are model calls behaving" silently
+// answered for half the fleet and looked complete either way.
+func TestAnthropicUsesRequestScopedLogger(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	requestLogger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})).
+		With("subsystem", "agent", "request_id", "r_abc123")
+	ctx := logging.WithLogger(context.Background(), requestLogger)
+
+	c := NewAnthropicClient("k", slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	c.callLogger(ctx).Debug("probe")
+
+	out := buf.String()
+	for _, want := range []string{`"request_id":"r_abc123"`, `"subsystem":"agent"`, `"provider":"anthropic"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("call logger output missing %s\n%s", want, out)
+		}
+	}
+}
+
+// TestAnthropicCallLoggerFallsBackToClientLogger pins that a call with
+// no request-scoped logger still reaches the client's configured
+// handler rather than slog.Default — the distinction LoggerFrom exists
+// to express.
+func TestAnthropicCallLoggerFallsBackToClientLogger(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	c := NewAnthropicClient("k", slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	c.callLogger(context.Background()).Debug("probe")
+
+	if !strings.Contains(buf.String(), `"provider":"anthropic"`) {
+		t.Errorf("bare-context call did not reach the client logger\n%s", buf.String())
 	}
 }
