@@ -302,7 +302,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewLMStudioClientWithTTL(srv.URL, "secret-token", nil, 600)
+	client := NewLMStudioClientWithTTL(srv.URL, "secret-token", "res", nil, 600)
 	resp, err := client.Chat(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "check the sun"}}, []map[string]any{
 		{"type": "function", "function": map[string]any{"name": "ha_get_state"}},
 	})

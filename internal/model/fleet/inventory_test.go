@@ -152,7 +152,7 @@ func TestDiscoverInventory_OpenAICompat(t *testing.T) {
 	cat := &Catalog{Resources: []Resource{{ID: "spark", Provider: "openai_compat", URL: srv.URL}}}
 	bundle := &ClientBundle{
 		OpenAICompatClients: map[string]*modelproviders.OpenAICompatClient{
-			"spark": modelproviders.NewOpenAICompatClient(srv.URL, "", "openai_compat", nil, 0),
+			"spark": modelproviders.NewOpenAICompatClient(srv.URL, "", "openai_compat", "res", nil, 0),
 		},
 	}
 

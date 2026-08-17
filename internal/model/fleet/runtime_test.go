@@ -223,7 +223,7 @@ func TestRuntime_SetLogger_RebindsAllProviderClients(t *testing.T) {
 			"deepslate": modelproviders.NewLMStudioClient("http://127.0.0.1:1234", "", bootLogger.With("resource", "deepslate")),
 		},
 		OpenAICompatClients: map[string]*modelproviders.OpenAICompatClient{
-			"spark": modelproviders.NewOpenAICompatClient("http://127.0.0.1:8000", "", "openai_compat", bootLogger.With("resource", "spark"), 0),
+			"spark": modelproviders.NewOpenAICompatClient("http://127.0.0.1:8000", "", "openai_compat", "res", bootLogger.With("resource", "spark"), 0),
 		},
 		AnthropicClient: modelproviders.NewAnthropicClient("k", bootLogger),
 	}

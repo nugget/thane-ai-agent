@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"testing"
 )
@@ -77,5 +78,33 @@ func TestWithLogger_FieldsPropagated(t *testing.T) {
 		if got != want {
 			t.Errorf("key %q = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// TestLoggerFromDistinguishesAbsence pins the difference Logger cannot
+// express. A component holding its own configured logger has to know
+// whether the caller attached one; without that it cannot tell a request
+// carrying trace fields from a bare context, and substituting
+// slog.Default silently discards the handler it was built with.
+func TestLoggerFromDistinguishesAbsence(t *testing.T) {
+	t.Parallel()
+
+	if _, ok := LoggerFrom(context.Background()); ok {
+		t.Error("LoggerFrom reported a logger on a bare context")
+	}
+	if got := Logger(context.Background()); got == nil {
+		t.Error("Logger returned nil instead of a usable default")
+	}
+
+	attached := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	ctx := WithLogger(context.Background(), attached)
+	got, ok := LoggerFrom(ctx)
+	if !ok || got != attached {
+		t.Errorf("LoggerFrom = (%v, %t), want the attached logger", got, ok)
+	}
+
+	// A nil stored logger is an absence, not a logger.
+	if _, ok := LoggerFrom(WithLogger(context.Background(), nil)); ok {
+		t.Error("LoggerFrom reported a nil logger as present")
 	}
 }

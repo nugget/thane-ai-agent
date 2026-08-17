@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // Default timeouts and connection pool limits for the shared transport.
@@ -332,7 +333,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		}
 
-		if t.logger != nil {
+		if log := t.requestLogger(req); log != nil {
 			attrs := []any{
 				"method", req.Method,
 				"url", req.URL.String(),
@@ -342,10 +343,10 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			if statusRetry {
 				attrs = append(attrs, "status", resp.StatusCode)
-				t.logger.Debug("retrying request after transient HTTP status", attrs...)
+				log.Debug("retrying request after transient HTTP status", attrs...)
 			} else {
 				attrs = append(attrs, "error", err)
-				t.logger.Debug("retrying request after transient error", attrs...)
+				log.Debug("retrying request after transient error", attrs...)
 			}
 		}
 
@@ -449,4 +450,27 @@ func ReadErrorBody(rc io.ReadCloser, limit int64) string {
 		return fmt.Sprintf("(failed to read error body: %v)", err)
 	}
 	return string(body)
+}
+
+// requestLogger prefers the request-scoped logger the caller attached to
+// the context, falling back to the logger this transport was built with.
+//
+// Retries are among the log lines most worth correlating and were the
+// hardest to: the transport captured a logger once at construction, so
+// it kept writing to the bootstrap handler after the process swapped to
+// its real one, and its lines carried no request_id because it had never
+// seen the request. Reading the context gets both the current handler
+// and the caller's trace fields, without the transport needing to be
+// told about either.
+func (t *retryTransport) requestLogger(req *http.Request) *slog.Logger {
+	if req != nil {
+		// LoggerFrom, not Logger: the latter substitutes slog.Default
+		// when the context carries nothing, which would route every
+		// plain-context request away from the handler and attributes
+		// this transport was configured with.
+		if log, ok := logging.LoggerFrom(req.Context()); ok {
+			return log
+		}
+	}
+	return t.logger
 }

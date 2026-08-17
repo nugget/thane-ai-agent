@@ -67,7 +67,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			}
 			client = oc
 		case "lmstudio":
-			lc := modelproviders.NewLMStudioClientWithTTL(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID), res.IdleTTLSeconds)
+			lc := modelproviders.NewLMStudioClientWithTTL(res.URL, serverAPIKey(cfg, res.ID), res.ID, logger.With("resource", res.ID), res.IdleTTLSeconds)
 			applyStreamIdleTimeout(lc.OpenAICompatClient, cfg, res.ID)
 			lmstudioClients[res.ID] = lc
 			healthClients[res.ID] = ResourceHealthClient{
@@ -81,7 +81,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			// No idle TTL — that is an LM Studio extension, and sending
 			// it to a server that does not know the field is a needless
 			// compatibility risk.
-			oc := modelproviders.NewOpenAICompatClient(res.URL, serverAPIKey(cfg, res.ID), "openai_compat", logger.With("resource", res.ID), 0)
+			oc := modelproviders.NewOpenAICompatClient(res.URL, serverAPIKey(cfg, res.ID), "openai_compat", res.ID, logger.With("resource", res.ID), 0)
 			applyStreamIdleTimeout(oc, cfg, res.ID)
 			openAICompatClients[res.ID] = oc
 			healthClients[res.ID] = ResourceHealthClient{
