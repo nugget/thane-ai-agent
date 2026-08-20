@@ -2072,6 +2072,21 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Track whether the error handler triggered timeout recovery.
 	var timeoutRecovered bool
+	var modelCalls []logging.ModelCallContent
+	captureModelCalls := l.requestRecorder != nil || l.liveRequestRecorder != nil
+	captureHooks := modelCallCaptureHooks{}
+	if captureModelCalls {
+		captureHooks.recordAttempt = func(model string, messages []llm.Message, tools []map[string]any) {
+			if len(modelCalls) > 0 {
+				modelCalls[len(modelCalls)-1].UseAttempt(model, messages, tools)
+			}
+		}
+		captureHooks.discard = func() {
+			if len(modelCalls) > 0 {
+				modelCalls[len(modelCalls)-1].Discard()
+			}
+		}
+	}
 
 	// Optional per-tool timeout wrapper for request-scoped runs such as
 	// delegates. Cancelled after each tool completes.
@@ -2250,7 +2265,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Iteration lifecycle callbacks.
-		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
+		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, toolDefs []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
 
 			// Rebuild system prompt each iteration so that:
@@ -2269,6 +2284,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 
 			msgSnapshot := append([]llm.Message(nil), msgs...)
+			if captureModelCalls {
+				modelCalls = append(modelCalls, logging.NewModelCallContent(i, currentModel, msgs, toolDefs))
+			}
 			liveStreamMu.Lock()
 			liveStreamModel = currentModel
 			liveStreamIteration = i
@@ -2317,6 +2335,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		OnLLMResponse: func(iterCtx context.Context, llmResp *llm.ChatResponse, i int) {
+			for callIndex := len(modelCalls) - 1; callIndex >= 0; callIndex-- {
+				if modelCalls[callIndex].Iteration == i {
+					modelCalls[callIndex].Complete(llmResp)
+					break
+				}
+			}
 			if stream != nil {
 				stream(llm.StreamEvent{
 					Kind:     llm.KindLLMResponse,
@@ -2338,7 +2362,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Error handling: timeout retry, recovery model, failover.
-		OnLLMError: l.buildLLMErrorHandler(ctx, stream, model, req, &timeoutRecovered),
+		OnLLMError: l.buildLLMErrorHandler(ctx, stream, model, req, &timeoutRecovered, captureHooks),
 
 		// Enrich context before each tool execution.
 		OnBeforeToolExec: func(iterCtx context.Context, i int, tc llm.ToolCall) context.Context {
@@ -2586,7 +2610,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		LoadedCapabilities:       toolcatalog.BuildLoadedCapabilityEntries(l.capSurface, activeTags),
 	}
 
-	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
+	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult, modelCalls)
 
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID, iterResult.UpstreamRequestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
@@ -2596,7 +2620,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
+		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult, modelCalls)
 	}()
 
 	return resp, nil
@@ -2623,7 +2647,24 @@ func (l *Loop) conversationChannelBinding(conversationID string) *memory.Channel
 
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
-func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
+type modelCallCaptureHooks struct {
+	recordAttempt func(model string, messages []llm.Message, tools []map[string]any)
+	discard       func()
+}
+
+func (h modelCallCaptureHooks) attempt(model string, messages []llm.Message, tools []map[string]any) {
+	if h.recordAttempt != nil {
+		h.recordAttempt(model, messages, tools)
+	}
+}
+
+func (h modelCallCaptureHooks) discardSynthetic() {
+	if h.discard != nil {
+		h.discard()
+	}
+}
+
+func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool, capture modelCallCaptureHooks) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
 	explicitModelRequested := strings.TrimSpace(req.Model) != ""
 
 	return func(iterCtx context.Context, err error, model string,
@@ -2655,6 +2696,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					return nil, "", ctx.Err()
 				case <-time.After(backoff):
 				}
+				capture.attempt(model, msgs, toolDefs)
 				resp, retryErr := l.llm.ChatStream(iterCtx, model, msgs, toolDefs, stream)
 				if retryErr == nil {
 					iterLog.Info("LLM retry succeeded", "retry", retry, "model", model)
@@ -2680,6 +2722,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				// generation is bounded like every other call.
 				recoveryBase := llm.WithMaxOutputTokens(context.Background(), llm.MaxOutputTokensFromContext(iterCtx))
 				recoveryCtx, recoveryCancel := context.WithTimeout(recoveryBase, timeoutRecoveryDeadline)
+				capture.attempt(l.recoveryModel, recoveryMessages, nil)
 				resp, recoveryErr := l.llm.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
 				if recoveryErr != nil {
@@ -2688,6 +2731,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 						"recovery_model", l.recoveryModel,
 					)
 					// Return a static recovery response as content.
+					capture.discardSynthetic()
 					return &llm.ChatResponse{
 						Model:   l.recoveryModel,
 						Message: llm.Message{Role: "assistant", Content: prompts.TimeoutRecoveryEmpty},
@@ -2703,6 +2747,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			// No recovery model — return a static fallback response
 			// so the user sees something rather than an error.
 			iterLog.Error("LLM timeout with no recovery model, returning static fallback")
+			capture.discardSynthetic()
 			*timeoutRecovered = true
 			used := toolsUsedFromMessages(msgs)
 			names := make([]string, 0, len(used))
@@ -2735,7 +2780,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		}
 
 		if explicitModelRequested {
-			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, model, err, msgs, toolDefs, stream); handled {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, model, err, msgs, toolDefs, stream, capture); handled {
 				if recoveryErr != nil {
 					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
 					return nil, "", recoveryErr
@@ -2770,6 +2815,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					iterLog.Warn("failover handler failed", "error", ferr)
 				}
 			}
+			capture.attempt(fallbackModel, msgs, toolDefs)
 			resp, failErr := l.llm.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
 			if failErr != nil {
 				iterLog.Error("failover also failed", "error", failErr, "model", fallbackModel)
@@ -2826,7 +2872,7 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 
 // retainContent captures request-level content (system prompt, tool call
 // details, messages) for live inspection and optional persistence.
-func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result, modelCalls []logging.ModelCallContent) {
 	if l.requestRecorder == nil {
 		return
 	}
@@ -2843,10 +2889,11 @@ func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userM
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+		ModelCalls:       modelCalls,
 	})
 }
 
-func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result, modelCalls []logging.ModelCallContent) {
 	if l.liveRequestRecorder == nil || result == nil {
 		return
 	}
@@ -2863,6 +2910,7 @@ func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPro
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+		ModelCalls:       modelCalls,
 	})
 }
 

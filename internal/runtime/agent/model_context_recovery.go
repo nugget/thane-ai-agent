@@ -18,6 +18,7 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	msgs []llm.Message,
 	toolDefs []map[string]any,
 	stream llm.StreamCallback,
+	capture modelCallCaptureHooks,
 ) (*llm.ChatResponse, string, error, bool) {
 	if l == nil || l.modelRuntime == nil || err == nil {
 		return nil, "", nil, false
@@ -119,6 +120,7 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	}
 
 	retryCall := func(tools []map[string]any) (*llm.ChatResponse, error) {
+		capture.attempt(retryModel, msgs, tools)
 		if retryUpstreamModel != "" {
 			if client := l.modelRuntime.LMStudioClient(dep.ResourceID); client != nil {
 				resp, err := client.ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)

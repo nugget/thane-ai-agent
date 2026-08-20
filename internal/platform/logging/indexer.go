@@ -427,6 +427,7 @@ func Migrate(db *sql.DB) error {
 		output_tokens INTEGER,
 		tools_used TEXT,
 		messages_json TEXT,
+		model_calls_json TEXT,
 		exhausted BOOLEAN DEFAULT FALSE,
 		exhaust_reason TEXT,
 		created_at TEXT NOT NULL
@@ -452,6 +453,9 @@ func Migrate(db *sql.DB) error {
 	}
 	if err := database.AddColumn(db, "log_request_content", "messages_json", "TEXT"); err != nil {
 		return fmt.Errorf("migrate content messages: %w", err)
+	}
+	if err := database.AddColumn(db, "log_request_content", "model_calls_json", "TEXT"); err != nil {
+		return fmt.Errorf("migrate retained model calls: %w", err)
 	}
 
 	return nil

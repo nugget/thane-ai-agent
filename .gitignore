@@ -75,6 +75,11 @@ talents/my-*
 
 # Built dev-tool binary (cmd/prewarm-replay)
 /prewarm-replay
+/model-eval
+
+# Production-derived model-evaluation artifacts are private runtime data.
+*.thane-eval.json
+*.thane-eval-report.json
 
 # Runtime state written by a local `thane serve` or `thane init` run in
 # the repo root. These are workspace artifacts, not source: the archive

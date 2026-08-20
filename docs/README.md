@@ -57,6 +57,8 @@ complete onboarding guide for Home Assistant users.
   macOS and Linux
 - **[Release Engineering](operating/release-engineering.md)** — Preferred
   macOS workflows for GitHub releases and pkg-based live-host deploys
+- **[Model Evaluation](operating/model-evaluation.md)** — Capture private
+  production model-call snapshots and replay them against local deployments
 
 ## Reference
 
