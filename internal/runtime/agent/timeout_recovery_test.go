@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // --- isTimeout tests ---
@@ -289,6 +291,10 @@ func TestTimeoutRecovery_DownshiftsToRecoveryModel(t *testing.T) {
 
 	loop := buildTestLoopWithLLM(mock, []string{"recall_fact"})
 	loop.recoveryModel = "recovery-model"
+	var retained logging.RequestContent
+	loop.UseLiveRequestRecorder(func(_ context.Context, content logging.RequestContent) {
+		retained = content
+	})
 
 	resp, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "recall something"}},
@@ -311,6 +317,16 @@ func TestTimeoutRecovery_DownshiftsToRecoveryModel(t *testing.T) {
 	mock.mu.Unlock()
 	if lastCall.Model != "recovery-model" {
 		t.Errorf("last call model = %q, want recovery-model", lastCall.Model)
+	}
+	if len(retained.ModelCalls) != 2 {
+		t.Fatalf("retained model calls = %#v, want initial and recovery calls", retained.ModelCalls)
+	}
+	recoveryCall := retained.ModelCalls[1]
+	if recoveryCall.Model != "recovery-model" || len(recoveryCall.Tools) != 0 {
+		t.Fatalf("retained recovery call = %#v", recoveryCall)
+	}
+	if len(recoveryCall.Messages) != 2 || recoveryCall.Messages[0].Content != prompts.TimeoutRecoverySystem {
+		t.Fatalf("retained recovery messages = %#v", recoveryCall.Messages)
 	}
 }
 
@@ -349,6 +365,12 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 
 	loop := buildTestLoopWithLLM(mock, []string{"recall_fact"})
 	// No recovery model set
+	store := logging.NewLiveRequestStore(4, 64<<10)
+	var retainedRequestID string
+	loop.UseLiveRequestRecorder(func(_ context.Context, content logging.RequestContent) {
+		retainedRequestID = content.RequestID
+		store.WriteRequest(context.Background(), content)
+	})
 
 	resp, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "recall something"}},
@@ -359,6 +381,13 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 
 	if resp.FinishReason != "timeout_recovery" {
 		t.Errorf("FinishReason = %q, want timeout_recovery", resp.FinishReason)
+	}
+	retained, err := store.QueryRequestDetail(retainedRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retained == nil || len(retained.ModelCalls) != 1 {
+		t.Fatalf("static timeout fallback was not excluded from capture: %#v", retained)
 	}
 
 	if !strings.Contains(resp.Content, "tool call") {
@@ -444,7 +473,7 @@ func TestCanceledContext_DoesNotFailOver(t *testing.T) {
 	cancelIter()
 
 	timeoutRecovered := false
-	handler := loop.buildLLMErrorHandler(reqCtx, nil, loop.model, &Request{}, &timeoutRecovered)
+	handler := loop.buildLLMErrorHandler(reqCtx, nil, loop.model, &Request{}, &timeoutRecovered, modelCallCaptureHooks{})
 
 	_, _, err := handler(
 		iterCtx,
