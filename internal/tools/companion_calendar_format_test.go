@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -452,5 +453,82 @@ func TestParseCompanionTimeArgDefaultsAndRejects(t *testing.T) {
 
 	if _, err := parseCompanionTimeArg(map[string]any{"start": "next tuesday"}, "start", home, fallback); err == nil {
 		t.Fatal("expected an unparseable value to be rejected")
+	}
+}
+
+func TestFormatCompanionCalendarResponseReportsTruncation(t *testing.T) {
+	events := []companionCalendarEvent{{
+		Title:    "Standup",
+		Calendar: "Work",
+		Start:    "2026-08-29T09:00:00-05:00",
+		End:      "2026-08-29T09:30:00-05:00",
+	}}
+	now := mustTime(t, "2026-08-29T10:48:00-05:00")
+	const note = "the window held more events than were returned"
+
+	complete := formatCompanionCalendarResponse(
+		companionCalendarResponse{Events: events}, chicago(t), now)
+	if strings.Contains(complete, note) {
+		t.Errorf("a complete result must not claim truncation:\n%s", complete)
+	}
+
+	capped := formatCompanionCalendarResponse(
+		companionCalendarResponse{Events: events, Truncated: true}, chicago(t), now)
+	if !strings.Contains(capped, note) {
+		t.Errorf("a capped result must say so:\n%s", capped)
+	}
+	// The note has to be the last thing read; a reader that stops at the
+	// final event is exactly the reader this is for.
+	if !strings.HasSuffix(strings.TrimSpace(capped), "narrow it, filter by calendar, or raise limit]") {
+		t.Errorf("truncation note should close the output:\n%s", capped)
+	}
+}
+
+func TestCompanionCalendarResponseDecodesTruncated(t *testing.T) {
+	var resp companionCalendarResponse
+	if err := json.Unmarshal([]byte(`{"events":[],"truncated":true}`), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !resp.Truncated {
+		t.Error("truncated should decode as true")
+	}
+
+	// A companion predating the field leaves it absent, which must read as
+	// "not told", never as a positive claim of completeness.
+	var legacy companionCalendarResponse
+	if err := json.Unmarshal([]byte(`{"events":[]}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacy.Truncated {
+		t.Error("an absent field must not decode as truncated")
+	}
+}
+
+func TestFormatCompanionCalendarResponseKeepsTheCappedMarkerWhenBytesAlsoOverflow(t *testing.T) {
+	// A result can be capped by count and oversized in bytes at once — a
+	// hundred capped events with fat notes clears the byte ceiling easily.
+	// The byte cut slices from the tail, which is exactly where the capped
+	// marker lives; it must survive the cut and keep the final word.
+	response := companionCalendarResponse{Truncated: true}
+	for i := 0; i < 100; i++ {
+		response.Events = append(response.Events, companionCalendarEvent{
+			Title:        strings.Repeat("Quarterly planning sync ", 8),
+			Calendar:     "Work",
+			Start:        "2026-04-02T09:00:00-05:00",
+			End:          "2026-04-02T10:00:00-05:00",
+			NotesExcerpt: strings.Repeat("Bring status notes. ", 12),
+		})
+	}
+
+	out := formatCompanionCalendarResponse(response, chicago(t), mustTime(t, "2026-08-29T10:48:00-05:00"))
+
+	if len(out) > maxCompanionCalendarResultBytes {
+		t.Fatalf("output exceeded the byte cap: %d", len(out))
+	}
+	if !strings.Contains(out, "[... output truncated;") {
+		t.Errorf("expected the size note to be present:\n...%s", out[len(out)-300:])
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out), "narrow it, filter by calendar, or raise limit]") {
+		t.Errorf("the capped-events marker must keep the final word:\n...%s", out[len(out)-300:])
 	}
 }
