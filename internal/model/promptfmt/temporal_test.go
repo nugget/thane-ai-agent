@@ -1,6 +1,7 @@
 package promptfmt
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -172,5 +173,18 @@ func TestExpandTemporalTemplates_FastPathDoesNotAllocate(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Errorf("template-free expansion allocated %.1f times per run, want 0", allocs)
+	}
+}
+
+func TestExpandTemporalTemplatesManyOpeningsOneClose(t *testing.T) {
+	// The pathological shape the bounded close-search exists for: many
+	// openings, a single distant close. Output contract is unchanged —
+	// everything renders verbatim except the one well-formed template.
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	input := strings.Repeat("{{delta:x ", 500) + "{{delta:2026-08-30}}"
+	got := ExpandTemporalTemplates(input, now)
+	want := strings.Repeat("{{delta:x ", 500) + "tomorrow"
+	if got != want {
+		t.Fatalf("pathological input mishandled:\n got tail: %q\nwant tail: %q", got[len(got)-40:], want[len(want)-40:])
 	}
 }

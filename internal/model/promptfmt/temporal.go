@@ -82,14 +82,27 @@ func ExpandTemporalTemplates(s string, now time.Time) string {
 // and leniency here would just widen the set of near-misses that
 // silently half-work.
 func expandLeadingTemporal(s string, now time.Time) (string, int, bool) {
-	end := strings.Index(s, temporalClose)
-	if end < 0 {
-		return "", 0, false
-	}
-	value, ok := strings.CutPrefix(s[len(temporalOpen):end], temporalDelta)
+	// The tag check comes before any search, and the search for the
+	// close is bounded at the next opening. Order matters for cost, not
+	// correctness: a malformed document with many openings and one
+	// distant close would otherwise rescan nearly the whole suffix per
+	// opening — quadratic on a per-turn path. A well-formed value never
+	// contains "{{", so the bound rejects exactly the strings the date
+	// parsers were going to reject anyway.
+	rest, ok := strings.CutPrefix(s[len(temporalOpen):], temporalDelta)
 	if !ok {
 		return "", 0, false
 	}
+	searchIn := rest
+	if next := strings.Index(rest, temporalOpen); next >= 0 {
+		searchIn = rest[:next]
+	}
+	closeAt := strings.Index(searchIn, temporalClose)
+	if closeAt < 0 {
+		return "", 0, false
+	}
+	value := rest[:closeAt]
+	end := len(temporalOpen) + len(temporalDelta) + closeAt
 	// A bare date first: RFC3339 rejects it anyway, and the two forms
 	// deliberately render differently — a date occupies a day, so day
 	// words; an instant is a moment, so a signed compact delta. The

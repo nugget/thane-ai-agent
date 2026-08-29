@@ -77,7 +77,8 @@ Relative time is the fastest-rotting thing curated prose can carry:
 "~20 days out" is wrong by morning and stays wrong until a wake
 rewrites it. Write the absolute date wrapped in the delta template
 instead — "Sep 18–30 ({{delta:2026-09-18}})" reads as "Sep 18–30
-(+20d)" on every injection surface and stays true between publishes. A
+(+20d)" where tagged documents are injected, and stays true between
+publishes. A
 bare date renders in day words ("today", "tomorrow", "+20d"); an
 RFC3339 timestamp renders as a compact offset ("+3d16h"). That one
 form is the whole vocabulary, and a malformed template renders

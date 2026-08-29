@@ -1334,3 +1334,45 @@ func TestUnclassifiedDocumentsRefusedAtStartup(t *testing.T) {
 		t.Fatalf("refusal must name the root, got: %v", err)
 	}
 }
+
+func TestTagContextAssemblerSamplesOneClockPerAssembly(t *testing.T) {
+	// Two articles carrying the identical template must render the same
+	// words even when the clock ticks between article renders. A
+	// per-article clock sample would let one prompt say "today" above
+	// and "tomorrow" below for the same date — two documents appearing
+	// to disagree when only the clock moved.
+	kbDir := t.TempDir()
+	body := "---\ntags: [trip]\n---\nDay: {{delta:2026-08-30}}."
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(kbDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  map[string]config.CapabilityTagConfig{"trip": {}},
+		KBDir:    kbDir,
+		Timezone: "UTC",
+	})
+	// Each clock read jumps a whole day, straddling the template's date:
+	// the first sample renders it "tomorrow", a second sample would
+	// render "today". Only a single per-assembly sample keeps the two
+	// articles agreeing.
+	tick := 0
+	a.nowFunc = func() time.Time {
+		tick++
+		return time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC).AddDate(0, 0, tick-1)
+	}
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"trip": true}})
+	var rendered string
+	for _, s := range sections {
+		rendered += s.Content
+	}
+	if !strings.Contains(rendered, "Day: tomorrow.") {
+		t.Fatalf("expected the single-sample rendering, got: %q", rendered)
+	}
+	if strings.Contains(rendered, "Day: today.") {
+		t.Fatalf("identical templates rendered differently within one assembly: %q", rendered)
+	}
+}
