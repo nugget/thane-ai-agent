@@ -58,10 +58,12 @@ var schema = database.Schema{
 		// mtime or size changes, so a pre-upgrade row would otherwise
 		// carry NULLs indefinitely — and NULL facet_bytes_json means the
 		// advertiser cannot cost a single facet, while NULL audience
-		// falls on the excluded side of the SQL privacy gate, silently
-		// hiding published documents. The index is derived data, so the
-		// cure is deletion: purge the stale rows and let the background
-		// refresher rebuild them from disk on its next pass.
+		// passes the SQL privacy gate (COALESCE reads it as ""), so a
+		// pre-upgrade row for an internal document would lean solely on
+		// the in-Go frontmatter backstop until re-parsed. The index is
+		// derived data, so the cure is deletion: purge the stale rows
+		// and let the background refresher rebuild them from disk on its
+		// next pass.
 		//
 		// NULL facet_bytes_json is the marker for "row predates this
 		// upgrade": every post-upgrade upsert writes the column, so the
