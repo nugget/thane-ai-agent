@@ -338,7 +338,10 @@ Projection roles describe what a consumer gets:
   escalation, never selected automatically.
 
 Go owns evidence ordering, deduplication, projection choice, stable ties, and
-count and byte limits. Providers own domain matching and materialization. A
+count and byte limits. When those limits refuse a genuinely selectable offer,
+the refusal is rendered — a closing line counts the withheld offers and names
+the pull door — because a capped rail must never read as a complete one.
+Providers own domain matching and materialization. A
 model-authored facet can describe why it is useful, but it cannot grant itself
 injection or assign its own rank.
 
