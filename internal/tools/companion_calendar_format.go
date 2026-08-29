@@ -12,37 +12,25 @@ import (
 // carries a full RFC3339 timestamp with the offset of the zone the event
 // is scheduled in; an all-day event carries a bare calendar date, which
 // has no time and no zone by definition.
-const (
-	calendarDateLayout = "2006-01-02"
+const calendarDateLayout = "2006-01-02"
 
-	// Weekday-and-date shapes. The year appears only when the event does
-	// not fall in the reader's current year: on a calendar the near term
-	// is the common case, and "2026" on every line of a week's schedule
-	// is noise that pushes the parts that vary off to the right.
-	calendarDayLayout     = "Mon Jan 2"
-	calendarDayYearLayout = "Mon Jan 2 2006"
-
-	// Clock shapes. Seconds never appear — no calendar event means them,
-	// and rendering ":00" on every line invites the model to treat the
-	// precision as real.
-	calendarClockLayout     = "3:04PM MST"
-	calendarClockOnlyLayout = "3:04PM"
-)
-
-// calendarRenderer turns companion calendar events into the lines a model
-// reads. It resolves two frames for every event:
+// calendarRenderer turns companion calendar events into what the model
+// reads: a one-line framing header stating the frame, then one JSON
+// object per event (docs/model-facing-context.md — generated runtime
+// data defaults to JSON; one object per line for homogeneous lists).
+//
+// The value of rendering server-side is derivation, not prose. Every
+// event resolves against two frames:
 //
 //   - home, the household zone from configuration, which is the frame the
 //     agent's own process reasons in and the one "is this soon?" is asked
-//     against;
+//     against — start/end are re-expressed in it, and every event carries
+//     a delta so the model never does timestamp arithmetic;
 //   - the event's own zone, which on this operator's calendar is a
 //     statement of intent — an event recorded in Europe/Berlin means the
 //     operator expects to be in Berlin for it, so that reading is the
-//     wall clock they will actually live.
-//
-// Home is primary and every event is rendered in it. The event's own
-// reading is appended whenever the two disagree about what the clock says,
-// so neither frame has to be inferred.
+//     wall clock they will actually live. It is emitted as
+//     event_local_start/end whenever it disagrees with home's clock.
 type calendarRenderer struct {
 	home *time.Location
 	now  time.Time
@@ -89,6 +77,58 @@ func parseCalendarBoundary(value string) (calendarBoundary, bool) {
 	return calendarBoundary{}, false
 }
 
+// calendarEventJSON is one event as the model reads it. Timed events use
+// start/end (RFC3339 in the household zone, end exclusive); all-day
+// events use first_day/last_day (bare dates, both inclusive) — distinct
+// field names because the two kinds answer inclusivity differently, and
+// a reader should never have to know which convention start/end is in.
+type calendarEventJSON struct {
+	Title    string `json:"title"`
+	Calendar string `json:"calendar,omitempty"`
+	AllDay   bool   `json:"all_day,omitempty"`
+
+	// Day is the weekday the event starts, in the household frame.
+	// Derivable from the date in principle, but models are bad at
+	// calendar arithmetic and "what's on Wednesday" is a first-class
+	// calendar question.
+	Day string `json:"day,omitempty"`
+
+	Start    string `json:"start,omitempty"`
+	End      string `json:"end,omitempty"`
+	FirstDay string `json:"first_day,omitempty"`
+	LastDay  string `json:"last_day,omitempty"`
+
+	// StartDelta is the signed distance from now to the start —
+	// "-1h48m", "+3d16h" — or a day word for all-day events ("today",
+	// "tomorrow", "+4d"), which occupy a date rather than a moment and
+	// must not be rendered as though there were a clock to be early for.
+	StartDelta string `json:"start_delta,omitempty"`
+
+	// EventZone is the IANA zone the event declares, present only when
+	// the companion named one that reads differently from home. An
+	// event's own zone is intent on this calendar: where the operator
+	// expects to be standing.
+	EventZone string `json:"event_zone,omitempty"`
+
+	// EventLocalStart/End re-express the span on the event's own clock,
+	// present only when that clock disagrees with home's at either end.
+	// Each carries its boundary's own offset, so a span crossing a DST
+	// transition — local or remote — shows both offsets rather than
+	// forcing one end into the other's.
+	EventLocalStart string `json:"event_local_start,omitempty"`
+	EventLocalEnd   string `json:"event_local_end,omitempty"`
+
+	Location string `json:"location,omitempty"`
+	Notes    string `json:"notes,omitempty"`
+	URL      string `json:"url,omitempty"`
+
+	// Unparsed marks an event whose boundaries did not parse; start/end
+	// then echo the companion's bytes verbatim. A malformed timestamp is
+	// a bug worth seeing, and the title and location are still useful —
+	// but nothing downstream should read those strings as times.
+	Unparsed bool `json:"unparsed,omitempty"`
+}
+
 // formatCompanionCalendarResponse renders the whole result set, headed by
 // the frame every line below it is written in. Stating the zone and the
 // current time once removes the arithmetic the model would otherwise have
@@ -101,23 +141,14 @@ func formatCompanionCalendarResponse(response companionCalendarResponse, home *t
 	r := newCalendarRenderer(home, now)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Found %d macOS calendar events (times in %s; now %s):",
-		len(response.Events), r.homeZoneName(), r.now.Format(calendarDayLayout+" "+calendarClockLayout))
+	fmt.Fprintf(&b, "Found %d macOS calendar events (times in %s; now %s %s):",
+		len(response.Events), r.homeZoneName(),
+		r.now.Format("Mon"), r.now.Format(time.RFC3339))
 	for _, event := range response.Events {
-		fmt.Fprintf(&b, "\n- %s | %s", r.formatRange(event), strings.TrimSpace(event.Title))
-		if event.Calendar != "" {
-			fmt.Fprintf(&b, " (%s)", event.Calendar)
-		}
-		if event.Location != "" {
-			fmt.Fprintf(&b, "\n  Location: %s", event.Location)
-		}
-		if event.NotesExcerpt != "" {
-			fmt.Fprintf(&b, "\n  Notes: %s", event.NotesExcerpt)
-		}
-		if event.URL != "" {
-			fmt.Fprintf(&b, "\n  URL: %s", event.URL)
-		}
+		b.WriteString("\n")
+		b.WriteString(promptfmt.MarshalCompact(r.renderEvent(event)))
 	}
+
 	// A capped result must say so on the line the reader finishes on.
 	// Twenty events with nothing appended reads as "there are twenty",
 	// and a calendar answer that quietly omits the rest is worse than one
@@ -126,10 +157,9 @@ func formatCompanionCalendarResponse(response companionCalendarResponse, home *t
 	// Built as a suffix rather than written into the body, because the
 	// byte cap below slices from the tail — the exact place this marker
 	// has to survive. A result can be capped by count and oversized in
-	// bytes at once (a hundred events with fat notes clears the ceiling
-	// easily), and losing the marker to the size cut would defeat the
-	// reason it is carried. When both fire, the size note comes first and
-	// the capped-events marker keeps the final word.
+	// bytes at once, and losing the marker to the size cut would defeat
+	// the reason it is carried. When both fire, the size note comes first
+	// and the capped-events marker keeps the final word.
 	const cappedNote = "\n\n[the window held more events than were returned; narrow it, filter by calendar, or raise limit]"
 	const sizeNote = "\n\n[... output truncated; narrow the window, filters, or limit for more ...]"
 
@@ -147,7 +177,17 @@ func formatCompanionCalendarResponse(response companionCalendarResponse, home *t
 	if allowed < 0 {
 		allowed = 0
 	}
-	return truncateUTF8(body, allowed) + suffix
+	cut := truncateUTF8(body, allowed)
+	// Trim back to the last complete line. The body is one JSON object per
+	// line, and a byte-positioned cut would almost always leave a partial
+	// object right before the marker — breaking the very contract the
+	// header advertises, and doing it precisely on the large responses
+	// where a reader most needs the lines to parse. Dropping the split
+	// line costs one event that was already being cut; the marker says so.
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		cut = cut[:i]
+	}
+	return cut + suffix
 }
 
 // homeZoneName is the IANA name of the reader's frame where one exists.
@@ -163,43 +203,140 @@ func (r calendarRenderer) homeZoneName() string {
 	return name
 }
 
-// formatRange renders the time portion of one event line.
-func (r calendarRenderer) formatRange(event companionCalendarEvent) string {
+// renderEvent derives one event's JSON object.
+func (r calendarRenderer) renderEvent(event companionCalendarEvent) calendarEventJSON {
+	out := calendarEventJSON{
+		Title:    strings.TrimSpace(event.Title),
+		Calendar: event.Calendar,
+		Location: event.Location,
+		Notes:    event.NotesExcerpt,
+		URL:      event.URL,
+	}
+
 	start, startOK := parseCalendarBoundary(event.Start)
 	end, endOK := parseCalendarBoundary(event.End)
 
-	// An unparseable start leaves nothing to reason from. Echo whatever the
-	// companion sent rather than dropping the event: a malformed timestamp
-	// is a bug worth seeing, and the title and location are still useful.
-	if !startOK {
-		if strings.TrimSpace(event.End) == "" {
-			return strings.TrimSpace(event.Start)
-		}
-		return strings.TrimSpace(event.Start) + " - " + strings.TrimSpace(event.End)
+	// An empty end is a legitimate omission; a non-empty end that does not
+	// parse is companion drift, and folding it into "no end" would render
+	// a confident one-day or open-ended event from data that is actually
+	// broken. Either way the boundaries are echoed verbatim and marked, so
+	// nothing downstream reads them as times.
+	if !startOK || (!endOK && strings.TrimSpace(event.End) != "") {
+		out.Start = strings.TrimSpace(event.Start)
+		out.End = strings.TrimSpace(event.End)
+		out.Unparsed = true
+		return out
 	}
 
 	if event.AllDay {
-		return r.formatAllDay(start, end, endOK)
+		r.renderAllDay(&out, start, end, endOK)
+		return out
 	}
-	return r.formatTimed(event, start, end, endOK)
+	r.renderTimed(&out, event, start, end, endOK)
+	return out
 }
 
-// formatAllDay renders a date range with no clock and no zone. An all-day
-// event is a property of a date in the place the operator will be, not an
-// interval on any particular clock, so imposing one would be a fiction.
-func (r calendarRenderer) formatAllDay(start, end calendarBoundary, endOK bool) string {
+// renderAllDay fills the date fields. An all-day event is a property of a
+// date in the place the operator will be, not an interval on any
+// particular clock, so it carries no times and no zone.
+func (r calendarRenderer) renderAllDay(out *calendarEventJSON, start, end calendarBoundary, endOK bool) {
 	first := r.allDayDate(start)
-	delta := promptfmt.FormatDayDelta(first, r.now)
-
 	last := first
 	if endOK {
 		last = r.allDayLastDate(end, first)
 	}
 
-	if sameDay(first, last) {
-		return fmt.Sprintf("%s (all day, %s)", r.formatDay(first), delta)
+	out.AllDay = true
+	out.Day = first.Format("Mon")
+	out.FirstDay = first.Format(calendarDateLayout)
+	out.LastDay = last.Format(calendarDateLayout)
+	out.StartDelta = promptfmt.FormatDayDelta(first, r.now)
+}
+
+// renderTimed fills the instant fields, in home with the event's own
+// reading added when the two clocks disagree.
+func (r calendarRenderer) renderTimed(out *calendarEventJSON, event companionCalendarEvent, start, end calendarBoundary, endOK bool) {
+	homeStart := start.t.In(r.home)
+	out.Day = homeStart.Format("Mon")
+	out.Start = homeStart.Format(time.RFC3339)
+	if endOK && end.t.After(start.t) {
+		out.End = end.t.In(r.home).Format(time.RFC3339)
 	}
-	return fmt.Sprintf("%s -> %s (all day, %s)", r.formatDay(first), r.formatDay(last), delta)
+	out.StartDelta = promptfmt.FormatDeltaOnly(start.t, r.now)
+
+	awayStart, awayEnd, ok := r.awayReading(event, start, end, endOK)
+	if !ok {
+		return
+	}
+	if declaredLocation(event) != nil {
+		out.EventZone = strings.TrimSpace(event.TimeZone)
+	}
+	// Each boundary keeps its own offset. With a declared zone both were
+	// converted into it, transitions included; without one, each
+	// timestamp's embedded offset is the only evidence there is, and the
+	// two can legitimately differ across a transition the event spans.
+	out.EventLocalStart = awayStart.Format(time.RFC3339)
+	if endOK && end.t.After(start.t) {
+		out.EventLocalEnd = awayEnd.Format(time.RFC3339)
+	}
+}
+
+// awayReading resolves the event on its own clock, and reports whether
+// that reading says anything the home reading did not.
+func (r calendarRenderer) awayReading(event companionCalendarEvent, start, end calendarBoundary, endOK bool) (time.Time, time.Time, bool) {
+	declared := declaredLocation(event)
+
+	// Resolve each boundary in the frame that actually governs it. With a
+	// declared zone that is the zone itself, transitions included. Without
+	// one, each timestamp's own offset is the only evidence there is.
+	awayStart, awayEnd := start.t, end.t
+	if declared != nil {
+		awayStart, awayEnd = start.t.In(declared), end.t.In(declared)
+	} else if _, offset := start.t.Zone(); offset == 0 {
+		// No declared zone and a bare Z offset is an absence of evidence,
+		// not evidence of UTC: companions predating the time_zone field
+		// forced every event to UTC no matter where it was scheduled.
+		// Annotating those as UTC events would invent the very fact the
+		// old wire format destroyed.
+		return time.Time{}, time.Time{}, false
+	}
+
+	if !r.divergesFromHome(awayStart, awayEnd, endOK) {
+		return time.Time{}, time.Time{}, false
+	}
+	return awayStart, awayEnd, true
+}
+
+// divergesFromHome reports whether the event's own clock reads differently
+// from home at either end.
+//
+// The comparison is on the offsets in effect, not on the zone names:
+// America/Chicago and America/Winnipeg keep the same clock, and annotating
+// one with the other would add fields that say nothing a reader can act
+// on. Both ends are checked because two zones can share an offset at the
+// start and part before the end — America/Phoenix and America/Los_Angeles
+// agree all summer and diverge at the fall-back — and a reading suppressed
+// on the strength of the start alone would drop exactly the hour that made
+// it worth emitting.
+func (r calendarRenderer) divergesFromHome(awayStart, awayEnd time.Time, endOK bool) bool {
+	if !sameOffset(awayStart, awayStart.In(r.home)) {
+		return true
+	}
+	return endOK && !sameOffset(awayEnd, awayEnd.In(r.home))
+}
+
+// declaredLocation loads the zone the companion named, or nil when it named
+// none or named one this host cannot resolve.
+func declaredLocation(event companionCalendarEvent) *time.Location {
+	name := strings.TrimSpace(event.TimeZone)
+	if name == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil
+	}
+	return loc
 }
 
 // allDayDate resolves the calendar date an all-day boundary names.
@@ -241,192 +378,10 @@ func (r calendarRenderer) allDayLastDate(end calendarBoundary, first time.Time) 
 	return last
 }
 
-// formatTimed renders an event that occupies a span of clock time, in home
-// with the event's own reading appended when the two clocks disagree.
-func (r calendarRenderer) formatTimed(event companionCalendarEvent, start, end calendarBoundary, endOK bool) string {
-	homeStart := start.t.In(r.home)
-	line := fmt.Sprintf("%s (%s)",
-		r.formatSpan(homeStart, end.t.In(r.home), endOK, spanStyle{withDate: true, withZone: true}),
-		promptfmt.FormatDeltaOnly(start.t, r.now))
-
-	if away, ok := r.awayReading(event, start, end, endOK, homeStart); ok {
-		return line + " [" + away + "]"
-	}
-	return line
-}
-
-// awayReading renders the event on its own clock, and reports whether that
-// reading says anything the home reading did not.
-func (r calendarRenderer) awayReading(event companionCalendarEvent, start, end calendarBoundary, endOK bool, homeStart time.Time) (string, bool) {
-	declared := declaredLocation(event)
-
-	// Resolve each boundary in the frame that actually governs it. With a
-	// declared zone that is the zone itself, transitions included. Without
-	// one, each timestamp's own offset is the only evidence there is, and
-	// the two ends can legitimately disagree across a transition the event
-	// spans — forcing the end into the start's offset would move it.
-	awayStart, awayEnd := start.t, end.t
-	if declared != nil {
-		awayStart, awayEnd = start.t.In(declared), end.t.In(declared)
-	} else if _, offset := start.t.Zone(); offset == 0 {
-		// No declared zone and a bare Z offset is an absence of evidence,
-		// not evidence of UTC: companions predating the time_zone field
-		// forced every event to UTC no matter where it was scheduled.
-		// Annotating those as UTC events would invent the very fact the
-		// old wire format destroyed.
-		return "", false
-	}
-
-	if !r.divergesFromHome(awayStart, awayEnd, endOK) {
-		return "", false
-	}
-
-	// Label the frame once where a single one governs the whole span. When
-	// the ends sit at different offsets there is no one frame to name, so
-	// each end carries its own and the label is dropped rather than
-	// claiming the start's offset covers both.
-	zonesDiffer := endOK && !sameOffset(awayStart, awayEnd)
-	span := r.formatSpan(awayStart, awayEnd, endOK, spanStyle{
-		// The away reading repeats the date only when it is a different
-		// one. A 9pm Berlin event is 2pm the same afternoon in Chicago and
-		// the date would be noise; an 11pm Chicago event is the following
-		// morning in Berlin, and there the date is the whole point.
-		withDate: !sameDay(homeStart, awayStart),
-		withZone: zonesDiffer,
-	})
-
-	if zonesDiffer && declared == nil {
-		return span, true
-	}
-	return r.eventZoneName(event, awayStart) + " " + span, true
-}
-
-// divergesFromHome reports whether the event's own clock reads differently
-// from home at either end.
-//
-// The comparison is on the offsets in effect, not on the zone names:
-// America/Chicago and America/Winnipeg keep the same clock, and annotating
-// one with the other would add a line of text that says nothing a reader
-// can act on. Both ends are checked because two zones can share an offset
-// at the start and part before the end — America/Phoenix and
-// America/Los_Angeles agree all summer and diverge at the fall-back — and
-// an annotation suppressed on the strength of the start alone would drop
-// exactly the hour that made it worth printing.
-func (r calendarRenderer) divergesFromHome(awayStart, awayEnd time.Time, endOK bool) bool {
-	if !sameOffset(awayStart, awayStart.In(r.home)) {
-		return true
-	}
-	return endOK && !sameOffset(awayEnd, awayEnd.In(r.home))
-}
-
-// declaredLocation loads the zone the companion named, or nil when it named
-// none or named one this host cannot resolve.
-func declaredLocation(event companionCalendarEvent) *time.Location {
-	name := strings.TrimSpace(event.TimeZone)
-	if name == "" {
-		return nil
-	}
-	loc, err := time.LoadLocation(name)
-	if err != nil {
-		return nil
-	}
-	return loc
-}
-
-// eventZoneName labels the event's own frame, preferring the IANA name the
-// companion declared. A timestamp offset alone has no name to report, so
-// fall back to the zone abbreviation, and then to the numeric offset when
-// even that is only a "+02" placeholder.
-func (r calendarRenderer) eventZoneName(event companionCalendarEvent, at time.Time) string {
-	if declaredLocation(event) != nil {
-		return strings.TrimSpace(event.TimeZone)
-	}
-	abbrev, offset := at.Zone()
-	if abbrev != "" && !strings.HasPrefix(abbrev, "+") && !strings.HasPrefix(abbrev, "-") {
-		return abbrev
-	}
-	return formatZoneOffset(offset)
-}
-
 // sameOffset reports whether two times sit at the same UTC offset. Two
 // readings that do are the same wall clock, whatever their zones are named.
 func sameOffset(a, b time.Time) bool {
 	_, ao := a.Zone()
 	_, bo := b.Zone()
 	return ao == bo
-}
-
-// spanStyle selects which parts of a span are worth printing. The home
-// reading carries both the date and the zone; an away reading is already
-// introduced by its zone name and sits beside the home date, so it usually
-// needs neither.
-type spanStyle struct {
-	withDate bool
-	withZone bool
-}
-
-// formatSpan renders a start and end already converted to one location. A
-// span that stays inside a single day states the date once and drops it
-// from the end; one that crosses a day boundary states both regardless of
-// style, because a reader cannot supply the second date themselves. A
-// zero-length or unparseable end drops the end entirely.
-func (r calendarRenderer) formatSpan(start, end time.Time, endOK bool, style spanStyle) string {
-	clock := calendarClockOnlyLayout
-	if style.withZone {
-		clock = calendarClockLayout
-	}
-	day := func(t time.Time) string {
-		if !style.withDate {
-			return ""
-		}
-		return r.formatDay(t) + " "
-	}
-
-	if !endOK || !end.After(start) {
-		return day(start) + start.Format(clock)
-	}
-	if sameDay(start, end) {
-		// Fall back repeats an hour: 1:30AM CDT and 1:30AM CST are a real
-		// hour apart on the same date. Carrying the zone on the end alone
-		// would label the start with the end's zone and render that hour
-		// as a zero-length event.
-		if style.withZone && !sameOffset(start, end) {
-			return day(start) + start.Format(clock) + "-" + end.Format(clock)
-		}
-		return day(start) + start.Format(calendarClockOnlyLayout) + "-" + end.Format(clock)
-	}
-	return fmt.Sprintf("%s %s -> %s %s",
-		r.formatDay(start), start.Format(clock),
-		r.formatDay(end), end.Format(clock))
-}
-
-// formatDay renders a weekday and date, carrying the year only when the
-// event falls outside the reader's current one.
-func (r calendarRenderer) formatDay(t time.Time) string {
-	if t.Year() == r.now.Year() {
-		return t.Format(calendarDayLayout)
-	}
-	return t.Format(calendarDayYearLayout)
-}
-
-// formatZoneOffset renders a UTC offset as "UTC+2" or "UTC-5:30", the last
-// resort when a zone has neither an IANA name nor a usable abbreviation.
-func formatZoneOffset(seconds int) string {
-	sign := "+"
-	if seconds < 0 {
-		sign = "-"
-		seconds = -seconds
-	}
-	h, m := seconds/3600, (seconds%3600)/60
-	if m == 0 {
-		return fmt.Sprintf("UTC%s%d", sign, h)
-	}
-	return fmt.Sprintf("UTC%s%d:%02d", sign, h, m)
-}
-
-// sameDay reports whether two times fall on the same calendar day. Callers
-// pass times already in one location; comparing across locations would ask
-// a question with no answer.
-func sameDay(a, b time.Time) bool {
-	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
 }
