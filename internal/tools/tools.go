@@ -82,6 +82,7 @@ type Registry struct {
 	usageStore         *usage.Store
 	lensStore          *LensStore
 	logIndexDB         *sql.DB
+	homeLocation       *time.Location
 	workingMemoryStore *memory.WorkingMemoryStore
 	archiveStore       *memory.ArchiveStore
 
@@ -153,6 +154,35 @@ func (r *Registry) log() *slog.Logger {
 		return r.logger
 	}
 	return slog.Default()
+}
+
+// SetTimezone records the household IANA timezone (config `timezone`) as
+// the frame tool output renders wall-clock times in. Invalid or empty
+// names leave the registry on the host's local zone, matching how the
+// same setting degrades everywhere else it is read.
+//
+// Tool output is read by a model that cannot see where the reader stands,
+// so a bare local time is only as good as the frame stated alongside it.
+func (r *Registry) SetTimezone(name string) {
+	if name == "" {
+		return
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		r.log().Warn("ignoring invalid timezone for tool output",
+			"timezone", name, "error", err)
+		return
+	}
+	r.homeLocation = loc
+}
+
+// HomeLocation is the zone tool output renders wall-clock times in,
+// falling back to the host's local zone when none was configured.
+func (r *Registry) HomeLocation() *time.Location {
+	if r.homeLocation == nil {
+		return time.Local
+	}
+	return r.homeLocation
 }
 
 // SetFactTools adds fact management tools to the registry.
@@ -1263,6 +1293,7 @@ func (r *Registry) derive(capacity int) *Registry {
 		tagIndex:        r.tagIndex,
 		logger:          r.logger,
 		policy:          r.sharedPolicy(),
+		homeLocation:    r.homeLocation,
 	}
 }
 

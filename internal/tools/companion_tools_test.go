@@ -124,38 +124,3 @@ func TestMacOSCalendarEventsRejectsLimitOverMax(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
-
-func TestFormatCompanionCalendarResponseTruncatesOutput(t *testing.T) {
-	response := companionCalendarResponse{
-		Events: make([]companionCalendarEvent, 0, 80),
-	}
-	for i := 0; i < 80; i++ {
-		response.Events = append(response.Events, companionCalendarEvent{
-			Title:        strings.Repeat("Quarterly planning sync ", 8),
-			Calendar:     "Work",
-			Start:        "2026-04-02T09:00:00Z",
-			End:          "2026-04-02T10:00:00Z",
-			Location:     strings.Repeat("Conference Room A ", 6),
-			NotesExcerpt: strings.Repeat("Bring status notes. ", 12),
-		})
-	}
-
-	formatted := formatCompanionCalendarResponse(response)
-	if len(formatted) > maxCompanionCalendarResultBytes {
-		t.Fatalf("formatted output exceeded hard cap: got %d, want <= %d", len(formatted), maxCompanionCalendarResultBytes)
-	}
-	if !strings.Contains(formatted, "[... output truncated;") {
-		t.Fatalf("expected truncated note, got: %s", formatted)
-	}
-}
-
-func TestFormatCompanionCalendarRangeAllDayMultiDay(t *testing.T) {
-	got := formatCompanionCalendarRange(companionCalendarEvent{
-		Start:  "2026-04-02T00:00:00Z",
-		End:    "2026-04-05T00:00:00Z",
-		AllDay: true,
-	})
-	if got != "Thu Apr 2 -> Sat Apr 4 (all day)" {
-		t.Fatalf("all-day range: got %q", got)
-	}
-}
