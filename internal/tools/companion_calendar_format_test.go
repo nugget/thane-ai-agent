@@ -213,6 +213,46 @@ func TestFormatCompanionCalendarRange(t *testing.T) {
 			want: "Sat Mar 7 11:00PM CST -> Sun Mar 8 3:00AM CDT (+13h)",
 		},
 		{
+			// Fall back in Chicago is 2026-11-01: 1:30AM happens twice, an
+			// hour apart. Printing the zone only on the end labels the
+			// start CST too, so a real hour reads as zero-length.
+			name: "a same-day span across fall-back labels both ends",
+			now:  "2026-11-01T00:00:00-05:00",
+			event: companionCalendarEvent{
+				Start: "2026-11-01T01:30:00-05:00",
+				End:   "2026-11-01T01:30:00-06:00",
+			},
+			want: "Sun Nov 1 1:30AM CDT-1:30AM CST (+1h30m)",
+		},
+		{
+			// Phoenix never leaves -07:00; Los Angeles shares it until the
+			// fall-back, then drops to -08:00. Comparing only the start
+			// instant finds them equal and drops an annotation the end
+			// needs.
+			name: "an away zone that diverges only by the end is still annotated",
+			now:  "2026-11-01T00:00:00-07:00",
+			event: companionCalendarEvent{
+				Start:    "2026-11-01T01:30:00-07:00",
+				End:      "2026-11-01T01:30:00-08:00",
+				TimeZone: "America/Los_Angeles",
+			},
+			want: "Sun Nov 1 2:30AM-3:30AM CST (+1h30m) [America/Los_Angeles 1:30AM PDT-1:30AM PST]",
+		},
+		{
+			// With no declared zone the only evidence is each timestamp's
+			// own offset. Converting the end into the start's offset moves
+			// it an hour and reports a 4am event as ending at 3am.
+			name: "an offset-only span keeps each end's own offset",
+			event: companionCalendarEvent{
+				Start: "2026-09-01T23:00:00+01:00",
+				End:   "2026-09-02T04:00:00+02:00",
+			},
+			// The end reads 4:00AM, not the 3:00AM that forcing it into the
+			// start's offset produced. No single frame governs the span, so
+			// each end carries its own offset and the label is dropped.
+			want: "Tue Sep 1 5:00PM-9:00PM CDT (+3d6h) [Tue Sep 1 11:00PM +0100 -> Wed Sep 2 4:00AM +0200]",
+		},
+		{
 			name: "a malformed start echoes what the companion sent",
 			event: companionCalendarEvent{
 				Start: "not a timestamp",

@@ -229,66 +229,111 @@ func (r calendarRenderer) formatTimed(event companionCalendarEvent, start, end c
 		r.formatSpan(homeStart, end.t.In(r.home), endOK, spanStyle{withDate: true, withZone: true}),
 		promptfmt.FormatDeltaOnly(start.t, r.now))
 
-	away, ok := r.eventLocation(event, start.t)
-	if !ok {
-		return line
+	if away, ok := r.awayReading(event, start, end, endOK, homeStart); ok {
+		return line + " [" + away + "]"
 	}
-
-	// The away reading repeats the date only when it is a different one.
-	// A 9pm Berlin event is 2pm the same afternoon in Chicago and the date
-	// would be noise; an 11pm Chicago event is the following morning in
-	// Berlin, and there the date is the whole point.
-	awayStart := start.t.In(away)
-	return fmt.Sprintf("%s [%s %s]", line, r.eventZoneName(event, away, start.t),
-		r.formatSpan(awayStart, end.t.In(away), endOK, spanStyle{withDate: !sameDay(homeStart, awayStart)}))
+	return line
 }
 
-// eventLocation returns the zone to render an event's own clock in, and
-// whether that clock differs from home at all.
-//
-// The comparison is on the offset in effect at the event, not on the zone
-// names: America/Chicago and America/Winnipeg keep the same clock, and
-// annotating one with the other would add a line of text that says nothing
-// a reader can act on. Only a genuinely different wall-clock reading earns
-// the annotation.
-func (r calendarRenderer) eventLocation(event companionCalendarEvent, at time.Time) (*time.Location, bool) {
-	loc := at.Location()
-	if name := strings.TrimSpace(event.TimeZone); name != "" {
-		if parsed, err := time.LoadLocation(name); err == nil {
-			loc = parsed
-		}
-	} else if _, offset := at.Zone(); offset == 0 {
+// awayReading renders the event on its own clock, and reports whether that
+// reading says anything the home reading did not.
+func (r calendarRenderer) awayReading(event companionCalendarEvent, start, end calendarBoundary, endOK bool, homeStart time.Time) (string, bool) {
+	declared := declaredLocation(event)
+
+	// Resolve each boundary in the frame that actually governs it. With a
+	// declared zone that is the zone itself, transitions included. Without
+	// one, each timestamp's own offset is the only evidence there is, and
+	// the two ends can legitimately disagree across a transition the event
+	// spans — forcing the end into the start's offset would move it.
+	awayStart, awayEnd := start.t, end.t
+	if declared != nil {
+		awayStart, awayEnd = start.t.In(declared), end.t.In(declared)
+	} else if _, offset := start.t.Zone(); offset == 0 {
 		// No declared zone and a bare Z offset is an absence of evidence,
 		// not evidence of UTC: companions predating the time_zone field
 		// forced every event to UTC no matter where it was scheduled.
 		// Annotating those as UTC events would invent the very fact the
 		// old wire format destroyed.
-		return nil, false
+		return "", false
 	}
 
-	_, homeOffset := at.In(r.home).Zone()
-	_, eventOffset := at.In(loc).Zone()
-	if homeOffset == eventOffset {
-		return nil, false
+	if !r.divergesFromHome(awayStart, awayEnd, endOK) {
+		return "", false
 	}
-	return loc, true
+
+	// Label the frame once where a single one governs the whole span. When
+	// the ends sit at different offsets there is no one frame to name, so
+	// each end carries its own and the label is dropped rather than
+	// claiming the start's offset covers both.
+	zonesDiffer := endOK && !sameOffset(awayStart, awayEnd)
+	span := r.formatSpan(awayStart, awayEnd, endOK, spanStyle{
+		// The away reading repeats the date only when it is a different
+		// one. A 9pm Berlin event is 2pm the same afternoon in Chicago and
+		// the date would be noise; an 11pm Chicago event is the following
+		// morning in Berlin, and there the date is the whole point.
+		withDate: !sameDay(homeStart, awayStart),
+		withZone: zonesDiffer,
+	})
+
+	if zonesDiffer && declared == nil {
+		return span, true
+	}
+	return r.eventZoneName(event, awayStart) + " " + span, true
+}
+
+// divergesFromHome reports whether the event's own clock reads differently
+// from home at either end.
+//
+// The comparison is on the offsets in effect, not on the zone names:
+// America/Chicago and America/Winnipeg keep the same clock, and annotating
+// one with the other would add a line of text that says nothing a reader
+// can act on. Both ends are checked because two zones can share an offset
+// at the start and part before the end — America/Phoenix and
+// America/Los_Angeles agree all summer and diverge at the fall-back — and
+// an annotation suppressed on the strength of the start alone would drop
+// exactly the hour that made it worth printing.
+func (r calendarRenderer) divergesFromHome(awayStart, awayEnd time.Time, endOK bool) bool {
+	if !sameOffset(awayStart, awayStart.In(r.home)) {
+		return true
+	}
+	return endOK && !sameOffset(awayEnd, awayEnd.In(r.home))
+}
+
+// declaredLocation loads the zone the companion named, or nil when it named
+// none or named one this host cannot resolve.
+func declaredLocation(event companionCalendarEvent) *time.Location {
+	name := strings.TrimSpace(event.TimeZone)
+	if name == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil
+	}
+	return loc
 }
 
 // eventZoneName labels the event's own frame, preferring the IANA name the
 // companion declared. A timestamp offset alone has no name to report, so
 // fall back to the zone abbreviation, and then to the numeric offset when
 // even that is only a "+02" placeholder.
-func (r calendarRenderer) eventZoneName(event companionCalendarEvent, loc *time.Location, at time.Time) string {
-	if name := strings.TrimSpace(event.TimeZone); name != "" {
-		if _, err := time.LoadLocation(name); err == nil {
-			return name
-		}
+func (r calendarRenderer) eventZoneName(event companionCalendarEvent, at time.Time) string {
+	if declaredLocation(event) != nil {
+		return strings.TrimSpace(event.TimeZone)
 	}
-	abbrev, offset := at.In(loc).Zone()
+	abbrev, offset := at.Zone()
 	if abbrev != "" && !strings.HasPrefix(abbrev, "+") && !strings.HasPrefix(abbrev, "-") {
 		return abbrev
 	}
 	return formatZoneOffset(offset)
+}
+
+// sameOffset reports whether two times sit at the same UTC offset. Two
+// readings that do are the same wall clock, whatever their zones are named.
+func sameOffset(a, b time.Time) bool {
+	_, ao := a.Zone()
+	_, bo := b.Zone()
+	return ao == bo
 }
 
 // spanStyle selects which parts of a span are worth printing. The home
@@ -321,6 +366,13 @@ func (r calendarRenderer) formatSpan(start, end time.Time, endOK bool, style spa
 		return day(start) + start.Format(clock)
 	}
 	if sameDay(start, end) {
+		// Fall back repeats an hour: 1:30AM CDT and 1:30AM CST are a real
+		// hour apart on the same date. Carrying the zone on the end alone
+		// would label the start with the end's zone and render that hour
+		// as a zero-length event.
+		if style.withZone && !sameOffset(start, end) {
+			return day(start) + start.Format(clock) + "-" + end.Format(clock)
+		}
 		return day(start) + start.Format(calendarClockOnlyLayout) + "-" + end.Format(clock)
 	}
 	return fmt.Sprintf("%s %s -> %s %s",
