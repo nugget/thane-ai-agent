@@ -442,6 +442,12 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	// all-of activation. Both compose; see [articleMatchesTags].
 	kbStart := time.Now()
 	articles := a.loadKBArticles()
+	// One instant for every article in this assembly. Sampling the clock
+	// per article lets a prompt that crosses a second — or local
+	// midnight — render identical templates differently a few lines
+	// apart ("today" above, "tomorrow" below), which reads as two
+	// documents disagreeing rather than one clock ticking.
+	templateNow := a.templateNow()
 	for _, article := range articles {
 		if !articleMatchesTags(article, req.ActiveTags) {
 			continue
@@ -470,7 +476,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		// sees "+20d" here while doc_read, the publish tools, and git
 		// keep the raw {{delta:...}} so the author round-trip stays
 		// byte-exact.
-		content = promptfmt.ExpandTemporalTemplates(content, a.templateNow())
+		content = promptfmt.ExpandTemporalTemplates(content, templateNow)
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		bucket := agentctx.ContextBucketTaggedGuidance
 		if acc.append(bucket, data) {
