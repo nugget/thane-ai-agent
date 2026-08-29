@@ -85,11 +85,16 @@ type DocumentAdvertiser struct {
 
 	// lastRows remembers the most recent enumeration by ref, so
 	// materialization can find the file and freshness facts for a
-	// selection without a second index query. Advertise and materialize
+	// selection without a second index query; lastNow is the instant that
+	// enumeration was judged against, reused by every materialization it
+	// feeds so all fragments of one turn share one clock — a prompt must
+	// not say "today" in one fragment and "tomorrow" in the next because
+	// the clock ticked between file reads. Advertise and materialize
 	// happen on the same turn, but nothing forbids concurrent turns —
 	// hence the lock.
 	mu       sync.RWMutex
 	lastRows map[string]AdvertisableDocument
+	lastNow  time.Time
 }
 
 // NewDocumentAdvertiser builds the advertiser. It implements the
@@ -193,6 +198,7 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 	for ref, row := range remembered {
 		d.lastRows[ref] = row
 	}
+	d.lastNow = now
 	d.mu.Unlock()
 	return ads, nil
 }
@@ -212,7 +218,11 @@ func (d *DocumentAdvertiser) MaterializeContextAdvertisement(ctx context.Context
 	ref := selection.Advertisement.Ref
 	d.mu.RLock()
 	row, ok := d.lastRows[ref]
+	now := d.lastNow
 	d.mu.RUnlock()
+	if now.IsZero() {
+		now = d.cfg.Now().In(d.cfg.HomeZone)
+	}
 	if !ok {
 		return "", fmt.Errorf("no remembered enumeration row for %s", ref)
 	}
@@ -230,7 +240,6 @@ func (d *DocumentAdvertiser) MaterializeContextAdvertisement(ctx context.Context
 		return "", fmt.Errorf("document %s no longer carries facet %s", ref, selection.Projection.Name)
 	}
 
-	now := d.cfg.Now().In(d.cfg.HomeZone)
 	content = promptfmt.ExpandTemporalTemplates(content, now)
 
 	envelope := documentFragmentEnvelope{
