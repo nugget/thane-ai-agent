@@ -245,6 +245,35 @@ func TestRenderCalendarEvent(t *testing.T) {
 			},
 		},
 		{
+			// A non-empty end that does not parse is drift, not an omission:
+			// folding it into "no end" would render a confident open-ended
+			// event from broken data.
+			name: "a malformed end marks the whole event unparsed",
+			event: companionCalendarEvent{
+				Title: "Half broken",
+				Start: "2026-08-29T09:00:00-05:00", End: "garbage",
+			},
+			want: calendarEventJSON{
+				Title:    "Half broken",
+				Start:    "2026-08-29T09:00:00-05:00",
+				End:      "garbage",
+				Unparsed: true,
+			},
+		},
+		{
+			name: "a malformed all-day end marks the whole event unparsed",
+			event: companionCalendarEvent{
+				Title: "Broken holiday", AllDay: true,
+				Start: "2026-08-29", End: "not-a-date",
+			},
+			want: calendarEventJSON{
+				Title:    "Broken holiday",
+				Start:    "2026-08-29",
+				End:      "not-a-date",
+				Unparsed: true,
+			},
+		},
+		{
 			name: "a malformed boundary is echoed and marked, never read as a time",
 			event: companionCalendarEvent{
 				Title: "Broken",
@@ -369,6 +398,29 @@ func TestFormatCompanionCalendarResponseTruncatesOutput(t *testing.T) {
 	if !strings.Contains(formatted, "[... output truncated;") {
 		t.Fatalf("expected truncated note, got: %s", formatted[len(formatted)-200:])
 	}
+	assertEventLinesParse(t, formatted)
+}
+
+// assertEventLinesParse holds the one-object-per-line contract the header
+// advertises: every event line in the output — including the last one
+// before a truncation marker, which a byte-positioned cut would break —
+// must be a complete JSON object.
+func assertEventLinesParse(t *testing.T, out string) {
+	t.Helper()
+	kept := 0
+	for _, line := range strings.Split(out, "\n")[1:] {
+		if line == "" || strings.HasPrefix(line, "[") {
+			continue
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Errorf("event line is not a complete JSON object: %v\n%s", err, line)
+		}
+		kept++
+	}
+	if kept == 0 {
+		t.Error("expected at least one surviving event line")
+	}
 }
 
 func TestFormatCompanionCalendarResponseReportsTruncation(t *testing.T) {
@@ -418,6 +470,7 @@ func TestFormatCompanionCalendarResponseKeepsTheCappedMarkerWhenBytesAlsoOverflo
 	if !strings.HasSuffix(strings.TrimSpace(out), "narrow it, filter by calendar, or raise limit]") {
 		t.Errorf("the capped-events marker must keep the final word:\n...%s", out[len(out)-300:])
 	}
+	assertEventLinesParse(t, out)
 }
 
 func TestCompanionCalendarResponseDecodesTruncated(t *testing.T) {

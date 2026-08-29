@@ -177,7 +177,17 @@ func formatCompanionCalendarResponse(response companionCalendarResponse, home *t
 	if allowed < 0 {
 		allowed = 0
 	}
-	return truncateUTF8(body, allowed) + suffix
+	cut := truncateUTF8(body, allowed)
+	// Trim back to the last complete line. The body is one JSON object per
+	// line, and a byte-positioned cut would almost always leave a partial
+	// object right before the marker — breaking the very contract the
+	// header advertises, and doing it precisely on the large responses
+	// where a reader most needs the lines to parse. Dropping the split
+	// line costs one event that was already being cut; the marker says so.
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		cut = cut[:i]
+	}
+	return cut + suffix
 }
 
 // homeZoneName is the IANA name of the reader's frame where one exists.
@@ -206,7 +216,12 @@ func (r calendarRenderer) renderEvent(event companionCalendarEvent) calendarEven
 	start, startOK := parseCalendarBoundary(event.Start)
 	end, endOK := parseCalendarBoundary(event.End)
 
-	if !startOK {
+	// An empty end is a legitimate omission; a non-empty end that does not
+	// parse is companion drift, and folding it into "no end" would render
+	// a confident one-day or open-ended event from data that is actually
+	// broken. Either way the boundaries are echoed verbatim and marked, so
+	// nothing downstream reads them as times.
+	if !startOK || (!endOK && strings.TrimSpace(event.End) != "") {
 		out.Start = strings.TrimSpace(event.Start)
 		out.End = strings.TrimSpace(event.End)
 		out.Unparsed = true
