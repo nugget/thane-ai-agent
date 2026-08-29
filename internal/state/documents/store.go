@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 // RootSummary describes one indexed document root.
@@ -164,7 +166,7 @@ func NewStoreWithOptions(db *sql.DB, roots map[string]string, logger *slog.Logge
 		refreshInterval: defaultRefreshInterval,
 	}
 	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate documents schema: %w", err)
+		return nil, err
 	}
 	return s, nil
 }
@@ -184,74 +186,13 @@ func normalizeRoots(roots map[string]string) map[string]string {
 	return out
 }
 
+// migrate applies the declared schema. The historical facets_json
+// probe-and-purge upgrade is subsumed by the schema's ColumnAdd steps
+// plus its NULL-marker purge: a pre-facets database gains the column
+// via ColumnAdd and its rows are purged for rebuild by the same step
+// that handles pre-facet_bytes_json rows.
 func (s *Store) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS indexed_documents (
-		root TEXT NOT NULL,
-		rel_path TEXT NOT NULL,
-		abs_path TEXT NOT NULL,
-		title TEXT NOT NULL DEFAULT '',
-		summary TEXT NOT NULL DEFAULT '',
-		facets_json TEXT NOT NULL DEFAULT '[]',
-		tags_json TEXT NOT NULL DEFAULT '[]',
-		frontmatter_json TEXT NOT NULL DEFAULT '{}',
-		links_json TEXT NOT NULL DEFAULT '[]',
-		modified_at TEXT NOT NULL,
-		size_bytes INTEGER NOT NULL DEFAULT 0,
-		word_count INTEGER NOT NULL DEFAULT 0,
-		PRIMARY KEY(root, rel_path)
-	);
-	CREATE INDEX IF NOT EXISTS idx_indexed_documents_root_path ON indexed_documents(root, rel_path);
-	CREATE INDEX IF NOT EXISTS idx_indexed_documents_modified ON indexed_documents(root, modified_at DESC);
-
-	CREATE TABLE IF NOT EXISTS indexed_document_sections (
-		root TEXT NOT NULL,
-		rel_path TEXT NOT NULL,
-		ordinal INTEGER NOT NULL,
-		level INTEGER NOT NULL,
-		heading TEXT NOT NULL,
-		slug TEXT NOT NULL,
-		start_line INTEGER NOT NULL DEFAULT 0,
-		end_line INTEGER NOT NULL DEFAULT 0,
-		PRIMARY KEY(root, rel_path, ordinal)
-	);
-	CREATE INDEX IF NOT EXISTS idx_indexed_document_sections_doc ON indexed_document_sections(root, rel_path, ordinal);
-	`
-	if _, err := s.db.Exec(schema); err != nil {
-		return err
-	}
-	// Upgrade path for indexes created before facets_json existed. The
-	// index is derived state, so the one-time purge after adding the
-	// column is the reindex trigger: Refresh repopulates every row with
-	// its facets on the next pass, rather than leaving pre-upgrade rows
-	// advertising nothing until their documents happen to change.
-	if _, err := s.db.Exec(`SELECT facets_json FROM indexed_documents LIMIT 1`); err != nil {
-		// One transaction, deliberately: the probe above only fails
-		// while the column is absent, so a partial upgrade — column
-		// added, purge half done — would pass the probe on the next
-		// boot and never heal. Atomic means the upgrade either fully
-		// happened or fully retries.
-		tx, err := s.db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin facets upgrade: %w", err)
-		}
-		defer func() {
-			_ = tx.Rollback()
-		}()
-		if _, err := tx.Exec(`ALTER TABLE indexed_documents ADD COLUMN facets_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
-			return fmt.Errorf("add facets_json column: %w", err)
-		}
-		if _, err := tx.Exec(`DELETE FROM indexed_documents`); err != nil {
-			return fmt.Errorf("purge index for facets reindex: %w", err)
-		}
-		if _, err := tx.Exec(`DELETE FROM indexed_document_sections`); err != nil {
-			return fmt.Errorf("purge section index for facets reindex: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit facets upgrade: %w", err)
-		}
-	}
-	return nil
+	return database.Migrate(s.db, schema, s.logger)
 }
 
 // Refresh incrementally refreshes all indexed roots.
@@ -448,6 +389,17 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 	if err != nil {
 		return fmt.Errorf("marshal facets: %w", err)
 	}
+	// A nil map would marshal to JSON null; the parser always builds the
+	// map, but the guard keeps every stored value an object — and keeps
+	// facet_bytes_json non-NULL, which is the marker the schema's purge
+	// step uses to tell post-upgrade rows from pre-upgrade ones.
+	if doc.FacetBytes == nil {
+		doc.FacetBytes = map[string]int{}
+	}
+	facetBytesJSON, err := json.Marshal(doc.FacetBytes)
+	if err != nil {
+		return fmt.Errorf("marshal facet bytes: %w", err)
+	}
 	metaJSON, err := json.Marshal(doc.Frontmatter)
 	if err != nil {
 		return fmt.Errorf("marshal frontmatter: %w", err)
@@ -467,20 +419,22 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO indexed_documents
-			(root, rel_path, abs_path, title, summary, facets_json, tags_json, frontmatter_json, links_json, modified_at, size_bytes, word_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(root, rel_path, abs_path, title, summary, facets_json, facet_bytes_json, audience, tags_json, frontmatter_json, links_json, modified_at, size_bytes, word_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(root, rel_path) DO UPDATE SET
 		 	abs_path = excluded.abs_path,
 		 	title = excluded.title,
 		 	summary = excluded.summary,
 		 	facets_json = excluded.facets_json,
+		 	facet_bytes_json = excluded.facet_bytes_json,
+		 	audience = excluded.audience,
 		 	tags_json = excluded.tags_json,
 		 	frontmatter_json = excluded.frontmatter_json,
 		 	links_json = excluded.links_json,
 		 	modified_at = excluded.modified_at,
 		 	size_bytes = excluded.size_bytes,
 		 	word_count = excluded.word_count`,
-		root, relPath, absPath, doc.Title, doc.Summary, string(facetsJSON), string(tagsJSON), string(metaJSON), string(linksJSON), modified, size, doc.WordCount,
+		root, relPath, absPath, doc.Title, doc.Summary, string(facetsJSON), string(facetBytesJSON), doc.Audience, string(tagsJSON), string(metaJSON), string(linksJSON), modified, size, doc.WordCount,
 	); err != nil {
 		return fmt.Errorf("upsert indexed document: %w", err)
 	}
