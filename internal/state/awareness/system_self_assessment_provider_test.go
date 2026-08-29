@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // TestSystemSelfAssessmentProvider pins the provider's contract: the
@@ -74,5 +75,42 @@ func TestSystemSelfAssessmentProvider(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSystemSelfAssessmentProviderAdvertisesSignalBeforeReading(t *testing.T) {
+	t.Parallel()
+
+	reads := 0
+	p := NewSystemSelfAssessmentProvider(func(context.Context) (string, time.Time, error) {
+		reads++
+		return "## Status Line\n\npanel clean\n\n## Details\n\nbody\n", time.Now(), nil
+	}, nil)
+	ads, err := p.ContextAdvertisements(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("ContextAdvertisements: %v", err)
+	}
+	if reads != 0 {
+		t.Fatalf("advertising performed %d document reads, want 0", reads)
+	}
+	if len(ads) != 1 {
+		t.Fatalf("advertisements = %#v, want one", ads)
+	}
+	if err := ads[0].Validate(); err != nil {
+		t.Fatalf("advertisement invalid: %v", err)
+	}
+	projection := ads[0].Projections[0]
+	if projection.Name != string(looppkg.OutputFacetStatusLine) || projection.Role != agentctx.ContextRoleSignal {
+		t.Fatalf("projection = %#v, want status_line signal", projection)
+	}
+	out, err := p.MaterializeContextAdvertisement(context.Background(), agentctx.ContextRequest{}, agentctx.ContextSelection{
+		Advertisement: ads[0],
+		Projection:    projection,
+	})
+	if err != nil {
+		t.Fatalf("MaterializeContextAdvertisement: %v", err)
+	}
+	if reads != 1 || !strings.Contains(out, "panel clean") {
+		t.Fatalf("materialized output = %q after %d reads", out, reads)
 	}
 }

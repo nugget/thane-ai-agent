@@ -107,13 +107,14 @@ type OutputSpec struct {
 	Mode OutputMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Purpose is optional model-facing guidance for this output.
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
-	// Facets declares which condensed views this output publishes for a maintained
-	// document: which of status_line, teaser, and digest the loop
-	// publishes alongside the full body. Empty means no facets. The
-	// declaration is a set — element order carries no meaning, because
-	// the ladder's order is fixed by the contract itself
-	// (status_line → teaser → digest); renderers and consumers use that
-	// canonical order and must not read anything into declaration order.
+	// Facets declares which condensed views this output publishes for a
+	// maintained document: any needed subset of status_line, teaser, and
+	// digest alongside the full body. status_line and teaser are different
+	// shapes of one outward-facing signal role; digest is a context payload.
+	// Empty means no facets. The declaration is a set — element order
+	// carries no meaning, because presentation order is fixed by the
+	// contract itself; renderers and consumers must not read anything into
+	// declaration order.
 	Facets []FacetSpec `yaml:"facets,omitempty" json:"facets,omitempty"`
 	// Audience overrides which surfaces may project this output. Empty
 	// defaults from Type: working_notes is internal, every other type
@@ -232,8 +233,8 @@ func (o OutputSpec) Validate() error {
 
 // validateOutputFacets checks a declared facet set. Facets are a
 // published-projection contract, so they attach only to published
-// maintained documents, and status_line anchors the ladder whenever any
-// facet is declared.
+// maintained documents. Each document declares only the projections its
+// consumers need; full remains implicit and always present.
 func validateOutputFacets(o OutputSpec) error {
 	if len(o.Facets) == 0 {
 		return nil

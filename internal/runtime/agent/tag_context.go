@@ -41,6 +41,12 @@ import (
 //     full-mode loop turns set both, task-mode turns set only
 //     loop-scoped, delegate runs set neither.
 //
+// Providers may instead implement [ContextAdvertiser]. Those providers offer
+// cheap request-relative candidates during the same walk; one deterministic
+// discriminator ranks, filters, and limits all offers before materializing
+// selected projections. Legacy eager providers keep rendering directly while
+// they migrate.
+//
 // Each rendered bucket has its own 64 KB cap and truncation marker.
 // A provider's class is encoded as how it registered, not as a
 // separate code path — one interleaved list preserves registration
@@ -382,6 +388,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 
 	seen := make(map[string]bool)
 	acc := newContextAccumulator()
+	var advertisements []contextAdvertisementCandidate
 
 	// Source 1: Tagged KB articles. Re-scanned and re-read each turn
 	// so frontmatter edits, additions, and deletions propagate
@@ -430,11 +437,14 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 			continue
 		}
 		pStart := time.Now()
-		content, err := p.TagContext(ctx, req)
+		content, advertised, err := a.contextFromProvider(ctx, req, p, &advertisements)
 		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
 				"tag", tag, "error", err)
+			continue
+		}
+		if advertised {
 			continue
 		}
 		if content == "" {
@@ -474,10 +484,13 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 			defaultBucket, source = agentctx.ContextBucketLiveState, "loop_scoped_provider"
 		}
 		pStart := time.Now()
-		content, err := gp.provider.TagContext(ctx, req)
+		content, advertised, err := a.contextFromProvider(ctx, req, gp.provider, &advertisements)
 		warnSlowContextSource(a.logger, source, fmt.Sprintf("%T", gp.provider), pStart)
 		if err != nil {
 			a.logger.Warn("gated context provider failed", "source", source, "error", err)
+			continue
+		}
+		if advertised {
 			continue
 		}
 		if content == "" {
@@ -491,7 +504,50 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		}
 	}
 
+	// Advertised context wins the front of its bucket after the full offer
+	// set has competed. That keeps final rank independent of registration
+	// order and prevents a selected compact projection from being starved by
+	// an earlier legacy provider that filled the outer bucket cap.
+	for bucket, content := range a.materializeContextAdvertisements(ctx, req, advertisements) {
+		if acc.prepend(bucket, []byte(content)) {
+			a.logger.Warn("tag context bucket limit reached after advertised context selection",
+				"bucket", string(bucket), "bucket_title", bucket.Title(),
+				"source", "context_discriminator", "limit_bytes", maxTagContextBytes)
+		}
+	}
+
 	return acc.sections()
+}
+
+// contextFromProvider takes the advertisement path when a provider supports
+// it, otherwise preserving the legacy eager render contract. Invalid offers
+// are isolated to the producer that emitted them; other candidates still
+// compete normally.
+func (a *TagContextAssembler) contextFromProvider(ctx context.Context, req agentctx.ContextRequest, provider TagContextProvider, candidates *[]contextAdvertisementCandidate) (string, bool, error) {
+	advertiser, ok := provider.(ContextAdvertiser)
+	if !ok {
+		content, err := provider.TagContext(ctx, req)
+		return content, false, err
+	}
+	advertisements, err := advertiser.ContextAdvertisements(ctx, req)
+	if err != nil {
+		return "", true, err
+	}
+	for _, advertisement := range advertisements {
+		if err := advertisement.Validate(); err != nil {
+			a.logger.Warn("context advertisement rejected",
+				"provider", fmt.Sprintf("%T", provider),
+				"source", advertisement.Source,
+				"id", advertisement.ID,
+				"error", err)
+			continue
+		}
+		*candidates = append(*candidates, contextAdvertisementCandidate{
+			advertiser:    advertiser,
+			advertisement: advertisement,
+		})
+	}
+	return "", true, nil
 }
 
 // BuildRefs assembles exact managed document refs for origin-derived
@@ -647,6 +703,25 @@ func (a *contextAccumulator) append(bucket agentctx.ContextBucket, data []byte) 
 		return true
 	}
 	return false
+}
+
+func (a *contextAccumulator) prepend(bucket agentctx.ContextBucket, data []byte) bool {
+	bucket = bucket.OrDefault(agentctx.ContextBucketContinuity)
+	if len(data) == 0 {
+		return false
+	}
+	old := a.buffers[bucket]
+	buf := &strings.Builder{}
+	truncated := appendContextContent(buf, data, maxTagContextBytes, contextBucketTruncationMarker(bucket))
+	if !truncated && old != nil && old.Len() > 0 {
+		truncated = appendContextContent(buf, []byte(old.String()), maxTagContextBytes, contextBucketTruncationMarker(bucket))
+	}
+	if old == nil {
+		a.order = append(a.order, bucket)
+	}
+	a.buffers[bucket] = buf
+	a.capped[bucket] = truncated || a.capped[bucket]
+	return truncated
 }
 
 func (a *contextAccumulator) sections() []agentctx.ContextSection {
