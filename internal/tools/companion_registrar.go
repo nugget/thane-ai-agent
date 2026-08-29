@@ -341,7 +341,7 @@ func (cr *CompanionRegistrar) dispatch(ctx context.Context, capability, method s
 		return "", fmt.Errorf("marshal companion request: %w", err)
 	}
 
-	result, err := cr.call(ctx, companion.CallRequest{
+	result, err := callCompanion(ctx, cr.call, companion.CallRequest{
 		Account:    account,
 		ClientID:   clientID,
 		Capability: capability,
