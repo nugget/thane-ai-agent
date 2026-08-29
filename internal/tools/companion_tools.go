@@ -22,6 +22,11 @@ type companionCalendarRequest struct {
 
 type companionCalendarResponse struct {
 	Events []companionCalendarEvent `json:"events"`
+	// Truncated reports that the window held more events than the
+	// companion returned. Absent from companions predating the field,
+	// where false means "we were not told" rather than "we saw
+	// everything" — the byte cap below is the only backstop for those.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 type companionCalendarEvent struct {

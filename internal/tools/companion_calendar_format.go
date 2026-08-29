@@ -118,6 +118,14 @@ func formatCompanionCalendarResponse(response companionCalendarResponse, home *t
 			fmt.Fprintf(&b, "\n  URL: %s", event.URL)
 		}
 	}
+	// A capped result must say so on the line the reader finishes on.
+	// Twenty events with nothing appended reads as "there are twenty",
+	// and a calendar answer that quietly omits the rest is worse than one
+	// that fails: the reader has no reason to look further.
+	if response.Truncated {
+		b.WriteString("\n\n[the window held more events than were returned; narrow it, filter by calendar, or raise limit]")
+	}
+
 	formatted := b.String()
 	if len(formatted) <= maxCompanionCalendarResultBytes {
 		return formatted
