@@ -46,7 +46,7 @@ type companionProviderLister func() []companion.ProviderInfo
 
 // companionResultFormatter renders a raw companion result into the string
 // the model sees. The default is JSON passthrough; named formatters exist
-// only to preserve prose output for specific legacy tools.
+// where the server adds derivation the raw payload lacks.
 type companionResultFormatter func(json.RawMessage) (string, error)
 
 // CompanionRegistrar synthesizes model-facing tools from the tool
@@ -99,8 +99,10 @@ func newCompanionRegistrar(list companionProviderLister, call companionCallFunc,
 		logger: logger.With("component", "companion_registrar"),
 	}
 	cr.formatters = map[string]companionResultFormatter{
-		// Preserve the pretty calendar prose for the legacy tool name
-		// while everything else defaults to JSON passthrough.
+		// Calendar results are re-derived rather than passed through: the
+		// wire carries event-zone instants and dates, and the server owns
+		// the household frame, the deltas, and the divergence readings the
+		// model needs (see companion_calendar_format.go).
 		"macos_calendar_events": cr.calendarResultFormatter,
 	}
 	cr.Rebuild()
@@ -431,9 +433,9 @@ func jsonPassthroughFormatter(raw json.RawMessage) (string, error) {
 	return string(raw), nil
 }
 
-// calendarResultFormatter preserves the human-readable calendar prose for
-// the legacy macos_calendar_events tool name, rendered in the household
-// zone the registrar was built with.
+// calendarResultFormatter re-derives calendar results in the household
+// zone the registrar was built with: a framing header plus one JSON
+// object per event, with deltas and event-local readings attached.
 func (cr *CompanionRegistrar) calendarResultFormatter(raw json.RawMessage) (string, error) {
 	var resp companionCalendarResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
