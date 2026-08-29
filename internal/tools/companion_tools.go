@@ -44,7 +44,15 @@ const companionCallTimeout = 30 * time.Second
 // is the usual reason, and that retrying immediately will not help — so it
 // reports the situation rather than burning the turn on retries.
 func callCompanion(ctx context.Context, call companionCallFunc, req companion.CallRequest) (json.RawMessage, error) {
-	callCtx, cancel := context.WithTimeout(ctx, companionCallTimeout)
+	return callCompanionWithin(ctx, companionCallTimeout, call, req)
+}
+
+// callCompanionWithin is callCompanion with the bound supplied, so a test
+// can drive a real expiry in milliseconds instead of standing in for one.
+// The production bound stays the constant: this exists for tests, not for
+// operators, and no caller outside them passes anything else.
+func callCompanionWithin(ctx context.Context, timeout time.Duration, call companionCallFunc, req companion.CallRequest) (json.RawMessage, error) {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	result, err := call(callCtx, req)
@@ -52,15 +60,28 @@ func callCompanion(ctx context.Context, call companionCallFunc, req companion.Ca
 		return result, nil
 	}
 
-	// Only claim the timeout when it was ours. A caller whose own context
-	// expired gets its error unchanged; blaming the companion for the
-	// turn's deadline would send the model chasing the wrong fault.
-	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+	// Claim the timeout only when this bound is demonstrably the reason.
+	// All three conditions carry their own weight:
+	//
+	//   - the returned error is deadline-shaped, so a disconnect that raced
+	//     the deadline is still reported as the disconnect it was;
+	//   - this call's own context expired, so a caller that hands back
+	//     DeadlineExceeded from somewhere else entirely — its own inner
+	//     bound, a wrapped transport error — is not turned into a claim
+	//     that a Mac sat silent for the full window;
+	//   - the parent is still healthy, so a turn that ran out of time gets
+	//     its own error back rather than the companion taking the blame.
+	//
+	// The middle one is the difference between reporting a fact and
+	// inferring one from a error value that happens to match.
+	if errors.Is(err, context.DeadlineExceeded) &&
+		errors.Is(callCtx.Err(), context.DeadlineExceeded) &&
+		ctx.Err() == nil {
 		return nil, fmt.Errorf(
 			"companion did not respond to %s/%s within %s; it is connected but not answering, "+
 				"which usually means the Mac is asleep, locked, or waiting on a macOS permission prompt. "+
 				"Report this rather than retrying — the next call will wait the same %s",
-			req.Capability, req.Method, companionCallTimeout, companionCallTimeout)
+			req.Capability, req.Method, timeout, timeout)
 	}
 	return nil, err
 }
