@@ -122,20 +122,32 @@ func formatCompanionCalendarResponse(response companionCalendarResponse, home *t
 	// Twenty events with nothing appended reads as "there are twenty",
 	// and a calendar answer that quietly omits the rest is worse than one
 	// that fails: the reader has no reason to look further.
+	//
+	// Built as a suffix rather than written into the body, because the
+	// byte cap below slices from the tail — the exact place this marker
+	// has to survive. A result can be capped by count and oversized in
+	// bytes at once (a hundred events with fat notes clears the ceiling
+	// easily), and losing the marker to the size cut would defeat the
+	// reason it is carried. When both fire, the size note comes first and
+	// the capped-events marker keeps the final word.
+	const cappedNote = "\n\n[the window held more events than were returned; narrow it, filter by calendar, or raise limit]"
+	const sizeNote = "\n\n[... output truncated; narrow the window, filters, or limit for more ...]"
+
+	var suffix string
 	if response.Truncated {
-		b.WriteString("\n\n[the window held more events than were returned; narrow it, filter by calendar, or raise limit]")
+		suffix = cappedNote
 	}
 
-	formatted := b.String()
-	if len(formatted) <= maxCompanionCalendarResultBytes {
-		return formatted
+	body := b.String()
+	if len(body)+len(suffix) <= maxCompanionCalendarResultBytes {
+		return body + suffix
 	}
-	const note = "\n\n[... output truncated; narrow the window, filters, or limit for more ...]"
-	allowed := maxCompanionCalendarResultBytes - len(note)
+	suffix = sizeNote + suffix
+	allowed := maxCompanionCalendarResultBytes - len(suffix)
 	if allowed < 0 {
 		allowed = 0
 	}
-	return truncateUTF8(formatted, allowed) + note
+	return truncateUTF8(body, allowed) + suffix
 }
 
 // homeZoneName is the IANA name of the reader's frame where one exists.
