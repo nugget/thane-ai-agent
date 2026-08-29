@@ -321,3 +321,64 @@ func TestFormatDurationRoundTripsThroughParseDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatDayDelta(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Fatalf("load America/Chicago: %v", err)
+	}
+	day := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, 0, 0, 0, 0, chicago)
+	}
+	today := time.Date(2026, time.August, 29, 10, 48, 0, 0, chicago)
+
+	tests := []struct {
+		name string
+		day  time.Time
+		want string
+	}{
+		{"same day", day(2026, time.August, 29), "today"},
+		{"next day", day(2026, time.August, 30), "tomorrow"},
+		{"previous day", day(2026, time.August, 28), "yesterday"},
+		{"a week out", day(2026, time.September, 5), "+7d"},
+		{"a week back", day(2026, time.August, 22), "-7d"},
+		{"across a year boundary", day(2027, time.January, 1), "+125d"},
+		{
+			// The clock time of either argument is irrelevant: a date is
+			// the whole subject, so late on the 29th and early on the 30th
+			// are still one day apart.
+			name: "clock times do not shift the count",
+			day:  time.Date(2026, time.August, 30, 23, 59, 0, 0, chicago),
+			want: "tomorrow",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FormatDayDelta(tc.day, today); got != tc.want {
+				t.Errorf("FormatDayDelta() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatDayDeltaSurvivesDSTTransitions guards the reason daysBetween
+// normalises to UTC midnight before subtracting: the local days around a
+// transition are 23 and 25 hours long, and a plain division by 24h would
+// report the short one as no day at all.
+func TestFormatDayDeltaSurvivesDSTTransitions(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Fatalf("load America/Chicago: %v", err)
+	}
+
+	// 2026-03-08 springs forward; 2026-11-01 falls back.
+	springNow := time.Date(2026, time.March, 7, 10, 0, 0, 0, chicago)
+	if got := FormatDayDelta(time.Date(2026, time.March, 8, 0, 0, 0, 0, chicago), springNow); got != "tomorrow" {
+		t.Errorf("spring forward: got %q, want %q", got, "tomorrow")
+	}
+
+	fallNow := time.Date(2026, time.October, 31, 10, 0, 0, 0, chicago)
+	if got := FormatDayDelta(time.Date(2026, time.November, 1, 0, 0, 0, 0, chicago), fallNow); got != "tomorrow" {
+		t.Errorf("fall back: got %q, want %q", got, "tomorrow")
+	}
+}

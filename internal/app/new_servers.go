@@ -223,6 +223,19 @@ func (a *App) initServers(s *newState) error {
 	// to connect and register capabilities for bidirectional service dispatch.
 	if cfg.Companion.Configured() {
 		a.companionRegistry = companion.NewRegistry(logger)
+
+		// Calendar output is rendered in the household zone, not the
+		// host's, and not UTC. Already validated by config.Validate, so a
+		// load failure here can only mean the zone database is missing;
+		// time.Local is the honest fallback.
+		companionHome := time.Local
+		if cfg.Timezone != "" {
+			if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+				companionHome = loc
+			}
+		}
+		a.loop.Tools().SetTimezone(cfg.Timezone)
+
 		// Legacy floor: the hand-coded macos_calendar_events tool keeps
 		// working against older Macs that advertise only methods (no
 		// authored tool defs).
@@ -234,7 +247,7 @@ func (a *App) initServers(s *newState) error {
 		// whenever a companion connects, re-registers, or drops — so a
 		// laptop popping on/off line surfaces and retracts its tools
 		// mid-session. A Mac-authored tool shadows the legacy floor by name.
-		registrar := tools.NewCompanionRegistrar(a.companionRegistry, logger)
+		registrar := tools.NewCompanionRegistrar(a.companionRegistry, companionHome, logger)
 		a.loop.SetDynamicToolSource(registrar)
 		a.companionRegistry.SetOnChange(registrar.Rebuild)
 
