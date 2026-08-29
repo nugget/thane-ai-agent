@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,79 @@ import (
 )
 
 type companionCallFunc func(ctx context.Context, req companion.CallRequest) (json.RawMessage, error)
+
+// companionCallTimeout bounds a single dispatch to a connected companion.
+//
+// [companion.Registry.Call] deliberately imposes no deadline of its own —
+// it waits on the caller's context, or on the provider disconnecting. That
+// is the right division, but on an ordinary conversational turn there is no
+// deadline to wait on: delegate profiles and loop definitions set
+// ToolTimeout, while a Signal message or a web-console turn leaves it zero,
+// and the loop only applies one when it is positive. A companion that is
+// connected but not answering therefore hangs the turn outright.
+//
+// That state is not hypothetical. A Mac blocks inside EventKit until
+// someone dismisses the macOS permission prompt, which on a laptop that is
+// closed, locked, or simply elsewhere is never. A disconnect is already
+// handled; being present and unresponsive was not.
+//
+// Thirty seconds is far longer than any real query — EventKit answers a
+// window query in well under a second — and short enough that a wedged turn
+// recovers on its own. It is deliberately not configurable: the value only
+// has to separate "working" from "wedged", and a real query approaching it
+// is a problem to surface rather than a number to tune.
+const companionCallTimeout = 30 * time.Second
+
+// callCompanion dispatches one request to a connected companion under
+// [companionCallTimeout], translating a deadline this bound imposed into
+// something the model can act on.
+//
+// A bare "context deadline exceeded" tells the model nothing it can use. It
+// needs to know the Mac is reachable but silent, that a permission prompt
+// is the usual reason, and that retrying immediately will not help — so it
+// reports the situation rather than burning the turn on retries.
+func callCompanion(ctx context.Context, call companionCallFunc, req companion.CallRequest) (json.RawMessage, error) {
+	return callCompanionWithin(ctx, companionCallTimeout, call, req)
+}
+
+// callCompanionWithin is callCompanion with the bound supplied, so a test
+// can drive a real expiry in milliseconds instead of standing in for one.
+// The production bound stays the constant: this exists for tests, not for
+// operators, and no caller outside them passes anything else.
+func callCompanionWithin(ctx context.Context, timeout time.Duration, call companionCallFunc, req companion.CallRequest) (json.RawMessage, error) {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	result, err := call(callCtx, req)
+	if err == nil {
+		return result, nil
+	}
+
+	// Claim the timeout only when this bound is demonstrably the reason.
+	// All three conditions carry their own weight:
+	//
+	//   - the returned error is deadline-shaped, so a disconnect that raced
+	//     the deadline is still reported as the disconnect it was;
+	//   - this call's own context expired, so a caller that hands back
+	//     DeadlineExceeded from somewhere else entirely — its own inner
+	//     bound, a wrapped transport error — is not turned into a claim
+	//     that a Mac sat silent for the full window;
+	//   - the parent is still healthy, so a turn that ran out of time gets
+	//     its own error back rather than the companion taking the blame.
+	//
+	// The middle one is the difference between reporting a fact and
+	// inferring one from a error value that happens to match.
+	if errors.Is(err, context.DeadlineExceeded) &&
+		errors.Is(callCtx.Err(), context.DeadlineExceeded) &&
+		ctx.Err() == nil {
+		return nil, fmt.Errorf(
+			"companion did not respond to %s/%s within %s; it is connected but not answering, "+
+				"which usually means the Mac is asleep, locked, or waiting on a macOS permission prompt. "+
+				"Report this rather than retrying — the next call will wait the same %s",
+			req.Capability, req.Method, timeout, timeout)
+	}
+	return nil, err
+}
 
 type companionCalendarRequest struct {
 	Start         string   `json:"start"`
@@ -153,7 +227,7 @@ func (r *Registry) handleMacOSCalendarEvents(ctx context.Context, args map[strin
 		return "", fmt.Errorf("marshal calendar request: %w", err)
 	}
 
-	result, err := r.companionCaller(ctx, companion.CallRequest{
+	result, err := callCompanion(ctx, r.companionCaller, companion.CallRequest{
 		Account:    strings.TrimSpace(stringArg(args, "account")),
 		ClientID:   strings.TrimSpace(stringArg(args, "client_id")),
 		Capability: "macos.calendar",
