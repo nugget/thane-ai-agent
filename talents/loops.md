@@ -73,6 +73,20 @@ at the ceiling is not a retry prompt: the document has outgrown
 single-document maintenance, so move detail into linked documents
 rather than shaving bytes.
 
+Relative time is the fastest-rotting thing curated prose can carry:
+"~20 days out" is wrong by morning and stays wrong until a wake
+rewrites it. Write the absolute date wrapped in the delta template
+instead — "Sep 18–30 ({{delta:2026-09-18}})" reads as "Sep 18–30
+(+20d)" where tagged documents are injected, and stays true between
+publishes. A
+bare date renders in day words ("today", "tomorrow", "+20d"); an
+RFC3339 timestamp renders as a compact offset ("+3d16h"). That one
+form is the whole vocabulary, and a malformed template renders
+verbatim instead of vanishing, so a typo shows itself in the injected
+prose. The template substitutes a value, never a claim: when data
+changes enough to make a sentence false, that is your wake to rewrite
+the sentence, not something substitution will paper over.
+
 A faceted document created through `thane_loop_create` arrives
 scaffolded: its section skeleton is pre-rendered with a placeholder
 under each heading, so the body a loop sees on its first wake is

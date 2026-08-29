@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -564,6 +565,41 @@ func TestTagContextAssembler_TaggedKBArticles(t *testing.T) {
 	// Frontmatter should be stripped.
 	if strings.Contains(result, "tags:") {
 		t.Error("frontmatter should be stripped from KB articles")
+	}
+}
+
+// TestTagContextAssembler_TemporalTemplatesExpandedInArticles proves the
+// tagged-article surface is a reader surface for temporal templates: a
+// {{delta:...}} in a curated body reaches the prompt as a now-relative
+// value, a malformed template stays verbatim, and the surrounding prose
+// is untouched. Author surfaces (doc_read, the publish tools, git) keep
+// the raw templates; only injection renders them.
+func TestTagContextAssembler_TemporalTemplatesExpandedInArticles(t *testing.T) {
+	kbDir := t.TempDir()
+	body := "---\ntags: [trip]\n---\nDeparture is Sep 18 ({{delta:2026-09-18}}); broken {{delta:not-a-date}} stays."
+	if err := os.WriteFile(filepath.Join(kbDir, "trip.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  map[string]config.CapabilityTagConfig{"trip": {}},
+		KBDir:    kbDir,
+		Timezone: "America/Chicago",
+	})
+	// 2026-08-29T22:00 in the household zone; the UTC date is already
+	// Aug 30, so a render that ignored the configured zone would say
+	// "+19d" here instead of "+20d".
+	a.nowFunc = func() time.Time {
+		return time.Date(2026, 8, 30, 3, 0, 0, 0, time.UTC)
+	}
+
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"trip": true}})
+
+	if !strings.Contains(result, "Departure is Sep 18 (+20d);") {
+		t.Errorf("temporal template not expanded on the article injection surface:\n%s", result)
+	}
+	if !strings.Contains(result, "broken {{delta:not-a-date}} stays.") {
+		t.Errorf("malformed template should render verbatim with prose intact:\n%s", result)
 	}
 }
 
@@ -1296,5 +1332,47 @@ func TestUnclassifiedDocumentsRefusedAtStartup(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "talents") {
 		t.Fatalf("refusal must name the root, got: %v", err)
+	}
+}
+
+func TestTagContextAssemblerSamplesOneClockPerAssembly(t *testing.T) {
+	// Two articles carrying the identical template must render the same
+	// words even when the clock ticks between article renders. A
+	// per-article clock sample would let one prompt say "today" above
+	// and "tomorrow" below for the same date — two documents appearing
+	// to disagree when only the clock moved.
+	kbDir := t.TempDir()
+	body := "---\ntags: [trip]\n---\nDay: {{delta:2026-08-30}}."
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(kbDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  map[string]config.CapabilityTagConfig{"trip": {}},
+		KBDir:    kbDir,
+		Timezone: "UTC",
+	})
+	// Each clock read jumps a whole day, straddling the template's date:
+	// the first sample renders it "tomorrow", a second sample would
+	// render "today". Only a single per-assembly sample keeps the two
+	// articles agreeing.
+	tick := 0
+	a.nowFunc = func() time.Time {
+		tick++
+		return time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC).AddDate(0, 0, tick-1)
+	}
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"trip": true}})
+	var rendered string
+	for _, s := range sections {
+		rendered += s.Content
+	}
+	if !strings.Contains(rendered, "Day: tomorrow.") {
+		t.Fatalf("expected the single-sample rendering, got: %q", rendered)
+	}
+	if strings.Contains(rendered, "Day: today.") {
+		t.Fatalf("identical templates rendered differently within one assembly: %q", rendered)
 	}
 }
