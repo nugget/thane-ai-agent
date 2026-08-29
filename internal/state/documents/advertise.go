@@ -44,6 +44,9 @@ type AdvertisableDocument struct {
 	FacetBytes map[string]int `json:"facet_bytes,omitempty"`
 	Tags       []string       `json:"tags,omitempty"`
 	ModifiedAt time.Time      `json:"modified_at"`
+	// AbsPath lets a materializer read the file directly, off the
+	// store's locks — the same reason enumeration skips Refresh.
+	AbsPath string `json:"-"`
 	// Provenance from the document's frontmatter: the loop definition
 	// that owns it, the generated tool that manages it, and the owning
 	// loop's intent in prose ("" when unstamped). LoopIntent is match
@@ -78,7 +81,7 @@ func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocume
 		return nil, fmt.Errorf("document index not configured")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT root, rel_path, title, summary, facets_json, COALESCE(facet_bytes_json, '{}'), tags_json, frontmatter_json, modified_at
+		`SELECT root, rel_path, abs_path, title, summary, facets_json, COALESCE(facet_bytes_json, '{}'), tags_json, frontmatter_json, modified_at
 		 FROM indexed_documents
 		 WHERE LOWER(TRIM(COALESCE(audience, ''))) <> ?
 		 ORDER BY root, rel_path`,
@@ -93,7 +96,7 @@ func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocume
 	for rows.Next() {
 		var doc AdvertisableDocument
 		var facetsJSON, facetBytesJSON, tagsJSON, metaJSON, modified string
-		if err := rows.Scan(&doc.Root, &doc.Path, &doc.Title, &doc.Summary, &facetsJSON, &facetBytesJSON, &tagsJSON, &metaJSON, &modified); err != nil {
+		if err := rows.Scan(&doc.Root, &doc.Path, &doc.AbsPath, &doc.Title, &doc.Summary, &facetsJSON, &facetBytesJSON, &tagsJSON, &metaJSON, &modified); err != nil {
 			return nil, fmt.Errorf("scan advertisable document: %w", err)
 		}
 		doc.Ref = makeRef(doc.Root, doc.Path)

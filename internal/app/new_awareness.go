@@ -14,6 +14,7 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -217,6 +218,47 @@ func (a *App) initAwareness(s *newState) error {
 	// discriminator selects it and prepends the materialized projection to
 	// Live State, so a busy eager state window cannot starve the verdict.
 	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
+
+	// The corpus advertiser: any document root whose context policy opts
+	// in (advertise: always|tagged) offers its faceted documents to the
+	// discriminator. Index-only at offer time; a file is read only for a
+	// selected projection, under the rail's own detached budget. Sleep
+	// bounds come from the live definition registry — never frontmatter,
+	// which carries no updated stamp and rots after retunes (#1431).
+	if a.documentStore != nil {
+		advertisePolicies := make(map[string]documents.DocumentRootAdvertisePolicy, len(cfg.DocRoots))
+		for name, rootCfg := range cfg.DocRoots {
+			advertisePolicies[name] = documents.DocumentRootAdvertisePolicy{
+				Mode:        rootCfg.Context.EffectiveAdvertise(),
+				RequiresTag: rootCfg.Context.RequiresTag,
+			}
+		}
+		homeZone := time.Local
+		if cfg.Timezone != "" {
+			if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+				homeZone = loc
+			}
+		}
+		registry := a.loopDefinitionRegistry
+		a.loop.RegisterAlwaysContextProvider(documents.NewDocumentAdvertiser(documents.DocumentAdvertiserConfig{
+			Store: a.documentStore,
+			RootPolicy: func(root string) documents.DocumentRootAdvertisePolicy {
+				return advertisePolicies[root]
+			},
+			SleepMax: func(loopName string) (time.Duration, bool) {
+				if registry == nil {
+					return 0, false
+				}
+				spec, ok := registry.Get(loopName)
+				if !ok {
+					return 0, false
+				}
+				return spec.SleepMax, spec.SleepMax > 0
+			},
+			HomeZone: homeZone,
+			Logger:   logger,
+		}))
+	}
 
 	stateWindowProvider := homeassistant.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
