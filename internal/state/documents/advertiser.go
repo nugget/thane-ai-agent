@@ -29,12 +29,16 @@ const (
 	// only orders lexical matches among themselves.
 	advertiseLexicalStrength = 0.60
 
-	// advertiseEnvelopeOverheadBytes covers the one-line JSON envelope a
-	// materialized fragment opens with, on top of the indexed facet
-	// bytes. Estimates are commitments — the discriminator drops a
-	// payload that overruns its own declaration — so the overhead is
-	// budgeted generously.
-	advertiseEnvelopeOverheadBytes = 320
+	// advertiseEnvelopeSlackBytes absorbs the only way a materialized
+	// envelope can differ from the one measured at estimate time: a
+	// concurrent turn re-advertising the same document with different
+	// evidence (a longer match kind), a freshness band appearing as the
+	// document ages across the boundary, or a delta string gaining a
+	// unit. Estimates are commitments — the discriminator drops a
+	// payload that overruns its own declaration — so the drift is
+	// bounded and budgeted rather than guessed at: the envelope itself
+	// is measured exactly, and this covers only cross-turn skew.
+	advertiseEnvelopeSlackBytes = 32
 
 	// Fallback staleness bounds for a document no loop maintains: a
 	// hand-authored dossier is fresh for a day and aging for a week.
@@ -93,7 +97,7 @@ type DocumentAdvertiser struct {
 	// happen on the same turn, but nothing forbids concurrent turns —
 	// hence the lock.
 	mu       sync.RWMutex
-	lastRows map[string]AdvertisableDocument
+	lastRows map[string]advertisedDocument
 	lastNow  time.Time
 }
 
@@ -111,7 +115,7 @@ func NewDocumentAdvertiser(cfg DocumentAdvertiserConfig) *DocumentAdvertiser {
 	if cfg.HomeZone == nil {
 		cfg.HomeZone = time.Local
 	}
-	return &DocumentAdvertiser{cfg: cfg, lastRows: make(map[string]AdvertisableDocument)}
+	return &DocumentAdvertiser{cfg: cfg, lastRows: make(map[string]advertisedDocument)}
 }
 
 // TagContext implements TagContextProvider with an empty eager render:
@@ -141,7 +145,7 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 	subjects := knowledge.SubjectsFromContext(ctx)
 
 	now := d.cfg.Now().In(d.cfg.HomeZone)
-	remembered := make(map[string]AdvertisableDocument)
+	remembered := make(map[string]advertisedDocument)
 	var ads []agentctx.ContextAdvertisement
 	for _, row := range rows {
 		policy := d.cfg.RootPolicy(row.Root)
@@ -161,15 +165,6 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 			continue
 		}
 
-		projections := d.projectionsFor(row)
-		if len(projections) == 0 {
-			// An unfaceted document has only detail to offer, and
-			// automatic selection never takes detail. It stays reachable
-			// through search; the rail is for documents that authored
-			// their own compact projections.
-			continue
-		}
-
 		matches := []agentctx.ContextMatchSignal{{
 			Kind:     agentctx.ContextMatchAmbient,
 			Strength: d.freshnessStrength(row, now),
@@ -181,7 +176,29 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 			matches = append(matches, m)
 		}
 
-		remembered[row.Ref] = row
+		// The envelope is rendered now, with this offer's real values,
+		// and its measured length feeds the estimates. A fixed overhead
+		// constant would be a guess containing the unbounded ref twice;
+		// a measurement cannot be wrong about itself.
+		envelope := promptfmt.MarshalCompact(documentFragmentEnvelope{
+			Ref:          row.Ref,
+			SourceLoop:   row.LoopDefinitionName,
+			Match:        string(bestMatchKind(matches)),
+			UpdatedDelta: promptfmt.FormatDeltaOnly(row.ModifiedAt, now),
+			Stale:        d.freshnessBand(row, now),
+			More:         fmt.Sprintf("doc_read(%s, level=full)", row.Ref),
+		})
+
+		projections := d.projectionsFor(row, len(envelope)+1)
+		if len(projections) == 0 {
+			// An unfaceted document has only detail to offer, and
+			// automatic selection never takes detail. It stays reachable
+			// through search; the rail is for documents that authored
+			// their own compact projections.
+			continue
+		}
+
+		remembered[row.Ref] = advertisedDocument{row: row, envelope: envelope}
 		ads = append(ads, agentctx.ContextAdvertisement{
 			ID:          row.Ref,
 			Source:      "documents",
@@ -217,40 +234,71 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 func (d *DocumentAdvertiser) MaterializeContextAdvertisement(ctx context.Context, _ agentctx.ContextRequest, selection agentctx.ContextSelection) (string, error) {
 	ref := selection.Advertisement.Ref
 	d.mu.RLock()
-	row, ok := d.lastRows[ref]
+	entry, ok := d.lastRows[ref]
 	now := d.lastNow
 	d.mu.RUnlock()
-	if now.IsZero() {
-		now = d.cfg.Now().In(d.cfg.HomeZone)
-	}
 	if !ok {
 		return "", fmt.Errorf("no remembered enumeration row for %s", ref)
+	}
+	if now.IsZero() {
+		now = d.cfg.Now().In(d.cfg.HomeZone)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	row := entry.row
 
-	raw, err := os.ReadFile(row.AbsPath)
+	// The offer was made from a row the index measured; the render must
+	// prove the file is still that document. Enumeration deliberately
+	// serves a slightly stale index, so between offer and selection the
+	// file can be republished internal, replaced unsigned, or grown
+	// pathological — and a direct read would carry whatever is there now
+	// into the prompt under the old row's provenance. mtime+size
+	// equality is the same change detector the store's own refresher
+	// trusts to decide whether a file needs re-parsing, so matching it
+	// gives this path exactly the index's guarantees: any change the
+	// refresher would notice refuses the render here, and the next
+	// enumeration re-offers the document as whatever it has become.
+	info, err := os.Stat(row.AbsPath)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", ref, err)
+	}
+	if !info.ModTime().Equal(row.ModifiedAt) || info.Size() != row.SizeBytes {
+		return "", fmt.Errorf("document %s changed since it was offered; declining to render the stale offer", ref)
+	}
+
+	// Same bounded funnel as every other document-file read, then a
+	// fresh audience check from the bytes actually read — the SQL gate
+	// filtered the indexed row; this closes the window on the file.
+	raw, err := readDocumentBytes(row.AbsPath)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", ref, err)
 	}
-	payload, _ := looppkg.ParseFacetSections(string(raw))
+	meta, body := splitFrontmatter(string(raw))
+	if isInternalAudienceDocument(meta) {
+		return "", fmt.Errorf("document %s is audience-internal; refusing to materialize", ref)
+	}
+
+	payload, _ := looppkg.ParseFacetSections(body)
 	content := facetContent(payload, selection.Projection.Name)
 	if strings.TrimSpace(content) == "" {
 		return "", fmt.Errorf("document %s no longer carries facet %s", ref, selection.Projection.Name)
 	}
-
 	content = promptfmt.ExpandTemporalTemplates(content, now)
 
-	envelope := documentFragmentEnvelope{
-		Ref:          ref,
-		SourceLoop:   row.LoopDefinitionName,
-		Match:        string(bestMatchKind(selection.Advertisement.Matches)),
-		UpdatedDelta: promptfmt.FormatDeltaOnly(row.ModifiedAt, now),
-		Stale:        d.freshnessBand(row, now),
-		More:         fmt.Sprintf("doc_read(%s, level=full)", ref),
-	}
-	return promptfmt.MarshalCompact(envelope) + "\n" + content, nil
+	// The stored envelope is the one whose length the estimate promised;
+	// prepending those exact bytes keeps the commitment by construction.
+	return entry.envelope + "\n" + content, nil
+}
+
+// advertisedDocument is one remembered enumeration entry: the row a
+// materialization needs to find and validate the file, plus the exact
+// envelope line measured into this offer's estimates. Storing the
+// rendered envelope makes the estimate honest by construction — the
+// materializer prepends these bytes, not a reconstruction of them.
+type advertisedDocument struct {
+	row      AdvertisableDocument
+	envelope string
 }
 
 // documentFragmentEnvelope is the one-line JSON header a materialized
@@ -268,7 +316,7 @@ type documentFragmentEnvelope struct {
 // cost plus envelope overhead, and the full body as detail. Roles come
 // from the facet contract's own table, so the advertiser cannot drift
 // from what the ladder means.
-func (d *DocumentAdvertiser) projectionsFor(row AdvertisableDocument) []agentctx.ContextProjection {
+func (d *DocumentAdvertiser) projectionsFor(row AdvertisableDocument, envelopeBytes int) []agentctx.ContextProjection {
 	var out []agentctx.ContextProjection
 	compact := false
 	for facet, size := range row.FacetBytes {
@@ -283,7 +331,7 @@ func (d *DocumentAdvertiser) projectionsFor(row AdvertisableDocument) []agentctx
 			Name:           facet,
 			Role:           field.ContextRole,
 			Format:         "text/markdown",
-			EstimatedBytes: size + advertiseEnvelopeOverheadBytes,
+			EstimatedBytes: size + envelopeBytes + advertiseEnvelopeSlackBytes,
 		})
 	}
 	if !compact {

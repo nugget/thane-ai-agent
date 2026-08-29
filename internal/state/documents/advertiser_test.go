@@ -2,6 +2,8 @@ package documents
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -118,7 +120,7 @@ func TestDocumentAdvertiserProjectionsCarryIndexedCosts(t *testing.T) {
 	roles := map[string]agentctx.ContextProjectionRole{}
 	for _, p := range ads[0].Projections {
 		roles[p.Name] = p.Role
-		if p.EstimatedBytes <= advertiseEnvelopeOverheadBytes {
+		if p.EstimatedBytes <= advertiseEnvelopeSlackBytes {
 			t.Fatalf("projection %s estimate %d does not cover content plus envelope", p.Name, p.EstimatedBytes)
 		}
 	}
@@ -274,6 +276,11 @@ Utah trip Sep 18 ({{delta:2026-09-18}})
 
 Body.
 `)
+	// The fixture's first Refresh ran moments ago; without disabling the
+	// throttle this second one would no-op, the index would still hold
+	// the pre-rewrite row, and the materializer's changed-since-offered
+	// check would (correctly) refuse to render.
+	store.refreshInterval = 0
 	if err := store.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -301,5 +308,111 @@ Body.
 	}
 	if strings.Contains(out, "{{delta:") {
 		t.Fatalf("raw template leaked to the reader surface: %q", out)
+	}
+}
+
+func TestDocumentAdvertiserRefusesAFileChangedSinceTheOffer(t *testing.T) {
+	store, dirs := newAdvertiseStore(t)
+	adv := NewDocumentAdvertiser(DocumentAdvertiserConfig{
+		Store:      store,
+		RootPolicy: func(string) DocumentRootAdvertisePolicy { return DocumentRootAdvertisePolicy{Mode: "always"} },
+		HomeZone:   time.UTC,
+	})
+	ads, err := adv.ContextAdvertisements(context.Background(), agentctx.ContextRequest{})
+	if err != nil || len(ads) != 1 {
+		t.Fatalf("ContextAdvertisements: %v (%d)", err, len(ads))
+	}
+
+	// The file changes after the offer and before selection — the shape
+	// enumeration's deliberate staleness makes possible. The stale index
+	// row must not lend its provenance to whatever is on disk now.
+	writeFile(t, filepath.Join(dirs["beta"], "dossier.md"), "---\ntitle: Swapped\n---\n\n## Status Line\n\nnot what was offered\n")
+
+	_, err = adv.MaterializeContextAdvertisement(context.Background(), agentctx.ContextRequest{}, agentctx.ContextSelection{
+		Advertisement: ads[0],
+		Projection:    agentctx.ContextProjection{Name: "status_line", Role: agentctx.ContextRoleSignal, Format: "text/markdown", EstimatedBytes: 512},
+	})
+	if err == nil || !strings.Contains(err.Error(), "changed since it was offered") {
+		t.Fatalf("want changed-since-offered refusal, got %v", err)
+	}
+}
+
+func TestDocumentAdvertiserRefusesAFreshlyInternalDocument(t *testing.T) {
+	store, dirs := newAdvertiseStore(t)
+	adv := NewDocumentAdvertiser(DocumentAdvertiserConfig{
+		Store:      store,
+		RootPolicy: func(string) DocumentRootAdvertisePolicy { return DocumentRootAdvertisePolicy{Mode: "always"} },
+		HomeZone:   time.UTC,
+	})
+	ads, err := adv.ContextAdvertisements(context.Background(), agentctx.ContextRequest{})
+	if err != nil || len(ads) != 1 {
+		t.Fatalf("ContextAdvertisements: %v (%d)", err, len(ads))
+	}
+
+	// Republished as internal after the offer. The mtime/size check
+	// would already refuse this rewrite; the fresh audience check is the
+	// second lock on the same door, pinned here by defeating the first:
+	// remember the row, rewrite the file, then restore the remembered
+	// stat identity is impossible — so instead assert through the
+	// internal seam that the audience gate alone refuses.
+	d := adv
+	d.mu.RLock()
+	entry := d.lastRows[ads[0].Ref]
+	d.mu.RUnlock()
+
+	internalBody := "---\naudience: internal\n---\n\n## Status Line\n\nsecret\n"
+	writeFile(t, filepath.Join(dirs["beta"], "dossier.md"), internalBody)
+	info, err := os.Stat(filepath.Join(dirs["beta"], "dossier.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.row.ModifiedAt = info.ModTime()
+	entry.row.SizeBytes = info.Size()
+	d.mu.Lock()
+	d.lastRows[ads[0].Ref] = entry
+	d.mu.Unlock()
+
+	_, err = adv.MaterializeContextAdvertisement(context.Background(), agentctx.ContextRequest{}, agentctx.ContextSelection{
+		Advertisement: ads[0],
+		Projection:    agentctx.ContextProjection{Name: "status_line", Role: agentctx.ContextRoleSignal, Format: "text/markdown", EstimatedBytes: 512},
+	})
+	if err == nil || !strings.Contains(err.Error(), "audience-internal") {
+		t.Fatalf("want audience-internal refusal, got %v", err)
+	}
+}
+
+func TestDocumentAdvertiserEstimatesCoverTheMeasuredEnvelope(t *testing.T) {
+	store, _ := newAdvertiseStore(t)
+	fixed := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	adv := NewDocumentAdvertiser(DocumentAdvertiserConfig{
+		Store:      store,
+		RootPolicy: func(string) DocumentRootAdvertisePolicy { return DocumentRootAdvertisePolicy{Mode: "always"} },
+		HomeZone:   time.UTC,
+		Now:        func() time.Time { return fixed },
+	})
+	ads, err := adv.ContextAdvertisements(context.Background(), agentctx.ContextRequest{})
+	if err != nil || len(ads) != 1 {
+		t.Fatalf("ContextAdvertisements: %v (%d)", err, len(ads))
+	}
+
+	// The commitment the discriminator enforces: rendered bytes never
+	// exceed the declared estimate. Estimates are built from the exact
+	// stored envelope plus the indexed facet bytes, so this must hold
+	// for every offered projection — including one with a long ref that
+	// a fixed overhead constant would have under-counted.
+	for _, p := range ads[0].Projections {
+		if p.Role == agentctx.ContextRoleDetail {
+			continue
+		}
+		out, err := adv.MaterializeContextAdvertisement(context.Background(), agentctx.ContextRequest{}, agentctx.ContextSelection{
+			Advertisement: ads[0],
+			Projection:    p,
+		})
+		if err != nil {
+			t.Fatalf("Materialize %s: %v", p.Name, err)
+		}
+		if len(out) > p.EstimatedBytes {
+			t.Fatalf("projection %s rendered %d bytes over its own estimate %d", p.Name, len(out), p.EstimatedBytes)
+		}
 	}
 }

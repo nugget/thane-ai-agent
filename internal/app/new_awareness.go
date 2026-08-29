@@ -228,6 +228,16 @@ func (a *App) initAwareness(s *newState) error {
 	if a.documentStore != nil {
 		advertisePolicies := make(map[string]documents.DocumentRootAdvertisePolicy, len(cfg.DocRoots))
 		for name, rootCfg := range cfg.DocRoots {
+			// Canonicalize exactly as the store's own root wiring does
+			// (document_roots.go): legacy doc_roots keys tolerate
+			// whitespace and a trailing colon, and index rows carry the
+			// canonical name — a noncanonical key here would make the
+			// policy lookup miss and advertise: always silently behave
+			// as never.
+			name = strings.TrimSuffix(strings.TrimSpace(name), ":")
+			if name == "" {
+				continue
+			}
 			advertisePolicies[name] = documents.DocumentRootAdvertisePolicy{
 				Mode:        rootCfg.Context.EffectiveAdvertise(),
 				RequiresTag: rootCfg.Context.RequiresTag,

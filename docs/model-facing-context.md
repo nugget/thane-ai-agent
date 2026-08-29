@@ -201,7 +201,8 @@ Curated prose gets the same treatment through temporal templates:
 time via `promptfmt.ExpandTemporalTemplates` — day words for a date
 ("today", "+20d"), a signed compact delta for an instant ("+3d16h") —
 so an authored document stays true between rewrites. Only reader
-surfaces expand (tagged-article injection today); author surfaces
+surfaces expand — tagged-article injection and advertisement
+materialization; author surfaces
 (`doc_read`, the publish tools, git) keep the raw template so the
 round-trip is byte-exact, and a malformed template renders verbatim
 rather than disappearing. Templates render values, never claims —
