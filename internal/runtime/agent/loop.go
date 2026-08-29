@@ -701,6 +701,7 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	assembler = NewTagContextAssembler(TagContextAssemblerConfig{
 		HAInject: l.haInject,
 		Logger:   l.logger,
+		Timezone: l.timezone,
 	})
 	for tag, p := range pendingTagged {
 		assembler.RegisterTaggedProvider(tag, p)

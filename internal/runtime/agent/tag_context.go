@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -73,6 +74,12 @@ type TagContextAssembler struct {
 	}
 	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger   *slog.Logger
+	// loc is the zone temporal templates expand against; see
+	// [TagContextAssemblerConfig.Timezone] for why it matters.
+	loc *time.Location
+	// nowFunc returns the current time. Tests override it to pin
+	// template expansion to a fixed instant.
+	nowFunc func() time.Time
 
 	mu           sync.Mutex
 	tagProviders map[string]TagContextProvider
@@ -144,6 +151,13 @@ type TagContextAssemblerConfig struct {
 	}
 	HAInject homeassistant.StateFetcher // nil-safe
 	Logger   *slog.Logger
+	// Timezone is the household IANA timezone (e.g. "America/Chicago")
+	// that temporal templates in injected documents expand against.
+	// [promptfmt.FormatDayDelta] compares calendar days, so the zone
+	// decides which day "today" is — a household evening must not read
+	// as "tomorrow" because the process clock runs in UTC. Empty or
+	// unloadable falls back to the process-local zone.
+	Timezone string
 }
 
 // NewTagContextAssembler creates an assembler. The KB directory is
@@ -157,6 +171,20 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	// Config validation already rejects a bad household timezone, but
+	// this constructor is also reached directly (tests, the loop's
+	// pending-provider fallback), so degrade to the process-local zone
+	// with a warning rather than failing construction over a
+	// presentation concern.
+	loc := time.Local
+	if cfg.Timezone != "" {
+		if parsed, err := time.LoadLocation(cfg.Timezone); err == nil {
+			loc = parsed
+		} else {
+			cfg.Logger.Warn("invalid timezone for temporal template expansion; using process-local zone",
+				"timezone", cfg.Timezone, "error", err)
+		}
+	}
 	return &TagContextAssembler{
 		capTags:     cfg.CapTags,
 		kbDir:       cfg.KBDir,
@@ -165,7 +193,24 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 		verifier:    cfg.Verifier,
 		haInject:    cfg.HAInject,
 		logger:      cfg.Logger,
+		loc:         loc,
+		nowFunc:     time.Now,
 	}
+}
+
+// templateNow is the instant temporal templates in injected documents
+// expand against: the current time in the household zone when one was
+// configured, the process-local zone otherwise. Day-word rendering
+// compares calendar days, so the zone decides which day "today" is.
+func (a *TagContextAssembler) templateNow() time.Time {
+	now := time.Now()
+	if a.nowFunc != nil {
+		now = a.nowFunc()
+	}
+	if a.loc != nil {
+		now = now.In(a.loc)
+	}
+	return now
 }
 
 // InjectRoot is one injection-eligible document root: the directory to
@@ -419,6 +464,13 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		// Strip frontmatter before injection — the model doesn't need
 		// the YAML metadata, just the knowledge content.
 		_, content := talents.ParseFrontmatterMetadata(string(data))
+		// Temporal templates expand before ha-inject resolution so
+		// only the curated prose is expanded, never entity state
+		// fetched a moment ago. This is a reader surface: the model
+		// sees "+20d" here while doc_read, the publish tools, and git
+		// keep the raw {{delta:...}} so the author round-trip stays
+		// byte-exact.
+		content = promptfmt.ExpandTemporalTemplates(content, a.templateNow())
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		bucket := agentctx.ContextBucketTaggedGuidance
 		if acc.append(bucket, data) {

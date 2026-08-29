@@ -196,6 +196,18 @@ Use the shared helpers in `internal/model/promptfmt/timefmt.go`:
 When a tool naturally wants relative scheduling, accept delta syntax as
 input instead of forcing the model to invent RFC3339 timestamps.
 
+Curated prose gets the same treatment through temporal templates:
+`{{delta:2026-09-18}}` (bare date or RFC3339 value) expands at read
+time via `promptfmt.ExpandTemporalTemplates` — day words for a date
+("today", "+20d"), a signed compact delta for an instant ("+3d16h") —
+so an authored document stays true between rewrites. Only reader
+surfaces expand (tagged-article injection today); author surfaces
+(`doc_read`, the publish tools, git) keep the raw template so the
+round-trip is byte-exact, and a malformed template renders verbatim
+rather than disappearing. Templates render values, never claims —
+prose whose truth changes with data is a wake concern, not a
+substitution concern (#1431).
+
 ### Keep schemas stable and deterministic
 
 For model-facing data:
