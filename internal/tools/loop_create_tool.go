@@ -870,7 +870,7 @@ func thaneLoopCreateSchema() map[string]any {
 					"facets": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-						"description": "Publish selected projections alongside the full body, so each consumer takes the shape it needs. status_line and teaser are both outward-facing signals: status_line is the tight ambient form and teaser is the roomier search or cross-reference form. digest carries enough context to act. Declare only the projections this output's readers need; a dossier can use teaser and digest without inventing ambient status. Declaring any swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per declared projection plus full.",
+						"description": "Publish selected projections alongside the full body, so each consumer takes the shape it needs. status_line and teaser are both outward-facing signals: status_line is the tight ambient form and teaser is the roomier search or cross-reference form. digest carries enough context to act. status_line is required whenever facets are declared — the one-line projection every surface can take — and teaser and digest are optional. Declaring any swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per declared projection plus full.",
 					},
 					"initial": map[string]any{
 						"type":        "object",

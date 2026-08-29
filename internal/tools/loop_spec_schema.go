@@ -200,7 +200,7 @@ func loopOutputSpecSchema() map[string]any {
 						},
 					},
 				},
-				"description": "The facets this output publishes alongside its full body — views of the same understanding cut for different consumers: status_line is ambient current state, teaser advertises why to look, and digest is enough context to act. Declare only the projections this output's consumers need; full is always implicit. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per declared facet plus full. Write a bare name for the default encoding, or an object to set a format. Order carries no meaning.",
+				"description": "The facets this output publishes alongside its full body — views of the same understanding cut for different consumers: status_line is ambient current state, teaser advertises why to look, and digest is enough context to act. status_line is required whenever facets are declared; teaser and digest are optional, and full is always implicit. Declaring any swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per declared facet plus full. Write a bare name for the default encoding, or an object to set a format. Order carries no meaning.",
 			},
 			"audience": map[string]any{
 				"type":        "string",

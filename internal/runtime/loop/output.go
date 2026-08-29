@@ -246,6 +246,7 @@ func validateOutputFacets(o OutputSpec) error {
 		return fmt.Errorf("facets declare published projections, but audience is %q; an internal output has no consumers to cut a facet for", OutputAudienceInternal)
 	}
 	seen := make(map[OutputFacet]struct{}, len(o.Facets))
+	hasStatusLine := false
 	for i, facet := range o.Facets {
 		switch facet.Name {
 		case OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest:
@@ -259,6 +260,12 @@ func validateOutputFacets(o OutputSpec) error {
 			return fmt.Errorf("facets[%d]: duplicate facet %q", i, facet.Name)
 		}
 		seen[facet.Name] = struct{}{}
+		if facet.Name == OutputFacetStatusLine {
+			hasStatusLine = true
+		}
+	}
+	if !hasStatusLine {
+		return fmt.Errorf("facets must include %q; the ambient one-line projection is the one every surface can take (teaser and digest are optional)", OutputFacetStatusLine)
 	}
 	return nil
 }

@@ -91,11 +91,11 @@ your mind — so the loop's private thinking opens with a belief to
 revise instead of a blank page. Author the seed from what you actually
 observed; when you have observed nothing, leave the placeholders.
 
-Declare only what the readers need. Use `status_line` for ambient current
-state, `teaser` for search and cross-reference signals, and `digest` when a
-reader should be able to act without opening the document. A dossier may
-reasonably declare `teaser` and `digest` without inventing an ambient status;
-a small live-state panel may need only `status_line`.
+Every faceted output declares `status_line` — the one-line projection any
+surface can take is the ladder's anchor. Add `teaser` for search and
+cross-reference signals, and `digest` when a reader should be able to act
+without opening the document; a small live-state panel may need only
+`status_line`.
 
 What makes this concrete on the reading side: `doc_read` takes a `level`,
 so any consumer — another loop, a later turn of this one, you — can pull

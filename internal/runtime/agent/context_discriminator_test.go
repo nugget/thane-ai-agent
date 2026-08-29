@@ -208,3 +208,61 @@ func TestTagContextAssemblerUsesAdvertisementPathAndPrependsSelection(t *testing
 		t.Fatalf("materialized = %v, want selected status_line only", provider.materialized)
 	}
 }
+
+func TestSelectContextAdvertisementsDuplicateWithoutProjectionDoesNotSuppressLaterClaimant(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	// Two claimants of one identity. The higher-ranked one offers only
+	// detail, which automatic selection never chooses; the lower-ranked one
+	// carries a selectable signal. Marking the identity seen on the empty
+	// claimant would suppress the usable one and select nothing at all.
+	empty := testAdvertisement("memory", "same", agentctx.ContextMatchExactSubject, 1,
+		testProjection("full", agentctx.ContextRoleDetail, 100))
+	usable := testAdvertisement("memory", "same", agentctx.ContextMatchAmbient, 0.5,
+		testProjection("signal", agentctx.ContextRoleSignal, 100))
+
+	selected := selectContextAdvertisements([]contextAdvertisementCandidate{
+		{advertiser: provider, advertisement: empty},
+		{advertiser: provider, advertisement: usable},
+	})
+
+	if len(selected) != 1 {
+		t.Fatalf("selected %d advertisements, want 1", len(selected))
+	}
+	if got := selected[0].selection.Projection.Name; got != "signal" {
+		t.Fatalf("selected projection %q, want the later claimant's signal", got)
+	}
+}
+
+func TestMaterializeDropsPayloadExceedingItsOwnEstimate(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	over := testAdvertisement("memory", "overrun", agentctx.ContextMatchExactSubject, 1,
+		testProjection("digest", agentctx.ContextRoleContext, 64))
+	honest := testAdvertisement("memory", "honest", agentctx.ContextMatchSemantic, 1,
+		testProjection("digest", agentctx.ContextRoleContext, 64))
+	provider.advertisements = []agentctx.ContextAdvertisement{over, honest}
+	provider.content = map[string]string{
+		// Selection reserved 64 bytes for each; the overrun delivers far
+		// more. Admitting it would spend capacity promised to later
+		// winners and make their fate order-dependent.
+		"memory/overrun/digest": strings.Repeat("x", 4096),
+		"memory/honest/digest":  "fits fine",
+	}
+
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{})
+	buckets := assembler.materializeContextAdvertisements(context.Background(), agentctx.ContextRequest{}, []contextAdvertisementCandidate{
+		{advertiser: provider, advertisement: over},
+		{advertiser: provider, advertisement: honest},
+	})
+
+	rendered := buckets[agentctx.ContextBucketRelated]
+	if strings.Contains(rendered, "xxxx") {
+		t.Fatalf("over-estimate payload must be dropped, got: %.80s", rendered)
+	}
+	if !strings.Contains(rendered, "fits fine") {
+		t.Fatalf("honest payload should survive, got: %q", rendered)
+	}
+}

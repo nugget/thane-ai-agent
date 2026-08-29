@@ -109,7 +109,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantTool: "publish_output_ranch_status",
 		},
 		{
-			name: "status line can be the only declared projection",
+			name: "status line alone anchors the ladder",
 			output: OutputSpec{
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
@@ -119,14 +119,14 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantTool: "publish_output_ranch_status",
 		},
 		{
-			name: "request-facing facets do not require ambient status",
+			name: "facets without status line rejected",
 			output: OutputSpec{
 				Name:   "ranch status",
 				Type:   OutputTypeMaintainedDocument,
 				Ref:    "core:ranch.md",
 				Facets: []FacetSpec{{Name: OutputFacetTeaser}, {Name: OutputFacetDigest}},
 			},
-			wantTool: "publish_output_ranch_status",
+			wantErr: true,
 		},
 		{
 			name: "unknown facet rejected",

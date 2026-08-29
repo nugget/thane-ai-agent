@@ -75,7 +75,6 @@ func selectContextAdvertisements(candidates []contextAdvertisementCandidate) []c
 		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
-		seen[key] = struct{}{}
 		match, _ := bestContextMatch(candidate.advertisement.Matches)
 		separator := 0
 		if len(selected) > 0 {
@@ -83,8 +82,14 @@ func selectContextAdvertisements(candidates []contextAdvertisementCandidate) []c
 		}
 		projection, ok := chooseContextProjection(candidate.advertisement.Projections, match.Kind, remaining-separator)
 		if !ok {
+			// Not marked seen: this claimant offered nothing selectable
+			// (detail-only, or nothing fits the remaining budget), and a
+			// lower-ranked claimant of the same identity may still carry a
+			// projection that does. Marking the identity here would let
+			// the emptiest offer suppress every usable one behind it.
 			continue
 		}
+		seen[key] = struct{}{}
 		selected = append(selected, contextAdvertisementSelection{
 			advertiser: candidate.advertiser,
 			selection: agentctx.ContextSelection{
@@ -203,12 +208,20 @@ func (a *TagContextAssembler) materializeContextAdvertisements(ctx context.Conte
 			continue
 		}
 		if len(content) > item.selection.Projection.EstimatedBytes {
-			a.logger.Warn("context advertisement exceeded its byte estimate",
+			// The estimate is what selection reserved; admitting a larger
+			// payload spends capacity that later, honestly-estimated
+			// winners were promised, and whether they then fit becomes an
+			// accident of materialization order. An offer that overruns
+			// its own declaration is dropped — the same policy as an
+			// oversized projection, and the pressure that keeps estimates
+			// honest.
+			a.logger.Warn("context advertisement dropped: exceeded its own byte estimate",
 				"source", item.selection.Advertisement.Source,
 				"id", item.selection.Advertisement.ID,
 				"projection", item.selection.Projection.Name,
 				"estimated_bytes", item.selection.Projection.EstimatedBytes,
 				"actual_bytes", len(content))
+			continue
 		}
 		bucket := item.selection.Advertisement.Bucket
 		buf := buffers[bucket]
