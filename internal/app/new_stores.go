@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
+	"github.com/nugget/thane-ai-agent/internal/state/companions"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -140,6 +141,19 @@ func (a *App) initStores(s *newState) error {
 		return fmt.Errorf("loop queue store: %w", err)
 	}
 	a.loopQueue = loopQueue
+
+	// --- Companion device inventory ---
+	// Durable record of every known companion device (#1437), written by
+	// the WebSocket connection lifecycle in initServers. Constructed
+	// unconditionally: the inventory's lifetime deliberately exceeds the
+	// companion config that feeds it — unconfiguring companions must not
+	// orphan the records. Shares the main thane.db connection; no
+	// separate close hook (mem owns the DB).
+	companionDevices, err := companions.NewStore(a.mem.DB(), logger)
+	if err != nil {
+		return fmt.Errorf("companion device store: %w", err)
+	}
+	a.companionDevices = companionDevices
 
 	// Daily prune for the completions journal Ack writes — the audit
 	// trail is bounded by age, mirroring the log-index pruner's shape.

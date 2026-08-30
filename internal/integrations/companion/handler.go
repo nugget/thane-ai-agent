@@ -45,6 +45,7 @@ var upgrader = websocket.Upgrader{
 type Handler struct {
 	tokenIndex map[string]string // token → account name
 	registry   *Registry
+	devices    DeviceRecorder // optional durable inventory sink; nil disables
 	logger     *slog.Logger
 }
 
@@ -119,10 +120,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register the provider before confirming to the client, so the
-	// registry is consistent by the time the client reads auth_ok.
+	// registry is consistent by the time the client reads auth_ok. The
+	// durable inventory upsert rides the same moment; the disconnect
+	// stamp mirrors it on the way out — timestamps only, the record
+	// itself outlives the connection (#1437).
 	h.registry.Add(provider)
+	h.recordConnected(provider)
 	defer func() {
 		h.registry.Remove(provider.ID)
+		h.recordDisconnected(provider)
 		close(provider.done)
 		conn.Close()
 	}()
@@ -204,6 +210,9 @@ func (h *Handler) authenticate(conn *websocket.Conn, requestType string) (*Provi
 		Account:     account,
 		ClientName:  msg.ClientName,
 		ClientID:    msg.ClientID,
+		Platform:    msg.Platform,
+		AppVersion:  msg.AppVersion,
+		OSVersion:   msg.OSVersion,
 		Conn:        conn,
 		ConnectedAt: time.Now(),
 		requestType: requestType,
@@ -333,6 +342,9 @@ func (h *Handler) handleRegisterCapabilities(p *Provider, id int64, payload []by
 		h.writeErrorResult(p, id, "provider_not_found", err.Error())
 		return
 	}
+	// Persist the normalized manifest as the device's most recently
+	// advertised capability set.
+	h.recordCapabilities(p)
 
 	if err := p.writeJSON(Message{
 		ID:      id,
