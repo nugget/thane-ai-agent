@@ -41,13 +41,15 @@ type ContactContext struct {
 }
 
 // CounterpartyPresence is the compact whereabouts view joined from the
-// HA person binding: zone-level state, room when home (bermuda), and
-// deltas rather than timestamps.
+// HA person binding: zone-level state, provider-attributed room when home,
+// and deltas rather than timestamps.
 type CounterpartyPresence struct {
-	State     string `json:"state"`
-	Since     string `json:"since,omitempty"`
-	Room      string `json:"room,omitempty"`
-	RoomSince string `json:"room_since,omitempty"`
+	State        string `json:"state"`
+	Since        string `json:"since,omitempty"`
+	Room         string `json:"room,omitempty"`
+	RoomSince    string `json:"room_since,omitempty"`
+	RoomProvider string `json:"room_provider,omitempty"`
+	RoomSource   string `json:"room_source,omitempty"`
 }
 
 // CounterpartyDevice is one bound companion device, compactly: enough

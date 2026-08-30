@@ -39,8 +39,8 @@ type CounterpartyToolDeps struct {
 
 // EnableCounterpartyTools adds the fused counterparty view: one call
 // that answers "what do we know about where this person is" from every
-// source the contact record roots — HA person zone state, bermuda room
-// while home, and companion location observations — ranked, with
+// source the contact record roots — HA person zone state, provider-attributed
+// room presence while home, and companion location observations — ranked, with
 // provenance and freshness per source.
 func (r *Registry) EnableCounterpartyTools(deps CounterpartyToolDeps) {
 	if deps.Contacts == nil {
@@ -86,13 +86,14 @@ func (r *Registry) EnableCounterpartyTools(deps CounterpartyToolDeps) {
 // view. Entries are ordered best-first by the ranking the tool
 // description promises; rank is the order, not a numeric field.
 type whereaboutsSource struct {
-	// Source identifies the provenance: "bermuda_room",
-	// "ha_person_zone", or "companion_location".
+	// Source identifies the provenance: "unifi_room", "bermuda_room",
+	// neutral "room_presence", "ha_person_zone", or "companion_location".
 	Source string `json:"source"`
 
 	// Zone/room fields (presence sources).
-	State     string `json:"state,omitempty"`
-	Room      string `json:"room,omitempty"`
+	State string `json:"state,omitempty"`
+	Room  string `json:"room,omitempty"`
+	// RoomVia is provider-specific evidence, such as a UniFi AP name.
 	RoomVia   string `json:"room_via,omitempty"`
 	Since     string `json:"since,omitempty"`
 	RoomSince string `json:"room_since,omitempty"`
@@ -128,6 +129,20 @@ type whereaboutsResult struct {
 	Sources    []whereaboutsSource `json:"sources"`
 }
 
+// whereaboutsRoomSource keeps provider attribution honest without allowing an
+// arbitrary provider string to expand the model-facing source enum. Unknown or
+// legacy providers remain useful but explicitly neutral.
+func whereaboutsRoomSource(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "unifi":
+		return "unifi_room"
+	case "bermuda":
+		return "bermuda_room"
+	default:
+		return "room_presence"
+	}
+}
+
 func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, name, id string) (string, error) {
 	contact, err := resolveWhereaboutsContact(deps.Contacts, name, id)
 	if err != nil {
@@ -159,7 +174,11 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 					zone.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
 				}
 				if home && snap.Room != "" {
-					room := whereaboutsSource{Source: "bermuda_room", Room: snap.Room, RoomVia: snap.RoomSource}
+					room := whereaboutsSource{
+						Source:  whereaboutsRoomSource(snap.RoomProvider),
+						Room:    snap.Room,
+						RoomVia: snap.RoomSource,
+					}
 					if !snap.RoomSince.IsZero() {
 						room.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
 					}
@@ -288,7 +307,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 		result.Sources = append(result.Sources, presenceSources...)
 		result.Sources = append(result.Sources, available...)
 		result.Sources = append(result.Sources, withdrawn...)
-		if len(presenceSources) > 0 && presenceSources[0].Source == "bermuda_room" {
+		if len(presenceSources) > 0 && presenceSources[0].Room != "" {
 			result.Basis = "home per person entity; room-level presence leads as the most specific source while home"
 		} else {
 			result.Basis = "home per person entity; zone state leads because no room-level presence is available"

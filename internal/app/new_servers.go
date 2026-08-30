@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
@@ -387,21 +388,7 @@ func (a *App) initServers(s *newState) error {
 				if !ok {
 					return nil
 				}
-				now := time.Now()
-				view := &agent.CounterpartyPresence{State: snap.State}
-				if !snap.Since.IsZero() {
-					view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
-				}
-				// The tracker clears rooms only on not_home, so a direct
-				// home → zone transition can leave a stale room behind;
-				// room-level detail is only truthful while home.
-				if strings.EqualFold(snap.State, "home") {
-					view.Room = snap.Room
-					if !snap.RoomSince.IsZero() {
-						view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
-					}
-				}
-				return view
+				return counterpartyPresenceView(snap, time.Now())
 			}
 		}
 		if len(accountsByContact) > 0 && a.companionDevices != nil {
@@ -707,7 +694,12 @@ func (a *App) initServers(s *newState) error {
 		a.mqttPub.RegisterSensors(apSensors)
 
 		// Route room changes from person tracker to MQTT publishes.
-		s.personTracker.OnRoomChange(func(entityID, room, source string) {
+		s.personTracker.OnRoomChange(func(entityID, room, provider, source string) {
+			// This legacy MQTT sensor specifically represents UniFi AP
+			// association. Other room providers must not masquerade as AP data.
+			if provider != unifi.RoomProvider {
+				return
+			}
 			shortName := entityID
 			if idx := strings.IndexByte(entityID, '.'); idx >= 0 {
 				shortName = entityID[idx+1:]
@@ -716,6 +708,7 @@ func (a *App) initServers(s *newState) error {
 
 			attrs, err := json.Marshal(map[string]string{
 				"ap_name":      source,
+				"provider":     provider,
 				"last_changed": time.Now().Format(time.RFC3339),
 			})
 			if err != nil {
@@ -732,7 +725,8 @@ func (a *App) initServers(s *newState) error {
 					"entity_id", entityID, "room", room, "error", err)
 			} else {
 				logger.Debug("mqtt AP presence published",
-					"entity_id", entityID, "room", room, "source", source)
+					"entity_id", entityID, "room", room,
+					"room_provider", provider, "room_source", source)
 			}
 		})
 
@@ -895,6 +889,26 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	return nil
+}
+
+// counterpartyPresenceView renders the contact-context presence join. The
+// tracker clears rooms on not_home but can retain one across a direct home to
+// named-zone transition, so room detail and its provenance are truthful only
+// while the person state is home.
+func counterpartyPresenceView(snap contacts.PersonSnapshot, now time.Time) *agent.CounterpartyPresence {
+	view := &agent.CounterpartyPresence{State: snap.State}
+	if !snap.Since.IsZero() {
+		view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
+	}
+	if strings.EqualFold(snap.State, "home") && snap.Room != "" {
+		view.Room = snap.Room
+		view.RoomProvider = snap.RoomProvider
+		view.RoomSource = snap.RoomSource
+		if !snap.RoomSince.IsZero() {
+			view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+		}
+	}
+	return view
 }
 
 // companionAccountsByContact exposes counterparty bindings only while the

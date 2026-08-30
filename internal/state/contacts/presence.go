@@ -17,30 +17,37 @@ import (
 
 // PersonPresenceContext is the JSON structure emitted for each tracked
 // person in context output. Richer than the default entity JSON
-// because the tracker has room data from UniFi AP associations.
+// because the tracker has provider-attributed room data.
 type PersonPresenceContext struct {
-	Entity string `json:"entity"`
-	Name   string `json:"name"`
-	State  string `json:"state"`
-	Since  string `json:"since"`
-	Room   string `json:"room,omitempty"`
-	RoomSr string `json:"room_source,omitempty"`
+	Entity       string `json:"entity"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	Since        string `json:"since"`
+	Room         string `json:"room,omitempty"`
+	RoomProvider string `json:"room_provider,omitempty"`
+	RoomSource   string `json:"room_source,omitempty"`
 }
 
 // FormatPersonPresence formats a tracked person as compact JSON with
 // delta-annotated timestamps.
-func FormatPersonPresence(entityID, name, state string, since time.Time, room, roomSource string, now time.Time) string {
+func FormatPersonPresence(
+	entityID, name, state string,
+	since time.Time,
+	room, roomProvider, roomSource string,
+	now time.Time,
+) string {
 	displayState := state
 	if strings.EqualFold(state, "not_home") {
 		displayState = "away"
 	}
 	pc := PersonPresenceContext{
-		Entity: entityID,
-		Name:   name,
-		State:  displayState,
-		Since:  promptfmt.FormatDeltaOnly(since, now),
-		Room:   room,
-		RoomSr: roomSource,
+		Entity:       entityID,
+		Name:         name,
+		State:        displayState,
+		Since:        promptfmt.FormatDeltaOnly(since, now),
+		Room:         room,
+		RoomProvider: roomProvider,
+		RoomSource:   roomSource,
 	}
 	return promptfmt.MarshalCompact(pc)
 }
@@ -55,9 +62,10 @@ type Person struct {
 	State        string
 	Since        time.Time
 	DeviceMACs   []string  // configured MAC addresses for this person
-	Room         string    // inferred from AP association (e.g., "office")
+	Room         string    // inferred room (e.g., "office")
 	RoomSince    time.Time // when the current room was first detected
-	RoomSource   string    // AP name that determined the room (e.g., "ap-hor-office")
+	RoomProvider string    // stable provider family (e.g., "unifi")
+	RoomSource   string    // provider-specific evidence (e.g., an AP name)
 }
 
 // StateGetter abstracts the Home Assistant REST client for fetching
@@ -67,11 +75,11 @@ type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 }
 
-// RoomObserver is called when a tracked person's room changes.
-// Parameters are the person's entity ID, the new room name (may be
-// empty when cleared), and the AP or source name that determined
-// the room. Observers are called outside the tracker's lock.
-type RoomObserver func(entityID, room, source string)
+// RoomObserver is called when a tracked person's room observation changes.
+// Parameters are the person's entity ID, the new room name (may be empty when
+// cleared), the stable provider family, and provider-specific source evidence.
+// Observers are called outside the tracker's lock.
+type RoomObserver func(entityID, room, provider, source string)
 
 // PresenceTracker maintains in-memory presence state for configured
 // person entities and provides a context block for system prompt
@@ -225,6 +233,7 @@ func (t *PresenceTracker) HandleStateChange(entityID, _, newState, _ string) {
 	if strings.EqualFold(newState, "not_home") {
 		p.Room = ""
 		p.RoomSince = time.Time{}
+		p.RoomProvider = ""
 		p.RoomSource = ""
 	}
 }
@@ -259,7 +268,7 @@ func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextReques
 		} else {
 			sb.WriteString(FormatPersonPresence(
 				p.EntityID, displayName, p.State, p.Since,
-				p.Room, p.RoomSource, now,
+				p.Room, p.RoomProvider, p.RoomSource, now,
 			))
 			sb.WriteByte('\n')
 		}
@@ -268,9 +277,9 @@ func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextReques
 	return sb.String(), nil
 }
 
-// OnRoomChange registers a callback that fires whenever a tracked
-// person's room changes. Observers are called outside the tracker's
-// lock so they may perform blocking I/O (e.g., MQTT publishes).
+// OnRoomChange registers a callback that fires whenever a tracked person's
+// room observation or its provenance changes. Observers are called outside
+// the tracker's lock so they may perform blocking I/O (e.g., MQTT publishes).
 // Must be called before the poller starts.
 func (t *PresenceTracker) OnRoomChange(fn RoomObserver) {
 	t.mu.Lock()
@@ -278,16 +287,20 @@ func (t *PresenceTracker) OnRoomChange(fn RoomObserver) {
 	t.observers = append(t.observers, fn)
 }
 
-// UpdateRoom sets the room for a tracked person. If the room is
-// unchanged, no update occurs. When a person transitions to not_home,
-// HandleStateChange clears room data automatically; callers may also
-// pass an empty room to clear it explicitly. The source is the AP name
-// or other identifier that determined the room.
+// UpdateRoom sets one provider-attributed room observation for a tracked
+// person. An exact duplicate is ignored. A provider or source-evidence change
+// is retained without resetting RoomSince when the room itself is unchanged.
+// When a person transitions to not_home, HandleStateChange clears room data
+// automatically; callers may also pass an empty room to clear it explicitly.
 //
 // Registered [RoomObserver] callbacks are invoked after the state
 // update, outside the lock, so they may perform blocking operations.
-func (t *PresenceTracker) UpdateRoom(entityID, room, source string) {
+func (t *PresenceTracker) UpdateRoom(entityID, room, provider, source string) {
 	var notify bool
+	if room == "" {
+		provider = ""
+		source = ""
+	}
 
 	t.mu.Lock()
 	p, ok := t.people[entityID]
@@ -296,24 +309,27 @@ func (t *PresenceTracker) UpdateRoom(entityID, room, source string) {
 		return
 	}
 
-	if p.Room == room {
+	if p.Room == room && p.RoomProvider == provider && p.RoomSource == source {
 		t.mu.Unlock()
 		return
 	}
+	roomChanged := p.Room != room
 
 	t.logger.Debug("person room changed",
 		"entity_id", entityID,
 		"friendly_name", p.FriendlyName,
 		"old_room", p.Room,
 		"new_room", room,
-		"source", source,
+		"room_provider", provider,
+		"room_source", source,
 	)
 
 	p.Room = room
+	p.RoomProvider = provider
 	p.RoomSource = source
-	if room != "" {
+	if room != "" && roomChanged {
 		p.RoomSince = time.Now()
-	} else {
+	} else if room == "" {
 		p.RoomSince = time.Time{}
 	}
 
@@ -326,7 +342,7 @@ func (t *PresenceTracker) UpdateRoom(entityID, room, source string) {
 
 	if notify {
 		for _, fn := range obs {
-			fn(entityID, room, source)
+			fn(entityID, room, provider, source)
 		}
 	}
 }
@@ -355,6 +371,7 @@ type PersonSnapshot struct {
 	Since        time.Time
 	Room         string
 	RoomSince    time.Time
+	RoomProvider string
 	RoomSource   string
 }
 
@@ -374,6 +391,7 @@ func (t *PresenceTracker) Snapshot(entityID string) (PersonSnapshot, bool) {
 		Since:        p.Since,
 		Room:         p.Room,
 		RoomSince:    p.RoomSince,
+		RoomProvider: p.RoomProvider,
 		RoomSource:   p.RoomSource,
 	}, true
 }
