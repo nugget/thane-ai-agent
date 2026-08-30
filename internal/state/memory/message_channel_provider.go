@@ -207,18 +207,33 @@ func (p *MessageChannelProvider) conversationTiming(ctx context.Context, convID 
 	}
 	// On a contact turn the newest contact row is the current message
 	// itself (stored before prompt assembly), so the previous contact
-	// is the second entry; a wake stores no contact row, so it is the
-	// first.
+	// is the second entry — and the current message's stored arrival
+	// time becomes the anchor the gap is measured to, per the contract
+	// that the gap ends at arrival, not at prompt assembly. Assembly
+	// can lag arrival, and an anchor drifting across the recent-window
+	// or a day boundary would select the wrong rhythm bucket. A wake
+	// stores no contact row, so its previous contact is the first entry
+	// and wall-clock now is the honest anchor.
+	anchor := now
 	idx := 0
 	if facts.Kind == promptfmt.TurnContact {
 		idx = 1
+		if len(contacts) > 0 {
+			anchor = contacts[0]
+		}
 	}
 	if len(contacts) > idx {
 		facts.PreviousContactAt = contacts[idx]
 		facts.HasHistory = true
 	}
 
-	if sess, err := p.archive.ActiveSession(convID); err == nil && sess != nil {
+	if sess, err := p.archive.ActiveSession(convID); err != nil {
+		// Degrading to the session-less wording is fine; doing it
+		// silently on a real query failure is not — no rows is (nil,
+		// nil), so this only fires on genuine breakage.
+		p.logger.Warn("active session lookup failed",
+			"conversation_id", convID, "error", err)
+	} else if sess != nil {
 		facts.ActiveSessionStart = sess.StartedAt
 	}
 
@@ -237,7 +252,7 @@ func (p *MessageChannelProvider) conversationTiming(ctx context.Context, convID 
 		}
 	}
 
-	return promptfmt.ConversationRecency(facts, now, p.loadLocation())
+	return promptfmt.ConversationRecency(facts, anchor, p.loadLocation())
 }
 
 // previousSessionScan bounds how many recent sessions the timing

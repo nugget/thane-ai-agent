@@ -137,6 +137,34 @@ func TestConversationTiming_FirstContactEver(t *testing.T) {
 	}
 }
 
+// TestConversationTiming_AnchorsToArrivalNotAssemblyTime pins the
+// arrival-anchoring contract: the contact gap is measured to the current
+// message's stored arrival time, not to prompt-assembly time. Here
+// assembly runs 40 minutes after the message arrived; wall-clock
+// anchoring would push a 2-minute gap across the recent window into the
+// lull bucket, misnarrating an active exchange as a resumed one.
+func TestConversationTiming_AnchorsToArrivalNotAssemblyTime(t *testing.T) {
+	loc, _ := time.LoadLocation("America/Chicago")
+	assembly := time.Date(2026, 8, 26, 9, 40, 0, 0, loc)
+	arrival := assembly.Add(-40 * time.Minute)
+	provider, archive, insert := newTimingTestSetup(t, assembly, nil)
+
+	if _, err := archive.StartSessionAt("signal-15551234567", arrival.Add(-25*time.Minute)); err != nil {
+		t.Fatalf("StartSessionAt: %v", err)
+	}
+	insert("prev", "user", "earlier message", OriginChannel, arrival.Add(-2*time.Minute))
+	insert("current", "user", "the message being answered", OriginChannel, arrival)
+
+	out, err := provider.TagContext(timingCtx(OriginChannel), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	want := "You're in an active conversation that's been going on for about 25 minutes; the previous message was about 2 minutes before this one."
+	if !strings.Contains(out, "## Conversation Timing\n\n"+want) {
+		t.Errorf("timing not anchored to arrival.\n got: %q\nwant to contain: %q", out, want)
+	}
+}
+
 // TestConversationTiming_OmittedWithoutOriginExtractor pins the
 // degradation contract: without an origin extractor the contact/wake
 // distinction would be a guess, so the timing block is omitted entirely

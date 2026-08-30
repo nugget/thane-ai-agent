@@ -103,6 +103,17 @@ func TestConversationRecency(t *testing.T) {
 			want: "This is the first contact today. The previous conversation was last night, about the garage lighting circuits.",
 		},
 		{
+			name: "small-hours session this morning is last night, not earlier today",
+			facts: ConversationRecencyFacts{
+				Kind:               TurnContact,
+				PreviousContactAt:  time.Date(2026, 8, 26, 2, 0, 0, 0, loc),
+				PreviousSessionEnd: time.Date(2026, 8, 26, 2, 0, 0, 0, loc),
+				HasHistory:         true,
+			},
+			now:  morning,
+			want: "This is the first message in about 7 hours. The previous conversation was last night.",
+		},
+		{
 			name: "previous conversation yesterday when it is already afternoon",
 			facts: ConversationRecencyFacts{
 				Kind:               TurnContact,

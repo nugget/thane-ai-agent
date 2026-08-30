@@ -254,15 +254,18 @@ func dayPhrase(t, now time.Time, loc *time.Location) string {
 	t = t.In(loc)
 	now = now.In(loc)
 
-	if sameDay(t, now, loc) {
-		return "earlier today"
-	}
-
 	// "Last night": the instant fell in yesterday-evening-through-
 	// early-today (17:00 to 04:00) and it is still morning — after
-	// noon, "yesterday" reads more naturally than "last night".
+	// noon, "yesterday" (or "earlier today" for the small-hours half)
+	// reads more naturally than "last night". Checked before the
+	// same-day bucket so a 02:00 session viewed at 09:00 renders "last
+	// night", which is what that conversation was.
 	if now.Hour() < 12 && inLastNightBand(t, now) {
 		return "last night"
+	}
+
+	if sameDay(t, now, loc) {
+		return "earlier today"
 	}
 
 	days := calendarDaysBetween(t, now)

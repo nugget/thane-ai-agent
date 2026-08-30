@@ -1890,14 +1890,19 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// painted door this narrowing exists to remove. Everything derived
 	// from ctx now inherits it.
 	ctx = loop.WithBindings(ctx, req.Bindings)
-	// On the run context for the same reason as bindings: the prompt is
-	// rebuilt from the iteration context on every iteration after the
-	// first, and turn provenance must survive those rebuilds.
+	// Every value a context provider reads goes on the run context for
+	// the same reason as bindings: conversation ID, hints, channel
+	// binding, the suppress flag, and turn provenance must all survive
+	// the per-iteration rebuilds. Stamping only promptCtx silently
+	// emptied conversation-scoped providers (working memory, the
+	// message-channel blocks) from iteration 1 onward — the same
+	// painted-door shape the bindings stamp above fixed.
 	ctx = tools.WithMessageOrigin(ctx, req.MessageOrigin)
-	promptCtx := tools.WithConversationID(ctx, convID)
-	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
-	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
-	promptCtx = tools.WithSuppressAlwaysContext(promptCtx, req.SuppressAlwaysContext)
+	ctx = tools.WithConversationID(ctx, convID)
+	ctx = tools.WithHints(ctx, req.RoutingFactors)
+	ctx = tools.WithChannelBinding(ctx, channelBinding)
+	ctx = tools.WithSuppressAlwaysContext(ctx, req.SuppressAlwaysContext)
+	promptCtx := ctx
 
 	var systemPrompt string
 	var systemSections []llm.PromptSection
