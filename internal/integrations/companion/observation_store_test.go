@@ -24,6 +24,10 @@ func newTestObservationStore(t *testing.T) *ObservationStore {
 	return store
 }
 
+func testObservationPrincipal(account, deviceIdentity string) ObservationPrincipal {
+	return ObservationPrincipal{Account: account, DeviceIdentity: deviceIdentity}
+}
+
 func TestObservationStoreSurvivesDatabaseReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "thane.db")
 	db, err := database.Open(path)
@@ -35,7 +39,7 @@ func TestObservationStoreSurvivesDatabaseReopen(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	at := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	_, err = store.Ingest(context.Background(), "nugget", ObservationBatch{
+	_, err = store.Ingest(context.Background(), testObservationPrincipal("nugget", "iphone-1"), ObservationBatch{
 		DeviceMetadata: DeviceMetadata{ClientID: "iphone-1", Platform: "ios"},
 		Events: []ObservationEvent{{
 			EventID: "11111111-1111-4111-8111-111111111111", Kind: "ios.location",
@@ -76,7 +80,7 @@ func TestObservationStoreScopesSameClientIDByAccount(t *testing.T) {
 	store := newTestObservationStore(t)
 	at := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	for index, account := range []string{"nugget", "aimee"} {
-		_, err := store.Ingest(context.Background(), account, ObservationBatch{
+		_, err := store.Ingest(context.Background(), testObservationPrincipal(account, "shared-client"), ObservationBatch{
 			DeviceMetadata: DeviceMetadata{ClientID: "shared-client", Platform: "ios"},
 			Events: []ObservationEvent{{
 				EventID: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"}[index],
@@ -100,6 +104,37 @@ func TestObservationStoreScopesSameClientIDByAccount(t *testing.T) {
 	}
 }
 
+func TestObservationStoreKeysByAuthenticatedDeviceIdentity(t *testing.T) {
+	store := newTestObservationStore(t)
+	at := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	batch := ObservationBatch{
+		DeviceMetadata: DeviceMetadata{ClientID: "iphone-1", Platform: "ios"},
+		Events: []ObservationEvent{{
+			EventID: "11111111-1111-4111-8111-111111111111", Kind: "ios.location",
+			SchemaVersion: 1, ObservedAt: at, Payload: json.RawMessage(`{"latitude":41}`),
+		}},
+	}
+	principal := testObservationPrincipal("nugget", "key-fingerprint-1")
+	if _, err := store.Ingest(context.Background(), principal, batch, at); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	devices, err := store.ListDevices(context.Background())
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %+v err=%v", devices, err)
+	}
+	if devices[0].DeviceIdentity != principal.DeviceIdentity || devices[0].ClientID != batch.ClientID {
+		t.Fatalf("device = %+v", devices[0])
+	}
+	latest, err := store.ResolveLatest(context.Background(), "nugget", batch.ClientID, "ios.location")
+	if err != nil {
+		t.Fatalf("resolve by client_id: %v", err)
+	}
+	if latest.DeviceIdentity != principal.DeviceIdentity || latest.ClientID != batch.ClientID {
+		t.Fatalf("latest = %+v", latest)
+	}
+}
+
 func TestObservationStoreIngestLatestAndWithdrawal(t *testing.T) {
 	store := newTestObservationStore(t)
 	ctx := context.Background()
@@ -116,7 +151,8 @@ func TestObservationStoreIngestLatestAndWithdrawal(t *testing.T) {
 		}},
 	}
 
-	result, err := store.Ingest(ctx, "nugget", batch, base.Add(time.Second))
+	principal := testObservationPrincipal("nugget", batch.ClientID)
+	result, err := store.Ingest(ctx, principal, batch, base.Add(time.Second))
 	if err != nil {
 		t.Fatalf("ingest available: %v", err)
 	}
@@ -125,7 +161,7 @@ func TestObservationStoreIngestLatestAndWithdrawal(t *testing.T) {
 	}
 
 	// Exact retry is idempotent.
-	result, err = store.Ingest(ctx, "nugget", batch, base.Add(2*time.Second))
+	result, err = store.Ingest(ctx, principal, batch, base.Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("retry ingest: %v", err)
 	}
@@ -140,7 +176,7 @@ func TestObservationStoreIngestLatestAndWithdrawal(t *testing.T) {
 		SchemaVersion: 1, Status: ObservationAvailable, ObservedAt: base.Add(-time.Hour),
 		Payload: json.RawMessage(`{"latitude":0,"longitude":0}`),
 	}}
-	result, err = store.Ingest(ctx, "nugget", older, base.Add(3*time.Second))
+	result, err = store.Ingest(ctx, principal, older, base.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("older ingest: %v", err)
 	}
@@ -154,7 +190,7 @@ func TestObservationStoreIngestLatestAndWithdrawal(t *testing.T) {
 		EventID: "22222222-2222-4222-8222-222222222222", Kind: "ios.location",
 		SchemaVersion: 1, Status: ObservationWithdrawn, ObservedAt: withdrawnAt,
 	}}
-	if _, err := store.Ingest(ctx, "nugget", withdrawal, withdrawnAt.Add(time.Second)); err != nil {
+	if _, err := store.Ingest(ctx, principal, withdrawal, withdrawnAt.Add(time.Second)); err != nil {
 		t.Fatalf("withdraw ingest: %v", err)
 	}
 
@@ -170,7 +206,7 @@ func TestObservationStoreIngestLatestAndWithdrawal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list devices: %v", err)
 	}
-	if len(devices) != 1 || devices[0].Platform != "ios" || devices[0].ClientName != "Thane for iOS" {
+	if len(devices) != 1 || devices[0].DeviceIdentity != "iphone-1" || devices[0].Platform != "ios" || devices[0].ClientName != "Thane for iOS" {
 		t.Fatalf("devices = %+v", devices)
 	}
 }
@@ -182,10 +218,11 @@ func TestObservationStoreConnectionLifecyclePersistsDevice(t *testing.T) {
 	disconnectedAt := connectedAt.Add(5 * time.Minute)
 	device := DeviceMetadata{ClientID: "mac-1", ClientName: "Office Mac", Platform: "macos"}
 
-	if err := store.RecordConnected(ctx, "nugget", device, connectedAt); err != nil {
+	principal := testObservationPrincipal("nugget", device.ClientID)
+	if err := store.RecordConnected(ctx, principal, device, connectedAt); err != nil {
 		t.Fatalf("record connected: %v", err)
 	}
-	if err := store.RecordDisconnected(ctx, "nugget", device.ClientID, disconnectedAt); err != nil {
+	if err := store.RecordDisconnected(ctx, principal, disconnectedAt); err != nil {
 		t.Fatalf("record disconnected: %v", err)
 	}
 	devices, err := store.ListDevices(ctx)
@@ -216,7 +253,7 @@ func TestObservationStoreResolveLatestRequiresUnambiguousDevice(t *testing.T) {
 				Payload: json.RawMessage(`{"latitude":41,"longitude":-87}`),
 			}},
 		}
-		if _, err := store.Ingest(ctx, "nugget", batch, at); err != nil {
+		if _, err := store.Ingest(ctx, testObservationPrincipal("nugget", clientID), batch, at); err != nil {
 			t.Fatalf("ingest %s: %v", clientID, err)
 		}
 	}

@@ -26,34 +26,29 @@ const (
 // ObservationHandler authenticates companion tokens and ingests bounded
 // background observation batches without requiring a live WebSocket.
 type ObservationHandler struct {
-	tokenIndex map[string]string
-	store      *ObservationStore
-	logger     *slog.Logger
-	now        func() time.Time
+	authenticator ObservationAuthenticator
+	store         *ObservationStore
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
 // NewObservationHandler creates the authenticated companion observation
-// endpoint. tokenIndex maps bearer tokens to server-owned account names.
-func NewObservationHandler(tokenIndex map[string]string, store *ObservationStore, logger *slog.Logger) *ObservationHandler {
+// endpoint. Authentication is replaceable so ingestion and storage do not
+// own bearer-token configuration or the future device-key mechanism.
+func NewObservationHandler(authenticator ObservationAuthenticator, store *ObservationStore, logger *slog.Logger) *ObservationHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ObservationHandler{
-		tokenIndex: tokenIndex,
-		store:      store,
-		logger:     logger,
-		now:        time.Now,
+		authenticator: authenticator,
+		store:         store,
+		logger:        logger,
+		now:           time.Now,
 	}
 }
 
 // ServeHTTP validates, authenticates, and persists one observation batch.
 func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	account, ok := h.authenticate(r.Header.Get("Authorization"))
-	if !ok {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="companion"`)
-		writeObservationError(w, http.StatusUnauthorized, "unauthorized", "a valid companion bearer token is required")
-		return
-	}
 	if h.store == nil {
 		writeObservationError(w, http.StatusServiceUnavailable, "observation_store_unavailable", "companion observation storage is unavailable")
 		return
@@ -81,16 +76,28 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeObservationError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
+	if h.authenticator == nil {
+		writeObservationError(w, http.StatusServiceUnavailable, "observation_auth_unavailable", "companion observation authentication is unavailable")
+		return
+	}
+	principal, ok := h.authenticator.AuthenticateObservation(
+		r.Header.Get("Authorization"), batch.ClientID,
+	)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="companion"`)
+		writeObservationError(w, http.StatusUnauthorized, "unauthorized", "a valid companion bearer token is required")
+		return
+	}
 
 	receivedAt := h.now().UTC()
 	if err := validateObservationBatch(&batch, receivedAt); err != nil {
 		writeObservationError(w, http.StatusBadRequest, "invalid_observation", err.Error())
 		return
 	}
-	result, err := h.store.Ingest(r.Context(), account, batch, receivedAt)
+	result, err := h.store.Ingest(r.Context(), principal, batch, receivedAt)
 	if err != nil {
 		h.logger.Error("companion observation ingest failed",
-			"account", account,
+			"account", principal.Account,
 			"client_id", batch.ClientID,
 			"events", len(batch.Events),
 			"error", err,
@@ -100,7 +107,7 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Info("companion observations received",
-		"account", account,
+		"account", principal.Account,
 		"client_id", batch.ClientID,
 		"platform", batch.Platform,
 		"stored", result.Stored,
@@ -111,15 +118,6 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(result); err != nil {
 		h.logger.Debug("write companion observation response failed", "error", err)
 	}
-}
-
-func (h *ObservationHandler) authenticate(header string) (string, bool) {
-	token, ok := strings.CutPrefix(header, "Bearer ")
-	if !ok || token == "" || strings.TrimSpace(token) != token {
-		return "", false
-	}
-	account, ok := h.tokenIndex[token]
-	return account, ok
 }
 
 func validateObservationBatch(batch *ObservationBatch, receivedAt time.Time) error {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -129,12 +130,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Register the provider before confirming to the client, so the
 	// registry is consistent by the time the client reads auth_ok.
-	if h.observationStore != nil && provider.ClientID != "" {
-		device := DeviceMetadata{
-			ClientID: provider.ClientID, ClientName: provider.ClientName,
-			Platform: provider.Platform, AppVersion: provider.AppVersion, OSVersion: provider.OSVersion,
-		}
-		if err := h.observationStore.RecordConnected(r.Context(), provider.Account, device, provider.ConnectedAt); err != nil {
+	if h.observationStore != nil && provider.DeviceIdentity != "" {
+		if err := h.observationStore.RecordConnected(
+			r.Context(), observationPrincipalForProvider(provider), deviceMetadataForProvider(provider), provider.ConnectedAt,
+		); err != nil {
 			h.logger.Warn("persist connected companion failed",
 				"account", provider.Account,
 				"client_id", provider.ClientID,
@@ -145,10 +144,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.registry.Add(provider)
 	defer func() {
 		h.registry.Remove(provider.ID)
-		if h.observationStore != nil && provider.ClientID != "" {
+		if h.observationStore != nil && provider.DeviceIdentity != "" {
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
 			defer cancel()
-			if err := h.observationStore.RecordDisconnected(ctx, provider.Account, provider.ClientID, time.Now()); err != nil {
+			if err := h.observationStore.RecordDisconnected(ctx, observationPrincipalForProvider(provider), time.Now()); err != nil {
 				h.logger.Warn("persist disconnected companion failed",
 					"account", provider.Account,
 					"client_id", provider.ClientID,
@@ -232,18 +231,20 @@ func (h *Handler) authenticate(conn *websocket.Conn, requestType string) (*Provi
 	// Build the provider — auth_ok is sent by ServeHTTP after
 	// the provider is registered, ensuring registry consistency.
 	providerID := generateProviderID()
+	clientID := strings.TrimSpace(msg.ClientID)
 	return &Provider{
-		ID:          providerID,
-		Account:     account,
-		ClientName:  msg.ClientName,
-		ClientID:    msg.ClientID,
-		Platform:    msg.Platform,
-		AppVersion:  msg.AppVersion,
-		OSVersion:   msg.OSVersion,
-		Conn:        conn,
-		ConnectedAt: time.Now(),
-		requestType: requestType,
-		done:        make(chan struct{}),
+		ID:             providerID,
+		Account:        account,
+		DeviceIdentity: clientID,
+		ClientName:     msg.ClientName,
+		ClientID:       clientID,
+		Platform:       msg.Platform,
+		AppVersion:     msg.AppVersion,
+		OSVersion:      msg.OSVersion,
+		Conn:           conn,
+		ConnectedAt:    time.Now(),
+		requestType:    requestType,
+		done:           make(chan struct{}),
 	}, nil
 }
 
@@ -369,6 +370,20 @@ func (h *Handler) handleRegisterCapabilities(p *Provider, id int64, payload []by
 		h.writeErrorResult(p, id, "provider_not_found", err.Error())
 		return
 	}
+	if h.observationStore != nil && p.DeviceIdentity != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := h.observationStore.RecordCapabilities(
+			ctx, observationPrincipalForProvider(p), deviceMetadataForProvider(p), p.capabilitiesSnapshot(), time.Now(),
+		)
+		cancel()
+		if err != nil {
+			h.logger.Warn("persist companion capabilities failed",
+				"account", p.Account,
+				"client_id", p.ClientID,
+				"error", err,
+			)
+		}
+	}
 
 	if err := p.writeJSON(Message{
 		ID:      id,
@@ -387,6 +402,17 @@ func (h *Handler) handleRegisterCapabilities(p *Provider, id int64, payload []by
 		"account", p.Account,
 		"count", len(msg.Capabilities),
 	)
+}
+
+func observationPrincipalForProvider(p *Provider) ObservationPrincipal {
+	return ObservationPrincipal{Account: p.Account, DeviceIdentity: p.DeviceIdentity}
+}
+
+func deviceMetadataForProvider(p *Provider) DeviceMetadata {
+	return DeviceMetadata{
+		ClientID: p.ClientID, ClientName: p.ClientName,
+		Platform: p.Platform, AppVersion: p.AppVersion, OSVersion: p.OSVersion,
+	}
 }
 
 func (h *Handler) handleResult(p *Provider, payload []byte) {

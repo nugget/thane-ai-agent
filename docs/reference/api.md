@@ -106,13 +106,23 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `POST` | `/v1/companion/observations` | Submit a bounded latest-value observation batch from an authenticated companion. |
 
 `POST /v1/companion/observations` uses a configured companion bearer token,
-which determines the account, and a stable `client_id` supplied by the app.
+which determines the account, and a stable opaque `client_id` claim supplied by
+the app. The ingestion handler resolves those inputs through an authenticator;
+storage is keyed by that resolved account and device identity rather than by
+the HTTP token map or claimed metadata directly. This leaves the persistence
+contract unchanged when device-key authentication supplies a verified key
+fingerprint in the future.
 The endpoint accepts at most 64 KiB and 16 events; each available event carries
 a UUID idempotency key, kind, schema version, device `observed_at`, and a JSON
 object payload of at most 32 KiB. A `status` of `withdrawn` must omit the
 payload and prevents an earlier sensitive value from remaining available.
 Successful responses are `202 Accepted` and report stored versus ignored
 (duplicate or older) events plus the independent server `received_at`.
+
+The current bearer credential is replayable and is suitable only under Thane's
+explicit private-network/Tailscale deployment assumption. Bearer comparisons
+on this HTTP path use fixed-size digests and constant-time comparison. A
+per-device signed-request replacement is tracked in issue #1444.
 
 ### Deprecated route aliases
 

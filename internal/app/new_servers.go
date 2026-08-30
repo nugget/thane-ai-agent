@@ -280,7 +280,9 @@ func (a *App) initServers(s *newState) error {
 		handler.UseObservationStore(a.companionObservationStore)
 		server.SetCompanionHandler(handler)
 		server.SetCompanionObservationHandler(companion.NewObservationHandler(
-			cfg.Companion.TokenIndex(), a.companionObservationStore, logger,
+			companion.NewBearerObservationAuthenticator(cfg.Companion.TokenIndex()),
+			a.companionObservationStore,
+			logger,
 		))
 
 		logger.Info("companion app endpoint enabled")

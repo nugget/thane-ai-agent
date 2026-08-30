@@ -66,8 +66,8 @@ type companionObservationJSON struct {
 }
 
 type companionDeviceKey struct {
-	account  string
-	clientID string
+	account        string
+	deviceIdentity string
 }
 
 // TagContext returns the companion-device block for tag-gated injection.
@@ -82,7 +82,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 			return "", fmt.Errorf("load durable companion context: %w", err)
 		}
 		for _, record := range records {
-			key := companionDeviceKey{account: record.Account, clientID: record.ClientID}
+			key := companionDeviceKey{account: record.Account, deviceIdentity: record.DeviceIdentity}
 			device := &companionDeviceJSON{
 				Account:      record.Account,
 				ClientName:   record.ClientName,
@@ -107,7 +107,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 			return "", fmt.Errorf("load companion observation context: %w", err)
 		}
 		for _, observation := range observations {
-			key := companionDeviceKey{account: observation.Account, clientID: observation.ClientID}
+			key := companionDeviceKey{account: observation.Account, deviceIdentity: observation.DeviceIdentity}
 			device := devices[key]
 			if device == nil {
 				device = &companionDeviceJSON{
@@ -128,7 +128,11 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 
 	if p.registry != nil {
 		for _, info := range p.registry.List() {
-			key := companionDeviceKey{account: info.Account, clientID: info.ClientID}
+			deviceIdentity := info.DeviceIdentity
+			if deviceIdentity == "" {
+				deviceIdentity = info.ClientID
+			}
+			key := companionDeviceKey{account: info.Account, deviceIdentity: deviceIdentity}
 			device := devices[key]
 			if device == nil {
 				device = &companionDeviceJSON{Account: info.Account, ClientID: info.ClientID}

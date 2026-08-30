@@ -12,7 +12,7 @@ import (
 
 func TestObservationHandlerAcceptsAuthenticatedBatch(t *testing.T) {
 	store := newTestObservationStore(t)
-	handler := NewObservationHandler(testTokenIndex(), store, nil)
+	handler := NewObservationHandler(NewBearerObservationAuthenticator(testTokenIndex()), store, nil)
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	handler.now = func() time.Time { return now }
 	body := `{
@@ -55,6 +55,36 @@ func TestObservationHandlerAcceptsAuthenticatedBatch(t *testing.T) {
 	}
 }
 
+type fixedObservationAuthenticator struct {
+	principal ObservationPrincipal
+}
+
+func (a fixedObservationAuthenticator) AuthenticateObservation(_, _ string) (ObservationPrincipal, bool) {
+	return a.principal, true
+}
+
+func TestObservationHandlerUsesAuthenticatorDeviceIdentity(t *testing.T) {
+	store := newTestObservationStore(t)
+	principal := ObservationPrincipal{Account: "nugget", DeviceIdentity: "key-fingerprint-1"}
+	handler := NewObservationHandler(fixedObservationAuthenticator{principal: principal}, store, nil)
+	handler.now = func() time.Time { return time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC) }
+	body := `{"client_id":"iphone-1","platform":"ios","events":[{"event_id":"11111111-1111-4111-8111-111111111111","kind":"ios.location","schema_version":1,"observed_at":"2026-08-30T11:59:55Z","payload":{"latitude":41}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	devices, err := store.ListDevices(req.Context())
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices = %+v err=%v", devices, err)
+	}
+	if devices[0].DeviceIdentity != principal.DeviceIdentity || devices[0].ClientID != "iphone-1" {
+		t.Fatalf("device = %+v", devices[0])
+	}
+}
+
 func TestObservationHandlerRejectsInvalidRequests(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	valid := `{"client_id":"iphone-1","platform":"ios","events":[{"event_id":"11111111-1111-4111-8111-111111111111","kind":"ios.location","schema_version":1,"observed_at":"2026-08-30T11:59:55Z","payload":{"latitude":41}}]}`
@@ -78,7 +108,7 @@ func TestObservationHandlerRejectsInvalidRequests(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := NewObservationHandler(testTokenIndex(), newTestObservationStore(t), nil)
+			handler := NewObservationHandler(NewBearerObservationAuthenticator(testTokenIndex()), newTestObservationStore(t), nil)
 			handler.now = func() time.Time { return now }
 			req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", bytes.NewBufferString(tc.body))
 			if tc.auth != "" {

@@ -47,7 +47,7 @@ func TestIOSLastKnownLocationFreshStaleExpiredAndWithdrawn(t *testing.T) {
 			if tt.status == companion.ObservationAvailable {
 				payload = json.RawMessage(`{"latitude":41,"longitude":-87,"horizontal_accuracy_m":12}`)
 			}
-			_, err := store.Ingest(context.Background(), "nugget", companion.ObservationBatch{
+			_, err := store.Ingest(context.Background(), companion.ObservationPrincipal{Account: "nugget", DeviceIdentity: "iphone-1"}, companion.ObservationBatch{
 				DeviceMetadata: companion.DeviceMetadata{ClientID: "iphone-1", Platform: "ios"},
 				Events: []companion.ObservationEvent{{
 					EventID: "11111111-1111-4111-8111-111111111111", Kind: "ios.location",
@@ -84,7 +84,7 @@ func TestIOSLastKnownLocationNeverObservedAndAmbiguous(t *testing.T) {
 
 	at := time.Now()
 	for i, clientID := range []string{"iphone-1", "iphone-2"} {
-		_, err := store.Ingest(context.Background(), "nugget", companion.ObservationBatch{
+		_, err := store.Ingest(context.Background(), companion.ObservationPrincipal{Account: "nugget", DeviceIdentity: clientID}, companion.ObservationBatch{
 			DeviceMetadata: companion.DeviceMetadata{ClientID: clientID, Platform: "ios"},
 			Events: []companion.ObservationEvent{{
 				EventID: []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"}[i],

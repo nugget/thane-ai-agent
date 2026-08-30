@@ -109,14 +109,38 @@ func TestAuthLifecyclePersistsDeviceMetadataAndDisconnect(t *testing.T) {
 	}
 	var authenticated authOK
 	readJSON(t, conn, &authenticated)
+	if err := conn.WriteJSON(registerCapabilitiesMessage{
+		ID:   1,
+		Type: typeRegisterCaps,
+		Capabilities: []Capability{{
+			Name: " ios.location ", Version: " 1 ", Methods: []string{" current "},
+		}},
+	}); err != nil {
+		t.Fatalf("register capabilities: %v", err)
+	}
+	var registered Message
+	readJSON(t, conn, &registered)
+	if !registered.Success {
+		t.Fatalf("capability registration = %+v", registered)
+	}
 
 	devices, err := store.ListDevices(context.Background())
 	if err != nil || len(devices) != 1 {
 		t.Fatalf("connected devices = %+v err=%v", devices, err)
 	}
 	device := devices[0]
-	if device.Platform != "ios" || device.AppVersion != "0.2.0" || device.LastConnectedAt == nil {
+	if device.DeviceIdentity != "iphone-1" || device.Platform != "ios" || device.AppVersion != "0.2.0" || device.LastConnectedAt == nil {
 		t.Fatalf("connected device = %+v", device)
+	}
+	if device.CapabilityManifestVersion != 1 || device.CapabilitiesUpdatedAt == nil {
+		t.Fatalf("capability manifest metadata = %+v", device)
+	}
+	var capabilities []Capability
+	if err := json.Unmarshal(device.CapabilityManifest, &capabilities); err != nil {
+		t.Fatalf("decode capability manifest: %v", err)
+	}
+	if len(capabilities) != 1 || capabilities[0].Name != "ios.location" || capabilities[0].Version != "1" || len(capabilities[0].Methods) != 1 || capabilities[0].Methods[0] != "current" {
+		t.Fatalf("normalized capability manifest = %+v", capabilities)
 	}
 
 	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye")); err != nil {

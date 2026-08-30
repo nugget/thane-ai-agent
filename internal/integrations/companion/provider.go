@@ -26,17 +26,20 @@ type capabilityState struct {
 
 // Provider represents a connected companion app (e.g. a macOS app instance).
 // Account is the server-assigned identity resolved from the token at auth time.
+// DeviceIdentity is the opaque durable key selected by that authentication;
+// today's WebSocket handshake binds its stable client ID as the identity.
 type Provider struct {
-	ID          string
-	Account     string
-	ClientName  string
-	ClientID    string
-	Platform    string
-	AppVersion  string
-	OSVersion   string
-	Conn        *websocket.Conn
-	ConnectedAt time.Time
-	requestType string
+	ID             string
+	Account        string
+	DeviceIdentity string
+	ClientName     string
+	ClientID       string
+	Platform       string
+	AppVersion     string
+	OSVersion      string
+	Conn           *websocket.Conn
+	ConnectedAt    time.Time
+	requestType    string
 
 	// done is closed when the provider's connection is terminated.
 	done chan struct{}
@@ -54,15 +57,16 @@ type Provider struct {
 // ProviderInfo is a safe-to-export snapshot of a connected provider,
 // without the WebSocket connection pointer.
 type ProviderInfo struct {
-	ID           string       `json:"id"`
-	Account      string       `json:"account"`
-	ClientName   string       `json:"client_name"`
-	ClientID     string       `json:"client_id"`
-	Platform     string       `json:"platform,omitempty"`
-	AppVersion   string       `json:"app_version,omitempty"`
-	OSVersion    string       `json:"os_version,omitempty"`
-	ConnectedAt  time.Time    `json:"connected_at"`
-	Capabilities []Capability `json:"capabilities,omitempty"`
+	ID             string       `json:"id"`
+	Account        string       `json:"account"`
+	DeviceIdentity string       `json:"-"`
+	ClientName     string       `json:"client_name"`
+	ClientID       string       `json:"client_id"`
+	Platform       string       `json:"platform,omitempty"`
+	AppVersion     string       `json:"app_version,omitempty"`
+	OSVersion      string       `json:"os_version,omitempty"`
+	ConnectedAt    time.Time    `json:"connected_at"`
+	Capabilities   []Capability `json:"capabilities,omitempty"`
 }
 
 // CallRequest describes a routed request to a connected companion app.
@@ -622,15 +626,16 @@ func (p *Provider) writeJSON(msg any) error {
 
 func providerToInfo(p *Provider) ProviderInfo {
 	return ProviderInfo{
-		ID:           p.ID,
-		Account:      p.Account,
-		ClientName:   p.ClientName,
-		ClientID:     p.ClientID,
-		Platform:     p.Platform,
-		AppVersion:   p.AppVersion,
-		OSVersion:    p.OSVersion,
-		ConnectedAt:  p.ConnectedAt,
-		Capabilities: p.capabilitiesSnapshot(),
+		ID:             p.ID,
+		Account:        p.Account,
+		DeviceIdentity: p.DeviceIdentity,
+		ClientName:     p.ClientName,
+		ClientID:       p.ClientID,
+		Platform:       p.Platform,
+		AppVersion:     p.AppVersion,
+		OSVersion:      p.OSVersion,
+		ConnectedAt:    p.ConnectedAt,
+		Capabilities:   p.capabilitiesSnapshot(),
 	}
 }
 

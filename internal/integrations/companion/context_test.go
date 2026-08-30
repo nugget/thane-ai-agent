@@ -90,7 +90,7 @@ func TestContextProvider_ListsOfflineDeviceWithoutSensitivePayload(t *testing.T)
 			Payload: json.RawMessage(`{"latitude":41.0,"longitude":-87.0}`),
 		}},
 	}
-	if _, err := store.Ingest(context.Background(), "nugget", batch, at.Add(time.Minute)); err != nil {
+	if _, err := store.Ingest(context.Background(), testObservationPrincipal("nugget", batch.ClientID), batch, at.Add(time.Minute)); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

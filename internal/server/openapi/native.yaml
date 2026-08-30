@@ -1232,16 +1232,24 @@ paths:
       summary: Ingest latest-value observations from a companion device
       description: |
         Accepts a bounded, versioned batch from an authenticated companion.
-        The bearer token determines the account; `client_id` is the stable
-        installation identity within that account. Replayed or out-of-order
-        events are accepted but cannot duplicate or regress the latest stored
-        value. The server retains one latest value per observation kind, not
-        an event or location history.
+        The bearer token determines the account and today's authenticator binds
+        the claimed `client_id` as an opaque device identity. Storage is keyed
+        by the authenticator-resolved identity so a future device-key
+        authenticator can use its verified key fingerprint without a schema
+        change. Replayed or out-of-order events are accepted but cannot
+        duplicate or regress the latest stored value. The server retains one
+        latest value per observation kind, not an event or location history.
+
+        Companion bearer tokens are replayable and are suitable only behind
+        the deployment's private-network/Tailscale boundary. Per-device signed
+        request authentication is tracked separately in issue #1444.
 
         Limits: 64 KiB request body, 16 events per batch, 32 KiB per event
         payload, and 128 Unicode characters for identifiers and metadata.
         `observed_at` may be at most five minutes ahead of server receipt time.
       x-thane-scope: companion:write
+      security:
+        - companionBearerAuth: []
       requestBody:
         description: Bounded latest-value observations from one stable companion installation.
         required: true
@@ -1313,7 +1321,7 @@ paths:
               example:
                 error: { code: ingest_failed, message: failed to store companion observations }
         "503":
-          description: Companion observation storage is not configured.
+          description: Companion observation authentication or storage is not configured.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CompanionObservationError" }
@@ -1330,6 +1338,14 @@ components:
         Bearer token. Written OIDC-ready; minted directly for now. The
         per-operation `x-thane-scope` extension names the scope the token must
         carry once authorization is enforced.
+    companionBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Companion token
+      description: |
+        Configured companion credential, accepted only under the explicit
+        private-network/Tailscale deployment assumption. Per-device signed
+        requests are tracked in issue #1444.
 
   parameters:
     LoopId:
@@ -1401,7 +1417,7 @@ components:
           minLength: 1
           maxLength: 128
           pattern: '^[A-Za-z0-9._-]+$'
-          description: Stable installation identifier reused by companion authentication.
+          description: Stable opaque installation claim reused by companion authentication.
           example: 8a166cda-0f6a-4e4e-a729-36e173289e5b
         client_name:
           type: string
