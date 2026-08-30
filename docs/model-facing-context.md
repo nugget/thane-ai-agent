@@ -427,6 +427,7 @@ right track.
 Good places to look for existing patterns:
 
 - `internal/model/promptfmt/timefmt.go`
+- `internal/integrations/companion/calendar_snapshot.go`
 - `internal/state/awareness/entity_format.go`
 - `loops/ego.md` — an instruction document shaped by the job each form
   does (prose stance, numbered protocol, constraints at their point of

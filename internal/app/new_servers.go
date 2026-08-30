@@ -249,7 +249,27 @@ func (a *App) initServers(s *newState) error {
 		// mid-session. A Mac-authored tool shadows the legacy floor by name.
 		registrar := tools.NewCompanionRegistrar(a.companionRegistry, companionHome, logger)
 		a.loop.SetDynamicToolSource(registrar)
-		a.companionRegistry.SetOnChange(registrar.Rebuild)
+
+		// The mechanical calendar block (#1432): an in-memory snapshot of
+		// every connected account's near-term calendar, refreshed on the
+		// runner's own clock and rendered into Live State every turn.
+		// Wall-clock truth deliberately does not ride the advertisement
+		// rail — ambient evidence loses to request-matched offers by
+		// design, and today's calendar must not lose a lottery on busy
+		// turns. The registry's single change callback fans out to both
+		// consumers: tool synthesis rebuilds, and the snapshot refreshes
+		// so a Mac reconnecting after a night away repopulates without
+		// waiting out the interval.
+		calendarSnapshot := companion.NewCalendarSnapshot(a.companionRegistry, companionHome, logger)
+		a.companionRegistry.SetOnChange(func() {
+			registrar.Rebuild()
+			calendarSnapshot.NudgeRefresh()
+		})
+		a.loop.RegisterAlwaysContextProvider(calendarSnapshot)
+		a.deferWorker("companion-calendar-snapshot", func(ctx context.Context) error {
+			go calendarSnapshot.Run(ctx)
+			return nil
+		})
 
 		// On companion-tagged turns, tell the model which companions are
 		// connected and what they currently offer (uncached live state).
