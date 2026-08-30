@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -208,6 +210,118 @@ func TestContactWhereaboutsWithdrawnTrailsZoneFloor(t *testing.T) {
 	}
 	if last := res.Sources[len(res.Sources)-1]; last.Source != "companion_location" || last.Status != "withdrawn" {
 		t.Errorf("withdrawn entry does not trail: %+v", res.Sources)
+	}
+	if strings.Contains(res.Basis, "device location leads") || !strings.Contains(res.Basis, "zone state leads") {
+		t.Errorf("basis contradicts the zone-floor ranking: %q", res.Basis)
+	}
+}
+
+func TestContactWhereaboutsWithdrawnOnlyBasis(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+	}{
+		{name: "away", state: "not_home"},
+		{name: "unknown", state: "Unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newWhereaboutsFixture(t, tt.state, "", map[string]companion.ObservationStatus{
+				"device-1": companion.ObservationWithdrawn,
+			})
+			out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			res := decodeWhereabouts(t, out)
+			if res.BestSource != "ha_person_zone" {
+				t.Errorf("BestSource = %q, want zone state", res.BestSource)
+			}
+			if strings.Contains(res.Basis, "device location leads") || !strings.Contains(res.Basis, "zone state leads") {
+				t.Errorf("basis contradicts withdrawn-only ranking: %q", res.Basis)
+			}
+		})
+	}
+}
+
+func TestContactWhereaboutsDeviceCapPreservesZoneFloor(t *testing.T) {
+	observations := make(map[string]companion.ObservationStatus, maxWhereaboutsSources+4)
+	for i := 0; i < maxWhereaboutsSources+4; i++ {
+		observations[fmt.Sprintf("device-%02d", i)] = companion.ObservationAvailable
+	}
+	fx := newWhereaboutsFixture(t, "not_home", "", observations)
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) != maxWhereaboutsSources {
+		t.Fatalf("sources = %d, want cap %d", len(res.Sources), maxWhereaboutsSources)
+	}
+	if res.TruncatedDevices != 5 {
+		t.Errorf("TruncatedDevices = %d, want 5 device entries", res.TruncatedDevices)
+	}
+	deviceSources := 0
+	zoneSources := 0
+	for _, src := range res.Sources {
+		switch src.Source {
+		case "companion_location":
+			deviceSources++
+		case "ha_person_zone":
+			zoneSources++
+		}
+	}
+	if deviceSources != maxWhereaboutsSources-1 || zoneSources != 1 {
+		t.Errorf("capped sources = %d devices/%d zones, want %d/1", deviceSources, zoneSources, maxWhereaboutsSources-1)
+	}
+	if last := res.Sources[len(res.Sources)-1]; last.Source != "ha_person_zone" {
+		t.Errorf("zone floor was not preserved at the end: %+v", res.Sources)
+	}
+}
+
+func TestContactWhereaboutsWithdrawnWithoutPresenceHasNoBestSource(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", map[string]companion.ObservationStatus{
+		"device-1": companion.ObservationWithdrawn,
+	})
+	if err := fx.deps.Contacts.SetHAPersonEntity(uuid.MustParse(fx.contactID), ""); err != nil {
+		t.Fatalf("clear HA binding: %v", err)
+	}
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.BestSource != "" {
+		t.Errorf("BestSource = %q, want none when every source is withdrawn", res.BestSource)
+	}
+	if !strings.Contains(res.Basis, "no available whereabouts source") {
+		t.Errorf("basis treats withdrawn provenance as a location: %q", res.Basis)
+	}
+}
+
+func TestContactWhereaboutsHABindingReadFailure(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := contacts.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Upsert(&contacts.Contact{FormattedName: "Alice Operator"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP INDEX idx_contacts_ha_person_unique`); err != nil {
+		t.Fatalf("drop HA binding index: %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE contacts DROP COLUMN ha_person_entity`); err != nil {
+		t.Fatalf("drop HA binding column: %v", err)
+	}
+
+	_, err = handleContactWhereabouts(context.Background(), CounterpartyToolDeps{Contacts: store}, "Alice Operator", "")
+	if err == nil || !strings.Contains(err.Error(), "read HA person binding") {
+		t.Fatalf("binding read failure was collapsed into absence: %v", err)
 	}
 }
 

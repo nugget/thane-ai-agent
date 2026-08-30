@@ -21,7 +21,8 @@ import (
 const maxWhereaboutsSources = 16
 
 // CounterpartyToolDeps are the join sources the fused counterparty
-// view composes (#1450). Every optional source degrades to absence.
+// view composes (#1450). An unconfigured optional source degrades to
+// absence; a configured source that fails is reported to the caller.
 type CounterpartyToolDeps struct {
 	Contacts   *contacts.Store
 	Companions *companions.Store
@@ -119,9 +120,9 @@ type whereaboutsResult struct {
 	// TruncatedDevices counts device entries dropped by the result
 	// cap; zero (omitted) means every bound device is listed.
 	TruncatedDevices int `json:"truncated_devices,omitempty"`
-	// BestSource names the leading entry of Sources and Basis says why
-	// it leads — precomputed so the model does not re-derive the
-	// ranking.
+	// BestSource names the leading usable entry of Sources and Basis says
+	// why it leads — precomputed so the model does not re-derive the
+	// ranking. It is omitted when every source is withdrawn provenance.
 	BestSource string              `json:"best_source,omitempty"`
 	Basis      string              `json:"basis,omitempty"`
 	Sources    []whereaboutsSource `json:"sources"`
@@ -142,7 +143,11 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 	home, presenceUnknown := false, true
 	hasHABinding := false
 
-	if entity, ok, err := deps.Contacts.HAPersonEntity(contact.ID); err == nil && ok && entity != "" {
+	entity, hasEntity, err := deps.Contacts.HAPersonEntity(contact.ID)
+	if err != nil {
+		return "", fmt.Errorf("read HA person binding for contact %q: %w", contact.FormattedName, err)
+	}
+	if hasEntity && entity != "" {
 		hasHABinding = true
 		if deps.Presence != nil {
 			if snap, tracked := deps.Presence(entity); tracked {
@@ -196,7 +201,11 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 				ObservedAgo: promptfmt.FormatDeltaOnly(obs.ObservedAt, now),
 				ReceivedAgo: promptfmt.FormatDeltaOnly(obs.ReceivedAt, now),
 			}
-			if device, ok, err := deps.Companions.Get(ctx, obs.Account, obs.ClientID); err == nil && ok {
+			device, ok, err := deps.Companions.Get(ctx, obs.Account, obs.ClientID)
+			if err != nil {
+				return "", fmt.Errorf("read companion device metadata for %s/%s: %w", obs.Account, obs.ClientID, err)
+			}
+			if ok {
 				entry.Device = device.ClientName
 				entry.Platform = device.Platform
 			}
@@ -254,26 +263,66 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 		withdrawn = append(withdrawn, ts.entry)
 	}
 
+	// Presence is a semantic floor, not another fleet entry. Reserve its
+	// slots before capping device sources so a large fleet cannot truncate
+	// away the HA zone (or miscount that zone as a truncated device).
+	totalDevices := len(available) + len(withdrawn)
+	deviceBudget := maxWhereaboutsSources - len(presenceSources)
+	if deviceBudget < 0 {
+		deviceBudget = 0
+	}
+	if len(available) > deviceBudget {
+		available = available[:deviceBudget]
+		withdrawn = nil
+	} else if remaining := deviceBudget - len(available); len(withdrawn) > remaining {
+		withdrawn = withdrawn[:remaining]
+	}
+	result.TruncatedDevices = totalDevices - len(available) - len(withdrawn)
+
 	// Ranking: room-level truth leads while home; the freshest device
 	// fix leads while away; unknown presence never asserts either, so
 	// the freshest fix leads with the unknown zone state listed after.
 	// Withdrawn entries always trail the zone floor.
 	switch {
 	case home:
-		result.Sources = append(append(presenceSources, available...), withdrawn...)
-		result.Basis = "home per person entity; room-level presence is the most specific source while home"
+		result.Sources = append(result.Sources, presenceSources...)
+		result.Sources = append(result.Sources, available...)
+		result.Sources = append(result.Sources, withdrawn...)
+		if len(presenceSources) > 0 && presenceSources[0].Source == "bermuda_room" {
+			result.Basis = "home per person entity; room-level presence leads as the most specific source while home"
+		} else {
+			result.Basis = "home per person entity; zone state leads because no room-level presence is available"
+		}
 	case presenceUnknown && len(presenceSources) > 0:
-		result.Sources = append(append(available, presenceSources...), withdrawn...)
-		result.Basis = "presence state is unknown; the freshest device location leads without asserting home or away"
+		result.Sources = append(result.Sources, available...)
+		result.Sources = append(result.Sources, presenceSources...)
+		result.Sources = append(result.Sources, withdrawn...)
+		if len(available) > 0 {
+			result.Basis = "presence state is unknown; the freshest device location leads without asserting home or away"
+		} else if len(withdrawn) > 0 {
+			result.Basis = "presence state is unknown; zone state leads because no available device location exists; withdrawn device entries are not locations"
+		} else {
+			result.Basis = "no bound companion device has published a location; unknown presence state is the only whereabouts source"
+		}
 	case len(presenceSources) > 0:
-		result.Sources = append(append(available, presenceSources...), withdrawn...)
-		result.Basis = "not home per person entity; the freshest device location leads and zone state is the floor"
+		result.Sources = append(result.Sources, available...)
+		result.Sources = append(result.Sources, presenceSources...)
+		result.Sources = append(result.Sources, withdrawn...)
+		if len(available) > 0 {
+			result.Basis = "not home per person entity; the freshest device location leads and zone state is the floor"
+		} else if len(withdrawn) > 0 {
+			result.Basis = "not home per person entity; zone state leads because no available device location exists; withdrawn device entries are not locations"
+		} else {
+			result.Basis = "no bound companion device has published a location; person-entity zone state is the only whereabouts source"
+		}
 	default:
-		result.Sources = append(available, withdrawn...)
-		result.Basis = "no presence tracking for this contact; device locations only"
-	}
-	if len(available) == 0 && len(presenceSources) > 0 && len(withdrawn) == 0 {
-		result.Basis = "no bound companion devices have published a location; presence only"
+		result.Sources = append(result.Sources, available...)
+		result.Sources = append(result.Sources, withdrawn...)
+		if len(available) > 0 {
+			result.Basis = "no presence tracking for this contact; device locations only"
+		} else {
+			result.Basis = "no available whereabouts source; bound devices have withdrawn location sharing, so their entries are provenance only"
+		}
 	}
 
 	if len(result.Sources) == 0 {
@@ -292,11 +341,9 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 		return string(out), nil
 	}
 
-	if len(result.Sources) > maxWhereaboutsSources {
-		result.TruncatedDevices = len(result.Sources) - maxWhereaboutsSources
-		result.Sources = result.Sources[:maxWhereaboutsSources]
+	if result.Sources[0].Status != "withdrawn" {
+		result.BestSource = result.Sources[0].Source
 	}
-	result.BestSource = result.Sources[0].Source
 
 	out, err := json.Marshal(result)
 	if err != nil {
