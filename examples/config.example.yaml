@@ -310,6 +310,17 @@ roots:
       # Gating search the same way would need the document store to see
       # active capability tags, which it deliberately does not.
       requires_tag: ""
+      # Advertise controls whether this root's documents may offer
+      # themselves to context assembly through the advertisement rail
+      # (#1431): "never" (default), "tagged" (offers only while
+      # RequiresTag's capability tag is active), or "always" (ambient
+      # offers on every eligible turn). Advertising is a third door
+      # beside Inject and Search rather than a mode of either: injection
+      # pushes whole documents on a tag, search answers an explicit ask,
+      # and advertising lets a document compete for a bounded slice of
+      # unasked-for attention. A root must opt in — the safe reading of
+      # silence is that a corpus does not volunteer itself.
+      advertise: ""
       # Untagged decides what a document carrying no tags means in this
       # root: "ignore" (default) skips it, "refuse" makes it an error.
       # 
@@ -467,6 +478,17 @@ roots:
       # Gating search the same way would need the document store to see
       # active capability tags, which it deliberately does not.
       requires_tag: ""
+      # Advertise controls whether this root's documents may offer
+      # themselves to context assembly through the advertisement rail
+      # (#1431): "never" (default), "tagged" (offers only while
+      # RequiresTag's capability tag is active), or "always" (ambient
+      # offers on every eligible turn). Advertising is a third door
+      # beside Inject and Search rather than a mode of either: injection
+      # pushes whole documents on a tag, search answers an explicit ask,
+      # and advertising lets a document compete for a bounded slice of
+      # unasked-for attention. A root must opt in — the safe reading of
+      # silence is that a corpus does not volunteer itself.
+      advertise: ""
       # Untagged decides what a document carrying no tags means in this
       # root: "ignore" (default) skips it, "refuse" makes it an error.
       # 
@@ -589,6 +611,17 @@ roots:
       # Gating search the same way would need the document store to see
       # active capability tags, which it deliberately does not.
       requires_tag: ""
+      # Advertise controls whether this root's documents may offer
+      # themselves to context assembly through the advertisement rail
+      # (#1431): "never" (default), "tagged" (offers only while
+      # RequiresTag's capability tag is active), or "always" (ambient
+      # offers on every eligible turn). Advertising is a third door
+      # beside Inject and Search rather than a mode of either: injection
+      # pushes whole documents on a tag, search answers an explicit ask,
+      # and advertising lets a document compete for a bounded slice of
+      # unasked-for attention. A root must opt in — the safe reading of
+      # silence is that a corpus does not volunteer itself.
+      advertise: ""
       # Untagged decides what a document carrying no tags means in this
       # root: "ignore" (default) skips it, "refuse" makes it an error.
       # 

@@ -31,7 +31,28 @@ func TestRootContextPolicyValidate(t *testing.T) {
 		{
 			name:    "requires_tag without injection rejected",
 			policy:  RootContextPolicy{Search: RootSearchOnRequest, RequiresTag: "devops"},
-			wantErr: "requires_tag gates prompt injection",
+			wantErr: "requires_tag gates tagged injection and tagged advertising",
+		},
+		{name: "always advertising", policy: RootContextPolicy{Advertise: RootAdvertiseAlways}},
+		{
+			name:   "tagged advertising with its gate",
+			policy: RootContextPolicy{Advertise: RootAdvertiseTagged, RequiresTag: "schedule"},
+		},
+		{
+			// requires_tag no longer forces inject: tagged — advertising is
+			// the second capability-aware door it can be gating.
+			name:   "requires_tag satisfied by tagged advertising alone",
+			policy: RootContextPolicy{Advertise: RootAdvertiseTagged, RequiresTag: "schedule", Search: RootSearchOnRequest},
+		},
+		{
+			name:    "unknown advertise rejected",
+			policy:  RootContextPolicy{Advertise: "sometimes"},
+			wantErr: "context.advertise",
+		},
+		{
+			name:    "tagged advertising without a gate rejected",
+			policy:  RootContextPolicy{Advertise: RootAdvertiseTagged},
+			wantErr: "needs requires_tag",
 		},
 	}
 
@@ -55,6 +76,9 @@ func TestRootContextPolicyEffectiveDefaults(t *testing.T) {
 	var p RootContextPolicy
 	if got := p.EffectiveInject(); got != RootInjectNone {
 		t.Fatalf("EffectiveInject() = %q, want none", got)
+	}
+	if got := p.EffectiveAdvertise(); got != RootAdvertiseNever {
+		t.Fatalf("EffectiveAdvertise() = %q, want never", got)
 	}
 	if got := p.EffectiveSearch(); got != RootSearchDefault {
 		t.Fatalf("EffectiveSearch() = %q, want default", got)

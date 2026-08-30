@@ -1230,6 +1230,12 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 			IncludeAlways:     !taskPrompt && !suppressAlways,
 			IncludeLoopScoped: !suppressAlways,
 		}
+		// Refs the session-origin policy injects whole are pinned so
+		// advertisers do not spend rail budget offering a document the
+		// prompt already carries in full.
+		if result := sessionOriginPolicyResultFromContext(ctx); result != nil {
+			req.PinnedRefs = result.ContextRefs
+		}
 		for _, contextSection := range assembler.BuildSections(haCtx, req) {
 			title := contextSection.Bucket.Title()
 			appendTrackedMarkdown(strings.ToUpper(title), 2, title, contextSection.Content)

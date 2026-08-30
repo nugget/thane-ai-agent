@@ -18,6 +18,15 @@ const (
 	maxSelectedContextAdvertisements = 8
 	maxAdvertisedContextBytes        = 16 * 1024
 	contextContentSeparatorBytes     = len("\n\n---\n\n")
+
+	// contextMaterializationBudget bounds the whole lazy-materialization
+	// phase, detached from the assembly walk's shared deadline.
+	// Materialization runs at the tail of the serial walk, when the
+	// shared 2s budget is most depleted — structurally, the
+	// highest-ranked content would otherwise be the first casualty of a
+	// slow turn. Same shape, same figure as the self-assessment
+	// provider's detach, and for the same reason.
+	contextMaterializationBudget = 1500 * time.Millisecond
 )
 
 type contextAdvertisementCandidate struct {
@@ -35,7 +44,14 @@ type contextAdvertisementSelection struct {
 // decide what they can offer and how the current request matches; this pass
 // owns cross-provider evidence ordering, deduplication, projection choice,
 // count, and byte limits. Complete detail is never selected automatically.
-func selectContextAdvertisements(candidates []contextAdvertisementCandidate) []contextAdvertisementSelection {
+// selectContextAdvertisements picks the winning offers. The second return
+// counts identities that made a genuinely selectable offer — a projection
+// automatic selection could have taken on an empty rail — but lost to the
+// offer cap or the byte budget. Losing must be observable: a turn that
+// silently renders eight offers out of twenty reads as "this is
+// everything", and the one thing an attention budget must never buy is a
+// false sense of completeness.
+func selectContextAdvertisements(candidates []contextAdvertisementCandidate) ([]contextAdvertisementSelection, int) {
 	valid := make([]contextAdvertisementCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.advertiser == nil || candidate.advertisement.Validate() != nil {
@@ -69,13 +85,23 @@ func selectContextAdvertisements(candidates []contextAdvertisementCandidate) []c
 
 	selected := make([]contextAdvertisementSelection, 0, min(len(valid), maxSelectedContextAdvertisements))
 	seen := make(map[string]struct{}, len(valid))
+	withheld := make(map[string]struct{})
 	remaining := maxAdvertisedContextBytes
 	for _, candidate := range valid {
 		key := candidate.advertisement.Source + "\x00" + candidate.advertisement.ID
 		if _, duplicate := seen[key]; duplicate {
+			delete(withheld, key)
 			continue
 		}
 		match, _ := bestContextMatch(candidate.advertisement.Matches)
+		if len(selected) == maxSelectedContextAdvertisements || remaining <= 0 {
+			// Past capacity. Anything that could have been chosen on an
+			// empty rail is a withheld offer, not a non-offer.
+			if _, ok := chooseContextProjection(candidate.advertisement.Projections, match.Kind, maxAdvertisedContextBytes); ok {
+				withheld[key] = struct{}{}
+			}
+			continue
+		}
 		separator := 0
 		if len(selected) > 0 {
 			separator = contextContentSeparatorBytes
@@ -83,13 +109,19 @@ func selectContextAdvertisements(candidates []contextAdvertisementCandidate) []c
 		projection, ok := chooseContextProjection(candidate.advertisement.Projections, match.Kind, remaining-separator)
 		if !ok {
 			// Not marked seen: this claimant offered nothing selectable
-			// (detail-only, or nothing fits the remaining budget), and a
-			// lower-ranked claimant of the same identity may still carry a
-			// projection that does. Marking the identity here would let
-			// the emptiest offer suppress every usable one behind it.
+			// here, and a lower-ranked claimant of the same identity may
+			// still carry a projection that fits. Marking the identity
+			// would let the emptiest offer suppress every usable one
+			// behind it. But if the offer would have fit an empty rail,
+			// the budget is what refused it — count it withheld unless a
+			// later claimant of the identity gets selected after all.
+			if _, fits := chooseContextProjection(candidate.advertisement.Projections, match.Kind, maxAdvertisedContextBytes); fits {
+				withheld[key] = struct{}{}
+			}
 			continue
 		}
 		seen[key] = struct{}{}
+		delete(withheld, key)
 		selected = append(selected, contextAdvertisementSelection{
 			advertiser: candidate.advertiser,
 			selection: agentctx.ContextSelection{
@@ -99,11 +131,8 @@ func selectContextAdvertisements(candidates []contextAdvertisementCandidate) []c
 			match: match,
 		})
 		remaining -= separator + projection.EstimatedBytes
-		if len(selected) == maxSelectedContextAdvertisements || remaining <= 0 {
-			break
-		}
 	}
-	return selected
+	return selected, len(withheld)
 }
 
 func bestContextMatch(matches []agentctx.ContextMatchSignal) (agentctx.ContextMatchSignal, int) {
@@ -186,15 +215,21 @@ func contextAdvertisementFingerprint(ad agentctx.ContextAdvertisement) string {
 // whole. An oversized projection is dropped rather than clipped into an
 // unmarked fragment.
 func (a *TagContextAssembler) materializeContextAdvertisements(ctx context.Context, req agentctx.ContextRequest, candidates []contextAdvertisementCandidate) map[agentctx.ContextBucket]string {
-	selected := selectContextAdvertisements(candidates)
-	if len(selected) == 0 {
+	selected, withheld := selectContextAdvertisements(candidates)
+	if len(selected) == 0 && withheld == 0 {
 		return nil
 	}
+
+	// Values (loop id, logging) survive WithoutCancel; only the walk's
+	// depleted deadline is replaced with this phase's own bound.
+	materializeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), contextMaterializationBudget)
+	defer cancel()
+
 	buffers := make(map[agentctx.ContextBucket]*strings.Builder)
 	used := 0
 	for _, item := range selected {
 		started := time.Now()
-		content, err := item.advertiser.MaterializeContextAdvertisement(ctx, req, item.selection)
+		content, err := item.advertiser.MaterializeContextAdvertisement(materializeCtx, req, item.selection)
 		warnSlowContextSource(a.logger, "context_advertisement_materialization", item.selection.Advertisement.Source+"/"+item.selection.Advertisement.ID, started)
 		if err != nil {
 			a.logger.Warn("context advertisement materialization failed",
@@ -256,6 +291,22 @@ func (a *TagContextAssembler) materializeContextAdvertisements(ctx context.Conte
 			"match_strength", item.match.Strength,
 			"bytes", len(content))
 	}
+	// Withheld offers get one explicit line so a capped rail never reads
+	// as a complete one. It rides the Related bucket — "lightweight and
+	// clearly optional" is that bucket's charter, and the door it names
+	// is a pull the model can choose.
+	if withheld > 0 {
+		buf := buffers[agentctx.ContextBucketRelated]
+		if buf == nil {
+			buf = &strings.Builder{}
+			buffers[agentctx.ContextBucketRelated] = buf
+		}
+		if buf.Len() > 0 {
+			buf.WriteString("\n\n")
+		}
+		fmt.Fprintf(buf, "[%d context offer(s) withheld by the advertisement budget; doc_search reaches the full corpus]", withheld)
+	}
+
 	out := make(map[agentctx.ContextBucket]string, len(buffers))
 	for bucket, buf := range buffers {
 		if buf.Len() > 0 {
