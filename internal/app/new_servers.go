@@ -373,6 +373,20 @@ func (a *App) initServers(s *newState) error {
 	// and rides the HA person binding, so it must not require companion
 	// apps to be configured — and both degrade to absence when their
 	// source is missing.
+	// Canonical contact-UUID → bound companion accounts, shared by the
+	// channel enrichment join and the fused whereabouts tool. Config
+	// may spell a binding in any form uuid.Parse accepts; lookups
+	// compare against contact.ID.String().
+	accountsByContact := make(map[string][]string)
+	for account, provider := range cfg.Companion.Providers {
+		if provider.Contact == "" {
+			continue
+		}
+		if id, err := uuid.Parse(provider.Contact); err == nil {
+			accountsByContact[id.String()] = append(accountsByContact[id.String()], account)
+		}
+	}
+
 	if s.contactLookup != nil {
 		if s.personTracker != nil {
 			tracker := s.personTracker
@@ -397,20 +411,6 @@ func (a *App) initServers(s *newState) error {
 				}
 				return view
 			}
-		}
-		// Device reachability keys by canonical contact UUID — the
-		// config may spell a binding in any form uuid.Parse accepts,
-		// and lookups compare against contact.ID.String().
-		accountsByContact := make(map[string][]string)
-		for account, provider := range cfg.Companion.Providers {
-			if provider.Contact == "" {
-				continue
-			}
-			id, err := uuid.Parse(provider.Contact)
-			if err != nil {
-				continue // config validation rejects these; defensive only
-			}
-			accountsByContact[id.String()] = append(accountsByContact[id.String()], account)
 		}
 		if len(accountsByContact) > 0 && a.companionDevices != nil {
 			s.contactLookup.devicesFor = func(ctx context.Context, contactID string) []agent.CounterpartyDevice {
@@ -456,6 +456,36 @@ func (a *App) initServers(s *newState) error {
 				return views
 			}
 		}
+	}
+
+	// Fused counterparty view (#1450 slice C): contact_whereabouts
+	// composes every whereabouts source the contact record roots.
+	// Registered whenever contacts exist — a presence-only household
+	// without companion apps still gets the fused answer.
+	if a.contactStore != nil {
+		deps := tools.CounterpartyToolDeps{
+			Contacts:   a.contactStore,
+			Companions: a.companionDevices,
+		}
+		if s.personTracker != nil {
+			deps.Presence = s.personTracker.Snapshot
+		}
+		if len(accountsByContact) > 0 {
+			deps.AccountsForContact = func(contactID string) []string {
+				return accountsByContact[contactID]
+			}
+		}
+		if a.companionRegistry != nil {
+			registry := a.companionRegistry
+			deps.LiveIdentities = func() map[[2]string]bool {
+				live := make(map[[2]string]bool)
+				for _, info := range registry.List() {
+					live[[2]string{info.Account, info.ClientID}] = true
+				}
+				return live
+			}
+		}
+		a.loop.Tools().EnableCounterpartyTools(deps)
 	}
 
 	// --- CardDAV server ---

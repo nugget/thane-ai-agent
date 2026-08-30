@@ -468,3 +468,7 @@ keeps the encoded vCard small enough to scan reliably. As with
 - For "merge two contacts" — there's no native merge tool. The
   workflow above (save absorbs, forget removes) is the supported
   pattern.
+
+- Asked where a contact is, `contact_whereabouts` fuses their
+  presence and device locations into one ranked, provenance-carrying
+  answer — start there rather than assembling it yourself.

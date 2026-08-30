@@ -39,12 +39,14 @@ Reading the device block:
 
 How to work here:
 
-- Asked where someone is, or about their phone's last whereabouts?
-  `companion_last_known_location` answers from stored data even while
-  the phone is offline or asleep, and says whose device it was, how
-  old the fix is, and whether it has gone stale. Reach for a device's
-  own live location tool only when the device block shows it online
-  and you need a fresh fix right now.
+- Asked where someone is? `contact_whereabouts` is the first door: it
+  fuses every source that person's contact record roots — room-level
+  presence while home, their freshest device location when away, zone
+  state as the floor — ranked, with provenance and freshness per
+  source. Reach for `companion_last_known_location` only when you need
+  one specific device's stored fix, and a device's own live location
+  tool only when the device block shows it online and you need a
+  fresh fix right now.
 - A connected device authors its own tools, so their exact names come
   from it, not from a fixed list. Use the tool whose name and
   description match the data you need; `macos_calendar_events` lists
