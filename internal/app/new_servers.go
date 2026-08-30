@@ -276,6 +276,12 @@ func (a *App) initServers(s *newState) error {
 		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry))
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
+		// Durable inventory: authentication upserts the device record,
+		// disconnect stamps timestamps without deleting it (#1437).
+		// The LIFO closer drains queued inventory writes before the
+		// memory store closes the database they land in.
+		handler.SetDeviceRecorder(a.companionDevices)
+		a.onClose("companion-device-recorder", handler.CloseDeviceRecorder)
 		server.SetCompanionHandler(handler)
 
 		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
