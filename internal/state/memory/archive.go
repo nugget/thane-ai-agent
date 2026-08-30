@@ -512,10 +512,12 @@ func (s *ArchiveStore) msgSelectCols() string {
 		return `id, conversation_id, COALESCE(session_id, '') as session_id,
 			role, content, timestamp, token_count, tool_calls, tool_call_id,
 			COALESCE(archived_at, '') as archived_at,
-			COALESCE(archive_reason, '') as archive_reason`
+			COALESCE(archive_reason, '') as archive_reason,
+			COALESCE(origin, '') as origin`
 	}
 	return `id, conversation_id, session_id, role, content, timestamp,
-		token_count, tool_calls, tool_call_id, archived_at, archive_reason`
+		token_count, tool_calls, tool_call_id, archived_at, archive_reason,
+		COALESCE(origin, '') as origin`
 }
 
 // countSessionMessages returns the message count for a session from the
@@ -595,10 +597,11 @@ func (s *ArchiveStore) migrate() error {
 			tool_calls TEXT,
 			tool_call_id TEXT,
 			archived_at TIMESTAMP NOT NULL,
-			archive_reason TEXT NOT NULL
+			archive_reason TEXT NOT NULL,
+			origin TEXT DEFAULT ''
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_archive_conversation 
+		CREATE INDEX IF NOT EXISTS idx_archive_conversation
 			ON archive_messages(conversation_id, timestamp);
 		CREATE INDEX IF NOT EXISTS idx_archive_session 
 			ON archive_messages(session_id, timestamp);
@@ -759,6 +762,13 @@ func (s *ArchiveStore) migrateSchema() {
 	if _, err := s.db.Exec("SELECT tools_offered FROM archive_iterations LIMIT 0"); err != nil {
 		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tools_offered TEXT")
 	}
+
+	// Add origin provenance column for existing archive_messages tables,
+	// keeping the legacy split-DB projection aligned with the unified
+	// messages table (both feed the same scanners).
+	if _, err := s.db.Exec("SELECT origin FROM archive_messages LIMIT 0"); err != nil {
+		_, _ = s.db.Exec("ALTER TABLE archive_messages ADD COLUMN origin TEXT DEFAULT ''")
+	}
 }
 
 // tryEnableFTS attempts to create the FTS5 virtual table. Returns true if
@@ -893,10 +903,10 @@ func (s *ArchiveStore) ArchiveMessages(messages []Message) error {
 	defer func() { _ = tx.Rollback() }()
 
 	insertMsg, err := tx.Prepare(`
-		INSERT OR IGNORE INTO archive_messages 
-			(id, conversation_id, session_id, role, content, timestamp, 
-			 token_count, tool_calls, tool_call_id, archived_at, archive_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR IGNORE INTO archive_messages
+			(id, conversation_id, session_id, role, content, timestamp,
+			 token_count, tool_calls, tool_call_id, archived_at, archive_reason, origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
@@ -933,7 +943,7 @@ func (s *ArchiveStore) ArchiveMessages(messages []Message) error {
 			m.ID, m.ConversationID, m.SessionID, m.Role, m.Content,
 			m.Timestamp.Format(time.RFC3339Nano),
 			m.TokenCount, nullString(m.ToolCalls), nullString(m.ToolCallID),
-			m.ArchivedAt.Format(time.RFC3339Nano), m.ArchiveReason,
+			m.ArchivedAt.Format(time.RFC3339Nano), m.ArchiveReason, m.Origin,
 		)
 		if err != nil {
 			return fmt.Errorf("insert message %s: %w", m.ID, err)
@@ -1028,8 +1038,8 @@ func (s *ArchiveStore) ImportMessages(messages []Message) error {
 		INSERT OR IGNORE INTO %s
 			(id, conversation_id, session_id, role, content, timestamp,
 			 token_count, tool_calls, tool_call_id,
-			 status, archived_at, archive_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)
+			 status, archived_at, archive_reason, origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?, ?)
 	`, s.msgTableName))
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
@@ -1052,7 +1062,7 @@ func (s *ArchiveStore) ImportMessages(messages []Message) error {
 			m.ID, m.ConversationID, m.SessionID, m.Role, m.Content,
 			m.Timestamp.Format(time.RFC3339Nano),
 			m.TokenCount, nullString(m.ToolCalls), nullString(m.ToolCallID),
-			m.ArchivedAt.Format(time.RFC3339Nano), m.ArchiveReason,
+			m.ArchivedAt.Format(time.RFC3339Nano), m.ArchiveReason, m.Origin,
 		); err != nil {
 			return fmt.Errorf("insert message %s: %w", m.ID, err)
 		}
@@ -1525,7 +1535,7 @@ func (s *ArchiveStore) runFTSQuery(ftsExpr string, opts SearchOptions, limit int
 // ftsMatchColumns is the message-column projection shared by the FTS
 // SELECT here and the COUNT/scan paths, kept in one place so the column
 // order can't drift from [scanFTSMatches].
-const ftsMatchColumns = "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason"
+const ftsMatchColumns = "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason, COALESCE(am.origin, '') as origin"
 
 // ftsConditions builds the shared WHERE clause and bound args for an
 // FTS query: the MATCH expression plus optional conversation scope,
@@ -1668,7 +1678,7 @@ func scanFTSMatches(rows *sql.Rows) ([]matchWithHighlight, error) {
 		err := rows.Scan(
 			&m.ID, &m.ConversationID, &m.SessionID, &m.Role, &m.Content,
 			&tsStr, &m.TokenCount, &toolCalls, &toolCallID,
-			&archivedStr, &m.ArchiveReason, &highlight, &bm25,
+			&archivedStr, &m.ArchiveReason, &m.Origin, &highlight, &bm25,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -1779,7 +1789,7 @@ func (s *ArchiveStore) expandContext(
 		err := rows.Scan(
 			&m.ID, &m.ConversationID, &m.SessionID, &m.Role, &m.Content,
 			&tsStr, &m.TokenCount, &toolCalls, &toolCallID,
-			&archivedStr, &m.ArchiveReason,
+			&archivedStr, &m.ArchiveReason, &m.Origin,
 		)
 		if err != nil {
 			continue
@@ -2851,7 +2861,7 @@ func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
 		err := rows.Scan(
 			&m.ID, &m.ConversationID, &m.SessionID, &m.Role, &m.Content,
 			&tsStr, &m.TokenCount, &toolCalls, &toolCallID,
-			&archivedStr, &m.ArchiveReason,
+			&archivedStr, &m.ArchiveReason, &m.Origin,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)

@@ -89,7 +89,7 @@ func newMockMemWithCompaction() *mockMemWithCompaction {
 func (m *mockMemWithCompaction) AddCompactionSummary(convID, summary string) error {
 	m.summaries = append(m.summaries, compactionSummary{convID, summary})
 	// Also add as a message so GetMessages sees it.
-	return m.AddMessage(convID, "system", summary)
+	return m.AddMessage(convID, "system", summary, "")
 }
 
 func (m *mockMemWithCompaction) GetAllMessages(convID string) []memory.Message {
@@ -159,7 +159,7 @@ func TestCloseSession(t *testing.T) {
 
 			// Seed messages.
 			for _, m := range tt.messages {
-				_ = mem.AddMessage("conv1", m.Role, m.Content)
+				_ = mem.AddMessage("conv1", m.Role, m.Content, "")
 			}
 
 			err := loop.CloseSession("conv1", tt.reason, tt.carryForward)
@@ -225,7 +225,7 @@ func TestCloseSession_ClearsPersistedCapabilityTags(t *testing.T) {
 	if err := store.SaveTags("conv1", []string{"forge", "web"}); err != nil {
 		t.Fatalf("SaveTags() error: %v", err)
 	}
-	if err := mem.AddMessage("conv1", "user", "hello"); err != nil {
+	if err := mem.AddMessage("conv1", "user", "hello", ""); err != nil {
 		t.Fatalf("AddMessage() error: %v", err)
 	}
 
@@ -282,7 +282,7 @@ func TestCheckpointSession(t *testing.T) {
 			loop := newTestLoop(mem, archiver)
 
 			for _, m := range tt.messages {
-				_ = mem.AddMessage("conv1", m.Role, m.Content)
+				_ = mem.AddMessage("conv1", m.Role, m.Content, "")
 			}
 
 			err := loop.CheckpointSession("conv1", tt.label)
@@ -410,7 +410,7 @@ func TestSplitSession(t *testing.T) {
 			loop := newTestLoop(mem, archiver)
 
 			for _, m := range tt.messages {
-				_ = mem.AddMessage("conv1", m.Role, m.Content)
+				_ = mem.AddMessage("conv1", m.Role, m.Content, "")
 			}
 
 			err := loop.SplitSession("conv1", tt.atIndex, tt.atMessage)
@@ -474,7 +474,7 @@ func TestSplitSession_ClearsPersistedCapabilityTags(t *testing.T) {
 		{Role: "assistant", Content: "msg2"},
 		{Role: "user", Content: "msg3"},
 	} {
-		if err := mem.AddMessage("conv1", m.Role, m.Content); err != nil {
+		if err := mem.AddMessage("conv1", m.Role, m.Content, ""); err != nil {
 			t.Fatalf("AddMessage() error: %v", err)
 		}
 	}
@@ -502,7 +502,7 @@ func TestResetConversation_ClearsPersistedCapabilityTags(t *testing.T) {
 	if err := store.SaveTags("conv1", []string{"forge"}); err != nil {
 		t.Fatalf("SaveTags() error: %v", err)
 	}
-	if err := mem.AddMessage("conv1", "user", "hello"); err != nil {
+	if err := mem.AddMessage("conv1", "user", "hello", ""); err != nil {
 		t.Fatalf("AddMessage() error: %v", err)
 	}
 

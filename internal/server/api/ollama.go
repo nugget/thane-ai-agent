@@ -267,6 +267,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		ChannelBinding:   channelBinding,
 		SkipContext:      auxiliary,
 		SystemPrompt:     ocSystemPrompt,
+		MessageOrigin:    memory.OriginAPI,
 	}
 
 	// Derive a short display name for the conversation's dashboard node.

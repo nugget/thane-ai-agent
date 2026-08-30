@@ -766,6 +766,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		RoutingFactors:   hints,
 		DelegationGating: delegationGating,
 		SystemPrompt:     systemPrompt,
+		MessageOrigin:    memory.OriginAPI,
 	}
 
 	if req.Stream {
@@ -856,6 +857,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		RoutingFactors: map[string]string{
 			"channel": "api",
 		},
+		MessageOrigin: memory.OriginAPI,
 	}
 
 	resp, err := s.runChatLoop(ctx, agentReq, nil, "api/simple-chat")

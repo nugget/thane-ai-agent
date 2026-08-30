@@ -31,7 +31,7 @@ func addConv(t *testing.T, store *memory.SQLiteStore, id string, messages int, b
 		t.Fatalf("GetOrCreateConversation %s: %v", id, err)
 	}
 	for i := 0; i < messages; i++ {
-		if err := store.AddMessage(id, "user", "hello"); err != nil {
+		if err := store.AddMessage(id, "user", "hello", ""); err != nil {
 			t.Fatalf("AddMessage %s: %v", id, err)
 		}
 	}
