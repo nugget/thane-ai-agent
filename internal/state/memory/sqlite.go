@@ -125,20 +125,23 @@ func (s *SQLiteStore) GetOrCreateConversation(id string) (*Conversation, error) 
 	return &conv, nil
 }
 
-// AddMessage adds a message to a conversation.
-func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
-	return s.addMessage(conversationID, role, content, false)
+// AddMessage adds a message to a conversation. origin records how the
+// message entered the conversation (see the Origin* constants); pass ""
+// when the enqueue site cannot know.
+func (s *SQLiteStore) AddMessage(conversationID, role, content, origin string) error {
+	return s.addMessage(conversationID, role, content, origin, false)
 }
 
 // AddMidTurnMessage adds a message that arrived mid-turn and was merged into
 // an in-flight turn (#1230), tagging the row so consumers can identify the
 // injection from the structured record rather than substring-matching the
-// channel-rendered arrival marker in the content.
-func (s *SQLiteStore) AddMidTurnMessage(conversationID, role, content string) error {
-	return s.addMessage(conversationID, role, content, true)
+// channel-rendered arrival marker in the content. origin follows the same
+// contract as [SQLiteStore.AddMessage].
+func (s *SQLiteStore) AddMidTurnMessage(conversationID, role, content, origin string) error {
+	return s.addMessage(conversationID, role, content, origin, true)
 }
 
-func (s *SQLiteStore) addMessage(conversationID, role, content string, midTurn bool) error {
+func (s *SQLiteStore) addMessage(conversationID, role, content, origin string, midTurn bool) error {
 	now := time.Now()
 	msgID, err := uuid.NewV7()
 	if err != nil {
@@ -158,9 +161,9 @@ func (s *SQLiteStore) addMessage(conversationID, role, content string, midTurn b
 
 	// Insert message
 	_, err = s.db.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, mid_turn)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, msgID.String(), conversationID, role, content, now, llm.EstimateTokens(content), midTurnVal)
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, mid_turn, origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, msgID.String(), conversationID, role, content, now, llm.EstimateTokens(content), midTurnVal, origin)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -197,15 +200,15 @@ func (s *SQLiteStore) addMessage(conversationID, role, content string, midTurn b
 func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
 		WITH recent AS (
-			SELECT id, role, content, timestamp, COALESCE(mid_turn, 0) AS mid_turn
+			SELECT id, role, content, timestamp, COALESCE(mid_turn, 0) AS mid_turn, COALESCE(origin, '') AS origin
 			FROM messages
 			WHERE conversation_id = ? AND status = 'active'
 			ORDER BY timestamp DESC, id DESC
 			LIMIT ?
 		)
-		SELECT id, role, content, timestamp, mid_turn FROM recent
+		SELECT id, role, content, timestamp, mid_turn, origin FROM recent
 		UNION
-		SELECT id, role, content, timestamp, COALESCE(mid_turn, 0)
+		SELECT id, role, content, timestamp, COALESCE(mid_turn, 0), COALESCE(origin, '')
 		FROM messages
 		WHERE conversation_id = ? AND status = 'active' AND role = 'system'
 		  AND content LIKE ? || '%'
@@ -220,7 +223,7 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	for rows.Next() {
 		var m Message
 		var midTurn int
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &midTurn); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &midTurn, &m.Origin); err != nil {
 			continue
 		}
 		m.MidTurn = midTurn != 0
@@ -455,7 +458,7 @@ func (s *SQLiteStore) BindConversationChannel(conversationID string, binding *Ch
 // Includes tool call data for full-fidelity archiving — never lose primary sources.
 func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
-		SELECT id, role, content, timestamp, tool_calls, tool_call_id, COALESCE(mid_turn, 0)
+		SELECT id, role, content, timestamp, tool_calls, tool_call_id, COALESCE(mid_turn, 0), COALESCE(origin, '')
 		FROM messages
 		WHERE conversation_id = ?
 		ORDER BY timestamp ASC
@@ -470,7 +473,7 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 		var m Message
 		var toolCalls, toolCallID sql.NullString
 		var midTurn int
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID, &midTurn); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID, &midTurn, &m.Origin); err != nil {
 			continue
 		}
 		if toolCalls.Valid {

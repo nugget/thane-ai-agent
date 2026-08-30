@@ -14,10 +14,10 @@ import (
 func TestMidTurnMessageRoundTrip(t *testing.T) {
 	store := newWindowStore(t, 100)
 
-	if err := store.AddMessage("conv-1", "user", "ordinary"); err != nil {
+	if err := store.AddMessage("conv-1", "user", "ordinary", ""); err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
-	if err := store.AddMidTurnMessage("conv-1", "user", "mid-turn arrival"); err != nil {
+	if err := store.AddMidTurnMessage("conv-1", "user", "mid-turn arrival", ""); err != nil {
 		t.Fatalf("AddMidTurnMessage: %v", err)
 	}
 
@@ -74,10 +74,10 @@ func TestMidTurnMessageNullLegacyRow(t *testing.T) {
 // AddMidTurnMessage contract as the SQLite store.
 func TestMidTurnMessageInMemoryParity(t *testing.T) {
 	s := NewStore(100)
-	if err := s.AddMessage("c", "user", "ordinary"); err != nil {
+	if err := s.AddMessage("c", "user", "ordinary", ""); err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
-	if err := s.AddMidTurnMessage("c", "user", "mid"); err != nil {
+	if err := s.AddMidTurnMessage("c", "user", "mid", ""); err != nil {
 		t.Fatalf("AddMidTurnMessage: %v", err)
 	}
 	byContent := make(map[string]Message)

@@ -1077,6 +1077,7 @@ func (b *Bridge) agentTurnMessages(convID string, binding *memory.ChannelBinding
 			ExcludeTools:     opts.ExcludeTools,
 			InitialTags:      []string{"signal"},
 			RuntimeTags:      []string{"message_channel"},
+			MessageOrigin:    memory.OriginChannel,
 			FallbackContent:  fallbackContent,
 		},
 		Summary: summary,

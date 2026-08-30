@@ -42,7 +42,7 @@ func TestAdapter_ArchiveConversation(t *testing.T) {
 	// Add active messages to the unified table.
 	workingStore.GetOrCreateConversation("conv-1")
 	for _, content := range []string{"hello", "hi there!"} {
-		if err := workingStore.AddMessage("conv-1", "user", content); err != nil {
+		if err := workingStore.AddMessage("conv-1", "user", content, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -91,7 +91,7 @@ func TestAdapter_ArchiveConversation_WithToolCalls(t *testing.T) {
 
 	// Add messages and tool calls to the unified tables.
 	workingStore.GetOrCreateConversation("conv-1")
-	workingStore.AddMessage("conv-1", "user", "search for test")
+	workingStore.AddMessage("conv-1", "user", "search for test", "")
 	workingStore.RecordToolCall("conv-1", "", "tc-1", "web_search", `{"query":"test"}`)
 	workingStore.CompleteToolCall("tc-1", "search results", "")
 
