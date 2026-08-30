@@ -1,6 +1,8 @@
 package companion
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -30,21 +32,21 @@ type recordedManifest struct {
 	Manifest string
 }
 
-func (f *fakeDeviceRecorder) RecordConnected(account, clientID string, meta DeviceMetadata, _ time.Time) error {
+func (f *fakeDeviceRecorder) RecordConnected(_ context.Context, account, clientID string, meta DeviceMetadata, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.connected = append(f.connected, recordedDevice{account, clientID, meta})
 	return nil
 }
 
-func (f *fakeDeviceRecorder) RecordCapabilities(account, clientID string, manifest []byte, _ time.Time) error {
+func (f *fakeDeviceRecorder) RecordCapabilities(_ context.Context, account, clientID string, manifest []byte, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.capabilities = append(f.capabilities, recordedManifest{account, clientID, string(manifest)})
 	return nil
 }
 
-func (f *fakeDeviceRecorder) RecordDisconnected(account, clientID string, _ time.Time) error {
+func (f *fakeDeviceRecorder) RecordDisconnected(_ context.Context, account, clientID string, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.disconnected = append(f.disconnected, recordedDevice{Account: account, ClientID: clientID})
@@ -173,11 +175,27 @@ func TestDeviceRecorderFullLifecycle(t *testing.T) {
 
 // TestDeviceRecorderSkipsAnonymousClients pins the published contract:
 // a connection without a client_id stays fully functional live but is
-// never recorded in the durable inventory.
+// never recorded in the durable inventory. The assertion is
+// deterministic: the wrapped handler signals when connection teardown
+// (the last recorder call site) has fully returned, and a barrier op
+// drains the recording queue behind anything mistakenly enqueued.
 func TestDeviceRecorderSkipsAnonymousClients(t *testing.T) {
 	recorder := &fakeDeviceRecorder{}
-	srv, conn := dialWithRecorder(t, recorder)
+	registry := NewRegistry(nil)
+	handler := NewHandler(testTokenIndex(), registry, nil)
+	handler.SetDeviceRecorder(recorder)
+
+	teardown := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+		close(teardown)
+	}))
 	defer srv.Close()
+	wsURL := "ws" + srv.URL[len("http"):]
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
 	defer conn.Close()
 
 	authAs(t, conn, authMessage{ClientName: "Legacy Mac"})
@@ -197,9 +215,19 @@ func TestDeviceRecorderSkipsAnonymousClients(t *testing.T) {
 	}
 	conn.Close()
 
-	// The disconnect path is the last recorder call site; give the
-	// teardown goroutine time to run before asserting silence.
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-teardown:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler teardown did not complete")
+	}
+	drained := make(chan struct{})
+	handler.enqueueDeviceOp(func(context.Context) { close(drained) })
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("device op queue did not drain")
+	}
+
 	c, caps, d := recorder.snapshot()
 	if c != 0 || caps != 0 || d != 0 {
 		t.Errorf("anonymous client was recorded: connected=%d capabilities=%d disconnected=%d", c, caps, d)

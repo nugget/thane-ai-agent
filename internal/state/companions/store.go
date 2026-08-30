@@ -5,9 +5,18 @@
 // ephemeral transport, the record survives disconnects and process
 // restarts (#1437). Reachability is never persisted here; it stays
 // derived from the in-memory provider registry.
+//
+// Overlapping connections for the same durable identity are legal (a
+// reconnecting phone races its own dying socket), so every write is
+// guarded to be monotonic: timestamps never regress and an older write
+// cannot replace newer state. The guards compare timestamps in SQL,
+// which is sound because the driver stores them in the canonical text
+// layout and this store normalizes every value to UTC — uniform-offset
+// canonical text compares bytewise in chronological order.
 package companions
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -43,8 +52,11 @@ type Device struct {
 
 	// Capabilities is the most recently advertised capability manifest,
 	// stored verbatim as JSON. It describes what the device offered when
-	// last heard from — not what is callable now.
-	Capabilities json.RawMessage
+	// last heard from — not what is callable now. CapabilitiesRecordedAt
+	// is when that advertisement happened; zero when the device has
+	// never registered capabilities.
+	Capabilities           json.RawMessage
+	CapabilitiesRecordedAt time.Time
 
 	State string
 }
@@ -69,31 +81,40 @@ func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 
 // RecordConnected upserts the device row for a successful companion
 // authentication. A new device gets its first_seen_at anchored; a
-// returning device keeps it. Metadata updates are non-empty-wins so a
-// client that omits a field on one connection cannot erase what it
-// reported before. Implements [companion.DeviceRecorder].
-func (s *Store) RecordConnected(account, clientID string, meta companion.DeviceMetadata, at time.Time) error {
-	account, clientID, err := normalizeKey(account, clientID)
-	if err != nil {
+// returning device keeps it. Timestamps are monotonic, and metadata
+// replacement is gated on the connect being at least as new as the
+// stored one — an older racing write can only fill fields that are
+// still empty, never overwrite what a newer connection reported.
+// Metadata is stored verbatim; the auth handshake is the one place
+// values are normalized. Implements [companion.DeviceRecorder].
+func (s *Store) RecordConnected(ctx context.Context, account, clientID string, meta companion.DeviceMetadata, at time.Time) error {
+	if err := validateKey(account, clientID); err != nil {
 		return err
 	}
 	at = normalizeTime(at)
 
-	_, err = s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO companion_devices (
 			account, client_id, client_name, platform, app_version, os_version,
 			first_seen_at, last_seen_at, last_connected_at, state
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account, client_id) DO UPDATE SET
-			client_name       = CASE WHEN excluded.client_name != '' THEN excluded.client_name ELSE client_name END,
-			platform          = CASE WHEN excluded.platform != '' THEN excluded.platform ELSE platform END,
-			app_version       = CASE WHEN excluded.app_version != '' THEN excluded.app_version ELSE app_version END,
-			os_version        = CASE WHEN excluded.os_version != '' THEN excluded.os_version ELSE os_version END,
-			last_seen_at      = excluded.last_seen_at,
-			last_connected_at = excluded.last_connected_at
+			client_name = CASE WHEN excluded.client_name != ''
+					AND (companion_devices.client_name = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+				THEN excluded.client_name ELSE companion_devices.client_name END,
+			platform = CASE WHEN excluded.platform != ''
+					AND (companion_devices.platform = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+				THEN excluded.platform ELSE companion_devices.platform END,
+			app_version = CASE WHEN excluded.app_version != ''
+					AND (companion_devices.app_version = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+				THEN excluded.app_version ELSE companion_devices.app_version END,
+			os_version = CASE WHEN excluded.os_version != ''
+					AND (companion_devices.os_version = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+				THEN excluded.os_version ELSE companion_devices.os_version END,
+			last_seen_at      = MAX(companion_devices.last_seen_at, excluded.last_seen_at),
+			last_connected_at = MAX(companion_devices.last_connected_at, excluded.last_connected_at)
 	`, account, clientID,
-		strings.TrimSpace(meta.ClientName), strings.TrimSpace(meta.Platform),
-		strings.TrimSpace(meta.AppVersion), strings.TrimSpace(meta.OSVersion),
+		meta.ClientName, meta.Platform, meta.AppVersion, meta.OSVersion,
 		at, at, at, DeviceStateActive)
 	if err != nil {
 		return fmt.Errorf("record companion connect %s/%s: %w", account, clientID, err)
@@ -101,16 +122,17 @@ func (s *Store) RecordConnected(account, clientID string, meta companion.DeviceM
 	return nil
 }
 
-// RecordCapabilities stores the most recently advertised capability
-// manifest for a known device and bumps last_seen_at. The manifest is
-// opaque JSON authored by the registration path; an empty manifest is
-// stored as an empty JSON array. Registering capabilities for a device
-// that was never recorded is an error — connection recording precedes
-// capability registration in the protocol. Implements
-// [companion.DeviceRecorder].
-func (s *Store) RecordCapabilities(account, clientID string, manifest []byte, at time.Time) error {
-	account, clientID, err := normalizeKey(account, clientID)
-	if err != nil {
+// RecordCapabilities stores the advertised capability manifest for a
+// known device, but only when it is at least as new as the one already
+// stored — overlapping providers with the same durable identity may
+// race, and "most recently advertised" must survive out-of-order
+// writes. A stale write is dropped silently (the newer manifest is
+// already the correct outcome); an unknown device is an error, since
+// connection recording precedes capability registration in the
+// protocol. An empty manifest is stored as an empty JSON array.
+// Implements [companion.DeviceRecorder].
+func (s *Store) RecordCapabilities(ctx context.Context, account, clientID string, manifest []byte, at time.Time) error {
+	if err := validateKey(account, clientID); err != nil {
 		return err
 	}
 	at = normalizeTime(at)
@@ -121,50 +143,84 @@ func (s *Store) RecordCapabilities(account, clientID string, manifest []byte, at
 		return fmt.Errorf("record companion capabilities %s/%s: manifest is not valid JSON", account, clientID)
 	}
 
-	res, err := s.db.Exec(`
+	res, err := s.db.ExecContext(ctx, `
 		UPDATE companion_devices
-		SET capabilities = ?, last_seen_at = ?
+		SET capabilities = ?, capabilities_recorded_at = ?, last_seen_at = MAX(last_seen_at, ?)
 		WHERE account = ? AND client_id = ?
-	`, string(manifest), at, account, clientID)
+		  AND (capabilities_recorded_at IS NULL OR capabilities_recorded_at <= ?)
+	`, string(manifest), at, at, account, clientID, at)
 	if err != nil {
 		return fmt.Errorf("record companion capabilities %s/%s: %w", account, clientID, err)
 	}
-	return requireRow(res, "record companion capabilities", account, clientID)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record companion capabilities %s/%s: %w", account, clientID, err)
+	}
+	if n > 0 {
+		return nil
+	}
+
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM companion_devices WHERE account = ? AND client_id = ?)`,
+		account, clientID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("record companion capabilities %s/%s: %w", account, clientID, err)
+	}
+	if exists {
+		s.logger.Debug("stale companion capability manifest ignored",
+			"account", account,
+			"client_id", clientID,
+			"recorded_at", at,
+		)
+		return nil
+	}
+	return fmt.Errorf("record companion capabilities %s/%s: device not recorded", account, clientID)
 }
 
-// RecordDisconnected stamps the disconnect time for a known device. It
-// only updates timestamps — a disconnect must never delete or degrade
-// the record; that separation is the point of the inventory (#1437).
-// Implements [companion.DeviceRecorder].
-func (s *Store) RecordDisconnected(account, clientID string, at time.Time) error {
-	account, clientID, err := normalizeKey(account, clientID)
-	if err != nil {
+// RecordDisconnected stamps the disconnect on a known device without
+// deleting or degrading anything else — that separation is the point
+// of the inventory (#1437). It also advances last_seen_at: the
+// connection was live evidence of the device until the moment it tore
+// down, so teardown is the last proof of liveness (with skew bounded
+// by the heartbeat read timeout when the transport died silently).
+// Both stamps are monotonic for overlapping teardowns. Implements
+// [companion.DeviceRecorder].
+func (s *Store) RecordDisconnected(ctx context.Context, account, clientID string, at time.Time) error {
+	if err := validateKey(account, clientID); err != nil {
 		return err
 	}
 	at = normalizeTime(at)
 
-	res, err := s.db.Exec(`
+	res, err := s.db.ExecContext(ctx, `
 		UPDATE companion_devices
-		SET last_disconnected_at = ?, last_seen_at = ?
+		SET last_disconnected_at = MAX(COALESCE(last_disconnected_at, ?), ?),
+		    last_seen_at = MAX(last_seen_at, ?)
 		WHERE account = ? AND client_id = ?
-	`, at, at, account, clientID)
+	`, at, at, at, account, clientID)
 	if err != nil {
 		return fmt.Errorf("record companion disconnect %s/%s: %w", account, clientID, err)
 	}
-	return requireRow(res, "record companion disconnect", account, clientID)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record companion disconnect %s/%s: %w", account, clientID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("record companion disconnect %s/%s: device not recorded", account, clientID)
+	}
+	return nil
 }
 
 // Get returns one device record. The boolean reports whether the
 // device exists; a missing device is not an error.
-func (s *Store) Get(account, clientID string) (Device, bool, error) {
-	account, clientID, err := normalizeKey(account, clientID)
-	if err != nil {
+func (s *Store) Get(ctx context.Context, account, clientID string) (Device, bool, error) {
+	if err := validateKey(account, clientID); err != nil {
 		return Device{}, false, err
 	}
-	devices, err := s.scanDevices(`
+	devices, err := s.scanDevices(ctx, `
 		SELECT account, client_id, client_name, platform, app_version, os_version,
 		       first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
-		       capabilities, state
+		       capabilities, capabilities_recorded_at, state
 		FROM companion_devices
 		WHERE account = ? AND client_id = ?
 	`, account, clientID)
@@ -179,18 +235,18 @@ func (s *Store) Get(account, clientID string) (Device, bool, error) {
 
 // List returns every device record, ordered by account then client ID
 // so consumers render a stable shape across calls.
-func (s *Store) List() ([]Device, error) {
-	return s.scanDevices(`
+func (s *Store) List(ctx context.Context) ([]Device, error) {
+	return s.scanDevices(ctx, `
 		SELECT account, client_id, client_name, platform, app_version, os_version,
 		       first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
-		       capabilities, state
+		       capabilities, capabilities_recorded_at, state
 		FROM companion_devices
 		ORDER BY account ASC, client_id ASC
 	`)
 }
 
-func (s *Store) scanDevices(query string, args ...any) ([]Device, error) {
-	rows, err := s.db.Query(query, args...)
+func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]Device, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,12 +258,13 @@ func (s *Store) scanDevices(query string, args ...any) ([]Device, error) {
 			d            Device
 			connected    sql.NullTime
 			disconnected sql.NullTime
+			capsAt       sql.NullTime
 			capsJSON     string
 		)
 		if err := rows.Scan(
 			&d.Account, &d.ClientID, &d.ClientName, &d.Platform, &d.AppVersion, &d.OSVersion,
 			&d.FirstSeenAt, &d.LastSeenAt, &connected, &disconnected,
-			&capsJSON, &d.State,
+			&capsJSON, &capsAt, &d.State,
 		); err != nil {
 			return nil, err
 		}
@@ -217,6 +274,9 @@ func (s *Store) scanDevices(query string, args ...any) ([]Device, error) {
 		if disconnected.Valid {
 			d.LastDisconnectedAt = disconnected.Time.UTC()
 		}
+		if capsAt.Valid {
+			d.CapabilitiesRecordedAt = capsAt.Time.UTC()
+		}
 		d.FirstSeenAt = d.FirstSeenAt.UTC()
 		d.LastSeenAt = d.LastSeenAt.UTC()
 		d.Capabilities = json.RawMessage(capsJSON)
@@ -225,16 +285,18 @@ func (s *Store) scanDevices(query string, args ...any) ([]Device, error) {
 	return devices, rows.Err()
 }
 
-func normalizeKey(account, clientID string) (string, string, error) {
-	account = strings.TrimSpace(account)
-	clientID = strings.TrimSpace(clientID)
-	if account == "" {
-		return "", "", fmt.Errorf("account is required")
+// validateKey rejects identities that are empty after trimming, but
+// never rewrites them: client_id is an opaque claim, and the stored
+// bytes must match what the live registry holds or the durable/live
+// join cannot line up. Normalization is the auth handshake's job.
+func validateKey(account, clientID string) error {
+	if strings.TrimSpace(account) == "" {
+		return fmt.Errorf("account is required")
 	}
-	if clientID == "" {
-		return "", "", fmt.Errorf("client_id is required")
+	if strings.TrimSpace(clientID) == "" {
+		return fmt.Errorf("client_id is required")
 	}
-	return account, clientID, nil
+	return nil
 }
 
 func normalizeTime(at time.Time) time.Time {
@@ -242,15 +304,4 @@ func normalizeTime(at time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return at.UTC()
-}
-
-func requireRow(res sql.Result, op, account, clientID string) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("%s %s/%s: %w", op, account, clientID, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%s %s/%s: device not recorded", op, account, clientID)
-	}
-	return nil
 }

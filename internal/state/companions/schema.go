@@ -30,6 +30,7 @@ var devicesSchema = database.Schema{
 				last_connected_at    TIMESTAMP,
 				last_disconnected_at TIMESTAMP,
 				capabilities         TEXT NOT NULL DEFAULT '[]',
+				capabilities_recorded_at TIMESTAMP,
 				state                TEXT NOT NULL DEFAULT 'active',
 				PRIMARY KEY (account, client_id)
 			)`,
