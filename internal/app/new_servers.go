@@ -290,7 +290,7 @@ func (a *App) initServers(s *newState) error {
 		// with live connectivity, so an iPhone that locked stays visible
 		// as an offline device with honest freshness instead of
 		// vanishing. Uncached live state.
-		a.loop.RegisterTagContextProvider("companion", companions.NewContextProvider(a.companionDevices, a.companionRegistry.List))
+		a.loop.RegisterTagContextProvider("companion", companions.NewContextProvider(a.companionDevices, a.companionRegistry.List, logger))
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
 		// Durable inventory: authentication upserts the device record,

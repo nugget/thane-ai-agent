@@ -105,7 +105,7 @@ func TestContextProviderJoinsDurableAndLive(t *testing.T) {
 		}
 	}
 
-	p := NewContextProvider(store, live)
+	p := NewContextProvider(store, live, nil)
 	if p.TagContextBucket() != agentctx.ContextBucketLiveState {
 		t.Fatalf("bucket = %v, want live state", p.TagContextBucket())
 	}
@@ -184,7 +184,7 @@ func TestContextProviderOfflineOnly(t *testing.T) {
 		t.Fatalf("disconnect: %v", err)
 	}
 
-	p := NewContextProvider(store, func() []companion.ProviderInfo { return nil })
+	p := NewContextProvider(store, func() []companion.ProviderInfo { return nil }, nil)
 	block, err := p.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
@@ -199,7 +199,7 @@ func TestContextProviderOfflineOnly(t *testing.T) {
 // is paired or connected.
 func TestContextProviderEmpty(t *testing.T) {
 	store := newTestStore(t)
-	p := NewContextProvider(store, nil)
+	p := NewContextProvider(store, nil, nil)
 	block, err := p.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
@@ -219,7 +219,7 @@ func TestContextProviderUnrecordedLiveDevice(t *testing.T) {
 		return []companion.ProviderInfo{{
 			Account: "alice", ClientID: "device-9", ClientName: "Fresh iPhone", ConnectedAt: now.Add(-time.Second),
 		}}
-	})
+	}, nil)
 	out := decodeDeviceContext(t, mustContext(t, p))
 	if len(out.Devices) != 1 {
 		t.Fatalf("unrecorded live device lost: %+v", out)
@@ -252,7 +252,7 @@ func TestContextProviderOverlappingConnections(t *testing.T) {
 			{Account: "alice", ClientID: "device-1", ConnectedAt: old,
 				Capabilities: []companion.Capability{{Name: "c", Tools: []companion.ToolDefinition{{Name: "tool_from_old_socket", Method: "m"}}}}},
 		}
-	})
+	}, nil)
 	p.now = func() time.Time { return now }
 	out := decodeDeviceContext(t, mustContext(t, p))
 	if len(out.Devices) != 1 {
@@ -280,7 +280,7 @@ func TestContextProviderTruncation(t *testing.T) {
 			}
 		}
 		return infos
-	})
+	}, nil)
 	out := decodeDeviceContext(t, mustContext(t, p))
 	if len(out.Devices) != maxContextDevices {
 		t.Fatalf("rendered %d devices, want cap %d", len(out.Devices), maxContextDevices)
@@ -310,7 +310,7 @@ func TestContextProviderDoesNotRenderStoredCapabilities(t *testing.T) {
 	if err := store.RecordDisconnected(ctx, "alice", "device-1", now.Add(-30*time.Minute)); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}
-	p := NewContextProvider(store, nil)
+	p := NewContextProvider(store, nil, nil)
 	block := mustContext(t, p)
 	if strings.Contains(block, "stored_manifest_tool") {
 		t.Fatalf("stored capability manifest leaked into offline device context: %s", block)
@@ -340,7 +340,7 @@ func TestContextProviderFreshnessSources(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 
-	p := NewContextProvider(store, nil)
+	p := NewContextProvider(store, nil, nil)
 	p.now = func() time.Time { return now }
 	out := decodeDeviceContext(t, mustContext(t, p))
 	d := out.Devices[0]
@@ -381,7 +381,7 @@ func TestContextProviderFiltersInactiveDevices(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `UPDATE companion_devices SET state = 'retired' WHERE client_id = 'device-1'`); err != nil {
 		t.Fatalf("retire: %v", err)
 	}
-	p := NewContextProvider(store, nil)
+	p := NewContextProvider(store, nil, nil)
 	out := decodeDeviceContext(t, mustContext(t, p))
 	if len(out.Devices) != 0 {
 		t.Fatalf("retired device rendered into ambient context: %+v", out.Devices)
@@ -405,7 +405,7 @@ func TestContextProviderInventoryErrorFallsBackToLive(t *testing.T) {
 	now := time.Now().UTC()
 	p := NewContextProvider(store, func() []companion.ProviderInfo {
 		return []companion.ProviderInfo{{Account: "alice", ClientID: "device-1", ClientName: "Alice's Mac", ConnectedAt: now}}
-	})
+	}, nil)
 	block := mustContext(t, p)
 	out := decodeDeviceContext(t, block)
 	if !out.InventoryError {
@@ -424,4 +424,36 @@ func mustContext(t *testing.T, p *ContextProvider) string {
 		t.Fatalf("TagContext: %v", err)
 	}
 	return block
+}
+
+// TestContextProviderUnrecordedOverlapCollapses pins the merge rule on
+// the not-yet-recorded path too: overlapping same-identity sockets with
+// no durable row render as one device, exactly like the joined path.
+func TestContextProviderUnrecordedOverlapCollapses(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	old := now.Add(-2 * time.Hour)
+	p := NewContextProvider(store, func() []companion.ProviderInfo {
+		return []companion.ProviderInfo{
+			{Account: "alice", ClientID: "device-x", ConnectedAt: now,
+				Capabilities: []companion.Capability{{Name: "c", Tools: []companion.ToolDefinition{{Name: "tool_new", Method: "m"}}}}},
+			{Account: "alice", ClientID: "device-x", ClientName: "Alice's iPhone", ConnectedAt: old,
+				Capabilities: []companion.Capability{{Name: "c", Tools: []companion.ToolDefinition{{Name: "tool_old", Method: "m"}}}}},
+		}
+	}, nil)
+	p.now = func() time.Time { return now }
+	out := decodeDeviceContext(t, mustContext(t, p))
+	if len(out.Devices) != 1 {
+		t.Fatalf("overlap rendered %d rows, want 1: %+v", len(out.Devices), out.Devices)
+	}
+	d := out.Devices[0]
+	if len(d.Tools) != 2 || d.Tools[0] != "tool_new" || d.Tools[1] != "tool_old" {
+		t.Errorf("tool union = %v", d.Tools)
+	}
+	if want := promptfmt.FormatDeltaOnly(old, now); d.ConnectedAgo != want {
+		t.Errorf("ConnectedAgo = %q, want longest-open %q", d.ConnectedAgo, want)
+	}
+	if d.ClientName != "Alice's iPhone" {
+		t.Errorf("first non-empty client name not adopted: %q", d.ClientName)
+	}
 }

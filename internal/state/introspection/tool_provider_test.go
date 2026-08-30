@@ -128,6 +128,16 @@ func TestToolAndPanelShareOnePayload(t *testing.T) {
 	}
 	panelPayload := panelJSON(t, body)
 
+	// host.goroutines is the one field that is legitimately live per
+	// render — runtime.NumGoroutine() can differ between the two calls
+	// under parallel test scheduling — so equality is asserted over
+	// everything else. (Surfaced as a CI-only flake on #1449.)
+	for _, payload := range []map[string]any{toolPayload, panelPayload} {
+		if host, ok := payload["host"].(map[string]any); ok {
+			delete(host, "goroutines")
+		}
+	}
+
 	if !reflect.DeepEqual(toolPayload, panelPayload) {
 		t.Errorf("tool and panel payloads differ:\ntool:  %v\npanel: %v", toolPayload, panelPayload)
 	}

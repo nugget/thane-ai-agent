@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -38,13 +39,17 @@ type ContextProvider struct {
 	// the durable view degrades gracefully if wiring changes.
 	live func() []companion.ProviderInfo
 	// now is a clock seam for deterministic tests.
-	now func() time.Time
+	now    func() time.Time
+	logger *slog.Logger
 }
 
 // NewContextProvider creates the joined companion-device context
 // provider. live is typically Registry.List.
-func NewContextProvider(store *Store, live func() []companion.ProviderInfo) *ContextProvider {
-	return &ContextProvider{store: store, live: live, now: time.Now}
+func NewContextProvider(store *Store, live func() []companion.ProviderInfo, logger *slog.Logger) *ContextProvider {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &ContextProvider{store: store, live: live, now: time.Now, logger: logger}
 }
 
 // TagContextBucket places the device view in live state: it reflects
@@ -127,6 +132,10 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 	}
 	inventoryFailed := listErr != nil
 	if inventoryFailed {
+		// The model sees inventory_error; the operator needs the cause.
+		p.logger.Warn("companion device inventory read failed; rendering live-only view",
+			"error", listErr,
+		)
 		devices, observations = nil, nil
 	}
 	obsByDevice := make(map[string][]observationContextJSON)
@@ -189,15 +198,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 			delete(liveByIdentity, key)
 			row.Availability = "online"
 			row.Tools = liveToolNames(matches)
-			// With overlapping connections, the earliest ConnectedAt is
-			// the device's longest continuous presence.
-			earliest := matches[0].ConnectedAt
-			for _, m := range matches[1:] {
-				if m.ConnectedAt.Before(earliest) {
-					earliest = m.ConnectedAt
-				}
-			}
-			row.ConnectedAgo = promptfmt.FormatDeltaOnly(earliest, now)
+			row.ConnectedAgo = promptfmt.FormatDeltaOnly(earliestConnect(matches), now)
 			if row.ClientName == "" {
 				row.ClientName = matches[0].ClientName
 			}
@@ -205,18 +206,37 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 		rows = append(rows, row)
 	}
 
-	// Live connections with no durable row: identity-less clients, or
-	// identities whose inventory write has not landed. They are online
-	// and callable, so they must not disappear from the view.
+	// Live connections with no durable row yet — identities whose async
+	// inventory write has not landed. Same-identity overlapping sockets
+	// collapse to one row exactly as the joined path merges them: one
+	// device, unioned tools, longest-open connection age.
 	for _, matches := range liveByIdentity {
-		liveUnjoined = append(liveUnjoined, matches...)
+		first := matches[0]
+		row := deviceContextJSON{
+			Account:      first.Account,
+			ClientName:   first.ClientName,
+			ClientID:     first.ClientID,
+			Platform:     first.Platform,
+			Availability: "online",
+			ConnectedAgo: promptfmt.FormatDeltaOnly(earliestConnect(matches), now),
+			Tools:        liveToolNames(matches),
+		}
+		for _, m := range matches[1:] {
+			if row.ClientName == "" {
+				row.ClientName = m.ClientName
+			}
+			if row.Platform == "" {
+				row.Platform = m.Platform
+			}
+		}
+		rows = append(rows, row)
 	}
+	// Identity-less clients are each genuinely distinct — there is no
+	// identity to merge on — so they render per connection.
 	for _, info := range liveUnjoined {
 		rows = append(rows, deviceContextJSON{
 			Account:      info.Account,
 			ClientName:   info.ClientName,
-			ClientID:     info.ClientID,
-			Platform:     info.Platform,
 			Availability: "online",
 			ConnectedAgo: promptfmt.FormatDeltaOnly(info.ConnectedAt, now),
 			Tools:        liveToolNames([]companion.ProviderInfo{info}),
@@ -250,6 +270,18 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 		"Observations are the latest report per kind — status \"withdrawn\" means sharing was revoked and that data is not retrievable. " +
 		"No tool fetches observation payloads yet.\n" +
 		string(data) + "\n", nil
+}
+
+// earliestConnect returns the oldest ConnectedAt across overlapping
+// connections — the device's longest continuous presence.
+func earliestConnect(infos []companion.ProviderInfo) time.Time {
+	earliest := infos[0].ConnectedAt
+	for _, m := range infos[1:] {
+		if m.ConnectedAt.Before(earliest) {
+			earliest = m.ConnectedAt
+		}
+	}
+	return earliest
 }
 
 // liveToolNames unions the tool names advertised across the given live
