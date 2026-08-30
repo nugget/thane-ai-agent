@@ -379,3 +379,23 @@ func TestObservationsSurviveDatabaseReopen(t *testing.T) {
 		t.Fatalf("restored latest = %+v", latest)
 	}
 }
+
+// TestLatestObservationsByKindScopes pins the counterparty-scoped
+// query: only the requested kind and accounts come back.
+func TestLatestObservationsByKindScopes(t *testing.T) {
+	store := newTestStore(t)
+	seedObservation(t, store, "alice", "device-1", "ios.location", companion.ObservationAvailable, t0, t0.Add(time.Minute))
+	seedObservation(t, store, "alice", "device-1", "ios.system-context", companion.ObservationAvailable, t0, t0.Add(time.Minute))
+	seedObservation(t, store, "bob", "device-2", "ios.location", companion.ObservationAvailable, t1, t1.Add(time.Minute))
+
+	got, err := store.LatestObservationsByKind(ctx, "ios.location", []string{"alice"})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(got) != 1 || got[0].Account != "alice" || got[0].Kind != "ios.location" {
+		t.Fatalf("scoped query returned %+v", got)
+	}
+	if empty, err := store.LatestObservationsByKind(ctx, "ios.location", nil); err != nil || empty != nil {
+		t.Errorf("no accounts should return nothing: %v %v", empty, err)
+	}
+}

@@ -191,3 +191,102 @@ func TestContactWhereaboutsResolution(t *testing.T) {
 		t.Errorf("by-id result = %+v", res)
 	}
 }
+
+// TestContactWhereaboutsWithdrawnTrailsZoneFloor pins the fixed
+// ranking: withdrawn entries trail even the zone floor, so an
+// all-withdrawn fleet can never make a payload-less device entry the
+// best source.
+func TestContactWhereaboutsWithdrawnTrailsZoneFloor(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", map[string]companion.ObservationStatus{"device-1": companion.ObservationWithdrawn})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.BestSource != "ha_person_zone" {
+		t.Errorf("BestSource = %q, want the zone floor when every fix is withdrawn", res.BestSource)
+	}
+	if last := res.Sources[len(res.Sources)-1]; last.Source != "companion_location" || last.Status != "withdrawn" {
+		t.Errorf("withdrawn entry does not trail: %+v", res.Sources)
+	}
+}
+
+// TestContactWhereaboutsUnknownPresence pins the three-state fix: an
+// Unknown tracker state must not claim away ranking's basis.
+func TestContactWhereaboutsUnknownPresence(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "Unknown", "", map[string]companion.ObservationStatus{"device-1": companion.ObservationAvailable})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.Sources[0].Source != "companion_location" {
+		t.Errorf("unknown presence should lead with the device fix: %+v", res.Sources[0])
+	}
+	if !strings.Contains(res.Basis, "unknown") || strings.Contains(res.Basis, "not home") {
+		t.Errorf("basis asserts unsupported location: %q", res.Basis)
+	}
+}
+
+// TestContactWhereaboutsBoundButSilent pins the C3 distinction: a
+// bound contact whose sources yielded nothing gets a valid empty
+// result explaining which binding was silent — never the
+// configuration-gap error.
+func TestContactWhereaboutsBoundButSilent(t *testing.T) {
+	cdb, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cdb.Close() })
+	store, err := contacts.NewStore(cdb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := store.Upsert(&contacts.Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatal(err)
+	}
+	deps := CounterpartyToolDeps{
+		Contacts: store,
+		Presence: func(string) (contacts.PersonSnapshot, bool) { return contacts.PersonSnapshot{}, false }, // untracked
+	}
+	out, err := handleContactWhereabouts(context.Background(), deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("bound-but-silent must not error: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) != 0 || !strings.Contains(res.Basis, "person.track") {
+		t.Errorf("silent result should teach the tracking gap: %+v", res)
+	}
+}
+
+// TestContactWhereaboutsLeadingPayloadOnly pins the result bound: only
+// the freshest available fix carries its payload; the rest chain by
+// identity into companion_last_known_location.
+func TestContactWhereaboutsLeadingPayloadOnly(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", nil)
+	now := time.Now().UTC()
+	store := fx.deps.Companions
+	seedLocation(t, store, "alice-acct", "device-old", companion.ObservationAvailable, now.Add(-3*time.Hour))
+	seedLocation(t, store, "alice-acct", "device-fresh", companion.ObservationAvailable, now.Add(-10*time.Minute))
+
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.Sources[0].ClientID != "device-fresh" || res.Sources[0].Location == nil {
+		t.Errorf("leading fix wrong or payload-less: %+v", res.Sources[0])
+	}
+	if res.Sources[1].Source != "companion_location" || res.Sources[1].Location != nil {
+		t.Errorf("non-leading fix must not carry a payload: %+v", res.Sources[1])
+	}
+	for _, src := range res.Sources[:2] {
+		if src.Account == "" || src.ClientID == "" || src.DeviceID == "" {
+			t.Errorf("chaining identity missing: %+v", src)
+		}
+	}
+}

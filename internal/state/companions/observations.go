@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 // ResolveObservationIdentity maps the current account/client claim onto the
@@ -293,4 +294,43 @@ func scanLatestObservation(row *sql.Rows) (companion.LatestObservation, error) {
 		observation.Payload = json.RawMessage(payload.String)
 	}
 	return observation, nil
+}
+
+// LatestObservationsByKind returns the latest observation of one kind
+// for every device belonging to the given accounts, ordered by
+// account/client for a stable shape. Scoped at the query so a caller
+// joining one counterparty never reads every account's every kind
+// (#1450 slice C).
+func (s *Store) LatestObservationsByKind(ctx context.Context, kind string, accounts []string) ([]companion.LatestObservation, error) {
+	kind = strings.TrimSpace(kind)
+	if kind == "" || len(accounts) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(accounts)+1)
+	args = append(args, kind)
+	for _, acct := range accounts {
+		args = append(args, acct)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT d.account, o.device_id, d.client_id, o.kind, o.event_id,
+		       o.schema_version, o.status, o.observed_at, o.received_at, o.payload
+		FROM companion_latest_observations o
+		JOIN companion_devices d ON d.device_id = o.device_id
+		WHERE o.kind = ? AND d.account IN (`+database.Placeholders(len(accounts))+`)
+		ORDER BY d.account, d.client_id
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list %s observations for accounts: %w", kind, err)
+	}
+	defer rows.Close()
+
+	var observations []companion.LatestObservation
+	for rows.Next() {
+		observation, err := scanLatestObservation(rows)
+		if err != nil {
+			return nil, err
+		}
+		observations = append(observations, observation)
+	}
+	return observations, rows.Err()
 }
