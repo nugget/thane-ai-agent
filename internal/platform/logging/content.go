@@ -40,8 +40,8 @@ func NewContentWriter(db *sql.DB, maxLen int, logger *slog.Logger) (*ContentWrit
 	insertRequest, err := db.Prepare(`INSERT OR REPLACE INTO log_request_content
 		(request_id, prompt_hash, user_content, assistant_content, model,
 		 iteration_count, input_tokens, output_tokens, tools_used, messages_json,
-		 exhausted, exhaust_reason, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		 model_calls_json, exhausted, exhaust_reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		upsertPrompt.Close()
 		return nil, fmt.Errorf("prepare insert request: %w", err)
@@ -103,6 +103,11 @@ type RequestContent struct {
 	// Full message history sent to the model, retained for forensics and
 	// tool-call extraction. Image bytes are omitted from retained detail.
 	Messages []llm.Message
+
+	// ModelCalls preserves each logical model decision with the exact messages
+	// and tool schemas offered on that iteration. It powers offline evaluation
+	// without executing production tools.
+	ModelCalls []ModelCallContent
 }
 
 // WriteRequest persists a completed request's content. The system
@@ -135,6 +140,22 @@ func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
 			"error", err,
 		)
 	}
+	modelCallsJSON, modelCallPrompts, err := marshalRetainedModelCalls(rc.ModelCalls, w.maxLen)
+	if err != nil {
+		w.logger.Warn("content retention: failed to marshal model calls",
+			"request_id", rc.RequestID,
+			"error", err,
+		)
+	}
+	for hash, prompt := range modelCallPrompts {
+		if _, err := w.stmtUpsertPrompt.ExecContext(ctx, hash, prompt, now); err != nil {
+			w.logger.Warn("content retention: failed to store model-call prompt",
+				"request_id", rc.RequestID,
+				"prompt_hash", hash,
+				"error", err,
+			)
+		}
+	}
 
 	// Store request-level content.
 	if _, err := w.stmtInsertRequest.ExecContext(ctx,
@@ -148,6 +169,7 @@ func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
 		rc.OutputTokens,
 		nullStr(toolsUsedJSON),
 		nullStr(messagesJSON),
+		nullStr(modelCallsJSON),
 		rc.Exhausted,
 		nullStr(rc.ExhaustReason),
 		now,

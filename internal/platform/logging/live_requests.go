@@ -125,6 +125,7 @@ func (s *LiveRequestStore) QueryRequestDetail(requestID string) (*RequestDetail,
 }
 
 func buildLiveRequestDetail(rc RequestContent, maxLen int, now time.Time) *RequestDetail {
+	modelCalls, _ := retainedModelCalls(rc.ModelCalls, maxLen, true)
 	detail := &RequestDetail{
 		RequestID:        rc.RequestID,
 		PromptHash:       hashPrompt(rc.SystemPrompt),
@@ -140,6 +141,7 @@ func buildLiveRequestDetail(rc RequestContent, maxLen int, now time.Time) *Reque
 		CreatedAt:        now.Format(time.RFC3339Nano),
 		Messages:         retainedMessages(rc.Messages, maxLen),
 		ToolCalls:        extractToolDetails(rc.Messages, maxLen),
+		ModelCalls:       modelCalls,
 	}
 	if len(rc.ToolsUsed) > 0 {
 		detail.ToolsUsed = make(map[string]int, len(rc.ToolsUsed))
@@ -167,6 +169,7 @@ func cloneRequestDetail(src *RequestDetail) *RequestDetail {
 		dst.ToolCalls = append([]ToolDetail(nil), src.ToolCalls...)
 	}
 	dst.Messages = cloneMessageDetails(src.Messages)
+	dst.ModelCalls = cloneModelCallDetails(src.ModelCalls)
 	return &dst
 }
 

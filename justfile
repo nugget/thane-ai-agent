@@ -291,6 +291,11 @@ deploy-macos host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-re
 serve: build
     cd Thane && ../dist/thane-{{host_os}}-{{host_arch}} serve -workspace .
 
+[doc("Capture and replay private production model-evaluation snapshots")]
+[group('operations')]
+model-eval *args:
+    go run ./cmd/model-eval {{args}}
+
 # Tail live service logs (default: dev workdir). Follows the events
 # dataset and rolls to the next HH.jsonl segment automatically. Waits
 # patiently if no segment exists yet so this works on a fresh install.

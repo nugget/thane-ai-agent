@@ -2368,6 +2368,11 @@ components:
           items: { $ref: "#/components/schemas/ToolDetail" }
           description: Tool invocations performed while handling the request.
           readOnly: true
+        model_calls:
+          type: array
+          items: { $ref: "#/components/schemas/ModelCallDetail" }
+          description: Exact per-iteration model inputs and reference decisions retained for private offline evaluation.
+          readOnly: true
       required: [request_id, messages, iteration_count, input_tokens, output_tokens, exhausted, created_at, tool_calls]
       example:
         request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
@@ -2446,7 +2451,86 @@ components:
           description: JSON-encoded arguments passed to the tool call.
           readOnly: true
           example: "{\"location\":\"Austin, TX\"}"
+        arguments_truncated:
+          type: boolean
+          description: Whether retained arguments were truncated and therefore cannot be replayed exactly.
+          readOnly: true
+          example: false
       required: [name]
+    ModelCallDetail:
+      type: object
+      description: One retained logical provider call, including its exact message and tool surface plus the reference response before tool execution.
+      properties:
+        iteration:
+          type: integer
+          description: Zero-based agent-loop iteration that made the provider call.
+          readOnly: true
+        model:
+          type: string
+          description: Resolved deployment that produced the retained response.
+          readOnly: true
+        prompt_hash:
+          type: string
+          description: Content hash used to resolve the system prompt without duplicating it on disk.
+          readOnly: true
+        prompt_sections:
+          type: array
+          items: { $ref: "#/components/schemas/PromptSectionDetail" }
+          description: Semantic ranges within the resolved system prompt, used for model-family contract substitution.
+          readOnly: true
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/MessageDetail" }
+          description: Exact provider-neutral input messages for this call.
+          readOnly: true
+        tools:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: Exact OpenAI-style tool definitions offered on this call.
+          readOnly: true
+        response:
+          $ref: "#/components/schemas/MessageDetail"
+        stop_reason:
+          type: string
+          description: Provider termination signal normalized by Thane.
+          readOnly: true
+        input_tokens:
+          type: integer
+          description: Provider-reported input tokens for this call.
+          readOnly: true
+        output_tokens:
+          type: integer
+          description: Provider-reported output tokens for this call.
+          readOnly: true
+        duration_ms:
+          type: integer
+          format: int64
+          description: Logical provider-call duration in milliseconds, including recovery.
+          readOnly: true
+      required: [iteration, model, messages, tools, response]
+    PromptSectionDetail:
+      type: object
+      description: Byte range and cache metadata for one semantic system-prompt section.
+      properties:
+        name:
+          type: string
+          description: Stable semantic section name.
+          readOnly: true
+        start:
+          type: integer
+          description: Inclusive byte offset in the resolved system prompt.
+          readOnly: true
+        end:
+          type: integer
+          description: Exclusive byte offset in the resolved system prompt.
+          readOnly: true
+        cache_ttl:
+          type: string
+          description: Optional provider cache hint captured with the section.
+          readOnly: true
+      required: [name, start, end]
     MessageImageDetail:
       type: object
       description: Metadata for a retained image attachment, without the base64 image payload.

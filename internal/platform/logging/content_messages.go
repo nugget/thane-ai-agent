@@ -43,15 +43,17 @@ func retainedToolCalls(calls []llm.ToolCall, maxLen int) []MessageToolCallDetail
 	for _, call := range calls {
 		argsJSON, err := json.Marshal(call.Function.Arguments)
 		args := ""
+		truncated := false
 		if err != nil {
 			args = retainedToolCallMarshalError(err, maxLen)
 		} else {
-			args = truncateRetainedContent(string(argsJSON), maxLen)
+			args, truncated = truncateRetainedContentWithFlag(string(argsJSON), maxLen)
 		}
 		retained = append(retained, MessageToolCallDetail{
-			ID:        call.ID,
-			Name:      call.Function.Name,
-			Arguments: args,
+			ID:                 call.ID,
+			Name:               call.Function.Name,
+			Arguments:          args,
+			ArgumentsTruncated: truncated,
 		})
 	}
 	return retained
