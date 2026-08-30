@@ -64,7 +64,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"home"},
 	},
 	"companion": {
-		Description: "Paired companion devices — the macOS and iOS apps. Live tools (calendar, contacts, reminders, whatever the connected device currently advertises) are callable only while that device is online; the companion-device context view also lists offline devices with last-seen freshness and their latest observation kinds.",
+		Description: "Paired companion devices — the macOS and iOS apps. Live tools (calendar, contacts, reminders, whatever the connected device currently advertises) are callable only while that device is online; server-native tools like companion_last_known_location answer from stored observations even when every device is offline. The companion-device context view lists online and offline devices with freshness and observation kinds.",
 		Parents:     []string{"operations", "people", "home"},
 	},
 	"contacts": {

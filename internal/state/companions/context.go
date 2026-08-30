@@ -314,7 +314,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 	return "### Companion Devices\n\n" +
 		"Paired devices persist while offline; tools are callable only on online devices. " +
 		"Observations are the latest report per kind — status \"withdrawn\" means sharing was revoked and that data is not retrievable. " +
-		"No tool fetches observation payloads yet.\n" +
+		"Fetch a stored location with `companion_last_known_location`; other kinds have no reader yet.\n" +
 		string(data) + "\n", nil
 }
 
