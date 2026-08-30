@@ -37,7 +37,7 @@ func TestToolCallRecording(t *testing.T) {
 	}
 
 	// Record a tool call with message_id
-	err = store.AddMessage("test-conv", "user", "test message")
+	err = store.AddMessage("test-conv", "user", "test message", "")
 	if err != nil {
 		t.Fatalf("AddMessage failed: %v", err)
 	}

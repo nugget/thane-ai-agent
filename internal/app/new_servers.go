@@ -223,6 +223,19 @@ func (a *App) initServers(s *newState) error {
 	// to connect and register capabilities for bidirectional service dispatch.
 	if cfg.Companion.Configured() {
 		a.companionRegistry = companion.NewRegistry(logger)
+
+		// Calendar output is rendered in the household zone, not the
+		// host's, and not UTC. Already validated by config.Validate, so a
+		// load failure here can only mean the zone database is missing;
+		// time.Local is the honest fallback.
+		companionHome := time.Local
+		if cfg.Timezone != "" {
+			if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+				companionHome = loc
+			}
+		}
+		a.loop.Tools().SetTimezone(cfg.Timezone)
+
 		// Legacy floor: the hand-coded macos_calendar_events tool keeps
 		// working against older Macs that advertise only methods (no
 		// authored tool defs).
@@ -234,9 +247,29 @@ func (a *App) initServers(s *newState) error {
 		// whenever a companion connects, re-registers, or drops — so a
 		// laptop popping on/off line surfaces and retracts its tools
 		// mid-session. A Mac-authored tool shadows the legacy floor by name.
-		registrar := tools.NewCompanionRegistrar(a.companionRegistry, logger)
+		registrar := tools.NewCompanionRegistrar(a.companionRegistry, companionHome, logger)
 		a.loop.SetDynamicToolSource(registrar)
-		a.companionRegistry.SetOnChange(registrar.Rebuild)
+
+		// The mechanical calendar block (#1432): an in-memory snapshot of
+		// every connected account's near-term calendar, refreshed on the
+		// runner's own clock and rendered into Live State every turn.
+		// Wall-clock truth deliberately does not ride the advertisement
+		// rail — ambient evidence loses to request-matched offers by
+		// design, and today's calendar must not lose a lottery on busy
+		// turns. The registry's single change callback fans out to both
+		// consumers: tool synthesis rebuilds, and the snapshot refreshes
+		// so a Mac reconnecting after a night away repopulates without
+		// waiting out the interval.
+		calendarSnapshot := companion.NewCalendarSnapshot(a.companionRegistry, companionHome, logger)
+		a.companionRegistry.SetOnChange(func() {
+			registrar.Rebuild()
+			calendarSnapshot.NudgeRefresh()
+		})
+		a.loop.RegisterAlwaysContextProvider(calendarSnapshot)
+		a.deferWorker("companion-calendar-snapshot", func(ctx context.Context) error {
+			go calendarSnapshot.Run(ctx)
+			return nil
+		})
 
 		// On companion-tagged turns, tell the model which companions are
 		// connected and what they currently offer (uncached live state).

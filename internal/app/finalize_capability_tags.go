@@ -147,6 +147,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		Verifier:    contextVerifier,
 		HAInject:    a.loop.HAInject(),
 		Logger:      logger.With("component", "tag_context"),
+		Timezone:    cfg.Timezone,
 	})
 
 	// Wire the assembler before tag context providers register so the

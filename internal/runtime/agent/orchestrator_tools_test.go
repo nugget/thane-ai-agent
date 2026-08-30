@@ -56,12 +56,12 @@ type mockMem struct {
 func newMockMem() *mockMem { return &mockMem{msgs: make(map[string][]memory.Message)} }
 
 func (m *mockMem) GetMessages(id string) []memory.Message { return m.msgs[id] }
-func (m *mockMem) AddMessage(id, role, content string) error {
-	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content})
+func (m *mockMem) AddMessage(id, role, content, origin string) error {
+	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content, Origin: origin})
 	return nil
 }
-func (m *mockMem) AddMidTurnMessage(id, role, content string) error {
-	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content, MidTurn: true})
+func (m *mockMem) AddMidTurnMessage(id, role, content, origin string) error {
+	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content, MidTurn: true, Origin: origin})
 	return nil
 }
 func (m *mockMem) GetTokenCount(string) int { return 0 }

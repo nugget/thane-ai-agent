@@ -623,7 +623,7 @@ func (n *conversationSystemInjector) InjectSystemMessage(conversationID, message
 	if conversationID == "" || strings.TrimSpace(message) == "" {
 		return nil
 	}
-	return n.mem.AddMessage(conversationID, "system", message)
+	return n.mem.AddMessage(conversationID, "system", message, memory.OriginInternal)
 }
 
 // InjectAssistantMessage adds an assistant-authored message to the
@@ -636,7 +636,7 @@ func (n *conversationSystemInjector) InjectAssistantMessage(conversationID, mess
 	if conversationID == "" || strings.TrimSpace(message) == "" {
 		return nil
 	}
-	return n.mem.AddMessage(conversationID, "assistant", message)
+	return n.mem.AddMessage(conversationID, "assistant", message, memory.OriginInternal)
 }
 
 // IsSessionAlive reports whether the conversation has an active
@@ -708,7 +708,10 @@ func (r *signalMemoryRecorder) RecordOutbound(phone, message string) error {
 		}
 	}
 	convID := "signal-" + sb.String()
-	return r.mem.AddMessage(convID, "assistant", message)
+	// OriginChannel: this row records an outbound send that crossed the
+	// Signal transport to the counterparty — outbound contact, with
+	// direction carried by the assistant role.
+	return r.mem.AddMessage(convID, "assistant", message, memory.OriginChannel)
 }
 
 // channelActivityAdapter bridges [notifications.ChannelActivitySource]
@@ -1074,6 +1077,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		RoutingFactors:        cloneStringMap(req.RoutingFactors),
 		Bindings:              cloneStringMap(req.Bindings),
 		DelegationGating:      req.DelegationGating,
+		MessageOrigin:         req.MessageOrigin,
 		InitialTags:           append([]string(nil), req.InitialTags...),
 		RuntimeTags:           append([]string(nil), req.RuntimeTags...),
 		RuntimeTools:          compileLoopRuntimeTools(req.RuntimeTools),

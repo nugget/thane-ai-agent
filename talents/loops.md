@@ -47,6 +47,14 @@ wants everything opens the document. Without facets, every consumer pays
 for the whole document or gets a blind truncation of it, so a curator
 whose value is being *consulted often* is the case for declaring them.
 
+`status_line` and `teaser` are two authored shapes of one consumer role:
+the document's outward-facing **signal**. A status line is the tight,
+single-line form for ambient surfaces; a teaser is the roomier form for a
+search result or cross-reference. Whether a signal is offered ambiently or
+because it matched a request is context policy, not something the prose gets
+to decide. `digest` is different: it is the payload selected when the match is
+strong enough to deserve enough context to act.
+
 Declaring facets changes the write interface: instead of
 `replace_output_*` taking a document body, the loop gets
 `publish_output_*` taking one argument per projection. Pass them all in
@@ -64,6 +72,20 @@ what you write, you can always read back whole in one call. A rejection
 at the ceiling is not a retry prompt: the document has outgrown
 single-document maintenance, so move detail into linked documents
 rather than shaving bytes.
+
+Relative time is the fastest-rotting thing curated prose can carry:
+"~20 days out" is wrong by morning and stays wrong until a wake
+rewrites it. Write the absolute date wrapped in the delta template
+instead — "Sep 18–30 ({{delta:2026-09-18}})" reads as "Sep 18–30
+(+20d)" where tagged documents are injected, and stays true between
+publishes. A
+bare date renders in day words ("today", "tomorrow", "+20d"); an
+RFC3339 timestamp renders as a compact offset ("+3d16h"). That one
+form is the whole vocabulary, and a malformed template renders
+verbatim instead of vanishing, so a typo shows itself in the injected
+prose. The template substitutes a value, never a claim: when data
+changes enough to make a sentence false, that is your wake to rewrite
+the sentence, not something substitution will paper over.
 
 A faceted document created through `thane_loop_create` arrives
 scaffolded: its section skeleton is pre-rendered with a placeholder
@@ -83,9 +105,11 @@ your mind — so the loop's private thinking opens with a belief to
 revise instead of a blank page. Author the seed from what you actually
 observed; when you have observed nothing, leave the placeholders.
 
-Declare `status_line` for any faceted output; add `teaser` when the
-output is something others search or link to, and `digest` when a
-reader should be able to act without opening the document.
+Every faceted output declares `status_line` — the one-line projection any
+surface can take is the ladder's anchor. Add `teaser` for search and
+cross-reference signals, and `digest` when a reader should be able to act
+without opening the document; a small live-state panel may need only
+`status_line`.
 
 What makes this concrete on the reading side: `doc_read` takes a `level`,
 so any consumer — another loop, a later turn of this one, you — can pull

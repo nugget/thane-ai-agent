@@ -220,7 +220,7 @@ func TestComputeHomeSnapshot_FiltersDiagnosticAndDisabled(t *testing.T) {
 	client := &fakeAreaClient{
 		entities: []homeassistant.EntityRegistryEntry{
 			{EntityID: "lock.front_door"},
-			{EntityID: "lock.shed", DisabledBy: "user"},                                              // filtered
+			{EntityID: "lock.shed", DisabledBy: "user"}, // filtered
 			{EntityID: "binary_sensor.diag_door", DeviceClass: "door", EntityCategory: "diagnostic"}, // filtered
 		},
 		states: []homeassistant.State{

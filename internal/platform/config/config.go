@@ -1070,6 +1070,20 @@ const (
 	// refuses says which file is unclassified instead of inferring an
 	// answer from its name.
 	RootUntaggedRefuse = "refuse"
+
+	// RootAdvertiseNever keeps this root's documents off the context
+	// advertisement rail entirely. The default: ambient attention is a
+	// per-turn spend, and a corpus earns it by opting in.
+	RootAdvertiseNever = "never"
+	// RootAdvertiseTagged lets documents offer themselves only while the
+	// root's requires_tag capability tag is active on the turn, so a
+	// specialist corpus surfaces exactly when its capability does.
+	RootAdvertiseTagged = "tagged"
+	// RootAdvertiseAlways lets documents make ambient offers on every
+	// eligible turn — the posture for a small curated corpus like a
+	// schedule root, whose freshest signal is worth a standing seat at
+	// the discriminator's table.
+	RootAdvertiseAlways = "always"
 )
 
 // RootContextPolicy declares how one document root may reach a model.
@@ -1097,6 +1111,18 @@ type RootContextPolicy struct {
 	// active capability tags, which it deliberately does not.
 	RequiresTag string `yaml:"requires_tag,omitempty"`
 
+	// Advertise controls whether this root's documents may offer
+	// themselves to context assembly through the advertisement rail
+	// (#1431): "never" (default), "tagged" (offers only while
+	// RequiresTag's capability tag is active), or "always" (ambient
+	// offers on every eligible turn). Advertising is a third door
+	// beside Inject and Search rather than a mode of either: injection
+	// pushes whole documents on a tag, search answers an explicit ask,
+	// and advertising lets a document compete for a bounded slice of
+	// unasked-for attention. A root must opt in — the safe reading of
+	// silence is that a corpus does not volunteer itself.
+	Advertise string `yaml:"advertise,omitempty"`
+
 	// Untagged decides what a document carrying no tags means in this
 	// root: "ignore" (default) skips it, "refuse" makes it an error.
 	//
@@ -1111,7 +1137,7 @@ type RootContextPolicy struct {
 // An undeclared policy keeps the root's historical behavior so an
 // existing config does not silently change how context is assembled.
 func (p RootContextPolicy) Declared() bool {
-	return p.Inject != "" || p.Search != "" || p.RequiresTag != ""
+	return p.Inject != "" || p.Search != "" || p.RequiresTag != "" || p.Advertise != ""
 }
 
 // EffectiveInject resolves the injection policy. A root that declares a
@@ -1135,6 +1161,17 @@ func (p RootContextPolicy) EffectiveSearch() string {
 	return p.Search
 }
 
+// EffectiveAdvertise resolves the advertisement policy. The default is
+// "never" for the same reason EffectiveInject defaults closed: ambient
+// attention is spent on every turn, and a corpus earns it by explicit
+// opt-in, not by existing.
+func (p RootContextPolicy) EffectiveAdvertise() string {
+	if p.Advertise == "" {
+		return RootAdvertiseNever
+	}
+	return p.Advertise
+}
+
 // EffectiveUntagged resolves what a tagless document means here,
 // defaulting to skipping it.
 func (p RootContextPolicy) EffectiveUntagged() string {
@@ -1156,6 +1193,14 @@ func (p RootContextPolicy) Validate(rootName string) error {
 	default:
 		return fmt.Errorf("roots.%s.context.search must be %q, %q, or %q, got %q", rootName, RootSearchDefault, RootSearchOnRequest, RootSearchNever, p.Search)
 	}
+	switch p.Advertise {
+	case "", RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways:
+	default:
+		return fmt.Errorf("roots.%s.context.advertise must be %q, %q, or %q, got %q", rootName, RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways, p.Advertise)
+	}
+	if p.Advertise == RootAdvertiseTagged && p.RequiresTag == "" {
+		return fmt.Errorf("roots.%s.context.advertise %q needs requires_tag to name the gating capability tag", rootName, RootAdvertiseTagged)
+	}
 	switch p.Untagged {
 	case "", RootUntaggedIgnore, RootUntaggedRefuse:
 	default:
@@ -1168,12 +1213,13 @@ func (p RootContextPolicy) Validate(rootName string) error {
 		// for, which reads as a broken config rather than a policy.
 		return fmt.Errorf("roots.%s.context.untagged is %q but the root does not inject; set inject: %q or drop the untagged policy", rootName, RootUntaggedRefuse, RootInjectTagged)
 	}
-	// requires_tag gates prompt injection only. Search runs below the
-	// capability layer — the document store has no view of which tags
-	// are active — so accepting the field on a root that does not inject
-	// would silently do nothing, which is worse than refusing it.
-	if p.RequiresTag != "" && p.EffectiveInject() != RootInjectTagged {
-		return fmt.Errorf("roots.%s.context.requires_tag gates prompt injection and requires inject: %q (got %q); it does not gate search, because search does not see active capability tags", rootName, RootInjectTagged, p.EffectiveInject())
+	// requires_tag gates the capability-aware doors: tagged injection
+	// and tagged advertising. Search runs below the capability layer —
+	// the document store has no view of which tags are active — so
+	// accepting the field on a root that neither injects nor advertises
+	// by tag would silently do nothing, which is worse than refusing it.
+	if p.RequiresTag != "" && p.EffectiveInject() != RootInjectTagged && p.EffectiveAdvertise() != RootAdvertiseTagged {
+		return fmt.Errorf("roots.%s.context.requires_tag gates tagged injection and tagged advertising; set inject: %q or advertise: %q (got inject %q, advertise %q). It does not gate search, because search does not see active capability tags", rootName, RootInjectTagged, RootAdvertiseTagged, p.EffectiveInject(), p.EffectiveAdvertise())
 	}
 	return nil
 }

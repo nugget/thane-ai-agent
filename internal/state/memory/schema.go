@@ -39,6 +39,7 @@ var schema = database.Schema{
 				archive_reason TEXT,
 				iteration_index INTEGER,
 				mid_turn INTEGER DEFAULT 0,
+				origin TEXT DEFAULT '',
 				FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 			)`,
 		},
@@ -115,6 +116,7 @@ var schema = database.Schema{
 		database.ColumnAdd{Table: "messages", Column: "archive_reason", Typedef: "TEXT"},
 		database.ColumnAdd{Table: "messages", Column: "iteration_index", Typedef: "INTEGER"},
 		database.ColumnAdd{Table: "messages", Column: "mid_turn", Typedef: "INTEGER DEFAULT 0"},
+		database.ColumnAdd{Table: "messages", Column: "origin", Typedef: "TEXT DEFAULT ''"},
 		database.ColumnAdd{Table: "tool_calls", Column: "session_id", Typedef: "TEXT"},
 		database.ColumnAdd{Table: "tool_calls", Column: "status", Typedef: "TEXT DEFAULT 'active' CHECK (status IN ('active', 'archived'))"},
 		database.ColumnAdd{Table: "tool_calls", Column: "archived_at", Typedef: "TIMESTAMP"},

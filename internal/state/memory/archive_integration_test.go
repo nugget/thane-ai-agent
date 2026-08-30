@@ -29,7 +29,7 @@ func TestCompaction_PreservesMessages(t *testing.T) {
 	// Add enough messages to trigger compaction.
 	for i := 0; i < 20; i++ {
 		msg := "This is a test message with some content for token counting purposes."
-		if err := memStore.AddMessage("test-conv", "user", msg); err != nil {
+		if err := memStore.AddMessage("test-conv", "user", msg, ""); err != nil {
 			t.Fatal(err)
 		}
 	}

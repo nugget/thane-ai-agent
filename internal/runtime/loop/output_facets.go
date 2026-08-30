@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // Rune budgets for the published projection facets. They are display
@@ -59,17 +61,21 @@ type FacetPayload struct {
 // generated publish tool advertises it to the model.
 type FacetField struct {
 	// Key is the tool argument name.
-	Key string
+	Key string `json:"key"`
 	// MaxRunes is the display budget in runes; zero is unbounded.
-	MaxRunes int
+	MaxRunes int `json:"max_runes"`
 	// SingleLine marks a field that must not contain line breaks.
-	SingleLine bool
+	SingleLine bool `json:"single_line"`
 	// Guidance is the model-facing description of what this field is
 	// for and where it surfaces.
-	Guidance string
+	Guidance string `json:"guidance"`
 	// Format is how this facet's value is encoded. Empty on the full
 	// body, which is always markdown.
-	Format FacetFormat
+	Format FacetFormat `json:"format,omitempty"`
+	// ContextRole describes how a consumer should treat this projection
+	// when it is offered as model context. It does not grant injection or
+	// choose a rank; the context discriminator owns those decisions.
+	ContextRole agentctx.ContextProjectionRole `json:"context_role"`
 }
 
 // facetSection binds one projection to its canonical document section and
@@ -98,10 +104,11 @@ var facetSections = []facetSection{
 		Facet:   OutputFacetStatusLine,
 		Heading: "Status Line",
 		Field: FacetField{
-			Key:        "status_line",
-			MaxRunes:   statusLineMaxRunes,
-			SingleLine: true,
-			Guidance:   "One standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
+			Key:         "status_line",
+			MaxRunes:    statusLineMaxRunes,
+			SingleLine:  true,
+			Guidance:    "The tight signal shape: one standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
+			ContextRole: agentctx.ContextRoleSignal,
 		},
 		scaffoldHint: "one standalone line of what is true right now",
 		value:        func(p *FacetPayload) *string { return &p.StatusLine },
@@ -110,9 +117,10 @@ var facetSections = []facetSection{
 		Facet:   OutputFacetTeaser,
 		Heading: "Teaser",
 		Field: FacetField{
-			Key:      "teaser",
-			MaxRunes: teaserMaxRunes,
-			Guidance: "One short paragraph on why a reader would open this document right now. Surfaces as the snippet in search results and cross-references, so write the hook — the reason to look — rather than a compressed summary.",
+			Key:         "teaser",
+			MaxRunes:    teaserMaxRunes,
+			Guidance:    "The roomy signal shape: one short paragraph on why a reader would open this document right now. Surfaces as the snippet in search results and cross-references, so write the hook — the reason to look — rather than a compressed summary.",
+			ContextRole: agentctx.ContextRoleSignal,
 		},
 		scaffoldHint: "why a reader would open this document right now",
 		value:        func(p *FacetPayload) *string { return &p.Teaser },
@@ -121,9 +129,10 @@ var facetSections = []facetSection{
 		Facet:   OutputFacetDigest,
 		Heading: "Digest",
 		Field: FacetField{
-			Key:      "digest",
-			MaxRunes: digestMaxRunes,
-			Guidance: "A standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
+			Key:         "digest",
+			MaxRunes:    digestMaxRunes,
+			Guidance:    "The context payload: a standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
+			ContextRole: agentctx.ContextRoleContext,
 		},
 		scaffoldHint: "a summary with enough substance to act on",
 		value:        func(p *FacetPayload) *string { return &p.Digest },
@@ -131,8 +140,9 @@ var facetSections = []facetSection{
 	{
 		Heading: "Details",
 		Field: FacetField{
-			Key:      "full",
-			Guidance: "The complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
+			Key:         "full",
+			Guidance:    "The detail payload: the complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
+			ContextRole: agentctx.ContextRoleDetail,
 		},
 		scaffoldHint: "the complete current state",
 		value:        func(p *FacetPayload) *string { return &p.Full },
@@ -167,6 +177,17 @@ func (o OutputSpec) FacetFields() []FacetField {
 		}
 	}
 	return fields
+}
+
+// FacetFieldByKey returns the canonical metadata for one projection key.
+// Consumers that advertise faceted documents use this to share the same
+// role and size vocabulary as the generated publish tool.
+func FacetFieldByKey(key string) (FacetField, bool) {
+	section, ok := facetSectionByKey(key)
+	if !ok {
+		return FacetField{}, false
+	}
+	return section.Field, true
 }
 
 // HasFacets reports whether this output publishes through the faceted

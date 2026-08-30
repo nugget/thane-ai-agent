@@ -44,6 +44,13 @@ type ContextRequest struct {
 	UserMessage string
 	ActiveTags  map[string]bool
 
+	// PinnedRefs names managed-document refs the turn already injects
+	// whole through session-origin context (contact origin policy's
+	// context_refs). Advertisers skip them: a document the prompt
+	// carries in full must not also spend advertisement budget offering
+	// its own summary.
+	PinnedRefs []string
+
 	// IncludeAlways admits the ambient experiential bucket: presence,
 	// episodic memory, working memory, notification history, and the
 	// other continuity context an interactive turn wears. Full-mode
