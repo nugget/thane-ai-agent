@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -66,10 +67,45 @@ func TestHAPersonEntityValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := store.SetHAPersonEntity(contact.ID, "device_tracker.phone"); err == nil {
-		t.Error("non-person entity accepted")
+	for _, bad := range []string{"device_tracker.phone", "person.", "person.alice.extra", "Person.Alice", "person.Alice"} {
+		if err := store.SetHAPersonEntity(contact.ID, bad); err == nil {
+			t.Errorf("malformed entity %q accepted", bad)
+		}
 	}
 	if err := store.SetHAPersonEntity(uuid.New(), "person.ghost"); err == nil {
 		t.Error("binding to a missing contact accepted")
+	}
+}
+
+// TestHAPersonEntityUniqueness pins the storage-boundary guarantee the
+// reverse lookup depends on: presence attaches to exactly one active
+// counterparty, and a second claimant is refused with the current
+// holder named.
+func TestHAPersonEntityUniqueness(t *testing.T) {
+	store := newCounterpartyTestStore(t)
+	alice, err := store.Upsert(&Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := store.Upsert(&Contact{FormattedName: "Bob Guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatalf("first binding: %v", err)
+	}
+	err = store.SetHAPersonEntity(bob.ID, "person.alice")
+	if err == nil {
+		t.Fatal("duplicate claim accepted; reverse lookup is now arbitrary")
+	}
+	if !strings.Contains(err.Error(), "Alice Operator") {
+		t.Errorf("conflict error should name the current holder: %v", err)
+	}
+	// Rebinding: clear, then the other contact may claim it.
+	if err := store.SetHAPersonEntity(alice.ID, ""); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if err := store.SetHAPersonEntity(bob.ID, "person.alice"); err != nil {
+		t.Fatalf("rebind after clear: %v", err)
 	}
 }

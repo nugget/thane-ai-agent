@@ -4,10 +4,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+// haPersonEntityRE pins the full domain.object_id shape — a bare
+// "person." or a dotted suffix is not a valid Home Assistant entity.
+var haPersonEntityRE = regexp.MustCompile(`^person\.[a-z0-9_]+$`)
 
 // SetHAPersonEntity binds a contact to a Home Assistant person entity
 // (e.g. "person.alice") — the counterparty edge presence flows through
@@ -19,14 +24,20 @@ import (
 // or operator-initiated code.
 func (s *Store) SetHAPersonEntity(id uuid.UUID, entity string) error {
 	entity = strings.TrimSpace(entity)
-	if entity != "" && !strings.HasPrefix(entity, "person.") {
-		return fmt.Errorf("ha person entity must be a person.* entity id, got %q", entity)
+	if entity != "" && !haPersonEntityRE.MatchString(entity) {
+		return fmt.Errorf("ha person entity must match person.<object_id> (lowercase letters, digits, underscores), got %q", entity)
 	}
 	res, err := s.db.Exec(
 		`UPDATE contacts SET ha_person_entity = ? WHERE id = ? AND deleted_at IS NULL`,
 		entity, id.String(),
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			if claimant, ferr := s.FindByHAPersonEntity(entity); ferr == nil && claimant != nil {
+				return fmt.Errorf("ha person entity %q is already bound to contact %q (%s); clear that binding first — presence must attach to exactly one counterparty", entity, claimant.FormattedName, claimant.ID)
+			}
+			return fmt.Errorf("ha person entity %q is already bound to another contact; clear that binding first", entity)
+		}
 		return fmt.Errorf("set ha person entity for %s: %w", id, err)
 	}
 	n, err := res.RowsAffected()

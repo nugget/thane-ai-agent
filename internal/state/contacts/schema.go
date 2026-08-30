@@ -53,6 +53,12 @@ var schema = database.Schema{
 		// idempotent ColumnAdd serves fresh and existing databases
 		// alike.
 		database.ColumnAdd{Table: "contacts", Column: "ha_person_entity", Typedef: "TEXT"},
+		// Presence must attach to exactly one counterparty: at most one
+		// active contact may claim a given HA person entity, enforced at
+		// the storage boundary rather than by caller discipline.
+		database.IndexCreate{Name: "idx_contacts_ha_person_unique", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_ha_person_unique
+			ON contacts(ha_person_entity)
+			WHERE ha_person_entity IS NOT NULL AND ha_person_entity != '' AND deleted_at IS NULL`},
 		database.TableCreate{
 			Table: "contact_properties",
 			SQL: `CREATE TABLE IF NOT EXISTS contact_properties (

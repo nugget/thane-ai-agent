@@ -139,14 +139,27 @@ enable it to sync contacts with macOS/iOS/Thunderbird.
 companion:
   enabled: true
   providers:
-    nugget:
+    alice:
       tokens:
         - your-shared-token
+      contact: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
 ```
 
 Optional. Companion apps connect inward to Thane and expose local host
 capabilities, such as macOS Calendar access from
 [thane-agent-macos](https://github.com/nugget/thane-agent-macos).
+
+`contact` (optional) binds every device that authenticates through the
+account to one contact record, by contact UUID — the counterparty
+layer's person attribution. Devices then present and report as that
+contact's devices, and inherit authority from the contact's trust zone
+at read time, so a zone change reaches every bound device immediately.
+Configuration is deliberately the only place this binding can be made:
+bindings confer inherited trust, and neither they nor trust zones are
+writable through model-facing contact tools. A malformed (non-UUID)
+value is rejected at config load; a UUID that matches no contact fails
+closed at render time — the devices degrade to account-only
+attribution and a warning names the unresolved binding.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).
