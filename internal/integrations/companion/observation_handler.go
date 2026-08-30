@@ -20,9 +20,12 @@ const (
 	maxObservationBodyBytes    = 64 * 1024
 	maxObservationEvents       = 16
 	maxObservationPayloadBytes = 32 * 1024
+	maxObservationProperties   = 256
 	maxObservationStringRunes  = 128
 	maxObservationFutureSkew   = 5 * time.Minute
 )
+
+var minimumObservationTime = time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 // ObservationHandler authenticates companion tokens and ingests bounded
 // background observation batches without requiring a live WebSocket.
@@ -86,9 +89,15 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeObservationError(w, http.StatusServiceUnavailable, "observation_auth_unavailable", "companion observation authentication is unavailable")
 		return
 	}
+	requestTarget := r.URL.RequestURI()
+	scheme := observationRequestScheme(r)
+	authority := r.Host
 	principal, err := h.authenticator.AuthenticateObservation(r.Context(), ObservationAuthRequest{
 		Method:          r.Method,
-		RequestTarget:   r.URL.RequestURI(),
+		Scheme:          scheme,
+		Authority:       authority,
+		RequestTarget:   requestTarget,
+		TargetURI:       scheme + "://" + authority + requestTarget,
 		Header:          r.Header.Clone(),
 		Body:            body,
 		ClaimedClientID: batch.ClientID,
@@ -113,6 +122,10 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.store.IngestObservations(r.Context(), principal, batch, receivedAt)
+	if errors.Is(err, ErrObservationKindLimit) {
+		writeObservationError(w, http.StatusBadRequest, "invalid_observation", err.Error())
+		return
+	}
 	if err != nil {
 		h.logger.Error("companion observation ingest failed",
 			"account", principal.Account,
@@ -176,6 +189,9 @@ func validateObservationBatch(batch *ObservationBatch, receivedAt time.Time) err
 		if event.ObservedAt.IsZero() {
 			return fmt.Errorf("events[%d].observed_at is required", i)
 		}
+		if event.ObservedAt.Before(minimumObservationTime) {
+			return fmt.Errorf("events[%d].observed_at must be on or after 2000-01-01T00:00:00Z", i)
+		}
 		if event.ObservedAt.After(receivedAt.Add(maxObservationFutureSkew)) {
 			return fmt.Errorf("events[%d].observed_at is too far in the future", i)
 		}
@@ -190,9 +206,12 @@ func validateObservationBatch(batch *ObservationBatch, receivedAt time.Time) err
 			if len(event.Payload) > maxObservationPayloadBytes {
 				return fmt.Errorf("events[%d].payload exceeds %d bytes", i, maxObservationPayloadBytes)
 			}
-			trimmedPayload := strings.TrimSpace(string(event.Payload))
-			if !json.Valid(event.Payload) || !strings.HasPrefix(trimmedPayload, "{") {
+			var properties map[string]json.RawMessage
+			if err := json.Unmarshal(event.Payload, &properties); err != nil || properties == nil {
 				return fmt.Errorf("events[%d].payload must be a JSON object", i)
+			}
+			if len(properties) > maxObservationProperties {
+				return fmt.Errorf("events[%d].payload exceeds %d properties", i, maxObservationProperties)
 			}
 		case ObservationWithdrawn:
 			if len(event.Payload) != 0 && string(event.Payload) != "null" {
@@ -205,6 +224,16 @@ func validateObservationBatch(batch *ObservationBatch, receivedAt time.Time) err
 		event.ObservedAt = event.ObservedAt.UTC()
 	}
 	return nil
+}
+
+func observationRequestScheme(r *http.Request) string {
+	if r.URL.Scheme != "" {
+		return r.URL.Scheme
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 func trimDeviceMetadata(device *ObservationDeviceMetadata) {

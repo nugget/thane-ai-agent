@@ -14,7 +14,15 @@ var (
 	// ErrObservationAmbiguous means more than one device matches and the
 	// caller must supply account and client ID rather than guess.
 	ErrObservationAmbiguous = errors.New("companion observation is ambiguous")
+	// ErrObservationKindLimit means a device has reached the bounded number
+	// of distinct latest-value kinds it may retain.
+	ErrObservationKindLimit = errors.New("companion observation kind limit reached")
 )
+
+// MaxObservationKindsPerDevice bounds latest-value storage independently of
+// request size. Existing kinds may continue to advance after the limit is
+// reached; only creation of another distinct kind is rejected.
+const MaxObservationKindsPerDevice = 64
 
 // ObservationStatus describes whether a companion currently shares an
 // observation or has explicitly withdrawn it.

@@ -30,6 +30,7 @@ var devicesSchema = database.Schema{
 				platform             TEXT NOT NULL DEFAULT '',
 				app_version          TEXT NOT NULL DEFAULT '',
 				os_version           TEXT NOT NULL DEFAULT '',
+				metadata_recorded_at TIMESTAMP,
 				first_seen_at        TIMESTAMP NOT NULL,
 				last_seen_at         TIMESTAMP NOT NULL,
 				last_connected_at    TIMESTAMP,
@@ -39,6 +40,9 @@ var devicesSchema = database.Schema{
 				state                TEXT NOT NULL DEFAULT 'active',
 				UNIQUE (account, client_id)
 			)`,
+		},
+		database.ColumnAdd{
+			Table: "companion_devices", Column: "metadata_recorded_at", Typedef: "TIMESTAMP",
 		},
 		database.TableCreate{
 			Table: "companion_latest_observations",

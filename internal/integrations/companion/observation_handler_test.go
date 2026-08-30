@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 type recordingObservationStore struct {
 	principal ObservationPrincipal
 	batch     ObservationBatch
+	err       error
 }
 
 type recordingObservationAuthenticator struct {
@@ -33,6 +35,9 @@ func (s *recordingObservationStore) IngestObservations(
 ) (IngestResult, error) {
 	s.principal = principal
 	s.batch = batch
+	if s.err != nil {
+		return IngestResult{}, s.err
+	}
 	return IngestResult{Stored: len(batch.Events), ReceivedAt: receivedAt}, nil
 }
 
@@ -64,7 +69,7 @@ func TestObservationHandlerAcceptsAuthenticatedBatch(t *testing.T) {
 		}]
 	}`
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "https://thane.example/v1/companion/observations?source=background", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-secret")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -86,8 +91,13 @@ func TestObservationHandlerAcceptsAuthenticatedBatch(t *testing.T) {
 	if store.batch.ClientID != "iphone-1" || len(store.batch.Events) != 1 {
 		t.Fatalf("batch = %+v", store.batch)
 	}
-	if authenticator.request.Method != http.MethodPost || authenticator.request.RequestTarget != "/v1/companion/observations" {
+	if authenticator.request.Method != http.MethodPost || authenticator.request.RequestTarget != "/v1/companion/observations?source=background" {
 		t.Fatalf("auth request target = %s %s", authenticator.request.Method, authenticator.request.RequestTarget)
+	}
+	if authenticator.request.Scheme != "https" || authenticator.request.Authority != "thane.example" ||
+		authenticator.request.TargetURI != "https://thane.example/v1/companion/observations?source=background" {
+		t.Fatalf("auth request URI components = scheme %q authority %q target %q",
+			authenticator.request.Scheme, authenticator.request.Authority, authenticator.request.TargetURI)
 	}
 	if authenticator.request.Header.Get("Authorization") != "Bearer test-secret" || string(authenticator.request.Body) != body {
 		t.Fatal("authenticator did not receive the exact bounded HTTP request")
@@ -110,6 +120,7 @@ func TestObservationHandlerRejectsInvalidRequests(t *testing.T) {
 		{name: "wrong content type", auth: "Bearer test-secret", contentType: "text/plain", body: valid, wantStatus: http.StatusUnsupportedMediaType},
 		{name: "unknown field", auth: "Bearer test-secret", contentType: "application/json", body: strings.Replace(valid, `"client_id"`, `"unknown":true,"client_id"`, 1), wantStatus: http.StatusBadRequest},
 		{name: "missing events", auth: "Bearer test-secret", contentType: "application/json", body: `{"client_id":"iphone-1"}`, wantStatus: http.StatusBadRequest},
+		{name: "implausibly old observation", auth: "Bearer test-secret", contentType: "application/json", body: strings.Replace(valid, "2026-08-30T11:59:55Z", "1970-01-01T00:00:00Z", 1), wantStatus: http.StatusBadRequest},
 		{name: "future observation", auth: "Bearer test-secret", contentType: "application/json", body: strings.Replace(valid, "2026-08-30T11:59:55Z", "2026-08-30T12:06:00Z", 1), wantStatus: http.StatusBadRequest},
 		{name: "withdrawal with payload", auth: "Bearer test-secret", contentType: "application/json", body: strings.Replace(valid, `"payload"`, `"status":"withdrawn","payload"`, 1), wantStatus: http.StatusBadRequest},
 		{name: "trailing object", auth: "Bearer test-secret", contentType: "application/json", body: valid + `{}`, wantStatus: http.StatusBadRequest},
@@ -142,6 +153,14 @@ func TestValidateObservationBatchBounds(t *testing.T) {
 		EventID: "11111111-1111-4111-8111-111111111111", Kind: "ios.location",
 		SchemaVersion: 1, ObservedAt: now, Payload: json.RawMessage(`{"latitude":41}`),
 	}
+	tooManyProperties := make(map[string]int, maxObservationProperties+1)
+	for i := 0; i <= maxObservationProperties; i++ {
+		tooManyProperties[fmt.Sprintf("property_%03d", i)] = i
+	}
+	tooManyPropertiesJSON, err := json.Marshal(tooManyProperties)
+	if err != nil {
+		t.Fatalf("marshal oversized property set: %v", err)
+	}
 	tests := []struct {
 		name  string
 		batch ObservationBatch
@@ -155,12 +174,55 @@ func TestValidateObservationBatchBounds(t *testing.T) {
 		{name: "unsupported kind character", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
 			EventID: validEvent.EventID, Kind: "ios/location", SchemaVersion: 1, ObservedAt: now, Payload: validEvent.Payload,
 		}}}},
+		{name: "too many payload properties", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
+			EventID: validEvent.EventID, Kind: validEvent.Kind, SchemaVersion: 1, ObservedAt: now, Payload: tooManyPropertiesJSON,
+		}}}},
 		{name: "overlong metadata", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1", ClientName: strings.Repeat("x", maxObservationStringRunes+1)}, Events: []ObservationEvent{validEvent}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if err := validateObservationBatch(&test.batch, now); err == nil {
 				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestObservationHandlerReportsUnavailableAuthenticationAndKindLimit(t *testing.T) {
+	valid := `{"client_id":"iphone-1","events":[{"event_id":"11111111-1111-4111-8111-111111111111","kind":"ios.location","schema_version":1,"observed_at":"2026-08-30T11:59:55Z","payload":{"latitude":41}}]}`
+	tests := []struct {
+		name       string
+		handler    *ObservationHandler
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "authentication unavailable",
+			handler:    NewObservationHandler(nil, &recordingObservationStore{}, nil),
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "observation_auth_unavailable",
+		},
+		{
+			name: "kind limit",
+			handler: NewObservationHandler(
+				testObservationAuthenticator(),
+				&recordingObservationStore{err: ErrObservationKindLimit},
+				nil,
+			),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_observation",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.handler.now = func() time.Time { return time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC) }
+			req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", strings.NewReader(valid))
+			req.Header.Set("Authorization", "Bearer test-secret")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			test.handler.ServeHTTP(rec, req)
+			if rec.Code != test.wantStatus || !strings.Contains(rec.Body.String(), `"code":"`+test.wantCode+`"`) {
+				t.Fatalf("response = %d %s, want status %d code %q", rec.Code, rec.Body.String(), test.wantStatus, test.wantCode)
 			}
 		})
 	}

@@ -36,8 +36,9 @@ func (s *Store) ResolveObservationIdentity(ctx context.Context, account, clientI
 }
 
 // IngestObservations atomically advances the device's last-seen time and the
-// latest value for each observation kind. Equal timestamps use event ID as a
-// deterministic tie-breaker; an exact event replay never rewrites a value.
+// latest value for each observation kind. At equal timestamps, withdrawal
+// dominates availability; matching statuses use event ID as a deterministic
+// tie-breaker. An exact event replay never rewrites a value.
 // Implements [companion.ObservationStore].
 func (s *Store) IngestObservations(
 	ctx context.Context,
@@ -56,21 +57,81 @@ func (s *Store) IngestObservations(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var storedAccount string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT account FROM companion_devices WHERE device_id = ?`, principal.DeviceID,
-	).Scan(&storedAccount); err != nil {
-		return result, fmt.Errorf("verify companion observation device %s: %w", principal.DeviceID, err)
+	metadataAt := any(nil)
+	if batch.ClientName != "" || batch.Platform != "" || batch.AppVersion != "" || batch.OSVersion != "" {
+		metadataAt = result.ReceivedAt
 	}
-	if storedAccount != principal.Account {
+	// Take SQLite's write lock before establishing any read snapshot. A
+	// deferred transaction that reads first cannot upgrade after a concurrent
+	// writer commits in WAL mode and fails with SQLITE_BUSY_SNAPSHOT instead.
+	deviceWrite, err := tx.ExecContext(ctx, `
+		UPDATE companion_devices
+		SET client_name = CASE WHEN ? != ''
+				AND (client_name = '' OR metadata_recorded_at IS NULL OR ? >= metadata_recorded_at)
+			THEN ? ELSE client_name END,
+			platform = CASE WHEN ? != ''
+				AND (platform = '' OR metadata_recorded_at IS NULL OR ? >= metadata_recorded_at)
+			THEN ? ELSE platform END,
+			app_version = CASE WHEN ? != ''
+				AND (app_version = '' OR metadata_recorded_at IS NULL OR ? >= metadata_recorded_at)
+			THEN ? ELSE app_version END,
+			os_version = CASE WHEN ? != ''
+				AND (os_version = '' OR metadata_recorded_at IS NULL OR ? >= metadata_recorded_at)
+			THEN ? ELSE os_version END,
+			metadata_recorded_at = CASE WHEN ? IS NOT NULL
+				AND (metadata_recorded_at IS NULL OR ? >= metadata_recorded_at)
+			THEN ? ELSE metadata_recorded_at END,
+			last_seen_at = MAX(last_seen_at, ?)
+		WHERE device_id = ? AND account = ?
+	`, batch.ClientName, metadataAt, batch.ClientName,
+		batch.Platform, metadataAt, batch.Platform,
+		batch.AppVersion, metadataAt, batch.AppVersion,
+		batch.OSVersion, metadataAt, batch.OSVersion,
+		metadataAt, metadataAt, metadataAt,
+		result.ReceivedAt, principal.DeviceID, principal.Account)
+	if err != nil {
+		return result, fmt.Errorf("update companion observation last seen: %w", err)
+	}
+	deviceRows, err := deviceWrite.RowsAffected()
+	if err != nil {
+		return result, fmt.Errorf("verify companion observation device ownership: %w", err)
+	}
+	if deviceRows == 0 {
 		return result, fmt.Errorf("companion observation device does not belong to authenticated account")
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE companion_devices
-		SET last_seen_at = MAX(last_seen_at, ?)
-		WHERE device_id = ? AND account = ?
-	`, result.ReceivedAt, principal.DeviceID, principal.Account); err != nil {
-		return result, fmt.Errorf("update companion observation last seen: %w", err)
+
+	existingKinds := make(map[string]struct{}, companion.MaxObservationKindsPerDevice)
+	rows, err := tx.QueryContext(ctx,
+		`SELECT kind FROM companion_latest_observations WHERE device_id = ?`, principal.DeviceID,
+	)
+	if err != nil {
+		return result, fmt.Errorf("list companion observation kinds: %w", err)
+	}
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			_ = rows.Close()
+			return result, fmt.Errorf("scan companion observation kind: %w", err)
+		}
+		existingKinds[kind] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return result, fmt.Errorf("list companion observation kinds: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return result, fmt.Errorf("close companion observation kinds: %w", err)
+	}
+	newKinds := make(map[string]struct{}, len(batch.Events))
+	for _, event := range batch.Events {
+		if _, exists := existingKinds[event.Kind]; exists {
+			continue
+		}
+		newKinds[event.Kind] = struct{}{}
+	}
+	if len(newKinds) > 0 && len(existingKinds)+len(newKinds) > companion.MaxObservationKindsPerDevice {
+		return result, fmt.Errorf("%w: device may retain at most %d distinct kinds",
+			companion.ErrObservationKindLimit, companion.MaxObservationKindsPerDevice)
 	}
 
 	for _, event := range batch.Events {
@@ -97,7 +158,10 @@ func (s *Store) IngestObservations(
 			WHERE excluded.event_id != companion_latest_observations.event_id
 			  AND (excluded.observed_at > companion_latest_observations.observed_at
 			       OR (excluded.observed_at = companion_latest_observations.observed_at
-			           AND excluded.event_id > companion_latest_observations.event_id))
+			           AND ((excluded.status = 'withdrawn'
+			                 AND companion_latest_observations.status != 'withdrawn')
+			                OR (excluded.status = companion_latest_observations.status
+			                    AND excluded.event_id > companion_latest_observations.event_id))))
 		`, principal.DeviceID, event.Kind, event.EventID, event.SchemaVersion,
 			string(status), event.ObservedAt.UTC(), result.ReceivedAt, payload)
 		if err != nil {

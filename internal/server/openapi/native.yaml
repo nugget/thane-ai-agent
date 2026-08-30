@@ -1245,9 +1245,11 @@ paths:
         the deployment's private-network/Tailscale boundary. Per-device signed
         request authentication is tracked separately in issue #1444.
 
-        Limits: 64 KiB request body, 16 events per batch, 32 KiB per event
-        payload, and 128 Unicode characters for identifiers and metadata.
-        `observed_at` may be at most five minutes ahead of server receipt time.
+        Limits: 64 KiB request body, 16 events per batch, 32 KiB and 256
+        properties per event payload, 64 retained kinds per device, and 128
+        Unicode characters for identifiers and metadata. `observed_at` must be
+        on or after 2000-01-01T00:00:00Z and may be at most five minutes ahead
+        of server receipt time.
       x-thane-scope: companion:write
       security:
         - companionBearerAuth: []
@@ -1422,23 +1424,23 @@ components:
         client_name:
           type: string
           maxLength: 128
-          description: Operator-readable device name supplied by the companion.
+          description: Operator-readable device name supplied by the companion and used to refresh durable inventory metadata.
           example: Thane for iOS
         platform:
           type: string
           maxLength: 128
           pattern: '^[A-Za-z0-9._-]+$'
-          description: Lowercase operating-system family reported by the companion.
+          description: Lowercase operating-system family reported by the companion and used to refresh durable inventory metadata.
           example: ios
         app_version:
           type: string
           maxLength: 128
-          description: Companion application version and build identifier.
+          description: Companion application version and build identifier used to refresh durable inventory metadata.
           example: 1.0.0 (1)
         os_version:
           type: string
           maxLength: 128
-          description: Operating-system version reported by the companion.
+          description: Operating-system version reported by the companion and used to refresh durable inventory metadata.
           example: "26.6"
         events:
           type: array
@@ -1470,7 +1472,7 @@ components:
           minLength: 1
           maxLength: 128
           pattern: '^[A-Za-z0-9._-]+$'
-          description: Namespaced observation kind whose latest value this event advances.
+          description: Namespaced observation kind whose latest value this event advances; each device may retain at most 64 distinct kinds.
           example: ios.location
         schema_version:
           type: integer
@@ -1487,7 +1489,7 @@ components:
         observed_at:
           type: string
           format: date-time
-          description: Device-supplied observation time, independent of server receipt time.
+          description: Device-supplied observation time, independent of server receipt time; must be on or after 2000-01-01T00:00:00Z.
           example: "2026-08-30T16:59:55.123Z"
         payload:
           type: object

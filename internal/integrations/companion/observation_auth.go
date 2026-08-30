@@ -15,12 +15,16 @@ import (
 var ErrObservationUnauthorized = errors.New("companion observation unauthorized")
 
 // ObservationAuthRequest is the bounded HTTP material an authenticator may
-// verify. Keeping the request target, headers, and exact body here allows a
-// future RFC 9421 authenticator to replace bearer auth without changing the
-// ingestion service contract.
+// verify. Scheme and Authority retain the request components that Go keeps
+// outside Header; TargetURI is their canonical absolute composition with the
+// exact request target. Together with the exact body, this allows a future RFC
+// 9421 authenticator to replace bearer auth without changing ingestion.
 type ObservationAuthRequest struct {
 	Method          string
+	Scheme          string
+	Authority       string
 	RequestTarget   string
+	TargetURI       string
 	Header          http.Header
 	Body            []byte
 	ClaimedClientID string

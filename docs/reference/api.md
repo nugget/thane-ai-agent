@@ -114,8 +114,13 @@ device-key authentication can therefore resolve a verified key to the same
 device without rewriting observation history.
 The endpoint accepts at most 64 KiB and 16 events; each available event carries
 a UUID idempotency key, kind, schema version, device `observed_at`, and a JSON
-object payload of at most 32 KiB. A `status` of `withdrawn` must omit the
-payload and prevents an earlier sensitive value from remaining available.
+object payload of at most 32 KiB and 256 properties. Each device may retain at
+most 64 distinct latest-value kinds. `observed_at` must be on or after
+2000-01-01T00:00:00Z and no more than five minutes ahead of server receipt. A
+`status` of `withdrawn` must omit the payload and prevents an earlier sensitive
+value from remaining available; at equal timestamps, withdrawal wins. Optional
+non-empty device metadata refreshes the durable inventory using server receipt
+time as its recency guard.
 Successful responses are `202 Accepted` and report stored versus ignored
 (duplicate or older) events plus the independent server `received_at`.
 

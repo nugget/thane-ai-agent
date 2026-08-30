@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +58,9 @@ func TestIngestObservationsLatestRetryWithdrawalAndLastSeen(t *testing.T) {
 	device := recordObservationDevice(t, store, "nugget", "iphone-1", t0)
 	principal := companion.ObservationPrincipal{Account: "nugget", DeviceID: device.DeviceID}
 	batch := observationBatch("iphone-1", "11111111-1111-4111-8111-111111111111", t1)
+	batch.ClientName = "Nugget's iPhone"
+	batch.AppVersion = "1.1 (2)"
+	batch.OSVersion = "26.6"
 
 	result, err := store.IngestObservations(ctx, principal, batch, t1.Add(time.Second))
 	if err != nil {
@@ -94,6 +99,109 @@ func TestIngestObservationsLatestRetryWithdrawalAndLastSeen(t *testing.T) {
 	updated, found, err := store.Get(ctx, "nugget", "iphone-1")
 	if err != nil || !found || !updated.LastSeenAt.Equal(withdrawnAt.Add(time.Second)) {
 		t.Fatalf("last seen = %v found=%t err=%v", updated.LastSeenAt, found, err)
+	}
+	if updated.ClientName != "Nugget's iPhone" || updated.AppVersion != "1.1 (2)" || updated.OSVersion != "26.6" ||
+		!updated.MetadataRecordedAt.Equal(withdrawnAt.Add(time.Second)) {
+		t.Fatalf("observation metadata was not persisted: %+v", updated)
+	}
+}
+
+func TestIngestObservationsEqualTimeWithdrawalDominates(t *testing.T) {
+	store := newTestStore(t)
+	device := recordObservationDevice(t, store, "nugget", "iphone-1", t0)
+	principal := companion.ObservationPrincipal{Account: "nugget", DeviceID: device.DeviceID}
+	available := observationBatch("iphone-1", "ffffffff-ffff-4fff-bfff-ffffffffffff", t1)
+	if _, err := store.IngestObservations(ctx, principal, available, t1); err != nil {
+		t.Fatalf("store available observation: %v", err)
+	}
+
+	withdrawn := observationBatch("iphone-1", "00000000-0000-4000-8000-000000000000", t1)
+	withdrawn.Events[0].Status = companion.ObservationWithdrawn
+	withdrawn.Events[0].Payload = nil
+	if _, err := store.IngestObservations(ctx, principal, withdrawn, t1.Add(time.Second)); err != nil {
+		t.Fatalf("store equal-time withdrawal: %v", err)
+	}
+	latest, err := store.ResolveLatestObservation(ctx, "nugget", "iphone-1", "ios.location")
+	if err != nil || latest.Status != companion.ObservationWithdrawn || latest.Payload != nil {
+		t.Fatalf("latest after withdrawal = %+v payload=%s err=%v", latest, latest.Payload, err)
+	}
+
+	resurrection := observationBatch("iphone-1", "ffffffff-ffff-4fff-bfff-ffffffffffff", t1)
+	result, err := store.IngestObservations(ctx, principal, resurrection, t1.Add(2*time.Second))
+	if err != nil || result.Stored != 0 || result.Ignored != 1 {
+		t.Fatalf("equal-time resurrection result = %+v err=%v", result, err)
+	}
+	latest, err = store.ResolveLatestObservation(ctx, "nugget", "iphone-1", "ios.location")
+	if err != nil || latest.Status != companion.ObservationWithdrawn {
+		t.Fatalf("equal-time available resurrected withdrawal: %+v err=%v", latest, err)
+	}
+}
+
+func TestIngestObservationsBoundsKindsAtomically(t *testing.T) {
+	store := newTestStore(t)
+	device := recordObservationDevice(t, store, "nugget", "iphone-1", t0)
+	principal := companion.ObservationPrincipal{Account: "nugget", DeviceID: device.DeviceID}
+	for i := 0; i < companion.MaxObservationKindsPerDevice; i++ {
+		batch := observationBatch("iphone-1", fmt.Sprintf("%08x-0000-4000-8000-000000000000", i), t1)
+		batch.Events[0].Kind = fmt.Sprintf("ios.kind.%02d", i)
+		if _, err := store.IngestObservations(ctx, principal, batch, t1); err != nil {
+			t.Fatalf("seed kind %d: %v", i, err)
+		}
+	}
+
+	batch := observationBatch("iphone-1", "ffffffff-ffff-4fff-bfff-ffffffffffff", t2)
+	batch.Events[0].Kind = "ios.kind.00"
+	newKind := batch.Events[0]
+	newKind.EventID = "eeeeeeee-eeee-4eee-beee-eeeeeeeeeeee"
+	newKind.Kind = "ios.kind.overflow"
+	batch.Events = append(batch.Events, newKind)
+	if _, err := store.IngestObservations(ctx, principal, batch, t2); !errors.Is(err, companion.ErrObservationKindLimit) {
+		t.Fatalf("overflow error = %v", err)
+	}
+	latest, err := store.ResolveLatestObservation(ctx, "nugget", "iphone-1", "ios.kind.00")
+	if err != nil || latest.EventID != "00000000-0000-4000-8000-000000000000" {
+		t.Fatalf("kind-limit failure was not atomic: latest=%+v err=%v", latest, err)
+	}
+}
+
+func TestConcurrentObservationIngestsSerializeBeforeReading(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "concurrent.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	device := recordObservationDevice(t, store, "nugget", "iphone-1", t0)
+	principal := companion.ObservationPrincipal{Account: "nugget", DeviceID: device.DeviceID}
+
+	start := make(chan struct{})
+	errs := make(chan error, 8)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			batch := observationBatch("iphone-1", fmt.Sprintf("%08x-0000-4000-8000-000000000000", i), t1)
+			batch.Events[0].Kind = fmt.Sprintf("ios.concurrent.%d", i)
+			_, err := store.IngestObservations(context.Background(), principal, batch, t1.Add(time.Duration(i)*time.Second))
+			errs <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ingest: %v", err)
+		}
+	}
+	observations, err := store.ListLatestObservations(ctx)
+	if err != nil || len(observations) != 8 {
+		t.Fatalf("observations after concurrent ingest = %d err=%v", len(observations), err)
 	}
 }
 
