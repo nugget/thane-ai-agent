@@ -766,7 +766,11 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 		"signal_batch_turn": len(items) > 1,
 	}
 	if notifySummary := loop.FormatNotifyEnvelopes(notifies); notifySummary != "" {
-		msgs = append(msgs, loop.Message{Role: "user", Content: notifySummary})
+		// Origin wake on the message itself: the notify summary rides a
+		// contact turn but is not counterparty traffic, and a channel-
+		// stamped row here would sit adjacent to the inbound rows and
+		// masquerade as the previous contact.
+		msgs = append(msgs, loop.Message{Role: "user", Content: notifySummary, Origin: memory.OriginWake})
 		summary["notification_count"] = len(notifies)
 	}
 	skipped := 0
@@ -823,10 +827,16 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 		}
 		scaffold.opts = b.requestOptions(sender, hints)
 	}
-	// OriginChannel even when notify envelopes ride along: a mailbox
-	// turn exists because counterparty traffic arrived, and the single
-	// per-request stamp describes the turn's contact-bearing shape.
-	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary, memory.OriginChannel)
+	// The request stamp follows what actually survived rendering: any
+	// counterparty message makes this a contact turn, while a turn
+	// reduced to the notify summary alone (every mailbox item skipped)
+	// is a wake in contact clothing and must not read as new contact.
+	// The notify row itself carries its own wake override either way.
+	origin := memory.OriginWake
+	if messageCount > 0 {
+		origin = memory.OriginChannel
+	}
+	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary, origin)
 	// Mid-turn input merge (#1221): let the loop pull messages that arrive
 	// while this turn is composing, rendered in channel voice. The loop owns
 	// delta-gating, the drain budget, and the ack; this only renders. Close
@@ -1075,16 +1085,19 @@ func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, conten
 // this bridge produces. origin is the provenance stamped onto the
 // turn's messages (memory.Origin* constants) and each caller declares
 // its own truth: turns carrying counterparty traffic — inbound
-// envelopes, reactions, mailbox batches — declare OriginChannel, and
-// the pure loop-notification wake declares OriginWake. One stamp for
-// every bridge turn would poison the conversation-timing narrative in
-// one direction or the other: a wake stamped channel renders the
-// contact branch on a turn with no new message and moves the previous
-// contact, erasing the very silence the next turn should report.
-// RuntimeTags stays message_channel on every shape — the tag is what
-// keeps the channel context (including the wake branch of the timing
-// narrative) active, and it is runtime-only, so it must be asserted
-// here or not at all.
+// envelopes, reactions, mailbox batches with surviving messages —
+// declare OriginChannel, and turns that are wakes in substance (the
+// pure loop notification, a mailbox turn reduced to its notify summary)
+// declare OriginWake. A message may carry its own Origin override for
+// mixed turns — the notify summary rides a contact turn as a wake row.
+// One stamp for every bridge turn would poison the conversation-timing
+// narrative in one direction or the other: a wake stamped channel
+// renders the contact branch on a turn with no new message and moves
+// the previous contact, erasing the very silence the next turn should
+// report. RuntimeTags stays message_channel on every shape — the tag is
+// what keeps the channel context (including the wake branch of the
+// timing narrative) active, and it is runtime-only, so it must be
+// asserted here or not at all.
 func (b *Bridge) agentTurnMessages(convID string, binding *memory.ChannelBinding, msgs []loop.Message, opts router.RequestOptions, summary map[string]any, origin string) *loop.AgentTurn {
 	fallbackContent := prompts.InteractiveEmptyResponseFallback
 	return &loop.AgentTurn{

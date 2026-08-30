@@ -1059,6 +1059,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 	msgs := make([]agent.Message, len(req.Messages))
 	for i, m := range req.Messages {
 		msgs[i] = agent.Message{
+			Origin:  m.Origin,
 			Role:    m.Role,
 			Content: m.Content,
 			Images:  append([]llm.ImageContent(nil), m.Images...),

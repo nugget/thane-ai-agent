@@ -96,3 +96,47 @@ func TestConversationScopeReachesContextProvidersEveryIteration(t *testing.T) {
 	}
 	t.Logf("provider invoked %d times, all fully scoped", len(provider.seen))
 }
+
+// TestPerMessageOriginOverridesRequestStamp pins the storage half of
+// mixed-provenance turns: a message carrying its own Origin is recorded
+// with it, while its siblings inherit the request stamp. Without the
+// override, a notify summary riding a Signal mailbox turn persists as
+// channel contact and can masquerade as the previous contact in the
+// conversation-timing narrative.
+func TestPerMessageOriginOverridesRequestStamp(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:       "test-model",
+				Message:     llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens: 100, OutputTokens: 10,
+			},
+		},
+	}
+	loop := buildTestLoop(mock, nil)
+	mem := loop.memory.(*mockMem)
+
+	if _, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{
+			{Role: "user", Content: "notify summary", Origin: memory.OriginWake},
+			{Role: "user", Content: "inbound message"},
+		},
+		ConversationID: "conv-mixed",
+		MessageOrigin:  memory.OriginChannel,
+	}, nil); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, m := range mem.msgs["conv-mixed"] {
+		if m.Role == "user" {
+			got[m.Content] = m.Origin
+		}
+	}
+	if got["notify summary"] != memory.OriginWake {
+		t.Errorf("override row origin = %q, want %q", got["notify summary"], memory.OriginWake)
+	}
+	if got["inbound message"] != memory.OriginChannel {
+		t.Errorf("inheriting row origin = %q, want %q", got["inbound message"], memory.OriginChannel)
+	}
+}

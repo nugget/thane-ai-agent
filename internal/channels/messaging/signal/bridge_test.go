@@ -2102,22 +2102,34 @@ func TestBridge_TurnShapeDeclaresMessageOrigin(t *testing.T) {
 	}
 
 	tests := []struct {
-		name  string
-		input loop.TurnInput
-		want  string
+		name           string
+		input          loop.TurnInput
+		want           string
+		wantMsgOrigins []string // per-message Origin overrides, nil to skip
 	}{
 		{
-			name:  "mailbox traffic is channel contact",
-			input: loop.TurnInput{MailboxItems: []loop.MailboxItem{mkItem("hello", 1700000000000)}},
-			want:  memory.OriginChannel,
+			name:           "mailbox traffic is channel contact",
+			input:          loop.TurnInput{MailboxItems: []loop.MailboxItem{mkItem("hello", 1700000000000)}},
+			want:           memory.OriginChannel,
+			wantMsgOrigins: []string{""},
 		},
 		{
-			name: "mailbox traffic with notify riding along stays channel",
+			name: "mailbox traffic with notify riding along stays channel, notify row overrides to wake",
 			input: loop.TurnInput{
 				MailboxItems:    []loop.MailboxItem{mkItem("hello", 1700000000000)},
 				NotifyEnvelopes: []messages.Envelope{notify},
 			},
-			want: memory.OriginChannel,
+			want:           memory.OriginChannel,
+			wantMsgOrigins: []string{memory.OriginWake, ""},
+		},
+		{
+			name: "mailbox turn reduced to its notify summary is a wake",
+			input: loop.TurnInput{
+				MailboxItems:    []loop.MailboxItem{{ID: "signal:bad", Payload: []byte("{not json")}},
+				NotifyEnvelopes: []messages.Envelope{notify},
+			},
+			want:           memory.OriginWake,
+			wantMsgOrigins: []string{memory.OriginWake},
 		},
 		{
 			name:  "pure loop notification is a wake",
@@ -2137,6 +2149,16 @@ func TestBridge_TurnShapeDeclaresMessageOrigin(t *testing.T) {
 			}
 			if turn.Request.MessageOrigin != tt.want {
 				t.Errorf("MessageOrigin = %q, want %q", turn.Request.MessageOrigin, tt.want)
+			}
+			if tt.wantMsgOrigins != nil {
+				if len(turn.Request.Messages) != len(tt.wantMsgOrigins) {
+					t.Fatalf("messages len = %d, want %d", len(turn.Request.Messages), len(tt.wantMsgOrigins))
+				}
+				for i, want := range tt.wantMsgOrigins {
+					if got := turn.Request.Messages[i].Origin; got != want {
+						t.Errorf("message %d Origin = %q, want %q — the notify row must not persist as channel contact", i, got, want)
+					}
+				}
 			}
 			if len(turn.Request.RuntimeTags) != 1 || turn.Request.RuntimeTags[0] != "message_channel" {
 				t.Errorf("RuntimeTags = %#v — the tag that keeps channel context (and the wake narrative) active must survive every shape", turn.Request.RuntimeTags)
