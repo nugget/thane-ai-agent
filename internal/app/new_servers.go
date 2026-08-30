@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
+	"github.com/nugget/thane-ai-agent/internal/state/companions"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -284,9 +285,12 @@ func (a *App) initServers(s *newState) error {
 			return nil
 		})
 
-		// On companion-tagged turns, tell the model which companions are
-		// connected and what they currently offer (uncached live state).
-		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry))
+		// On companion-tagged turns, render the joined device view
+		// (#1437): every paired device from the durable inventory merged
+		// with live connectivity, so an iPhone that locked stays visible
+		// as an offline device with honest freshness instead of
+		// vanishing. Uncached live state.
+		a.loop.RegisterTagContextProvider("companion", companions.NewContextProvider(a.companionDevices, a.companionRegistry.List))
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
 		// Durable inventory: authentication upserts the device record,
@@ -297,18 +301,13 @@ func (a *App) initServers(s *newState) error {
 		a.onClose("companion-device-recorder", handler.CloseDeviceRecorder)
 		server.SetCompanionHandler(handler)
 
-		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-			Name: "companion",
-			Probe: func(_ context.Context) error {
-				if a.companionRegistry.Count() == 0 {
-					return fmt.Errorf("no providers connected")
-				}
-				return nil
-			},
-			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  logger,
-		})
-
+		// Deliberately NOT a connwatch watcher: companions are phones
+		// and laptops that sleep, roam, and background their apps — zero
+		// connected providers is a normal state, not an integration
+		// failure (#1437). The old zero-providers probe degraded
+		// /health and lit a red annunciator lamp every time the last
+		// device went to sleep. Reachability now lives per-device in the
+		// durable inventory and the joined context view above.
 		logger.Info("companion app endpoint enabled")
 	}
 

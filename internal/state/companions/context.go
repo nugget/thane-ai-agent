@@ -1,0 +1,273 @@
+package companions
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+)
+
+// maxContextDevices caps the rendered device list. Far above any real
+// household fleet; truncation is reported explicitly rather than
+// silently dropping devices.
+const maxContextDevices = 32
+
+// ContextProvider renders the joined companion-device view: every
+// paired device from the durable inventory merged with the live
+// provider registry. A known companion, its current reachability, and
+// its latest observations are different states with different
+// lifetimes (#1437) — so an iPhone whose socket closed when it locked
+// stays visible here as an offline device with honest freshness,
+// instead of vanishing the way the connected-only view made it.
+//
+// Live callable tools are listed only for online devices. Latest
+// observations are listed by kind and freshness only — payloads
+// (precise location included) never ride ambient context; they are
+// fetched through explicit tag-gated tools.
+//
+// It implements [agent.TagContextProvider] structurally and is
+// registered on the companion capability tag.
+type ContextProvider struct {
+	store *Store
+	// live returns the current provider-registry snapshot. Nil-safe so
+	// the durable view degrades gracefully if wiring changes.
+	live func() []companion.ProviderInfo
+	// now is a clock seam for deterministic tests.
+	now func() time.Time
+}
+
+// NewContextProvider creates the joined companion-device context
+// provider. live is typically Registry.List.
+func NewContextProvider(store *Store, live func() []companion.ProviderInfo) *ContextProvider {
+	return &ContextProvider{store: store, live: live, now: time.Now}
+}
+
+// TagContextBucket places the device view in live state: it reflects
+// current runtime connectivity and must not thrash the cached prompt
+// prefix.
+func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketLiveState
+}
+
+type companionDevicesJSON struct {
+	Devices []deviceContextJSON `json:"devices"`
+	// TruncatedDevices counts devices dropped by the render cap; zero
+	// (omitted) means the list is complete.
+	TruncatedDevices int `json:"truncated_devices,omitempty"`
+	// InventoryError reports that the durable inventory could not be
+	// read this turn: only live-connection rows are shown, and offline
+	// devices are temporarily invisible rather than gone.
+	InventoryError bool `json:"inventory_error,omitempty"`
+}
+
+type deviceContextJSON struct {
+	Account    string `json:"account"`
+	ClientName string `json:"client_name,omitempty"`
+	// DeviceID is the server-assigned identity that survives credential
+	// rotation (#1444) — the stable handle for referring to a device
+	// across turns. ClientID is the device's current claim, used by
+	// today's tool routing.
+	DeviceID string `json:"device_id,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	Platform string `json:"platform,omitempty"`
+
+	// Availability is "online" (a live connection is open; Tools are
+	// callable now) or "offline" (paired but not currently connected).
+	Availability string `json:"availability"`
+
+	// ConnectedAgo is how long the current live connection has been
+	// open; present only while online.
+	ConnectedAgo string `json:"connected_ago,omitempty"`
+	// Tools are the live callable tools this device offers right now;
+	// present only while online.
+	Tools []string `json:"tools,omitempty"`
+
+	LastSeenAgo         string `json:"last_seen_ago,omitempty"`
+	LastConnectedAgo    string `json:"last_connected_ago,omitempty"`
+	LastDisconnectedAgo string `json:"last_disconnected_ago,omitempty"`
+
+	// Observations lists the latest stored observation per kind with
+	// freshness only — never payload data.
+	Observations []observationContextJSON `json:"observations,omitempty"`
+}
+
+type observationContextJSON struct {
+	Kind string `json:"kind"`
+	// Status is "available" or "withdrawn" (sharing was revoked; no
+	// payload is retrievable).
+	Status string `json:"status"`
+	// ObservedAgo is device-claimed observation age; ReceivedAgo is
+	// when the server received it. The two differ when a device drains
+	// an old outbox.
+	ObservedAgo string `json:"observed_ago"`
+	ReceivedAgo string `json:"received_ago"`
+}
+
+// TagContext returns the joined companion-device block for tag-gated
+// injection. Implements [agent.TagContextProvider].
+func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+	if p.store == nil {
+		return "", nil
+	}
+	now := p.now().UTC()
+
+	// A store failure must not blank live truth: the registry rows come
+	// from memory and can always render. Degrade to a live-only view
+	// with an explicit inventory_error marker instead of dropping the
+	// whole block (the error paths are where the failure lives).
+	devices, listErr := p.store.List(ctx)
+	var observations []companion.LatestObservation
+	if listErr == nil {
+		observations, listErr = p.store.ListLatestObservations(ctx)
+	}
+	inventoryFailed := listErr != nil
+	if inventoryFailed {
+		devices, observations = nil, nil
+	}
+	obsByDevice := make(map[string][]observationContextJSON)
+	for _, obs := range observations {
+		obsByDevice[obs.DeviceID] = append(obsByDevice[obs.DeviceID], observationContextJSON{
+			Kind:        obs.Kind,
+			Status:      string(obs.Status),
+			ObservedAgo: promptfmt.FormatDeltaOnly(obs.ObservedAt, now),
+			ReceivedAgo: promptfmt.FormatDeltaOnly(obs.ReceivedAt, now),
+		})
+	}
+	for _, list := range obsByDevice {
+		sort.Slice(list, func(i, j int) bool { return list[i].Kind < list[j].Kind })
+	}
+
+	var liveInfos []companion.ProviderInfo
+	if p.live != nil {
+		liveInfos = p.live()
+	}
+	// Index live providers by durable identity. Providers without a
+	// client_id have no durable row to join; they still render as
+	// online devices below.
+	liveByIdentity := make(map[[2]string][]companion.ProviderInfo)
+	var liveUnjoined []companion.ProviderInfo
+	for _, info := range liveInfos {
+		if info.ClientID == "" {
+			liveUnjoined = append(liveUnjoined, info)
+			continue
+		}
+		key := [2]string{info.Account, info.ClientID}
+		liveByIdentity[key] = append(liveByIdentity[key], info)
+	}
+
+	rows := make([]deviceContextJSON, 0, len(devices)+len(liveUnjoined))
+	for _, d := range devices {
+		if d.State != DeviceStateActive {
+			continue
+		}
+		row := deviceContextJSON{
+			Account:      d.Account,
+			ClientName:   d.ClientName,
+			DeviceID:     d.DeviceID,
+			ClientID:     d.ClientID,
+			Platform:     d.Platform,
+			Availability: "offline",
+			Observations: obsByDevice[d.DeviceID],
+		}
+		if !d.LastSeenAt.IsZero() {
+			row.LastSeenAgo = promptfmt.FormatDeltaOnly(d.LastSeenAt, now)
+		}
+		if !d.LastConnectedAt.IsZero() {
+			row.LastConnectedAgo = promptfmt.FormatDeltaOnly(d.LastConnectedAt, now)
+		}
+		if !d.LastDisconnectedAt.IsZero() {
+			row.LastDisconnectedAgo = promptfmt.FormatDeltaOnly(d.LastDisconnectedAt, now)
+		}
+
+		key := [2]string{d.Account, d.ClientID}
+		if matches := liveByIdentity[key]; len(matches) > 0 {
+			delete(liveByIdentity, key)
+			row.Availability = "online"
+			row.Tools = liveToolNames(matches)
+			// With overlapping connections, the earliest ConnectedAt is
+			// the device's longest continuous presence.
+			earliest := matches[0].ConnectedAt
+			for _, m := range matches[1:] {
+				if m.ConnectedAt.Before(earliest) {
+					earliest = m.ConnectedAt
+				}
+			}
+			row.ConnectedAgo = promptfmt.FormatDeltaOnly(earliest, now)
+			if row.ClientName == "" {
+				row.ClientName = matches[0].ClientName
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	// Live connections with no durable row: identity-less clients, or
+	// identities whose inventory write has not landed. They are online
+	// and callable, so they must not disappear from the view.
+	for _, matches := range liveByIdentity {
+		liveUnjoined = append(liveUnjoined, matches...)
+	}
+	for _, info := range liveUnjoined {
+		rows = append(rows, deviceContextJSON{
+			Account:      info.Account,
+			ClientName:   info.ClientName,
+			ClientID:     info.ClientID,
+			Platform:     info.Platform,
+			Availability: "online",
+			ConnectedAgo: promptfmt.FormatDeltaOnly(info.ConnectedAt, now),
+			Tools:        liveToolNames([]companion.ProviderInfo{info}),
+		})
+	}
+
+	// Deterministic order across turns so the model can compare without
+	// relearning the shape.
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Account != rows[j].Account {
+			return rows[i].Account < rows[j].Account
+		}
+		if rows[i].ClientID != rows[j].ClientID {
+			return rows[i].ClientID < rows[j].ClientID
+		}
+		return rows[i].ClientName < rows[j].ClientName
+	})
+
+	out := companionDevicesJSON{Devices: rows, InventoryError: inventoryFailed}
+	if len(rows) > maxContextDevices {
+		out.TruncatedDevices = len(rows) - maxContextDevices
+		out.Devices = rows[:maxContextDevices]
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("marshal companion device context: %w", err)
+	}
+	return "### Companion Devices\n\n" +
+		"Paired devices persist while offline; tools are callable only on online devices. " +
+		"Observations are the latest report per kind — status \"withdrawn\" means sharing was revoked and that data is not retrievable. " +
+		"No tool fetches observation payloads yet.\n" +
+		string(data) + "\n", nil
+}
+
+// liveToolNames unions the tool names advertised across the given live
+// providers, sorted and deduplicated.
+func liveToolNames(infos []companion.ProviderInfo) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, info := range infos {
+		for _, cap := range info.Capabilities {
+			for _, def := range cap.Tools {
+				if def.Name == "" || seen[def.Name] {
+					continue
+				}
+				seen[def.Name] = true
+				names = append(names, def.Name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}

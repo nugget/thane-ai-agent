@@ -20,8 +20,8 @@ Choose the next move deliberately:
   actionable, activate `notifications`.
 - If the question is about who is where or what context is currently
   live, activate `awareness`.
-- If the answer lives on a paired Mac — its calendar or reminders
-  reached through a connected macOS companion — activate `companion`.
+- If the answer lives on a paired companion device — a Mac's calendar
+  or reminders, an iPhone's latest observations — activate `companion`.
 
 Once the real intervention is clear, act. If home work starts mixing
 with chat, code, or research, keep the parent loop narrow and delegate

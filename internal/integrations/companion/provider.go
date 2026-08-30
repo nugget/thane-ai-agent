@@ -271,7 +271,11 @@ func (r *Registry) Call(ctx context.Context, req CallRequest) (json.RawMessage, 
 	}
 }
 
-// Count returns the number of connected providers.
+// Count returns the number of connected providers. Zero is a normal
+// state — companions are phones and laptops that sleep and roam — and
+// must never feed health or failure semantics; the connwatch probe
+// that once did exactly that was retired by #1437's reachability
+// rework. Today's callers are tests and introspection convenience.
 func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
