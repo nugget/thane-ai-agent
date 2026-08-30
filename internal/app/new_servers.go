@@ -315,8 +315,9 @@ func (a *App) initServers(s *newState) error {
 			}
 			contactBindings[account] = id
 		}
+		var contactResolver companions.ContactResolver
 		if len(contactBindings) > 0 && a.contactStore != nil {
-			deviceContext.SetContactResolver(func(_ context.Context, account string) (companions.ContactBinding, bool) {
+			contactResolver = func(_ context.Context, account string) (companions.ContactBinding, bool) {
 				id, ok := contactBindings[account]
 				if !ok {
 					return companions.ContactBinding{}, false
@@ -335,7 +336,8 @@ func (a *App) initServers(s *newState) error {
 					Name:      contact.FormattedName,
 					TrustZone: contact.TrustZone,
 				}, true
-			})
+			}
+			deviceContext.SetContactResolver(contactResolver)
 		}
 		a.loop.RegisterTagContextProvider("companion", deviceContext)
 
@@ -413,6 +415,12 @@ func (a *App) initServers(s *newState) error {
 				}
 			}
 		}
+
+		// Server-native observation tools (#1437 slice 4): answer from
+		// the durable store, so they work while every device is
+		// offline — and they attribute their answers to the bound
+		// counterparty (#1450).
+		a.loop.Tools().EnableCompanionObservationTools(a.companionDevices, contactResolver)
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
 		// Durable inventory: authentication upserts the device record,

@@ -33,11 +33,18 @@ Reading the device block:
   `observed_ago` is the device's claim about when it happened,
   `received_ago` is when it reached you — they differ when a device
   uploads an old backlog. A `withdrawn` status means sharing was
-  revoked; that data is gone, not stale. No tool fetches observation
-  payloads yet — the block's freshness is what you know.
+  revoked; that data is gone, not stale. Payloads never appear in this
+  block — fetch a stored location with
+  `companion_last_known_location`; other kinds have no reader yet.
 
 How to work here:
 
+- Asked where someone is, or about their phone's last whereabouts?
+  `companion_last_known_location` answers from stored data even while
+  the phone is offline or asleep, and says whose device it was, how
+  old the fix is, and whether it has gone stale. Reach for a device's
+  own live location tool only when the device block shows it online
+  and you need a fresh fix right now.
 - A connected device authors its own tools, so their exact names come
   from it, not from a fixed list. Use the tool whose name and
   description match the data you need; `macos_calendar_events` lists
