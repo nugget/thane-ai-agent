@@ -46,6 +46,19 @@ var schema = database.Schema{
 		database.IndexCreate{Name: "idx_contacts_fn", SQL: `CREATE INDEX IF NOT EXISTS idx_contacts_fn ON contacts(formatted_name)`},
 		database.IndexCreate{Name: "idx_contacts_deleted", SQL: `CREATE INDEX IF NOT EXISTS idx_contacts_deleted ON contacts(deleted_at)`},
 		database.IndexCreate{Name: "idx_contacts_trust_zone", SQL: `CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone)`},
+		// ha_person_entity is the durable contact → Home Assistant
+		// person binding (#1450): the counterparty edge presence flows
+		// through. Deliberately declared ONLY here (not in the CREATE
+		// TABLE above) so the column has a single source of truth; the
+		// idempotent ColumnAdd serves fresh and existing databases
+		// alike.
+		database.ColumnAdd{Table: "contacts", Column: "ha_person_entity", Typedef: "TEXT"},
+		// Presence must attach to exactly one counterparty: at most one
+		// active contact may claim a given HA person entity, enforced at
+		// the storage boundary rather than by caller discipline.
+		database.IndexCreate{Name: "idx_contacts_ha_person_unique", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_ha_person_unique
+			ON contacts(ha_person_entity)
+			WHERE ha_person_entity IS NOT NULL AND ha_person_entity != '' AND deleted_at IS NULL`},
 		database.TableCreate{
 			Table: "contact_properties",
 			SQL: `CREATE TABLE IF NOT EXISTS contact_properties (

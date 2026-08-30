@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
@@ -290,7 +292,50 @@ func (a *App) initServers(s *newState) error {
 		// with live connectivity, so an iPhone that locked stays visible
 		// as an offline device with honest freshness instead of
 		// vanishing. Uncached live state.
-		a.loop.RegisterTagContextProvider("companion", companions.NewContextProvider(a.companionDevices, a.companionRegistry.List, logger))
+		deviceContext := companions.NewContextProvider(a.companionDevices, a.companionRegistry.List, logger)
+
+		// Counterparty attribution (#1450): each account's configured
+		// contact binding resolves at read time — never copied onto
+		// device rows — so a trust-zone change on the contact reaches
+		// every bound device instantly. Resolution fails closed: an
+		// unknown or deleted contact degrades the device to
+		// account-only attribution, loudly.
+		contactBindings := make(map[string]uuid.UUID, len(cfg.Companion.Providers))
+		for account, provider := range cfg.Companion.Providers {
+			if provider.Contact == "" {
+				continue
+			}
+			id, err := uuid.Parse(provider.Contact)
+			if err != nil {
+				// Config validation rejects non-UUIDs; defensive only.
+				logger.Error("companion contact binding is not a UUID", "account", account)
+				continue
+			}
+			contactBindings[account] = id
+		}
+		if len(contactBindings) > 0 && a.contactStore != nil {
+			deviceContext.SetContactResolver(func(_ context.Context, account string) (companions.ContactBinding, bool) {
+				id, ok := contactBindings[account]
+				if !ok {
+					return companions.ContactBinding{}, false
+				}
+				contact, err := a.contactStore.Get(id)
+				if err != nil || contact == nil {
+					logger.Warn("companion contact binding did not resolve",
+						"account", account,
+						"contact_id", id.String(),
+						"error", err,
+					)
+					return companions.ContactBinding{}, false
+				}
+				return companions.ContactBinding{
+					ContactID: contact.ID.String(),
+					Name:      contact.FormattedName,
+					TrustZone: contact.TrustZone,
+				}, true
+			})
+		}
+		a.loop.RegisterTagContextProvider("companion", deviceContext)
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
 		// Durable inventory: authentication upserts the device record,

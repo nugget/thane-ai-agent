@@ -1,6 +1,7 @@
 package companions
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -424,6 +425,49 @@ func mustContext(t *testing.T, p *ContextProvider) string {
 		t.Fatalf("TagContext: %v", err)
 	}
 	return block
+}
+
+// TestContextProviderContactAttribution pins the counterparty layer's
+// first presentation surface (#1450): a bound account's devices carry
+// the contact name and the trust zone authority derives from — on
+// durable and live-only rows alike — and resolution fails closed to
+// account-only attribution.
+func TestContextProviderContactAttribution(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	if err := store.RecordConnected(ctx, "alice", "device-1", companion.DeviceMetadata{}, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	p := NewContextProvider(store, func() []companion.ProviderInfo {
+		return []companion.ProviderInfo{
+			{Account: "alice", ClientID: "device-new", ConnectedAt: now}, // live, no durable row
+			{Account: "bob", ClientID: "device-b", ConnectedAt: now},     // unbound account
+		}
+	}, nil)
+	p.SetContactResolver(func(_ context.Context, account string) (ContactBinding, bool) {
+		if account == "alice" {
+			return ContactBinding{ContactID: "c-1", Name: "Alice Operator", TrustZone: "admin"}, true
+		}
+		return ContactBinding{}, false
+	})
+
+	out := decodeDeviceContext(t, mustContext(t, p))
+	if len(out.Devices) != 3 {
+		t.Fatalf("got %d devices, want 3", len(out.Devices))
+	}
+	for _, d := range out.Devices {
+		switch d.Account {
+		case "alice":
+			if d.Contact != "Alice Operator" || d.ContactTrustZone != "admin" {
+				t.Errorf("alice device %q attribution = %q/%q", d.ClientID, d.Contact, d.ContactTrustZone)
+			}
+		case "bob":
+			if d.Contact != "" || d.ContactTrustZone != "" {
+				t.Errorf("unbound account carries attribution: %+v", d)
+			}
+		}
+	}
 }
 
 // TestContextProviderUnrecordedOverlapCollapses pins the merge rule on
