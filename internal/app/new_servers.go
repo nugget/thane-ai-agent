@@ -697,7 +697,7 @@ func (a *App) initServers(s *newState) error {
 		s.personTracker.OnRoomChange(func(entityID, room, provider, source string) {
 			// This legacy MQTT sensor specifically represents UniFi AP
 			// association. Other room providers must not masquerade as AP data.
-			if provider != unifi.RoomProvider {
+			if !shouldPublishUnifiAPRoom(room, provider) {
 				return
 			}
 			shortName := entityID
@@ -889,6 +889,12 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	return nil
+}
+
+// shouldPublishUnifiAPRoom keeps populated observations provider-specific but
+// permits normalized clears, whose provider is intentionally empty.
+func shouldPublishUnifiAPRoom(room, provider string) bool {
+	return room == "" || provider == unifi.RoomProvider
 }
 
 // counterpartyPresenceView renders the contact-context presence join. The

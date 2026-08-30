@@ -5,9 +5,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
+
+func TestShouldPublishUnifiAPRoom(t *testing.T) {
+	tests := []struct {
+		name     string
+		room     string
+		provider string
+		want     bool
+	}{
+		{name: "populated UniFi observation", room: "office", provider: unifi.RoomProvider, want: true},
+		{name: "populated non-UniFi observation", room: "office", provider: "bermuda", want: false},
+		{name: "normalized clear", room: "", provider: "", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPublishUnifiAPRoom(tt.room, tt.provider); got != tt.want {
+				t.Errorf("shouldPublishUnifiAPRoom(%q, %q) = %v, want %v", tt.room, tt.provider, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestCounterpartyPresenceView(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)

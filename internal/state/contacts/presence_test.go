@@ -310,6 +310,43 @@ func TestTracker_GetContext_WithRoom(t *testing.T) {
 	}
 }
 
+func TestTracker_GetContext_NamedZoneSuppressesRetainedRoom(t *testing.T) {
+	now := time.Date(2026, 2, 15, 16, 30, 0, 0, time.UTC)
+	getter := &mockStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID:    "person.alice",
+				State:       "home",
+				Attributes:  map[string]any{"friendly_name": "Alice"},
+				LastChanged: now,
+			},
+		},
+	}
+
+	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	_ = tracker.Initialize(context.Background(), getter)
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
+	tracker.HandleStateChange("person.alice", "home", "work", "")
+
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
+	if !strings.Contains(result, `"state":"work"`) {
+		t.Errorf("expected named zone state in JSON, got:\n%s", result)
+	}
+	for _, field := range []string{`"room"`, `"room_provider"`, `"room_source"`} {
+		if strings.Contains(result, field) {
+			t.Errorf("expected %s to be suppressed outside home, got:\n%s", field, result)
+		}
+	}
+
+	snap, ok := tracker.Snapshot("person.alice")
+	if !ok {
+		t.Fatal("expected person snapshot")
+	}
+	if snap.Room != "office" || snap.RoomProvider != "unifi" || snap.RoomSource != "ap-hor-office" {
+		t.Errorf("named-zone transition should retain tracker evidence, got %+v", snap)
+	}
+}
+
 func TestTracker_GetContext_WithoutRoom(t *testing.T) {
 	now := time.Date(2026, 2, 15, 16, 30, 0, 0, time.UTC)
 	getter := &mockStateGetter{

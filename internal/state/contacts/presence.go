@@ -40,6 +40,11 @@ func FormatPersonPresence(
 	if strings.EqualFold(state, "not_home") {
 		displayState = "away"
 	}
+	if !strings.EqualFold(state, "home") {
+		room = ""
+		roomProvider = ""
+		roomSource = ""
+	}
 	pc := PersonPresenceContext{
 		Entity:       entityID,
 		Name:         name,
