@@ -60,8 +60,9 @@ func (r *Registry) EnableCompanionObservationTools(store *companions.Store, cont
 	})
 }
 
-// companionLastKnownLocationResult is the tool's result shape. Ages are
-// deltas for reasoning; absolute times remain for record-keeping.
+// companionLastKnownLocationResult is the tool's result shape. Ages
+// are deltas per the model-facing time convention; absolute timestamps
+// live in the observation store and the API, not here.
 type companionLastKnownLocationResult struct {
 	Contact          string          `json:"contact,omitempty"`
 	ContactTrustZone string          `json:"contact_trust_zone,omitempty"`
@@ -74,7 +75,6 @@ type companionLastKnownLocationResult struct {
 	Freshness        string          `json:"freshness,omitempty"`
 	ObservedAgo      string          `json:"observed_ago"`
 	ReceivedAgo      string          `json:"received_ago"`
-	ObservedAt       string          `json:"observed_at"`
 	SchemaVersion    int             `json:"schema_version"`
 	Location         json.RawMessage `json:"location,omitempty"`
 	Note             string          `json:"note,omitempty"`
@@ -102,7 +102,6 @@ func (r *Registry) handleCompanionLastKnownLocation(ctx context.Context, store *
 		Status:        string(obs.Status),
 		ObservedAgo:   promptfmt.FormatDeltaOnly(obs.ObservedAt, now),
 		ReceivedAgo:   promptfmt.FormatDeltaOnly(obs.ReceivedAt, now),
-		ObservedAt:    obs.ObservedAt.Format(time.RFC3339),
 		SchemaVersion: obs.SchemaVersion,
 	}
 

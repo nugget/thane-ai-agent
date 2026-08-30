@@ -93,7 +93,7 @@ func TestCompanionLastKnownLocationFresh(t *testing.T) {
 	if !strings.Contains(string(res.Location), `"latitude":41`) {
 		t.Errorf("payload not passed through: %s", res.Location)
 	}
-	if res.ObservedAgo == "" || res.ReceivedAgo == "" || res.ObservedAt == "" {
+	if res.ObservedAgo == "" || res.ReceivedAgo == "" {
 		t.Errorf("ages missing: %+v", res)
 	}
 }
