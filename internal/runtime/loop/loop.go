@@ -121,6 +121,14 @@ type Message struct {
 	// runtime-only because persisted loop specs should stay textual and
 	// portable; HTTP ingress paths such as OWU populate it per request.
 	Images []llm.ImageContent `yaml:"-" json:"-"`
+
+	// Origin optionally overrides the request's MessageOrigin for this
+	// one message when it is recorded in conversation memory
+	// (memory.Origin* constants). Turn builders that mix provenance in
+	// a single request use it — a notify summary riding a mailbox turn
+	// is a wake even though the turn is contact. Empty inherits the
+	// request stamp.
+	Origin string `yaml:"-" json:"-"`
 }
 
 // RunMessage is a compatibility alias for [Message], the primary

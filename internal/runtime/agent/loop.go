@@ -42,6 +42,10 @@ type Message struct {
 	Role    string             `json:"role"` // system, user, assistant
 	Content string             `json:"content"`
 	Images  []llm.ImageContent `json:"-"`
+	// Origin optionally overrides Request.MessageOrigin for this one
+	// message when it is recorded in conversation memory (memory.Origin*
+	// constants). Empty inherits the request stamp.
+	Origin string `json:"-"`
 }
 
 // Request represents an incoming agent request.
@@ -62,7 +66,9 @@ type Request struct {
 	// memory.Origin* constants). Channel bridges declare
 	// memory.OriginChannel, API surfaces memory.OriginAPI; turn-builder
 	// wake requests that declare nothing default to memory.OriginWake in
-	// the loop runtime's request preparation. Empty means unstamped.
+	// the loop runtime's request preparation. Empty means unstamped. A
+	// message carrying its own Message.Origin overrides this stamp for
+	// that one row.
 	MessageOrigin   string                              `json:"-"`
 	SkipContext     bool                                `json:"-"` // Skip memory, tools, and context injection (for lightweight completions)
 	AllowedTools    []string                            `json:"-"` // Optional allowlist of tools visible for this run
@@ -1653,11 +1659,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if !req.SkipContext {
 		history = l.memory.GetMessages(convID)
 
+		// Per-message Origin overrides the request stamp so one turn can
+		// carry mixed provenance — a notify summary riding a mailbox
+		// batch is a wake row even though the turn is contact.
+		originFor := func(m Message) string {
+			if m.Origin != "" {
+				return m.Origin
+			}
+			return req.MessageOrigin
+		}
 		if strings.HasPrefix(convID, "owu-") {
 			// External client (Open WebUI): only add the last user message
 			for i := len(req.Messages) - 1; i >= 0; i-- {
 				if req.Messages[i].Role == "user" {
-					if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content, req.MessageOrigin); err != nil {
+					if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content, originFor(req.Messages[i])); err != nil {
 						log.Warn("failed to store message", "error", err)
 					}
 					break
@@ -1666,7 +1681,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		} else {
 			// Internal/API clients: store all messages
 			for _, m := range req.Messages {
-				if err := l.memory.AddMessage(convID, m.Role, m.Content, req.MessageOrigin); err != nil {
+				if err := l.memory.AddMessage(convID, m.Role, m.Content, originFor(m)); err != nil {
 					log.Warn("failed to store message", "error", err)
 				}
 			}

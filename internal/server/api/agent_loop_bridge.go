@@ -18,6 +18,7 @@ func loopRequestFromAgent(req *agent.Request) loop.Request {
 			Role:    msg.Role,
 			Content: msg.Content,
 			Images:  append(msg.Images[:0:0], msg.Images...),
+			Origin:  msg.Origin,
 		}
 	}
 	runtimeTools := make([]loop.RuntimeTool, 0, len(req.RuntimeTools))
