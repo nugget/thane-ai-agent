@@ -418,3 +418,69 @@ func TestSurvivesReopen(t *testing.T) {
 		t.Errorf("capabilities lost across restart: %s (err=%v)", d.Capabilities, err)
 	}
 }
+
+func TestMigratesSliceOneDeviceSchema(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// This is the companion_devices CREATE TABLE merged in #1445 at 8ba2559a,
+	// before observation ingestion added metadata_recorded_at.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS companion_devices (
+		device_id            TEXT NOT NULL PRIMARY KEY,
+		account              TEXT NOT NULL,
+		client_id            TEXT NOT NULL,
+		client_name          TEXT NOT NULL DEFAULT '',
+		platform             TEXT NOT NULL DEFAULT '',
+		app_version          TEXT NOT NULL DEFAULT '',
+		os_version           TEXT NOT NULL DEFAULT '',
+		first_seen_at        TIMESTAMP NOT NULL,
+		last_seen_at         TIMESTAMP NOT NULL,
+		last_connected_at    TIMESTAMP,
+		last_disconnected_at TIMESTAMP,
+		capabilities         TEXT NOT NULL DEFAULT '[]',
+		capabilities_recorded_at TIMESTAMP,
+		state                TEXT NOT NULL DEFAULT 'active',
+		UNIQUE (account, client_id)
+	)`); err != nil {
+		t.Fatalf("create slice-one schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO companion_devices (
+		device_id, account, client_id, client_name, platform, app_version, os_version,
+		first_seen_at, last_seen_at, last_connected_at, state
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"dev_legacy", "alice", "iphone-1", "Legacy iPhone", "ios", "1.0", "26.6",
+		t1, t1, t1, DeviceStateActive,
+	); err != nil {
+		t.Fatalf("seed slice-one device: %v", err)
+	}
+
+	store, err := NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("migrate slice-one schema: %v", err)
+	}
+	legacy, found, err := store.Get(ctx, "alice", "iphone-1")
+	if err != nil || !found || !legacy.MetadataRecordedAt.Equal(t1) {
+		t.Fatalf("legacy metadata recency was not backfilled: device=%+v found=%t err=%v", legacy, found, err)
+	}
+	if err := store.RecordConnected(ctx, "alice", "iphone-1", companion.DeviceMetadata{ClientName: "Stale Name"}, t0); err != nil {
+		t.Fatalf("record stale connection after migration: %v", err)
+	}
+	legacy, _, err = store.Get(ctx, "alice", "iphone-1")
+	if err != nil || legacy.ClientName != "Legacy iPhone" {
+		t.Fatalf("stale connection replaced migrated metadata: device=%+v err=%v", legacy, err)
+	}
+
+	batch := observationBatch("iphone-1", "11111111-1111-4111-8111-111111111111", t2)
+	batch.ClientName = "Background iPhone"
+	if _, err := store.IngestObservations(ctx,
+		companion.ObservationPrincipal{Account: "alice", DeviceID: legacy.DeviceID}, batch, t2,
+	); err != nil {
+		t.Fatalf("ingest observation after migration: %v", err)
+	}
+	legacy, _, err = store.Get(ctx, "alice", "iphone-1")
+	if err != nil || legacy.ClientName != "Background iPhone" || !legacy.MetadataRecordedAt.Equal(t2) {
+		t.Fatalf("background metadata did not advance after migration: device=%+v err=%v", legacy, err)
+	}
+}

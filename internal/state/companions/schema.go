@@ -30,6 +30,7 @@ var devicesSchema = database.Schema{
 				platform             TEXT NOT NULL DEFAULT '',
 				app_version          TEXT NOT NULL DEFAULT '',
 				os_version           TEXT NOT NULL DEFAULT '',
+				metadata_recorded_at TIMESTAMP,
 				first_seen_at        TIMESTAMP NOT NULL,
 				last_seen_at         TIMESTAMP NOT NULL,
 				last_connected_at    TIMESTAMP,
@@ -39,6 +40,41 @@ var devicesSchema = database.Schema{
 				state                TEXT NOT NULL DEFAULT 'active',
 				UNIQUE (account, client_id)
 			)`,
+		},
+		// Existing #1445 databases predate metadata_recorded_at, so this is a
+		// load-bearing upgrade step even though fresh databases get the column
+		// from TableCreate above.
+		database.ColumnAdd{
+			Table: "companion_devices", Column: "metadata_recorded_at", Typedef: "TIMESTAMP",
+		},
+		// Anchor legacy metadata to the connection time that guarded it before
+		// observation ingestion added a shared cross-transport recency timestamp.
+		database.Raw{
+			Description: "backfill companion device metadata recency",
+			SQL: `UPDATE companion_devices
+				SET metadata_recorded_at = last_connected_at
+				WHERE metadata_recorded_at IS NULL
+				  AND (client_name != '' OR platform != '' OR app_version != '' OR os_version != '')`,
+		},
+		database.TableCreate{
+			Table: "companion_latest_observations",
+			SQL: `CREATE TABLE IF NOT EXISTS companion_latest_observations (
+				device_id       TEXT NOT NULL,
+				kind            TEXT NOT NULL,
+				event_id        TEXT NOT NULL,
+				schema_version  INTEGER NOT NULL,
+				status          TEXT NOT NULL,
+				observed_at     TIMESTAMP NOT NULL,
+				received_at     TIMESTAMP NOT NULL,
+				payload         TEXT,
+				PRIMARY KEY (device_id, kind),
+				FOREIGN KEY (device_id) REFERENCES companion_devices(device_id)
+			)`,
+		},
+		database.IndexCreate{
+			Name: "idx_companion_latest_observation_kind",
+			SQL: `CREATE INDEX IF NOT EXISTS idx_companion_latest_observation_kind
+				ON companion_latest_observations(kind, device_id)`,
 		},
 	},
 }
