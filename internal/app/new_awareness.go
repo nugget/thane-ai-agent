@@ -34,6 +34,7 @@ func (a *App) initAwareness(s *newState) error {
 	// loops can opt out of always-on providers by setting
 	// Launch.SuppressAlwaysContext = true.
 	contactLookup := &contactNameLookup{store: a.contactStore, logger: logger}
+	s.contactLookup = contactLookup
 	if a.cfg.Unverified() {
 		a.loop.RegisterAlwaysContextProvider(agent.NewUnverifiedTrustProvider(a.cfg.LoadedFrom()))
 	}

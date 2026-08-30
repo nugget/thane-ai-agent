@@ -18,21 +18,21 @@ type mockContactLookup struct {
 	policies map[string]*ContactOriginPolicy
 }
 
-func (m *mockContactLookup) LookupContact(name, _ string) *ContactContext {
+func (m *mockContactLookup) LookupContact(_ context.Context, name, _ string) *ContactContext {
 	if m == nil || m.contacts == nil {
 		return nil
 	}
 	return m.contacts[name]
 }
 
-func (m *mockContactLookup) LookupContactByID(id, _ string) *ContactContext {
+func (m *mockContactLookup) LookupContactByID(_ context.Context, id, _ string) *ContactContext {
 	if m == nil || m.byID == nil {
 		return nil
 	}
 	return m.byID[id]
 }
 
-func (m *mockContactLookup) LookupContactOriginPolicy(id, name, _ string) *ContactOriginPolicy {
+func (m *mockContactLookup) LookupContactOriginPolicy(_ context.Context, id, name, _ string) *ContactOriginPolicy {
 	if m == nil || m.policies == nil {
 		return nil
 	}

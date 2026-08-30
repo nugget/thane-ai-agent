@@ -28,6 +28,10 @@ type newState struct {
 	// Forward-declared in initStores (for connwatch OnReady closure),
 	// constructed in initAwareness.
 	personTracker *contacts.PresenceTracker
+	// contactLookup is stashed so initServers can wire counterparty
+	// enrichment (presence + companion devices, #1450) after the
+	// stores those joins read from exist.
+	contactLookup *contactNameLookup
 
 	// Built in initAgentLoop, used by initChannels and initDelegation.
 	resolver *paths.Resolver

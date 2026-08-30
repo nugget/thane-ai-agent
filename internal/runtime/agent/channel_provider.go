@@ -30,6 +30,33 @@ type ContactContext struct {
 	Channels        map[string]any   `json:"channels,omitempty"`
 	LastInteraction *InteractionRef  `json:"last_interaction,omitempty"`
 	ContactSince    string           `json:"contact_since,omitempty"`
+
+	// Presence is the counterparty's live whereabouts, pulled through
+	// the contact's Home Assistant person binding (#1450); absent when
+	// the contact has no binding or the tracker has nothing.
+	Presence *CounterpartyPresence `json:"presence,omitempty"`
+	// Devices are the counterparty's bound companion devices with
+	// reachability only — no observation payloads (#1450).
+	Devices []CounterpartyDevice `json:"devices,omitempty"`
+}
+
+// CounterpartyPresence is the compact whereabouts view joined from the
+// HA person binding: zone-level state, room when home (bermuda), and
+// deltas rather than timestamps.
+type CounterpartyPresence struct {
+	State     string `json:"state"`
+	Since     string `json:"since,omitempty"`
+	Room      string `json:"room,omitempty"`
+	RoomSince string `json:"room_since,omitempty"`
+}
+
+// CounterpartyDevice is one bound companion device, compactly: enough
+// to reason about reachability, nothing that belongs behind a tool.
+type CounterpartyDevice struct {
+	Name         string `json:"name,omitempty"`
+	Platform     string `json:"platform,omitempty"`
+	Availability string `json:"availability"`
+	LastSeenAgo  string `json:"last_seen_ago,omitempty"`
 }
 
 type channelContextEnvelope struct {
@@ -69,9 +96,9 @@ type InteractionRef struct {
 // implementation can gate fields and source-specific policy by trust
 // zone. Returns nil when no matching contact is found.
 type ContactLookup interface {
-	LookupContact(name string, source string) *ContactContext
-	LookupContactByID(id string, source string) *ContactContext
-	LookupContactOriginPolicy(id string, name string, source string) *ContactOriginPolicy
+	LookupContact(ctx context.Context, name string, source string) *ContactContext
+	LookupContactByID(ctx context.Context, id string, source string) *ContactContext
+	LookupContactOriginPolicy(ctx context.Context, id string, name string, source string) *ContactOriginPolicy
 }
 
 // ContactOriginPolicy is contact-owned session shaping applied when a
@@ -161,7 +188,7 @@ func (p *ChannelProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 	// Try contact resolution when we have a sender name.
 	var contactCtx *ContactContext
 	if senderName != "" && p.contacts != nil {
-		contactCtx = p.contacts.LookupContact(senderName, source)
+		contactCtx = p.contacts.LookupContact(ctx, senderName, source)
 	}
 	if contactCtx == nil && binding != nil {
 		contactCtx = contactContextFromBinding(binding, source)

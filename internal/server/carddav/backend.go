@@ -76,7 +76,7 @@ func (b *Backend) GetAddressObject(_ context.Context, path string, _ *carddav.Ad
 	if err != nil {
 		return nil, err
 	}
-	return b.contactToObject(c), nil
+	return b.contactToObject(c)
 }
 
 // ListAddressObjects returns all active contacts as CardDAV address
@@ -91,7 +91,11 @@ func (b *Backend) ListAddressObjects(_ context.Context, path string, _ *carddav.
 	}
 	objects := make([]carddav.AddressObject, 0, len(all))
 	for _, c := range all {
-		objects = append(objects, *b.contactToObject(c))
+		obj, err := b.contactToObject(c)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *obj)
 	}
 	return objects, nil
 }
@@ -109,7 +113,10 @@ func (b *Backend) QueryAddressObjects(_ context.Context, path string, query *car
 
 	var result []carddav.AddressObject
 	for _, c := range all {
-		obj := b.contactToObject(c)
+		obj, err := b.contactToObject(c)
+		if err != nil {
+			return nil, err
+		}
 		if matchesQuery(obj.Card, query) {
 			result = append(result, *obj)
 		}
@@ -162,7 +169,15 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 	contact, props := contacts.CardToContact(card)
 	contact.ID = id
 
-	upserted, err := b.store.UpsertWithProperties(contact, props)
+	// X-THANE-HA-PERSON is honored here and only here: CardDAV is the
+	// operator-authenticated surface, so the card is the operator's
+	// custody path for the counterparty binding (#1450). The shared
+	// codec ignores the header, which keeps model-facing vCard import
+	// blind to it. Absent or empty clears the binding, and the binding
+	// commits atomically with the contact and its properties — a
+	// rejected binding (malformed, or a claim another contact holds)
+	// fails the whole PUT with nothing applied.
+	upserted, err := b.store.UpsertWithPropertiesAndHAPerson(contact, props, card.Value("X-THANE-HA-PERSON"))
 	if err != nil {
 		return nil, fmt.Errorf("upsert contact: %w", err)
 	}
@@ -172,7 +187,7 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 	if err != nil {
 		return nil, fmt.Errorf("re-read contact: %w", err)
 	}
-	return b.contactToObject(final), nil
+	return b.contactToObject(final)
 }
 
 // DeleteAddressObject soft-deletes a contact.
@@ -207,14 +222,27 @@ func (b *Backend) addressBook() carddav.AddressBook {
 
 // contactToObject converts a Contact (with properties) to a CardDAV
 // AddressObject.
-func (b *Backend) contactToObject(c *contacts.Contact) *carddav.AddressObject {
+func (b *Backend) contactToObject(c *contacts.Contact) (*carddav.AddressObject, error) {
 	card := contacts.ContactToCard(c)
+	// Emit the counterparty binding so the operator sees and can edit
+	// it in their contacts client; round-trips preserve it. A read
+	// failure fails the whole conversion: emitting a card WITHOUT the
+	// header would teach the client a headerless card, whose next PUT
+	// clears the binding — a transient read error must not become
+	// silent data loss.
+	entity, ok, err := b.store.HAPersonEntity(c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read ha person binding for %s: %w", c.ID, err)
+	}
+	if ok && entity != "" {
+		card.SetValue("X-THANE-HA-PERSON", entity)
+	}
 	return &carddav.AddressObject{
 		Path:    objectPath(c.ID),
 		ModTime: c.UpdatedAt,
 		ETag:    formatETag(c.Rev),
 		Card:    card,
-	}
+	}, nil
 }
 
 // formatETag wraps a revision string in double quotes for HTTP ETag

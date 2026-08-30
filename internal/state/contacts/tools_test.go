@@ -1462,3 +1462,32 @@ func TestImportVCF_TrustZoneNotImportable(t *testing.T) {
 		_ = tools.store.Delete(c.ID)
 	}
 }
+
+// TestImportVCF_HAPersonNotImportable pins custody symmetry with trust
+// zones (#1450): X-THANE-HA-PERSON is honored only by the CardDAV
+// backend; a model-supplied vCard can neither set the binding nor
+// smuggle the header in as a generic property.
+func TestImportVCF_HAPersonNotImportable(t *testing.T) {
+	tools := newTestTools(t)
+	vcf := "BEGIN:VCARD\nVERSION:4.0\nFN:Sneaky Binder\nX-THANE-HA-PERSON:person.alice\nEND:VCARD"
+	payload, _ := json.Marshal(map[string]any{"text": vcf, "merge": false})
+	if _, err := tools.ImportVCF(string(payload)); err != nil {
+		t.Fatalf("ImportVCF: %v", err)
+	}
+	c, err := tools.store.FindByName("Sneaky Binder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entity, _, _ := tools.store.HAPersonEntity(c.ID); entity != "" {
+		t.Errorf("model import set the HA person binding: %q", entity)
+	}
+	props, err := tools.store.GetPropertiesMap(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k := range props {
+		if strings.Contains(strings.ToLower(k), "ha-person") || strings.Contains(strings.ToLower(k), "ha_person") {
+			t.Errorf("header rescued as property %q", k)
+		}
+	}
+}

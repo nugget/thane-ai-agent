@@ -504,6 +504,19 @@ func (s *Store) DeleteAllProperties(contactID uuid.UUID) error {
 // database is INSERT-ed (enabling CardDAV clients to create contacts
 // by PUTing to a new URL).
 func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, error) {
+	return s.upsertWithPropertiesBinding(c, props, nil)
+}
+
+// UpsertWithPropertiesAndHAPerson atomically upserts the contact, its
+// properties, and its HA person binding in one transaction — the
+// CardDAV PUT path, where a binding rejection after a committed upsert
+// would violate PUT atomicity (#1450). An empty entity clears the
+// binding.
+func (s *Store) UpsertWithPropertiesAndHAPerson(c *Contact, props []Property, haPersonEntity string) (*Contact, error) {
+	return s.upsertWithPropertiesBinding(c, props, &haPersonEntity)
+}
+
+func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPersonEntity *string) (*Contact, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -599,6 +612,12 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 			nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
 			boolToInt(p.Verified), propNow, propNow); err != nil {
 			return nil, fmt.Errorf("add property %s: %w", p.Property, err)
+		}
+	}
+
+	if haPersonEntity != nil {
+		if err := applyHAPersonEntity(tx, c.ID, *haPersonEntity); err != nil {
+			return nil, err
 		}
 	}
 

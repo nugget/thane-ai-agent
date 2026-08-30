@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -326,4 +327,75 @@ func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T)
 	if second != first {
 		t.Fatalf("cachedOwnerContactID() after rename = %v, want cached %v", second, first)
 	}
+}
+
+// TestContactLookupCounterpartyEnrichment pins #1450's channel-side
+// presentation: a counterparty's contact context joins presence
+// (through the HA person binding) and bound companion devices, and
+// both joins degrade to absence — never errors — when unwired or
+// unbound.
+func TestContactLookupCounterpartyEnrichment(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := contacts.NewStore(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	alice, err := store.Upsert(&contacts.Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatal(err)
+	}
+	bob, err := store.Upsert(&contacts.Contact{FormattedName: "Bob Guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lookup := &contactNameLookup{store: store, logger: slog.Default()}
+
+	// Unwired seams: plain context, no enrichment, no error.
+	cc := lookup.LookupContact(context.Background(), "Alice Operator", "signal")
+	if cc == nil || cc.Presence != nil || cc.Devices != nil {
+		t.Fatalf("unwired lookup = %+v, want plain context", cc)
+	}
+
+	lookup.presenceFor = func(entity string) *agent.CounterpartyPresence {
+		if entity != "person.alice" {
+			t.Errorf("presence joined via %q, want person.alice", entity)
+		}
+		return &agent.CounterpartyPresence{State: "Home", Room: "office", Since: "-2h"}
+	}
+	lookup.devicesFor = func(_ context.Context, contactID string) []agent.CounterpartyDevice {
+		if contactID != alice.ID.String() {
+			return nil
+		}
+		return []agent.CounterpartyDevice{{Name: "Alice's iPhone", Platform: "ios", Availability: "offline", LastSeenAgo: "-40m"}}
+	}
+
+	cc = lookup.LookupContact(context.Background(), "Alice Operator", "signal")
+	if cc == nil || cc.Presence == nil || cc.Presence.Room != "office" {
+		t.Fatalf("presence not joined: %+v", cc)
+	}
+	if len(cc.Devices) != 1 || cc.Devices[0].Availability != "offline" {
+		t.Fatalf("devices not joined: %+v", cc.Devices)
+	}
+
+	// By-ID lookups enrich identically.
+	cc = lookup.LookupContactByID(context.Background(), alice.ID.String(), "signal")
+	if cc == nil || cc.Presence == nil || len(cc.Devices) != 1 {
+		t.Fatalf("by-ID lookup not enriched: %+v", cc)
+	}
+
+	// A contact with no HA binding gets no presence; devicesFor still
+	// consulted (it returns nil for unbound contacts).
+	cc = lookup.LookupContact(context.Background(), "Bob Guest", "signal")
+	if cc == nil || cc.Presence != nil || cc.Devices != nil {
+		t.Fatalf("unbound contact leaked joins: %+v", cc)
+	}
+	_ = bob
 }
