@@ -455,7 +455,6 @@ func logRateLimitSnapshot(logger *slog.Logger, snap *RateLimitSnapshot) {
 	logger.Debug("anthropic rate limits", args...)
 }
 
-// Ping checks if the Anthropic API is reachable.
 // callLogger returns the logger for one request, preferring the
 // request-scoped logger the caller attached so provider lines carry
 // request_id, conversation_id, and session_id and can be read as one
@@ -475,6 +474,7 @@ func (c *AnthropicClient) callLogger(ctx context.Context) *slog.Logger {
 	return log.With("provider", "anthropic")
 }
 
+// Ping checks if the Anthropic API is reachable.
 func (c *AnthropicClient) Ping(ctx context.Context) error {
 	// Anthropic doesn't have a dedicated health endpoint.
 	// We'll send a minimal request to verify the API key works.
@@ -535,6 +535,7 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"tool_calls", len(result.Message.ToolCalls),
 		"upstream_request_id", upstreamRequestID,
 		"stop_reason", result.StopReason,
+		"total_ms", time.Since(started).Milliseconds(),
 	)
 	log.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 
