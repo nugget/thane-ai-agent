@@ -113,6 +113,139 @@ func TestMessageOriginInMemoryParity(t *testing.T) {
 	}
 }
 
+// TestMessageOriginCompactionRows verifies the compaction insert paths
+// stamp their rows OriginInternal: ApplyCompaction and
+// AddCompactionSummary write system rows directly rather than through
+// addMessage, and a known system-authored row persisted as unstamped
+// would violate the contract that empty means the enqueue site could
+// not know.
+func TestMessageOriginCompactionRows(t *testing.T) {
+	store := newWindowStore(t, 100)
+
+	if err := store.AddMessage("conv-1", "user", "to be compacted", OriginChannel); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	compacted := store.GetMessages("conv-1")
+	if len(compacted) != 1 {
+		t.Fatalf("seed message missing")
+	}
+	summaryTS := time.Now().Add(-time.Minute)
+	if err := store.ApplyCompaction("conv-1", []string{compacted[0].ID}, CompactionSummaryPrefix+" the earlier exchange", summaryTS); err != nil {
+		t.Fatalf("ApplyCompaction: %v", err)
+	}
+	if err := store.AddCompactionSummary("conv-1", CompactionSummaryPrefix+" session handoff"); err != nil {
+		t.Fatalf("AddCompactionSummary: %v", err)
+	}
+
+	for _, m := range store.GetMessages("conv-1") {
+		if m.Role == "system" && m.Origin != OriginInternal {
+			t.Errorf("compaction row %q origin = %q, want %q", m.Content, m.Origin, OriginInternal)
+		}
+	}
+}
+
+// TestMessageOriginArchiveRoundTrip verifies origin survives the archive
+// write and read paths in both storage modes: ImportMessages into the
+// unified table read back through the session-transcript and search
+// scanners, and legacy split-DB ArchiveMessages into archive_messages —
+// including a NULL-origin legacy row surviving the legacy scanner.
+func TestMessageOriginArchiveRoundTrip(t *testing.T) {
+	base := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	imported := []Message{
+		{
+			ID: "arch-1", ConversationID: "conv-arch", SessionID: "sess-arch",
+			Role: "user", Content: "archived inbound greeting",
+			Timestamp: base, Origin: OriginChannel,
+		},
+		{
+			ID: "arch-2", ConversationID: "conv-arch", SessionID: "sess-arch",
+			Role: "user", Content: "archived wake prompt",
+			Timestamp: base.Add(time.Minute), Origin: OriginWake,
+		},
+	}
+
+	t.Run("unified", func(t *testing.T) {
+		store := newWindowStore(t, 100)
+		archive, err := NewArchiveStoreFromDB(store.db, nil, nil)
+		if err != nil {
+			t.Fatalf("NewArchiveStoreFromDB: %v", err)
+		}
+		if err := archive.ImportMessages(imported); err != nil {
+			t.Fatalf("ImportMessages: %v", err)
+		}
+
+		transcript, err := archive.GetSessionTranscript("sess-arch")
+		if err != nil {
+			t.Fatalf("GetSessionTranscript: %v", err)
+		}
+		assertOrigins(t, "transcript", transcript, map[string]string{
+			"archived inbound greeting": OriginChannel,
+			"archived wake prompt":      OriginWake,
+		})
+
+		results, err := archive.Search(SearchOptions{Query: "archived inbound", Limit: 5})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if len(results) == 0 {
+			t.Fatalf("search found nothing for the archived row")
+		}
+		if got := results[0].Match.Origin; got != OriginChannel {
+			t.Errorf("search match origin = %q, want %q", got, OriginChannel)
+		}
+	})
+
+	t.Run("legacy split-DB", func(t *testing.T) {
+		archive, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil, nil)
+		if err != nil {
+			t.Fatalf("NewArchiveStore: %v", err)
+		}
+		t.Cleanup(func() { _ = archive.Close() })
+
+		if err := archive.ArchiveMessages(imported); err != nil {
+			t.Fatalf("ArchiveMessages: %v", err)
+		}
+		// A pre-stamp legacy row: NULL origin must scan as "" rather
+		// than dropping the message.
+		if _, err := archive.DB().Exec(`
+			INSERT INTO archive_messages (id, conversation_id, session_id, role, content, timestamp, archived_at, archive_reason, origin)
+			VALUES ('arch-legacy', 'conv-arch', 'sess-arch', 'user', 'pre-stamp row', ?, ?, 'import', NULL)
+		`, base.Add(2*time.Minute).Format(time.RFC3339Nano), base.Add(2*time.Minute).Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("insert NULL-origin legacy row: %v", err)
+		}
+
+		transcript, err := archive.GetSessionTranscript("sess-arch")
+		if err != nil {
+			t.Fatalf("GetSessionTranscript: %v", err)
+		}
+		assertOrigins(t, "legacy transcript", transcript, map[string]string{
+			"archived inbound greeting": OriginChannel,
+			"archived wake prompt":      OriginWake,
+			"pre-stamp row":             "",
+		})
+	})
+}
+
+// assertOrigins checks each expected content string is present with the
+// expected origin.
+func assertOrigins(t *testing.T, path string, msgs []Message, want map[string]string) {
+	t.Helper()
+	byContent := make(map[string]Message, len(msgs))
+	for _, m := range msgs {
+		byContent[m.Content] = m
+	}
+	for content, origin := range want {
+		m, ok := byContent[content]
+		if !ok {
+			t.Errorf("%s: message %q missing", path, content)
+			continue
+		}
+		if m.Origin != origin {
+			t.Errorf("%s: %q origin = %q, want %q", path, content, m.Origin, origin)
+		}
+	}
+}
+
 // TestMessageOriginJSONContract locks the wire shape: origin appears only
 // when stamped, so unstamped rows stay unchanged for existing consumers.
 func TestMessageOriginJSONContract(t *testing.T) {

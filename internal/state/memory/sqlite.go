@@ -611,9 +611,9 @@ func (s *SQLiteStore) ApplyCompaction(conversationID string, compactedIDs []stri
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
-		VALUES (?, ?, 'system', ?, ?, ?, 'active')
-	`, msgID.String(), conversationID, summary, summaryTS, llm.EstimateTokens(summary)); err != nil {
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status, origin)
+		VALUES (?, ?, 'system', ?, ?, ?, 'active', ?)
+	`, msgID.String(), conversationID, summary, summaryTS, llm.EstimateTokens(summary), OriginInternal); err != nil {
 		return fmt.Errorf("insert summary: %w", err)
 	}
 
@@ -631,9 +631,9 @@ func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error
 	}
 
 	_, err = s.db.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
-		VALUES (?, ?, 'system', ?, ?, ?, 'active')
-	`, msgID.String(), conversationID, summary, time.Now(), llm.EstimateTokens(summary))
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status, origin)
+		VALUES (?, ?, 'system', ?, ?, ?, 'active', ?)
+	`, msgID.String(), conversationID, summary, time.Now(), llm.EstimateTokens(summary), OriginInternal)
 
 	return err
 }
