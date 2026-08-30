@@ -175,23 +175,29 @@ type contactNameLookup struct {
 	// are optional (#1450) — wired late in initServers once the
 	// presence tracker and companion stores exist — and read-only.
 	presenceFor func(haPersonEntity string) *agent.CounterpartyPresence
-	devicesFor  func(contactID string) []agent.CounterpartyDevice
+	devicesFor  func(ctx context.Context, contactID string) []agent.CounterpartyDevice
 }
 
 // enrichCounterparty joins presence and device reachability onto a
 // built contact context. Failures degrade to the un-enriched view —
 // channel context must never break because a join source is down.
-func (r *contactNameLookup) enrichCounterparty(c *contacts.Contact, cc *agent.ContactContext) {
+func (r *contactNameLookup) enrichCounterparty(ctx context.Context, c *contacts.Contact, cc *agent.ContactContext) {
 	if cc == nil {
 		return
 	}
 	if r.presenceFor != nil {
-		if entity, ok, err := r.store.HAPersonEntity(c.ID); err == nil && ok && entity != "" {
+		entity, ok, err := r.store.HAPersonEntity(c.ID)
+		switch {
+		case err != nil:
+			// Degrade to no presence, but say why: an unbound contact
+			// and a broken join must be distinguishable in logs.
+			r.logger.Warn("counterparty presence join failed", "contact_id", c.ID, "error", err)
+		case ok && entity != "":
 			cc.Presence = r.presenceFor(entity)
 		}
 	}
 	if r.devicesFor != nil {
-		cc.Devices = r.devicesFor(c.ID.String())
+		cc.Devices = r.devicesFor(ctx, c.ID.String())
 	}
 }
 
@@ -240,7 +246,7 @@ func (r *contactNameLookup) propertiesForContact(c *contacts.Contact) ([]contact
 // only see the channel matching the current source. Database errors
 // other than "not found" are logged so operational issues don't
 // silently disable contact context injection.
-func (r *contactNameLookup) LookupContact(name string, source string) *agent.ContactContext {
+func (r *contactNameLookup) LookupContact(ctx context.Context, name string, source string) *agent.ContactContext {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -252,13 +258,13 @@ func (r *contactNameLookup) LookupContact(name string, source string) *agent.Con
 
 	policy := contacts.Policy(c.TrustZone)
 	cc := buildContactContext(c, props, policy, source, time.Now())
-	r.enrichCounterparty(c, cc)
+	r.enrichCounterparty(ctx, c, cc)
 	return cc
 }
 
 // LookupContactByID returns a ContactContext for the exact contact UUID,
 // or nil if no matching contact is found.
-func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.ContactContext {
+func (r *contactNameLookup) LookupContactByID(ctx context.Context, id string, source string) *agent.ContactContext {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -270,7 +276,7 @@ func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.C
 
 	policy := contacts.Policy(c.TrustZone)
 	cc := buildContactContext(c, props, policy, source, time.Now())
-	r.enrichCounterparty(c, cc)
+	r.enrichCounterparty(ctx, c, cc)
 	return cc
 }
 
@@ -278,7 +284,7 @@ func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.C
 // contact directory. Policy lives with the contact record so adding,
 // removing, or changing origin tags does not require editing config or
 // restarting the agent.
-func (r *contactNameLookup) LookupContactOriginPolicy(id string, name string, source string) *agent.ContactOriginPolicy {
+func (r *contactNameLookup) LookupContactOriginPolicy(_ context.Context, id string, name string, source string) *agent.ContactOriginPolicy {
 	if r == nil || r.store == nil {
 		return nil
 	}

@@ -341,81 +341,6 @@ func (a *App) initServers(s *newState) error {
 		}
 		a.loop.RegisterTagContextProvider("companion", deviceContext)
 
-		// Counterparty enrichment of channel context (#1450): the
-		// contact block a conversation renders about its counterparty
-		// joins live presence (through the contact's HA person binding)
-		// and bound companion-device reachability. Wired here because
-		// the join sources belong to this phase; both joins degrade to
-		// absence when a source is missing.
-		if s.contactLookup != nil {
-			if s.personTracker != nil {
-				tracker := s.personTracker
-				s.contactLookup.presenceFor = func(entity string) *agent.CounterpartyPresence {
-					snap, ok := tracker.Snapshot(entity)
-					if !ok {
-						return nil
-					}
-					now := time.Now()
-					view := &agent.CounterpartyPresence{State: snap.State, Room: snap.Room}
-					if !snap.Since.IsZero() {
-						view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
-					}
-					if !snap.RoomSince.IsZero() {
-						view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
-					}
-					return view
-				}
-			}
-			accountsByContact := make(map[string][]string)
-			for account, provider := range cfg.Companion.Providers {
-				if provider.Contact != "" {
-					accountsByContact[provider.Contact] = append(accountsByContact[provider.Contact], account)
-				}
-			}
-			if len(accountsByContact) > 0 {
-				s.contactLookup.devicesFor = func(contactID string) []agent.CounterpartyDevice {
-					accounts := accountsByContact[contactID]
-					if len(accounts) == 0 {
-						return nil
-					}
-					owned := make(map[string]bool, len(accounts))
-					for _, acct := range accounts {
-						owned[acct] = true
-					}
-					devices, err := a.companionDevices.List(context.Background())
-					if err != nil {
-						logger.Warn("counterparty device join failed", "error", err)
-						return nil
-					}
-					live := make(map[[2]string]bool)
-					for _, info := range a.companionRegistry.List() {
-						live[[2]string{info.Account, info.ClientID}] = true
-					}
-					now := time.Now()
-					var views []agent.CounterpartyDevice
-					for _, d := range devices {
-						if !owned[d.Account] || d.State != companions.DeviceStateActive {
-							continue
-						}
-						availability := "offline"
-						if live[[2]string{d.Account, d.ClientID}] {
-							availability = "online"
-						}
-						view := agent.CounterpartyDevice{
-							Name:         d.ClientName,
-							Platform:     d.Platform,
-							Availability: availability,
-						}
-						if !d.LastSeenAt.IsZero() {
-							view.LastSeenAgo = promptfmt.FormatDeltaOnly(d.LastSeenAt, now)
-						}
-						views = append(views, view)
-					}
-					return views
-				}
-			}
-		}
-
 		// Server-native observation tools (#1437 slice 4): answer from
 		// the durable store, so they work while every device is
 		// offline — and they attribute their answers to the bound
@@ -439,6 +364,98 @@ func (a *App) initServers(s *newState) error {
 		// device went to sleep. Reachability now lives per-device in the
 		// durable inventory and the joined context view above.
 		logger.Info("companion app endpoint enabled")
+	}
+
+	// Counterparty enrichment of channel context (#1450): the contact
+	// block a conversation renders about its counterparty joins live
+	// presence and bound companion-device reachability. The two joins
+	// are independent by design — presence needs only a person tracker
+	// and rides the HA person binding, so it must not require companion
+	// apps to be configured — and both degrade to absence when their
+	// source is missing.
+	if s.contactLookup != nil {
+		if s.personTracker != nil {
+			tracker := s.personTracker
+			s.contactLookup.presenceFor = func(entity string) *agent.CounterpartyPresence {
+				snap, ok := tracker.Snapshot(entity)
+				if !ok {
+					return nil
+				}
+				now := time.Now()
+				view := &agent.CounterpartyPresence{State: snap.State}
+				if !snap.Since.IsZero() {
+					view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
+				}
+				// The tracker clears rooms only on not_home, so a direct
+				// home → zone transition can leave a stale room behind;
+				// room-level detail is only truthful while home.
+				if strings.EqualFold(snap.State, "home") {
+					view.Room = snap.Room
+					if !snap.RoomSince.IsZero() {
+						view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+					}
+				}
+				return view
+			}
+		}
+		// Device reachability keys by canonical contact UUID — the
+		// config may spell a binding in any form uuid.Parse accepts,
+		// and lookups compare against contact.ID.String().
+		accountsByContact := make(map[string][]string)
+		for account, provider := range cfg.Companion.Providers {
+			if provider.Contact == "" {
+				continue
+			}
+			id, err := uuid.Parse(provider.Contact)
+			if err != nil {
+				continue // config validation rejects these; defensive only
+			}
+			accountsByContact[id.String()] = append(accountsByContact[id.String()], account)
+		}
+		if len(accountsByContact) > 0 && a.companionDevices != nil {
+			s.contactLookup.devicesFor = func(ctx context.Context, contactID string) []agent.CounterpartyDevice {
+				accounts := accountsByContact[contactID]
+				if len(accounts) == 0 {
+					return nil
+				}
+				owned := make(map[string]bool, len(accounts))
+				for _, acct := range accounts {
+					owned[acct] = true
+				}
+				devices, err := a.companionDevices.List(ctx)
+				if err != nil {
+					logger.Warn("counterparty device join failed", "error", err)
+					return nil
+				}
+				live := make(map[[2]string]bool)
+				if a.companionRegistry != nil {
+					for _, info := range a.companionRegistry.List() {
+						live[[2]string{info.Account, info.ClientID}] = true
+					}
+				}
+				now := time.Now()
+				var views []agent.CounterpartyDevice
+				for _, d := range devices {
+					if !owned[d.Account] || d.State != companions.DeviceStateActive {
+						continue
+					}
+					availability := "offline"
+					if live[[2]string{d.Account, d.ClientID}] {
+						availability = "online"
+					}
+					view := agent.CounterpartyDevice{
+						Name:         d.ClientName,
+						Platform:     d.Platform,
+						Availability: availability,
+					}
+					if !d.LastSeenAt.IsZero() {
+						view.LastSeenAgo = promptfmt.FormatDeltaOnly(d.LastSeenAt, now)
+					}
+					views = append(views, view)
+				}
+				return views
+			}
+		}
 	}
 
 	// --- CardDAV server ---

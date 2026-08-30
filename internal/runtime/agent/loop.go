@@ -1280,7 +1280,7 @@ func (l *Loop) renderSessionOriginContext(ctx context.Context) string {
 		ContextRefs []string                   `json:"context_refs,omitempty"`
 	}{
 		Origin:      result.Origin,
-		Contact:     l.originContactContext(result),
+		Contact:     l.originContactContext(ctx, result),
 		Applied:     result.Applied,
 		Tags:        result.Tags,
 		ContextRefs: result.ContextRefs,
@@ -1309,7 +1309,7 @@ func (l *Loop) renderSessionOriginContext(ctx context.Context) string {
 	return sb.String()
 }
 
-func (l *Loop) originContactContext(result *SessionOriginPolicyResult) *ContactContext {
+func (l *Loop) originContactContext(ctx context.Context, result *SessionOriginPolicyResult) *ContactContext {
 	if result == nil || l.contactLookup == nil {
 		return nil
 	}
@@ -1318,17 +1318,17 @@ func (l *Loop) originContactContext(result *SessionOriginPolicyResult) *ContactC
 		source = result.Origin.Channel
 	}
 	if result.Origin.ContactID != "" {
-		if contact := l.contactLookup.LookupContactByID(result.Origin.ContactID, source); contact != nil {
+		if contact := l.contactLookup.LookupContactByID(ctx, result.Origin.ContactID, source); contact != nil {
 			return contact
 		}
 	}
 	if result.Origin.ContactName != "" {
-		return l.contactLookup.LookupContact(result.Origin.ContactName, source)
+		return l.contactLookup.LookupContact(ctx, result.Origin.ContactName, source)
 	}
 	return nil
 }
 
-func (l *Loop) contactOriginPolicy(origin SessionOrigin) *ContactOriginPolicy {
+func (l *Loop) contactOriginPolicy(ctx context.Context, origin SessionOrigin) *ContactOriginPolicy {
 	if l.contactLookup == nil {
 		return nil
 	}
@@ -1339,7 +1339,7 @@ func (l *Loop) contactOriginPolicy(origin SessionOrigin) *ContactOriginPolicy {
 	if source == "" {
 		source = origin.Channel
 	}
-	policy := l.contactLookup.LookupContactOriginPolicy(origin.ContactID, origin.ContactName, source)
+	policy := l.contactLookup.LookupContactOriginPolicy(ctx, origin.ContactID, origin.ContactName, source)
 	if policy == nil || (len(policy.Tags) == 0 && len(policy.ContextRefs) == 0) {
 		return nil
 	}
@@ -1800,7 +1800,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	ctx = withChannelSubjects(ctx, channelBinding)
 	origin := newSessionOrigin(req.RoutingFactors, channelBinding)
 	originResult := SessionOriginPolicyResult{Origin: origin}
-	if contactPolicy := l.contactOriginPolicy(origin); contactPolicy != nil {
+	if contactPolicy := l.contactOriginPolicy(ctx, origin); contactPolicy != nil {
 		originResult.addApplied(SessionOriginAppliedRule{
 			Name:        "contact_origin",
 			Source:      "contacts",

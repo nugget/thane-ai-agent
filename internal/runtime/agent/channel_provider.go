@@ -96,9 +96,9 @@ type InteractionRef struct {
 // implementation can gate fields and source-specific policy by trust
 // zone. Returns nil when no matching contact is found.
 type ContactLookup interface {
-	LookupContact(name string, source string) *ContactContext
-	LookupContactByID(id string, source string) *ContactContext
-	LookupContactOriginPolicy(id string, name string, source string) *ContactOriginPolicy
+	LookupContact(ctx context.Context, name string, source string) *ContactContext
+	LookupContactByID(ctx context.Context, id string, source string) *ContactContext
+	LookupContactOriginPolicy(ctx context.Context, id string, name string, source string) *ContactOriginPolicy
 }
 
 // ContactOriginPolicy is contact-owned session shaping applied when a
@@ -188,7 +188,7 @@ func (p *ChannelProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 	// Try contact resolution when we have a sender name.
 	var contactCtx *ContactContext
 	if senderName != "" && p.contacts != nil {
-		contactCtx = p.contacts.LookupContact(senderName, source)
+		contactCtx = p.contacts.LookupContact(ctx, senderName, source)
 	}
 	if contactCtx == nil && binding != nil {
 		contactCtx = contactContextFromBinding(binding, source)

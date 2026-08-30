@@ -359,7 +359,7 @@ func TestContactLookupCounterpartyEnrichment(t *testing.T) {
 	lookup := &contactNameLookup{store: store, logger: slog.Default()}
 
 	// Unwired seams: plain context, no enrichment, no error.
-	cc := lookup.LookupContact("Alice Operator", "signal")
+	cc := lookup.LookupContact(context.Background(), "Alice Operator", "signal")
 	if cc == nil || cc.Presence != nil || cc.Devices != nil {
 		t.Fatalf("unwired lookup = %+v, want plain context", cc)
 	}
@@ -370,14 +370,14 @@ func TestContactLookupCounterpartyEnrichment(t *testing.T) {
 		}
 		return &agent.CounterpartyPresence{State: "Home", Room: "office", Since: "-2h"}
 	}
-	lookup.devicesFor = func(contactID string) []agent.CounterpartyDevice {
+	lookup.devicesFor = func(_ context.Context, contactID string) []agent.CounterpartyDevice {
 		if contactID != alice.ID.String() {
 			return nil
 		}
 		return []agent.CounterpartyDevice{{Name: "Alice's iPhone", Platform: "ios", Availability: "offline", LastSeenAgo: "-40m"}}
 	}
 
-	cc = lookup.LookupContact("Alice Operator", "signal")
+	cc = lookup.LookupContact(context.Background(), "Alice Operator", "signal")
 	if cc == nil || cc.Presence == nil || cc.Presence.Room != "office" {
 		t.Fatalf("presence not joined: %+v", cc)
 	}
@@ -386,14 +386,14 @@ func TestContactLookupCounterpartyEnrichment(t *testing.T) {
 	}
 
 	// By-ID lookups enrich identically.
-	cc = lookup.LookupContactByID(alice.ID.String(), "signal")
+	cc = lookup.LookupContactByID(context.Background(), alice.ID.String(), "signal")
 	if cc == nil || cc.Presence == nil || len(cc.Devices) != 1 {
 		t.Fatalf("by-ID lookup not enriched: %+v", cc)
 	}
 
 	// A contact with no HA binding gets no presence; devicesFor still
 	// consulted (it returns nil for unbound contacts).
-	cc = lookup.LookupContact("Bob Guest", "signal")
+	cc = lookup.LookupContact(context.Background(), "Bob Guest", "signal")
 	if cc == nil || cc.Presence != nil || cc.Devices != nil {
 		t.Fatalf("unbound contact leaked joins: %+v", cc)
 	}

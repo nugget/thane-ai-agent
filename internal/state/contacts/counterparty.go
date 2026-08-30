@@ -23,18 +23,37 @@ var haPersonEntityRE = regexp.MustCompile(`^person\.[a-z0-9_]+$`)
 // paths stay operator-gated; wire this only from configuration-driven
 // or operator-initiated code.
 func (s *Store) SetHAPersonEntity(id uuid.UUID, entity string) error {
+	return applyHAPersonEntity(s.db, id, entity)
+}
+
+// sqlRunner is the subset of database/sql shared by *sql.DB and
+// *sql.Tx, so the binding write can run standalone or inside the
+// atomic CardDAV upsert transaction.
+type sqlRunner interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// applyHAPersonEntity validates and writes one contact's HA person
+// binding, mapping the uniqueness constraint to an error that names
+// the current holder.
+func applyHAPersonEntity(run sqlRunner, id uuid.UUID, entity string) error {
 	entity = strings.TrimSpace(entity)
 	if entity != "" && !haPersonEntityRE.MatchString(entity) {
 		return fmt.Errorf("ha person entity must match person.<object_id> (lowercase letters, digits, underscores), got %q", entity)
 	}
-	res, err := s.db.Exec(
+	res, err := run.Exec(
 		`UPDATE contacts SET ha_person_entity = ? WHERE id = ? AND deleted_at IS NULL`,
 		entity, id.String(),
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			if claimant, ferr := s.FindByHAPersonEntity(entity); ferr == nil && claimant != nil {
-				return fmt.Errorf("ha person entity %q is already bound to contact %q (%s); clear that binding first — presence must attach to exactly one counterparty", entity, claimant.FormattedName, claimant.ID)
+			var name, holder string
+			if ferr := run.QueryRow(
+				`SELECT formatted_name, id FROM contacts WHERE ha_person_entity = ? AND deleted_at IS NULL`,
+				entity,
+			).Scan(&name, &holder); ferr == nil {
+				return fmt.Errorf("ha person entity %q is already bound to contact %q (%s); clear that binding first — presence must attach to exactly one counterparty", entity, name, holder)
 			}
 			return fmt.Errorf("ha person entity %q is already bound to another contact; clear that binding first", entity)
 		}

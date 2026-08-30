@@ -461,3 +461,29 @@ func TestHAPersonBindingRoundTrip(t *testing.T) {
 		t.Errorf("binding not cleared by header-less PUT: %q", entity)
 	}
 }
+
+// TestHAPersonBindingPutIsAtomic pins PUT atomicity (#1450): a PUT
+// whose binding is rejected must apply nothing — a brand-new contact
+// with a claim another contact holds is not created at all.
+func TestHAPersonBindingPutIsAtomic(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	holderID := uuid.New()
+	holder := newTestCard("Alice Operator", holderID)
+	holder.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(holderID), holder, nil); err != nil {
+		t.Fatalf("holder put: %v", err)
+	}
+
+	rivalID := uuid.New()
+	rival := newTestCard("Mallory Rival", rivalID)
+	rival.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(rivalID), rival, nil); err == nil {
+		t.Fatal("duplicate-claim PUT accepted")
+	}
+	// Atomicity: the rival contact must not exist at all.
+	if _, err := b.store.GetWithProperties(rivalID); err == nil {
+		t.Fatal("rejected PUT still created the contact — binding write is not atomic with the upsert")
+	}
+}

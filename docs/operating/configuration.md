@@ -168,7 +168,9 @@ add an `X-THANE-HA-PERSON` field (e.g. `person.alice`) via CardDAV,
 which is the operator-authenticated surface and the only one that
 honors the header. Model-facing vCard import ignores it, at most one
 active contact may claim a given person entity, and removing the field
-clears the binding.
+clears the binding. Presence flows only for entities the tracker
+watches: the same entity must also be listed under `person.track`, or
+the binding resolves but the presence join has nothing to report.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).
