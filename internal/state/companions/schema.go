@@ -3,22 +3,27 @@ package companions
 import "github.com/nugget/thane-ai-agent/internal/platform/database"
 
 // devicesSchema declares the companion_devices table: the durable
-// companion-device inventory, keyed by (account, client_id) — the
-// authenticated account plus the stable identity a companion claims
-// about itself, never the per-connection provider ID (#1437).
+// companion-device inventory (#1437).
+//
+// device_id is the immutable server-assigned primary key, minted once
+// when a device is first seen. (account, client_id) is how devices are
+// looked up today — the authenticated account plus the stable identity
+// a companion claims about itself, never the per-connection provider
+// ID — but it is a credential mapping, not the identity itself: the
+// enrollment arc (#1444) makes key replacement and re-enrollment
+// normal, so anything that must survive credential rotation (future
+// observation rows included) references device_id, and rotating a
+// claim re-points the mapping instead of minting a second device.
 //
 // Rows outlive connections by design. A WebSocket disconnect updates
 // timestamps; nothing in the connection lifecycle deletes a row.
-// client_id is opaque: today it is the UUID companion apps persist
-// locally, and the column deliberately carries no format so a future
-// enrollment arc (#1444) can key devices by an attested key
-// fingerprint without a schema break.
 var devicesSchema = database.Schema{
 	Name: "companions/devices",
 	Steps: []database.MigrationStep{
 		database.TableCreate{
 			Table: "companion_devices",
 			SQL: `CREATE TABLE IF NOT EXISTS companion_devices (
+				device_id            TEXT NOT NULL PRIMARY KEY,
 				account              TEXT NOT NULL,
 				client_id            TEXT NOT NULL,
 				client_name          TEXT NOT NULL DEFAULT '',
@@ -32,7 +37,7 @@ var devicesSchema = database.Schema{
 				capabilities         TEXT NOT NULL DEFAULT '[]',
 				capabilities_recorded_at TIMESTAMP,
 				state                TEXT NOT NULL DEFAULT 'active',
-				PRIMARY KEY (account, client_id)
+				UNIQUE (account, client_id)
 			)`,
 		},
 	},

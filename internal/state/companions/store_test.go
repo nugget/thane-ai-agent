@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,11 +205,39 @@ func TestOutOfOrderConnectWrites(t *testing.T) {
 	if d.Platform != "ios" {
 		t.Errorf("older write did not fill empty field: platform=%q", d.Platform)
 	}
-	// first_seen_at reflects the earliest write that created the row —
-	// with out-of-order arrival that is the newer event's time, which is
-	// the honest floor for "known since".
-	if !d.FirstSeenAt.Equal(t1) {
-		t.Errorf("FirstSeenAt = %v, want anchor %v", d.FirstSeenAt, t1)
+	// first_seen_at is MIN-guarded: the earliest event time is when the
+	// server first observed the device, regardless of which write landed
+	// first.
+	if !d.FirstSeenAt.Equal(t0) {
+		t.Errorf("FirstSeenAt = %v, want earliest event time %v", d.FirstSeenAt, t0)
+	}
+}
+
+// TestDeviceIDStableAcrossReconnects pins the immutable server-side
+// identity: the row's device_id is minted once and survives later
+// connects, so rows that reference it (future observations) keep their
+// continuity when the lookup claim eventually rotates (#1444).
+func TestDeviceIDStableAcrossReconnects(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.RecordConnected(ctx, "alice", "device-1", companion.DeviceMetadata{}, t0); err != nil {
+		t.Fatalf("first connect: %v", err)
+	}
+	first, _, err := store.Get(ctx, "alice", "device-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if first.DeviceID == "" || !strings.HasPrefix(first.DeviceID, "dev_") {
+		t.Fatalf("DeviceID = %q, want dev_-prefixed identity", first.DeviceID)
+	}
+	if err := store.RecordConnected(ctx, "alice", "device-1", companion.DeviceMetadata{}, t1); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	second, _, err := store.Get(ctx, "alice", "device-1")
+	if err != nil {
+		t.Fatalf("Get after reconnect: %v", err)
+	}
+	if second.DeviceID != first.DeviceID {
+		t.Errorf("DeviceID changed across reconnect: %q → %q", first.DeviceID, second.DeviceID)
 	}
 }
 

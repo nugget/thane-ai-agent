@@ -51,14 +51,34 @@ type DeviceRecorder interface {
 // connection lifecycle and starts the recording goroutine. Optional: a
 // nil recorder (the default) disables persistence and the handler
 // behaves as a pure live-connection endpoint. Call before the handler
-// starts serving; the queue goroutine lives for the process lifetime.
+// starts serving, and pair with [Handler.CloseDeviceRecorder] at
+// shutdown so queued writes land before their database closes.
 func (h *Handler) SetDeviceRecorder(recorder DeviceRecorder) {
 	h.devices = recorder
 	if recorder == nil || h.deviceOps != nil {
 		return
 	}
 	h.deviceOps = make(chan func(context.Context), deviceOpQueueSize)
+	h.deviceOpsDone = make(chan struct{})
 	go h.runDeviceOps()
+}
+
+// CloseDeviceRecorder stops accepting new inventory writes, drains the
+// ones already queued, and returns once the recording goroutine has
+// exited. Registered on the app's LIFO closer stack ahead of the
+// database owner, so a restart cannot lose a just-recorded lifecycle
+// event or write into a closed database. Safe to call more than once;
+// lifecycle events after close are dropped (best-effort, as ever).
+func (h *Handler) CloseDeviceRecorder() {
+	h.deviceOpsMu.Lock()
+	if h.deviceOps == nil || h.deviceOpsClosed {
+		h.deviceOpsMu.Unlock()
+		return
+	}
+	h.deviceOpsClosed = true
+	close(h.deviceOps)
+	h.deviceOpsMu.Unlock()
+	<-h.deviceOpsDone
 }
 
 // runDeviceOps applies queued inventory writes in order. A single
@@ -66,6 +86,7 @@ func (h *Handler) SetDeviceRecorder(recorder DeviceRecorder) {
 // sequence ordered without ever putting a database write on the
 // WebSocket handshake or teardown path.
 func (h *Handler) runDeviceOps() {
+	defer close(h.deviceOpsDone)
 	for op := range h.deviceOps {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceOpTimeout)
 		op(ctx)
@@ -74,9 +95,15 @@ func (h *Handler) runDeviceOps() {
 }
 
 // enqueueDeviceOp hands a write to the recording goroutine without
-// blocking the connection path. Dropping on overflow is deliberate:
-// inventory is best-effort relative to live traffic.
+// blocking the connection path. Dropping on overflow or after close is
+// deliberate: inventory is best-effort relative to live traffic.
 func (h *Handler) enqueueDeviceOp(op func(context.Context)) {
+	h.deviceOpsMu.Lock()
+	defer h.deviceOpsMu.Unlock()
+	if h.deviceOpsClosed {
+		h.logger.Debug("companion device inventory recorder closed; dropping record")
+		return
+	}
 	select {
 	case h.deviceOps <- op:
 	default:

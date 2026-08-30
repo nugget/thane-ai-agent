@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,11 +76,13 @@ func waitFor(t *testing.T, cond func() bool) {
 }
 
 // dialWithRecorder is dialTestServer with a device recorder wired in.
+// The recording goroutine is torn down with the test.
 func dialWithRecorder(t *testing.T, recorder DeviceRecorder) (*httptest.Server, *websocket.Conn) {
 	t.Helper()
 	registry := NewRegistry(nil)
 	handler := NewHandler(testTokenIndex(), registry, nil)
 	handler.SetDeviceRecorder(recorder)
+	t.Cleanup(handler.CloseDeviceRecorder)
 	srv := httptest.NewServer(handler)
 	wsURL := "ws" + srv.URL[len("http"):]
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -177,13 +180,14 @@ func TestDeviceRecorderFullLifecycle(t *testing.T) {
 // a connection without a client_id stays fully functional live but is
 // never recorded in the durable inventory. The assertion is
 // deterministic: the wrapped handler signals when connection teardown
-// (the last recorder call site) has fully returned, and a barrier op
-// drains the recording queue behind anything mistakenly enqueued.
+// (the last recorder call site) has fully returned, and closing the
+// recorder drains the queue behind anything mistakenly enqueued.
 func TestDeviceRecorderSkipsAnonymousClients(t *testing.T) {
 	recorder := &fakeDeviceRecorder{}
 	registry := NewRegistry(nil)
 	handler := NewHandler(testTokenIndex(), registry, nil)
 	handler.SetDeviceRecorder(recorder)
+	t.Cleanup(handler.CloseDeviceRecorder)
 
 	teardown := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,18 +224,39 @@ func TestDeviceRecorderSkipsAnonymousClients(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler teardown did not complete")
 	}
-	drained := make(chan struct{})
-	handler.enqueueDeviceOp(func(context.Context) { close(drained) })
-	select {
-	case <-drained:
-	case <-time.After(5 * time.Second):
-		t.Fatal("device op queue did not drain")
-	}
+	// Close drains: anything mistakenly enqueued has run by the time it
+	// returns.
+	handler.CloseDeviceRecorder()
 
 	c, caps, d := recorder.snapshot()
 	if c != 0 || caps != 0 || d != 0 {
 		t.Errorf("anonymous client was recorded: connected=%d capabilities=%d disconnected=%d", c, caps, d)
 	}
+}
+
+// TestCloseDeviceRecorderDrains pins the shutdown contract: close
+// waits for queued writes to land, and later lifecycle events are
+// dropped rather than sent to a recorder whose database may be gone.
+func TestCloseDeviceRecorderDrains(t *testing.T) {
+	registry := NewRegistry(nil)
+	handler := NewHandler(testTokenIndex(), registry, nil)
+	recorder := &fakeDeviceRecorder{}
+	handler.SetDeviceRecorder(recorder)
+
+	var ran atomic.Bool
+	handler.enqueueDeviceOp(func(context.Context) {
+		time.Sleep(50 * time.Millisecond)
+		ran.Store(true)
+	})
+	handler.CloseDeviceRecorder()
+	if !ran.Load() {
+		t.Error("CloseDeviceRecorder returned before the queued write landed")
+	}
+
+	// Enqueue after close is a silent drop, never a panic; a second
+	// close is a no-op.
+	handler.enqueueDeviceOp(func(context.Context) { t.Error("op ran after close") })
+	handler.CloseDeviceRecorder()
 }
 
 // TestAuthCarriesDeviceMetadata pins the optional auth fields onto the

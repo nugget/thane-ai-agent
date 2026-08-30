@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -50,6 +51,10 @@ type Handler struct {
 	devices    DeviceRecorder             // optional durable inventory sink; nil disables
 	deviceOps  chan func(context.Context) // ordered async inventory writes
 	logger     *slog.Logger
+
+	deviceOpsMu     sync.Mutex    // guards enqueue vs. close
+	deviceOpsClosed bool          // no new ops accepted once set
+	deviceOpsDone   chan struct{} // closed when the recording goroutine exits
 }
 
 // NewHandler creates a new companion WebSocket handler. The tokenIndex

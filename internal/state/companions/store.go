@@ -17,7 +17,9 @@ package companions
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -35,6 +37,12 @@ const DeviceStateActive = "active"
 
 // Device is one durable companion-device record.
 type Device struct {
+	// DeviceID is the immutable server-assigned identity, minted when
+	// the device is first seen and stable across credential changes.
+	// Account and ClientID are the current lookup claim mapped to it
+	// (#1444's enrollment arc re-points that mapping on key rotation).
+	DeviceID string
+
 	Account    string
 	ClientID   string
 	ClientName string
@@ -93,12 +101,22 @@ func (s *Store) RecordConnected(ctx context.Context, account, clientID string, m
 	}
 	at = normalizeTime(at)
 
-	_, err := s.db.ExecContext(ctx, `
+	deviceID, err := generateDeviceID()
+	if err != nil {
+		return fmt.Errorf("record companion connect %s/%s: %w", account, clientID, err)
+	}
+	// The freshly minted device_id is discarded when the claim already
+	// maps to a device — the conflict update never touches it.
+	// first_seen_at is MIN-guarded for the same reason the others are
+	// MAX-guarded: async recording can land a connection's write after
+	// a later connection's, and the earliest event time is the truth.
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO companion_devices (
-			account, client_id, client_name, platform, app_version, os_version,
+			device_id, account, client_id, client_name, platform, app_version, os_version,
 			first_seen_at, last_seen_at, last_connected_at, state
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account, client_id) DO UPDATE SET
+			first_seen_at = MIN(companion_devices.first_seen_at, excluded.first_seen_at),
 			client_name = CASE WHEN excluded.client_name != ''
 					AND (companion_devices.client_name = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
 				THEN excluded.client_name ELSE companion_devices.client_name END,
@@ -113,7 +131,7 @@ func (s *Store) RecordConnected(ctx context.Context, account, clientID string, m
 				THEN excluded.os_version ELSE companion_devices.os_version END,
 			last_seen_at      = MAX(companion_devices.last_seen_at, excluded.last_seen_at),
 			last_connected_at = MAX(companion_devices.last_connected_at, excluded.last_connected_at)
-	`, account, clientID,
+	`, deviceID, account, clientID,
 		meta.ClientName, meta.Platform, meta.AppVersion, meta.OSVersion,
 		at, at, at, DeviceStateActive)
 	if err != nil {
@@ -218,7 +236,7 @@ func (s *Store) Get(ctx context.Context, account, clientID string) (Device, bool
 		return Device{}, false, err
 	}
 	devices, err := s.scanDevices(ctx, `
-		SELECT account, client_id, client_name, platform, app_version, os_version,
+		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
 		       first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
 		       capabilities, capabilities_recorded_at, state
 		FROM companion_devices
@@ -237,7 +255,7 @@ func (s *Store) Get(ctx context.Context, account, clientID string) (Device, bool
 // so consumers render a stable shape across calls.
 func (s *Store) List(ctx context.Context) ([]Device, error) {
 	return s.scanDevices(ctx, `
-		SELECT account, client_id, client_name, platform, app_version, os_version,
+		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
 		       first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
 		       capabilities, capabilities_recorded_at, state
 		FROM companion_devices
@@ -262,7 +280,7 @@ func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]D
 			capsJSON     string
 		)
 		if err := rows.Scan(
-			&d.Account, &d.ClientID, &d.ClientName, &d.Platform, &d.AppVersion, &d.OSVersion,
+			&d.DeviceID, &d.Account, &d.ClientID, &d.ClientName, &d.Platform, &d.AppVersion, &d.OSVersion,
 			&d.FirstSeenAt, &d.LastSeenAt, &connected, &disconnected,
 			&capsJSON, &capsAt, &d.State,
 		); err != nil {
@@ -304,4 +322,14 @@ func normalizeTime(at time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return at.UTC()
+}
+
+// generateDeviceID mints an immutable server-assigned device identity
+// with the dev_ prefix and a random hex suffix.
+func generateDeviceID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate device_id: %w", err)
+	}
+	return "dev_" + hex.EncodeToString(b), nil
 }
