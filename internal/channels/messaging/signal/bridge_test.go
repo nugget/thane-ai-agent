@@ -2060,3 +2060,87 @@ func TestMergeInitialTags(t *testing.T) {
 		})
 	}
 }
+
+// TestBridge_TurnShapeDeclaresMessageOrigin pins the per-shape
+// provenance contract at the routing seam: a turn that exists because
+// counterparty traffic arrived declares OriginChannel, and the pure
+// loop-notification wake declares OriginWake. One stamp for every
+// bridge turn poisons the conversation-timing narrative in one
+// direction or the other — a wake stamped channel renders the contact
+// branch on a turn with no new message and advances the previous
+// contact, erasing the silence the next turn should report.
+func TestBridge_TurnShapeDeclaresMessageOrigin(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	mkItem := func(message string, ts int64) loop.MailboxItem {
+		t.Helper()
+		env := &Envelope{
+			Source:      "+15551234567",
+			SourceName:  "Alice",
+			Timestamp:   ts,
+			DataMessage: &DataMessage{Timestamp: ts, Message: message},
+		}
+		payload, err := json.Marshal(env)
+		if err != nil {
+			t.Fatalf("marshal envelope: %v", err)
+		}
+		return loop.MailboxItem{ID: fmt.Sprintf("signal:%d", ts), Payload: payload}
+	}
+	notify, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityLoop, ID: "loop-42", Name: "garage-watch"},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   "signal",
+			Selector: messages.SelectorName,
+		},
+		Type:    messages.TypeSignal,
+		Scope:   []string{loop.CoreAttentionScope},
+		Payload: messages.LoopNotifyPayload{Kind: loop.CoreAttentionRequestKind, Concern: "The reading looks wrong."},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("normalize notification: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		input loop.TurnInput
+		want  string
+	}{
+		{
+			name:  "mailbox traffic is channel contact",
+			input: loop.TurnInput{MailboxItems: []loop.MailboxItem{mkItem("hello", 1700000000000)}},
+			want:  memory.OriginChannel,
+		},
+		{
+			name: "mailbox traffic with notify riding along stays channel",
+			input: loop.TurnInput{
+				MailboxItems:    []loop.MailboxItem{mkItem("hello", 1700000000000)},
+				NotifyEnvelopes: []messages.Envelope{notify},
+			},
+			want: memory.OriginChannel,
+		},
+		{
+			name:  "pure loop notification is a wake",
+			input: loop.TurnInput{NotifyEnvelopes: []messages.Envelope{notify}},
+			want:  memory.OriginWake,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			turn, err := bridge.buildSignalTurn(context.Background(), "+15551234567", tt.input)
+			if err != nil {
+				t.Fatalf("buildSignalTurn: %v", err)
+			}
+			if turn == nil {
+				t.Fatal("turn is nil")
+			}
+			if turn.Request.MessageOrigin != tt.want {
+				t.Errorf("MessageOrigin = %q, want %q", turn.Request.MessageOrigin, tt.want)
+			}
+			if len(turn.Request.RuntimeTags) != 1 || turn.Request.RuntimeTags[0] != "message_channel" {
+				t.Errorf("RuntimeTags = %#v — the tag that keeps channel context (and the wake narrative) active must survive every shape", turn.Request.RuntimeTags)
+			}
+		})
+	}
+}

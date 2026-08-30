@@ -751,7 +751,7 @@ func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.Ag
 	if err != nil || !ok {
 		return nil, err
 	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary), nil
+	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary, memory.OriginChannel), nil
 }
 
 func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, items []loop.MailboxItem, notifies []messages.Envelope) (*loop.AgentTurn, error) {
@@ -823,7 +823,10 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 		}
 		scaffold.opts = b.requestOptions(sender, hints)
 	}
-	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary)
+	// OriginChannel even when notify envelopes ride along: a mailbox
+	// turn exists because counterparty traffic arrived, and the single
+	// per-request stamp describes the turn's contact-bearing shape.
+	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary, memory.OriginChannel)
 	// Mid-turn input merge (#1221): let the loop pull messages that arrive
 	// while this turn is composing, rendered in channel voice. The loop owns
 	// delta-gating, the drain budget, and the ack; this only renders. Close
@@ -857,13 +860,17 @@ func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string,
 		"sender":      sender,
 		"wake_reason": "core_attention",
 	})
+	// OriginWake: this turn has no new counterparty message. Stamping
+	// it channel would render the contact branch of the timing
+	// narrative and advance the previous contact — a wake erasing the
+	// very silence it is asking the model to weigh.
 	turn := b.agentTurn(convID, channelBinding, content, opts, map[string]any{
 		"event_type":          "loop_notification",
 		"sender":              sender,
 		"notification_count":  len(envs),
 		"core_attention_wake": true,
 		"fallback_suppressed": true,
-	})
+	}, memory.OriginWake)
 	turn.Request.FallbackContent = ""
 
 	log := b.logger.With(
@@ -1057,14 +1064,28 @@ func (b *Bridge) prepareReactionTurn(_ context.Context, env *Envelope) (*loop.Ag
 	if err != nil || !ok {
 		return nil, err
 	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary), nil
+	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary, memory.OriginChannel), nil
 }
 
-func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, content string, opts router.RequestOptions, summary map[string]any) *loop.AgentTurn {
-	return b.agentTurnMessages(convID, binding, []loop.Message{{Role: "user", Content: content}}, opts, summary)
+func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, content string, opts router.RequestOptions, summary map[string]any, origin string) *loop.AgentTurn {
+	return b.agentTurnMessages(convID, binding, []loop.Message{{Role: "user", Content: content}}, opts, summary, origin)
 }
 
-func (b *Bridge) agentTurnMessages(convID string, binding *memory.ChannelBinding, msgs []loop.Message, opts router.RequestOptions, summary map[string]any) *loop.AgentTurn {
+// agentTurnMessages assembles the shared turn shape for every request
+// this bridge produces. origin is the provenance stamped onto the
+// turn's messages (memory.Origin* constants) and each caller declares
+// its own truth: turns carrying counterparty traffic — inbound
+// envelopes, reactions, mailbox batches — declare OriginChannel, and
+// the pure loop-notification wake declares OriginWake. One stamp for
+// every bridge turn would poison the conversation-timing narrative in
+// one direction or the other: a wake stamped channel renders the
+// contact branch on a turn with no new message and moves the previous
+// contact, erasing the very silence the next turn should report.
+// RuntimeTags stays message_channel on every shape — the tag is what
+// keeps the channel context (including the wake branch of the timing
+// narrative) active, and it is runtime-only, so it must be asserted
+// here or not at all.
+func (b *Bridge) agentTurnMessages(convID string, binding *memory.ChannelBinding, msgs []loop.Message, opts router.RequestOptions, summary map[string]any, origin string) *loop.AgentTurn {
 	fallbackContent := prompts.InteractiveEmptyResponseFallback
 	return &loop.AgentTurn{
 		Request: loop.Request{
@@ -1077,7 +1098,7 @@ func (b *Bridge) agentTurnMessages(convID string, binding *memory.ChannelBinding
 			ExcludeTools:     opts.ExcludeTools,
 			InitialTags:      []string{"signal"},
 			RuntimeTags:      []string{"message_channel"},
-			MessageOrigin:    memory.OriginChannel,
+			MessageOrigin:    origin,
 			FallbackContent:  fallbackContent,
 		},
 		Summary: summary,
