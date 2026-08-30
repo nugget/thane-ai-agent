@@ -50,6 +50,7 @@ type CounterpartyPresence struct {
 	RoomSince    string `json:"room_since,omitempty"`
 	RoomProvider string `json:"room_provider,omitempty"`
 	RoomSource   string `json:"room_source,omitempty"`
+	RoomConflict bool   `json:"room_conflict,omitempty"`
 }
 
 // CounterpartyDevice is one bound companion device, compactly: enough

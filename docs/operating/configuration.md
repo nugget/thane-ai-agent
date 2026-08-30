@@ -175,7 +175,11 @@ the binding resolves but the presence join has nothing to report.
 The person binding itself does not infer a room from Home Assistant
 device-tracker attributes. Today room observations come from the
 configured UniFi poller, and model-facing output identifies `unifi` as
-the provider plus the AP name as source evidence.
+the provider plus the AP name as source evidence. The presence tracker
+retains room observations by provider and source: observations that agree
+resolve to one room, while disagreement reports `room_conflict` and withholds
+a guessed room. This is the ingestion boundary future room providers join
+rather than a last-writer-wins slot.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).

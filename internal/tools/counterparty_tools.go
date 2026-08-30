@@ -53,6 +53,7 @@ func (r *Registry) EnableCounterpartyTools(deps CounterpartyToolDeps) {
 			"contact record roots and ranked best-first: room-level presence while they are home, their " +
 			"freshest companion-device location when away, and zone-level person state as the floor. Each " +
 			"source carries its own provenance and freshness — nothing is blended into a single guess. " +
+			"When current room observations disagree, room_conflict is true and no room is asserted. " +
 			"Only the leading available device fix includes its location payload; every device entry " +
 			"carries account, client_id, and device_id, so fetch any other device's payload with " +
 			"companion_last_known_location. " +
@@ -124,9 +125,12 @@ type whereaboutsResult struct {
 	// BestSource names the leading usable entry of Sources and Basis says
 	// why it leads — precomputed so the model does not re-derive the
 	// ranking. It is omitted when every source is withdrawn provenance.
-	BestSource string              `json:"best_source,omitempty"`
-	Basis      string              `json:"basis,omitempty"`
-	Sources    []whereaboutsSource `json:"sources"`
+	BestSource string `json:"best_source,omitempty"`
+	Basis      string `json:"basis,omitempty"`
+	// RoomConflict is true when current room observations disagree. The tool
+	// deliberately omits a room source instead of guessing between them.
+	RoomConflict bool                `json:"room_conflict,omitempty"`
+	Sources      []whereaboutsSource `json:"sources"`
 }
 
 // whereaboutsRoomSource keeps provider attribution honest without allowing an
@@ -156,6 +160,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 	// report unavailable, and the basis must not claim "not home" on
 	// either of those.
 	home, presenceUnknown := false, true
+	roomConflict := false
 	hasHABinding := false
 
 	entity, hasEntity, err := deps.Contacts.HAPersonEntity(contact.ID)
@@ -169,11 +174,12 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 				state := strings.ToLower(strings.TrimSpace(snap.State))
 				home = state == "home"
 				presenceUnknown = state == "" || state == "unknown" || state == "unavailable"
+				roomConflict = home && snap.RoomConflict
 				zone := whereaboutsSource{Source: "ha_person_zone", State: snap.State}
 				if !snap.Since.IsZero() {
 					zone.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
 				}
-				if home && snap.Room != "" {
+				if home && !roomConflict && snap.Room != "" {
 					room := whereaboutsSource{
 						Source:  whereaboutsRoomSource(snap.RoomProvider),
 						Room:    snap.Room,
@@ -260,9 +266,10 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 	}
 
 	result := whereaboutsResult{
-		Contact:   contact.FormattedName,
-		ContactID: contact.ID.String(),
-		TrustZone: contact.TrustZone,
+		Contact:      contact.FormattedName,
+		ContactID:    contact.ID.String(),
+		TrustZone:    contact.TrustZone,
+		RoomConflict: roomConflict,
 	}
 
 	// Only the leading available fix carries its payload: the result
@@ -307,7 +314,9 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 		result.Sources = append(result.Sources, presenceSources...)
 		result.Sources = append(result.Sources, available...)
 		result.Sources = append(result.Sources, withdrawn...)
-		if len(presenceSources) > 0 && presenceSources[0].Room != "" {
+		if roomConflict {
+			result.Basis = "home per person entity; current room observations conflict, so no room is asserted"
+		} else if len(presenceSources) > 0 && presenceSources[0].Room != "" {
 			result.Basis = "home per person entity; room-level presence leads as the most specific source while home"
 		} else {
 			result.Basis = "home per person entity; zone state leads because no room-level presence is available"

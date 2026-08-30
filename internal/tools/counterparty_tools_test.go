@@ -120,6 +120,44 @@ func TestContactWhereaboutsHomeRanking(t *testing.T) {
 	}
 }
 
+func TestContactWhereaboutsReportsRoomConflictWithoutGuessing(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "home", "", nil)
+	now := time.Now().UTC()
+	fx.deps.Presence = func(entity string) (contacts.PersonSnapshot, bool) {
+		if entity != "person.alice" {
+			return contacts.PersonSnapshot{}, false
+		}
+		return contacts.PersonSnapshot{
+			EntityID:     entity,
+			State:        "home",
+			Since:        now.Add(-2 * time.Hour),
+			Room:         "office",
+			RoomProvider: "bermuda",
+			RoomSource:   "device_tracker.phone_bermuda",
+			RoomConflict: true,
+			RoomObservations: []contacts.RoomObservation{
+				{Room: "office", Provider: "bermuda", Source: "device_tracker.phone_bermuda", ObservedAt: now.Add(-time.Minute)},
+				{Room: "kitchen", Provider: "unifi", Source: "ap-kitchen", ObservedAt: now.Add(-2 * time.Minute)},
+			},
+		}, true
+	}
+
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := decodeWhereabouts(t, out)
+	if !res.RoomConflict {
+		t.Fatalf("result = %s, want room_conflict", out)
+	}
+	if len(res.Sources) != 1 || res.Sources[0].Source != "ha_person_zone" || res.Sources[0].Room != "" {
+		t.Fatalf("sources = %+v, want only the home zone floor", res.Sources)
+	}
+	if res.BestSource != "ha_person_zone" || !strings.Contains(res.Basis, "conflict") || !strings.Contains(res.Basis, "no room is asserted") {
+		t.Errorf("verdict = %q / %q", res.BestSource, res.Basis)
+	}
+}
+
 // TestContactWhereaboutsProductionPersonShapePreservesRoomProvider mirrors the
 // material parts of a production HA person backed by regular and Bermuda
 // device trackers. The aggregate person's active source must not overwrite the
