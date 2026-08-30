@@ -600,8 +600,11 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 					// and content_block_start frames say the request was
 					// accepted, this says the model began answering. The
 					// gap before it is prefill plus queueing, which is
-					// what separates a slow model from a busy one.
-					if firstToken.IsZero() {
+					// what separates a slow model from a busy one. An
+					// empty delta is not content — marking it would put
+					// first_token_ms on a turn that never produced text,
+					// the same guard the OpenAI-compatible stream applies.
+					if event.Delta.Text != "" && firstToken.IsZero() {
 						firstToken = time.Now()
 					}
 					contentBuilder.WriteString(event.Delta.Text)

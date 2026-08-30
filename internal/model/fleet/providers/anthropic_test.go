@@ -1051,3 +1051,133 @@ func TestAnthropicCallLoggerFallsBackToClientLogger(t *testing.T) {
 		t.Errorf("bare-context call did not reach the client logger\n%s", buf.String())
 	}
 }
+
+// sseTransport is a RoundTripper that answers every request with a
+// canned SSE stream, so ChatStream can be exercised end to end without
+// a network.
+type sseTransport struct {
+	body string
+}
+
+func (t *sseTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"upstream-1"}},
+		Body:       io.NopCloser(strings.NewReader(t.body)),
+	}, nil
+}
+
+// sse renders JSON events as the data: lines the stream parser reads.
+func sse(events ...string) string {
+	var sb strings.Builder
+	for _, e := range events {
+		sb.WriteString("data: ")
+		sb.WriteString(e)
+		sb.WriteString("\n\n")
+	}
+	return sb.String()
+}
+
+// TestAnthropicChatStreamCompletionTelemetry drives ChatStream through a
+// fake transport and reads the emitted completion record — the seam the
+// callLogger unit tests cannot see: they would stay green if ChatStream
+// stopped using the request-scoped logger, which is the exact production
+// split this PR repairs. It also pins the conditional-telemetry
+// contract: first_token_ms and generation_ms appear only for streams
+// that produced text, and an empty text_delta is not text.
+func TestAnthropicChatStreamCompletionTelemetry(t *testing.T) {
+	t.Parallel()
+
+	const (
+		msgStart  = `{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":10,"output_tokens":0}}}`
+		msgDelta  = `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`
+		toolStart = `{"type":"content_block_start","content_block":{"type":"tool_use","id":"tu_1","name":"base_tool"}}`
+		toolArgs  = `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`
+		toolStop  = `{"type":"content_block_stop"}`
+	)
+
+	tests := []struct {
+		name           string
+		body           string
+		wantFirstToken bool
+	}{
+		{
+			name: "text-producing stream reports first token",
+			body: sse(msgStart,
+				`{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}`,
+				`{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}`,
+				msgDelta),
+			wantFirstToken: true,
+		},
+		{
+			name:           "tool-only stream reports no first token",
+			body:           sse(msgStart, toolStart, toolArgs, toolStop, msgDelta),
+			wantFirstToken: false,
+		},
+		{
+			name: "empty text delta is not a first token",
+			body: sse(msgStart,
+				`{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}`,
+				toolStart, toolArgs, toolStop, msgDelta),
+			wantFirstToken: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			buf := &bytes.Buffer{}
+			requestLogger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})).
+				With("subsystem", "agent", "request_id", "r_stream1")
+			ctx := logging.WithLogger(context.Background(), requestLogger)
+
+			c := NewAnthropicClient("k", slog.New(slog.NewJSONHandler(io.Discard, nil)))
+			c.httpClient = &http.Client{Transport: &sseTransport{body: tt.body}}
+
+			resp, err := c.ChatStream(ctx, "claude-test",
+				[]llm.Message{{Role: "user", Content: "hi"}}, nil,
+				func(llm.StreamEvent) {})
+			if err != nil {
+				t.Fatalf("ChatStream: %v", err)
+			}
+			if resp == nil || !resp.Done {
+				t.Fatalf("ChatStream returned %+v, want a completed response", resp)
+			}
+
+			var complete map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				var rec map[string]any
+				if err := json.Unmarshal([]byte(line), &rec); err != nil {
+					continue
+				}
+				if rec["msg"] == "stream complete" {
+					complete = rec
+					break
+				}
+			}
+			if complete == nil {
+				t.Fatalf("no stream-complete record in log output:\n%s", buf.String())
+			}
+
+			for key, want := range map[string]string{
+				"request_id": "r_stream1",
+				"subsystem":  "agent",
+				"provider":   "anthropic",
+			} {
+				if got, _ := complete[key].(string); got != want {
+					t.Errorf("stream complete %s = %q, want %q — the completion line left the request-scoped logger", key, got, want)
+				}
+			}
+			if _, ok := complete["total_ms"]; !ok {
+				t.Errorf("stream complete missing total_ms:\n%v", complete)
+			}
+			_, hasFirst := complete["first_token_ms"]
+			_, hasGen := complete["generation_ms"]
+			if hasFirst != tt.wantFirstToken || hasGen != tt.wantFirstToken {
+				t.Errorf("first_token_ms present=%v generation_ms present=%v, want both %v:\n%v",
+					hasFirst, hasGen, tt.wantFirstToken, complete)
+			}
+		})
+	}
+}
