@@ -44,7 +44,12 @@ func (f *calendarFake) call(_ context.Context, req CallRequest) (json.RawMessage
 }
 
 func calendarProvider(account, clientID string) ProviderInfo {
+	return calendarProviderIncarnation(account, clientID, "conn-"+clientID)
+}
+
+func calendarProviderIncarnation(account, clientID, id string) ProviderInfo {
 	return ProviderInfo{
+		ID:       id,
 		Account:  account,
 		ClientID: clientID,
 		Capabilities: []Capability{{
@@ -508,5 +513,167 @@ func TestCalendarSnapshotDepartedAccountStopsRenderingAfterCutoff(t *testing.T) 
 	out, _ = s.TagContext(context.Background(), agentctx.ContextRequest{})
 	if out != "" {
 		t.Fatalf("a long-departed account must stop haunting the prompt, got:\n%s", out)
+	}
+}
+
+func TestCalendarSnapshotFastReconnectClearsBackoffByIncarnation(t *testing.T) {
+	// The nudge channel coalesces, so a disconnect/reconnect pair can
+	// arrive as one refresh that never samples the empty provider set.
+	// The client_id is stable across the bounce; only the per-connection
+	// incarnation betrays that this is a fresh Mac deserving a fresh try.
+	base := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	now := base
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProviderIncarnation("aimee", "pocket", "conn-1")},
+		err:   fmt.Errorf("companion did not respond"),
+	}
+	s := snapshotUnderTest(t, fake, base)
+	s.now = func() time.Time { return now }
+
+	for i := 0; i < 6; i++ {
+		s.refreshAll(context.Background())
+		if i < 5 {
+			now = now.Add(calendarSnapshotMaxBackoff + time.Minute)
+		}
+	}
+	now = now.Add(time.Minute)
+
+	// Reconnect: same account, same client_id, new incarnation — and the
+	// runner never sees the empty set in between.
+	fake.infos = []ProviderInfo{calendarProviderIncarnation("aimee", "pocket", "conn-2")}
+	fake.err = nil
+	before := len(fake.calls)
+
+	s.mu.RLock()
+	blocked := now.Before(s.retryAt["aimee"])
+	s.mu.RUnlock()
+	if !blocked {
+		t.Fatal("test setup broken: account must still be inside its backoff window")
+	}
+
+	s.refreshAll(context.Background())
+
+	if len(fake.calls) != before+1 {
+		t.Fatalf("fast reconnect inherited the old backoff (%d calls, want %d)", len(fake.calls), before+1)
+	}
+}
+
+func TestCalendarSnapshotOfflineMeansCalendarCapableOffline(t *testing.T) {
+	// The calendar Mac departs; a capability-less companion on the same
+	// account stays. The snapshot must read offline — and age out at the
+	// cutoff — on the strength of calendar availability, not account
+	// presence.
+	fetched := time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC)
+	fake := &calendarFake{
+		infos:    []ProviderInfo{calendarProvider("nugget", "macbook")},
+		response: snapshotCalendarResponse{},
+	}
+	s := snapshotUnderTest(t, fake, fetched)
+	s.refreshAll(context.Background())
+
+	// Calendar Mac gone; a no-capability companion remains on the account.
+	fake.infos = []ProviderInfo{{ID: "conn-x", Account: "nugget", ClientID: "deepslate"}}
+
+	s.now = func() time.Time { return fetched.Add(time.Hour) }
+	out, _ := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if !strings.Contains(out, `"offline":true`) {
+		t.Fatalf("calendarless account presence must not read as online:\n%s", out)
+	}
+
+	s.now = func() time.Time { return fetched.Add(calendarSnapshotRenderCutoff + time.Hour) }
+	out, _ = s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if strings.Contains(out, `"account":"nugget"`) {
+		t.Fatalf("the cutoff must apply despite the capability-less companion:\n%s", out)
+	}
+}
+
+func TestCalendarSnapshotNextCanBeAnAllDayEvent(t *testing.T) {
+	// Tomorrow's holiday is the earliest upcoming event; an empty timed
+	// schedule must not render an empty next. The delta is day-granular —
+	// a date is not a moment to be early for.
+	now := time.Date(2026, 8, 29, 15, 0, 0, 0, time.UTC)
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("aimee", "pocket")},
+		response: snapshotCalendarResponse{Events: []snapshotCalendarEvent{
+			{Title: "Labor Day", AllDay: true, Start: "2026-08-30", End: "2026-08-30"},
+			{Title: "Monday standup", Start: "2026-08-31T09:00:00-05:00", End: "2026-08-31T09:30:00-05:00"},
+		}},
+	}
+	s := snapshotUnderTest(t, fake, now)
+	s.refreshAll(context.Background())
+
+	out, err := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(out, `"next":{"title":"Labor Day"`) {
+		t.Fatalf("the all-day event is the earliest upcoming and must be next:\n%s", out)
+	}
+	if !strings.Contains(out, `"first_day":"2026-08-30"`) || !strings.Contains(out, `"start_delta":"tomorrow"`) {
+		t.Fatalf("an all-day next carries inclusive dates and a day-word delta:\n%s", out)
+	}
+}
+
+func TestCalendarSnapshotInvalidZoneNeitherPublishesNorDefeatsSuppression(t *testing.T) {
+	now := time.Date(2026, 8, 29, 15, 0, 0, 0, time.UTC)
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("aimee", "pocket")},
+		response: snapshotCalendarResponse{Events: []snapshotCalendarEvent{
+			// An unloadable zone on a legacy bare-Z timestamp: the invalid
+			// name must not be published, and it must not defeat the
+			// bare-Z suppression by falling through to the embedded
+			// offset.
+			{Title: "Broken zone Z", TimeZone: "Mars/Olympus_Mons", Start: "2026-08-29T21:00:00Z", End: "2026-08-29T22:00:00Z"},
+			// An unloadable zone on an offset-carrying timestamp: the
+			// embedded offset is real evidence, so the local reading
+			// renders — but with no event_zone name, matching the tool's
+			// validated-declaration rule.
+			{Title: "Broken zone offset", TimeZone: "Mars/Olympus_Mons", Start: "2026-08-29T21:00:00+02:00", End: "2026-08-29T22:00:00+02:00"},
+		}},
+	}
+	s := snapshotUnderTest(t, fake, now)
+	s.refreshAll(context.Background())
+
+	out, err := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if strings.Contains(out, "Mars/Olympus_Mons") {
+		t.Fatalf("an unloadable zone name must never be published:\n%s", out)
+	}
+	if c := strings.Count(out, "event_local_start"); c != 2 {
+		// "Broken zone offset" appears as next and in today_remaining;
+		// both rows carry the offset-evidence reading. The bare-Z event
+		// contributes none.
+		t.Fatalf("only the offset-carrying event's rows may carry local readings, got %d:\n%s", c, out)
+	}
+	if strings.Contains(out, `"event_zone"`) {
+		t.Fatalf("no validated zone name exists, so event_zone must be absent:\n%s", out)
+	}
+}
+
+func TestCalendarSnapshotOrdersByInstantNotText(t *testing.T) {
+	// RFC3339 text does not sort as time sorts: "16:00-05:00" is after
+	// "21:00+02:00" (14:00 home) but sorts before it lexicographically.
+	now := time.Date(2026, 8, 29, 13, 0, 0, 0, time.UTC)
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("aimee", "pocket")},
+		response: snapshotCalendarResponse{Events: []snapshotCalendarEvent{
+			{Title: "Chicago late", Start: "2026-08-29T16:00:00-05:00", End: "2026-08-29T17:00:00-05:00"},
+			{Title: "Berlin early", Start: "2026-08-29T21:00:00+02:00", End: "2026-08-29T22:00:00+02:00"},
+		}},
+	}
+	s := snapshotUnderTest(t, fake, now)
+	s.refreshAll(context.Background())
+
+	out, err := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(out, `"next":{"title":"Berlin early"`) {
+		t.Fatalf("next must be the earlier instant, not the lexicographically smaller text:\n%s", out)
+	}
+	if strings.Index(out, "Berlin early") > strings.Index(out, "Chicago late") {
+		t.Fatalf("today_remaining must order by instant:\n%s", out)
 	}
 }

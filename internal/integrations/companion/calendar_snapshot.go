@@ -193,6 +193,7 @@ func (s *CalendarSnapshot) refreshAll(ctx context.Context) {
 // hand-off the snapshot's provenance makes visible.
 func (s *CalendarSnapshot) calendarAccounts() map[string]string {
 	capable := make(map[string][]string)
+	incarnations := make(map[string][]string)
 	for _, info := range s.list() {
 		for _, capability := range info.Capabilities {
 			if capability.Name != "macos.calendar" {
@@ -201,6 +202,14 @@ func (s *CalendarSnapshot) calendarAccounts() map[string]string {
 			for _, method := range capability.Methods {
 				if method == "list_events" {
 					capable[info.Account] = append(capable[info.Account], info.ClientID)
+					// The provider ID is minted fresh per connection —
+					// useless for stable identity, which is exactly why
+					// it belongs in the change fingerprint: a fast
+					// disconnect/reconnect can coalesce into one nudge
+					// that never samples the empty set, and the same
+					// client_id would then read as no change at all.
+					// The incarnation cannot lie about that.
+					incarnations[info.Account] = append(incarnations[info.Account], info.ID)
 					break
 				}
 			}
@@ -232,7 +241,9 @@ func (s *CalendarSnapshot) calendarAccounts() map[string]string {
 		// this, the reconnect nudge arrives, finds the account still
 		// serving out a two-hour sentence earned while asleep, and the
 		// snapshot stays stale with the Mac sitting right there.
-		fingerprint := strings.Join(clients, "\x00")
+		ids := incarnations[account]
+		sort.Strings(ids)
+		fingerprint := strings.Join(clients, "\x00") + "\x00\x00" + strings.Join(ids, "\x00")
 		if s.capable[account] != fingerprint {
 			s.capable[account] = fingerprint
 			s.failures[account] = 0
@@ -360,7 +371,14 @@ func (s *CalendarSnapshot) TagContext(context.Context, agentctx.ContextRequest) 
 	}
 	s.mu.RUnlock()
 
-	connected := s.connectedAccounts()
+	// Connectivity means calendar-capable connectivity: an account whose
+	// only remaining companion has no calendar would otherwise read as
+	// online forever, its stale snapshot bypassing the departure cutoff
+	// on the strength of a Mac that cannot answer.
+	connected := make(map[string]bool, len(capableClients))
+	for account := range capableClients {
+		connected[account] = true
+	}
 	haveSnapshot := make(map[string]bool, len(snaps))
 
 	var accounts []renderedCalendarAccount
@@ -406,14 +424,6 @@ func (s *CalendarSnapshot) TagContext(context.Context, agentctx.ContextRequest) 
 	return "### Calendar\n\n" + promptfmt.MarshalCompact(payload), nil
 }
 
-func (s *CalendarSnapshot) connectedAccounts() map[string]bool {
-	out := make(map[string]bool)
-	for _, info := range s.list() {
-		out[info.Account] = true
-	}
-	return out
-}
-
 // renderedCalendarAccount is one account's block as the model reads it.
 type renderedCalendarAccount struct {
 	Account     string                  `json:"account"`
@@ -457,11 +467,13 @@ type renderedCalendarEvent struct {
 	Location        string `json:"location,omitempty"`
 }
 
-// renderAccount derives the account's view at one instant. Event rows
-// sort by start so the block is deterministic whatever order the wire
-// delivered; a rendered event carries the event's own clock beside home's
-// whenever the two disagree, the same rule and field names as the tool
-// renderer — one event, one vocabulary, however it reaches the model.
+// renderAccount derives the account's view at one instant. Events are
+// parsed first and ordered by instant — RFC3339 text with mixed offsets
+// does not sort as time sorts, and a Berlin-offset event must not trail a
+// Chicago one it precedes. A rendered event carries the event's own clock
+// beside home's whenever the two disagree, the same rule and field names
+// as the tool renderer — one event, one vocabulary, however it reaches
+// the model.
 func (s *CalendarSnapshot) renderAccount(snap accountCalendarSnapshot, now time.Time, connected bool) renderedCalendarAccount {
 	out := renderedCalendarAccount{
 		Account:     snap.Account,
@@ -472,15 +484,26 @@ func (s *CalendarSnapshot) renderAccount(snap accountCalendarSnapshot, now time.
 		Truncated:   snap.Truncated,
 	}
 
-	events := make([]snapshotCalendarEvent, len(snap.Events))
-	copy(events, snap.Events)
-	sort.SliceStable(events, func(i, j int) bool { return events[i].Start < events[j].Start })
-
-	var next *snapshotTimedEvent
-	for _, event := range events {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	var timed []snapshotTimedEvent
+	var nextAllDay *snapshotAllDayEvent
+	for _, event := range snap.Events {
 		if event.AllDay {
-			if rendered, ok := s.renderAllDay(event, now); ok {
-				out.TodayAllDay = append(out.TodayAllDay, rendered)
+			first, last, ok := allDayRange(event)
+			if !ok {
+				continue
+			}
+			switch {
+			case !today.Before(first) && !today.After(last):
+				out.TodayAllDay = append(out.TodayAllDay, renderedCalendarEvent{
+					Title: event.Title, Calendar: event.Calendar,
+					FirstDay: first.Format("2006-01-02"), LastDay: last.Format("2006-01-02"),
+					Location: event.Location,
+				})
+			case first.After(today):
+				if nextAllDay == nil || first.Before(nextAllDay.first) {
+					nextAllDay = &snapshotAllDayEvent{event: event, first: first, last: last}
+				}
 			}
 			continue
 		}
@@ -492,38 +515,102 @@ func (s *CalendarSnapshot) renderAccount(snap accountCalendarSnapshot, now time.
 			// calendar tool, which echoes malformed input loudly.
 			continue
 		}
+		timed = append(timed, snapshotTimedEvent{event: event, start: start, end: end, endOK: endOK})
+	}
+	sort.SliceStable(timed, func(i, j int) bool {
+		if !timed[i].start.Equal(timed[j].start) {
+			return timed[i].start.Before(timed[j].start)
+		}
+		return timed[i].event.Title < timed[j].event.Title
+	})
+	sort.SliceStable(out.TodayAllDay, func(i, j int) bool {
+		if out.TodayAllDay[i].FirstDay != out.TodayAllDay[j].FirstDay {
+			return out.TodayAllDay[i].FirstDay < out.TodayAllDay[j].FirstDay
+		}
+		return out.TodayAllDay[i].Title < out.TodayAllDay[j].Title
+	})
+
+	var nextTimed *snapshotTimedEvent
+	for i := range timed {
+		item := &timed[i]
 		switch {
-		case !start.After(now) && end.After(now):
-			rendered := s.renderTimed(event, start, end, endOK)
-			if endOK {
-				rendered.EndsIn = promptfmt.FormatDeltaOnly(end, now)
+		case !item.start.After(now) && item.end.After(now):
+			rendered := s.renderTimed(item.event, item.start, item.end, item.endOK)
+			if item.endOK {
+				rendered.EndsIn = promptfmt.FormatDeltaOnly(item.end, now)
 			}
 			out.ActiveNow = append(out.ActiveNow, rendered)
-		case start.After(now):
-			if next == nil || start.Before(next.start) {
-				next = &snapshotTimedEvent{event: event, start: start, end: end, endOK: endOK}
+		case item.start.After(now):
+			if nextTimed == nil {
+				nextTimed = item
 			}
-			if sameHomeDay(start.In(s.homeZone), now) {
-				rendered := s.renderTimed(event, start, end, endOK)
-				rendered.StartDelta = promptfmt.FormatDeltaOnly(start, now)
+			if sameHomeDay(item.start.In(s.homeZone), now) {
+				rendered := s.renderTimed(item.event, item.start, item.end, item.endOK)
+				rendered.StartDelta = promptfmt.FormatDeltaOnly(item.start, now)
 				out.TodayLeft = append(out.TodayLeft, rendered)
 			}
 		}
 	}
-	if next != nil {
-		rendered := s.renderTimed(next.event, next.start, next.end, next.endOK)
-		rendered.StartDelta = promptfmt.FormatDeltaOnly(next.start, now)
+
+	// Next is the earliest upcoming event of either kind. An all-day
+	// event's instant, for the comparison only, is home midnight of its
+	// first day; its rendered delta stays day-granular, because a date
+	// is not a moment to be early for.
+	if nextAllDay != nil {
+		allDayInstant := time.Date(nextAllDay.first.Year(), nextAllDay.first.Month(), nextAllDay.first.Day(), 0, 0, 0, 0, s.homeZone)
+		if nextTimed == nil || allDayInstant.Before(nextTimed.start) {
+			out.Next = &renderedCalendarEvent{
+				Title: nextAllDay.event.Title, Calendar: nextAllDay.event.Calendar,
+				FirstDay:   nextAllDay.first.Format("2006-01-02"),
+				LastDay:    nextAllDay.last.Format("2006-01-02"),
+				StartDelta: promptfmt.FormatDayDelta(nextAllDay.first, now),
+				Location:   nextAllDay.event.Location,
+			}
+		}
+	}
+	if out.Next == nil && nextTimed != nil {
+		rendered := s.renderTimed(nextTimed.event, nextTimed.start, nextTimed.end, nextTimed.endOK)
+		rendered.StartDelta = promptfmt.FormatDeltaOnly(nextTimed.start, now)
 		out.Next = &rendered
 	}
 	return out
 }
 
+type snapshotAllDayEvent struct {
+	event snapshotCalendarEvent
+	first time.Time
+	last  time.Time
+}
+
+// allDayRange resolves an all-day event's inclusive date range: date-form
+// bounds directly (the Mac already resolved inclusivity), instant-form
+// legacy bounds via midnight rounding with the EventKit-exclusive end
+// converted — the same rules the tool renderer applies to the same wire.
+func allDayRange(event snapshotCalendarEvent) (first, last time.Time, ok bool) {
+	first, _, ok = parseSnapshotDate(event.Start)
+	if !ok {
+		return time.Time{}, time.Time{}, false
+	}
+	last = first
+	if event.End != "" {
+		if parsed, dateOnly, ok := parseSnapshotDate(event.End); ok {
+			if !dateOnly {
+				parsed = parsed.AddDate(0, 0, -1)
+			}
+			if !parsed.Before(first) {
+				last = parsed
+			}
+		}
+	}
+	return first, last, true
+}
+
 // renderTimed fills the fields every timed row shares. The end appears
 // only when the companion supplied one, and the event-local reading
-// appears only when the event's own clock disagrees with home's at either
-// end — mirroring the tool renderer's rule, bare-Z suppression included:
-// a zone-less UTC instant is an older companion discarding the zone, not
-// an event scheduled on UTC's clock.
+// appears only when the event's own validated clock disagrees with home's
+// at either end — mirroring the tool renderer's rule, bare-Z suppression
+// included: a zone-less UTC instant is an older companion discarding the
+// zone, not an event scheduled on UTC's clock.
 func (s *CalendarSnapshot) renderTimed(event snapshotCalendarEvent, start, end time.Time, endOK bool) renderedCalendarEvent {
 	rendered := renderedCalendarEvent{
 		Title: event.Title, Calendar: event.Calendar,
@@ -534,11 +621,9 @@ func (s *CalendarSnapshot) renderTimed(event snapshotCalendarEvent, start, end t
 		rendered.End = end.In(s.homeZone).Format(time.RFC3339)
 	}
 
-	awayStart, awayEnd, diverges := s.eventLocalReading(event, start, end, endOK)
+	awayStart, awayEnd, zoneName, diverges := s.eventLocalReading(event, start, end, endOK)
 	if diverges {
-		if name := strings.TrimSpace(event.TimeZone); name != "" {
-			rendered.EventZone = name
-		}
+		rendered.EventZone = zoneName
 		rendered.EventLocalStart = awayStart.Format(time.RFC3339)
 		if endOK {
 			rendered.EventLocalEnd = awayEnd.Format(time.RFC3339)
@@ -548,22 +633,30 @@ func (s *CalendarSnapshot) renderTimed(event snapshotCalendarEvent, start, end t
 }
 
 // eventLocalReading resolves the event on its own clock and reports
-// whether that reading differs from home at either end.
-func (s *CalendarSnapshot) eventLocalReading(event snapshotCalendarEvent, start, end time.Time, endOK bool) (time.Time, time.Time, bool) {
+// whether that reading differs from home at either end. The declared zone
+// is used only when it validates — an unloadable name must not be
+// published as event_zone, and must not defeat the bare-Z suppression the
+// way falling through to the embedded offset would.
+func (s *CalendarSnapshot) eventLocalReading(event snapshotCalendarEvent, start, end time.Time, endOK bool) (time.Time, time.Time, string, bool) {
 	awayStart, awayEnd := start, end
+	zoneName := ""
 	if name := strings.TrimSpace(event.TimeZone); name != "" {
 		if loc, err := time.LoadLocation(name); err == nil {
 			awayStart, awayEnd = start.In(loc), end.In(loc)
+			zoneName = name
 		}
-	} else if _, offset := start.Zone(); offset == 0 {
-		return time.Time{}, time.Time{}, false
+	}
+	if zoneName == "" {
+		if _, offset := start.Zone(); offset == 0 {
+			return time.Time{}, time.Time{}, "", false
+		}
 	}
 
 	if offsetsMatch(awayStart, awayStart.In(s.homeZone)) &&
 		(!endOK || offsetsMatch(awayEnd, awayEnd.In(s.homeZone))) {
-		return time.Time{}, time.Time{}, false
+		return time.Time{}, time.Time{}, "", false
 	}
-	return awayStart, awayEnd, true
+	return awayStart, awayEnd, zoneName, true
 }
 
 func offsetsMatch(a, b time.Time) bool {
@@ -577,40 +670,6 @@ type snapshotTimedEvent struct {
 	start time.Time
 	end   time.Time
 	endOK bool
-}
-
-// renderAllDay reports the event when today falls inside its inclusive
-// date range. All-day events have no clock to be active against; they
-// occupy the date, so "today's all-day events" is their whole ambient
-// story and the delta vocabulary is day words by construction.
-func (s *CalendarSnapshot) renderAllDay(event snapshotCalendarEvent, now time.Time) (renderedCalendarEvent, bool) {
-	first, _, ok := parseSnapshotDate(event.Start)
-	if !ok {
-		return renderedCalendarEvent{}, false
-	}
-	last := first
-	if event.End != "" {
-		if parsed, dateOnly, ok := parseSnapshotDate(event.End); ok {
-			if !dateOnly {
-				// The legacy instant form is EventKit-exclusive; the
-				// tool renderer subtracts the day, and the same event
-				// must not claim an extra day here.
-				parsed = parsed.AddDate(0, 0, -1)
-			}
-			if !parsed.Before(first) {
-				last = parsed
-			}
-		}
-	}
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	if today.Before(first) || today.After(last) {
-		return renderedCalendarEvent{}, false
-	}
-	return renderedCalendarEvent{
-		Title: event.Title, Calendar: event.Calendar,
-		FirstDay: first.Format("2006-01-02"), LastDay: last.Format("2006-01-02"),
-		Location: event.Location,
-	}, true
 }
 
 // parseSnapshotDate resolves an all-day boundary: the date form directly,
