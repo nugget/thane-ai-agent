@@ -13,18 +13,17 @@ import (
 func TestShouldPublishUnifiAPRoom(t *testing.T) {
 	tests := []struct {
 		name     string
-		room     string
 		provider string
 		want     bool
 	}{
-		{name: "populated UniFi observation", room: "office", provider: unifi.RoomProvider, want: true},
-		{name: "populated non-UniFi observation", room: "office", provider: "bermuda", want: false},
-		{name: "normalized clear", room: "", provider: "", want: true},
+		{name: "UniFi observation", provider: unifi.RoomProvider, want: true},
+		{name: "non-UniFi observation", provider: "bermuda", want: false},
+		{name: "legacy unidentified clear", provider: "", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldPublishUnifiAPRoom(tt.room, tt.provider); got != tt.want {
-				t.Errorf("shouldPublishUnifiAPRoom(%q, %q) = %v, want %v", tt.room, tt.provider, got, tt.want)
+			if got := shouldPublishUnifiAPRoom(tt.provider); got != tt.want {
+				t.Errorf("shouldPublishUnifiAPRoom(%q) = %v, want %v", tt.provider, got, tt.want)
 			}
 		})
 	}
@@ -38,6 +37,9 @@ func TestCounterpartyPresenceView(t *testing.T) {
 		wantRoom           string
 		wantRoomProvider   string
 		wantRoomSource     string
+		roomConflict       bool
+		wantRoomConflict   bool
+		retainRoom         bool
 		wantRoomSinceEmpty bool
 	}{
 		{
@@ -46,25 +48,43 @@ func TestCounterpartyPresenceView(t *testing.T) {
 			wantRoom:         "office",
 			wantRoomProvider: "unifi",
 			wantRoomSource:   "ap-office",
+			retainRoom:       true,
+		},
+		{
+			name:               "home reports conflict without room",
+			state:              "home",
+			roomConflict:       true,
+			wantRoomConflict:   true,
+			retainRoom:         true,
+			wantRoomSinceEmpty: true,
 		},
 		{
 			name:               "named zone hides retained room",
 			state:              "work",
+			roomConflict:       true,
+			retainRoom:         true,
 			wantRoomSinceEmpty: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			view := counterpartyPresenceView(contacts.PersonSnapshot{
+			snapshot := contacts.PersonSnapshot{
 				State:        tt.state,
 				Since:        now.Add(-2 * time.Hour),
-				Room:         "office",
-				RoomSince:    now.Add(-20 * time.Minute),
-				RoomProvider: "unifi",
-				RoomSource:   "ap-office",
-			}, now)
+				RoomConflict: tt.roomConflict,
+			}
+			if tt.retainRoom {
+				snapshot.Room = "office"
+				snapshot.RoomSince = now.Add(-20 * time.Minute)
+				snapshot.RoomProvider = "unifi"
+				snapshot.RoomSource = "ap-office"
+			}
+			view := counterpartyPresenceView(snapshot, now)
 			if view.Room != tt.wantRoom || view.RoomProvider != tt.wantRoomProvider || view.RoomSource != tt.wantRoomSource {
 				t.Errorf("room view = %+v", view)
+			}
+			if view.RoomConflict != tt.wantRoomConflict {
+				t.Errorf("RoomConflict = %v, want %v", view.RoomConflict, tt.wantRoomConflict)
 			}
 			if (view.RoomSince == "") != tt.wantRoomSinceEmpty {
 				t.Errorf("RoomSince = %q, want empty=%v", view.RoomSince, tt.wantRoomSinceEmpty)

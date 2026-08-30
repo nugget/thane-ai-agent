@@ -697,7 +697,7 @@ func (a *App) initServers(s *newState) error {
 		s.personTracker.OnRoomChange(func(entityID, room, provider, source string) {
 			// This legacy MQTT sensor specifically represents UniFi AP
 			// association. Other room providers must not masquerade as AP data.
-			if !shouldPublishUnifiAPRoom(room, provider) {
+			if !shouldPublishUnifiAPRoom(provider) {
 				return
 			}
 			shortName := entityID
@@ -706,8 +706,12 @@ func (a *App) initServers(s *newState) error {
 			}
 			suffix := shortName + "_ap"
 
+			apName := source
+			if room == "" {
+				apName = ""
+			}
 			attrs, err := json.Marshal(map[string]string{
-				"ap_name":      source,
+				"ap_name":      apName,
 				"provider":     provider,
 				"last_changed": time.Now().Format(time.RFC3339),
 			})
@@ -891,10 +895,10 @@ func (a *App) initServers(s *newState) error {
 	return nil
 }
 
-// shouldPublishUnifiAPRoom keeps populated observations provider-specific but
-// permits normalized clears, whose provider is intentionally empty.
-func shouldPublishUnifiAPRoom(room, provider string) bool {
-	return room == "" || provider == unifi.RoomProvider
+// shouldPublishUnifiAPRoom keeps the legacy AP sensor scoped to observation
+// changes and withdrawals from the UniFi provider.
+func shouldPublishUnifiAPRoom(provider string) bool {
+	return provider == unifi.RoomProvider
 }
 
 // counterpartyPresenceView renders the contact-context presence join. The
@@ -906,12 +910,15 @@ func counterpartyPresenceView(snap contacts.PersonSnapshot, now time.Time) *agen
 	if !snap.Since.IsZero() {
 		view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
 	}
-	if strings.EqualFold(snap.State, "home") && snap.Room != "" {
-		view.Room = snap.Room
-		view.RoomProvider = snap.RoomProvider
-		view.RoomSource = snap.RoomSource
-		if !snap.RoomSince.IsZero() {
-			view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+	if strings.EqualFold(snap.State, "home") {
+		view.RoomConflict = snap.RoomConflict
+		if !snap.RoomConflict && snap.Room != "" {
+			view.Room = snap.Room
+			view.RoomProvider = snap.RoomProvider
+			view.RoomSource = snap.RoomSource
+			if !snap.RoomSince.IsZero() {
+				view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+			}
 		}
 	}
 	return view
