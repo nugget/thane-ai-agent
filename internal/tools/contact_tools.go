@@ -34,11 +34,6 @@ func (r *Registry) registerContactTools() {
 					"enum":        []string{"individual", "group", "org", "location"},
 					"description": "Type of contact (default: individual)",
 				},
-				"trust_zone": map[string]any{
-					"type":        "string",
-					"enum":        []string{"admin", "household", "trusted", "known"},
-					"description": "Trust zone for this contact. Gates model access, tool permissions, and send policy. admin=full access, household=family members, trusted=established relationship, known=default/gated.",
-				},
 				"given_name": map[string]any{
 					"type":        "string",
 					"description": "First/given name (vCard N given-name component)",
@@ -261,7 +256,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_import_vcf",
-		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, TrustZone and AISummary are never overwritten. Use dry_run to preview changes.",
+		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, and TrustZone and AISummary are never overwritten. New contacts are always created at the default trust zone; a vCard X-THANE-TRUST-ZONE is ignored on import (trust zones are operator-assigned). Use dry_run to preview changes.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

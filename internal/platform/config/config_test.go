@@ -1720,3 +1720,44 @@ homeassistant:
 		t.Errorf("error %q should name the retired block and the replacement", err)
 	}
 }
+
+// TestCompanionContactBindingValidation pins the boot-time gate on the
+// counterparty binding (#1450): a contact binding must be a UUID, and a
+// valid one loads cleanly. This validation is a security boundary — the
+// binding confers inherited device authority — so its rejection path
+// must not regress silently.
+func TestCompanionContactBindingValidation(t *testing.T) {
+	valid := CompanionConfig{
+		Enabled: true,
+		Providers: map[string]CompanionProviderConfig{
+			"alice": {Tokens: []string{"tok-1"}, Contact: "0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41"},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid contact binding rejected: %v", err)
+	}
+
+	unbound := CompanionConfig{
+		Enabled: true,
+		Providers: map[string]CompanionProviderConfig{
+			"alice": {Tokens: []string{"tok-1"}},
+		},
+	}
+	if err := unbound.Validate(); err != nil {
+		t.Fatalf("unbound account rejected: %v", err)
+	}
+
+	malformed := CompanionConfig{
+		Enabled: true,
+		Providers: map[string]CompanionProviderConfig{
+			"alice": {Tokens: []string{"tok-1"}, Contact: "not-a-uuid"},
+		},
+	}
+	err := malformed.Validate()
+	if err == nil {
+		t.Fatal("malformed contact binding accepted")
+	}
+	if !strings.Contains(err.Error(), "alice") || !strings.Contains(err.Error(), "not-a-uuid") {
+		t.Errorf("rejection should name the account and value: %v", err)
+	}
+}

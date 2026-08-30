@@ -213,6 +213,15 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("name is required")
 	}
 
+	// Trust zones are operator custody, not contact data: a zone now
+	// confers inherited authority on every companion device bound to
+	// the contact (#1450), so the everyday save path must never be a
+	// promotion path. The operator assigns zones through CardDAV
+	// (X-THANE-TRUST-ZONE) or direct curation.
+	if args.TrustZone != "" {
+		return "", fmt.Errorf("trust_zone cannot be set through contact_save: zones are operator-custodied and confer device authority (#1450); ask the operator to assign the zone, then retry without trust_zone")
+	}
+
 	// Look for existing contact by name.
 	existing, err := t.store.FindByName(args.Name)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -223,9 +232,6 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		// Update existing contact — only non-empty fields overwrite.
 		if args.Kind != "" {
 			existing.Kind = args.Kind
-		}
-		if args.TrustZone != "" {
-			existing.TrustZone = args.TrustZone
 		}
 		if args.GivenName != "" {
 			existing.GivenName = args.GivenName
@@ -273,7 +279,6 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	c := &Contact{
 		FormattedName: args.Name,
 		Kind:          args.Kind,
-		TrustZone:     args.TrustZone,
 		GivenName:     args.GivenName,
 		FamilyName:    args.FamilyName,
 		Nickname:      args.Nickname,
@@ -768,6 +773,15 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 
 	for i, incoming := range decoded {
 		props := allProps[i]
+
+		// Trust zone is operator custody, not importable data (#1450):
+		// a zone confers inherited authority on bound companion devices,
+		// so a model-supplied vCard must not mint an elevated contact
+		// through X-THANE-TRUST-ZONE. New contacts always start at the
+		// default zone; the merge path already never overwrites an
+		// existing zone. The operator sets zones through CardDAV, whose
+		// backend decodes the same header on an authenticated surface.
+		incoming.TrustZone = ZoneKnown
 
 		// Try to find existing contact for merge.
 		var existing *Contact

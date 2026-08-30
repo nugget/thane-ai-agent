@@ -297,8 +297,18 @@ func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T)
 	}
 
 	tools := contacts.NewTools(store)
-	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"admin","facts":{"email":"aimee@example.com"}}`); err != nil {
+	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`); err != nil {
 		t.Fatalf("SaveContact: %v", err)
+	}
+	// Zones are operator custody (#1450): seed through the store, the
+	// path contact_save deliberately refuses.
+	aimee, err := store.FindByName("Aimee")
+	if err != nil {
+		t.Fatalf("FindByName: %v", err)
+	}
+	aimee.TrustZone = contacts.ZoneAdmin
+	if _, err := store.Upsert(aimee); err != nil {
+		t.Fatalf("Upsert zone: %v", err)
 	}
 
 	resolver := &contactChannelBindingResolver{
