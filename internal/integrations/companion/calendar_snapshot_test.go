@@ -677,3 +677,48 @@ func TestCalendarSnapshotOrdersByInstantNotText(t *testing.T) {
 		t.Fatalf("today_remaining must order by instant:\n%s", out)
 	}
 }
+
+func TestCalendarSnapshotMalformedEndsAreDriftNotOmission(t *testing.T) {
+	// A non-empty end that does not parse is companion drift. The tool
+	// renderer marks the same payload unparsed and loud; the ambient
+	// block's equivalent is absence — never a confident one-day range or
+	// a briefly-active classification fabricated from corrupt bytes.
+	now := time.Date(2026, 8, 29, 15, 0, 30, 0, time.UTC)
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("aimee", "pocket")},
+		response: snapshotCalendarResponse{Events: []snapshotCalendarEvent{
+			{Title: "Broken all-day", AllDay: true, Start: "2026-08-29", End: "not-a-date"},
+			{Title: "Broken timed", Start: "2026-08-29T15:00:00Z", End: "garbage"},
+			{Title: "Genuinely endless", Start: "2026-08-29T15:00:00Z"},
+		}},
+	}
+	s := snapshotUnderTest(t, fake, now)
+	s.refreshAll(context.Background())
+
+	out, err := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if strings.Contains(out, "Broken all-day") || strings.Contains(out, "Broken timed") {
+		t.Fatalf("malformed non-empty ends must be omitted, not reshaped:\n%s", out)
+	}
+	// The truly absent end keeps its synthetic classification.
+	if !strings.Contains(out, `"active_now":[{"title":"Genuinely endless"`) {
+		t.Fatalf("an absent end still classifies through the synthetic interval:\n%s", out)
+	}
+}
+
+func TestCalendarSnapshotUnavailableRowCarriesNoSnapshotAge(t *testing.T) {
+	now := time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC)
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("aimee", "pocket")},
+		err:   fmt.Errorf("companion did not respond"),
+	}
+	s := snapshotUnderTest(t, fake, now)
+	s.refreshAll(context.Background())
+
+	out, _ := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if strings.Contains(out, `"snapshot_age"`) {
+		t.Fatalf("a row stating no snapshot exists must not carry an empty age:\n%s", out)
+	}
+}

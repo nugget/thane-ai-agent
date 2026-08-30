@@ -80,16 +80,16 @@ type accountCalendarSnapshot struct {
 	Truncated bool
 }
 
-// CalendarSnapshot keeps an in-memory, background-refreshed view of every
-// connected companion account's near-term calendar, and renders it as an
-// always-on Live State block — the wall-clock-truth half of the #1432
-// design. Assembly only ever reads memory; the companion is called on the
-// runner's own clock, under its own bound, never inside a turn.
 // calendarProviderLister enumerates the connected providers; a func
 // rather than an interface, matching the registrar's injection style, so
 // tests supply a fake list without a fake registry.
 type calendarProviderLister func() []ProviderInfo
 
+// CalendarSnapshot keeps an in-memory, background-refreshed view of every
+// connected companion account's near-term calendar, and renders it as an
+// always-on Live State block — the wall-clock-truth half of the #1432
+// design. Assembly only ever reads memory; the companion is called on the
+// runner's own clock, under its own bound, never inside a turn.
 type CalendarSnapshot struct {
 	list     calendarProviderLister
 	call     func(ctx context.Context, req CallRequest) (json.RawMessage, error)
@@ -428,7 +428,7 @@ func (s *CalendarSnapshot) TagContext(context.Context, agentctx.ContextRequest) 
 type renderedCalendarAccount struct {
 	Account     string                  `json:"account"`
 	Client      string                  `json:"client,omitempty"`
-	SnapshotAge string                  `json:"snapshot_age"`
+	SnapshotAge string                  `json:"snapshot_age,omitempty"`
 	Stale       bool                    `json:"stale,omitempty"`
 	Offline     bool                    `json:"offline,omitempty"`
 	ActiveNow   []renderedCalendarEvent `json:"active_now,omitempty"`
@@ -593,13 +593,20 @@ func allDayRange(event snapshotCalendarEvent) (first, last time.Time, ok bool) {
 	}
 	last = first
 	if event.End != "" {
-		if parsed, dateOnly, ok := parseSnapshotDate(event.End); ok {
-			if !dateOnly {
-				parsed = parsed.AddDate(0, 0, -1)
-			}
-			if !parsed.Before(first) {
-				last = parsed
-			}
+		parsed, dateOnly, ok := parseSnapshotDate(event.End)
+		if !ok {
+			// A non-empty end that does not parse is companion drift,
+			// not an omission — rendering a confident one-day event from
+			// it would state a range nobody published. The tool renderer
+			// marks the same payload unparsed; the ambient block's
+			// equivalent of loud is absence.
+			return time.Time{}, time.Time{}, false
+		}
+		if !dateOnly {
+			parsed = parsed.AddDate(0, 0, -1)
+		}
+		if !parsed.Before(first) {
+			last = parsed
 		}
 	}
 	return first, last, true
@@ -701,8 +708,21 @@ func parseSnapshotSpan(event snapshotCalendarEvent) (start, end time.Time, endOK
 	if err != nil {
 		return time.Time{}, time.Time{}, false, false
 	}
-	end, err = time.Parse(time.RFC3339, strings.TrimSpace(event.End))
-	endOK = err == nil && end.After(start)
+	trimmedEnd := strings.TrimSpace(event.End)
+	if trimmedEnd == "" {
+		// A genuinely absent end gets the synthetic minute so active-now
+		// has an interval to classify; the invention is never rendered.
+		return start, start.Add(time.Minute), false, true
+	}
+	end, err = time.Parse(time.RFC3339, trimmedEnd)
+	if err != nil {
+		// A non-empty end that does not parse is drift, not omission —
+		// classifying corrupted data as active would present it with
+		// more confidence than the tool renderer, which marks the same
+		// payload unparsed. Skip; the tool remains the loud surface.
+		return time.Time{}, time.Time{}, false, false
+	}
+	endOK = end.After(start)
 	if !endOK {
 		end = start.Add(time.Minute)
 	}
