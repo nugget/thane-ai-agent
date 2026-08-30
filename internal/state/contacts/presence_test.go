@@ -210,7 +210,7 @@ func TestTracker_HandleStateChange_ClearsRoom(t *testing.T) {
 	_ = tracker.Initialize(context.Background(), getter)
 
 	// Set a room.
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 
 	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, `"room":"office"`) {
@@ -294,7 +294,7 @@ func TestTracker_GetContext_WithRoom(t *testing.T) {
 
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 	_ = tracker.Initialize(context.Background(), getter)
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 
 	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 
@@ -302,8 +302,48 @@ func TestTracker_GetContext_WithRoom(t *testing.T) {
 	if !strings.Contains(result, `"room":"office"`) {
 		t.Errorf("expected room:office in JSON, got:\n%s", result)
 	}
+	if !strings.Contains(result, `"room_provider":"unifi"`) {
+		t.Errorf("expected explicit room_provider in JSON, got:\n%s", result)
+	}
 	if !strings.Contains(result, `"room_source":"ap-hor-office"`) {
 		t.Errorf("expected room_source in JSON, got:\n%s", result)
+	}
+}
+
+func TestTracker_GetContext_NamedZoneSuppressesRetainedRoom(t *testing.T) {
+	now := time.Date(2026, 2, 15, 16, 30, 0, 0, time.UTC)
+	getter := &mockStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID:    "person.alice",
+				State:       "home",
+				Attributes:  map[string]any{"friendly_name": "Alice"},
+				LastChanged: now,
+			},
+		},
+	}
+
+	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	_ = tracker.Initialize(context.Background(), getter)
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
+	tracker.HandleStateChange("person.alice", "home", "work", "")
+
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
+	if !strings.Contains(result, `"state":"work"`) {
+		t.Errorf("expected named zone state in JSON, got:\n%s", result)
+	}
+	for _, field := range []string{`"room"`, `"room_provider"`, `"room_source"`} {
+		if strings.Contains(result, field) {
+			t.Errorf("expected %s to be suppressed outside home, got:\n%s", field, result)
+		}
+	}
+
+	snap, ok := tracker.Snapshot("person.alice")
+	if !ok {
+		t.Fatal("expected person snapshot")
+	}
+	if snap.Room != "office" || snap.RoomProvider != "unifi" || snap.RoomSource != "ap-hor-office" {
+		t.Errorf("named-zone transition should retain tracker evidence, got %+v", snap)
 	}
 }
 
@@ -371,17 +411,21 @@ func TestTracker_GetContext_NotHome(t *testing.T) {
 func TestTracker_UpdateRoom(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 
 	tracker.mu.RLock()
 	p := tracker.people["person.alice"]
 	room := p.Room
+	provider := p.RoomProvider
 	source := p.RoomSource
 	sinceZero := p.RoomSince.IsZero()
 	tracker.mu.RUnlock()
 
 	if room != "office" {
 		t.Errorf("expected room office, got %q", room)
+	}
+	if provider != "unifi" {
+		t.Errorf("expected provider unifi, got %q", provider)
 	}
 	if source != "ap-hor-office" {
 		t.Errorf("expected source ap-hor-office, got %q", source)
@@ -394,7 +438,7 @@ func TestTracker_UpdateRoom(t *testing.T) {
 func TestTracker_UpdateRoom_SameRoom(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 
 	tracker.mu.RLock()
 	firstSince := tracker.people["person.alice"].RoomSince
@@ -402,7 +446,7 @@ func TestTracker_UpdateRoom_SameRoom(t *testing.T) {
 
 	// Same room — should not update RoomSince.
 	time.Sleep(time.Millisecond)
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 
 	tracker.mu.RLock()
 	secondSince := tracker.people["person.alice"].RoomSince
@@ -413,20 +457,49 @@ func TestTracker_UpdateRoom_SameRoom(t *testing.T) {
 	}
 }
 
+func TestTracker_UpdateRoom_SameRoomRefreshesProvenance(t *testing.T) {
+	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-office-east")
+	first, ok := tracker.Snapshot("person.alice")
+	if !ok {
+		t.Fatal("tracked entity not found")
+	}
+
+	time.Sleep(time.Millisecond)
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-office-west")
+	second, ok := tracker.Snapshot("person.alice")
+	if !ok {
+		t.Fatal("tracked entity not found")
+	}
+
+	if second.RoomProvider != "unifi" || second.RoomSource != "ap-office-west" {
+		t.Fatalf("refreshed provenance = %+v", second)
+	}
+	if !second.RoomSince.Equal(first.RoomSince) {
+		t.Errorf("same-room provenance refresh reset RoomSince: %v then %v", first.RoomSince, second.RoomSince)
+	}
+}
+
 func TestTracker_UpdateRoom_ClearsRoom(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
-	tracker.UpdateRoom("person.alice", "", "")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "", "", "")
 
 	tracker.mu.RLock()
 	p := tracker.people["person.alice"]
 	room := p.Room
+	provider := p.RoomProvider
+	source := p.RoomSource
 	sinceZero := p.RoomSince.IsZero()
 	tracker.mu.RUnlock()
 
 	if room != "" {
 		t.Errorf("expected empty room, got %q", room)
+	}
+	if provider != "" || source != "" {
+		t.Errorf("expected cleared provenance, got provider=%q source=%q", provider, source)
 	}
 	if !sinceZero {
 		t.Error("expected RoomSince to be zero after clearing")
@@ -437,7 +510,7 @@ func TestTracker_UpdateRoom_IgnoresUntracked(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 
 	// Should not panic.
-	tracker.UpdateRoom("person.unknown", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.unknown", "office", "unifi", "ap-hor-office")
 }
 
 func TestTracker_SetDeviceMACs(t *testing.T) {
@@ -521,7 +594,7 @@ func TestTracker_ConcurrentAccess(t *testing.T) {
 				if i%2 == 0 {
 					room = "bedroom"
 				}
-				tracker.UpdateRoom("person.alice", room, "ap-test")
+				tracker.UpdateRoom("person.alice", room, "unifi", "ap-test")
 			}
 		}()
 	}
@@ -598,16 +671,17 @@ func TestFriendlyNameFromEntityID(t *testing.T) {
 func TestTracker_RoomObserver(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "", nil)
 
-	var gotEntity, gotRoom, gotSource string
+	var gotEntity, gotRoom, gotProvider, gotSource string
 	var callCount int
-	tracker.OnRoomChange(func(entityID, room, source string) {
+	tracker.OnRoomChange(func(entityID, room, provider, source string) {
 		gotEntity = entityID
 		gotRoom = room
+		gotProvider = provider
 		gotSource = source
 		callCount++
 	})
 
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 
 	if callCount != 1 {
 		t.Fatalf("observer called %d times, want 1", callCount)
@@ -618,6 +692,9 @@ func TestTracker_RoomObserver(t *testing.T) {
 	if gotRoom != "office" {
 		t.Errorf("room = %q, want %q", gotRoom, "office")
 	}
+	if gotProvider != "unifi" {
+		t.Errorf("provider = %q, want %q", gotProvider, "unifi")
+	}
 	if gotSource != "ap-hor-office" {
 		t.Errorf("source = %q, want %q", gotSource, "ap-hor-office")
 	}
@@ -627,24 +704,24 @@ func TestTracker_RoomObserverNotCalledOnNoOp(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "", nil)
 
 	var callCount int
-	tracker.OnRoomChange(func(_, _, _ string) {
+	tracker.OnRoomChange(func(_, _, _, _ string) {
 		callCount++
 	})
 
 	// Set initial room.
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 	if callCount != 1 {
 		t.Fatalf("observer called %d times after first update, want 1", callCount)
 	}
 
 	// Same room — observer should not fire again.
-	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-hor-office")
 	if callCount != 1 {
 		t.Errorf("observer called %d times after no-op update, want 1", callCount)
 	}
 
 	// Different room — observer should fire.
-	tracker.UpdateRoom("person.alice", "bedroom", "ap-hor-bedroom")
+	tracker.UpdateRoom("person.alice", "bedroom", "unifi", "ap-hor-bedroom")
 	if callCount != 2 {
 		t.Errorf("observer called %d times after room change, want 2", callCount)
 	}
@@ -655,14 +732,14 @@ func TestTracker_RoomObserverCalledOutsideLock(t *testing.T) {
 
 	// Register an observer that calls GetContext (which takes a read lock).
 	// If observers were called under the write lock this would deadlock.
-	tracker.OnRoomChange(func(_, _, _ string) {
+	tracker.OnRoomChange(func(_, _, _, _ string) {
 		_, _ = tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	})
 
 	// Should complete without deadlock.
 	done := make(chan struct{})
 	go func() {
-		tracker.UpdateRoom("person.alice", "kitchen", "ap-hor-kitchen")
+		tracker.UpdateRoom("person.alice", "kitchen", "unifi", "ap-hor-kitchen")
 		close(done)
 	}()
 
@@ -679,13 +756,13 @@ func TestTracker_RoomObserverCalledOutsideLock(t *testing.T) {
 func TestPresenceSnapshot(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 	tracker.HandleStateChange("person.alice", "", "home", "")
-	tracker.UpdateRoom("person.alice", "office", "bermuda")
+	tracker.UpdateRoom("person.alice", "office", "bermuda", "device_tracker.alice_bermuda")
 
 	snap, ok := tracker.Snapshot("person.alice")
 	if !ok {
 		t.Fatal("tracked entity not found")
 	}
-	if snap.Room != "office" || snap.RoomSource != "bermuda" {
+	if snap.Room != "office" || snap.RoomProvider != "bermuda" || snap.RoomSource != "device_tracker.alice_bermuda" {
 		t.Errorf("snapshot = %+v", snap)
 	}
 	if _, ok := tracker.Snapshot("person.nobody"); ok {

@@ -40,10 +40,11 @@ Reading the device block:
 How to work here:
 
 - Asked where someone is? `contact_whereabouts` is the first door: it
-  fuses every source that person's contact record roots — room-level
-  presence while home, their freshest device location when away, zone
-  state as the floor — ranked, with provenance and freshness per
-  source. Reach for `companion_last_known_location` only when you need
+  fuses every source that person's contact record roots —
+  provider-attributed room-level presence while home, their freshest
+  device location when away, zone state as the floor — ranked, with
+  provenance and freshness per source. Reach for
+  `companion_last_known_location` only when you need
   one specific device's stored fix, and a device's own live location
   tool only when the device block shows it online and you need a
   fresh fix right now.

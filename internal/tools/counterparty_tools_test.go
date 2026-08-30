@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
@@ -17,6 +18,16 @@ import (
 type whereaboutsFixture struct {
 	deps      CounterpartyToolDeps
 	contactID string
+}
+
+type staticWhereaboutsStateGetter map[string]*homeassistant.State
+
+func (g staticWhereaboutsStateGetter) GetState(_ context.Context, entityID string) (*homeassistant.State, error) {
+	state, ok := g[entityID]
+	if !ok {
+		return nil, fmt.Errorf("state %q not found", entityID)
+	}
+	return state, nil
 }
 
 // newWhereaboutsFixture builds a contact ("Alice Operator") with an HA
@@ -59,7 +70,8 @@ func newWhereaboutsFixture(t *testing.T, state, room string, observations map[st
 			snap := contacts.PersonSnapshot{EntityID: entity, State: state, Since: now.Add(-2 * time.Hour)}
 			if room != "" {
 				snap.Room = room
-				snap.RoomSource = "bermuda"
+				snap.RoomProvider = "unifi"
+				snap.RoomSource = "ap-office"
 				snap.RoomSince = now.Add(-20 * time.Minute)
 			}
 			return snap, true
@@ -97,14 +109,81 @@ func TestContactWhereaboutsHomeRanking(t *testing.T) {
 	if len(res.Sources) != 3 {
 		t.Fatalf("sources = %+v, want room + zone + device", res.Sources)
 	}
-	if res.Sources[0].Source != "bermuda_room" || res.Sources[0].Room != "office" || res.Sources[0].RoomVia != "bermuda" {
-		t.Errorf("home ranking: leading source = %+v, want bermuda room", res.Sources[0])
+	if res.Sources[0].Source != "unifi_room" || res.Sources[0].Room != "office" || res.Sources[0].RoomVia != "ap-office" {
+		t.Errorf("home ranking: leading source = %+v, want provider-attributed UniFi room", res.Sources[0])
 	}
 	if res.Sources[1].Source != "ha_person_zone" || res.Sources[2].Source != "companion_location" {
 		t.Errorf("home order = %s, %s", res.Sources[1].Source, res.Sources[2].Source)
 	}
-	if res.BestSource != "bermuda_room" || !strings.Contains(res.Basis, "home") {
+	if res.BestSource != "unifi_room" || !strings.Contains(res.Basis, "home") {
 		t.Errorf("verdict = %q / %q", res.BestSource, res.Basis)
+	}
+}
+
+// TestContactWhereaboutsProductionPersonShapePreservesRoomProvider mirrors the
+// material parts of a production HA person backed by regular and Bermuda
+// device trackers. The aggregate person's active source must not overwrite the
+// explicit provider that actually supplied Thane's room observation.
+func TestContactWhereaboutsProductionPersonShapePreservesRoomProvider(t *testing.T) {
+	now := time.Now().UTC()
+	getter := staticWhereaboutsStateGetter{
+		"person.alice": {
+			EntityID: "person.alice",
+			State:    "home",
+			Attributes: map[string]any{
+				"friendly_name": "Alice",
+				"source":        "device_tracker.alice_phone_bermuda_tracker",
+				"device_trackers": []any{
+					"device_tracker.alice_phone",
+					"device_tracker.alice_phone_bermuda_tracker",
+				},
+			},
+			LastChanged: now.Add(-24 * time.Hour),
+			LastUpdated: now,
+		},
+	}
+	tracker := contacts.NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+	tracker.UpdateRoom("person.alice", "office", "unifi", "ap-office")
+
+	fx := newWhereaboutsFixture(t, "home", "", nil)
+	fx.deps.Presence = tracker.Snapshot
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) < 2 {
+		t.Fatalf("sources = %+v, want room and zone", res.Sources)
+	}
+	room := res.Sources[0]
+	if room.Source != "unifi_room" || room.RoomVia != "ap-office" {
+		t.Fatalf("room source = %+v, want explicit UniFi provenance", room)
+	}
+	if strings.Contains(out, "bermuda_room") {
+		t.Fatalf("aggregate HA source fabricated Bermuda room provenance: %s", out)
+	}
+}
+
+func TestWhereaboutsRoomSource(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "UniFi", provider: "unifi", want: "unifi_room"},
+		{name: "Bermuda normalized", provider: " Bermuda ", want: "bermuda_room"},
+		{name: "unknown", provider: "future-provider", want: "room_presence"},
+		{name: "legacy empty", provider: "", want: "room_presence"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := whereaboutsRoomSource(tt.provider); got != tt.want {
+				t.Errorf("whereaboutsRoomSource(%q) = %q, want %q", tt.provider, got, tt.want)
+			}
+		})
 	}
 }
 

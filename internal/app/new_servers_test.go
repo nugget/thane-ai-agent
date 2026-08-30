@@ -3,9 +3,78 @@ package app
 import (
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
+
+func TestShouldPublishUnifiAPRoom(t *testing.T) {
+	tests := []struct {
+		name     string
+		room     string
+		provider string
+		want     bool
+	}{
+		{name: "populated UniFi observation", room: "office", provider: unifi.RoomProvider, want: true},
+		{name: "populated non-UniFi observation", room: "office", provider: "bermuda", want: false},
+		{name: "normalized clear", room: "", provider: "", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPublishUnifiAPRoom(tt.room, tt.provider); got != tt.want {
+				t.Errorf("shouldPublishUnifiAPRoom(%q, %q) = %v, want %v", tt.room, tt.provider, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCounterpartyPresenceView(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name               string
+		state              string
+		wantRoom           string
+		wantRoomProvider   string
+		wantRoomSource     string
+		wantRoomSinceEmpty bool
+	}{
+		{
+			name:             "home keeps attributed room",
+			state:            "home",
+			wantRoom:         "office",
+			wantRoomProvider: "unifi",
+			wantRoomSource:   "ap-office",
+		},
+		{
+			name:               "named zone hides retained room",
+			state:              "work",
+			wantRoomSinceEmpty: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := counterpartyPresenceView(contacts.PersonSnapshot{
+				State:        tt.state,
+				Since:        now.Add(-2 * time.Hour),
+				Room:         "office",
+				RoomSince:    now.Add(-20 * time.Minute),
+				RoomProvider: "unifi",
+				RoomSource:   "ap-office",
+			}, now)
+			if view.Room != tt.wantRoom || view.RoomProvider != tt.wantRoomProvider || view.RoomSource != tt.wantRoomSource {
+				t.Errorf("room view = %+v", view)
+			}
+			if (view.RoomSince == "") != tt.wantRoomSinceEmpty {
+				t.Errorf("RoomSince = %q, want empty=%v", view.RoomSince, tt.wantRoomSinceEmpty)
+			}
+			if view.Since != "-2h" {
+				t.Errorf("Since = %q, want -2h", view.Since)
+			}
+		})
+	}
+}
 
 func TestCompanionAccountsByContactRequiresConfiguredSource(t *testing.T) {
 	const contactID = "8A1F50A7-91C1-4DE5-90D3-B239719D29A8"

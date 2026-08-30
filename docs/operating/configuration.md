@@ -162,8 +162,9 @@ closed at render time — the devices degrade to account-only
 attribution and a warning names the unresolved binding.
 
 The second counterparty edge — binding a contact to its Home Assistant
-person entity, through which zone state and room presence flow into
-that contact's channel context — is set on the contact card itself:
+person entity, through which zone state and separately resolved,
+provider-attributed room presence flow into that contact's channel
+context — is set on the contact card itself:
 add an `X-THANE-HA-PERSON` field (e.g. `person.alice`) via CardDAV,
 which is the operator-authenticated surface and the only one that
 honors the header. Model-facing vCard import ignores it, at most one
@@ -171,6 +172,10 @@ active contact may claim a given person entity, and removing the field
 clears the binding. Presence flows only for entities the tracker
 watches: the same entity must also be listed under `person.track`, or
 the binding resolves but the presence join has nothing to report.
+The person binding itself does not infer a room from Home Assistant
+device-tracker attributes. Today room observations come from the
+configured UniFi poller, and model-facing output identifies `unifi` as
+the provider plus the AP name as source evidence.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).

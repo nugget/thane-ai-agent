@@ -45,6 +45,7 @@ func (m *mockLocator) setErr(err error) {
 type roomUpdate struct {
 	entityID string
 	room     string
+	provider string
 	source   string
 }
 
@@ -53,10 +54,10 @@ type mockUpdater struct {
 	updates []roomUpdate
 }
 
-func (m *mockUpdater) UpdateRoom(entityID, room, source string) {
+func (m *mockUpdater) UpdateRoom(entityID, room, provider, source string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.updates = append(m.updates, roomUpdate{entityID, room, source})
+	m.updates = append(m.updates, roomUpdate{entityID, room, provider, source})
 }
 
 func (m *mockUpdater) getUpdates() []roomUpdate {
@@ -109,6 +110,9 @@ func TestPoller_BasicRoomUpdate(t *testing.T) {
 	}
 	if updates[0].room != "office" {
 		t.Errorf("expected room office, got %q", updates[0].room)
+	}
+	if updates[0].provider != RoomProvider {
+		t.Errorf("expected provider %q, got %q", RoomProvider, updates[0].provider)
 	}
 	if updates[0].source != "ap-office" {
 		t.Errorf("expected source ap-office, got %q", updates[0].source)
