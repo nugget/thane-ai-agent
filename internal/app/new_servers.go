@@ -284,6 +284,17 @@ func (a *App) initServers(s *newState) error {
 		a.onClose("companion-device-recorder", handler.CloseDeviceRecorder)
 		server.SetCompanionHandler(handler)
 
+		// Background observation ingestion (#1437): the authenticated
+		// HTTPS path for devices that cannot hold a WebSocket. Bearer
+		// auth rides behind the authenticator seam so the enrollment
+		// arc (#1444) can swap in signature verification without
+		// touching ingestion.
+		server.SetCompanionObservationsHandler(companion.NewObservationsHandler(
+			companion.NewTokenAuthenticator(cfg.Companion.TokenIndex()),
+			a.companionDevices,
+			logger,
+		))
+
 		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
 			Name: "companion",
 			Probe: func(_ context.Context) error {

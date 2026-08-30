@@ -40,5 +40,26 @@ var devicesSchema = database.Schema{
 				UNIQUE (account, client_id)
 			)`,
 		},
+		// companion_observations holds the latest observation per
+		// (device, kind) — one current record, not a history (#1437's
+		// deliberate retention contract). Rows reference the immutable
+		// device_id so they survive credential rotation (#1444).
+		// observed_at is the device's claim, received_at the server's
+		// receipt time; status 'withdrawn' keeps provenance while the
+		// payload is cleared.
+		database.TableCreate{
+			Table: "companion_observations",
+			SQL: `CREATE TABLE IF NOT EXISTS companion_observations (
+				device_id      TEXT NOT NULL,
+				kind           TEXT NOT NULL,
+				event_id       TEXT NOT NULL,
+				schema_version INTEGER NOT NULL,
+				observed_at    TIMESTAMP NOT NULL,
+				received_at    TIMESTAMP NOT NULL,
+				payload        TEXT NOT NULL DEFAULT '{}',
+				status         TEXT NOT NULL DEFAULT 'present',
+				PRIMARY KEY (device_id, kind)
+			)`,
+		},
 	},
 }

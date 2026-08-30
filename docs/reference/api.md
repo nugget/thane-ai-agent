@@ -101,6 +101,7 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `DELETE` | `/v1/checkpoints/{id}` | Delete a checkpoint. |
 | `POST` | `/v1/checkpoints/{id}/restore` | Restore from a checkpoint. |
 | `GET` | `/v1/realtime/ws` | First-party realtime WebSocket (canonical). |
+| `POST` | `/v1/companion/observations` | Background observation ingestion from companion devices (bearer-authenticated; enforced today). |
 | `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 

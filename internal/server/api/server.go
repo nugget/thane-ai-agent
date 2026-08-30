@@ -86,6 +86,7 @@ type Server struct {
 	owuTracker                         *OWUTracker
 	webServer                          WebServerRegistrar
 	companionHandler                   http.Handler
+	companionObservationsHandler       http.Handler
 	modelRegistry                      *fleet.Registry
 	contactStore                       *contacts.Store
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
@@ -158,6 +159,13 @@ func (s *Server) SetWebServer(ws WebServerRegistrar) {
 // companion app connections.
 func (s *Server) SetCompanionHandler(h http.Handler) {
 	s.companionHandler = h
+}
+
+// SetCompanionObservationsHandler configures the authenticated
+// observation-ingestion endpoint for companion devices that cannot
+// hold a WebSocket (#1437).
+func (s *Server) SetCompanionObservationsHandler(h http.Handler) {
+	s.companionObservationsHandler = h
 }
 
 // UseContactStore configures the native contact-directory API.
@@ -538,6 +546,15 @@ func (s *Server) Start(ctx context.Context) error {
 	// so the routes, the coverage allowlist, and the sunset gate share
 	// one source of truth (#1084). The handler emits deprecation signals
 	// and usage telemetry when a connection arrives on an alias.
+	// Companion background ingestion: bearer-authenticated pushes from
+	// devices that are offline in WebSocket terms (a phone waking for a
+	// background event). Unlike the rest of the native surface, this
+	// route enforces its own authentication — it is designed to be
+	// reachable by roaming devices.
+	if s.companionObservationsHandler != nil {
+		mux.Handle("POST /v1/companion/observations", s.companionObservationsHandler)
+	}
+
 	if s.companionHandler != nil {
 		mux.Handle("GET /v1/realtime/ws", s.companionHandler)
 		for _, alias := range legacyroute.Aliases {

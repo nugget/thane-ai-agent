@@ -21,7 +21,10 @@ info:
     Each operation below carries an `x-thane-scope` extension naming the
     permission it will require once authorization is enforced. Today the API is
     open behind the network boundary; the contract is declared first so the
-    explorer, the UIs, and the eventual middleware all agree on the shape.
+    explorer, the UIs, and the eventual middleware all agree on the shape. One
+    exception enforces authentication already: `POST /v1/companion/observations`
+    requires a companion device token, because it is designed to be reachable
+    by roaming devices.
 
     - **AuthN:** bearer token (`Authorization: Bearer <token>`). The scheme is
       written OIDC-ready; tokens are minted directly for now.
@@ -31,7 +34,7 @@ info:
       `archive:read`,
       `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
       `telemetry:read`, `contacts:read`, `contacts:write`, `identity:read`,
-      `system:read`.
+      `system:read`, `companion:ingest`.
     - **Roles** bundle scopes: `observer` (all `:read`), `operator`
       (observer + `definitions:write`, `sessions:write`, `checkpoints:write`),
       `admin` (everything, incl. `models:admin`, `contacts:write`).
@@ -86,6 +89,8 @@ tags:
     description: Durable instance identity and core provenance evidence.
   - name: Realtime
     description: WebSocket channel for first-party live interaction.
+  - name: Companion
+    description: Companion-device surfaces that work while the device is offline in WebSocket terms.
 
 externalDocs:
   description: Source, architecture, and contributor guides on GitHub.
@@ -105,7 +110,7 @@ x-tagGroups:
   - name: Integrations & Data
     tags: [Contacts]
   - name: Runtime
-    tags: [Identity, System, Realtime]
+    tags: [Identity, System, Realtime, Companion]
 
 paths:
   # --------------------------------------------------------------- Identity
@@ -1223,6 +1228,58 @@ paths:
       responses:
         "101": { description: Switching Protocols (WebSocket). }
 
+  # -------------------------------------------------------------- Companion
+  /v1/companion/observations:
+    post:
+      tags: [Companion]
+      operationId: ingestCompanionObservations
+      summary: Ingest background observations from a companion device
+      description: |
+        Authenticated HTTPS push path for companion devices that cannot hold a
+        WebSocket — an iPhone waking briefly for a background system event
+        drains its observation outbox here. Unlike the rest of the native
+        surface, this operation enforces its bearer token today: the token is
+        a companion token (`companion.providers.<account>.tokens[]`), it alone
+        determines the account, and every accepted `client_id` is bound to
+        that account. A successful upload means the device was recently seen;
+        it does not make the device live or remotely callable.
+
+        Limits: body ≤ 262144 bytes, ≤ 64 events per batch, ≤ 16384 bytes per
+        event payload. Events are validated individually — one bad event earns
+        an `invalid` verdict without failing its batch — and every per-event
+        verdict is terminal for the client's outbox entry. Replaying an
+        accepted `event_id` is idempotent (`duplicate`), and an event older
+        than the stored observation of its kind is `superseded`, so retrying a
+        whole batch after a 5xx is always safe.
+      x-thane-scope: companion:ingest
+      requestBody:
+        required: true
+        description: A bounded batch of observations from one device.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompanionObservationBatch" }
+            example:
+              client_id: 6A0C3F62-6E1B-4E1E-9A3C-2B6F16E6D0A4
+              events:
+                - event_id: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
+                  kind: ios.location
+                  schema_version: 1
+                  observed_at: "2026-08-29T19:42:00Z"
+                  payload: { latitude: 41.0, longitude: -87.0, horizontal_accuracy_m: 24.0 }
+      responses:
+        "200":
+          description: Per-event verdicts, in batch order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationResults" }
+              example:
+                results:
+                  - event_id: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
+                    status: applied
+        "400": { description: "Malformed body, missing client_id, empty batch, or too many events." }
+        "401": { description: Invalid or missing companion token. }
+        "413": { description: Request body exceeds the documented limit. }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1283,6 +1340,88 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    CompanionObservationBatch:
+      type: object
+      required: [client_id, events]
+      example:
+        client_id: 6A0C3F62-6E1B-4E1E-9A3C-2B6F16E6D0A4
+        events:
+          - event_id: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
+            kind: ios.location
+            schema_version: 1
+            observed_at: "2026-08-29T19:42:00Z"
+            payload: { latitude: 41.0, longitude: -87.0, horizontal_accuracy_m: 24.0 }
+      properties:
+        client_id:
+          type: string
+          description: The device's stable identity claim — the same value it presents during WebSocket authentication.
+          example: 6A0C3F62-6E1B-4E1E-9A3C-2B6F16E6D0A4
+        events:
+          type: array
+          minItems: 1
+          maxItems: 64
+          description: The observations to ingest, at most 64 per request.
+          example:
+            - event_id: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
+              kind: ios.location
+              schema_version: 1
+              observed_at: "2026-08-29T19:42:00Z"
+              payload: { latitude: 41.0, longitude: -87.0 }
+          items: { $ref: "#/components/schemas/CompanionObservationEvent" }
+    CompanionObservationEvent:
+      type: object
+      required: [event_id, kind, schema_version, observed_at]
+      properties:
+        event_id:
+          type: string
+          maxLength: 128
+          description: Client-generated idempotency key for this event; replays are acknowledged as duplicates.
+          example: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
+        kind:
+          type: string
+          description: "Observation kind, matching `[a-z0-9][a-z0-9._-]{0,63}`."
+          example: ios.location
+        schema_version:
+          type: integer
+          minimum: 1
+          description: Version of the payload schema for this kind.
+          example: 1
+        observed_at:
+          type: string
+          format: date-time
+          description: Device-supplied observation time (RFC 3339). Recorded independently from the server's authoritative receipt time; may not claim more than 5 minutes into the future, and arbitrarily old catch-up uploads are legal.
+          example: "2026-08-29T19:42:00Z"
+        withdrawn:
+          type: boolean
+          description: "True erases the stored observation of this kind — sharing was disabled or OS permission became insufficient. A withdrawn event must not carry a payload."
+        payload:
+          type: object
+          additionalProperties: true
+          description: Observation data, ≤ 16384 bytes. Required unless withdrawn.
+          example: { latitude: 41.0, longitude: -87.0, horizontal_accuracy_m: 24.0 }
+    CompanionObservationResults:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          description: One verdict per submitted event, in batch order. Every verdict is terminal for the client's outbox entry.
+          example:
+            - event_id: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
+              status: applied
+          items:
+            type: object
+            required: [event_id, status]
+            properties:
+              event_id: { type: string, example: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41 }
+              status:
+                type: string
+                enum: [applied, duplicate, superseded, invalid]
+                description: applied = stored as the latest observation of its kind; duplicate = this event_id was already accepted; superseded = a newer observation is already stored; invalid = the event failed validation and will not improve on retry.
+                example: applied
+              error:
+                type: string
+                description: Validation failure reason; present only for invalid events.
     Error:
       type: object
       description: Standard error envelope returned for any 4xx/5xx response.
