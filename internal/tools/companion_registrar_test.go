@@ -62,7 +62,7 @@ func findTool(tools []*Tool, name string) *Tool {
 
 func TestCompanionRegistrar_Synthesize(t *testing.T) {
 	src := &fakeCompanionSource{infos: []companion.ProviderInfo{contactsProvider()}}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 
 	synth, tagAdds := cr.Snapshot()
 	if len(synth) != 1 {
@@ -103,7 +103,7 @@ func TestCompanionRegistrar_DispatchRoutesAndStripsHints(t *testing.T) {
 		infos:  []companion.ProviderInfo{contactsProvider()},
 		result: json.RawMessage(`{"contacts":[{"name":"Bob"}]}`),
 	}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 	synth, _ := cr.Snapshot()
 	tool := findTool(synth, "macos_search_contacts")
 
@@ -151,7 +151,7 @@ func TestCompanionRegistrar_DispatchSurfacesError(t *testing.T) {
 		infos: []companion.ProviderInfo{contactsProvider()},
 		err:   errors.New("provider_disconnected: companion app disconnected"),
 	}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 	synth, _ := cr.Snapshot()
 	tool := findTool(synth, "macos_search_contacts")
 
@@ -177,7 +177,7 @@ func TestCompanionRegistrar_CalendarFormatter(t *testing.T) {
 		infos:  []companion.ProviderInfo{info},
 		result: json.RawMessage(`{"events":[{"title":"Standup","calendar":"Work","start":"2026-06-23T09:00:00Z","end":"2026-06-23T09:15:00Z"}]}`),
 	}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 	synth, _ := cr.Snapshot()
 	tool := findTool(synth, "macos_calendar_events")
 
@@ -205,7 +205,7 @@ func TestCompanionRegistrar_DedupAcrossProviders(t *testing.T) {
 		}
 	}
 	src := &fakeCompanionSource{infos: []companion.ProviderInfo{mk("aimee", "first"), mk("nugget", "second")}}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 	synth, tagAdds := cr.Snapshot()
 	if len(synth) != 1 {
 		t.Fatalf("dedup: got %d tools, want 1", len(synth))
@@ -218,7 +218,7 @@ func TestCompanionRegistrar_DedupAcrossProviders(t *testing.T) {
 
 func TestCompanionRegistrar_RebuildOnConnectAndDisconnect(t *testing.T) {
 	src := &fakeCompanionSource{}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 
 	if synth, _ := cr.Snapshot(); len(synth) != 0 {
 		t.Fatalf("initial snapshot should be empty, got %d", len(synth))
@@ -401,7 +401,7 @@ func claimant(providerID, clientID, method string) companion.ProviderInfo {
 func winningMethod(t *testing.T, infos ...companion.ProviderInfo) string {
 	t.Helper()
 	src := &fakeCompanionSource{infos: infos, result: json.RawMessage(`{}`)}
-	cr := newCompanionRegistrar(src.List, src.Call, discardLogger())
+	cr := newCompanionRegistrar(src.List, src.Call, nil, discardLogger())
 	synth, _ := cr.Snapshot()
 	if len(synth) != 1 {
 		t.Fatalf("collision should yield 1 tool, got %d", len(synth))
@@ -419,7 +419,7 @@ func rebuildLogs(t *testing.T, infos ...companion.ProviderInfo) string {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	src := &fakeCompanionSource{infos: infos}
-	newCompanionRegistrar(src.List, src.Call, logger)
+	newCompanionRegistrar(src.List, src.Call, nil, logger)
 	return buf.String()
 }
 
@@ -435,7 +435,7 @@ func TestCompanionRegistrar_DispatchCapsResult(t *testing.T) {
 		infos:  []companion.ProviderInfo{contactsProvider()},
 		result: json.RawMessage(huge),
 	}
-	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	cr := newCompanionRegistrar(src.List, src.Call, nil, nil)
 	synth, _ := cr.Snapshot()
 
 	out, err := findTool(synth, "macos_search_contacts").Handler(context.Background(), map[string]any{"query": "x"})

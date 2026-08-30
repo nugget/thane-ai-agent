@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
 )
@@ -45,7 +46,7 @@ type companionProviderLister func() []companion.ProviderInfo
 
 // companionResultFormatter renders a raw companion result into the string
 // the model sees. The default is JSON passthrough; named formatters exist
-// only to preserve prose output for specific legacy tools.
+// where the server adds derivation the raw payload lacks.
 type companionResultFormatter func(json.RawMessage) (string, error)
 
 // CompanionRegistrar synthesizes model-facing tools from the tool
@@ -64,6 +65,7 @@ type CompanionRegistrar struct {
 	list       companionProviderLister
 	call       companionCallFunc
 	logger     *slog.Logger
+	home       *time.Location
 	formatters map[string]companionResultFormatter
 
 	mu           sync.RWMutex
@@ -75,25 +77,33 @@ type CompanionRegistrar struct {
 // registry. Wire its Rebuild method to companion.Registry.SetOnChange and
 // install it via Loop.SetDynamicToolSource. The initial snapshot is empty
 // until a companion connects and registers capabilities.
-func NewCompanionRegistrar(registry *companion.Registry, logger *slog.Logger) *CompanionRegistrar {
-	return newCompanionRegistrar(registry.List, registry.Call, logger)
+// The home location is the household zone every calendar time is
+// rendered in; pass nil to fall back to the host's local zone.
+func NewCompanionRegistrar(registry *companion.Registry, home *time.Location, logger *slog.Logger) *CompanionRegistrar {
+	return newCompanionRegistrar(registry.List, registry.Call, home, logger)
 }
 
 // newCompanionRegistrar is the func-injected constructor used by tests to
 // supply a fake provider list and caller.
-func newCompanionRegistrar(list companionProviderLister, call companionCallFunc, logger *slog.Logger) *CompanionRegistrar {
+func newCompanionRegistrar(list companionProviderLister, call companionCallFunc, home *time.Location, logger *slog.Logger) *CompanionRegistrar {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if home == nil {
+		home = time.Local
 	}
 	cr := &CompanionRegistrar{
 		list:   list,
 		call:   call,
+		home:   home,
 		logger: logger.With("component", "companion_registrar"),
-		formatters: map[string]companionResultFormatter{
-			// Preserve the pretty calendar prose for the legacy tool name
-			// while everything else defaults to JSON passthrough.
-			"macos_calendar_events": calendarResultFormatter,
-		},
+	}
+	cr.formatters = map[string]companionResultFormatter{
+		// Calendar results are re-derived rather than passed through: the
+		// wire carries event-zone instants and dates, and the server owns
+		// the household frame, the deltas, and the divergence readings the
+		// model needs (see companion_calendar_format.go).
+		"macos_calendar_events": cr.calendarResultFormatter,
 	}
 	cr.Rebuild()
 	return cr
@@ -333,7 +343,7 @@ func (cr *CompanionRegistrar) dispatch(ctx context.Context, capability, method s
 		return "", fmt.Errorf("marshal companion request: %w", err)
 	}
 
-	result, err := cr.call(ctx, companion.CallRequest{
+	result, err := callCompanion(ctx, cr.call, companion.CallRequest{
 		Account:    account,
 		ClientID:   clientID,
 		Capability: capability,
@@ -423,12 +433,13 @@ func jsonPassthroughFormatter(raw json.RawMessage) (string, error) {
 	return string(raw), nil
 }
 
-// calendarResultFormatter preserves the human-readable calendar prose for
-// the legacy macos_calendar_events tool name.
-func calendarResultFormatter(raw json.RawMessage) (string, error) {
+// calendarResultFormatter re-derives calendar results in the household
+// zone the registrar was built with: a framing header plus one JSON
+// object per event, with deltas and event-local readings attached.
+func (cr *CompanionRegistrar) calendarResultFormatter(raw json.RawMessage) (string, error) {
 	var resp companionCalendarResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", fmt.Errorf("decode companion calendar response: %w", err)
 	}
-	return formatCompanionCalendarResponse(resp), nil
+	return formatCompanionCalendarResponse(resp, cr.home, time.Now()), nil
 }

@@ -123,7 +123,9 @@ and those publish the same understanding at several fidelities. Pass
 
 `status_line` is one line of what is true right now. `teaser` is a
 paragraph on why you would open the document. `digest` carries enough to
-act on without opening it. `full` is the whole body.
+act on without opening it. `full` is the whole body. The first two are
+different shapes of the same outward-facing signal role; `digest` is the
+context payload after that signal earns attention.
 
 This is not truncation — each level was written to stand alone at that
 size by the loop that owns the subject, so a status line is a sentence

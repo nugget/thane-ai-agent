@@ -30,6 +30,13 @@ How to work here:
 - When more than one account has a Mac connected, a call may come back
   asking you to disambiguate. Retry with `account` (and `client_id` if one
   account has several hosts) set to one of the choices it names.
+- A "### Calendar" block in Live State is the mechanical snapshot of the
+  household's near-term calendar: events active right now (with an
+  ends-in delta), the next upcoming one, and today's remainder,
+  refreshed in the background from a connected Mac. Trust its
+  snapshot-age, stale, and offline fields over assumptions about
+  freshness; when it reads truncated, or you need more than two days
+  out, pull the window you need with `macos_calendar_events`.
 - These are read surfaces — inspect before you expect to change anything.
   Writing host data (e.g. creating calendar events) is gated separately and
   is not available just because a read tool is.

@@ -19,9 +19,24 @@ var (
 )
 
 type parsedDocument struct {
-	Title       string
-	Summary     string
-	Facets      []string
+	Title   string
+	Summary string
+	// Audience is the document's single audience frontmatter value
+	// ("" when undeclared), promoted out of the frontmatter map so the
+	// index can store it as a first-class column and exclude
+	// audience: internal rows in SQL rather than after decoding every
+	// row's frontmatter JSON (#1250, #1431).
+	Audience string
+	Facets   []string
+	// FacetBytes is the UTF-8 byte length of each present projection's
+	// content, keyed by facet key, with "full" always present. Byte
+	// length, not rune count, deliberately: facet budgets elsewhere in
+	// the contract are runes (display budgets), but these entries exist
+	// so a context advertiser can estimate what materializing a level
+	// costs against a byte-denominated context budget without any file
+	// I/O — and a rune count under-estimates multi-byte UTF-8 content,
+	// which the discriminator punishes with silent post-read drops.
+	FacetBytes  map[string]int
 	WordCount   int
 	Tags        []string
 	Frontmatter map[string][]string
@@ -69,7 +84,9 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 	// pull (#1250).
 	summary := ""
 	var facets []string
-	if payload, faceted := looppkg.ParseFacetSections(body); faceted {
+	facetBytes := make(map[string]int, len(looppkg.FacetKeys()))
+	payload, faceted := looppkg.ParseFacetSections(body)
+	if faceted {
 		for _, key := range looppkg.FacetKeys() {
 			// full is every document's baseline and advertises nothing;
 			// the facet list exists to say which condensed projections
@@ -79,6 +96,7 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 			}
 			if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
 				facets = append(facets, key)
+				facetBytes[key] = len(value)
 			}
 		}
 		if teaser, ok := payload.FacetByKey(string(looppkg.OutputFacetTeaser)); ok && strings.TrimSpace(teaser) != "" {
@@ -91,11 +109,18 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 	} else {
 		summary = firstParagraph(body)
 	}
+	// full is measured for every document, faceted or not: the full body
+	// is always a readable projection level, and an unfaceted body parses
+	// entirely into payload.Full, so both branches share one source of
+	// truth for what a full-level read yields.
+	facetBytes["full"] = len(payload.Full)
 
 	return parsedDocument{
 		Title:       title,
 		Summary:     summary,
+		Audience:    firstValue(meta, audienceFrontmatterKey),
 		Facets:      facets,
+		FacetBytes:  facetBytes,
 		WordCount:   len(strings.Fields(body)),
 		Tags:        append([]string(nil), meta["tags"]...),
 		Frontmatter: meta,

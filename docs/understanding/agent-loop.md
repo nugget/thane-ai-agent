@@ -123,7 +123,10 @@ Output shapes available today:
   body through a generated `publish_output_<name>` tool, one argument
   per projection. Thane renders the document's sections, enforces a
   per-projection size budget, and can parse the document back into the
-  projections it was published from.
+  projections it was published from. Declare only the projections the
+  document's consumers need: `status_line` and `teaser` are compact
+  outward-facing signals with different shape budgets, while `digest`
+  carries enough context to act.
 - **Working notes** outputs are a loop's private append-only process
   log. They are internal-audience: excluded from document search and
   from tagged-guidance injection, though the operator and the archive

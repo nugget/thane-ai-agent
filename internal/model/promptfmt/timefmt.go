@@ -193,3 +193,44 @@ func parseDeltaTerms(s string) (time.Duration, error) {
 	}
 	return total, nil
 }
+
+// FormatDayDelta renders the distance between two calendar days as the
+// word a reader would use, falling back to a signed day count past the
+// range words have: "today", "tomorrow", "yesterday", "+5d", "-3d".
+//
+// Unlike [FormatDeltaOnly] this takes whole days rather than an instant
+// offset, because its subject is a date rather than a moment. An all-day
+// calendar event occupies a day, not a point on the clock; saying it
+// starts in "+14h29m" invents a precision the source never had and reads
+// as though there were a time to be early or late for.
+//
+// Both arguments are interpreted in their own locations, so callers must
+// pass times already converted to the frame the reader thinks in.
+func FormatDayDelta(day, today time.Time) string {
+	d := daysBetween(today, day)
+	switch d {
+	case 0:
+		return "today"
+	case 1:
+		return "tomorrow"
+	case -1:
+		return "yesterday"
+	}
+	if d > 0 {
+		return fmt.Sprintf("+%dd", d)
+	}
+	return fmt.Sprintf("-%dd", -d)
+}
+
+// daysBetween counts whole calendar days from one date to another,
+// ignoring both clock times and the locations the two carry. Truncating
+// each to midnight UTC before subtracting keeps the count immune to the
+// 23- and 25-hour days a DST transition produces: a plain Sub on two
+// local midnights either side of a spring-forward reports 23h, which
+// integer-divides to zero days and would render an event "today" on the
+// morning it is actually tomorrow.
+func daysBetween(from, to time.Time) int {
+	a := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
+	b := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.UTC)
+	return int(b.Sub(a) / (24 * time.Hour))
+}

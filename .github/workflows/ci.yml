@@ -22,7 +22,7 @@ permissions:
 # recompile every run. Per-job keys keep each job's warm cache intact.
 env:
   LYCHEE_VERSION: '0.24.2'
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.27.0'
 
 jobs:
   test:

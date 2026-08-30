@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -41,6 +42,12 @@ import (
 //     full-mode loop turns set both, task-mode turns set only
 //     loop-scoped, delegate runs set neither.
 //
+// Providers may instead implement [ContextAdvertiser]. Those providers offer
+// cheap request-relative candidates during the same walk; one deterministic
+// discriminator ranks, filters, and limits all offers before materializing
+// selected projections. Legacy eager providers keep rendering directly while
+// they migrate.
+//
 // Each rendered bucket has its own 64 KB cap and truncation marker.
 // A provider's class is encoded as how it registered, not as a
 // separate code path — one interleaved list preserves registration
@@ -67,6 +74,12 @@ type TagContextAssembler struct {
 	}
 	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger   *slog.Logger
+	// loc is the zone temporal templates expand against; see
+	// [TagContextAssemblerConfig.Timezone] for why it matters.
+	loc *time.Location
+	// nowFunc returns the current time. Tests override it to pin
+	// template expansion to a fixed instant.
+	nowFunc func() time.Time
 
 	mu           sync.Mutex
 	tagProviders map[string]TagContextProvider
@@ -138,6 +151,13 @@ type TagContextAssemblerConfig struct {
 	}
 	HAInject homeassistant.StateFetcher // nil-safe
 	Logger   *slog.Logger
+	// Timezone is the household IANA timezone (e.g. "America/Chicago")
+	// that temporal templates in injected documents expand against.
+	// [promptfmt.FormatDayDelta] compares calendar days, so the zone
+	// decides which day "today" is — a household evening must not read
+	// as "tomorrow" because the process clock runs in UTC. Empty or
+	// unloadable falls back to the process-local zone.
+	Timezone string
 }
 
 // NewTagContextAssembler creates an assembler. The KB directory is
@@ -151,6 +171,20 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	// Config validation already rejects a bad household timezone, but
+	// this constructor is also reached directly (tests, the loop's
+	// pending-provider fallback), so degrade to the process-local zone
+	// with a warning rather than failing construction over a
+	// presentation concern.
+	loc := time.Local
+	if cfg.Timezone != "" {
+		if parsed, err := time.LoadLocation(cfg.Timezone); err == nil {
+			loc = parsed
+		} else {
+			cfg.Logger.Warn("invalid timezone for temporal template expansion; using process-local zone",
+				"timezone", cfg.Timezone, "error", err)
+		}
+	}
 	return &TagContextAssembler{
 		capTags:     cfg.CapTags,
 		kbDir:       cfg.KBDir,
@@ -159,7 +193,24 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 		verifier:    cfg.Verifier,
 		haInject:    cfg.HAInject,
 		logger:      cfg.Logger,
+		loc:         loc,
+		nowFunc:     time.Now,
 	}
+}
+
+// templateNow is the instant temporal templates in injected documents
+// expand against: the current time in the household zone when one was
+// configured, the process-local zone otherwise. Day-word rendering
+// compares calendar days, so the zone decides which day "today" is.
+func (a *TagContextAssembler) templateNow() time.Time {
+	now := time.Now()
+	if a.nowFunc != nil {
+		now = a.nowFunc()
+	}
+	if a.loc != nil {
+		now = now.In(a.loc)
+	}
+	return now
 }
 
 // InjectRoot is one injection-eligible document root: the directory to
@@ -382,6 +433,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 
 	seen := make(map[string]bool)
 	acc := newContextAccumulator()
+	var advertisements []contextAdvertisementCandidate
 
 	// Source 1: Tagged KB articles. Re-scanned and re-read each turn
 	// so frontmatter edits, additions, and deletions propagate
@@ -390,6 +442,12 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	// all-of activation. Both compose; see [articleMatchesTags].
 	kbStart := time.Now()
 	articles := a.loadKBArticles()
+	// One instant for every article in this assembly. Sampling the clock
+	// per article lets a prompt that crosses a second — or local
+	// midnight — render identical templates differently a few lines
+	// apart ("today" above, "tomorrow" below), which reads as two
+	// documents disagreeing rather than one clock ticking.
+	templateNow := a.templateNow()
 	for _, article := range articles {
 		if !articleMatchesTags(article, req.ActiveTags) {
 			continue
@@ -412,6 +470,13 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		// Strip frontmatter before injection — the model doesn't need
 		// the YAML metadata, just the knowledge content.
 		_, content := talents.ParseFrontmatterMetadata(string(data))
+		// Temporal templates expand before ha-inject resolution so
+		// only the curated prose is expanded, never entity state
+		// fetched a moment ago. This is a reader surface: the model
+		// sees "+20d" here while doc_read, the publish tools, and git
+		// keep the raw {{delta:...}} so the author round-trip stays
+		// byte-exact.
+		content = promptfmt.ExpandTemporalTemplates(content, templateNow)
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		bucket := agentctx.ContextBucketTaggedGuidance
 		if acc.append(bucket, data) {
@@ -430,11 +495,14 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 			continue
 		}
 		pStart := time.Now()
-		content, err := p.TagContext(ctx, req)
+		content, advertised, err := a.contextFromProvider(ctx, req, p, &advertisements)
 		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
 				"tag", tag, "error", err)
+			continue
+		}
+		if advertised {
 			continue
 		}
 		if content == "" {
@@ -474,10 +542,13 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 			defaultBucket, source = agentctx.ContextBucketLiveState, "loop_scoped_provider"
 		}
 		pStart := time.Now()
-		content, err := gp.provider.TagContext(ctx, req)
+		content, advertised, err := a.contextFromProvider(ctx, req, gp.provider, &advertisements)
 		warnSlowContextSource(a.logger, source, fmt.Sprintf("%T", gp.provider), pStart)
 		if err != nil {
 			a.logger.Warn("gated context provider failed", "source", source, "error", err)
+			continue
+		}
+		if advertised {
 			continue
 		}
 		if content == "" {
@@ -491,7 +562,50 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		}
 	}
 
+	// Advertised context wins the front of its bucket after the full offer
+	// set has competed. That keeps final rank independent of registration
+	// order and prevents a selected compact projection from being starved by
+	// an earlier legacy provider that filled the outer bucket cap.
+	for bucket, content := range a.materializeContextAdvertisements(ctx, req, advertisements) {
+		if acc.prepend(bucket, []byte(content)) {
+			a.logger.Warn("tag context bucket limit reached after advertised context selection",
+				"bucket", string(bucket), "bucket_title", bucket.Title(),
+				"source", "context_discriminator", "limit_bytes", maxTagContextBytes)
+		}
+	}
+
 	return acc.sections()
+}
+
+// contextFromProvider takes the advertisement path when a provider supports
+// it, otherwise preserving the legacy eager render contract. Invalid offers
+// are isolated to the producer that emitted them; other candidates still
+// compete normally.
+func (a *TagContextAssembler) contextFromProvider(ctx context.Context, req agentctx.ContextRequest, provider TagContextProvider, candidates *[]contextAdvertisementCandidate) (string, bool, error) {
+	advertiser, ok := provider.(ContextAdvertiser)
+	if !ok {
+		content, err := provider.TagContext(ctx, req)
+		return content, false, err
+	}
+	advertisements, err := advertiser.ContextAdvertisements(ctx, req)
+	if err != nil {
+		return "", true, err
+	}
+	for _, advertisement := range advertisements {
+		if err := advertisement.Validate(); err != nil {
+			a.logger.Warn("context advertisement rejected",
+				"provider", fmt.Sprintf("%T", provider),
+				"source", advertisement.Source,
+				"id", advertisement.ID,
+				"error", err)
+			continue
+		}
+		*candidates = append(*candidates, contextAdvertisementCandidate{
+			advertiser:    advertiser,
+			advertisement: advertisement,
+		})
+	}
+	return "", true, nil
 }
 
 // BuildRefs assembles exact managed document refs for origin-derived
@@ -647,6 +761,25 @@ func (a *contextAccumulator) append(bucket agentctx.ContextBucket, data []byte) 
 		return true
 	}
 	return false
+}
+
+func (a *contextAccumulator) prepend(bucket agentctx.ContextBucket, data []byte) bool {
+	bucket = bucket.OrDefault(agentctx.ContextBucketContinuity)
+	if len(data) == 0 {
+		return false
+	}
+	old := a.buffers[bucket]
+	buf := &strings.Builder{}
+	truncated := appendContextContent(buf, data, maxTagContextBytes, contextBucketTruncationMarker(bucket))
+	if !truncated && old != nil && old.Len() > 0 {
+		truncated = appendContextContent(buf, []byte(old.String()), maxTagContextBytes, contextBucketTruncationMarker(bucket))
+	}
+	if old == nil {
+		a.order = append(a.order, bucket)
+	}
+	a.buffers[bucket] = buf
+	a.capped[bucket] = truncated || a.capped[bucket]
+	return truncated
 }
 
 func (a *contextAccumulator) sections() []agentctx.ContextSection {

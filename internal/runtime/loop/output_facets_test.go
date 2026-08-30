@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func facetedOutput(names ...OutputFacet) OutputSpec {
@@ -36,6 +38,11 @@ func TestOutputSpecFacetFieldsFollowCanonicalOrder(t *testing.T) {
 			want:   []string{"status_line", "full"},
 		},
 		{
+			name:   "request-facing facets need no ambient status",
+			output: facetedOutput(OutputFacetTeaser, OutputFacetDigest),
+			want:   []string{"teaser", "digest", "full"},
+		},
+		{
 			name:   "declaration order is ignored",
 			output: facetedOutput(OutputFacetDigest, OutputFacetStatusLine),
 			want:   []string{"status_line", "digest", "full"},
@@ -58,6 +65,26 @@ func TestOutputSpecFacetFieldsFollowCanonicalOrder(t *testing.T) {
 				t.Fatalf("FacetFields() keys = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFacetContextRolesUnifyOutwardSignals(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]agentctx.ContextProjectionRole{
+		"status_line": agentctx.ContextRoleSignal,
+		"teaser":      agentctx.ContextRoleSignal,
+		"digest":      agentctx.ContextRoleContext,
+		"full":        agentctx.ContextRoleDetail,
+	}
+	for key, role := range want {
+		field, ok := FacetFieldByKey(key)
+		if !ok {
+			t.Fatalf("FacetFieldByKey(%q) missing", key)
+		}
+		if field.ContextRole != role {
+			t.Errorf("FacetFieldByKey(%q).ContextRole = %q, want %q", key, field.ContextRole, role)
+		}
 	}
 }
 

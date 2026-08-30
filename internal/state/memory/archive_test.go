@@ -1094,7 +1094,7 @@ func TestNewArchiveStoreFromDB_CloseIsNoop(t *testing.T) {
 	}
 
 	// The working store should still be usable.
-	if err := workingStore.AddMessage("conv-1", "user", "after close"); err != nil {
+	if err := workingStore.AddMessage("conv-1", "user", "after close", ""); err != nil {
 		t.Fatalf("working store should still work after archive close: %v", err)
 	}
 }
@@ -1876,7 +1876,7 @@ func TestGetMessagesInRange_UnifiedTableSpaceFormat(t *testing.T) {
 
 	// Insert three messages via the production path (bound time.Time).
 	for i, content := range []string{"first", "second", "third"} {
-		if err := workingStore.AddMessage("conv-1", "user", content); err != nil {
+		if err := workingStore.AddMessage("conv-1", "user", content, ""); err != nil {
 			t.Fatalf("AddMessage[%d]: %v", i, err)
 		}
 		time.Sleep(2 * time.Millisecond) // distinguish timestamps
