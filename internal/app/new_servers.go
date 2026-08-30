@@ -377,15 +377,7 @@ func (a *App) initServers(s *newState) error {
 	// channel enrichment join and the fused whereabouts tool. Config
 	// may spell a binding in any form uuid.Parse accepts; lookups
 	// compare against contact.ID.String().
-	accountsByContact := make(map[string][]string)
-	for account, provider := range cfg.Companion.Providers {
-		if provider.Contact == "" {
-			continue
-		}
-		if id, err := uuid.Parse(provider.Contact); err == nil {
-			accountsByContact[id.String()] = append(accountsByContact[id.String()], account)
-		}
-	}
+	accountsByContact := companionAccountsByContact(cfg.Companion)
 
 	if s.contactLookup != nil {
 		if s.personTracker != nil {
@@ -903,4 +895,25 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	return nil
+}
+
+// companionAccountsByContact exposes counterparty bindings only while the
+// companion source is configured. Provider entries may remain in disabled
+// config, but they must not keep persisted companion data reachable through
+// contact joins after the operator disables the integration.
+func companionAccountsByContact(cfg config.CompanionConfig) map[string][]string {
+	if !cfg.Configured() {
+		return nil
+	}
+	accountsByContact := make(map[string][]string)
+	for account, provider := range cfg.Providers {
+		if provider.Contact == "" {
+			continue
+		}
+		if id, err := uuid.Parse(provider.Contact); err == nil {
+			canonicalID := id.String()
+			accountsByContact[canonicalID] = append(accountsByContact[canonicalID], account)
+		}
+	}
+	return accountsByContact
 }
