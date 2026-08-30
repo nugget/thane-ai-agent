@@ -292,7 +292,7 @@ func (a *App) initServers(s *newState) error {
 		// with live connectivity, so an iPhone that locked stays visible
 		// as an offline device with honest freshness instead of
 		// vanishing. Uncached live state.
-		deviceContext := companions.NewContextProvider(a.companionDevices, a.companionRegistry.List)
+		deviceContext := companions.NewContextProvider(a.companionDevices, a.companionRegistry.List, logger)
 
 		// Counterparty attribution (#1450): each account's configured
 		// contact binding resolves at read time — never copied onto

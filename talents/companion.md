@@ -26,8 +26,9 @@ Reading the device block:
 - `availability` says whether a live connection is open. Only online
   devices have callable tools, listed per device by exact name.
 - `device_id` is the durable handle for a device — stable across
-  reinstalls and credential changes. `client_id` is the device's
-  current claim, and is what tool routing accepts today.
+  reconnects and credential changes. (A fresh install that presents a
+  brand-new identity claim registers as a new device.) `client_id` is
+  the device's current claim, and is what tool routing accepts today.
 - `observations` lists the latest report per kind with two ages:
   `observed_ago` is the device's claim about when it happened,
   `received_ago` is when it reached you — they differ when a device
@@ -42,10 +43,12 @@ How to work here:
   description match the data you need; `macos_calendar_events` lists
   calendar events, and a connected Mac may also offer contact-search
   and reminder-listing tools.
-- If a tool you expect is absent, its device is offline rather than the
-  request being wrong. The device block tells you which device that is
-  and when it was last seen — say so plainly instead of substituting a
-  guess.
+- If a tool you expect is absent, check the device block before
+  concluding anything: when the device shows offline, say so plainly
+  with its last-seen age; when it shows online without that tool, the
+  device simply does not offer the capability right now — its platform
+  may lack it or registration may still be settling. Neither case
+  means the request was wrong, and neither is a reason to guess.
 - When more than one account has a device connected, a call may come
   back asking you to disambiguate. Retry with `account` (and
   `client_id` if one account has several devices) set to one of the
