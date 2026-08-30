@@ -346,6 +346,38 @@ func (t *PresenceTracker) SetDeviceMACs(entityID string, macs []string) {
 	p.DeviceMACs = macs
 }
 
+// PersonSnapshot is a read-only copy of one tracked person's live
+// state, for consumers that join presence onto other views (#1450).
+type PersonSnapshot struct {
+	EntityID     string
+	FriendlyName string
+	State        string
+	Since        time.Time
+	Room         string
+	RoomSince    time.Time
+	RoomSource   string
+}
+
+// Snapshot returns the current state of one tracked person entity.
+// The boolean reports whether the entity is tracked at all.
+func (t *PresenceTracker) Snapshot(entityID string) (PersonSnapshot, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	p, ok := t.people[entityID]
+	if !ok {
+		return PersonSnapshot{}, false
+	}
+	return PersonSnapshot{
+		EntityID:     p.EntityID,
+		FriendlyName: p.FriendlyName,
+		State:        p.State,
+		Since:        p.Since,
+		Room:         p.Room,
+		RoomSince:    p.RoomSince,
+		RoomSource:   p.RoomSource,
+	}, true
+}
+
 // EntityIDs returns a copy of the tracked entity IDs. This is used to
 // auto-merge person entities into the state watcher's entity filter
 // globs so that person state changes are delivered regardless of the

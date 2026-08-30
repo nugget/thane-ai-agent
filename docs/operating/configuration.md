@@ -160,6 +160,15 @@ writable through model-facing contact tools. A malformed (non-UUID)
 value is rejected at config load; a UUID that matches no contact fails
 closed at render time — the devices degrade to account-only
 attribution and a warning names the unresolved binding.
+
+The second counterparty edge — binding a contact to its Home Assistant
+person entity, through which zone state and room presence flow into
+that contact's channel context — is set on the contact card itself:
+add an `X-THANE-HA-PERSON` field (e.g. `person.alice`) via CardDAV,
+which is the operator-authenticated surface and the only one that
+honors the header. Model-facing vCard import ignores it, at most one
+active contact may claim a given person entity, and removing the field
+clears the binding.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).

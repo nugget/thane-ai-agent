@@ -167,6 +167,17 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 		return nil, fmt.Errorf("upsert contact: %w", err)
 	}
 
+	// X-THANE-HA-PERSON is honored here and only here: CardDAV is the
+	// operator-authenticated surface, so the card is the operator's
+	// custody path for the counterparty binding (#1450). The shared
+	// codec ignores the header, which keeps model-facing vCard import
+	// blind to it. Absent or empty clears the binding; a malformed
+	// value or a claim already held by another contact fails the PUT
+	// with the store's teaching error.
+	if err := b.store.SetHAPersonEntity(upserted.ID, card.Value("X-THANE-HA-PERSON")); err != nil {
+		return nil, fmt.Errorf("set ha person binding: %w", err)
+	}
+
 	// Re-read to get the final state with Rev set by Upsert.
 	final, err := b.store.GetWithProperties(upserted.ID)
 	if err != nil {
@@ -209,6 +220,11 @@ func (b *Backend) addressBook() carddav.AddressBook {
 // AddressObject.
 func (b *Backend) contactToObject(c *contacts.Contact) *carddav.AddressObject {
 	card := contacts.ContactToCard(c)
+	// Emit the counterparty binding so the operator sees and can edit
+	// it in their contacts client; round-trips preserve it.
+	if entity, ok, err := b.store.HAPersonEntity(c.ID); err == nil && ok && entity != "" {
+		card.SetValue("X-THANE-HA-PERSON", entity)
+	}
 	return &carddav.AddressObject{
 		Path:    objectPath(c.ID),
 		ModTime: c.UpdatedAt,

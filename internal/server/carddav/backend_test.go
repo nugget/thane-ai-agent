@@ -405,3 +405,59 @@ func TestBackend_RoundTrip(t *testing.T) {
 		t.Errorf("EMAIL = %+v", emails)
 	}
 }
+
+// newTestCard builds a minimal valid vCard for one contact.
+func newTestCard(name string, id uuid.UUID) vcard.Card {
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldUID, id.String())
+	card.SetValue(vcard.FieldFormattedName, name)
+	card.SetKind(vcard.KindIndividual)
+	return card
+}
+
+// TestHAPersonBindingRoundTrip pins the operator custody path (#1450):
+// CardDAV is the one surface that honors X-THANE-HA-PERSON — a PUT
+// sets the binding, reads emit it, clearing the header clears the
+// binding, and a claim already held by another contact fails the PUT.
+func TestHAPersonBindingRoundTrip(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	id := uuid.New()
+	card := newTestCard("Alice Operator", id)
+	card.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(id), card, nil); err != nil {
+		t.Fatalf("put with binding: %v", err)
+	}
+	entity, ok, err := b.store.HAPersonEntity(id)
+	if err != nil || !ok || entity != "person.alice" {
+		t.Fatalf("binding not stored: %q ok=%v err=%v", entity, ok, err)
+	}
+
+	got, err := b.GetAddressObject(ctx, objectPath(id), nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Card.Value("X-THANE-HA-PERSON") != "person.alice" {
+		t.Errorf("read did not emit binding: %q", got.Card.Value("X-THANE-HA-PERSON"))
+	}
+
+	// A second contact claiming the same person entity fails the PUT.
+	rivalID := uuid.New()
+	rival := newTestCard("Mallory Rival", rivalID)
+	rival.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(rivalID), rival, nil); err == nil {
+		t.Fatal("duplicate person claim accepted over CardDAV")
+	}
+
+	// Clearing the header clears the binding.
+	card2 := newTestCard("Alice Operator", id)
+	if _, err := b.PutAddressObject(ctx, objectPath(id), card2, nil); err != nil {
+		t.Fatalf("put without binding: %v", err)
+	}
+	entity, _, _ = b.store.HAPersonEntity(id)
+	if entity != "" {
+		t.Errorf("binding not cleared by header-less PUT: %q", entity)
+	}
+}

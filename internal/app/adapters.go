@@ -169,6 +169,30 @@ func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address s
 type contactNameLookup struct {
 	store  *contacts.Store
 	logger *slog.Logger
+
+	// presenceFor joins live whereabouts through the contact's HA
+	// person binding; devicesFor joins bound companion devices. Both
+	// are optional (#1450) — wired late in initServers once the
+	// presence tracker and companion stores exist — and read-only.
+	presenceFor func(haPersonEntity string) *agent.CounterpartyPresence
+	devicesFor  func(contactID string) []agent.CounterpartyDevice
+}
+
+// enrichCounterparty joins presence and device reachability onto a
+// built contact context. Failures degrade to the un-enriched view —
+// channel context must never break because a join source is down.
+func (r *contactNameLookup) enrichCounterparty(c *contacts.Contact, cc *agent.ContactContext) {
+	if cc == nil {
+		return
+	}
+	if r.presenceFor != nil {
+		if entity, ok, err := r.store.HAPersonEntity(c.ID); err == nil && ok && entity != "" {
+			cc.Presence = r.presenceFor(entity)
+		}
+	}
+	if r.devicesFor != nil {
+		cc.Devices = r.devicesFor(c.ID.String())
+	}
 }
 
 func (r *contactNameLookup) contactWithPropertiesByName(name string) (*contacts.Contact, []contacts.Property, bool) {
@@ -227,7 +251,9 @@ func (r *contactNameLookup) LookupContact(name string, source string) *agent.Con
 	}
 
 	policy := contacts.Policy(c.TrustZone)
-	return buildContactContext(c, props, policy, source, time.Now())
+	cc := buildContactContext(c, props, policy, source, time.Now())
+	r.enrichCounterparty(c, cc)
+	return cc
 }
 
 // LookupContactByID returns a ContactContext for the exact contact UUID,
@@ -243,7 +269,9 @@ func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.C
 	}
 
 	policy := contacts.Policy(c.TrustZone)
-	return buildContactContext(c, props, policy, source, time.Now())
+	cc := buildContactContext(c, props, policy, source, time.Now())
+	r.enrichCounterparty(c, cc)
+	return cc
 }
 
 // LookupContactOriginPolicy returns contact-owned origin policy from the

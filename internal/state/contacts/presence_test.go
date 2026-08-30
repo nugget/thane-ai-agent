@@ -673,3 +673,22 @@ func TestTracker_RoomObserverCalledOutsideLock(t *testing.T) {
 		t.Fatal("UpdateRoom deadlocked — observer is likely called under the write lock")
 	}
 }
+
+// TestPresenceSnapshot pins the read-only join surface #1450's channel
+// enrichment consumes.
+func TestPresenceSnapshot(t *testing.T) {
+	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	tracker.HandleStateChange("person.alice", "", "home", "")
+	tracker.UpdateRoom("person.alice", "office", "bermuda")
+
+	snap, ok := tracker.Snapshot("person.alice")
+	if !ok {
+		t.Fatal("tracked entity not found")
+	}
+	if snap.Room != "office" || snap.RoomSource != "bermuda" {
+		t.Errorf("snapshot = %+v", snap)
+	}
+	if _, ok := tracker.Snapshot("person.nobody"); ok {
+		t.Error("untracked entity reported as tracked")
+	}
+}

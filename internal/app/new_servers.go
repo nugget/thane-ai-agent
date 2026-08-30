@@ -14,10 +14,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
@@ -336,6 +338,81 @@ func (a *App) initServers(s *newState) error {
 			})
 		}
 		a.loop.RegisterTagContextProvider("companion", deviceContext)
+
+		// Counterparty enrichment of channel context (#1450): the
+		// contact block a conversation renders about its counterparty
+		// joins live presence (through the contact's HA person binding)
+		// and bound companion-device reachability. Wired here because
+		// the join sources belong to this phase; both joins degrade to
+		// absence when a source is missing.
+		if s.contactLookup != nil {
+			if s.personTracker != nil {
+				tracker := s.personTracker
+				s.contactLookup.presenceFor = func(entity string) *agent.CounterpartyPresence {
+					snap, ok := tracker.Snapshot(entity)
+					if !ok {
+						return nil
+					}
+					now := time.Now()
+					view := &agent.CounterpartyPresence{State: snap.State, Room: snap.Room}
+					if !snap.Since.IsZero() {
+						view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
+					}
+					if !snap.RoomSince.IsZero() {
+						view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+					}
+					return view
+				}
+			}
+			accountsByContact := make(map[string][]string)
+			for account, provider := range cfg.Companion.Providers {
+				if provider.Contact != "" {
+					accountsByContact[provider.Contact] = append(accountsByContact[provider.Contact], account)
+				}
+			}
+			if len(accountsByContact) > 0 {
+				s.contactLookup.devicesFor = func(contactID string) []agent.CounterpartyDevice {
+					accounts := accountsByContact[contactID]
+					if len(accounts) == 0 {
+						return nil
+					}
+					owned := make(map[string]bool, len(accounts))
+					for _, acct := range accounts {
+						owned[acct] = true
+					}
+					devices, err := a.companionDevices.List(context.Background())
+					if err != nil {
+						logger.Warn("counterparty device join failed", "error", err)
+						return nil
+					}
+					live := make(map[[2]string]bool)
+					for _, info := range a.companionRegistry.List() {
+						live[[2]string{info.Account, info.ClientID}] = true
+					}
+					now := time.Now()
+					var views []agent.CounterpartyDevice
+					for _, d := range devices {
+						if !owned[d.Account] || d.State != companions.DeviceStateActive {
+							continue
+						}
+						availability := "offline"
+						if live[[2]string{d.Account, d.ClientID}] {
+							availability = "online"
+						}
+						view := agent.CounterpartyDevice{
+							Name:         d.ClientName,
+							Platform:     d.Platform,
+							Availability: availability,
+						}
+						if !d.LastSeenAt.IsZero() {
+							view.LastSeenAgo = promptfmt.FormatDeltaOnly(d.LastSeenAt, now)
+						}
+						views = append(views, view)
+					}
+					return views
+				}
+			}
+		}
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
 		// Durable inventory: authentication upserts the device record,
