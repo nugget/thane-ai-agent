@@ -11,155 +11,74 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
-// ContextProvider injects companion reachability and durable observation
-// metadata into the system prompt. Exact observation payloads remain behind
-// explicit tools so sensitive values such as precise location do not become
-// ambient prompt context.
+// ContextProvider injects the set of currently-connected companion apps and
+// the tools they offer into the system prompt. It implements
+// [agent.TagContextProvider] structurally and is registered on the
+// companion capability tag, so it fires only when that tag is active.
+//
+// Companions are laptops that pop on and off line without warning. This
+// block is what lets the model tell, on a companion-tagged turn, whether a
+// device is actually connected and which tools it currently exposes —
+// rather than guessing from the tool list alone.
 type ContextProvider struct {
 	registry *Registry
-	store    *ObservationStore
 }
 
-// NewContextProvider creates a companion live-state context provider. The
-// optional store preserves device identity and observation freshness while a
-// mobile companion is suspended or offline.
-func NewContextProvider(registry *Registry, stores ...*ObservationStore) *ContextProvider {
-	p := &ContextProvider{registry: registry}
-	if len(stores) > 0 {
-		p.store = stores[0]
-	}
-	return p
+// NewContextProvider creates a companion live-state context provider.
+func NewContextProvider(registry *Registry) *ContextProvider {
+	return &ContextProvider{registry: registry}
 }
 
-// TagContextBucket places the companion view in live state: reachability and
-// observation freshness change independently of the cached prompt prefix.
+// TagContextBucket places the connected-companion view in live state: it
+// reflects current runtime connectivity and must not thrash the cached
+// prompt prefix.
 func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
 	return agentctx.ContextBucketLiveState
 }
 
 type companionContextJSON struct {
-	Companions []companionDeviceJSON `json:"companions"`
+	Companions []connectedCompanionJSON `json:"companions"`
 }
 
-type companionDeviceJSON struct {
-	Account             string                     `json:"account"`
-	ClientName          string                     `json:"client_name,omitempty"`
-	ClientID            string                     `json:"client_id,omitempty"`
-	Platform            string                     `json:"platform,omitempty"`
-	AppVersion          string                     `json:"app_version,omitempty"`
-	OSVersion           string                     `json:"os_version,omitempty"`
-	Availability        string                     `json:"availability"`
-	ConnectedAgo        string                     `json:"connected_ago,omitempty"`
-	LastSeenAgo         string                     `json:"last_seen_ago,omitempty"`
-	LastConnectedAgo    string                     `json:"last_connected_ago,omitempty"`
-	LastDisconnectedAgo string                     `json:"last_disconnected_ago,omitempty"`
-	LiveTools           []string                   `json:"live_tools,omitempty"`
-	LatestObservations  []companionObservationJSON `json:"latest_observations,omitempty"`
+type connectedCompanionJSON struct {
+	Account      string   `json:"account"`
+	ClientName   string   `json:"client_name,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	ConnectedAgo string   `json:"connected_ago"`
+	Tools        []string `json:"tools,omitempty"`
 }
 
-type companionObservationJSON struct {
-	Kind          string            `json:"kind"`
-	Status        ObservationStatus `json:"status"`
-	SchemaVersion int               `json:"schema_version"`
-	ObservedAgo   string            `json:"observed_ago"`
-	ReceivedAgo   string            `json:"received_ago"`
-}
-
-type companionDeviceKey struct {
-	account        string
-	deviceIdentity string
-}
-
-// TagContext returns the companion-device block for tag-gated injection.
+// TagContext returns the connected-companion block for tag-gated injection.
 // Implements [agent.TagContextProvider].
-func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+func (p *ContextProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
+	if p.registry == nil {
+		return "", nil
+	}
+
 	now := time.Now()
-	devices := make(map[companionDeviceKey]*companionDeviceJSON)
+	infos := p.registry.List()
 
-	if p.store != nil {
-		records, err := p.store.ListDevices(ctx)
-		if err != nil {
-			return "", fmt.Errorf("load durable companion context: %w", err)
+	companions := make([]connectedCompanionJSON, 0, len(infos))
+	for _, info := range infos {
+		var toolNames []string
+		for _, cap := range info.Capabilities {
+			for _, def := range cap.Tools {
+				toolNames = append(toolNames, def.Name)
+			}
 		}
-		for _, record := range records {
-			key := companionDeviceKey{account: record.Account, deviceIdentity: record.DeviceIdentity}
-			device := &companionDeviceJSON{
-				Account:      record.Account,
-				ClientName:   record.ClientName,
-				ClientID:     record.ClientID,
-				Platform:     record.Platform,
-				AppVersion:   record.AppVersion,
-				OSVersion:    record.OSVersion,
-				Availability: "offline",
-				LastSeenAgo:  promptfmt.FormatDeltaOnly(record.LastSeenAt, now),
-			}
-			if record.LastDisconnectedAt != nil {
-				device.LastDisconnectedAgo = promptfmt.FormatDeltaOnly(*record.LastDisconnectedAt, now)
-			}
-			if record.LastConnectedAt != nil {
-				device.LastConnectedAgo = promptfmt.FormatDeltaOnly(*record.LastConnectedAt, now)
-			}
-			devices[key] = device
-		}
+		sort.Strings(toolNames)
 
-		observations, err := p.store.ListLatest(ctx)
-		if err != nil {
-			return "", fmt.Errorf("load companion observation context: %w", err)
-		}
-		for _, observation := range observations {
-			key := companionDeviceKey{account: observation.Account, deviceIdentity: observation.DeviceIdentity}
-			device := devices[key]
-			if device == nil {
-				device = &companionDeviceJSON{
-					Account: observation.Account, ClientID: observation.ClientID,
-					Availability: "offline",
-				}
-				devices[key] = device
-			}
-			device.LatestObservations = append(device.LatestObservations, companionObservationJSON{
-				Kind:          observation.Kind,
-				Status:        observation.Status,
-				SchemaVersion: observation.SchemaVersion,
-				ObservedAgo:   promptfmt.FormatDeltaOnly(observation.ObservedAt, now),
-				ReceivedAgo:   promptfmt.FormatDeltaOnly(observation.ReceivedAt, now),
-			})
-		}
-	}
-
-	if p.registry != nil {
-		for _, info := range p.registry.List() {
-			deviceIdentity := info.DeviceIdentity
-			if deviceIdentity == "" {
-				deviceIdentity = info.ClientID
-			}
-			key := companionDeviceKey{account: info.Account, deviceIdentity: deviceIdentity}
-			device := devices[key]
-			if device == nil {
-				device = &companionDeviceJSON{Account: info.Account, ClientID: info.ClientID}
-				devices[key] = device
-			}
-			device.Availability = "online"
-			device.ConnectedAgo = promptfmt.FormatDeltaOnly(info.ConnectedAt, now)
-			preferNonempty(&device.ClientName, info.ClientName)
-			preferNonempty(&device.Platform, info.Platform)
-			preferNonempty(&device.AppVersion, info.AppVersion)
-			preferNonempty(&device.OSVersion, info.OSVersion)
-			for _, capability := range info.Capabilities {
-				for _, definition := range capability.Tools {
-					device.LiveTools = append(device.LiveTools, definition.Name)
-				}
-			}
-			sort.Strings(device.LiveTools)
-		}
-	}
-
-	companions := make([]companionDeviceJSON, 0, len(devices))
-	for _, device := range devices {
-		sort.Slice(device.LatestObservations, func(i, j int) bool {
-			return device.LatestObservations[i].Kind < device.LatestObservations[j].Kind
+		companions = append(companions, connectedCompanionJSON{
+			Account:      info.Account,
+			ClientName:   info.ClientName,
+			ClientID:     info.ClientID,
+			ConnectedAgo: promptfmt.FormatDeltaOnly(info.ConnectedAt, now),
+			Tools:        toolNames,
 		})
-		companions = append(companions, *device)
 	}
+
+	// Deterministic order across turns (by account, then client) so the
+	// model can compare turns without relearning the shape.
 	sort.Slice(companions, func(i, j int) bool {
 		if companions[i].Account != companions[j].Account {
 			return companions[i].Account < companions[j].Account
@@ -171,11 +90,5 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 	if err != nil {
 		return "", fmt.Errorf("marshal companion context: %w", err)
 	}
-	return "### Companion Devices\n\n" + string(data) + "\n", nil
-}
-
-func preferNonempty(target *string, value string) {
-	if value != "" {
-		*target = value
-	}
+	return "### Connected Companions\n\n" + string(data) + "\n", nil
 }

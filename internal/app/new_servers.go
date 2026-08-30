@@ -240,7 +240,6 @@ func (a *App) initServers(s *newState) error {
 		// working against older Macs that advertise only methods (no
 		// authored tool defs).
 		a.loop.Tools().EnableCompanionTools(a.companionRegistry.Call)
-		a.loop.Tools().SetCompanionObservationStore(a.companionObservationStore)
 
 		// macOS-authoritative path: synthesize model-facing tools from the
 		// definitions companion apps author in register_capabilities. The
@@ -274,16 +273,33 @@ func (a *App) initServers(s *newState) error {
 
 		// On companion-tagged turns, tell the model which companions are
 		// connected and what they currently offer (uncached live state).
-		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry, a.companionObservationStore))
+		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry))
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
-		handler.UseObservationStore(a.companionObservationStore)
+		// Durable inventory: authentication upserts the device record,
+		// disconnect stamps timestamps without deleting it (#1437).
+		// The LIFO closer drains queued inventory writes before the
+		// memory store closes the database they land in.
+		handler.SetDeviceRecorder(a.companionDevices)
+		a.onClose("companion-device-recorder", handler.CloseDeviceRecorder)
 		server.SetCompanionHandler(handler)
 		server.SetCompanionObservationHandler(companion.NewObservationHandler(
-			companion.NewBearerObservationAuthenticator(cfg.Companion.TokenIndex()),
-			a.companionObservationStore,
+			companion.NewBearerObservationAuthenticator(cfg.Companion.TokenIndex(), a.companionDevices.ResolveObservationIdentity),
+			a.companionDevices,
 			logger,
 		))
+
+		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
+			Name: "companion",
+			Probe: func(_ context.Context) error {
+				if a.companionRegistry.Count() == 0 {
+					return fmt.Errorf("no providers connected")
+				}
+				return nil
+			},
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger,
+		})
 
 		logger.Info("companion app endpoint enabled")
 	}

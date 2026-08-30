@@ -51,6 +51,7 @@ import (
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
+	"github.com/nugget/thane-ai-agent/internal/state/companions"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
@@ -130,9 +131,10 @@ type App struct {
 	ha   *homeassistant.Client
 	haWS *homeassistant.WSClient
 
-	// Companion app registry
-	companionRegistry         *companion.Registry
-	companionObservationStore *companion.ObservationStore
+	// Companion app registry (live connections) and durable device
+	// inventory (records that outlive them).
+	companionRegistry *companion.Registry
+	companionDevices  *companions.Store
 
 	// Connection health
 	connMgr *connwatch.Manager

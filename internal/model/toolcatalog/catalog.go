@@ -282,7 +282,6 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"thane_loop_create":           {CanonicalID: "native:thane_loop_create", Source: NativeToolSource},
 	"thane_now":                   {CanonicalID: "native:thane_now", Source: NativeToolSource},
 	"macos_calendar_events":       {CanonicalID: "native:macos_calendar_events", Source: NativeToolSource, Tags: []string{"companion"}},
-	"ios_last_known_location":     {CanonicalID: "native:ios_last_known_location", Source: NativeToolSource, Tags: []string{"companion"}},
 	"media_feeds":                 {CanonicalID: "native:media_feeds", Source: NativeToolSource, Tags: []string{"feeds"}},
 	"media_follow":                {CanonicalID: "native:media_follow", Source: NativeToolSource, Tags: []string{"feeds"}},
 	"media_save_analysis":         {CanonicalID: "native:media_save_analysis", Source: NativeToolSource, Tags: []string{"media"}},

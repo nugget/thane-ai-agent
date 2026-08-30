@@ -107,11 +107,11 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 
 `POST /v1/companion/observations` uses a configured companion bearer token,
 which determines the account, and a stable opaque `client_id` claim supplied by
-the app. The ingestion handler resolves those inputs through an authenticator;
-storage is keyed by that resolved account and device identity rather than by
-the HTTP token map or claimed metadata directly. This leaves the persistence
-contract unchanged when device-key authentication supplies a verified key
-fingerprint in the future.
+the app. The ingestion authenticator resolves that account and claim through
+the durable inventory to its immutable server-assigned `device_id`; observation
+rows reference that ID rather than a credential or mutable claim. Future
+device-key authentication can therefore resolve a verified key to the same
+device without rewriting observation history.
 The endpoint accepts at most 64 KiB and 16 events; each available event carries
 a UUID idempotency key, kind, schema version, device `observed_at`, and a JSON
 object payload of at most 32 KiB. A `status` of `withdrawn` must omit the

@@ -64,6 +64,12 @@ type authRequired struct {
 }
 
 // authMessage is the client's response to authRequired.
+//
+// ClientID is the device's durable identity claim: stable across
+// launches, opaque, and reused identically by every transport the
+// device speaks. Platform, AppVersion, and OSVersion are optional
+// device metadata recorded in the durable inventory when supplied
+// (#1437); clients that omit them lose nothing at the protocol level.
 type authMessage struct {
 	Type       string `json:"type"`
 	Token      string `json:"token"`

@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +28,7 @@ const (
 // background observation batches without requiring a live WebSocket.
 type ObservationHandler struct {
 	authenticator ObservationAuthenticator
-	store         *ObservationStore
+	store         ObservationStore
 	logger        *slog.Logger
 	now           func() time.Time
 }
@@ -35,7 +36,7 @@ type ObservationHandler struct {
 // NewObservationHandler creates the authenticated companion observation
 // endpoint. Authentication is replaceable so ingestion and storage do not
 // own bearer-token configuration or the future device-key mechanism.
-func NewObservationHandler(authenticator ObservationAuthenticator, store *ObservationStore, logger *slog.Logger) *ObservationHandler {
+func NewObservationHandler(authenticator ObservationAuthenticator, store ObservationStore, logger *slog.Logger) *ObservationHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,15 +61,20 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxObservationBodyBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var batch ObservationBatch
-	if err := decoder.Decode(&batch); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeObservationError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "observation batch exceeds 64 KiB")
 			return
 		}
+		writeObservationError(w, http.StatusBadRequest, "invalid_body", "read observation batch: "+err.Error())
+		return
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var batch ObservationBatch
+	if err := decoder.Decode(&batch); err != nil {
 		writeObservationError(w, http.StatusBadRequest, "invalid_json", "decode observation batch: "+err.Error())
 		return
 	}
@@ -80,12 +86,24 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeObservationError(w, http.StatusServiceUnavailable, "observation_auth_unavailable", "companion observation authentication is unavailable")
 		return
 	}
-	principal, ok := h.authenticator.AuthenticateObservation(
-		r.Header.Get("Authorization"), batch.ClientID,
-	)
-	if !ok {
+	principal, err := h.authenticator.AuthenticateObservation(r.Context(), ObservationAuthRequest{
+		Method:          r.Method,
+		RequestTarget:   r.URL.RequestURI(),
+		Header:          r.Header.Clone(),
+		Body:            body,
+		ClaimedClientID: batch.ClientID,
+	})
+	if errors.Is(err, ErrObservationUnauthorized) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="companion"`)
 		writeObservationError(w, http.StatusUnauthorized, "unauthorized", "a valid companion bearer token is required")
+		return
+	}
+	if err != nil {
+		h.logger.Error("companion observation authentication failed",
+			"client_id", batch.ClientID,
+			"error", err,
+		)
+		writeObservationError(w, http.StatusInternalServerError, "authentication_failed", "failed to authenticate companion observation")
 		return
 	}
 
@@ -94,7 +112,7 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeObservationError(w, http.StatusBadRequest, "invalid_observation", err.Error())
 		return
 	}
-	result, err := h.store.Ingest(r.Context(), principal, batch, receivedAt)
+	result, err := h.store.IngestObservations(r.Context(), principal, batch, receivedAt)
 	if err != nil {
 		h.logger.Error("companion observation ingest failed",
 			"account", principal.Account,
@@ -121,8 +139,8 @@ func (h *ObservationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateObservationBatch(batch *ObservationBatch, receivedAt time.Time) error {
-	trimDeviceMetadata(&batch.DeviceMetadata)
-	if err := validateBoundedIdentifier("client_id", batch.ClientID); err != nil {
+	trimDeviceMetadata(&batch.ObservationDeviceMetadata)
+	if err := validateBoundedOpaque("client_id", batch.ClientID); err != nil {
 		return err
 	}
 	if err := validateOptionalString("client_name", batch.ClientName); err != nil {
@@ -189,7 +207,7 @@ func validateObservationBatch(batch *ObservationBatch, receivedAt time.Time) err
 	return nil
 }
 
-func trimDeviceMetadata(device *DeviceMetadata) {
+func trimDeviceMetadata(device *ObservationDeviceMetadata) {
 	device.ClientID = strings.TrimSpace(device.ClientID)
 	device.ClientName = strings.TrimSpace(device.ClientName)
 	device.Platform = strings.TrimSpace(device.Platform)
@@ -198,11 +216,8 @@ func trimDeviceMetadata(device *DeviceMetadata) {
 }
 
 func validateBoundedIdentifier(name, value string) error {
-	if value == "" {
-		return fmt.Errorf("%s is required", name)
-	}
-	if utf8.RuneCountInString(value) > maxObservationStringRunes {
-		return fmt.Errorf("%s exceeds %d characters", name, maxObservationStringRunes)
+	if err := validateBoundedOpaque(name, value); err != nil {
+		return err
 	}
 	for _, r := range value {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
@@ -210,6 +225,16 @@ func validateBoundedIdentifier(name, value string) error {
 			continue
 		}
 		return fmt.Errorf("%s contains an unsupported character", name)
+	}
+	return nil
+}
+
+func validateBoundedOpaque(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if utf8.RuneCountInString(value) > maxObservationStringRunes {
+		return fmt.Errorf("%s exceeds %d characters", name, maxObservationStringRunes)
 	}
 	return nil
 }

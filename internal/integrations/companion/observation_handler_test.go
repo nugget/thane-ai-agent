@@ -2,6 +2,7 @@ package companion
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +11,42 @@ import (
 	"time"
 )
 
+type recordingObservationStore struct {
+	principal ObservationPrincipal
+	batch     ObservationBatch
+}
+
+type recordingObservationAuthenticator struct {
+	request ObservationAuthRequest
+}
+
+func (a *recordingObservationAuthenticator) AuthenticateObservation(_ context.Context, request ObservationAuthRequest) (ObservationPrincipal, error) {
+	a.request = request
+	return ObservationPrincipal{Account: "nugget", DeviceID: "dev_iphone_1"}, nil
+}
+
+func (s *recordingObservationStore) IngestObservations(
+	_ context.Context,
+	principal ObservationPrincipal,
+	batch ObservationBatch,
+	receivedAt time.Time,
+) (IngestResult, error) {
+	s.principal = principal
+	s.batch = batch
+	return IngestResult{Stored: len(batch.Events), ReceivedAt: receivedAt}, nil
+}
+
+func testObservationAuthenticator() ObservationAuthenticator {
+	identities := fakeObservationIdentityResolver{devices: map[string]string{
+		"nugget/iphone-1": "dev_iphone_1",
+	}}
+	return NewBearerObservationAuthenticator(testTokenIndex(), identities.ResolveObservationIdentity)
+}
+
 func TestObservationHandlerAcceptsAuthenticatedBatch(t *testing.T) {
-	store := newTestObservationStore(t)
-	handler := NewObservationHandler(NewBearerObservationAuthenticator(testTokenIndex()), store, nil)
+	store := &recordingObservationStore{}
+	authenticator := &recordingObservationAuthenticator{}
+	handler := NewObservationHandler(authenticator, store, nil)
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	handler.now = func() time.Time { return now }
 	body := `{
@@ -46,42 +80,17 @@ func TestObservationHandlerAcceptsAuthenticatedBatch(t *testing.T) {
 	if result.Stored != 1 || !result.ReceivedAt.Equal(now) {
 		t.Fatalf("result = %+v", result)
 	}
-	latest, err := store.ResolveLatest(req.Context(), "nugget", "iphone-1", "ios.location")
-	if err != nil {
-		t.Fatalf("resolve latest: %v", err)
+	if store.principal != (ObservationPrincipal{Account: "nugget", DeviceID: "dev_iphone_1"}) {
+		t.Fatalf("principal = %+v", store.principal)
 	}
-	if latest.Account != "nugget" {
-		t.Fatalf("account = %q", latest.Account)
+	if store.batch.ClientID != "iphone-1" || len(store.batch.Events) != 1 {
+		t.Fatalf("batch = %+v", store.batch)
 	}
-}
-
-type fixedObservationAuthenticator struct {
-	principal ObservationPrincipal
-}
-
-func (a fixedObservationAuthenticator) AuthenticateObservation(_, _ string) (ObservationPrincipal, bool) {
-	return a.principal, true
-}
-
-func TestObservationHandlerUsesAuthenticatorDeviceIdentity(t *testing.T) {
-	store := newTestObservationStore(t)
-	principal := ObservationPrincipal{Account: "nugget", DeviceIdentity: "key-fingerprint-1"}
-	handler := NewObservationHandler(fixedObservationAuthenticator{principal: principal}, store, nil)
-	handler.now = func() time.Time { return time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC) }
-	body := `{"client_id":"iphone-1","platform":"ios","events":[{"event_id":"11111111-1111-4111-8111-111111111111","kind":"ios.location","schema_version":1,"observed_at":"2026-08-30T11:59:55Z","payload":{"latitude":41}}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if authenticator.request.Method != http.MethodPost || authenticator.request.RequestTarget != "/v1/companion/observations" {
+		t.Fatalf("auth request target = %s %s", authenticator.request.Method, authenticator.request.RequestTarget)
 	}
-	devices, err := store.ListDevices(req.Context())
-	if err != nil || len(devices) != 1 {
-		t.Fatalf("devices = %+v err=%v", devices, err)
-	}
-	if devices[0].DeviceIdentity != principal.DeviceIdentity || devices[0].ClientID != "iphone-1" {
-		t.Fatalf("device = %+v", devices[0])
+	if authenticator.request.Header.Get("Authorization") != "Bearer test-secret" || string(authenticator.request.Body) != body {
+		t.Fatal("authenticator did not receive the exact bounded HTTP request")
 	}
 }
 
@@ -97,6 +106,7 @@ func TestObservationHandlerRejectsInvalidRequests(t *testing.T) {
 	}{
 		{name: "missing auth", contentType: "application/json", body: valid, wantStatus: http.StatusUnauthorized},
 		{name: "wrong auth", auth: "Bearer wrong", contentType: "application/json", body: valid, wantStatus: http.StatusUnauthorized},
+		{name: "unknown device", auth: "Bearer test-secret", contentType: "application/json", body: strings.Replace(valid, "iphone-1", "iphone-2", 1), wantStatus: http.StatusUnauthorized},
 		{name: "wrong content type", auth: "Bearer test-secret", contentType: "text/plain", body: valid, wantStatus: http.StatusUnsupportedMediaType},
 		{name: "unknown field", auth: "Bearer test-secret", contentType: "application/json", body: strings.Replace(valid, `"client_id"`, `"unknown":true,"client_id"`, 1), wantStatus: http.StatusBadRequest},
 		{name: "missing events", auth: "Bearer test-secret", contentType: "application/json", body: `{"client_id":"iphone-1"}`, wantStatus: http.StatusBadRequest},
@@ -106,21 +116,21 @@ func TestObservationHandlerRejectsInvalidRequests(t *testing.T) {
 		{name: "oversized body", auth: "Bearer test-secret", contentType: "application/json", body: `{"padding":"` + strings.Repeat("x", maxObservationBodyBytes) + `"}`, wantStatus: http.StatusRequestEntityTooLarge},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			handler := NewObservationHandler(NewBearerObservationAuthenticator(testTokenIndex()), newTestObservationStore(t), nil)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := NewObservationHandler(testObservationAuthenticator(), &recordingObservationStore{}, nil)
 			handler.now = func() time.Time { return now }
-			req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", bytes.NewBufferString(tc.body))
-			if tc.auth != "" {
-				req.Header.Set("Authorization", tc.auth)
+			req := httptest.NewRequest(http.MethodPost, "/v1/companion/observations", bytes.NewBufferString(test.body))
+			if test.auth != "" {
+				req.Header.Set("Authorization", test.auth)
 			}
-			if tc.contentType != "" {
-				req.Header.Set("Content-Type", tc.contentType)
+			if test.contentType != "" {
+				req.Header.Set("Content-Type", test.contentType)
 			}
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			if rec.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d body=%s", rec.Code, test.wantStatus, rec.Body.String())
 			}
 		})
 	}
@@ -136,16 +146,16 @@ func TestValidateObservationBatchBounds(t *testing.T) {
 		name  string
 		batch ObservationBatch
 	}{
-		{name: "empty events", batch: ObservationBatch{DeviceMetadata: DeviceMetadata{ClientID: "iphone-1"}}},
-		{name: "too many events", batch: ObservationBatch{DeviceMetadata: DeviceMetadata{ClientID: "iphone-1"}, Events: make([]ObservationEvent, maxObservationEvents+1)}},
-		{name: "oversized payload", batch: ObservationBatch{DeviceMetadata: DeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
+		{name: "empty events", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}}},
+		{name: "too many events", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: make([]ObservationEvent, maxObservationEvents+1)}},
+		{name: "oversized payload", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
 			EventID: validEvent.EventID, Kind: validEvent.Kind, SchemaVersion: 1, ObservedAt: now,
 			Payload: json.RawMessage(`{"value":"` + strings.Repeat("x", maxObservationPayloadBytes) + `"}`),
 		}}}},
-		{name: "unsupported kind character", batch: ObservationBatch{DeviceMetadata: DeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
+		{name: "unsupported kind character", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
 			EventID: validEvent.EventID, Kind: "ios/location", SchemaVersion: 1, ObservedAt: now, Payload: validEvent.Payload,
 		}}}},
-		{name: "overlong metadata", batch: ObservationBatch{DeviceMetadata: DeviceMetadata{ClientID: "iphone-1", ClientName: strings.Repeat("x", maxObservationStringRunes+1)}, Events: []ObservationEvent{validEvent}}},
+		{name: "overlong metadata", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1", ClientName: strings.Repeat("x", maxObservationStringRunes+1)}, Events: []ObservationEvent{validEvent}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -159,7 +169,7 @@ func TestValidateObservationBatchBounds(t *testing.T) {
 func TestValidateObservationBatchCanonicalizesEventID(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	batch := ObservationBatch{
-		DeviceMetadata: DeviceMetadata{ClientID: "iphone-1"},
+		ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"},
 		Events: []ObservationEvent{{
 			EventID: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", Kind: "ios.location",
 			SchemaVersion: 1, ObservedAt: now, Payload: json.RawMessage(`{"latitude":41}`),
@@ -171,5 +181,23 @@ func TestValidateObservationBatchCanonicalizesEventID(t *testing.T) {
 	}
 	if got, want := batch.Events[0].EventID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; got != want {
 		t.Fatalf("event ID = %q, want %q", got, want)
+	}
+}
+
+func TestValidateObservationBatchPreservesOpaqueClientID(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	batch := ObservationBatch{
+		ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "device:key/+ value"},
+		Events: []ObservationEvent{{
+			EventID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Kind: "ios.location",
+			SchemaVersion: 1, ObservedAt: now, Payload: json.RawMessage(`{"latitude":41}`),
+		}},
+	}
+
+	if err := validateObservationBatch(&batch, now); err != nil {
+		t.Fatalf("validate opaque client ID: %v", err)
+	}
+	if batch.ClientID != "device:key/+ value" {
+		t.Fatalf("client ID rewritten as %q", batch.ClientID)
 	}
 }
