@@ -1,0 +1,406 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+)
+
+type whereaboutsFixture struct {
+	deps      CounterpartyToolDeps
+	contactID string
+}
+
+// newWhereaboutsFixture builds a contact ("Alice Operator") with an HA
+// person binding, one bound companion account carrying the given
+// observations, and a fake presence snapshot.
+func newWhereaboutsFixture(t *testing.T, state, room string, observations map[string]companion.ObservationStatus) whereaboutsFixture {
+	t.Helper()
+	cdb, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("contacts db: %v", err)
+	}
+	t.Cleanup(func() { cdb.Close() })
+	contactStore, err := contacts.NewStore(cdb, nil)
+	if err != nil {
+		t.Fatalf("contacts store: %v", err)
+	}
+	alice, err := contactStore.Upsert(&contacts.Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contactStore.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	companionStore := newObservationToolStore(t)
+	now := time.Now().UTC()
+	i := 0
+	for device, status := range observations {
+		seedLocation(t, companionStore, "alice-acct", device, status, now.Add(-time.Duration(30+i*30)*time.Minute))
+		i++
+	}
+
+	deps := CounterpartyToolDeps{
+		Contacts:   contactStore,
+		Companions: companionStore,
+		Presence: func(entity string) (contacts.PersonSnapshot, bool) {
+			if entity != "person.alice" {
+				return contacts.PersonSnapshot{}, false
+			}
+			snap := contacts.PersonSnapshot{EntityID: entity, State: state, Since: now.Add(-2 * time.Hour)}
+			if room != "" {
+				snap.Room = room
+				snap.RoomSource = "bermuda"
+				snap.RoomSince = now.Add(-20 * time.Minute)
+			}
+			return snap, true
+		},
+		AccountsForContact: func(id string) []string {
+			if id == alice.ID.String() {
+				return []string{"alice-acct"}
+			}
+			return nil
+		},
+		LiveIdentities: func() map[[2]string]bool { return nil },
+	}
+	return whereaboutsFixture{deps: deps, contactID: alice.ID.String()}
+}
+
+func decodeWhereabouts(t *testing.T, out string) whereaboutsResult {
+	t.Helper()
+	var res whereaboutsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	return res
+}
+
+func TestContactWhereaboutsHomeRanking(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "home", "office", map[string]companion.ObservationStatus{"device-1": companion.ObservationAvailable})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.Contact != "Alice Operator" || res.ContactID != fx.contactID {
+		t.Errorf("identity = %q/%q", res.Contact, res.ContactID)
+	}
+	if len(res.Sources) != 3 {
+		t.Fatalf("sources = %+v, want room + zone + device", res.Sources)
+	}
+	if res.Sources[0].Source != "bermuda_room" || res.Sources[0].Room != "office" || res.Sources[0].RoomVia != "bermuda" {
+		t.Errorf("home ranking: leading source = %+v, want bermuda room", res.Sources[0])
+	}
+	if res.Sources[1].Source != "ha_person_zone" || res.Sources[2].Source != "companion_location" {
+		t.Errorf("home order = %s, %s", res.Sources[1].Source, res.Sources[2].Source)
+	}
+	if res.BestSource != "bermuda_room" || !strings.Contains(res.Basis, "home") {
+		t.Errorf("verdict = %q / %q", res.BestSource, res.Basis)
+	}
+}
+
+func TestContactWhereaboutsAwayRanking(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", map[string]companion.ObservationStatus{"device-1": companion.ObservationAvailable})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.Sources[0].Source != "companion_location" {
+		t.Errorf("away ranking: leading source = %+v, want device location", res.Sources[0])
+	}
+	if res.Sources[0].Location == nil || !strings.Contains(string(res.Sources[0].Location), "latitude") {
+		t.Errorf("device payload missing: %+v", res.Sources[0])
+	}
+	last := res.Sources[len(res.Sources)-1]
+	if last.Source != "ha_person_zone" || last.State != "not_home" {
+		t.Errorf("zone floor = %+v", last)
+	}
+	if res.BestSource != "companion_location" {
+		t.Errorf("BestSource = %q", res.BestSource)
+	}
+}
+
+func TestContactWhereaboutsWithdrawnSinks(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", map[string]companion.ObservationStatus{
+		"device-1": companion.ObservationWithdrawn,
+		"device-2": companion.ObservationAvailable,
+	})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	var deviceEntries []whereaboutsSource
+	for _, src := range res.Sources {
+		if src.Source == "companion_location" {
+			deviceEntries = append(deviceEntries, src)
+		}
+	}
+	if len(deviceEntries) != 2 {
+		t.Fatalf("device entries = %+v", deviceEntries)
+	}
+	if deviceEntries[0].Status != "available" || deviceEntries[1].Status != "withdrawn" {
+		t.Errorf("withdrawn did not sink: %+v", deviceEntries)
+	}
+	if deviceEntries[1].Location != nil {
+		t.Errorf("withdrawn entry leaked payload: %+v", deviceEntries[1])
+	}
+}
+
+func TestContactWhereaboutsNoSources(t *testing.T) {
+	cdb, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cdb.Close() })
+	store, err := contacts.NewStore(cdb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Upsert(&contacts.Contact{FormattedName: "Bob Guest"}); err != nil {
+		t.Fatal(err)
+	}
+	deps := CounterpartyToolDeps{Contacts: store}
+	_, err = handleContactWhereabouts(context.Background(), deps, "Bob Guest", "")
+	if err == nil || !strings.Contains(err.Error(), "no whereabouts source") {
+		t.Fatalf("unbound contact must explain the configuration gap: %v", err)
+	}
+}
+
+func TestContactWhereaboutsResolution(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "home", "", nil)
+	if _, err := handleContactWhereabouts(context.Background(), fx.deps, "", ""); err == nil {
+		t.Error("empty selector accepted")
+	}
+	if _, err := handleContactWhereabouts(context.Background(), fx.deps, "Nobody Real", ""); err == nil || !strings.Contains(err.Error(), "Nobody Real") {
+		t.Errorf("unknown name error must echo the selection: %v", err)
+	}
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "", fx.contactID)
+	if err != nil {
+		t.Fatalf("by-id: %v", err)
+	}
+	if res := decodeWhereabouts(t, out); res.BestSource == "" {
+		t.Errorf("by-id result = %+v", res)
+	}
+}
+
+// TestContactWhereaboutsWithdrawnTrailsZoneFloor pins the fixed
+// ranking: withdrawn entries trail even the zone floor, so an
+// all-withdrawn fleet can never make a payload-less device entry the
+// best source.
+func TestContactWhereaboutsWithdrawnTrailsZoneFloor(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", map[string]companion.ObservationStatus{"device-1": companion.ObservationWithdrawn})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.BestSource != "ha_person_zone" {
+		t.Errorf("BestSource = %q, want the zone floor when every fix is withdrawn", res.BestSource)
+	}
+	if last := res.Sources[len(res.Sources)-1]; last.Source != "companion_location" || last.Status != "withdrawn" {
+		t.Errorf("withdrawn entry does not trail: %+v", res.Sources)
+	}
+	if strings.Contains(res.Basis, "device location leads") || !strings.Contains(res.Basis, "zone state leads") {
+		t.Errorf("basis contradicts the zone-floor ranking: %q", res.Basis)
+	}
+}
+
+func TestContactWhereaboutsWithdrawnOnlyBasis(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+	}{
+		{name: "away", state: "not_home"},
+		{name: "unknown", state: "Unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newWhereaboutsFixture(t, tt.state, "", map[string]companion.ObservationStatus{
+				"device-1": companion.ObservationWithdrawn,
+			})
+			out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			res := decodeWhereabouts(t, out)
+			if res.BestSource != "ha_person_zone" {
+				t.Errorf("BestSource = %q, want zone state", res.BestSource)
+			}
+			if strings.Contains(res.Basis, "device location leads") || !strings.Contains(res.Basis, "zone state leads") {
+				t.Errorf("basis contradicts withdrawn-only ranking: %q", res.Basis)
+			}
+		})
+	}
+}
+
+func TestContactWhereaboutsDeviceCapPreservesZoneFloor(t *testing.T) {
+	observations := make(map[string]companion.ObservationStatus, maxWhereaboutsSources+4)
+	for i := 0; i < maxWhereaboutsSources+4; i++ {
+		observations[fmt.Sprintf("device-%02d", i)] = companion.ObservationAvailable
+	}
+	fx := newWhereaboutsFixture(t, "not_home", "", observations)
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) != maxWhereaboutsSources {
+		t.Fatalf("sources = %d, want cap %d", len(res.Sources), maxWhereaboutsSources)
+	}
+	if res.TruncatedDevices != 5 {
+		t.Errorf("TruncatedDevices = %d, want 5 device entries", res.TruncatedDevices)
+	}
+	deviceSources := 0
+	zoneSources := 0
+	for _, src := range res.Sources {
+		switch src.Source {
+		case "companion_location":
+			deviceSources++
+		case "ha_person_zone":
+			zoneSources++
+		}
+	}
+	if deviceSources != maxWhereaboutsSources-1 || zoneSources != 1 {
+		t.Errorf("capped sources = %d devices/%d zones, want %d/1", deviceSources, zoneSources, maxWhereaboutsSources-1)
+	}
+	if last := res.Sources[len(res.Sources)-1]; last.Source != "ha_person_zone" {
+		t.Errorf("zone floor was not preserved at the end: %+v", res.Sources)
+	}
+}
+
+func TestContactWhereaboutsWithdrawnWithoutPresenceHasNoBestSource(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", map[string]companion.ObservationStatus{
+		"device-1": companion.ObservationWithdrawn,
+	})
+	if err := fx.deps.Contacts.SetHAPersonEntity(uuid.MustParse(fx.contactID), ""); err != nil {
+		t.Fatalf("clear HA binding: %v", err)
+	}
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.BestSource != "" {
+		t.Errorf("BestSource = %q, want none when every source is withdrawn", res.BestSource)
+	}
+	if !strings.Contains(res.Basis, "no available whereabouts source") {
+		t.Errorf("basis treats withdrawn provenance as a location: %q", res.Basis)
+	}
+}
+
+func TestContactWhereaboutsHABindingReadFailure(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := contacts.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Upsert(&contacts.Contact{FormattedName: "Alice Operator"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP INDEX idx_contacts_ha_person_unique`); err != nil {
+		t.Fatalf("drop HA binding index: %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE contacts DROP COLUMN ha_person_entity`); err != nil {
+		t.Fatalf("drop HA binding column: %v", err)
+	}
+
+	_, err = handleContactWhereabouts(context.Background(), CounterpartyToolDeps{Contacts: store}, "Alice Operator", "")
+	if err == nil || !strings.Contains(err.Error(), "read HA person binding") {
+		t.Fatalf("binding read failure was collapsed into absence: %v", err)
+	}
+}
+
+// TestContactWhereaboutsUnknownPresence pins the three-state fix: an
+// Unknown tracker state must not claim away ranking's basis.
+func TestContactWhereaboutsUnknownPresence(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "Unknown", "", map[string]companion.ObservationStatus{"device-1": companion.ObservationAvailable})
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.Sources[0].Source != "companion_location" {
+		t.Errorf("unknown presence should lead with the device fix: %+v", res.Sources[0])
+	}
+	if !strings.Contains(res.Basis, "unknown") || strings.Contains(res.Basis, "not home") {
+		t.Errorf("basis asserts unsupported location: %q", res.Basis)
+	}
+}
+
+// TestContactWhereaboutsBoundButSilent pins the C3 distinction: a
+// bound contact whose sources yielded nothing gets a valid empty
+// result explaining which binding was silent — never the
+// configuration-gap error.
+func TestContactWhereaboutsBoundButSilent(t *testing.T) {
+	cdb, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cdb.Close() })
+	store, err := contacts.NewStore(cdb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := store.Upsert(&contacts.Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatal(err)
+	}
+	deps := CounterpartyToolDeps{
+		Contacts: store,
+		Presence: func(string) (contacts.PersonSnapshot, bool) { return contacts.PersonSnapshot{}, false }, // untracked
+	}
+	out, err := handleContactWhereabouts(context.Background(), deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("bound-but-silent must not error: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) != 0 || !strings.Contains(res.Basis, "person.track") {
+		t.Errorf("silent result should teach the tracking gap: %+v", res)
+	}
+}
+
+// TestContactWhereaboutsLeadingPayloadOnly pins the result bound: only
+// the freshest available fix carries its payload; the rest chain by
+// identity into companion_last_known_location.
+func TestContactWhereaboutsLeadingPayloadOnly(t *testing.T) {
+	fx := newWhereaboutsFixture(t, "not_home", "", nil)
+	now := time.Now().UTC()
+	store := fx.deps.Companions
+	seedLocation(t, store, "alice-acct", "device-old", companion.ObservationAvailable, now.Add(-3*time.Hour))
+	seedLocation(t, store, "alice-acct", "device-fresh", companion.ObservationAvailable, now.Add(-10*time.Minute))
+
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	res := decodeWhereabouts(t, out)
+	if res.Sources[0].ClientID != "device-fresh" || res.Sources[0].Location == nil {
+		t.Errorf("leading fix wrong or payload-less: %+v", res.Sources[0])
+	}
+	if res.Sources[1].Source != "companion_location" || res.Sources[1].Location != nil {
+		t.Errorf("non-leading fix must not carry a payload: %+v", res.Sources[1])
+	}
+	for _, src := range res.Sources[:2] {
+		if src.Account == "" || src.ClientID == "" || src.DeviceID == "" {
+			t.Errorf("chaining identity missing: %+v", src)
+		}
+	}
+}
