@@ -49,6 +49,9 @@ type Device struct {
 	Platform   string
 	AppVersion string
 	OSVersion  string
+	// MetadataRecordedAt is the server receipt time of the newest
+	// non-empty device metadata accepted from any companion transport.
+	MetadataRecordedAt time.Time
 
 	FirstSeenAt time.Time
 	LastSeenAt  time.Time
@@ -90,9 +93,9 @@ func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 // RecordConnected upserts the device row for a successful companion
 // authentication. A new device gets its first_seen_at anchored; a
 // returning device keeps it. Timestamps are monotonic, and metadata
-// replacement is gated on the connect being at least as new as the
-// stored one — an older racing write can only fill fields that are
-// still empty, never overwrite what a newer connection reported.
+// replacement is gated on the report being at least as new as the
+// stored metadata — an older racing write can only fill fields that
+// are still empty, never overwrite what a newer transport reported.
 // Metadata is stored verbatim; the auth handshake is the one place
 // values are normalized. Implements [companion.DeviceRecorder].
 func (s *Store) RecordConnected(ctx context.Context, account, clientID string, meta companion.DeviceMetadata, at time.Time) error {
@@ -112,28 +115,36 @@ func (s *Store) RecordConnected(ctx context.Context, account, clientID string, m
 	// a later connection's, and the earliest event time is the truth.
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO companion_devices (
-			device_id, account, client_id, client_name, platform, app_version, os_version,
+			device_id, account, client_id, client_name, platform, app_version, os_version, metadata_recorded_at,
 			first_seen_at, last_seen_at, last_connected_at, state
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account, client_id) DO UPDATE SET
 			first_seen_at = MIN(companion_devices.first_seen_at, excluded.first_seen_at),
 			client_name = CASE WHEN excluded.client_name != ''
-					AND (companion_devices.client_name = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+					AND (companion_devices.client_name = '' OR companion_devices.metadata_recorded_at IS NULL
+						OR excluded.metadata_recorded_at >= companion_devices.metadata_recorded_at)
 				THEN excluded.client_name ELSE companion_devices.client_name END,
 			platform = CASE WHEN excluded.platform != ''
-					AND (companion_devices.platform = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+					AND (companion_devices.platform = '' OR companion_devices.metadata_recorded_at IS NULL
+						OR excluded.metadata_recorded_at >= companion_devices.metadata_recorded_at)
 				THEN excluded.platform ELSE companion_devices.platform END,
 			app_version = CASE WHEN excluded.app_version != ''
-					AND (companion_devices.app_version = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+					AND (companion_devices.app_version = '' OR companion_devices.metadata_recorded_at IS NULL
+						OR excluded.metadata_recorded_at >= companion_devices.metadata_recorded_at)
 				THEN excluded.app_version ELSE companion_devices.app_version END,
 			os_version = CASE WHEN excluded.os_version != ''
-					AND (companion_devices.os_version = '' OR excluded.last_connected_at >= companion_devices.last_connected_at)
+					AND (companion_devices.os_version = '' OR companion_devices.metadata_recorded_at IS NULL
+						OR excluded.metadata_recorded_at >= companion_devices.metadata_recorded_at)
 				THEN excluded.os_version ELSE companion_devices.os_version END,
+			metadata_recorded_at = CASE WHEN excluded.metadata_recorded_at IS NOT NULL
+					AND (companion_devices.metadata_recorded_at IS NULL
+						OR excluded.metadata_recorded_at >= companion_devices.metadata_recorded_at)
+				THEN excluded.metadata_recorded_at ELSE companion_devices.metadata_recorded_at END,
 			last_seen_at      = MAX(companion_devices.last_seen_at, excluded.last_seen_at),
 			last_connected_at = MAX(companion_devices.last_connected_at, excluded.last_connected_at)
 	`, deviceID, account, clientID,
 		meta.ClientName, meta.Platform, meta.AppVersion, meta.OSVersion,
-		at, at, at, DeviceStateActive)
+		deviceMetadataTime(meta, at), at, at, at, DeviceStateActive)
 	if err != nil {
 		return fmt.Errorf("record companion connect %s/%s: %w", account, clientID, err)
 	}
@@ -237,7 +248,7 @@ func (s *Store) Get(ctx context.Context, account, clientID string) (Device, bool
 	}
 	devices, err := s.scanDevices(ctx, `
 		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
-		       first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
+		       metadata_recorded_at, first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
 		       capabilities, capabilities_recorded_at, state
 		FROM companion_devices
 		WHERE account = ? AND client_id = ?
@@ -256,7 +267,7 @@ func (s *Store) Get(ctx context.Context, account, clientID string) (Device, bool
 func (s *Store) List(ctx context.Context) ([]Device, error) {
 	return s.scanDevices(ctx, `
 		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
-		       first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
+		       metadata_recorded_at, first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
 		       capabilities, capabilities_recorded_at, state
 		FROM companion_devices
 		ORDER BY account ASC, client_id ASC
@@ -274,6 +285,7 @@ func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]D
 	for rows.Next() {
 		var (
 			d            Device
+			metadataAt   sql.NullTime
 			connected    sql.NullTime
 			disconnected sql.NullTime
 			capsAt       sql.NullTime
@@ -281,10 +293,13 @@ func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]D
 		)
 		if err := rows.Scan(
 			&d.DeviceID, &d.Account, &d.ClientID, &d.ClientName, &d.Platform, &d.AppVersion, &d.OSVersion,
-			&d.FirstSeenAt, &d.LastSeenAt, &connected, &disconnected,
+			&metadataAt, &d.FirstSeenAt, &d.LastSeenAt, &connected, &disconnected,
 			&capsJSON, &capsAt, &d.State,
 		); err != nil {
 			return nil, err
+		}
+		if metadataAt.Valid {
+			d.MetadataRecordedAt = metadataAt.Time.UTC()
 		}
 		if connected.Valid {
 			d.LastConnectedAt = connected.Time.UTC()
@@ -301,6 +316,13 @@ func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]D
 		devices = append(devices, d)
 	}
 	return devices, rows.Err()
+}
+
+func deviceMetadataTime(meta companion.DeviceMetadata, at time.Time) any {
+	if meta.ClientName == "" && meta.Platform == "" && meta.AppVersion == "" && meta.OSVersion == "" {
+		return nil
+	}
+	return at
 }
 
 // validateKey rejects identities that are empty after trimming, but
