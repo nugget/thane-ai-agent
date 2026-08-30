@@ -221,6 +221,19 @@ func (a *App) initServers(s *newState) error {
 	// --- Companion app endpoint ---
 	// Optional: WebSocket endpoint for native companion apps (e.g. macOS)
 	// to connect and register capabilities for bidirectional service dispatch.
+	// Observation ingestion remains registered when companion auth is disabled
+	// so the documented route reports a structured 503 instead of disappearing.
+	var observationAuthenticator companion.ObservationAuthenticator
+	if cfg.Companion.Configured() {
+		observationAuthenticator = companion.NewBearerObservationAuthenticator(
+			cfg.Companion.TokenIndex(), a.companionDevices.ResolveObservationIdentity,
+		)
+	}
+	server.SetCompanionObservationHandler(companion.NewObservationHandler(
+		observationAuthenticator,
+		a.companionDevices,
+		logger,
+	))
 	if cfg.Companion.Configured() {
 		a.companionRegistry = companion.NewRegistry(logger)
 
