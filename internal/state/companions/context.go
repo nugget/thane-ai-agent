@@ -17,6 +17,24 @@ import (
 // silently dropping devices.
 const maxContextDevices = 32
 
+// ContactBinding is the resolved counterparty attribution for a
+// companion account: whose devices these are, and the trust zone that
+// authority derives from (#1450). Resolution happens at read time —
+// the binding lives in operator-custodied config and the contact
+// record, never copied onto device rows, so a zone change propagates
+// instantly and there is no second store of authority to drift.
+type ContactBinding struct {
+	ContactID string
+	Name      string
+	TrustZone string
+}
+
+// ContactResolver maps a companion account to its bound contact, when
+// one is configured. Implementations must fail closed: an unknown,
+// unbound, or deleted contact resolves to nothing, degrading the
+// device to account-only attribution.
+type ContactResolver func(ctx context.Context, account string) (ContactBinding, bool)
+
 // ContextProvider renders the joined companion-device view: every
 // paired device from the durable inventory merged with the live
 // provider registry. A known companion, its current reachability, and
@@ -39,6 +57,15 @@ type ContextProvider struct {
 	live func() []companion.ProviderInfo
 	// now is a clock seam for deterministic tests.
 	now func() time.Time
+	// contacts resolves account → counterparty attribution; nil means
+	// the binding layer is not wired and rows stay account-only.
+	contacts ContactResolver
+}
+
+// SetContactResolver wires counterparty attribution (#1450) into the
+// device view.
+func (p *ContextProvider) SetContactResolver(resolver ContactResolver) {
+	p.contacts = resolver
 }
 
 // NewContextProvider creates the joined companion-device context
@@ -75,6 +102,12 @@ type deviceContextJSON struct {
 	DeviceID string `json:"device_id,omitempty"`
 	ClientID string `json:"client_id,omitempty"`
 	Platform string `json:"platform,omitempty"`
+
+	// Contact is the bound counterparty's display name and
+	// ContactTrustZone the trust zone device authority derives from;
+	// absent when the account is unbound (#1450).
+	Contact          string `json:"contact,omitempty"`
+	ContactTrustZone string `json:"contact_trust_zone,omitempty"`
 
 	// Availability is "online" (a live connection is open; Tools are
 	// callable now) or "offline" (paired but not currently connected).
@@ -174,6 +207,10 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 			Availability: "offline",
 			Observations: obsByDevice[d.DeviceID],
 		}
+		if binding, ok := p.resolveContact(ctx, d.Account); ok {
+			row.Contact = binding.Name
+			row.ContactTrustZone = binding.TrustZone
+		}
 		if !d.LastSeenAt.IsZero() {
 			row.LastSeenAgo = promptfmt.FormatDeltaOnly(d.LastSeenAt, now)
 		}
@@ -212,7 +249,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 		liveUnjoined = append(liveUnjoined, matches...)
 	}
 	for _, info := range liveUnjoined {
-		rows = append(rows, deviceContextJSON{
+		row := deviceContextJSON{
 			Account:      info.Account,
 			ClientName:   info.ClientName,
 			ClientID:     info.ClientID,
@@ -220,7 +257,12 @@ func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 			Availability: "online",
 			ConnectedAgo: promptfmt.FormatDeltaOnly(info.ConnectedAt, now),
 			Tools:        liveToolNames([]companion.ProviderInfo{info}),
-		})
+		}
+		if binding, ok := p.resolveContact(ctx, info.Account); ok {
+			row.Contact = binding.Name
+			row.ContactTrustZone = binding.TrustZone
+		}
+		rows = append(rows, row)
 	}
 
 	// Deterministic order across turns so the model can compare without
@@ -270,4 +312,12 @@ func liveToolNames(infos []companion.ProviderInfo) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// resolveContact applies the optional counterparty resolver.
+func (p *ContextProvider) resolveContact(ctx context.Context, account string) (ContactBinding, bool) {
+	if p.contacts == nil {
+		return ContactBinding{}, false
+	}
+	return p.contacts(ctx, account)
 }

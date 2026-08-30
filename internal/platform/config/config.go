@@ -36,6 +36,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
@@ -803,6 +805,15 @@ type MemoryGuardConfig struct {
 // companion app (e.g. thane-agent-macos on a laptop vs desktop).
 type CompanionProviderConfig struct {
 	Tokens []string `yaml:"tokens"`
+
+	// Contact binds every device authenticating through this account to
+	// one contact record (a contact UUID): the counterparty layer's
+	// person attribution (#1450). The account names a credential
+	// namespace; this names whose devices those are. Optional — empty
+	// means unbound, and devices degrade to account-only attribution.
+	// Living in config is deliberate custody: bindings confer inherited
+	// trust and must not be writable through contact-editing tools.
+	Contact string `yaml:"contact"`
 }
 
 // Configured reports whether the companion endpoint is enabled
@@ -832,6 +843,11 @@ func (c CompanionConfig) Validate() error {
 	hasToken := false
 	seen := make(map[string]string) // token → account
 	for account, p := range c.Providers {
+		if p.Contact != "" {
+			if _, err := uuid.Parse(p.Contact); err != nil {
+				return fmt.Errorf("companion: account %q contact binding %q is not a contact UUID", account, p.Contact)
+			}
+		}
 		for _, tok := range p.Tokens {
 			if tok == "" {
 				continue
