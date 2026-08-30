@@ -2549,6 +2549,57 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 	return msgs, truncated, nil
 }
 
+// RecentContactTimes returns the timestamps of the most recent
+// contact-classified messages on a conversation, newest first, capped at
+// limit. Contact means communication with the channel counterparty:
+// rows stamped [OriginChannel] in either direction, plus — the one
+// documented fallback for rows written before provenance stamping
+// existed — unstamped user-role rows that are not wake-bridge synthetic
+// content (the "Anticipation matched:" prefix, the same exclusion the
+// search paths apply). Wake prompts (OriginWake) and system-authored
+// rows never move the result: the previous contact is the anchor the
+// conversation-timing narrative measures gaps against, and a wake that
+// shifted it would erase the very silence it is reporting.
+//
+// The current turn's just-stored inbound message is included when it is
+// already in the table — callers on a contact turn take the second entry
+// as the previous contact, and wake-turn callers take the first.
+func (s *ArchiveStore) RecentContactTimes(conversationID string, limit int) ([]time.Time, error) {
+	if limit <= 0 {
+		limit = 2
+	}
+	query := fmt.Sprintf(`
+		SELECT timestamp FROM %s
+		WHERE conversation_id = ?
+		  AND (
+			origin = ?
+			OR (COALESCE(origin, '') = '' AND role = 'user' AND content NOT LIKE 'Anticipation matched:%%')
+		  )
+		ORDER BY timestamp DESC, id DESC
+		LIMIT ?
+	`, s.msgTableName)
+
+	rows, err := s.msgDB().Query(query, conversationID, OriginChannel, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent contact times: %w", err)
+	}
+	defer rows.Close()
+
+	var out []time.Time
+	for rows.Next() {
+		var tsStr string
+		if err := rows.Scan(&tsStr); err != nil {
+			return nil, fmt.Errorf("scan contact time: %w", err)
+		}
+		ts, err := database.ParseTimestamp(tsStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse contact time: %w", err)
+		}
+		out = append(out, ts)
+	}
+	return out, rows.Err()
+}
+
 func (s *ArchiveStore) queryMessagesDesc(conversationID, excludeSessionID string, from, to time.Time, limit int) ([]Message, error) {
 	cols := s.msgSelectCols()
 	table := s.msgTableName

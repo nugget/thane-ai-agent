@@ -85,7 +85,11 @@ func (a *App) initAwareness(s *newState) error {
 	messageChannelProvider := memory.NewMessageChannelProvider(
 		a.archiveStore,
 		tools.ConversationIDFromContext,
-		memory.MessageChannelProviderConfig{},
+		memory.MessageChannelProviderConfig{
+			Timezone:          cfg.Timezone,
+			OriginFromContext: tools.MessageOriginFromContext,
+			HintsFromContext:  tools.HintsFromContext,
+		},
 		logger,
 	)
 	a.loop.RegisterTagContextProvider("message_channel", messageChannelProvider)

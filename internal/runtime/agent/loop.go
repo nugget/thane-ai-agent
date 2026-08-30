@@ -1890,6 +1890,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// painted door this narrowing exists to remove. Everything derived
 	// from ctx now inherits it.
 	ctx = loop.WithBindings(ctx, req.Bindings)
+	// On the run context for the same reason as bindings: the prompt is
+	// rebuilt from the iteration context on every iteration after the
+	// first, and turn provenance must survive those rebuilds.
+	ctx = tools.WithMessageOrigin(ctx, req.MessageOrigin)
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
