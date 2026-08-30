@@ -89,6 +89,11 @@ func (a *BearerObservationAuthenticator) AuthenticateObservation(
 		}
 	}
 	if matched != 1 {
+		// Deliberately avoid a dummy SQLite lookup for invalid bearer tokens.
+		// This temporary bearer path is restricted to Thane's private-network
+		// boundary; dummy database work would amplify unauthenticated traffic
+		// without making the full HTTP exchange constant-time. Per-device
+		// signatures in #1444 replace this shared-secret posture.
 		return ObservationPrincipal{}, ErrObservationUnauthorized
 	}
 	if a.identityLookup == nil {

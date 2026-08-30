@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,9 +75,19 @@ func TestIngestObservationsLatestRetryWithdrawalAndLastSeen(t *testing.T) {
 	if err != nil || result.Stored != 0 || result.Ignored != 1 {
 		t.Fatalf("retry result = %+v err=%v", result, err)
 	}
+	sameEventNewer := observationBatch("iphone-1", batch.Events[0].EventID, t1.Add(2*time.Second))
+	sameEventNewer.Events[0].Payload = json.RawMessage(`{"latitude":0,"longitude":0}`)
+	result, err = store.IngestObservations(ctx, principal, sameEventNewer, t1.Add(3*time.Second))
+	if err != nil || result.Stored != 0 || result.Ignored != 1 {
+		t.Fatalf("mutated retry result = %+v err=%v", result, err)
+	}
+	latestBeforeWithdrawal, err := store.ResolveLatestObservation(ctx, "nugget", "iphone-1", "ios.location")
+	if err != nil || !latestBeforeWithdrawal.ObservedAt.Equal(t1) || string(latestBeforeWithdrawal.Payload) != `{"latitude":41,"longitude":-87}` {
+		t.Fatalf("same event ID rewrote latest observation: %+v err=%v", latestBeforeWithdrawal, err)
+	}
 
 	older := observationBatch("iphone-1", "00000000-0000-4000-8000-000000000000", t0)
-	result, err = store.IngestObservations(ctx, principal, older, t1.Add(3*time.Second))
+	result, err = store.IngestObservations(ctx, principal, older, t1.Add(4*time.Second))
 	if err != nil || result.Stored != 0 || result.Ignored != 1 {
 		t.Fatalf("older result = %+v err=%v", result, err)
 	}
@@ -135,6 +146,16 @@ func TestIngestObservationsEqualTimeWithdrawalDominates(t *testing.T) {
 	if err != nil || latest.Status != companion.ObservationWithdrawn {
 		t.Fatalf("equal-time available resurrected withdrawal: %+v err=%v", latest, err)
 	}
+
+	recovery := observationBatch("iphone-1", "11111111-1111-4111-8111-111111111111", t2)
+	result, err = store.IngestObservations(ctx, principal, recovery, t2.Add(time.Second))
+	if err != nil || result.Stored != 1 || result.Ignored != 0 {
+		t.Fatalf("strictly newer recovery result = %+v err=%v", result, err)
+	}
+	latest, err = store.ResolveLatestObservation(ctx, "nugget", "iphone-1", "ios.location")
+	if err != nil || latest.Status != companion.ObservationAvailable || latest.Payload == nil || !latest.ObservedAt.Equal(t2) {
+		t.Fatalf("strictly newer observation did not recover withdrawal: %+v err=%v", latest, err)
+	}
 }
 
 func TestIngestObservationsBoundsKindsAtomically(t *testing.T) {
@@ -149,7 +170,14 @@ func TestIngestObservationsBoundsKindsAtomically(t *testing.T) {
 		}
 	}
 
-	batch := observationBatch("iphone-1", "ffffffff-ffff-4fff-bfff-ffffffffffff", t2)
+	atCap := observationBatch("iphone-1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", t2)
+	atCap.Events[0].Kind = "ios.kind.00"
+	result, err := store.IngestObservations(ctx, principal, atCap, t2)
+	if err != nil || result.Stored != 1 || result.Ignored != 0 {
+		t.Fatalf("existing kind at cap result = %+v err=%v", result, err)
+	}
+
+	batch := observationBatch("iphone-1", "ffffffff-ffff-4fff-bfff-ffffffffffff", t2.Add(time.Second))
 	batch.Events[0].Kind = "ios.kind.00"
 	newKind := batch.Events[0]
 	newKind.EventID = "eeeeeeee-eeee-4eee-beee-eeeeeeeeeeee"
@@ -159,8 +187,44 @@ func TestIngestObservationsBoundsKindsAtomically(t *testing.T) {
 		t.Fatalf("overflow error = %v", err)
 	}
 	latest, err := store.ResolveLatestObservation(ctx, "nugget", "iphone-1", "ios.kind.00")
-	if err != nil || latest.EventID != "00000000-0000-4000-8000-000000000000" {
+	if err != nil || latest.EventID != atCap.Events[0].EventID {
 		t.Fatalf("kind-limit failure was not atomic: latest=%+v err=%v", latest, err)
+	}
+}
+
+func TestDeviceMetadataRecencyAcrossTransports(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.RecordConnected(ctx, "nugget", "iphone-1", companion.DeviceMetadata{
+		ClientName: "WebSocket old", Platform: "ios", AppVersion: "1.0",
+	}, t1); err != nil {
+		t.Fatalf("record initial WebSocket metadata: %v", err)
+	}
+	device, found, err := store.Get(ctx, "nugget", "iphone-1")
+	if err != nil || !found {
+		t.Fatalf("get device: found=%t err=%v", found, err)
+	}
+	principal := companion.ObservationPrincipal{Account: "nugget", DeviceID: device.DeviceID}
+	httpBatch := observationBatch("iphone-1", "11111111-1111-4111-8111-111111111111", t2)
+	httpBatch.ClientName = "HTTP newest"
+	httpBatch.AppVersion = "2.0"
+	if _, err := store.IngestObservations(ctx, principal, httpBatch, t2); err != nil {
+		t.Fatalf("ingest HTTP metadata: %v", err)
+	}
+	if err := store.RecordConnected(ctx, "nugget", "iphone-1", companion.DeviceMetadata{
+		ClientName: "Late stale WebSocket", AppVersion: "1.5",
+	}, t0); err != nil {
+		t.Fatalf("record stale WebSocket metadata: %v", err)
+	}
+	if err := store.RecordConnected(ctx, "nugget", "iphone-1", companion.DeviceMetadata{}, t2.Add(time.Hour)); err != nil {
+		t.Fatalf("record metadata-free WebSocket connect: %v", err)
+	}
+
+	updated, found, err := store.Get(ctx, "nugget", "iphone-1")
+	if err != nil || !found {
+		t.Fatalf("get updated device: found=%t err=%v", found, err)
+	}
+	if updated.ClientName != "HTTP newest" || updated.AppVersion != "2.0" || !updated.MetadataRecordedAt.Equal(t2) {
+		t.Fatalf("cross-transport metadata did not converge: %+v", updated)
 	}
 }
 
@@ -249,6 +313,29 @@ func TestObservationStoreScopesAndRequiresUnambiguousDevice(t *testing.T) {
 		if string(latest.Payload) != `{"owner":"`+account+`"}` {
 			t.Fatalf("%s payload = %s", account, latest.Payload)
 		}
+	}
+}
+
+func TestResolveLatestObservationNotFoundDescribesRoutingScope(t *testing.T) {
+	store := newTestStore(t)
+	tests := []struct {
+		name     string
+		account  string
+		clientID string
+		want     string
+	}{
+		{name: "unscoped", want: "across all companions"},
+		{name: "account", account: "nugget", want: `for account "nugget"`},
+		{name: "client", clientID: "iphone-1", want: `for client_id "iphone-1"`},
+		{name: "account and client", account: "nugget", clientID: "iphone-1", want: `for account "nugget" and client_id "iphone-1"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.ResolveLatestObservation(ctx, test.account, test.clientID, "ios.location")
+			if !errors.Is(err, companion.ErrObservationNotFound) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("not-found error = %v, want scope %q", err, test.want)
+			}
+		})
 	}
 }
 

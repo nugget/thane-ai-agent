@@ -153,20 +153,18 @@ func TestValidateObservationBatchBounds(t *testing.T) {
 		EventID: "11111111-1111-4111-8111-111111111111", Kind: "ios.location",
 		SchemaVersion: 1, ObservedAt: now, Payload: json.RawMessage(`{"latitude":41}`),
 	}
-	tooManyProperties := make(map[string]int, maxObservationProperties+1)
-	for i := 0; i <= maxObservationProperties; i++ {
-		tooManyProperties[fmt.Sprintf("property_%03d", i)] = i
+	tooManyEvents := make([]ObservationEvent, maxObservationEvents+1)
+	for i := range tooManyEvents {
+		tooManyEvents[i] = validEvent
+		tooManyEvents[i].EventID = fmt.Sprintf("%08x-1111-4111-8111-111111111111", i)
 	}
-	tooManyPropertiesJSON, err := json.Marshal(tooManyProperties)
-	if err != nil {
-		t.Fatalf("marshal oversized property set: %v", err)
-	}
+	tooManyPropertiesJSON := observationPayloadWithProperties(t, maxObservationProperties+1)
 	tests := []struct {
 		name  string
 		batch ObservationBatch
 	}{
 		{name: "empty events", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}}},
-		{name: "too many events", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: make([]ObservationEvent, maxObservationEvents+1)}},
+		{name: "too many events", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: tooManyEvents}},
 		{name: "oversized payload", batch: ObservationBatch{ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"}, Events: []ObservationEvent{{
 			EventID: validEvent.EventID, Kind: validEvent.Kind, SchemaVersion: 1, ObservedAt: now,
 			Payload: json.RawMessage(`{"value":"` + strings.Repeat("x", maxObservationPayloadBytes) + `"}`),
@@ -186,6 +184,35 @@ func TestValidateObservationBatchBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateObservationBatchAcceptsInclusiveBounds(t *testing.T) {
+	batch := ObservationBatch{
+		ObservationDeviceMetadata: ObservationDeviceMetadata{ClientID: "iphone-1"},
+		Events: []ObservationEvent{{
+			EventID:       "11111111-1111-4111-8111-111111111111",
+			Kind:          "ios.location",
+			SchemaVersion: 1,
+			ObservedAt:    minimumObservationTime,
+			Payload:       observationPayloadWithProperties(t, maxObservationProperties),
+		}},
+	}
+	if err := validateObservationBatch(&batch, time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("validate inclusive observation bounds: %v", err)
+	}
+}
+
+func observationPayloadWithProperties(t *testing.T, count int) json.RawMessage {
+	t.Helper()
+	properties := make(map[string]int, count)
+	for i := 0; i < count; i++ {
+		properties[fmt.Sprintf("property_%03d", i)] = i
+	}
+	payload, err := json.Marshal(properties)
+	if err != nil {
+		t.Fatalf("marshal observation properties: %v", err)
+	}
+	return payload
 }
 
 func TestObservationHandlerReportsUnavailableAuthenticationAndKindLimit(t *testing.T) {

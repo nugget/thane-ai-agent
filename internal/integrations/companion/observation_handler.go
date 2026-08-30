@@ -233,6 +233,9 @@ func observationRequestScheme(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
 	}
+	// Do not trust X-Forwarded-Proto from arbitrary direct clients. Production
+	// TLS termination means #1444 must supply an explicitly trusted proxy/origin
+	// scheme before an RFC 9421 verifier treats TargetURI as authoritative.
 	return "http"
 }
 

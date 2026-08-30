@@ -41,8 +41,20 @@ var devicesSchema = database.Schema{
 				UNIQUE (account, client_id)
 			)`,
 		},
+		// Existing #1445 databases predate metadata_recorded_at, so this is a
+		// load-bearing upgrade step even though fresh databases get the column
+		// from TableCreate above.
 		database.ColumnAdd{
 			Table: "companion_devices", Column: "metadata_recorded_at", Typedef: "TIMESTAMP",
+		},
+		// Anchor legacy metadata to the connection time that guarded it before
+		// observation ingestion added a shared cross-transport recency timestamp.
+		database.Raw{
+			Description: "backfill companion device metadata recency",
+			SQL: `UPDATE companion_devices
+				SET metadata_recorded_at = last_connected_at
+				WHERE metadata_recorded_at IS NULL
+				  AND (client_name != '' OR platform != '' OR app_version != '' OR os_version != '')`,
 		},
 		database.TableCreate{
 			Table: "companion_latest_observations",

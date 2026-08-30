@@ -248,7 +248,8 @@ func (s *Store) ResolveLatestObservation(ctx context.Context, account, clientID,
 	}
 	switch len(matches) {
 	case 0:
-		return companion.LatestObservation{}, fmt.Errorf("%w: no companion has published %q for the requested account and client_id", companion.ErrObservationNotFound, kind)
+		return companion.LatestObservation{}, fmt.Errorf("%w: no companion has published %q %s",
+			companion.ErrObservationNotFound, kind, observationRoutingScope(account, clientID))
 	case 1:
 		return matches[0], nil
 	default:
@@ -258,6 +259,19 @@ func (s *Store) ResolveLatestObservation(ctx context.Context, account, clientID,
 		}
 		sort.Strings(labels)
 		return companion.LatestObservation{}, fmt.Errorf("%w: multiple companions have %q (%s); retry with account and client_id", companion.ErrObservationAmbiguous, kind, strings.Join(labels, ", "))
+	}
+}
+
+func observationRoutingScope(account, clientID string) string {
+	switch {
+	case account != "" && clientID != "":
+		return fmt.Sprintf("for account %q and client_id %q", account, clientID)
+	case account != "":
+		return fmt.Sprintf("for account %q", account)
+	case clientID != "":
+		return fmt.Sprintf("for client_id %q", clientID)
+	default:
+		return "across all companions"
 	}
 }
 
