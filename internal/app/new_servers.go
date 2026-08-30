@@ -240,6 +240,7 @@ func (a *App) initServers(s *newState) error {
 		// working against older Macs that advertise only methods (no
 		// authored tool defs).
 		a.loop.Tools().EnableCompanionTools(a.companionRegistry.Call)
+		a.loop.Tools().SetCompanionObservationStore(a.companionObservationStore)
 
 		// macOS-authoritative path: synthesize model-facing tools from the
 		// definitions companion apps author in register_capabilities. The
@@ -273,22 +274,14 @@ func (a *App) initServers(s *newState) error {
 
 		// On companion-tagged turns, tell the model which companions are
 		// connected and what they currently offer (uncached live state).
-		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry))
+		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry, a.companionObservationStore))
 
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
+		handler.UseObservationStore(a.companionObservationStore)
 		server.SetCompanionHandler(handler)
-
-		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-			Name: "companion",
-			Probe: func(_ context.Context) error {
-				if a.companionRegistry.Count() == 0 {
-					return fmt.Errorf("no providers connected")
-				}
-				return nil
-			},
-			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  logger,
-		})
+		server.SetCompanionObservationHandler(companion.NewObservationHandler(
+			cfg.Companion.TokenIndex(), a.companionObservationStore, logger,
+		))
 
 		logger.Info("companion app endpoint enabled")
 	}

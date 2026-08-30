@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
+	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -118,6 +119,14 @@ func (a *App) initStores(s *newState) error {
 	a.mem = mem
 	a.onCloseErr("memory", mem.Close)
 	logger.Info("memory database opened", "path", dbPath)
+
+	if cfg.Companion.Configured() {
+		observationStore, err := companion.NewObservationStore(mem.DB(), logger)
+		if err != nil {
+			return fmt.Errorf("companion observation store: %w", err)
+		}
+		a.companionObservationStore = observationStore
+	}
 
 	// --- Entity watchlist store ---
 	// Constructed early so later init phases (initChannels →

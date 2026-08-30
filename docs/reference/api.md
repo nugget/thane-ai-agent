@@ -103,6 +103,16 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/realtime/ws` | First-party realtime WebSocket (canonical). |
 | `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
+| `POST` | `/v1/companion/observations` | Submit a bounded latest-value observation batch from an authenticated companion. |
+
+`POST /v1/companion/observations` uses a configured companion bearer token,
+which determines the account, and a stable `client_id` supplied by the app.
+The endpoint accepts at most 64 KiB and 16 events; each available event carries
+a UUID idempotency key, kind, schema version, device `observed_at`, and a JSON
+object payload of at most 32 KiB. A `status` of `withdrawn` must omit the
+payload and prevents an earlier sensitive value from remaining available.
+Successful responses are `202 Accepted` and report stored versus ignored
+(duplicate or older) events plus the independent server `received_at`.
 
 ### Deprecated route aliases
 

@@ -70,6 +70,9 @@ type authMessage struct {
 	ClientName string `json:"client_name"`
 	ClientID   string `json:"client_id"`
 	Protocol   string `json:"protocol,omitempty"`
+	Platform   string `json:"platform,omitempty"`
+	AppVersion string `json:"app_version,omitempty"`
+	OSVersion  string `json:"os_version,omitempty"`
 }
 
 // authOK confirms successful authentication, assigns a provider ID, and

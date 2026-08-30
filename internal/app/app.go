@@ -131,7 +131,8 @@ type App struct {
 	haWS *homeassistant.WSClient
 
 	// Companion app registry
-	companionRegistry *companion.Registry
+	companionRegistry         *companion.Registry
+	companionObservationStore *companion.ObservationStore
 
 	// Connection health
 	connMgr *connwatch.Manager

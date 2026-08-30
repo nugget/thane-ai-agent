@@ -31,6 +31,9 @@ type Provider struct {
 	Account     string
 	ClientName  string
 	ClientID    string
+	Platform    string
+	AppVersion  string
+	OSVersion   string
 	Conn        *websocket.Conn
 	ConnectedAt time.Time
 	requestType string
@@ -55,6 +58,9 @@ type ProviderInfo struct {
 	Account      string       `json:"account"`
 	ClientName   string       `json:"client_name"`
 	ClientID     string       `json:"client_id"`
+	Platform     string       `json:"platform,omitempty"`
+	AppVersion   string       `json:"app_version,omitempty"`
+	OSVersion    string       `json:"os_version,omitempty"`
 	ConnectedAt  time.Time    `json:"connected_at"`
 	Capabilities []Capability `json:"capabilities,omitempty"`
 }
@@ -620,6 +626,9 @@ func providerToInfo(p *Provider) ProviderInfo {
 		Account:      p.Account,
 		ClientName:   p.ClientName,
 		ClientID:     p.ClientID,
+		Platform:     p.Platform,
+		AppVersion:   p.AppVersion,
+		OSVersion:    p.OSVersion,
 		ConnectedAt:  p.ConnectedAt,
 		Capabilities: p.capabilitiesSnapshot(),
 	}

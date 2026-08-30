@@ -87,6 +87,55 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 }
 
+func TestAuthLifecyclePersistsDeviceMetadataAndDisconnect(t *testing.T) {
+	store := newTestObservationStore(t)
+	registry := NewRegistry(nil)
+	handler := NewHandler(testTokenIndex(), registry, nil)
+	handler.UseObservationStore(store)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+srv.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	var required authRequired
+	readJSON(t, conn, &required)
+	if err := conn.WriteJSON(authMessage{
+		Type: typeAuth, Token: "test-secret", ClientName: "Pocket", ClientID: "iphone-1",
+		Platform: "ios", AppVersion: "0.2.0", OSVersion: "26.6",
+	}); err != nil {
+		t.Fatalf("auth: %v", err)
+	}
+	var authenticated authOK
+	readJSON(t, conn, &authenticated)
+
+	devices, err := store.ListDevices(context.Background())
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("connected devices = %+v err=%v", devices, err)
+	}
+	device := devices[0]
+	if device.Platform != "ios" || device.AppVersion != "0.2.0" || device.LastConnectedAt == nil {
+		t.Fatalf("connected device = %+v", device)
+	}
+
+	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye")); err != nil {
+		t.Fatalf("close message: %v", err)
+	}
+	_ = conn.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		devices, err = store.ListDevices(context.Background())
+		if err == nil && len(devices) == 1 && devices[0].LastDisconnectedAt != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("disconnect not persisted: devices=%+v err=%v", devices, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestAuthHandshakeBadToken(t *testing.T) {
 	srv, conn := dialTestServer(t, testTokenIndex())
 	defer srv.Close()

@@ -1,6 +1,7 @@
 package companion
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -43,9 +44,17 @@ var upgrader = websocket.Upgrader{
 
 // Handler is the HTTP handler for companion app WebSocket connections.
 type Handler struct {
-	tokenIndex map[string]string // token → account name
-	registry   *Registry
-	logger     *slog.Logger
+	tokenIndex       map[string]string // token → account name
+	registry         *Registry
+	observationStore *ObservationStore
+	logger           *slog.Logger
+}
+
+// UseObservationStore attaches durable companion inventory to the live
+// transport lifecycle. Authentication remains available without a store for
+// focused tests and compatibility embeddings.
+func (h *Handler) UseObservationStore(store *ObservationStore) {
+	h.observationStore = store
 }
 
 // NewHandler creates a new companion WebSocket handler. The tokenIndex
@@ -120,9 +129,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Register the provider before confirming to the client, so the
 	// registry is consistent by the time the client reads auth_ok.
+	if h.observationStore != nil && provider.ClientID != "" {
+		device := DeviceMetadata{
+			ClientID: provider.ClientID, ClientName: provider.ClientName,
+			Platform: provider.Platform, AppVersion: provider.AppVersion, OSVersion: provider.OSVersion,
+		}
+		if err := h.observationStore.RecordConnected(r.Context(), provider.Account, device, provider.ConnectedAt); err != nil {
+			h.logger.Warn("persist connected companion failed",
+				"account", provider.Account,
+				"client_id", provider.ClientID,
+				"error", err,
+			)
+		}
+	}
 	h.registry.Add(provider)
 	defer func() {
 		h.registry.Remove(provider.ID)
+		if h.observationStore != nil && provider.ClientID != "" {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+			defer cancel()
+			if err := h.observationStore.RecordDisconnected(ctx, provider.Account, provider.ClientID, time.Now()); err != nil {
+				h.logger.Warn("persist disconnected companion failed",
+					"account", provider.Account,
+					"client_id", provider.ClientID,
+					"error", err,
+				)
+			}
+		}
 		close(provider.done)
 		conn.Close()
 	}()
@@ -204,6 +237,9 @@ func (h *Handler) authenticate(conn *websocket.Conn, requestType string) (*Provi
 		Account:     account,
 		ClientName:  msg.ClientName,
 		ClientID:    msg.ClientID,
+		Platform:    msg.Platform,
+		AppVersion:  msg.AppVersion,
+		OSVersion:   msg.OSVersion,
 		Conn:        conn,
 		ConnectedAt: time.Now(),
 		requestType: requestType,

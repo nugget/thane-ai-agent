@@ -31,7 +31,7 @@ info:
       `archive:read`,
       `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
       `telemetry:read`, `contacts:read`, `contacts:write`, `identity:read`,
-      `system:read`.
+      `system:read`, `companion:write`.
     - **Roles** bundle scopes: `observer` (all `:read`), `operator`
       (observer + `definitions:write`, `sessions:write`, `checkpoints:write`),
       `admin` (everything, incl. `models:admin`, `contacts:write`).
@@ -86,6 +86,8 @@ tags:
     description: Durable instance identity and core provenance evidence.
   - name: Realtime
     description: WebSocket channel for first-party live interaction.
+  - name: Companion
+    description: Authenticated device inventory and background observation ingestion.
 
 externalDocs:
   description: Source, architecture, and contributor guides on GitHub.
@@ -103,7 +105,7 @@ x-tagGroups:
   - name: Routing & Telemetry
     tags: [Model Routing, Telemetry]
   - name: Integrations & Data
-    tags: [Contacts]
+    tags: [Contacts, Companion]
   - name: Runtime
     tags: [Identity, System, Realtime]
 
@@ -1223,6 +1225,101 @@ paths:
       responses:
         "101": { description: Switching Protocols (WebSocket). }
 
+  /v1/companion/observations:
+    post:
+      tags: [Companion]
+      operationId: ingestCompanionObservations
+      summary: Ingest latest-value observations from a companion device
+      description: |
+        Accepts a bounded, versioned batch from an authenticated companion.
+        The bearer token determines the account; `client_id` is the stable
+        installation identity within that account. Replayed or out-of-order
+        events are accepted but cannot duplicate or regress the latest stored
+        value. The server retains one latest value per observation kind, not
+        an event or location history.
+
+        Limits: 64 KiB request body, 16 events per batch, 32 KiB per event
+        payload, and 128 Unicode characters for identifiers and metadata.
+        `observed_at` may be at most five minutes ahead of server receipt time.
+      x-thane-scope: companion:write
+      requestBody:
+        description: Bounded latest-value observations from one stable companion installation.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompanionObservationBatch" }
+            example:
+              client_id: 8a166cda-0f6a-4e4e-a729-36e173289e5b
+              client_name: Thane for iOS
+              platform: ios
+              app_version: 1.0.0 (1)
+              os_version: "26.6"
+              events:
+                - event_id: 0198f8df-c8a6-7c49-8a0b-bf44ce7d9859
+                  kind: ios.location
+                  schema_version: 1
+                  status: available
+                  observed_at: "2026-08-30T16:59:55.123Z"
+                  payload:
+                    latitude: 41.8819
+                    longitude: -87.6278
+                    horizontal_accuracy_meters: 12
+      responses:
+        "202":
+          description: Batch validated and applied idempotently.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationIngestResult" }
+              example:
+                stored: 1
+                ignored: 0
+                received_at: "2026-08-30T17:00:00Z"
+        "400":
+          description: Malformed JSON or invalid observation contract.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationError" }
+              example:
+                error: { code: invalid_observation, message: events must contain between 1 and 16 items }
+        "401":
+          description: Missing or invalid companion bearer token.
+          headers:
+            WWW-Authenticate:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationError" }
+              example:
+                error: { code: unauthorized, message: a valid companion bearer token is required }
+        "413":
+          description: Request body exceeds 64 KiB.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationError" }
+              example:
+                error: { code: payload_too_large, message: observation batch exceeds 64 KiB }
+        "415":
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationError" }
+              example:
+                error: { code: unsupported_media_type, message: Content-Type must be application/json }
+        "500":
+          description: Valid observations could not be persisted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationError" }
+              example:
+                error: { code: ingest_failed, message: failed to store companion observations }
+        "503":
+          description: Companion observation storage is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanionObservationError" }
+              example:
+                error: { code: observation_store_unavailable, message: companion observation storage is unavailable }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1292,6 +1389,138 @@ components:
           type: string
           description: Human-readable message describing what went wrong.
           example: resource not found
+
+    CompanionObservationBatch:
+      type: object
+      description: Bounded observation upload associated with the token-authenticated account.
+      additionalProperties: false
+      required: [client_id, events]
+      properties:
+        client_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._-]+$'
+          description: Stable installation identifier reused by companion authentication.
+          example: 8a166cda-0f6a-4e4e-a729-36e173289e5b
+        client_name:
+          type: string
+          maxLength: 128
+          description: Operator-readable device name supplied by the companion.
+          example: Thane for iOS
+        platform:
+          type: string
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._-]+$'
+          description: Lowercase operating-system family reported by the companion.
+          example: ios
+        app_version:
+          type: string
+          maxLength: 128
+          description: Companion application version and build identifier.
+          example: 1.0.0 (1)
+        os_version:
+          type: string
+          maxLength: 128
+          description: Operating-system version reported by the companion.
+          example: "26.6"
+        events:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: Latest-value observation events to validate and apply atomically.
+          items: { $ref: "#/components/schemas/CompanionObservationEvent" }
+          example:
+            - event_id: 0198f8df-c8a6-7c49-8a0b-bf44ce7d9859
+              kind: ios.location
+              schema_version: 1
+              status: available
+              observed_at: "2026-08-30T16:59:55.123Z"
+              payload: { latitude: 41.8819, longitude: -87.6278 }
+
+    CompanionObservationEvent:
+      type: object
+      description: One versioned available snapshot or explicit withdrawal tombstone.
+      additionalProperties: false
+      required: [event_id, kind, schema_version, observed_at]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: Stable idempotency key retained through local retries.
+          example: 0198f8df-c8a6-7c49-8a0b-bf44ce7d9859
+        kind:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._-]+$'
+          description: Namespaced observation kind whose latest value this event advances.
+          example: ios.location
+        schema_version:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Version of the kind-specific payload contract.
+          example: 1
+        status:
+          type: string
+          enum: [available, withdrawn]
+          default: available
+          description: Whether payload is available or was explicitly withdrawn.
+          example: available
+        observed_at:
+          type: string
+          format: date-time
+          description: Device-supplied observation time, independent of server receipt time.
+          example: "2026-08-30T16:59:55.123Z"
+        payload:
+          type: object
+          maxProperties: 256
+          description: Versioned kind-specific JSON object, limited to 32 KiB; required when available and forbidden when withdrawn.
+          additionalProperties: true
+          example: { latitude: 41.8819, longitude: -87.6278, horizontal_accuracy_meters: 12 }
+
+    CompanionObservationIngestResult:
+      type: object
+      description: Counts showing how the accepted batch affected latest-value storage.
+      required: [stored, ignored, received_at]
+      properties:
+        stored:
+          type: integer
+          minimum: 0
+          description: Number of event kinds whose latest stored value advanced.
+          example: 1
+        ignored:
+          type: integer
+          minimum: 0
+          description: Valid replayed or older events that did not advance latest state.
+          example: 0
+        received_at:
+          type: string
+          format: date-time
+          description: Authoritative server receipt time for this batch.
+          example: "2026-08-30T17:00:00Z"
+
+    CompanionObservationError:
+      type: object
+      description: Machine-readable error envelope for companion observation ingestion.
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          description: Stable error code and safe operator-readable diagnostic message.
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable error category.
+              example: invalid_observation
+            message:
+              type: string
+              description: Safe diagnostic that never includes an observation payload or token.
+              example: events must contain between 1 and 16 items
 
     VersionInfo:
       type: object
