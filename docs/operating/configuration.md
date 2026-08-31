@@ -195,7 +195,16 @@ atomically reconciles the stored set to config. CardDAV still emits
 `X-THANE-HA-PERSON`, but treats it as a read-only projection and preserves
 it when clients omit unknown vCard fields. An explicitly present value must
 match the projection; attempting to change or clear it is rejected. Removing
-a map entry clears that binding on the next restart.
+a map entry clears that binding on the next restart. A contact with a
+configured binding cannot be deleted through CardDAV until its map entry is
+removed and Thane restarts; unbound contacts remain deletable.
+
+Configs loaded through `-insecure-config` cannot declare these identity
+relationships. Thane ignores `person.contact_bindings`,
+`identity.operator_contact_id`, and the legacy
+`identity.owner_contact_name`: it does not reconcile stored bindings or grant
+operator authority from unsigned input, and CardDAV retains its legacy
+authenticated custody mode for bindings during recovery.
 
 For backward compatibility, omitting `person.contact_bindings` entirely
 keeps the earlier CardDAV-managed behavior: an authenticated PUT may set

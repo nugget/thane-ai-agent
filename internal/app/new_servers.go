@@ -471,7 +471,7 @@ func (a *App) initServers(s *newState) error {
 	// Optional: exposes the contacts store as a CardDAV address book so
 	// native contact apps (macOS Contacts.app, iOS, Thunderbird) can sync.
 	if cfg.CardDAV.Configured() {
-		carddavBackend := cdav.NewBackend(a.contactStore, cfg.Person.ContactBindings != nil, logger)
+		carddavBackend := cdav.NewBackend(a.contactStore, a.contactBindingsConfigOwned, logger)
 		a.carddavServer = cdav.NewServer(
 			cfg.CardDAV.Listen,
 			cfg.CardDAV.Username,

@@ -48,6 +48,58 @@ func toMCPToolOverrides(cfg map[string]config.MCPToolConfig) map[string]mcp.Tool
 	return out
 }
 
+type contactIdentityConfig struct {
+	operatorContactID          uuid.UUID
+	legacyOwnerContactName     string
+	configOwnsHAPersonBindings bool
+}
+
+// applyContactIdentityConfig is the signed-config custody boundary for
+// persistent contact-to-person edges and operator selection. Recovery configs
+// remain useful, but cannot rewrite those edges or choose who receives
+// operator authority because their provenance is deliberately unverified.
+func applyContactIdentityConfig(cfg *config.Config, store *contacts.Store, logger *slog.Logger) (contactIdentityConfig, error) {
+	var resolved contactIdentityConfig
+	if cfg.Unverified() {
+		if cfg.Person.ContactBindings != nil || cfg.Identity.OperatorContactID != "" || cfg.Identity.OwnerContactName != "" {
+			logger.Warn("ignoring contact identity configuration: config is unverified",
+				"person_contact_bindings", cfg.Person.ContactBindings != nil,
+				"operator_contact_id", cfg.Identity.OperatorContactID != "",
+				"legacy_owner_contact_name", cfg.Identity.OwnerContactName != "")
+		}
+		return resolved, nil
+	}
+
+	resolved.configOwnsHAPersonBindings = cfg.Person.ContactBindings != nil
+	if resolved.configOwnsHAPersonBindings {
+		bindings := make(map[uuid.UUID]string, len(cfg.Person.ContactBindings))
+		for rawID, entity := range cfg.Person.ContactBindings {
+			id, err := uuid.Parse(rawID)
+			if err != nil {
+				return contactIdentityConfig{}, fmt.Errorf("parse configured contact binding %q: %w", rawID, err)
+			}
+			bindings[id] = entity
+		}
+		if err := store.ReplaceHAPersonBindings(bindings); err != nil {
+			return contactIdentityConfig{}, fmt.Errorf("apply person.contact_bindings: %w", err)
+		}
+		logger.Info("configured contact-to-person bindings applied", "count", len(bindings))
+	}
+
+	if cfg.Identity.OperatorContactID != "" {
+		operatorContactID, err := uuid.Parse(cfg.Identity.OperatorContactID)
+		if err != nil {
+			return contactIdentityConfig{}, fmt.Errorf("parse identity.operator_contact_id: %w", err)
+		}
+		if _, err := store.Get(operatorContactID); err != nil {
+			return contactIdentityConfig{}, fmt.Errorf("resolve identity.operator_contact_id %s: %w", operatorContactID, err)
+		}
+		resolved.operatorContactID = operatorContactID
+	}
+	resolved.legacyOwnerContactName = cfg.Identity.OwnerContactName
+	return resolved, nil
+}
+
 // initChannels wires tools and external channels into the agent loop.
 // Sections include fact store, contact directory, notifications, email,
 // forge, working memory, fact extraction, provenance,
@@ -82,31 +134,13 @@ func (a *App) initChannels(s *newState) error {
 	a.onCloseErr("contacts", contactStore.Close)
 	a.contactStore = contactStore
 
-	if a.cfg.Person.ContactBindings != nil {
-		bindings := make(map[uuid.UUID]string, len(a.cfg.Person.ContactBindings))
-		for rawID, entity := range a.cfg.Person.ContactBindings {
-			id, parseErr := uuid.Parse(rawID)
-			if parseErr != nil {
-				return fmt.Errorf("parse configured contact binding %q: %w", rawID, parseErr)
-			}
-			bindings[id] = entity
-		}
-		if err := contactStore.ReplaceHAPersonBindings(bindings); err != nil {
-			return fmt.Errorf("apply person.contact_bindings: %w", err)
-		}
-		a.logger.Info("configured contact-to-person bindings applied", "count", len(bindings))
+	contactIdentity, err := applyContactIdentityConfig(a.cfg, contactStore, a.logger)
+	if err != nil {
+		return err
 	}
-
-	var operatorContactID uuid.UUID
-	if a.cfg.Identity.OperatorContactID != "" {
-		operatorContactID, err = uuid.Parse(a.cfg.Identity.OperatorContactID)
-		if err != nil {
-			return fmt.Errorf("parse identity.operator_contact_id: %w", err)
-		}
-		if _, err := contactStore.Get(operatorContactID); err != nil {
-			return fmt.Errorf("resolve identity.operator_contact_id %s: %w", operatorContactID, err)
-		}
-	}
+	a.contactBindingsConfigOwned = contactIdentity.configOwnsHAPersonBindings
+	operatorContactID := contactIdentity.operatorContactID
+	legacyOwnerContactName := contactIdentity.legacyOwnerContactName
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()
@@ -127,8 +161,8 @@ func (a *App) initChannels(s *newState) error {
 	if operatorContactID != uuid.Nil {
 		contactTools.ConfigureOperatorContactID(operatorContactID)
 	}
-	if a.cfg.Identity.OwnerContactName != "" {
-		contactTools.SetOwnerContactName(a.cfg.Identity.OwnerContactName)
+	if legacyOwnerContactName != "" {
+		contactTools.SetOwnerContactName(legacyOwnerContactName)
 	}
 	ownerActivity := (&ownerChannelActivityAdapter{
 		loops: &channelLoopAdapter{registry: a.loopRegistry},
@@ -796,7 +830,7 @@ func (a *App) initChannels(s *newState) error {
 				Resolver: &contactChannelBindingResolver{
 					store:                  contactStore,
 					operatorContactID:      operatorContactID,
-					legacyOwnerContactName: a.cfg.Identity.OwnerContactName,
+					legacyOwnerContactName: legacyOwnerContactName,
 				},
 				BindConversation: a.mem.BindConversationChannel,
 				Attachments: sigcli.AttachmentConfig{

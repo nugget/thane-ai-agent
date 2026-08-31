@@ -24,7 +24,8 @@ type Backend struct {
 
 // NewBackend creates a CardDAV backend backed by the given contact
 // store. When configOwnsHAPersonBindings is true, CardDAV emits the
-// configured X-THANE-HA-PERSON value but cannot mutate it.
+// configured X-THANE-HA-PERSON value but cannot mutate it or delete
+// its bound contact.
 func NewBackend(store *contacts.Store, configOwnsHAPersonBindings bool, logger *slog.Logger) *Backend {
 	return &Backend{
 		store:                      store,
@@ -225,6 +226,15 @@ func (b *Backend) DeleteAddressObject(_ context.Context, path string) error {
 	id, err := contactIDFromPath(path)
 	if err != nil {
 		return err
+	}
+	if b.configOwnsHAPersonBindings {
+		entity, exists, err := b.store.HAPersonEntity(id)
+		if err != nil {
+			return fmt.Errorf("read configured ha person binding: %w", err)
+		}
+		if exists && entity != "" {
+			return fmt.Errorf("contact %s is bound by signed person.contact_bindings; edit config and restart Thane before deleting it", id)
+		}
 	}
 	return b.store.Delete(id)
 }

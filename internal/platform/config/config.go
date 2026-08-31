@@ -890,14 +890,15 @@ type IdentityConfig struct {
 	// OperatorContactID is the stable UUID of the primary human operator's
 	// contact record. It is preferred over the legacy name-based selector
 	// because contact display names can change. The referenced active
-	// contact must exist at startup.
+	// contact must exist at startup. Ignored when the config is unverified.
 	OperatorContactID string `yaml:"operator_contact_id"`
 
 	// OwnerContactName is the formatted name of the primary human
 	// operator's contact record. This legacy selector remains for
 	// compatibility; prefer OperatorContactID. The two selectors are
 	// mutually exclusive. When neither is set, contact_owner falls back
-	// to the sole admin contact if exactly one exists.
+	// to the sole admin contact if exactly one exists. Ignored when the
+	// config is unverified.
 	OwnerContactName string `yaml:"owner_contact_name,omitempty"`
 }
 
@@ -1956,7 +1957,8 @@ type PersonConfig struct {
 	// as an empty map, signed configuration is the exact source of truth:
 	// startup atomically replaces the stored bindings and CardDAV exposes
 	// X-THANE-HA-PERSON as read-only. When absent, legacy CardDAV-managed
-	// bindings remain enabled.
+	// bindings remain enabled. Unverified configs cannot own or reconcile
+	// bindings; this key is ignored in recovery mode.
 	ContactBindings map[string]string `yaml:"contact_bindings"`
 
 	// Devices maps tracked person entity IDs to their wireless device

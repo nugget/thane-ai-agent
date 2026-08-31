@@ -83,6 +83,10 @@ type App struct {
 	logger *slog.Logger
 	stdout io.Writer
 
+	// contactBindingsConfigOwned records the verified startup decision so
+	// CardDAV cannot reinterpret an ignored unverified config later.
+	contactBindingsConfigOwned bool
+
 	// LLM clients
 	llmClient             llm.Client
 	ollamaClients         map[string]*modelproviders.OllamaClient

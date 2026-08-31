@@ -256,6 +256,10 @@ to act on the world as though someone had:
 - **Service loops do not start automatically.** Unattended work needs a
   verified instance; an operator can still launch a specific loop
   deliberately.
+- **Contact identity configuration is ignored.** Unsigned
+  `person.contact_bindings`, `identity.operator_contact_id`, and legacy
+  `identity.owner_contact_name` values cannot rewrite persisted bindings or
+  select who receives operator authority.
 - **`/health` reports `status: degraded` with `trust: unverified`**, so a
   supervisor cannot mistake a recovery session for a healthy instance
   left running indefinitely.

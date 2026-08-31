@@ -565,9 +565,21 @@ func TestConfiguredHAPersonBindingIsReadOnlyInCardDAV(t *testing.T) {
 	if _, err := b.store.Get(newID); err == nil {
 		t.Fatal("rejected configured-binding PUT still created the contact")
 	}
+	if err := b.DeleteAddressObject(ctx, objectPath(operator.ID)); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
+		t.Fatalf("delete configured-bound contact error = %v, want config guidance", err)
+	}
+	if entity, exists, err := b.store.HAPersonEntity(operator.ID); err != nil || !exists || entity != "person.operator" {
+		t.Fatalf("binding after rejected DELETE = %q, %v, %v", entity, exists, err)
+	}
 
 	headerlessID := uuid.New()
 	if _, err := b.PutAddressObject(ctx, objectPath(headerlessID), newTestCard("Ordinary Contact", headerlessID), nil); err != nil {
 		t.Fatalf("header-less new contact should remain writable: %v", err)
+	}
+	if err := b.DeleteAddressObject(ctx, objectPath(headerlessID)); err != nil {
+		t.Fatalf("delete unbound contact: %v", err)
+	}
+	if _, err := b.store.Get(headerlessID); err == nil {
+		t.Fatal("unbound contact still exists after DELETE")
 	}
 }
