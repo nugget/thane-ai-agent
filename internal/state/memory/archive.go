@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -442,6 +443,12 @@ func (s *ArchiveStore) migrateSessionTables() error {
 			ON sessions(conversation_id, started_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started
 			ON sessions(started_at DESC);
+		-- Open sessions are the rare rows in a table that only grows;
+		-- the partial index keeps every "still open?" query (active
+		-- count, orphan recovery, shutdown enumeration) off the full
+		-- table scan that once cost ~0.8s per ops-panel render.
+		CREATE INDEX IF NOT EXISTS idx_sessions_open
+			ON sessions(ended_at) WHERE ended_at IS NULL;
 
 		CREATE TABLE IF NOT EXISTS archive_iterations (
 			session_id TEXT NOT NULL,
@@ -666,10 +673,14 @@ func (s *ArchiveStore) migrate() error {
 			metadata TEXT
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_sessions_conversation 
+		CREATE INDEX IF NOT EXISTS idx_sessions_conversation
 			ON sessions(conversation_id, started_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_sessions_started 
+		CREATE INDEX IF NOT EXISTS idx_sessions_started
 			ON sessions(started_at DESC);
+		-- Mirrors migrateSessionTables: open sessions are the rare rows,
+		-- and every "still open?" query should hit the partial index.
+		CREATE INDEX IF NOT EXISTS idx_sessions_open
+			ON sessions(ended_at) WHERE ended_at IS NULL;
 
 		-- Import tracking for idempotent re-imports and purge support.
 		-- Maps external source IDs to archive session IDs so we can
@@ -2114,10 +2125,11 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 // ActiveSessionCount returns the number of unclosed (active) sessions.
 // This is a lightweight query for telemetry dashboards — use
 // [ArchiveStore.ActiveSessionsWithLastActivity] when per-session
-// details are needed.
-func (s *ArchiveStore) ActiveSessionCount() (int, error) {
+// details are needed. It honors ctx because it runs on the telemetry
+// collector's bounded refresh path.
+func (s *ArchiveStore) ActiveSessionCount(ctx context.Context) (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL`).Scan(&count)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL`).Scan(&count)
 	return count, err
 }
 

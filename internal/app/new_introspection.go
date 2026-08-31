@@ -68,29 +68,40 @@ func (a *App) telemetryDBPaths() map[string]string {
 	return dbPaths
 }
 
+// telemetryCollector returns the app-wide telemetry collector, creating
+// it on first use (App construction is single-threaded). The health
+// inspector and the MQTT publisher share the one instance so both
+// report the same numbers from one snapshot cache — the publisher's
+// fresh collections warm the inspector's assembly-path reads — while
+// neither owns the other's lifecycle: health works with MQTT disabled,
+// and whichever wires first creates it.
+func (a *App) telemetryCollector() *telemetry.Collector {
+	if a.telCollector == nil {
+		src := telemetry.Sources{
+			LoopRegistry: a.loopRegistry,
+			UsageStore:   a.usageStore,
+			ArchiveStore: a.archiveStore,
+			LogsDB:       a.indexDB,
+			DBPaths:      a.telemetryDBPaths(),
+			Logger:       a.logger,
+		}
+		if a.attachmentStore != nil {
+			src.AttachmentSource = a.attachmentStore
+		}
+		a.telCollector = telemetry.NewCollector(src)
+	}
+	return a.telCollector
+}
+
 // initInspector wires the health inspector — the single assembler
 // behind the system_health tool and the metacog context panel. Every
 // source closure is nil-safe and reads live App state at call time, so
 // components that come up later (the memory guard is stored in Serve)
 // or never (no remote doc roots) degrade to absent rows rather than
-// wiring errors. The telemetry collector here is deliberately separate
-// from the MQTT publisher's: that one only exists when MQTT telemetry
-// is enabled, and health must not depend on MQTT.
+// wiring errors.
 func (a *App) initInspector() {
-	telSources := telemetry.Sources{
-		LoopRegistry: a.loopRegistry,
-		UsageStore:   a.usageStore,
-		ArchiveStore: a.archiveStore,
-		LogsDB:       a.indexDB,
-		DBPaths:      a.telemetryDBPaths(),
-		Logger:       a.logger,
-	}
-	if a.attachmentStore != nil {
-		telSources.AttachmentSource = a.attachmentStore
-	}
-
 	src := introspection.HealthSources{
-		Telemetry:    telemetry.NewCollector(telSources),
+		Telemetry:    a.telemetryCollector(),
 		DataDir:      a.cfg.DataDir,
 		StartedAt:    time.Now(),
 		BuildVersion: buildinfo.Version,
