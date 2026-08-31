@@ -30,6 +30,27 @@ func (g staticWhereaboutsStateGetter) GetState(_ context.Context, entityID strin
 	return state, nil
 }
 
+func (g staticWhereaboutsStateGetter) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
+	return nil, nil
+}
+
+type registryWhereaboutsStateGetter struct {
+	states   map[string]*homeassistant.State
+	registry []homeassistant.EntityRegistryEntry
+}
+
+func (g registryWhereaboutsStateGetter) GetState(_ context.Context, entityID string) (*homeassistant.State, error) {
+	state, ok := g.states[entityID]
+	if !ok {
+		return nil, fmt.Errorf("state %q not found", entityID)
+	}
+	return state, nil
+}
+
+func (g registryWhereaboutsStateGetter) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
+	return g.registry, nil
+}
+
 // newWhereaboutsFixture builds a contact ("Alice Operator") with an HA
 // person binding, one bound companion account carrying the given
 // observations, and a fake presence snapshot.
@@ -202,6 +223,59 @@ func TestContactWhereaboutsProductionPersonShapePreservesRoomProvider(t *testing
 	}
 	if strings.Contains(out, "bermuda_room") {
 		t.Fatalf("aggregate HA source fabricated Bermuda room provenance: %s", out)
+	}
+}
+
+func TestContactWhereaboutsProductionBermudaConsensusUsesScannerEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	const (
+		phoneID = "device_tracker.alice_phone_bermuda_tracker"
+		watchID = "device_tracker.alice_watch_bermuda_tracker"
+	)
+	getter := registryWhereaboutsStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID: "person.alice", State: "home", LastChanged: now.Add(-2 * time.Hour),
+				Attributes: map[string]any{
+					"source":          watchID,
+					"device_trackers": []any{phoneID, watchID},
+				},
+			},
+			phoneID: {
+				EntityID: phoneID, State: "home", LastUpdated: now.Add(-2 * time.Minute),
+				Attributes: map[string]any{"area": "Office", "scanner": "Desk Presence"},
+			},
+			watchID: {
+				EntityID: watchID, State: "home", LastUpdated: now.Add(-time.Minute),
+				Attributes: map[string]any{"area": "Office", "scanner": "Desk Presence"},
+			},
+		},
+		registry: []homeassistant.EntityRegistryEntry{
+			{EntityID: phoneID, Platform: "bermuda"},
+			{EntityID: watchID, Platform: "bermuda"},
+		},
+	}
+	tracker := contacts.NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+
+	fx := newWhereaboutsFixture(t, "home", "", nil)
+	fx.deps.Presence = tracker.Snapshot
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) < 2 {
+		t.Fatalf("sources = %+v, want Bermuda room and person zone", res.Sources)
+	}
+	room := res.Sources[0]
+	if room.Source != "bermuda_room" || room.Room != "Office" || room.RoomVia != "Desk Presence" {
+		t.Fatalf("Bermuda room source = %+v", room)
+	}
+	if strings.Contains(out, phoneID) || strings.Contains(out, watchID) {
+		t.Fatalf("model-facing result leaked observation identity instead of scanner evidence: %s", out)
 	}
 }
 

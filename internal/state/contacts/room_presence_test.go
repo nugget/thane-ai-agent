@@ -18,10 +18,11 @@ func TestPresenceTrackerObserveRoomConsensus(t *testing.T) {
 		Room:       "Office",
 		Provider:   " Bermuda ",
 		Source:     "device_tracker.phone_bermuda",
+		Via:        "Desk Presence",
 		ObservedAt: phoneAt,
 	})
 	first, _ := tracker.Snapshot("person.alice")
-	if first.Room != "Office" || first.RoomProvider != "bermuda" || first.RoomSource != "device_tracker.phone_bermuda" {
+	if first.Room != "Office" || first.RoomProvider != "bermuda" || first.RoomSource != "Desk Presence" {
 		t.Fatalf("single-source resolution = %+v", first)
 	}
 
@@ -29,10 +30,11 @@ func TestPresenceTrackerObserveRoomConsensus(t *testing.T) {
 		Room:       " office ",
 		Provider:   "bermuda",
 		Source:     "device_tracker.watch_bermuda",
+		Via:        "Desk Presence",
 		ObservedAt: watchAt,
 	})
 	providerConsensus, _ := tracker.Snapshot("person.alice")
-	if providerConsensus.Room != "Office" || providerConsensus.RoomProvider != "bermuda" || providerConsensus.RoomSource != "" {
+	if providerConsensus.Room != "Office" || providerConsensus.RoomProvider != "bermuda" || providerConsensus.RoomSource != "Desk Presence" {
 		t.Fatalf("same-provider consensus = %+v", providerConsensus)
 	}
 	if providerConsensus.RoomConflict {
@@ -150,6 +152,17 @@ func TestPresenceTrackerObservationRefresh(t *testing.T) {
 	}
 	if !second.RoomSince.Equal(first.RoomSince) {
 		t.Errorf("semantic refresh reset RoomSince: %v then %v", first.RoomSince, second.RoomSince)
+	}
+
+	observation.Via = "Desk Presence"
+	observation.ObservedAt = secondAt.Add(time.Second)
+	tracker.ObserveRoom("person.alice", observation)
+	withEvidence, _ := tracker.Snapshot("person.alice")
+	if notifications != 2 {
+		t.Errorf("evidence change emitted %d notifications, want 2 total", notifications)
+	}
+	if withEvidence.RoomSource != "Desk Presence" || !withEvidence.RoomSince.Equal(first.RoomSince) {
+		t.Errorf("evidence refresh = %+v", withEvidence)
 	}
 }
 

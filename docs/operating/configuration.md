@@ -172,14 +172,15 @@ active contact may claim a given person entity, and removing the field
 clears the binding. Presence flows only for entities the tracker
 watches: the same entity must also be listed under `person.track`, or
 the binding resolves but the presence join has nothing to report.
-The person binding itself does not infer a room from Home Assistant
-device-tracker attributes. Today room observations come from the
-configured UniFi poller, and model-facing output identifies `unifi` as
-the provider plus the AP name as source evidence. The presence tracker
-retains room observations by provider and source: observations that agree
-resolve to one room, while disagreement reports `room_conflict` and withholds
-a guessed room. This is the ingestion boundary future room providers join
-rather than a last-writer-wins slot.
+The person tracker follows each person's Home Assistant `device_trackers`
+attribute and adds those linked entities to the system ingestion floor. A
+linked tracker contributes room presence only when its entity-registry
+platform is `bermuda`, its state is `home`, and its `area` attribute is a
+non-empty string. The tracker entity ID remains the stable observation identity;
+the human-readable `scanner` attribute is surfaced as source evidence. The
+configured UniFi poller remains a second room provider and uses the AP name as
+its evidence. Observations that agree resolve to one room, while disagreement
+reports `room_conflict` and withholds a guessed room.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).

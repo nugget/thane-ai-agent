@@ -28,6 +28,10 @@ func (m *mockStateGetter) GetState(_ context.Context, entityID string) (*homeass
 	return s, nil
 }
 
+func (m *mockStateGetter) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
+	return nil, nil
+}
+
 func TestNewPresenceTracker(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice", "person.bob"}, "America/Chicago", nil)
 

@@ -7,13 +7,15 @@ import (
 )
 
 // RoomObservation is one provider-attributed claim about a tracked person's
-// current room. Provider identifies the integration family, Source identifies
-// the concrete device or sensor within that provider, and ObservedAt records
-// when that source produced the claim.
+// current room. Provider identifies the integration family, Source is the
+// stable device or sensor identity within that provider, Via is optional
+// human-readable evidence such as a scanner or access-point name, and
+// ObservedAt records when that source produced the claim.
 type RoomObservation struct {
 	Room       string    `json:"room"`
 	Provider   string    `json:"provider"`
 	Source     string    `json:"source,omitempty"`
+	Via        string    `json:"via,omitempty"`
 	ObservedAt time.Time `json:"observed_at"`
 }
 
@@ -72,7 +74,7 @@ func (t *PresenceTracker) ObserveRoom(entityID string, observation RoomObservati
 	observers := append([]RoomObserver(nil), t.observers...)
 	t.mu.Unlock()
 
-	if existed && normalizedRoomName(previous.Room) == normalizedRoomName(observation.Room) {
+	if existed && normalizedRoomName(previous.Room) == normalizedRoomName(observation.Room) && previous.Via == observation.Via {
 		return
 	}
 	t.logRoomObservation("observed", entityID, friendlyName, observation, resolution)
@@ -200,6 +202,7 @@ func (t *PresenceTracker) logRoomObservation(operation, entityID, friendlyName s
 		"room", observation.Room,
 		"room_provider", observation.Provider,
 		"room_source", observation.Source,
+		"room_via", observation.Via,
 		"observed_at", observation.ObservedAt,
 		"resolved_room", resolution.room,
 		"resolved_room_provider", resolution.provider,
@@ -228,6 +231,7 @@ func (t *PresenceTracker) notifyRoomObservers(observers []RoomObserver, entityID
 func normalizeRoomObservation(observation RoomObservation, now time.Time) RoomObservation {
 	observation.Room = strings.TrimSpace(observation.Room)
 	observation.Provider, observation.Source = normalizeRoomObservationIdentity(observation.Provider, observation.Source)
+	observation.Via = strings.TrimSpace(observation.Via)
 	if observation.ObservedAt.IsZero() {
 		observation.ObservedAt = now
 	}
@@ -259,14 +263,14 @@ func resolvePersonRoom(person *Person, now time.Time) {
 
 	room := observations[0].Room
 	provider := observations[0].Provider
-	source := observations[0].Source
+	source := roomObservationEvidence(observations[0])
 	for _, observation := range observations[1:] {
 		if observation.Provider != provider {
 			provider = ""
 			source = ""
 			continue
 		}
-		if observation.Source != source {
+		if roomObservationEvidence(observation) != source {
 			source = ""
 		}
 	}
@@ -278,6 +282,13 @@ func resolvePersonRoom(person *Person, now time.Time) {
 	person.RoomProvider = provider
 	person.RoomSource = source
 	person.roomConflict = false
+}
+
+func roomObservationEvidence(observation RoomObservation) string {
+	if observation.Via != "" {
+		return observation.Via
+	}
+	return observation.Source
 }
 
 func clearResolvedRoom(person *Person, conflict bool) {

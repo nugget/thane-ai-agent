@@ -115,25 +115,30 @@ func (a *App) initAwareness(s *newState) error {
 	// into prompts.
 	watchlistStore := a.watchlistStore
 
-	// Person-entity ingestion floor: the tracked person entities are
-	// system-owned ingest subscriptions, re-seeded from person.track on
-	// every boot so config edits win. Expressing the floor as registry
-	// rows (instead of a hardcoded append onto the ingestion filter)
-	// makes list_entity_subscriptions tell the whole truth about what
-	// is being watched and ingested (#1209).
-	if watchlistStore != nil {
-		floor := make([]looppkg.EntitySubscription, 0, len(cfg.Person.Track))
-		for _, entityID := range cfg.Person.Track {
+	// Presence ingestion floor: tracked person entities and the device trackers
+	// they link in HA are system-owned ingest subscriptions. The callback is
+	// reused when a person attribute-only update changes that linked set, so the
+	// registry and client-side WebSocket filter move together.
+	seedPresenceIngestFloor := func(entityIDs []string) {
+		if watchlistStore == nil {
+			return
+		}
+		floor := make([]looppkg.EntitySubscription, 0, len(entityIDs))
+		for _, entityID := range entityIDs {
 			floor = append(floor, looppkg.EntitySubscription{
 				EntityID: entityID,
 				Mode:     looppkg.SubscriptionModeIngest,
 			})
 		}
 		if err := watchlistStore.ReplaceOwner(awareness.OwnerSystem, floor); err != nil {
-			// The degraded ingest-filter fallback below still feeds the
-			// person tracker directly, so a failed seed loses registry
-			// visibility, not presence tracking.
-			logger.Warn("failed to seed the person-entity ingestion floor", "error", err)
+			// The degraded ingest-filter fallback below still feeds these
+			// entities directly, so a failed seed loses registry visibility,
+			// not presence tracking.
+			logger.Warn("failed to seed the presence ingestion floor", "error", err)
+			return
+		}
+		if a.ingestFilterRebuild != nil {
+			a.ingestFilterRebuild()
 		}
 	}
 
@@ -307,6 +312,7 @@ func (a *App) initAwareness(s *newState) error {
 	// so a redundant call from OnReady is harmless.
 	if len(cfg.Person.Track) > 0 {
 		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
+		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
 		a.loop.RegisterAlwaysContextProvider(s.personTracker)
 
 		// Configure device MAC addresses from config.
@@ -327,6 +333,10 @@ func (a *App) initAwareness(s *newState) error {
 			}
 			initCancel()
 		}
+	} else {
+		// Config is the source of truth; clear system rows left by a prior
+		// configuration that tracked people.
+		seedPresenceIngestFloor(nil)
 	}
 
 	// --- UniFi room presence ---
@@ -442,7 +452,7 @@ func (a *App) initAwareness(s *newState) error {
 	// from every owner, rebuilt on every registry mutation — no HA
 	// re-subscription needed, the WS feed is a firehose gated
 	// client-side. The person floor arrives through the registry too
-	// (system-owned rows seeded above), not a hardcoded append.
+	// (system-owned rows maintained above), not a hardcoded append.
 	if a.haWS != nil {
 		buildIngestFilter := func() (*homeassistant.EntityFilter, error) {
 			globs, err := watchlistStore.IngestGlobs(time.Now())
@@ -460,10 +470,10 @@ func (a *App) initAwareness(s *newState) error {
 		if err != nil {
 			// A failed registry read at boot degrades to the person
 			// floor — the tracker must not go deaf — and says so.
-			logger.Warn("ingest registry read failed at startup; ingesting the person-entity floor only", "error", err)
+			logger.Warn("ingest registry read failed at startup; ingesting the presence floor only", "error", err)
 			var personGlobs []string
 			if s.personTracker != nil {
-				personGlobs = s.personTracker.EntityIDs()
+				personGlobs = s.personTracker.IngestEntityIDs()
 			}
 			if len(personGlobs) == 0 {
 				filter = homeassistant.NewEntityFilterMatchNone(logger)
@@ -473,13 +483,10 @@ func (a *App) initAwareness(s *newState) error {
 		}
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.IngestRateLimitPerMinute)
 
-		// Compose handler: the state window, person tracker, and
-		// subscription wake feeder all see every state change that
-		// passes the filter and rate limiter.
+		// Compose the compact transition taps. The person tracker registers a
+		// complete-state tap below because Bermuda and linked-tracker updates
+		// depend on attributes and HA timestamps that this compact surface omits.
 		taps := []homeassistant.StateWatchHandler{stateWindowProvider.HandleStateChange}
-		if s.personTracker != nil {
-			taps = append(taps, s.personTracker.HandleStateChange)
-		}
 		if a.subWakeFeeder != nil {
 			taps = append(taps, a.subWakeFeeder.HandleStateChange)
 		}
@@ -494,6 +501,9 @@ func (a *App) initAwareness(s *newState) error {
 		}
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
+		if s.personTracker != nil {
+			watcher.AddStateChangeHandler(s.personTracker.HandleHAStateChange)
+		}
 		a.haStateWatcher = watcher
 		a.ingestFilterRebuild = func() {
 			rebuilt, err := buildIngestFilter()

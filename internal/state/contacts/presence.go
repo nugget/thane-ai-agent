@@ -10,7 +10,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
@@ -65,8 +64,8 @@ func FormatPersonPresence(
 
 // Person represents the current presence state of a tracked household
 // member. State is typically "home", "not_home", or a zone name like
-// "zone.work". Room fields are populated by an external poller (e.g.,
-// UniFi AP associations) when available.
+// "zone.work". Room fields resolve provider-attributed observations such as
+// UniFi AP associations and linked Bermuda device trackers.
 type Person struct {
 	EntityID     string
 	FriendlyName string
@@ -76,17 +75,10 @@ type Person struct {
 	Room         string    // resolved room when current observations agree
 	RoomSince    time.Time // when the current resolved room began
 	RoomProvider string    // shared provider, empty for cross-provider consensus
-	RoomSource   string    // sole source, empty when multiple sources agree
+	RoomSource   string    // shared provider evidence, empty when evidence differs
 
 	roomObservations map[roomObservationKey]RoomObservation
 	roomConflict     bool
-}
-
-// StateGetter abstracts the Home Assistant REST client for fetching
-// entity state. Using an interface keeps the tracker testable without
-// a real HA instance.
-type StateGetter interface {
-	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 }
 
 // RoomObserver is called when a tracked person's room observation changes.
@@ -105,9 +97,15 @@ type PresenceTracker struct {
 	people    map[string]*Person // entity_id → Person
 	order     []string           // insertion order for deterministic output
 	observers []RoomObserver     // called on room changes
-	mu        sync.RWMutex
-	loc       *time.Location
-	logger    *slog.Logger
+
+	linkedByPerson  map[string][]string
+	ownersByTracker map[string][]string
+	trackerPlatform map[string]string
+	ingestObserver  func([]string)
+
+	mu     sync.RWMutex
+	loc    *time.Location
+	logger *slog.Logger
 }
 
 // NewPresenceTracker creates a person tracker for the given entity IDs. All
@@ -141,124 +139,19 @@ func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger
 	}
 
 	return &PresenceTracker{
-		people: people,
-		order:  order,
-		loc:    loc,
-		logger: logger,
+		people:          people,
+		order:           order,
+		linkedByPerson:  make(map[string][]string),
+		ownersByTracker: make(map[string][]string),
+		trackerPlatform: make(map[string]string),
+		loc:             loc,
+		logger:          logger,
 	}
 }
 
 // TagContextBucket places current person presence in live state.
 func (t *PresenceTracker) TagContextBucket() agentctx.ContextBucket {
 	return agentctx.ContextBucketLiveState
-}
-
-// Initialize fetches the current state of all tracked entities from the
-// Home Assistant REST API. Entities that fail to load are logged and
-// left in "Unknown" state. This method is idempotent and safe to call
-// from a connwatch OnReady callback on every reconnection.
-//
-// Network I/O is performed without holding the lock so that GetContext
-// and HandleStateChange are not blocked during initialization.
-func (t *PresenceTracker) Initialize(ctx context.Context, ha StateGetter) error {
-	// Read entity order without the lock — order is immutable after
-	// construction, so this is safe.
-	ids := t.EntityIDs()
-
-	// Fetch all states outside the lock to avoid blocking readers
-	// during network I/O.
-	type fetchResult struct {
-		id    string
-		state *homeassistant.State
-		err   error
-	}
-	results := make([]fetchResult, 0, len(ids))
-	for _, id := range ids {
-		state, err := ha.GetState(ctx, id)
-		results = append(results, fetchResult{id: id, state: state, err: err})
-	}
-
-	// Apply fetched results under the lock.
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	var firstErr error
-	for _, r := range results {
-		if r.err != nil {
-			t.logger.Warn("failed to fetch person state",
-				"entity_id", r.id,
-				"error", r.err,
-			)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("fetch %s: %w", r.id, r.err)
-			}
-			continue
-		}
-
-		p := t.people[r.id]
-		p.State = r.state.State
-		p.Since = r.state.LastChanged
-
-		if name, ok := r.state.Attributes["friendly_name"].(string); ok && name != "" {
-			p.FriendlyName = name
-		}
-
-		t.logger.Debug("person state initialized",
-			"entity_id", r.id,
-			"friendly_name", p.FriendlyName,
-			"state", p.State,
-			"since", p.Since,
-		)
-	}
-
-	return firstErr
-}
-
-// HandleStateChange updates the tracked person's state when a
-// state_changed event is received. It matches the
-// homeassistant.StateWatchHandler function signature; the old-state and
-// device_class arguments are unused. Untracked entities and no-change
-// events are silently ignored. Room data is cleared when a person
-// transitions to "not_home".
-func (t *PresenceTracker) HandleStateChange(entityID, _, newState, _ string) {
-	t.mu.Lock()
-
-	p, ok := t.people[entityID]
-	if !ok {
-		t.mu.Unlock()
-		return
-	}
-
-	if p.State == newState {
-		t.mu.Unlock()
-		return
-	}
-
-	t.logger.Debug("person state changed",
-		"entity_id", entityID,
-		"friendly_name", p.FriendlyName,
-		"old_state", p.State,
-		"new_state", newState,
-	)
-
-	p.State = newState
-	p.Since = time.Now()
-
-	var withdrawn []RoomObservation
-	var observers []RoomObserver
-	// Withdraw every room observation when the person leaves home. Retaining
-	// provider/source identity lets observers clear only their own projection.
-	if strings.EqualFold(newState, "not_home") {
-		withdrawn = sortedRoomObservations(p.roomObservations)
-		clear(p.roomObservations)
-		clearResolvedRoom(p, false)
-		observers = append([]RoomObserver(nil), t.observers...)
-	}
-	t.mu.Unlock()
-
-	for _, observation := range withdrawn {
-		t.notifyRoomObservers(observers, entityID, "", observation.Provider, observation.Source)
-	}
 }
 
 // TagContext returns a formatted presence block for injection into the
