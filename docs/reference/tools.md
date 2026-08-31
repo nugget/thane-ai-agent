@@ -216,12 +216,21 @@ Document tool results use model-facing time deltas such as
 absolute timestamps. Timestamp filter inputs still accept RFC3339 values
 or signed deltas like `-604800s`.
 
+On git-backed roots, `doc_read` returns a `revision` token. A loop that may
+race another loop or an operator should pass that token as
+`expected_revision` to `doc_write`, `doc_edit`, or `doc_journal_update`.
+The mutation then compares and commits atomically; if the document changed
+after the read, it returns a conflict without replacing the newer content.
+Use `expected_revision: absent` only when a deliberate new ref must have no
+prior file history. Successful mutations return the new `revision` for the
+next update when `expected_revision` was supplied.
+
 | Tool | Description |
 |------|-------------|
 | `doc_roots` | List configured document roots with policy, health, and counts. |
 | `doc_browse` | Walk a document root by folder. |
 | `doc_outline` | Emit the heading/section outline for a document. |
-| `doc_read` | Read a document by prefixed path. |
+| `doc_read` | Read a document by prefixed path, including its current revision token on a git-backed root. |
 | `doc_section` | Retrieve a named section from a document. |
 | `doc_search` | Full-text and tagged search across roots. |
 | `doc_links` | List inbound/outbound links for a document. |
@@ -229,14 +238,14 @@ or signed deltas like `-604800s`.
 | `doc_create` | Create a new document safely: corpus collision check + normalized placement + write in one call; declines with an analysis when a similar document exists. |
 | `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
 | `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
-| `doc_write` | Replace a document's content (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
-| `doc_edit` | Targeted edit within a document. |
+| `doc_write` | Replace a document's content, with an optional revision precondition (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
+| `doc_edit` | Targeted edit within a document, with an optional revision precondition. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |
 | `doc_delete` | Delete a document. |
 | `doc_copy_section` | Copy one named section into another document. |
 | `doc_move_section` | Move one named section into another document. |
-| `doc_journal_update` | Append or update a journal-style entry. |
+| `doc_journal_update` | Append or update a journal-style entry, with an optional revision precondition. |
 
 Loop-declared document output tools are request-scoped and do not appear
 in the global catalog above. When a loop declares an output, Thane

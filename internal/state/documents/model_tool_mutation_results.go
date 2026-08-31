@@ -18,6 +18,7 @@ type modelMutationResult struct {
 	SizeBytes     int64    `json:"size_bytes"`
 	Section       string   `json:"section,omitempty"`
 	Window        string   `json:"window,omitempty"`
+	Revision      string   `json:"revision,omitempty"`
 }
 
 type modelDeleteResult struct {
@@ -123,6 +124,7 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 		SizeBytes:     result.SizeBytes,
 		Section:       result.Section,
 		Window:        result.Window,
+		Revision:      result.Revision,
 	}
 }
 

@@ -53,6 +53,10 @@ func (w *recordingRootWriter) Write(_ context.Context, filename, content, messag
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+func (w *recordingRootWriter) WriteIfRevision(ctx context.Context, filename, content, message, _ string) (string, error) {
+	return "", w.Write(ctx, filename, content, message)
+}
+
 func (w *recordingRootWriter) Delete(_ context.Context, filename, message string) error {
 	w.deletes = append(w.deletes, filename+"|"+message)
 	return os.Remove(filepath.Join(w.root, filename))

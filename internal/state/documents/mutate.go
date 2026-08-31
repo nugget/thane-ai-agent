@@ -25,6 +25,10 @@ type DocumentRecord struct {
 	ModifiedAt  string              `json:"modified_at"`
 	WordCount   int                 `json:"word_count"`
 	SizeBytes   int64               `json:"size_bytes"`
+	// Revision is the newest commit touching this document on a
+	// revision-backed root. Pass it as expected_revision on a later
+	// mutation to reject stale read-modify-write cycles.
+	Revision string `json:"revision,omitempty"`
 }
 
 // WriteArgs creates or replaces a whole managed document.
@@ -36,6 +40,8 @@ type WriteArgs struct {
 	Frontmatter  map[string][]string `json:"frontmatter,omitempty"`
 	Body         *string             `json:"body,omitempty"`
 	JournalEntry string              `json:"journal_entry,omitempty"`
+	// ExpectedRevision rejects a stale mutation on a revision-backed root.
+	ExpectedRevision string `json:"expected_revision,omitempty"`
 }
 
 // EditArgs updates part of a managed document without leaving the
@@ -51,6 +57,8 @@ type EditArgs struct {
 	Description string              `json:"description,omitempty"`
 	Tags        []string            `json:"tags,omitempty"`
 	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
+	// ExpectedRevision rejects a stale mutation on a revision-backed root.
+	ExpectedRevision string `json:"expected_revision,omitempty"`
 }
 
 // JournalUpdateArgs appends a timestamped note into a rolling window
@@ -65,6 +73,8 @@ type JournalUpdateArgs struct {
 	Description  string              `json:"description,omitempty"`
 	Tags         []string            `json:"tags,omitempty"`
 	Frontmatter  map[string][]string `json:"frontmatter,omitempty"`
+	// ExpectedRevision rejects a stale mutation on a revision-backed root.
+	ExpectedRevision string `json:"expected_revision,omitempty"`
 }
 
 // MutationResult summarizes one managed document write/edit.
@@ -84,6 +94,8 @@ type MutationResult struct {
 	SizeBytes   int64    `json:"size_bytes"`
 	Section     string   `json:"section,omitempty"`
 	Window      string   `json:"window,omitempty"`
+	// Revision is the exact revision produced by a conditional mutation.
+	Revision string `json:"revision,omitempty"`
 }
 
 // IsNotFound reports whether err means the document does not exist, as
@@ -130,7 +142,7 @@ func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {
 	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_read"); err != nil {
 		return nil, err
 	}
-	record, _, _, err := s.readDocumentFile(absPath, root, relPath)
+	record, err := s.readCurrentDocument(ctx, absPath, root, relPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", ref)
@@ -223,13 +235,15 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	meta := mergeDocumentFrontmatter(existingRecord, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 	raw := renderDocument(meta, body)
 
-	if err := s.writeDocumentFile(ctx, root, relPath, raw); err != nil {
-		return nil, err
-	}
-	record, _, _, err := s.readDocumentFile(absPath, root, relPath)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, args.ExpectedRevision)
 	if err != nil {
 		return nil, err
 	}
+	record, _, _, err := documentRecordFromBytes(root, relPath, []byte(raw), time.Now())
+	if err != nil {
+		return nil, err
+	}
+	s.attachMutationRevision(ctx, record, revision)
 	return mutationResultFromRecord("doc_write", record, existed, sectionName, ""), nil
 }
 
@@ -292,13 +306,15 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 		raw = touchDocumentFrontmatter(raw, record, time.Now())
 	}
 	rendered := renderDocumentFromParts(raw, editedBody)
-	if err := s.writeDocumentFile(ctx, root, relPath, rendered); err != nil {
-		return nil, err
-	}
-	record, _, _, err = s.readDocumentFile(absPath, root, relPath)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, args.ExpectedRevision)
 	if err != nil {
 		return nil, err
 	}
+	record, _, _, err = documentRecordFromBytes(root, relPath, []byte(rendered), time.Now())
+	if err != nil {
+		return nil, err
+	}
+	s.attachMutationRevision(ctx, record, revision)
 	return mutationResultFromRecord("doc_edit", record, true, sectionName, ""), nil
 }
 
@@ -365,13 +381,15 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 		meta := mergeDocumentFrontmatter(record, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 		rendered = renderDocument(meta, updatedBody)
 	}
-	if err := s.writeDocumentFile(ctx, root, relPath, rendered); err != nil {
-		return nil, err
-	}
-	record, _, _, err = s.readDocumentFile(absPath, root, relPath)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, args.ExpectedRevision)
 	if err != nil {
 		return nil, err
 	}
+	record, _, _, err = documentRecordFromBytes(root, relPath, []byte(rendered), time.Now())
+	if err != nil {
+		return nil, err
+	}
+	s.attachMutationRevision(ctx, record, revision)
 	return mutationResultFromRecord("doc_journal_update", record, existed, windowHeading, windowKind), nil
 }
 
@@ -418,9 +436,20 @@ func (s *Store) readDocumentFile(absPath, root, relPath string) (*DocumentRecord
 	if err != nil {
 		return nil, "", "", err
 	}
+	return readDocumentRecordBytes(absPath, root, relPath, rawBytes)
+}
+
+func readDocumentRecordBytes(absPath, root, relPath string, rawBytes []byte) (*DocumentRecord, string, string, error) {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return nil, "", "", err
+	}
+	return documentRecordFromBytes(root, relPath, rawBytes, info.ModTime())
+}
+
+func documentRecordFromBytes(root, relPath string, rawBytes []byte, modifiedAt time.Time) (*DocumentRecord, string, string, error) {
+	if int64(len(rawBytes)) > maxReadableDocumentBytes {
+		return nil, "", "", fmt.Errorf("document %q exceeds the maximum readable size of %d bytes; it is likely runaway or corrupt and must be truncated or removed before Thane can read it", filepath.Base(relPath), maxReadableDocumentBytes)
 	}
 	raw := string(rawBytes)
 	rawFrontmatter, body, hasFrontmatter := splitFrontmatterBlock(raw)
@@ -439,9 +468,9 @@ func (s *Store) readDocumentFile(absPath, root, relPath string) (*DocumentRecord
 		Frontmatter: cloneFrontmatter(doc.Frontmatter),
 		Body:        strippedBody,
 		Outline:     append([]Section(nil), doc.Sections...),
-		ModifiedAt:  info.ModTime().UTC().Format(time.RFC3339Nano),
+		ModifiedAt:  modifiedAt.UTC().Format(time.RFC3339Nano),
 		WordCount:   doc.WordCount,
-		SizeBytes:   info.Size(),
+		SizeBytes:   int64(len(rawBytes)),
 	}, rawFrontmatter, body, nil
 }
 
@@ -523,6 +552,7 @@ func mutationResultFromRecord(action string, record *DocumentRecord, existed boo
 		SizeBytes:   record.SizeBytes,
 		Section:     section,
 		Window:      window,
+		Revision:    record.Revision,
 	}
 }
 

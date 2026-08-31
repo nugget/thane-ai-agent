@@ -3,6 +3,7 @@ package provenance
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -79,6 +80,146 @@ func TestStoreWriteRead(t *testing.T) {
 
 	if got != content {
 		t.Errorf("Read = %q, want %q", got, content)
+	}
+}
+
+func TestStoreWriteIfRevision(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if _, err := s.WriteIfRevision(ctx, "contact.md", "first", "create", RevisionAbsent); err != nil {
+		t.Fatalf("create with absent precondition: %v", err)
+	}
+	first, err := s.ResolveRevision(ctx, "contact.md", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve first revision: %v", err)
+	}
+	second, err := s.WriteIfRevision(ctx, "contact.md", "second", "update", first.Short)
+	if err != nil {
+		t.Fatalf("update with current precondition: %v", err)
+	}
+	current, err := s.ResolveRevision(ctx, "contact.md", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve current revision: %v", err)
+	}
+	if second.Commit != current.Commit {
+		t.Fatalf("returned revision = %s, current = %s; want exact committed revision", second.Commit, current.Commit)
+	}
+
+	_, err = s.WriteIfRevision(ctx, "contact.md", "stale", "stale-update", first.Short)
+	var conflict *RevisionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("stale update error = %v, want RevisionConflictError", err)
+	}
+	if conflict.Expected != first.Short || conflict.Actual == "" || conflict.Actual == first.Short {
+		t.Fatalf("conflict = %#v, want stale expected and newer actual", conflict)
+	}
+	if got, readErr := s.Read("contact.md"); readErr != nil || got != "second" {
+		t.Fatalf("Read after stale update = %q, %v; want second", got, readErr)
+	}
+}
+
+func TestStoreSnapshotPairsCurrentContentAndRevision(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	if err := s.Write(ctx, "contact.md", "current dossier", "create"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	revision, content, err := s.Snapshot(ctx, "contact.md")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	committed, err := s.Blob(ctx, revision.Commit, "contact.md")
+	if err != nil {
+		t.Fatalf("Blob at snapshot revision: %v", err)
+	}
+	if content != committed || content != "current dossier" {
+		t.Fatalf("snapshot content = %q, committed content = %q; want current dossier", content, committed)
+	}
+}
+
+func TestStoreSnapshotReturnsUntrackedContentWithoutRevision(t *testing.T) {
+	s := testStore(t)
+	if err := os.WriteFile(filepath.Join(s.path, "draft.md"), []byte("untracked draft"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	revision, content, err := s.Snapshot(t.Context(), "draft.md")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if revision.Commit != "" || content != "untracked draft" {
+		t.Fatalf("snapshot = revision %q, content %q; want no revision and untracked draft", revision.Commit, content)
+	}
+}
+
+func TestStoreWriteIfRevisionAllowsOnlyOneConcurrentWriter(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if _, err := s.WriteIfRevision(ctx, "contact.md", "first", "create", RevisionAbsent); err != nil {
+		t.Fatalf("create with absent precondition: %v", err)
+	}
+	first, err := s.ResolveRevision(ctx, "contact.md", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve first revision: %v", err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, content := range []string{"writer-a", "writer-b"} {
+		content := content
+		go func() {
+			<-start
+			_, err := s.WriteIfRevision(ctx, "contact.md", content, "concurrent update", first.Short)
+			errs <- err
+		}()
+	}
+	close(start)
+
+	successes := 0
+	conflicts := 0
+	for range 2 {
+		err := <-errs
+		if err == nil {
+			successes++
+			continue
+		}
+		var conflict *RevisionConflictError
+		if errors.As(err, &conflict) {
+			conflicts++
+			continue
+		}
+		t.Fatalf("concurrent write error = %v, want nil or RevisionConflictError", err)
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent outcomes = %d successes, %d conflicts; want 1 and 1", successes, conflicts)
+	}
+}
+
+func TestStoreWriteIfRevisionRejectsDirtyTarget(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	if err := s.Write(ctx, "contact.md", "committed", "create"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	rev, err := s.ResolveRevision(ctx, "contact.md", "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRevision: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(s.path, "contact.md"), []byte("operator edit"), 0o644); err != nil {
+		t.Fatalf("WriteFile dirty target: %v", err)
+	}
+
+	_, err = s.WriteIfRevision(ctx, "contact.md", "model edit", "update", rev.Short)
+	var conflict *RevisionConflictError
+	if !errors.As(err, &conflict) || conflict.Actual != "worktree_dirty" {
+		t.Fatalf("dirty-target error = %v, conflict=%#v; want worktree_dirty conflict", err, conflict)
+	}
+	got, readErr := os.ReadFile(filepath.Join(s.path, "contact.md"))
+	if readErr != nil || string(got) != "operator edit" {
+		t.Fatalf("dirty target after refusal = %q, %v; want operator edit preserved", got, readErr)
 	}
 }
 

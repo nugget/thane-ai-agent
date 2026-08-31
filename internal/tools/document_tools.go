@@ -438,6 +438,9 @@ func readDocumentFacet(ctx context.Context, dt *documents.Tools, ref, level stri
 		"faceted":          faceted,
 		"levels_available": available,
 	}
+	if doc.Revision != "" {
+		result["revision"] = doc.Revision
+	}
 	if title := strings.TrimSpace(doc.Title); title != "" {
 		result["title"] = title
 	}

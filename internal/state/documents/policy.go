@@ -183,6 +183,9 @@ type SignatureVerification struct {
 // the model.
 type RootWriter interface {
 	Write(ctx context.Context, filename, content, message string) error
+	// WriteIfRevision compares, commits, and returns the exact new revision
+	// atomically. expectedRevision may be the reserved creation token absent.
+	WriteIfRevision(ctx context.Context, filename, content, message, expectedRevision string) (revision string, err error)
 	Delete(ctx context.Context, filename, message string) error
 }
 
