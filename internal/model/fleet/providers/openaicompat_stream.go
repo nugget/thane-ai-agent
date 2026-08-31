@@ -41,6 +41,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		toolAcc        = make(map[int]*openAICompatToolAccumulator)
 		done           bool
 		chunks         int
+		reasoningChars int
 		finishReason   string
 		upstreamID     string
 		firstToken     time.Time
@@ -93,6 +94,17 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 			}
 			if choice.Delta.Role != "" {
 				role = choice.Delta.Role
+			}
+			// The thinking channel counts as generation for timing (the
+			// model is producing tokens, so prefill and queueing are
+			// over) and for the emptiness verdict below — but it is not
+			// content, so it neither accumulates nor streams to the
+			// callback.
+			if r := choice.Delta.reasoningText(); r != "" {
+				if firstToken.IsZero() {
+					firstToken = time.Now()
+				}
+				reasoningChars += len(r)
 			}
 			if choice.Delta.Content != "" {
 				// First content, not first frame: the role-only opener
@@ -171,8 +183,19 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	// a chunks>0 check and return Done:true with no content, no tool
 	// calls, and zero tokens — the fabricated success this client exists
 	// to refuse. Judge the same thing the non-streaming path judges:
-	// whether an assistant actually said or did anything.
+	// whether an assistant actually said or did anything. A stream that
+	// carried only reasoning is still a refusal — there is no answer to
+	// return — but it is a different diagnosis: the model was working
+	// (production saw 814-frame streams reported as "empty") and the
+	// answer never reached the content channel, either because the
+	// token budget died mid-think or because the runner's template
+	// routes the final answer into the reasoning field. Sizes only in
+	// the error; reasoning text stays out of logs.
 	if strings.TrimSpace(contentBuilder.String()) == "" && len(toolCalls) == 0 {
+		if reasoningChars > 0 {
+			return nil, fmt.Errorf("%s produced only reasoning for model %q (%d chars over %d frames, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, requestedModel, reasoningChars, chunks, finishReason)
+		}
 		return nil, fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks)
 	}
 

@@ -622,3 +622,122 @@ func TestOpenAICompatStreamLatencyMetrics(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAICompatReasoningOnlyStreamIsDiagnosed pins the difference
+// between a model that said nothing and a model that thought hard and
+// never answered. Production streams of 814 reasoning frames were
+// reported as "empty" because the thinking channel wasn't decoded —
+// the refusal is unchanged (there is no answer to return), but the
+// diagnosis must name what actually happened.
+func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		frames  []string
+		wantIn  string
+		wantOK  bool
+		wantOut string
+	}{
+		{
+			name: "ollama reasoning key with budget death",
+			frames: []string{
+				`{"choices":[{"delta":{"role":"assistant"}}]}`,
+				`{"choices":[{"delta":{"reasoning":"first I should"}}]}`,
+				`{"choices":[{"delta":{"reasoning":" consider"}}]}`,
+				`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
+				"[DONE]",
+			},
+			wantIn: "produced only reasoning",
+		},
+		{
+			name: "deepseek reasoning_content key",
+			frames: []string{
+				`{"choices":[{"delta":{"reasoning_content":"hmm"}}]}`,
+				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+				"[DONE]",
+			},
+			wantIn: "produced only reasoning",
+		},
+		{
+			name:   "scaffolding-only keeps the empty-stream diagnosis",
+			frames: []string{`{"choices":[{"delta":{"role":"assistant"}}]}`, "[DONE]"},
+			wantIn: "empty stream",
+		},
+		{
+			name: "reasoning then content is a real completion",
+			frames: []string{
+				`{"choices":[{"delta":{"reasoning":"think think"}}]}`,
+				`{"choices":[{"delta":{"content":"the answer"}}]}`,
+				"[DONE]",
+			},
+			wantOK:  true,
+			wantOut: "the answer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, f := range tt.frames {
+					_, _ = w.Write([]byte("data: " + f + "\n\n"))
+				}
+			}))
+			defer srv.Close()
+
+			var streamed strings.Builder
+			c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+			resp, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, func(ev llm.StreamEvent) {
+				if ev.Kind == llm.KindToken {
+					streamed.WriteString(ev.Token)
+				}
+			})
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("ChatStream: %v", err)
+				}
+				if resp.Message.Content != tt.wantOut {
+					t.Errorf("content = %q, want %q", resp.Message.Content, tt.wantOut)
+				}
+				// Reasoning must not leak into the token stream.
+				if streamed.String() != tt.wantOut {
+					t.Errorf("streamed tokens = %q, want %q", streamed.String(), tt.wantOut)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want error, got success: %#v", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantIn) {
+				t.Errorf("error %q missing %q", err.Error(), tt.wantIn)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatReasoningOnlyCompletionIsDiagnosed covers the
+// non-streaming sibling of the same seam.
+func TestOpenAICompatReasoningOnlyCompletionIsDiagnosed(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","reasoning":"deep thoughts"},"finish_reason":"length"}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+	_, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("want error for a reasoning-only completion")
+	}
+	if !strings.Contains(err.Error(), "produced only reasoning") {
+		t.Errorf("error %q missing reasoning diagnosis", err.Error())
+	}
+	if !strings.Contains(err.Error(), `finish_reason="length"`) {
+		t.Errorf("error %q missing finish_reason", err.Error())
+	}
+}
