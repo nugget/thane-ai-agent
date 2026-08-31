@@ -27,6 +27,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 	"github.com/nugget/thane-ai-agent/internal/server/openapi"
@@ -109,6 +110,7 @@ type Server struct {
 	reconcileLoopDefinition            func(context.Context, string) error
 	launchLoopDefinition               func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	launchChatLoop                     func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
+	runContactDossierBackfill          func(context.Context, int) (archivist.ContactDossierBackfillResult, error)
 	anthropicRateLimitSnapshot         func() *fleet.AnthropicRateLimitSnapshot
 	logger                             *slog.Logger
 	server                             *http.Server
@@ -449,6 +451,14 @@ func (s *Server) SetArchiveStore(as *memory.ArchiveStore) {
 	s.archiveStore = as
 }
 
+// ConfigureContactDossierBackfill configures the explicit operator path that
+// advances the archivist's one-time historical contact-dossier traversal.
+func (s *Server) ConfigureContactDossierBackfill(
+	run func(context.Context, int) (archivist.ContactDossierBackfillResult, error),
+) {
+	s.runContactDossierBackfill = run
+}
+
 // Start begins serving HTTP requests.
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
@@ -538,6 +548,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/search", s.handleArchiveSearch)
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
+	mux.HandleFunc("POST /v1/archive/contact-dossier-backfill", s.handleContactDossierBackfill)
 
 	// First-party realtime WebSocket. /v1/realtime/ws is the canonical
 	// path (per native.yaml); the legacy aliases for existing
@@ -1859,6 +1870,33 @@ func (s *Server) handleArchiveStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, stats, s.logger)
+}
+
+func (s *Server) handleContactDossierBackfill(w http.ResponseWriter, r *http.Request) {
+	if s.runContactDossierBackfill == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "contact dossier backfill is not configured")
+		return
+	}
+
+	limit := archivist.DefaultContactBackfillLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > archivist.MaxContactBackfillLimit {
+			s.errorResponse(w, http.StatusBadRequest,
+				fmt.Sprintf("limit must be an integer from 1 through %d", archivist.MaxContactBackfillLimit))
+			return
+		}
+		limit = parsed
+	}
+
+	result, err := s.runContactDossierBackfill(r.Context(), limit)
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "advance contact dossier backfill: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, result, s.logger)
 }
 
 func parseIntParam(r *http.Request, name string, defaultVal int) int {

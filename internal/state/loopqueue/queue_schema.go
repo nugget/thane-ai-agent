@@ -70,5 +70,12 @@ var queueSchema = database.Schema{
 			SQL: `CREATE INDEX IF NOT EXISTS idx_loop_queue_completions_acked
 				ON loop_queue_completions (acked_at)`,
 		},
+		database.IndexCreate{
+			Name: "idx_loop_queue_completions_key",
+			// Supports producer overlap checks before admitting a historical
+			// backfill key that the consumer recently completed.
+			SQL: `CREATE INDEX IF NOT EXISTS idx_loop_queue_completions_key
+				ON loop_queue_completions (consumer_loop, dedup_key)`,
+		},
 	},
 }

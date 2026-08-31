@@ -73,6 +73,45 @@ func TestCreateAndGet(t *testing.T) {
 	}
 }
 
+func TestListActivePage_KeysetAndCutoff(t *testing.T) {
+	store := newTestStore(t)
+	cutoff := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	rows := []struct {
+		id        string
+		name      string
+		createdAt time.Time
+	}{
+		{"019c0000-0000-7000-8000-000000000001", "Alpha", cutoff.Add(-time.Hour)},
+		{"019c0000-0000-7000-8000-000000000002", "Bravo", cutoff},
+		{"019c0000-0000-7000-8000-000000000003", "Future", cutoff.Add(time.Hour)},
+	}
+	for _, row := range rows {
+		stamp := row.createdAt.Format(time.RFC3339Nano)
+		if _, err := store.db.Exec(`
+			INSERT INTO contacts (id, formatted_name, rev, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, row.id, row.name, stamp, stamp, stamp); err != nil {
+			t.Fatalf("insert %s: %v", row.name, err)
+		}
+	}
+
+	first, hasMore, err := store.ListActivePage(cutoff, "", 1)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first) != 1 || first[0].FormattedName != "Alpha" || !hasMore {
+		t.Fatalf("first page = %#v, hasMore=%v", first, hasMore)
+	}
+
+	second, hasMore, err := store.ListActivePage(cutoff, first[0].ID.String(), 1)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second) != 1 || second[0].FormattedName != "Bravo" || hasMore {
+		t.Fatalf("second page = %#v, hasMore=%v", second, hasMore)
+	}
+}
+
 func TestUpsertByName(t *testing.T) {
 	store := newTestStore(t)
 

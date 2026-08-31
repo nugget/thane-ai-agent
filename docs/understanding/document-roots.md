@@ -563,6 +563,36 @@ unrelated dossiers get neither ambient nor loose lexical offers. Existing
 workspaces can add the same declaration and re-run `thane init` to establish
 the signed sibling repository before deployment.
 
+Contact lifecycle does not rename or silently erase this history:
+
+- Renaming a structured contact leaves `contacts:<uuid>.md` in place. The next
+  structured dossier write derives the new display title while the UUID path,
+  citations, and Git history remain continuous.
+- Forgetting a contact soft-deletes the structured row. The canonical writer
+  then refuses new writes because the UUID is no longer an active contact, but
+  the dossier file and its signed history remain until an operator explicitly
+  moves or deletes the document.
+- Merging contacts is deliberate rather than inferred. Choose the surviving
+  structured UUID, reconcile any useful claims and citations into that
+  contact's dossier through `contact_dossier_write`, then forget the duplicate.
+  The duplicate dossier is retained unless the operator explicitly archives it
+  with `doc_move` to another suitable managed root or removes it with
+  `doc_delete`.
+- `doc_move` and `doc_delete` are recovery and lifecycle operations, not normal
+  dossier-authoring doors. A deletion removes the live document but remains a
+  signed deletion in the source root's Git history; forgetting or merging a
+  structured contact never performs that step automatically.
+
+An existing installation can seed historical stewardship explicitly through
+`POST /v1/archive/contact-dossier-backfill`. Each call handles at most 200
+source records, with a durable frozen cutoff and keyset cursor. Active contact
+subjects are queued first, followed by closed, non-empty conversational
+sessions; automation traffic is omitted, recent queue work is coalesced, and
+historical entries sit below fresh session-close work. The operator repeats
+bounded calls until `complete` is true. Completion is permanent operational
+state: the endpoint becomes a no-op, while new session evidence continues
+through the normal steady-state enqueue path.
+
 ## The Human-Level Rule
 
 If you find yourself thinking:

@@ -2275,6 +2275,59 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 	return sessions, nil
 }
 
+// ListClosedSessionsPage returns one stable, ID-keyset page of closed sessions
+// that ended no later than cutoff. Results are ordered by session ID, and
+// hasMore says whether another page remains after the last returned session.
+// The cutoff freezes a one-time traversal while the normal session-close path
+// continues to handle sessions that finish after it began.
+//
+// Session IDs are the cursor rather than ended_at because historical rows mix
+// timestamp encodings. SQLite datetime() is used only for the inclusive cutoff;
+// pagination itself stays exact and index-backed through the primary key.
+func (s *ArchiveStore) ListClosedSessionsPage(cutoff time.Time, afterID string, limit int) ([]*Session, bool, error) {
+	if cutoff.IsZero() {
+		return nil, false, fmt.Errorf("closed session page cutoff is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       0 AS message_count,
+		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
+		FROM sessions
+		WHERE ended_at IS NOT NULL
+		  AND datetime(ended_at) <= datetime(?)
+		  AND id > ?
+		ORDER BY id ASC
+		LIMIT ?
+	`, cutoff.UTC().Format(time.RFC3339Nano), strings.TrimSpace(afterID), limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list closed session page: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		sess, err := s.scanSessionRow(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(sessions) > limit
+	if hasMore {
+		sessions = sessions[:limit]
+	}
+	s.populateMessageCounts(sessions)
+	return sessions, hasMore, nil
+}
+
 // ListClosedSessionsEndedBefore returns closed sessions on the given
 // conversation whose ended_at is strictly before cutoff, most recently
 // ended first, with message counts populated. Paginated by limit and

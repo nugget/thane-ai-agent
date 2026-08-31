@@ -4,42 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 )
-
-// archivistAutomationOrigins are conversation-id prefixes whose sessions
-// carry no dossier-worthy evidence: autonomous service-loop iterations,
-// scheduled-task runs, metacognitive bookkeeping, and auxiliary utility
-// traffic. Sessions from these origins are never enqueued for the archivist.
-//
-// This is a denylist on purpose — any origin NOT named here (interactive
-// channels like signal-/email-, delegate work, external events) is treated
-// as archivable, so the rare substantive case is never silently dropped.
-// The archivist-queue flood that motivated this (issue #1024) was exactly
-// these: loop- service iterations, sched- automation, metacog- bookkeeping.
-var archivistAutomationOrigins = []string{
-	"loop-",         // self-paced service loops (metacognitive, pollers, HA automations)
-	"sched-",        // scheduled tasks
-	"metacog-",      // metacognitive bookkeeping
-	"owu-auxiliary", // open-webui auxiliary requests ONLY — real OWU chats are owu-<hash> and stay archivable
-}
-
-// isArchivableSession reports whether a closed session is worth folding into
-// dossiers, judged solely from its conversation origin — a deterministic
-// property, no LLM call or content scan. Automation/auxiliary origins are
-// skipped; everything else is archivable.
-func isArchivableSession(conversationID string) bool {
-	for _, prefix := range archivistAutomationOrigins {
-		if strings.HasPrefix(conversationID, prefix) {
-			return false
-		}
-	}
-	return true
-}
 
 // enqueueSessionCloseWork records a closed session as a pending work item in
 // the archivist's durable queue, keyed dedup on "session:<id>" so the same
@@ -58,7 +27,7 @@ func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, conversati
 	if sessionID == "" {
 		return fmt.Errorf("empty session_id")
 	}
-	if !isArchivableSession(conversationID) {
+	if !archivist.IsArchivableSession(conversationID) {
 		if a.logger != nil {
 			a.logger.Debug("archivist: skipping non-archival session origin",
 				"session_id", sessionID,

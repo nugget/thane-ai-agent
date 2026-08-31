@@ -174,8 +174,8 @@ func TestIsArchivableSession(t *testing.T) {
 		{"owu-auxiliary", false}, // only the fixed auxiliary id is skipped
 	}
 	for _, tc := range cases {
-		if got := isArchivableSession(tc.conv); got != tc.want {
-			t.Errorf("isArchivableSession(%q) = %v, want %v", tc.conv, got, tc.want)
+		if got := archivist.IsArchivableSession(tc.conv); got != tc.want {
+			t.Errorf("archivist.IsArchivableSession(%q) = %v, want %v", tc.conv, got, tc.want)
 		}
 	}
 }

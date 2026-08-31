@@ -28,12 +28,13 @@ info:
     - **AuthZ scopes** are `resource:action`:
       `loops:read`, `definitions:read`, `definitions:write`, `requests:read`,
       `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
-      `archive:read`,
+      `archive:read`, `archive:write`,
       `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
       `telemetry:read`, `contacts:read`, `contacts:write`, `identity:read`,
       `system:read`, `companion:write`.
     - **Roles** bundle scopes: `observer` (all `:read`), `operator`
-      (observer + `definitions:write`, `sessions:write`, `checkpoints:write`),
+      (observer + `definitions:write`, `sessions:write`, `archive:write`,
+      `checkpoints:write`),
       `admin` (everything, incl. `models:admin`, `contacts:write`).
 
     CORS is a per-surface concern: the native API allowlists the UI origins
@@ -853,6 +854,50 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ArchiveStats" }
+  /v1/archive/contact-dossier-backfill:
+    post:
+      tags: [Archive]
+      operationId: advanceContactDossierBackfill
+      summary: Advance the one-time historical contact-dossier backfill
+      description: |
+        Operator-only catch-up path. Each call advances one bounded page of a
+        durable traversal: active contact subjects first, then closed
+        substantive sessions. A frozen cutoff and persisted keyset cursors
+        make retries and process restarts idempotent; queue keys that are
+        already pending or present in the retained completion journal are not
+        enqueued again. Historical items enter below fresh session-close work
+        and do not wake the self-paced archivist.
+
+        Repeat calls until `complete` is true. Once complete, later calls are
+        durable no-ops; this endpoint never turns into a recurring full-archive
+        scan.
+      x-thane-scope: archive:write
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum source records scanned in this call.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: One bounded page advanced, or the already-complete no-op state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContactDossierBackfillResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500":
+          description: The source page, queue write, or durable cursor update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: The archivist or its backfill dependencies are not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   # ------------------------------------------------------------ Checkpoints
   /v1/checkpoints:
@@ -4029,6 +4074,67 @@ components:
         by_status:
           active: 12044
           archived: 306160
+
+    ContactDossierBackfillResult:
+      type: object
+      description: >-
+        Per-call progress for the durable one-time contact-dossier backfill.
+        Counts cover this bounded request, not the lifetime traversal.
+      required:
+        - phase
+        - cutoff
+        - scanned
+        - enqueued
+        - skipped_recent
+        - skipped_empty
+        - skipped_automation
+        - complete
+      properties:
+        phase:
+          type: string
+          enum: [contacts, sessions, complete]
+          description: Source phase processed by this call, or complete for a durable no-op.
+        next_phase:
+          type: string
+          enum: [contacts, sessions, complete]
+          description: Durable phase the next call will process.
+        cutoff:
+          type: string
+          format: date-time
+          description: Frozen upper time bound shared by the complete traversal.
+        scanned:
+          type: integer
+          minimum: 0
+          description: Source records examined in this call.
+        enqueued:
+          type: integer
+          minimum: 0
+          description: New low-priority archivist subjects enqueued in this call.
+        skipped_recent:
+          type: integer
+          minimum: 0
+          description: Subjects already pending or present in the retained completion journal.
+        skipped_empty:
+          type: integer
+          minimum: 0
+          description: Closed sessions skipped because they contain no messages.
+        skipped_automation:
+          type: integer
+          minimum: 0
+          description: Closed sessions skipped because their origin is automation or auxiliary traffic.
+        complete:
+          type: boolean
+          description: Whether the durable one-time traversal is finished.
+      example:
+        phase: sessions
+        next_phase: sessions
+        cutoff: "2026-08-31T16:00:00Z"
+        scanned: 50
+        enqueued: 43
+        skipped_recent: 2
+        skipped_empty: 3
+        skipped_automation: 2
+        complete: false
 
     ArchivedSessionList:
       type: object
