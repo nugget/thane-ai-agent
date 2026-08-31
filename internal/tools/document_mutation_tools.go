@@ -15,7 +15,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_write",
-		Description:          "Write (replace) a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths. For brand-new documents prefer doc_create, which collision-checks the corpus and normalizes placement first — doc_write creating a fresh ref is for destinations that are already deliberate. On revision-backed roots Thane automatically protects a document you read from intervening edits; if it changed, no write occurs and the result includes the bounded intervening diff. Read an existing document before replacing its whole body.",
+		Description:          "Write (replace) an ordinary managed markdown document by semantic ref like `kb:article.md`. Contract-owned documents use their dedicated structured tool instead—for example, contact_dossier_write owns contact dossiers and publish_output_* owns loop outputs. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths. For brand-new ordinary documents prefer doc_create, which collision-checks the corpus and normalizes placement first — doc_write creating a fresh ref is for destinations that are already deliberate. On revision-backed roots Thane automatically protects a document you read from intervening edits; if it changed, no write occurs and the result includes the bounded intervening diff. Read an existing document before replacing its whole body.",
 		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -90,7 +90,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_edit",
-		Description:          "Edit a managed markdown document without leaving semantic refs behind. Supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations. On revision-backed roots Thane automatically uses this loop's last read as the comparison base. If another loop or operator changed the document, no edit occurs and the result includes a bounded diff to reconcile before retrying.",
+		Description:          "Edit an ordinary managed markdown document without leaving semantic refs behind. Contract-owned documents use their dedicated structured tool instead—for example, contact_dossier_write must update every dossier projection together, while publish_output_* owns loop outputs. A section edit on one of those documents can leave its other projections describing stale state. For ordinary documents, this supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations. On revision-backed roots Thane automatically uses this loop's last read as the comparison base. If another loop or operator changed the document, no edit occurs and the result includes a bounded diff to reconcile before retrying.",
 		ContentResolveExempt: []string{"ref", "mode", "section", "heading", "level", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
