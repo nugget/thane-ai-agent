@@ -696,7 +696,9 @@ shell_exec:
 # DataDir is the root directory for SQLite databases and other
 # opaque runtime state (memory, facts, scheduler, checkpoints).
 # Keep this separate from human-authored and model-authored
-# document roots. Default: "./db".
+# document roots. Relative paths are resolved from the workspace;
+# without a workspace they remain relative to the working directory.
+# Default: "./db".
 data_dir: ./db
 #
 # (optional) Archive configures session archive behavior.
@@ -972,6 +974,15 @@ compaction:
 #   track:
 #     - person.alice
 #     - person.bob
+#   ContactBindings maps stable contact UUIDs to tracked Home
+#   Assistant person entity IDs. When this key is present, including
+#   as an empty map, signed configuration is the exact source of truth:
+#   startup atomically replaces the stored bindings and CardDAV exposes
+#   X-THANE-HA-PERSON as read-only. When absent, legacy CardDAV-managed
+#   bindings remain enabled. Unverified configs cannot own or reconcile
+#   bindings; this key is ignored in recovery mode.
+#   contact_bindings:
+#     0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41: person.alice
 #   Devices maps tracked person entity IDs to their wireless device
 #   MAC addresses. Used by the UniFi poller to determine which person
 #   a wireless client belongs to for room-level presence.
@@ -1111,18 +1122,24 @@ compaction:
 #       default_from: Thane <thane@example.com>
 #       sent_folder: ""
 #
-# (optional) Identity configures the agent's own contact identity for vCard
+# (optional) Identity configures contact identities for the agent and human operator.
 # identity:
 #   ContactName is the formatted name of the agent's own contact
 #   record. When set, contact_export_vcf name="self" resolves to this
 #   contact.
 #   contact_name: Thane
+#   OperatorContactID is the stable UUID of the primary human operator's
+#   contact record. It is preferred over the legacy name-based selector
+#   because contact display names can change. The referenced active
+#   contact must exist at startup. Ignored when the config is unverified.
+#   operator_contact_id: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
 #   OwnerContactName is the formatted name of the primary human
-#   owner/operator contact record. When set, the contact_owner tool
-#   resolves directly to this contact instead of guessing from trust
-#   zones. When empty, contact_owner falls back to the sole admin
-#   contact if exactly one exists.
-#   owner_contact_name: Operator Name
+#   operator's contact record. This legacy selector remains for
+#   compatibility; prefer OperatorContactID. The two selectors are
+#   mutually exclusive. When neither is set, contact_owner falls back
+#   to the sole admin contact if exactly one exists. Ignored when the
+#   config is unverified.
+#   owner_contact_name: ""
 #
 # (optional) Attachments configures content-addressed attachment storage.
 # attachments:

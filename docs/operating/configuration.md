@@ -161,17 +161,56 @@ value is rejected at config load; a UUID that matches no contact fails
 closed at render time — the devices degrade to account-only
 attribution and a warning names the unresolved binding.
 
-The second counterparty edge — binding a contact to its Home Assistant
+The second counterparty edge binds a contact to its Home Assistant
 person entity, through which zone state and separately resolved,
 provider-attributed room presence flow into that contact's channel
-context — is set on the contact card itself:
-add an `X-THANE-HA-PERSON` field (e.g. `person.alice`) via CardDAV,
-which is the operator-authenticated surface and the only one that
-honors the header. Model-facing vCard import ignores it, at most one
-active contact may claim a given person entity, and removing the field
-clears the binding. Presence flows only for entities the tracker
-watches: the same entity must also be listed under `person.track`, or
-the binding resolves but the presence join has nothing to report.
+context. Signed config is the preferred source of truth:
+
+```yaml
+identity:
+  operator_contact_id: 019c76e4-2ff1-7918-8d6f-6c2488f5098d
+
+person:
+  track:
+    - person.nugget
+  contact_bindings:
+    019c76e4-2ff1-7918-8d6f-6c2488f5098d: person.nugget
+```
+
+`identity.operator_contact_id` says which stable contact is the human
+operator; it does not infer that authority from presence. The legacy
+`identity.owner_contact_name` selector remains accepted for existing
+installations, but it is mutually exclusive with the UUID selector.
+When neither is configured, Thane falls back to the sole `admin`
+contact only when exactly one exists. New `thane init` workspaces create
+a UUID in the signed config first, seed an `admin`-zone `Operator` contact
+stub with that exact ID, and start with an explicit empty
+`person.contact_bindings` map.
+
+`person.contact_bindings` is an exact contact-UUID-to-person-entity map.
+Every referenced contact must exist at startup, every person entity must
+also appear under `person.track`, and a person may belong to only one
+active contact. When the key is present — even as `{}` — startup
+atomically reconciles the stored set to config. CardDAV still emits
+`X-THANE-HA-PERSON`, but treats it as a read-only projection and preserves
+it when clients omit unknown vCard fields. An explicitly present value must
+match the projection; attempting to change or clear it is rejected. Removing
+a map entry clears that binding on the next restart. A contact with a
+configured binding cannot be deleted through CardDAV until its map entry is
+removed and Thane restarts; unbound contacts remain deletable.
+
+Configs loaded through `-insecure-config` cannot declare these identity
+relationships. Thane ignores `person.contact_bindings`,
+`identity.operator_contact_id`, and the legacy
+`identity.owner_contact_name`: it does not reconcile stored bindings or grant
+operator authority from unsigned input, and CardDAV retains its legacy
+authenticated custody mode for bindings during recovery.
+
+For backward compatibility, omitting `person.contact_bindings` entirely
+keeps the earlier CardDAV-managed behavior: an authenticated PUT may set
+or clear `X-THANE-HA-PERSON`. Model-facing vCard import never honors that
+field in either mode.
+
 The person tracker follows each person's Home Assistant `device_trackers`
 attribute and adds those linked entities to the system ingestion floor. A
 linked tracker contributes room presence only when its entity-registry
@@ -217,11 +256,14 @@ runtime-only tags from source defaults.
 ## Memory & Storage
 
 ```yaml
-data_dir: ~/Thane/data
+data_dir: ./db
 ```
 
-Where SQLite databases live (`thane.db`, `facts.db`). Defaults to
-`~/Thane/data`.
+Where SQLite databases live. Defaults to `./db`. For the normal signed config
+at `{workspace}/core/config.yaml`, relative paths resolve from the workspace,
+so the default is `{workspace}/db` regardless of the directory that launched
+Thane. Absolute paths remain unchanged; a config outside a workspace retains
+working-directory-relative behavior.
 
 ## Document Roots
 

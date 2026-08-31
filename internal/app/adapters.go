@@ -148,20 +148,21 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 // contactChannelBindingResolver resolves a channel/address pair to a
 // typed conversation binding with contact identity when available.
 type contactChannelBindingResolver struct {
-	store            *contacts.Store
-	ownerContactName string
+	store                  *contacts.Store
+	operatorContactID      uuid.UUID
+	legacyOwnerContactName string
 
-	mu                 sync.Mutex
-	ownerContactID     uuid.UUID
-	ownerContactCached bool
+	mu                      sync.Mutex
+	legacyOperatorContactID uuid.UUID
+	legacyOperatorCached    bool
 }
 
 // ResolveChannelBinding returns a typed binding for the given
 // channel/address pair. It always returns a channel-scoped binding when
 // the inputs are non-empty, even if no contact match is found.
 func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
-	ownerConfigured := strings.TrimSpace(r.ownerContactName) != ""
-	return resolveChannelBinding(r.store, channel, address, ownerConfigured, r.cachedOwnerContactID())
+	operatorConfigured := r.operatorContactID != uuid.Nil || strings.TrimSpace(r.legacyOwnerContactName) != ""
+	return resolveChannelBinding(r.store, channel, address, operatorConfigured, r.resolvedOperatorContactID())
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
@@ -569,23 +570,32 @@ func resolveChannelBinding(store *contacts.Store, channel, address string, owner
 	return binding.Normalize()
 }
 
-func (r *contactChannelBindingResolver) cachedOwnerContactID() uuid.UUID {
-	if r == nil || r.store == nil || strings.TrimSpace(r.ownerContactName) == "" {
+func (r *contactChannelBindingResolver) resolvedOperatorContactID() uuid.UUID {
+	if r == nil {
+		return uuid.Nil
+	}
+	if r.operatorContactID != uuid.Nil {
+		return r.operatorContactID
+	}
+	if r.store == nil {
+		return uuid.Nil
+	}
+	if strings.TrimSpace(r.legacyOwnerContactName) == "" {
 		return uuid.Nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.ownerContactCached {
-		return r.ownerContactID
+	if r.legacyOperatorCached {
+		return r.legacyOperatorContactID
 	}
 
-	owner, err := r.store.ResolveContact(r.ownerContactName)
-	if err == nil && owner != nil {
-		r.ownerContactID = owner.ID
+	operator, err := r.store.ResolveContact(r.legacyOwnerContactName)
+	if err == nil && operator != nil {
+		r.legacyOperatorContactID = operator.ID
 	}
-	r.ownerContactCached = true
-	return r.ownerContactID
+	r.legacyOperatorCached = true
+	return r.legacyOperatorContactID
 }
 
 func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerConfigured bool, ownerContactID uuid.UUID) bool {

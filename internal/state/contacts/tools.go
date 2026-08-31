@@ -40,11 +40,12 @@ const ownerActivitySummaryLimit = 8
 
 // Tools provides contact-related tools for the agent.
 type Tools struct {
-	store            *Store
-	embeddings       EmbeddingClient
-	selfContactName  string
-	ownerContactName string
-	ownerActivity    func() []OwnerChannelActivity
+	store             *Store
+	embeddings        EmbeddingClient
+	selfContactName   string
+	operatorContactID uuid.UUID
+	ownerContactName  string
+	ownerActivity     func() []OwnerChannelActivity
 }
 
 // NewTools creates contact tools using the given store.
@@ -63,8 +64,14 @@ func (t *Tools) SetSelfContactName(name string) {
 	t.selfContactName = name
 }
 
+// ConfigureOperatorContactID sets the stable contact UUID used to resolve the
+// primary human operator.
+func (t *Tools) ConfigureOperatorContactID(id uuid.UUID) {
+	t.operatorContactID = id
+}
+
 // SetOwnerContactName sets the contact name used to resolve the
-// primary human owner/operator contact.
+// primary human operator contact for legacy configurations.
 func (t *Tools) SetOwnerContactName(name string) {
 	t.ownerContactName = name
 }
@@ -75,8 +82,8 @@ func (t *Tools) SetOwnerActivitySource(src func() []OwnerChannelActivity) {
 	t.ownerActivity = src
 }
 
-// OwnerContact returns the configured owner contact, or falls back to
-// the sole admin contact when no explicit owner contact name is set.
+// OwnerContact returns the configured operator contact, or falls back to
+// the sole admin contact when no explicit operator identity is set.
 func (t *Tools) OwnerContact(_ string) (string, error) {
 	c, err := t.resolveOwnerContact()
 	if err != nil {
@@ -92,18 +99,29 @@ func (t *Tools) OwnerContact(_ string) (string, error) {
 }
 
 func (t *Tools) resolveOwnerContact() (*Contact, error) {
+	if t.operatorContactID != uuid.Nil {
+		full, err := t.store.GetWithProperties(t.operatorContactID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("configured operator contact %s not found", t.operatorContactID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get configured operator contact details: %w", err)
+		}
+		return full, nil
+	}
+
 	name := strings.TrimSpace(t.ownerContactName)
 	if name != "" {
 		c, err := t.store.ResolveContact(name)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("configured owner contact %q not found", name)
+			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("resolve configured owner contact: %w", err)
+			return nil, fmt.Errorf("resolve configured legacy operator contact name: %w", err)
 		}
 		full, err := t.store.GetWithProperties(c.ID)
 		if err != nil {
-			return nil, fmt.Errorf("get configured owner contact details: %w", err)
+			return nil, fmt.Errorf("get configured operator contact details: %w", err)
 		}
 		return full, nil
 	}
@@ -114,11 +132,11 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 	}
 	switch len(admins) {
 	case 0:
-		return nil, fmt.Errorf("owner contact not configured: set identity.owner_contact_name or mark exactly one admin contact")
+		return nil, fmt.Errorf("operator contact not configured: set identity.operator_contact_id or mark exactly one admin contact")
 	case 1:
 		full, err := t.store.GetWithProperties(admins[0].ID)
 		if err != nil {
-			return nil, fmt.Errorf("get owner contact details: %w", err)
+			return nil, fmt.Errorf("get operator contact details: %w", err)
 		}
 		return full, nil
 	default:
@@ -127,7 +145,7 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 			names = append(names, admin.FormattedName)
 		}
 		sort.Strings(names)
-		return nil, fmt.Errorf("owner contact is ambiguous: multiple admin contacts found (%s); set identity.owner_contact_name", strings.Join(names, ", "))
+		return nil, fmt.Errorf("operator contact is ambiguous: multiple admin contacts found (%s); set identity.operator_contact_id", strings.Join(names, ", "))
 	}
 }
 

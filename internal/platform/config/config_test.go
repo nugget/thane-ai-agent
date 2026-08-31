@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestFindConfig_Explicit(t *testing.T) {
@@ -146,6 +148,58 @@ func TestLoad_ExpandsEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoad_ResolvesDataDirFromDerivedWorkspace(t *testing.T) {
+	absDataDir := t.TempDir()
+	tests := []struct {
+		name    string
+		config  string
+		wantDir func(string) string
+	}{
+		{
+			name:   "default",
+			config: "listen:\n  port: 8080\n",
+			wantDir: func(workspace string) string {
+				return filepath.Join(workspace, "db")
+			},
+		},
+		{
+			name:   "explicit relative",
+			config: "data_dir: state/sqlite\n",
+			wantDir: func(workspace string) string {
+				return filepath.Join(workspace, "state", "sqlite")
+			},
+		},
+		{
+			name:   "absolute remains absolute",
+			config: "data_dir: " + absDataDir + "\n",
+			wantDir: func(string) string {
+				return absDataDir
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			coreDir := filepath.Join(workspace, "core")
+			if err := os.MkdirAll(coreDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(coreDir, "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if want := tt.wantDir(workspace); cfg.DataDir != want {
+				t.Fatalf("DataDir = %q, want %q", cfg.DataDir, want)
+			}
+		})
+	}
+}
+
 func TestLoad_InlineSecrets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -180,6 +234,32 @@ companion:
 	}
 	if got := cfg.Companion.TokenIndex()["secret"]; got != "nugget" {
 		t.Fatalf("token index = %q, want nugget", got)
+	}
+}
+
+func TestLoad_PersonContactBindingsPresenceControlsAuthority(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		wantPresent bool
+	}{
+		{name: "absent keeps legacy authority", yaml: "person:\n  track: []\n"},
+		{name: "explicit empty map selects config authority", yaml: "person:\n  track: []\n  contact_bindings: {}\n", wantPresent: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got := cfg.Person.ContactBindings != nil; got != tt.wantPresent {
+				t.Fatalf("ContactBindings present = %v, want %v", got, tt.wantPresent)
+			}
+		})
 	}
 }
 
@@ -873,6 +953,116 @@ func TestValidate_LoggingInvalidFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "logging.format") {
 		t.Errorf("error %q should mention logging.format", err)
+	}
+}
+
+func TestValidate_OperatorContactID(t *testing.T) {
+	const contactID = "019c76e4-2ff1-7918-8d6f-6c2488f5098d"
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		wantError string
+	}{
+		{
+			name: "canonical uuid",
+			configure: func(cfg *Config) {
+				cfg.Identity.OperatorContactID = contactID
+			},
+		},
+		{
+			name: "malformed uuid",
+			configure: func(cfg *Config) {
+				cfg.Identity.OperatorContactID = "not-a-uuid"
+			},
+			wantError: "identity.operator_contact_id",
+		},
+		{
+			name: "nil uuid",
+			configure: func(cfg *Config) {
+				cfg.Identity.OperatorContactID = uuid.Nil.String()
+			},
+			wantError: "non-nil UUID",
+		},
+		{
+			name: "legacy name conflicts",
+			configure: func(cfg *Config) {
+				cfg.Identity.OperatorContactID = contactID
+				cfg.Identity.OwnerContactName = "Operator Name"
+			},
+			wantError: "mutually exclusive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.configure(cfg)
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestValidate_PersonContactBindings(t *testing.T) {
+	const (
+		aliceID = "019c76e4-2ff1-7918-8d6f-6c2488f5098d"
+		bobID   = "0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41"
+	)
+	tests := []struct {
+		name      string
+		bindings  map[string]string
+		wantError string
+	}{
+		{
+			name:     "tracked unique bindings",
+			bindings: map[string]string{aliceID: "person.alice", bobID: "person.bob"},
+		},
+		{
+			name:      "malformed contact uuid",
+			bindings:  map[string]string{"alice": "person.alice"},
+			wantError: "canonical non-nil contact UUID",
+		},
+		{
+			name:      "malformed person entity",
+			bindings:  map[string]string{aliceID: "person.Alice"},
+			wantError: "must match person.<object_id>",
+		},
+		{
+			name:      "untracked person entity",
+			bindings:  map[string]string{aliceID: "person.carol"},
+			wantError: "untracked entity",
+		},
+		{
+			name:      "duplicate person claim",
+			bindings:  map[string]string{aliceID: "person.alice", bobID: "person.alice"},
+			wantError: "assigns \"person.alice\" to both",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Person.Track = []string{"person.alice", "person.bob"}
+			cfg.Person.ContactBindings = tt.bindings
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantError)
+			}
+		})
 	}
 }
 

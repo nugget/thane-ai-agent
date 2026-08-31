@@ -305,7 +305,9 @@ type Config struct {
 	// DataDir is the root directory for SQLite databases and other
 	// opaque runtime state (memory, facts, scheduler, checkpoints).
 	// Keep this separate from human-authored and model-authored
-	// document roots. Default: "./db".
+	// document roots. Relative paths are resolved from the workspace;
+	// without a workspace they remain relative to the working directory.
+	// Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory holding the talent markdown that extends
@@ -351,7 +353,7 @@ type Config struct {
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
 	// ChannelTags maps source channels to broad optional capability tags.
-	// Use this for coarse source defaults, not runtime facts such as owner
+	// Use this for coarse source defaults, not runtime facts such as operator
 	// identity or current message-channel affordances. Runtime-only tags
 	// such as owner and message_channel are skipped here; they must be
 	// asserted by trusted current-run evidence. This is additive to
@@ -389,8 +391,7 @@ type Config struct {
 	// email server subprocess.
 	Email email.Config `yaml:"email"`
 
-	// Identity configures the agent's own contact identity for vCard
-	// export and self-referencing operations.
+	// Identity configures contact identities for the agent and human operator.
 	Identity IdentityConfig `yaml:"identity"`
 
 	// Attachments configures content-addressed attachment storage.
@@ -876,21 +877,29 @@ func (c CompanionConfig) TokenIndex() map[string]string {
 	return idx
 }
 
-// IdentityConfig configures the agent's own contact identity. The
-// ContactName must match a contact record in the directory to enable
-// self-referencing operations like vCard export.
+// IdentityConfig configures the agent's own contact identity and the primary
+// human operator's stable contact reference. ContactName must match a contact
+// record in the directory to enable self-referencing operations like vCard
+// export.
 type IdentityConfig struct {
 	// ContactName is the formatted name of the agent's own contact
 	// record. When set, contact_export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
 
+	// OperatorContactID is the stable UUID of the primary human operator's
+	// contact record. It is preferred over the legacy name-based selector
+	// because contact display names can change. The referenced active
+	// contact must exist at startup. Ignored when the config is unverified.
+	OperatorContactID string `yaml:"operator_contact_id"`
+
 	// OwnerContactName is the formatted name of the primary human
-	// owner/operator contact record. When set, the contact_owner tool
-	// resolves directly to this contact instead of guessing from trust
-	// zones. When empty, contact_owner falls back to the sole admin
-	// contact if exactly one exists.
-	OwnerContactName string `yaml:"owner_contact_name"`
+	// operator's contact record. This legacy selector remains for
+	// compatibility; prefer OperatorContactID. The two selectors are
+	// mutually exclusive. When neither is set, contact_owner falls back
+	// to the sole admin contact if exactly one exists. Ignored when the
+	// config is unverified.
+	OwnerContactName string `yaml:"owner_contact_name,omitempty"`
 }
 
 // AttachmentsConfig configures content-addressed attachment storage.
@@ -1943,6 +1952,15 @@ type PersonConfig struct {
 	// with "person.". An empty list disables person tracking.
 	Track []string `yaml:"track"`
 
+	// ContactBindings maps stable contact UUIDs to tracked Home
+	// Assistant person entity IDs. When this key is present, including
+	// as an empty map, signed configuration is the exact source of truth:
+	// startup atomically replaces the stored bindings and CardDAV exposes
+	// X-THANE-HA-PERSON as read-only. When absent, legacy CardDAV-managed
+	// bindings remain enabled. Unverified configs cannot own or reconcile
+	// bindings; this key is ignored in recovery mode.
+	ContactBindings map[string]string `yaml:"contact_bindings"`
+
 	// Devices maps tracked person entity IDs to their wireless device
 	// MAC addresses. Used by the UniFi poller to determine which person
 	// a wireless client belongs to for room-level presence.
@@ -2882,9 +2900,7 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
-	if c.DataDir == "" {
-		c.DataDir = "./db"
-	}
+	c.DataDir = ResolveDataDir(c.Workspace.Path, c.DataDir)
 	if c.TalentsDir == "" {
 		// Derived, never authored: talents live inside core so they carry the
 		// same signed history and the same cleanliness rule as the prompts
@@ -3111,6 +3127,22 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// ResolveDataDir applies the data directory default and anchors a relative
+// path to workspace. Config loaded from core always has a derived workspace,
+// so its opaque runtime state follows the instance instead of the process's
+// current working directory. Callers without a workspace retain the historical
+// working-directory-relative behavior.
+func ResolveDataDir(workspace, dataDir string) string {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		dataDir = "./db"
+	}
+	if filepath.IsAbs(dataDir) || strings.TrimSpace(workspace) == "" {
+		return dataDir
+	}
+	return filepath.Join(workspace, dataDir)
+}
+
 // Validate checks that the configuration is internally consistent after
 // defaults have been applied. It returns an error describing the first
 // problem found, or nil if the configuration is valid.
@@ -3141,6 +3173,15 @@ func (c *Config) Validate() error {
 			if _, _, err := net.SplitHostPort(addr); err != nil {
 				return fmt.Errorf("carddav.listen %q: %w", addr, err)
 			}
+		}
+	}
+	if c.Identity.OperatorContactID != "" {
+		operatorID, err := uuid.Parse(c.Identity.OperatorContactID)
+		if err != nil || operatorID == uuid.Nil || operatorID.String() != c.Identity.OperatorContactID {
+			return fmt.Errorf("identity.operator_contact_id %q must be a canonical non-nil UUID", c.Identity.OperatorContactID)
+		}
+		if strings.TrimSpace(c.Identity.OwnerContactName) != "" {
+			return fmt.Errorf("identity.operator_contact_id and legacy identity.owner_contact_name are mutually exclusive")
 		}
 	}
 	// Validate logging — both new and deprecated fields.
@@ -3257,6 +3298,29 @@ func (c *Config) Validate() error {
 	for _, id := range c.Person.Track {
 		tracked[id] = true
 	}
+	contactIDs := make([]string, 0, len(c.Person.ContactBindings))
+	for contactID := range c.Person.ContactBindings {
+		contactIDs = append(contactIDs, contactID)
+	}
+	sort.Strings(contactIDs)
+	claimedPeople := make(map[string]string, len(contactIDs))
+	for _, contactID := range contactIDs {
+		parsed, err := uuid.Parse(contactID)
+		if err != nil || parsed == uuid.Nil || parsed.String() != contactID {
+			return fmt.Errorf("person.contact_bindings key %q must be a canonical non-nil contact UUID", contactID)
+		}
+		entityID := c.Person.ContactBindings[contactID]
+		if !validHAPersonEntityID(entityID) {
+			return fmt.Errorf("person.contact_bindings[%s] %q must match person.<object_id> (lowercase letters, digits, underscores)", contactID, entityID)
+		}
+		if !tracked[entityID] {
+			return fmt.Errorf("person.contact_bindings[%s] references untracked entity %q", contactID, entityID)
+		}
+		if holder, exists := claimedPeople[entityID]; exists {
+			return fmt.Errorf("person.contact_bindings assigns %q to both %s and %s", entityID, holder, contactID)
+		}
+		claimedPeople[entityID] = contactID
+	}
 	for entityID := range c.Person.Devices {
 		if !tracked[entityID] {
 			return fmt.Errorf("person.devices references untracked entity %q", entityID)
@@ -3349,6 +3413,19 @@ func (c *Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func validHAPersonEntityID(entityID string) bool {
+	const prefix = "person."
+	if !strings.HasPrefix(entityID, prefix) || len(entityID) == len(prefix) {
+		return false
+	}
+	for _, r := range entityID[len(prefix):] {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Config) validateModels() error {

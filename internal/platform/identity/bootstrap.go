@@ -82,12 +82,16 @@ func operatorPrincipal(operator *OperatorSigner) string {
 // Private key material is written under core/ with 0600 permissions and
 // ignored by git. Public key material, the channel CA certificate, and
 // core/config.yaml are committed together as the signed birth commit.
+// operatorContactID, when non-empty, is written as the stable runtime
+// operator identity. New cores also declare an explicit empty
+// person.contact_bindings map so signed config owns that relationship from
+// birth rather than inheriting the legacy CardDAV mutation path.
 // birthFiles are additional repo-relative files to include in the birth
 // commit. The talent set travels this way: talents steer every turn, so an
 // instance whose behaviour definitions are covered by the same operator
 // signature that founds it is attested from its first moment rather than from
 // whenever someone remembers to commit them.
-func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *OperatorSigner, birthFiles map[string]string, logger *slog.Logger) (*BootstrapResult, error) {
+func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *OperatorSigner, operatorContactID string, birthFiles map[string]string, logger *slog.Logger) (*BootstrapResult, error) {
 	absCoreDir, err := filepath.Abs(coreDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve core dir: %w", err)
@@ -161,7 +165,7 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, operator *
 	if err != nil {
 		return nil, err
 	}
-	policy, err := renderCoreConfig(instanceName, now, signing, channelCA, operator)
+	policy, err := renderCoreConfig(instanceName, now, signing, channelCA, operator, operatorContactID)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +286,7 @@ type coreConfig struct {
 	Version     int                       `yaml:"version"`
 	GeneratedAt string                    `yaml:"generated_at"`
 	Identity    identityPolicy            `yaml:"identity"`
+	Person      personPolicy              `yaml:"person"`
 	Trust       trustPolicy               `yaml:"trust"`
 	Delegation  delegationPolicy          `yaml:"delegation"`
 	Channels    channelPolicy             `yaml:"channels"`
@@ -289,9 +294,14 @@ type coreConfig struct {
 }
 
 type identityPolicy struct {
-	InstanceName string         `yaml:"instance_name"`
-	SigningKey   signingKeyRef  `yaml:"signing_key"`
-	ChannelCA    certificateRef `yaml:"channel_ca"`
+	InstanceName      string         `yaml:"instance_name"`
+	OperatorContactID string         `yaml:"operator_contact_id,omitempty"`
+	SigningKey        signingKeyRef  `yaml:"signing_key"`
+	ChannelCA         certificateRef `yaml:"channel_ca"`
+}
+
+type personPolicy struct {
+	ContactBindings map[string]string `yaml:"contact_bindings"`
 }
 
 type signingKeyRef struct {
@@ -359,13 +369,14 @@ func coreSeedDeclaration(signing *SigningKeyPair, operator *OperatorSigner) core
 	}}}
 }
 
-func renderCoreConfig(instanceName string, generatedAt time.Time, signing *SigningKeyPair, ca *CertificateAuthority, operator *OperatorSigner) ([]byte, error) {
+func renderCoreConfig(instanceName string, generatedAt time.Time, signing *SigningKeyPair, ca *CertificateAuthority, operator *OperatorSigner, operatorContactID string) ([]byte, error) {
 	cfg := coreConfig{
 		Roots:       map[string]coreRootPolicy{"core": coreSeedDeclaration(signing, operator)},
 		Version:     1,
 		GeneratedAt: generatedAt.Format(time.RFC3339),
 		Identity: identityPolicy{
-			InstanceName: instanceName,
+			InstanceName:      instanceName,
+			OperatorContactID: strings.TrimSpace(operatorContactID),
 			SigningKey: signingKeyRef{
 				PublicKeyPath: SigningPublicKeyFile,
 				Fingerprint:   signing.Fingerprint,
@@ -377,6 +388,7 @@ func renderCoreConfig(instanceName string, generatedAt time.Time, signing *Signi
 				NotAfter:    ca.NotAfter.Format(time.RFC3339),
 			},
 		},
+		Person: personPolicy{ContactBindings: map[string]string{}},
 		Trust: trustPolicy{
 			TrustedPeerCAs: []string{},
 			Revocations:    []string{},

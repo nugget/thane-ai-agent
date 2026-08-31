@@ -26,7 +26,7 @@ often reaches for one when the right answer is another:
 | You want to store / find... | Surface |
 |---|---|
 | "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`contact_save` with `facts` or `note`) — this leaf |
-| "Who is the owner of this host" | `contacts` (`contact_owner`) — this leaf |
+| "Who operates this host" | `contacts` (`contact_owner`) — this leaf |
 | "Sump pump runs Tuesdays" / "Garage door takes 23s to close" — stable, compact, *non-person* facts | `memory` (`remember_fact`) — see [`memory.md`](memory.md) |
 | "The VLAN renumber plan landed on 2026-04-22" / a project decision / design rationale | `documents` (`kb:`, `core:`) or workspace files — NOT memory, NOT contacts |
 | "What did Frank and I last discuss" | `archive_text` scoped to the conversation — the words live there, not in the contact record |
@@ -74,10 +74,11 @@ document-shaped, it isn't a memory fact either — push to documents.
   tombstone. Lookup before forgetting; the cost of removing the wrong
   record is real.
 
-- **The owner is a contact too.** The host's primary user lives in the
-  same table as everyone else, marked by `identity.owner_contact_name`
-  config or (fallback) by being the sole `admin`-zone contact. Treat
-  `contact_owner` as authoritative for "who is this host's user"
+- **The operator is a contact too.** The host's primary operator lives in
+  the same table as everyone else, marked by the stable
+  `identity.operator_contact_id` config, the legacy name selector, or
+  (fallback) by being the sole `admin`-zone contact. Treat
+  `contact_owner` as authoritative for "who operates this host"
   rather than guessing from message senders or workspace metadata.
 
 ## Cross-references
@@ -176,21 +177,22 @@ anchor — useful for "show me everyone" or "show me all orgs":
 `kind` is `individual` / `group` / `org` / `location`. Without `kind`,
 all types appear. Use `limit` to bound the result size.
 
-## You need the host's owner
+## You need the host's operator
 
 `contact_owner` returns the primary operator's record with rich
-detail plus a structured summary of currently active owner-scoped
+detail plus a structured summary of currently active operator-scoped
 channels:
 
 ```json
 {}
 ```
 
-No arguments needed. Uses `identity.owner_contact_name` from config
-when set; otherwise falls back to the sole `admin`-zone contact if
-exactly one exists. Right tool when the model needs to assert "this is
-the user I'm talking to" or "what channels does the owner have active
-right now."
+No arguments needed. Uses `identity.operator_contact_id` from config
+when set, accepts the legacy name selector for existing installs, and
+otherwise falls back to the sole `admin`-zone contact if exactly one
+exists. Right tool when the model needs to assert "this is the operator
+I'm talking to" or "what channels does the operator have active right
+now."
 
 ## Cross-references
 

@@ -232,6 +232,9 @@ func ExampleConfig() *Config {
 
 		Person: PersonConfig{
 			Track: []string{"person.alice", "person.bob"},
+			ContactBindings: map[string]string{
+				"0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41": "person.alice",
+			},
 			Devices: map[string][]DeviceMapping{
 				"person.alice": {
 					{MAC: "AA:BB:CC:DD:EE:FF"},
@@ -273,8 +276,8 @@ func ExampleConfig() *Config {
 		},
 
 		Identity: IdentityConfig{
-			ContactName:      "Thane",
-			OwnerContactName: "Operator Name",
+			ContactName:       "Thane",
+			OperatorContactID: "0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41",
 		},
 
 		Attachments: AttachmentsConfig{

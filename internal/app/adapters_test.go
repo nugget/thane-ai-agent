@@ -286,7 +286,7 @@ func TestDetachedLoopCompletionDispatcherRequiresConversationID(t *testing.T) {
 	}
 }
 
-func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T) {
+func TestContactChannelBindingResolverCachesLegacyConfiguredContactName(t *testing.T) {
 	db, err := database.Open(t.TempDir() + "/contacts.db")
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
@@ -313,19 +313,27 @@ func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T)
 	}
 
 	resolver := &contactChannelBindingResolver{
-		store:            store,
-		ownerContactName: "Aimee",
+		store:                  store,
+		legacyOwnerContactName: "Aimee",
 	}
 
-	first := resolver.cachedOwnerContactID()
+	first := resolver.resolvedOperatorContactID()
 	if first == uuid.Nil {
-		t.Fatal("cachedOwnerContactID() returned zero UUID")
+		t.Fatal("resolvedOperatorContactID() returned zero UUID")
 	}
 
-	resolver.ownerContactName = "Nobody"
-	second := resolver.cachedOwnerContactID()
+	resolver.legacyOwnerContactName = "Nobody"
+	second := resolver.resolvedOperatorContactID()
 	if second != first {
-		t.Fatalf("cachedOwnerContactID() after rename = %v, want cached %v", second, first)
+		t.Fatalf("resolvedOperatorContactID() after rename = %v, want cached %v", second, first)
+	}
+}
+
+func TestContactChannelBindingResolverUsesConfiguredOperatorID(t *testing.T) {
+	configured := uuid.New()
+	resolver := &contactChannelBindingResolver{operatorContactID: configured}
+	if got := resolver.resolvedOperatorContactID(); got != configured {
+		t.Fatalf("resolvedOperatorContactID() = %v, want configured %v", got, configured)
 	}
 }
 

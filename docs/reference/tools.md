@@ -277,9 +277,9 @@ being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `contact_owner` | Return the runtime owner identity. Protected tag. |
+| `contact_owner` | Return the runtime operator contact. Protected tag; name retained for compatibility. |
 
-Owner channel activity recency is reported with delta fields such as
+Operator channel activity recency is reported with delta fields such as
 `last_active_delta`.
 
 ## `files` — workspace filesystem access

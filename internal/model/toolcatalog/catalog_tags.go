@@ -149,7 +149,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Protected:   true,
 	},
 	"owner": {
-		Description: "Trusted owner/operator context set by runtime identity. When present, treat it as true; it can unlock owner-specific guidance and tools.",
+		Description: "Trusted operator context set by runtime identity. When present, treat it as true; it can unlock operator-specific guidance and tools.",
 		Protected:   true,
 		Parents:     []string{"interactive", "people"},
 	},
