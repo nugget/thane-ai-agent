@@ -27,7 +27,7 @@ Thank you for your interest in contributing to Thane!
 
 ### Prerequisites
 
-- [Go](https://go.dev/) 1.25+
+- [Go](https://go.dev/) 1.27+
 - [just](https://just.systems/) (command runner)
 - [lychee](https://github.com/lycheeverse/lychee) — optional; only the
   markdown link check needs it. `just ci` skips link-check locally when
