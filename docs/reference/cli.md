@@ -42,21 +42,26 @@ Starts these listeners:
 
 ### `thane init [dir]`
 
-Initialize a Thane working directory with bundled defaults. Creates the
-directory structure (`db/`, `talents/`, `archive/`), writes a default
-`config.yaml` (0600 permissions, contains placeholders for secrets) and a
-default `persona.md`, deploys the embedded talent corpus, bootstraps the
-core identity (signing key, channel CA) and the archive skeleton
-(orientation READMEs + the `interactions/` schema stub). Existing files
-are never overwritten — re-runs report `(exists, skipping)` per file, so
-it's safe to run against an established workspace to fill in anything
-missing.
+Initialize a Thane workspace with bundled defaults. Creates the directory
+structure, the archive skeleton, and `db/contacts.db` with an initial
+`admin`-zone operator contact. Its stable UUID is written to
+`identity.operator_contact_id` in `core/config.yaml`, and the new config
+starts with an explicit empty `person.contact_bindings` map. The same signed
+core birth commit carries the generated identity material (signing key and
+channel CA), default policy, and bundled talents. Reference copies of the
+example config and persona are written at the workspace root. Existing files
+are never overwritten — re-runs report `(exists, skipping)` per file.
 
 `dir` defaults to the current directory.
 
 ```bash
 thane init ~/Thane
+thane init -operator-name "Alice Example" ~/Thane
 ```
+
+`-operator-name` controls the initial contact's display name and defaults to
+`Operator`. It does not affect the cryptographic operator principal selected
+by `-operator-key` / `-operator-principal`.
 
 ### `thane validate`
 
@@ -265,4 +270,3 @@ it is diagnosed.
 
 `-config` was the previous name and is now rejected with a message
 pointing at `-workspace` for the ordinary case.
-

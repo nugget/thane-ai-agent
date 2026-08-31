@@ -17,14 +17,20 @@ import (
 // Backend implements the [carddav.Backend] interface using the
 // contacts store.  It exposes a single read-write address book.
 type Backend struct {
-	store  *contacts.Store
-	logger *slog.Logger
+	store                      *contacts.Store
+	configOwnsHAPersonBindings bool
+	logger                     *slog.Logger
 }
 
 // NewBackend creates a CardDAV backend backed by the given contact
-// store.
-func NewBackend(store *contacts.Store, logger *slog.Logger) *Backend {
-	return &Backend{store: store, logger: logger}
+// store. When configOwnsHAPersonBindings is true, CardDAV emits the
+// configured X-THANE-HA-PERSON value but cannot mutate it.
+func NewBackend(store *contacts.Store, configOwnsHAPersonBindings bool, logger *slog.Logger) *Backend {
+	return &Backend{
+		store:                      store,
+		configOwnsHAPersonBindings: configOwnsHAPersonBindings,
+		logger:                     logger,
+	}
 }
 
 // CurrentUserPrincipal returns the principal URL for the authenticated
@@ -169,15 +175,35 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 	contact, props := contacts.CardToContact(card)
 	contact.ID = id
 
-	// X-THANE-HA-PERSON is honored here and only here: CardDAV is the
-	// operator-authenticated surface, so the card is the operator's
-	// custody path for the counterparty binding (#1450). The shared
-	// codec ignores the header, which keeps model-facing vCard import
-	// blind to it. Absent or empty clears the binding, and the binding
-	// commits atomically with the contact and its properties — a
-	// rejected binding (malformed, or a claim another contact holds)
-	// fails the whole PUT with nothing applied.
-	upserted, err := b.store.UpsertWithPropertiesAndHAPerson(contact, props, card.Value("X-THANE-HA-PERSON"))
+	var upserted *contacts.Contact
+	if b.configOwnsHAPersonBindings {
+		currentEntity := ""
+		if exists {
+			var bindingExists bool
+			currentEntity, bindingExists, err = b.store.HAPersonEntity(id)
+			if err != nil {
+				return nil, fmt.Errorf("read configured ha person binding: %w", err)
+			}
+			if !bindingExists {
+				return nil, fmt.Errorf("read configured ha person binding: contact %s disappeared", id)
+			}
+		}
+		incomingEntity := strings.TrimSpace(card.Value("X-THANE-HA-PERSON"))
+		if incomingEntity != "" && incomingEntity != currentEntity {
+			return nil, fmt.Errorf("X-THANE-HA-PERSON is owned by signed person.contact_bindings; edit config and restart Thane")
+		}
+		// Header-less PUTs are normal for clients that discard unknown
+		// vCard extensions. Preserve the configured projection instead of
+		// treating absence as a request to clear it.
+		upserted, err = b.store.UpsertWithProperties(contact, props)
+	} else {
+		// Legacy custody: when person.contact_bindings is absent, CardDAV
+		// remains the operator-authenticated mutation surface. The shared
+		// codec ignores the header, keeping model-facing imports blind to
+		// it. Absent or empty clears the binding, and a rejected claim fails
+		// the whole PUT atomically with the contact update.
+		upserted, err = b.store.UpsertWithPropertiesAndHAPerson(contact, props, card.Value("X-THANE-HA-PERSON"))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("upsert contact: %w", err)
 	}

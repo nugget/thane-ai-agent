@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -24,6 +26,115 @@ var haPersonEntityRE = regexp.MustCompile(`^person\.[a-z0-9_]+$`)
 // or operator-initiated code.
 func (s *Store) SetHAPersonEntity(id uuid.UUID, entity string) error {
 	return applyHAPersonEntity(s.db, id, entity)
+}
+
+// ReplaceHAPersonBindings atomically makes bindings the exact set of
+// active contact to Home Assistant person edges. Existing bindings not in
+// the map are cleared. Every referenced contact must exist and every person
+// entity must be valid and unique; otherwise the transaction rolls back
+// without changing any binding.
+//
+// This is the signed-configuration reconciliation boundary. Model-facing
+// contact tools must not call it.
+func (s *Store) ReplaceHAPersonBindings(bindings map[uuid.UUID]string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin replacing ha person bindings: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on defer
+
+	ids := make([]uuid.UUID, 0, len(bindings))
+	for id := range bindings {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
+
+	desired := make(map[string]string, len(bindings))
+	claimed := make(map[string]uuid.UUID, len(bindings))
+	for _, id := range ids {
+		rawEntity := bindings[id]
+		entity := strings.TrimSpace(rawEntity)
+		if !haPersonEntityRE.MatchString(entity) {
+			return fmt.Errorf("ha person entity for %s must match person.<object_id> (lowercase letters, digits, underscores), got %q", id, rawEntity)
+		}
+		if holder, exists := claimed[entity]; exists {
+			return fmt.Errorf("ha person entity %q is assigned to both %s and %s", entity, holder, id)
+		}
+		claimed[entity] = id
+		desired[id.String()] = entity
+	}
+
+	current := make(map[string]string)
+	rows, err := tx.Query(`SELECT id, COALESCE(ha_person_entity, '') FROM contacts WHERE deleted_at IS NULL`)
+	if err != nil {
+		return fmt.Errorf("list contacts while replacing ha person bindings: %w", err)
+	}
+	for rows.Next() {
+		var id, entity string
+		if err := rows.Scan(&id, &entity); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan contact while replacing ha person bindings: %w", err)
+		}
+		current[id] = entity
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close contacts while replacing ha person bindings: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list contacts while replacing ha person bindings: %w", err)
+	}
+
+	for _, id := range ids {
+		if _, exists := current[id.String()]; !exists {
+			return fmt.Errorf("replace ha person bindings: contact %s not found", id)
+		}
+	}
+
+	changed := make([]string, 0)
+	for id, currentEntity := range current {
+		if currentEntity != desired[id] {
+			changed = append(changed, id)
+		}
+	}
+	if len(changed) == 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit unchanged ha person bindings: %w", err)
+		}
+		return nil
+	}
+	sort.Strings(changed)
+
+	// Clear changed rows first so swapping two existing person claims is
+	// legal under the unique index. One timestamp across the transaction
+	// gives CardDAV a stable ETag/CTag change without churning unchanged
+	// contacts on every restart.
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, id := range changed {
+		if _, err := tx.Exec(
+			`UPDATE contacts SET ha_person_entity = NULL, rev = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+			now, now, id,
+		); err != nil {
+			return fmt.Errorf("clear ha person binding for %s: %w", id, err)
+		}
+	}
+	for _, id := range changed {
+		entity := desired[id]
+		if entity == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return fmt.Errorf("parse contact id %q while replacing ha person bindings: %w", id, err)
+		}
+		if err := applyHAPersonEntity(tx, parsed, entity); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replacing ha person bindings: %w", err)
+	}
+	return nil
 }
 
 // sqlRunner is the subset of database/sql shared by *sql.DB and

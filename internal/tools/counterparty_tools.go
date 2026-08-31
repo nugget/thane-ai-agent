@@ -262,7 +262,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 	// gets a valid empty result whose basis says exactly which binding
 	// produced nothing — bound-but-silent is not misconfigured.
 	if !hasHABinding && len(boundAccounts) == 0 {
-		return "", fmt.Errorf("contact %q has no HA person binding and no bound companion devices — there is no whereabouts source to consult; the operator binds a person entity via the X-THANE-HA-PERSON contact field and companion accounts via companion.providers.<account>.contact", contact.FormattedName)
+		return "", fmt.Errorf("contact %q has no HA person binding and no bound companion devices — there is no whereabouts source to consult; the operator binds the contact UUID to a tracked person entity via signed person.contact_bindings and companion accounts via companion.providers.<account>.contact", contact.FormattedName)
 	}
 
 	result := whereaboutsResult{

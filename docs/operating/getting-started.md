@@ -49,6 +49,14 @@ material, `core/config.yaml`, and the bundled talents under
 `core/talents/`. A reference `config.example.yaml` and
 `persona.example.md` are also written at the workspace root.
 
+Initialization also creates an `admin`-zone operator contact stub in
+`db/contacts.db` and records its stable UUID as
+`identity.operator_contact_id` in the signed config. Pass
+`-operator-name "Your Name"` to `thane init` to name it immediately; the
+default display name is `Operator`. The generated config includes an explicit
+empty `person.contact_bindings` map, ready for UUID-to-Home-Assistant-person
+bindings once `person.track` is configured.
+
 In normal operation the runtime reads `core/config.yaml` from the
 workspace and nothing else (`-insecure-config` exists as a recovery path
 for loading a file from outside the trust boundary, at the cost of a

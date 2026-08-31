@@ -99,7 +99,7 @@ func TestBootstrapCoreAnchorsToAnOperatorKey(t *testing.T) {
 	}
 
 	coreDir := filepath.Join(t.TempDir(), "core")
-	result, err := BootstrapCore(t.Context(), coreDir, "pocket", operator, nil, nil)
+	result, err := BootstrapCore(t.Context(), coreDir, "pocket", operator, "", nil, nil)
 	if err != nil {
 		t.Fatalf("BootstrapCore: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBootstrapCoreAnchorsToAnOperatorKey(t *testing.T) {
 func TestBootstrapCoreSelfSignedIsAdmissible(t *testing.T) {
 	t.Parallel()
 	coreDir := filepath.Join(t.TempDir(), "core")
-	result, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, nil, nil)
+	result, err := BootstrapCore(t.Context(), coreDir, "pocket", nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("BootstrapCore: %v", err)
 	}

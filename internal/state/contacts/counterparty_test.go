@@ -109,3 +109,106 @@ func TestHAPersonEntityUniqueness(t *testing.T) {
 		t.Fatalf("rebind after clear: %v", err)
 	}
 }
+
+func TestReplaceHAPersonBindingsExact(t *testing.T) {
+	store := newCounterpartyTestStore(t)
+	alice, err := store.Upsert(&Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := store.Upsert(&Contact{FormattedName: "Bob Guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	carol, err := store.Upsert(&Contact{FormattedName: "Carol Guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.legacy_alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(bob.ID, "person.legacy_bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ReplaceHAPersonBindings(map[uuid.UUID]string{
+		alice.ID: "person.alice",
+		carol.ID: "person.carol",
+	}); err != nil {
+		t.Fatalf("ReplaceHAPersonBindings: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+		want string
+	}{
+		{name: "replaced", id: alice.ID, want: "person.alice"},
+		{name: "removed", id: bob.ID, want: ""},
+		{name: "added", id: carol.ID, want: "person.carol"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := store.HAPersonEntity(tc.id)
+			if err != nil || !ok || got != tc.want {
+				t.Fatalf("HAPersonEntity(%s) = %q, %v, %v; want %q, true, nil", tc.id, got, ok, err, tc.want)
+			}
+		})
+	}
+
+	if err := store.ReplaceHAPersonBindings(map[uuid.UUID]string{
+		alice.ID: "person.carol",
+		carol.ID: "person.alice",
+	}); err != nil {
+		t.Fatalf("swap existing unique claims: %v", err)
+	}
+	if got, _, _ := store.HAPersonEntity(alice.ID); got != "person.carol" {
+		t.Fatalf("alice binding after swap = %q, want person.carol", got)
+	}
+	if got, _, _ := store.HAPersonEntity(carol.ID); got != "person.alice" {
+		t.Fatalf("carol binding after swap = %q, want person.alice", got)
+	}
+
+	if err := store.ReplaceHAPersonBindings(map[uuid.UUID]string{}); err != nil {
+		t.Fatalf("clear all bindings: %v", err)
+	}
+	for _, id := range []uuid.UUID{alice.ID, bob.ID, carol.ID} {
+		if got, _, err := store.HAPersonEntity(id); err != nil || got != "" {
+			t.Fatalf("binding after exact empty replacement for %s = %q, %v", id, got, err)
+		}
+	}
+}
+
+func TestReplaceHAPersonBindingsRollback(t *testing.T) {
+	store := newCounterpartyTestStore(t)
+	alice, err := store.Upsert(&Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.ReplaceHAPersonBindings(map[uuid.UUID]string{
+		alice.ID:   "person.changed",
+		uuid.New(): "person.missing",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing contact error = %v, want not found", err)
+	}
+	got, ok, err := store.HAPersonEntity(alice.ID)
+	if err != nil || !ok || got != "person.alice" {
+		t.Fatalf("binding after rollback = %q, %v, %v; want person.alice, true, nil", got, ok, err)
+	}
+
+	err = store.ReplaceHAPersonBindings(map[uuid.UUID]string{
+		alice.ID:   "person.same",
+		uuid.New(): "person.same",
+	})
+	if err == nil || !strings.Contains(err.Error(), "assigned to both") {
+		t.Fatalf("duplicate person error = %v, want duplicate assignment", err)
+	}
+	got, _, _ = store.HAPersonEntity(alice.ID)
+	if got != "person.alice" {
+		t.Fatalf("binding after duplicate rollback = %q, want person.alice", got)
+	}
+}

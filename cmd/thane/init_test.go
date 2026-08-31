@@ -8,6 +8,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"gopkg.in/yaml.v3"
 )
 
 // clearUmask sets the process umask to 0 so file permission assertions are
@@ -136,6 +140,45 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		if got := info.Mode().Perm(); got != 0o600 {
 			t.Errorf("%s permissions = %o, want 0600", rel, got)
 		}
+	}
+
+	var generated struct {
+		Identity struct {
+			OperatorContactID string `yaml:"operator_contact_id"`
+		} `yaml:"identity"`
+		Person struct {
+			ContactBindings map[string]string `yaml:"contact_bindings"`
+		} `yaml:"person"`
+	}
+	configData, err := os.ReadFile(filepath.Join(dir, "core", "config.yaml"))
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	if err := yaml.Unmarshal(configData, &generated); err != nil {
+		t.Fatalf("parse generated config: %v", err)
+	}
+	operatorID, err := uuid.Parse(generated.Identity.OperatorContactID)
+	if err != nil || operatorID == uuid.Nil {
+		t.Fatalf("generated operator_contact_id = %q, %v", generated.Identity.OperatorContactID, err)
+	}
+	if generated.Person.ContactBindings == nil || len(generated.Person.ContactBindings) != 0 {
+		t.Fatalf("generated person.contact_bindings = %#v, want explicit empty map", generated.Person.ContactBindings)
+	}
+
+	contactStore, err := contacts.Open(filepath.Join(dir, "db", "contacts.db"), nil)
+	if err != nil {
+		t.Fatalf("open initialized contacts database: %v", err)
+	}
+	t.Cleanup(func() { _ = contactStore.Close() })
+	operatorContact, err := contactStore.Get(operatorID)
+	if err != nil {
+		t.Fatalf("get initialized operator contact: %v", err)
+	}
+	if operatorContact.FormattedName != "Operator" || operatorContact.TrustZone != contacts.ZoneAdmin {
+		t.Fatalf("operator contact = %+v, want Operator in admin zone", operatorContact)
+	}
+	if !strings.Contains(out, operatorID.String()) {
+		t.Fatalf("init output should report operator contact UUID %s", operatorID)
 	}
 
 	// Archive skeleton (#937) — every fresh install gets the directory
@@ -377,6 +420,44 @@ func TestInitFlagErrorsGoToStderr(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no-such-flag") {
 		t.Fatalf("stderr should carry the flag failure, got:\n%s", stderr.String())
+	}
+}
+
+func TestInitOperatorNameFlagNamesBootstrappedContact(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if err := runInitCommand(&stdout, &stderr, []string{"-self-signed", "-operator-name", "Alice Example", dir}); err != nil {
+		t.Fatalf("runInitCommand: %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var generated struct {
+		Identity struct {
+			OperatorContactID string `yaml:"operator_contact_id"`
+		} `yaml:"identity"`
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "core", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	id, err := uuid.Parse(generated.Identity.OperatorContactID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := contacts.Open(filepath.Join(dir, "db", "contacts.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	operator, err := store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operator.FormattedName != "Alice Example" {
+		t.Fatalf("operator contact name = %q, want Alice Example", operator.FormattedName)
 	}
 }
 

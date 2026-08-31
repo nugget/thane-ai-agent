@@ -15,6 +15,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 //go:generate sh -c "cp ../../examples/config.example.yaml . && cp ../../examples/persona.example.md ."
@@ -58,9 +59,99 @@ type initOptions struct {
 	OperatorKey string
 	// OperatorPrincipal overrides the identity the key signs as.
 	OperatorPrincipal string
+	// OperatorName is the display name for the initial operator contact.
+	// Empty creates an explicit stub named "Operator".
+	OperatorName string
 	// SelfSigned skips the search entirely and founds core with the agent's
 	// own key, for an operator who has decided that is what they want.
 	SelfSigned bool
+}
+
+type operatorContactBootstrap struct {
+	contact     *contacts.Contact
+	store       *contacts.Store
+	dbPath      string
+	databaseNew bool
+}
+
+func bootstrapOperatorContact(workspace, name string, logger *slog.Logger) (*operatorContactBootstrap, error) {
+	dbPath := filepath.Join(workspace, "db", "contacts.db")
+	_, statErr := os.Stat(dbPath)
+	databaseNew := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !databaseNew {
+		return nil, fmt.Errorf("stat contact database: %w", statErr)
+	}
+
+	store, err := contacts.Open(dbPath, logger)
+	if err != nil {
+		if databaseNew {
+			return nil, errors.Join(fmt.Errorf("open contact database: %w", err), removeContactDatabaseFiles(dbPath))
+		}
+		return nil, fmt.Errorf("open contact database: %w", err)
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		name = "Operator"
+	}
+	contact, err := store.Upsert(&contacts.Contact{
+		FormattedName: name,
+		Kind:          "individual",
+		TrustZone:     contacts.ZoneAdmin,
+	})
+	if err != nil {
+		store.Close() //nolint:errcheck // preserve the contact creation error
+		if databaseNew {
+			return nil, errors.Join(fmt.Errorf("create operator contact: %w", err), removeContactDatabaseFiles(dbPath))
+		}
+		return nil, fmt.Errorf("create operator contact: %w", err)
+	}
+	return &operatorContactBootstrap{
+		contact:     contact,
+		store:       store,
+		dbPath:      dbPath,
+		databaseNew: databaseNew,
+	}, nil
+}
+
+func removeContactDatabaseFiles(dbPath string) error {
+	var errs []error
+	for _, path := range []string{dbPath, dbPath + "-journal", dbPath + "-shm", dbPath + "-wal"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", path, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (b *operatorContactBootstrap) close() error {
+	if b == nil || b.store == nil {
+		return nil
+	}
+	err := b.store.Close()
+	b.store = nil
+	return err
+}
+
+// rollback removes only artifacts this bootstrap created. An existing
+// contact database is never discarded; its new stub is soft-deleted instead.
+func (b *operatorContactBootstrap) rollback() error {
+	if b == nil {
+		return nil
+	}
+	var errs []error
+	if !b.databaseNew && b.store != nil && b.contact != nil {
+		if err := b.store.Delete(b.contact.ID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := b.close(); err != nil {
+		errs = append(errs, err)
+	}
+	if b.databaseNew {
+		if err := removeContactDatabaseFiles(b.dbPath); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // resolveOperatorSigner decides which key founds core, and explains the
@@ -151,9 +242,40 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	if err != nil {
 		return err
 	}
-	result, err := identity.BootstrapCore(ctx, filepath.Join(absDir, "core"), filepath.Base(absDir), operator, bundledTalents, slog.Default())
+
+	var contactBootstrap *operatorContactBootstrap
+	coreConfigPath := filepath.Join(absDir, "core", identity.CoreConfigFile)
+	if _, statErr := os.Stat(coreConfigPath); errors.Is(statErr, os.ErrNotExist) {
+		contactBootstrap, err = bootstrapOperatorContact(absDir, opts.OperatorName, slog.Default())
+		if err != nil {
+			return err
+		}
+	} else if statErr != nil {
+		return fmt.Errorf("stat core config: %w", statErr)
+	}
+
+	operatorContactID := ""
+	if contactBootstrap != nil {
+		operatorContactID = contactBootstrap.contact.ID.String()
+	}
+	result, err := identity.BootstrapCore(ctx, filepath.Join(absDir, "core"), filepath.Base(absDir), operator, operatorContactID, bundledTalents, slog.Default())
 	if err != nil {
+		if rollbackErr := contactBootstrap.rollback(); rollbackErr != nil {
+			return errors.Join(fmt.Errorf("bootstrap core identity: %w", err), fmt.Errorf("rollback operator contact: %w", rollbackErr))
+		}
 		return fmt.Errorf("bootstrap core identity: %w", err)
+	}
+	if contactBootstrap != nil && !result.Created {
+		if rollbackErr := contactBootstrap.rollback(); rollbackErr != nil {
+			return fmt.Errorf("core identity already existed after creating an operator contact; rollback failed: %w", rollbackErr)
+		}
+		return fmt.Errorf("core identity already existed after creating an operator contact")
+	}
+	if contactBootstrap != nil {
+		if err := contactBootstrap.close(); err != nil {
+			return fmt.Errorf("close operator contact database: %w", err)
+		}
+		fmt.Fprintf(w, "  ✓ operator contact %q (%s)\n", contactBootstrap.contact.FormattedName, contactBootstrap.contact.ID)
 	}
 	if result.Created {
 		fmt.Fprintf(w, "  ✓ %s (core identity, signing %s)\n", result.CoreDir, result.SigningKeyFingerprint)
@@ -252,6 +374,8 @@ func runInitCommand(stdout, stderr io.Writer, args []string) error {
 		"private SSH key that founds core, making the instance answerable to its holder (default: from git's user.signingkey)")
 	fs.StringVar(&opts.OperatorPrincipal, "operator-principal", "",
 		"identity the operator key signs as (default: git's user.email)")
+	fs.StringVar(&opts.OperatorName, "operator-name", "",
+		"display name for the initial operator contact (default: Operator)")
 	fs.BoolVar(&opts.SelfSigned, "self-signed", false,
 		"found core with the instance's own agent key, without looking for an operator key")
 	if err := fs.Parse(args); err != nil {

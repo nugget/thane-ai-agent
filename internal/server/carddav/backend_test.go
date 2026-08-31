@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/emersion/go-vcard"
@@ -16,6 +17,10 @@ import (
 )
 
 func newTestBackend(t *testing.T) *Backend {
+	return newTestBackendWithConfigBindings(t, false)
+}
+
+func newTestBackendWithConfigBindings(t *testing.T, configOwnsHAPersonBindings bool) *Backend {
 	t.Helper()
 	tmp, err := os.CreateTemp("", "thane-carddav-test-*.db")
 	if err != nil {
@@ -35,7 +40,7 @@ func newTestBackend(t *testing.T) *Backend {
 		t.Fatal(err)
 	}
 
-	return NewBackend(store, slog.Default())
+	return NewBackend(store, configOwnsHAPersonBindings, slog.Default())
 }
 
 func TestBackend_ListAddressBooks(t *testing.T) {
@@ -485,5 +490,74 @@ func TestHAPersonBindingPutIsAtomic(t *testing.T) {
 	// Atomicity: the rival contact must not exist at all.
 	if _, err := b.store.GetWithProperties(rivalID); err == nil {
 		t.Fatal("rejected PUT still created the contact — binding write is not atomic with the upsert")
+	}
+}
+
+func TestConfiguredHAPersonBindingIsReadOnlyInCardDAV(t *testing.T) {
+	b := newTestBackendWithConfigBindings(t, true)
+	ctx := context.Background()
+
+	operator, err := b.store.Upsert(&contacts.Contact{FormattedName: "Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.store.ReplaceHAPersonBindings(map[uuid.UUID]string{
+		operator.ID: "person.operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := b.GetAddressObject(ctx, objectPath(operator.ID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entity := got.Card.Value("X-THANE-HA-PERSON"); entity != "person.operator" {
+		t.Fatalf("GET binding = %q, want person.operator", entity)
+	}
+
+	// Clients commonly discard unknown X- fields. A header-less update
+	// must preserve the configured binding while applying ordinary data.
+	headerless := newTestCard("Renamed Operator", operator.ID)
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), headerless, nil); err != nil {
+		t.Fatalf("header-less PUT: %v", err)
+	}
+	entity, ok, err := b.store.HAPersonEntity(operator.ID)
+	if err != nil || !ok || entity != "person.operator" {
+		t.Fatalf("binding after header-less PUT = %q, %v, %v", entity, ok, err)
+	}
+	updated, err := b.store.Get(operator.ID)
+	if err != nil || updated.FormattedName != "Renamed Operator" {
+		t.Fatalf("ordinary contact update = %+v, %v", updated, err)
+	}
+
+	equal := newTestCard("Still Operator", operator.ID)
+	equal.SetValue("X-THANE-HA-PERSON", "person.operator")
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), equal, nil); err != nil {
+		t.Fatalf("round-trip of configured value: %v", err)
+	}
+
+	changed := newTestCard("Rejected Rename", operator.ID)
+	changed.SetValue("X-THANE-HA-PERSON", "person.somebody_else")
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), changed, nil); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
+		t.Fatalf("changed configured binding error = %v, want config guidance", err)
+	}
+	unchanged, err := b.store.Get(operator.ID)
+	if err != nil || unchanged.FormattedName != "Still Operator" {
+		t.Fatalf("rejected PUT changed contact = %+v, %v", unchanged, err)
+	}
+
+	newID := uuid.New()
+	claim := newTestCard("New Claim", newID)
+	claim.SetValue("X-THANE-HA-PERSON", "person.new_claim")
+	if _, err := b.PutAddressObject(ctx, objectPath(newID), claim, nil); err == nil {
+		t.Fatal("CardDAV created a binding while config owns the set")
+	}
+	if _, err := b.store.Get(newID); err == nil {
+		t.Fatal("rejected configured-binding PUT still created the contact")
+	}
+
+	headerlessID := uuid.New()
+	if _, err := b.PutAddressObject(ctx, objectPath(headerlessID), newTestCard("Ordinary Contact", headerlessID), nil); err != nil {
+		t.Fatalf("header-less new contact should remain writable: %v", err)
 	}
 }

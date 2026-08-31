@@ -133,7 +133,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_owner",
-		Description: "Return the primary owner/operator contact record with rich details and contact properties, plus a structured summary of currently active owner-scoped channels. Uses identity.owner_contact_name when configured; otherwise falls back to the sole admin contact if exactly one exists.",
+		Description: "Return the primary operator contact record with rich details and contact properties, plus a structured summary of currently active operator-scoped channels. Uses identity.operator_contact_id when configured; otherwise supports the legacy name selector and finally the sole admin contact if exactly one exists.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

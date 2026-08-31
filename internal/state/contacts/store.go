@@ -118,6 +118,31 @@ type Store struct {
 	logger     *slog.Logger
 }
 
+// Open creates a contact store at path and owns the resulting database
+// connection. Call [Store.Close] when the store is no longer needed.
+func Open(path string, logger *slog.Logger) (*Store, error) {
+	db, err := database.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	store, err := NewStore(db, logger)
+	if err != nil {
+		db.Close() //nolint:errcheck // preserve the initialization error
+		return nil, err
+	}
+	return store, nil
+}
+
+// Close closes the database connection owned by a store created with
+// [Open]. Callers that use [NewStore] may continue to close their database
+// directly.
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
 // NewStore creates a contact store backed by db. The caller owns db's
 // lifecycle; NewStore applies the schema and sets up the optional
 // FTS5 index.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
@@ -74,16 +75,38 @@ func (a *App) initChannels(s *newState) error {
 	// --- Contact directory ---
 	// Structured storage for people and organizations. Separate database
 	// from facts to keep concerns isolated.
-	contactDB, err := database.Open(a.cfg.DataDir + "/contacts.db")
-	if err != nil {
-		return fmt.Errorf("open contacts database: %w", err)
-	}
-	a.onCloseErr("contacts", contactDB.Close)
-	contactStore, err := contacts.NewStore(contactDB, a.logger)
+	contactStore, err := contacts.Open(a.cfg.DataDir+"/contacts.db", a.logger)
 	if err != nil {
 		return fmt.Errorf("open contact store: %w", err)
 	}
+	a.onCloseErr("contacts", contactStore.Close)
 	a.contactStore = contactStore
+
+	if a.cfg.Person.ContactBindings != nil {
+		bindings := make(map[uuid.UUID]string, len(a.cfg.Person.ContactBindings))
+		for rawID, entity := range a.cfg.Person.ContactBindings {
+			id, parseErr := uuid.Parse(rawID)
+			if parseErr != nil {
+				return fmt.Errorf("parse configured contact binding %q: %w", rawID, parseErr)
+			}
+			bindings[id] = entity
+		}
+		if err := contactStore.ReplaceHAPersonBindings(bindings); err != nil {
+			return fmt.Errorf("apply person.contact_bindings: %w", err)
+		}
+		a.logger.Info("configured contact-to-person bindings applied", "count", len(bindings))
+	}
+
+	var operatorContactID uuid.UUID
+	if a.cfg.Identity.OperatorContactID != "" {
+		operatorContactID, err = uuid.Parse(a.cfg.Identity.OperatorContactID)
+		if err != nil {
+			return fmt.Errorf("parse identity.operator_contact_id: %w", err)
+		}
+		if _, err := contactStore.Get(operatorContactID); err != nil {
+			return fmt.Errorf("resolve identity.operator_contact_id %s: %w", operatorContactID, err)
+		}
+	}
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()
@@ -100,6 +123,9 @@ func (a *App) initChannels(s *newState) error {
 	contactTools := contacts.NewTools(contactStore)
 	if a.cfg.Identity.ContactName != "" {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
+	}
+	if operatorContactID != uuid.Nil {
+		contactTools.ConfigureOperatorContactID(operatorContactID)
 	}
 	if a.cfg.Identity.OwnerContactName != "" {
 		contactTools.SetOwnerContactName(a.cfg.Identity.OwnerContactName)
@@ -768,8 +794,9 @@ func (a *App) initChannels(s *newState) error {
 				HandleTimeout: a.cfg.Signal.HandleTimeout,
 				Routing:       a.cfg.Signal.Routing,
 				Resolver: &contactChannelBindingResolver{
-					store:            contactStore,
-					ownerContactName: a.cfg.Identity.OwnerContactName,
+					store:                  contactStore,
+					operatorContactID:      operatorContactID,
+					legacyOwnerContactName: a.cfg.Identity.OwnerContactName,
 				},
 				BindConversation: a.mem.BindConversationChannel,
 				Attachments: sigcli.AttachmentConfig{

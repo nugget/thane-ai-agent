@@ -917,6 +917,31 @@ func TestOwnerContact_ConfiguredName(t *testing.T) {
 	}
 }
 
+func TestOwnerContact_ConfiguredOperatorID(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Original Name","kind":"individual","facts":{"email":"operator@example.com"}}`); err != nil {
+		t.Fatal(err)
+	}
+	operator, err := tools.store.FindByName("Original Name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools.ConfigureOperatorContactID(operator.ID)
+
+	operator.FormattedName = "Renamed Operator"
+	if _, err := tools.store.Upsert(operator); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.OwnerContact(`{}`)
+	if err != nil {
+		t.Fatalf("OwnerContact() error = %v", err)
+	}
+	if !strings.Contains(result, "**Renamed Operator**") {
+		t.Fatalf("OwnerContact() = %q, want UUID-selected renamed contact", result)
+	}
+}
+
 func TestOwnerContact_FallsBackToSoleAdmin(t *testing.T) {
 	tools := newTestTools(t)
 
@@ -996,7 +1021,7 @@ func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ambiguity error when multiple admin contacts exist")
 	}
-	if !strings.Contains(err.Error(), "identity.owner_contact_name") {
+	if !strings.Contains(err.Error(), "identity.operator_contact_id") {
 		t.Fatalf("error = %v, want owner contact config hint", err)
 	}
 }
