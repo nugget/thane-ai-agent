@@ -95,17 +95,19 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}
 
-	// Serve waits on shutdownDone before returning: everything after the
-	// server drain below — archiving conversations, ending sessions, the
-	// shutdown checkpoint — reads the stores that the deferred
-	// a.shutdown() closes the moment Serve returns. Without the wait,
-	// those tail steps race the close and lose ("sql: database is
-	// closed" at every restart), which meant the shutdown checkpoint
-	// silently never happened.
-	shutdownDone := make(chan struct{})
-	go func() {
-		defer close(shutdownDone)
-		<-ctx.Done()
+	// Serve synchronizes with these tasks before returning: everything
+	// after the server drain below — archiving conversations, ending
+	// sessions, the shutdown checkpoint — reads the stores that the
+	// deferred a.shutdown() closes the moment Serve returns. Without
+	// the synchronization, those tail steps race the close and lose
+	// ("sql: database is closed" at every restart), which meant the
+	// shutdown checkpoint silently never happened. The abort path
+	// covers the fatal-server-error return, where the goroutine would
+	// otherwise stay parked on ctx.Done and fire the whole tail into
+	// closed stores when the command caller's deferred cancel finally
+	// runs.
+	tasks := newShutdownTasks(a.logger, shutdownTasksTimeout)
+	tasks.watch(ctx, func() {
 		a.logger.Info("shutdown signal received")
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -156,27 +158,22 @@ func (a *App) Serve(ctx context.Context) error {
 		if _, err := a.checkpointer.CreateShutdown(); err != nil {
 			a.logger.Error("failed to create shutdown checkpoint", "error", err)
 		}
-	}()
+	})
 
 	// Start the primary API server. This blocks until the server is shut
 	// down (via context cancellation or fatal error).
 	if err := a.server.Start(ctx); err != nil {
 		if ctx.Err() == nil {
+			tasks.finish(true)
 			return fmt.Errorf("server failed: %w", err)
 		}
 	}
 
-	// Only a cancelled ctx means the shutdown goroutine is running; on a
-	// fatal server error it is still parked on ctx.Done and waiting here
-	// would hang. The timeout is a backstop against a wedged tail step —
-	// resources still close, but loudly instead of racily.
-	if ctx.Err() != nil {
-		select {
-		case <-shutdownDone:
-		case <-time.After(60 * time.Second):
-			a.logger.Warn("shutdown tasks still running at exit; closing resources anyway")
-		}
-	}
+	// finish(fatal) when ctx is somehow still alive: Start returning nil
+	// without a cancelled ctx should not happen, but if it does, the
+	// watcher must be released without running tail work — Serve is
+	// about to close the stores either way.
+	tasks.finish(ctx.Err() == nil)
 
 	a.logger.Info("Thane stopped")
 	if guard != nil && guard.Tripped() {
