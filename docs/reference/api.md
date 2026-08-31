@@ -90,6 +90,25 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/archive/search` | Full-text archive search. |
 | `GET` | `/v1/archive/messages` | Archived message query. |
 | `GET` | `/v1/archive/stats` | Archive statistics. |
+| `POST` | `/v1/archive/contact-dossier-backfill` | Advance one bounded page of the durable, one-time contact-dossier backfill (`?limit`, default 50, max 200). |
+
+The backfill endpoint is an operator operation (`archive:write` in the native
+API contract), not a model tool or an autonomous-loop behavior. It freezes a
+cutoff on its first call, pages active contact subjects and then historical
+closed sessions with durable keyset cursors, and adds catch-up work below fresh
+session-close work. Repeat the request until `complete` is true:
+
+```sh
+curl -sS -X POST \
+  'http://127.0.0.1:8080/v1/archive/contact-dossier-backfill?limit=50'
+```
+
+Retries and restarts are safe. Pending subjects and subjects in the retained
+queue-completion journal are skipped, while the durable cursor prevents the
+already-traversed archive from being scanned again. Once complete, future calls
+are no-ops rather than recurring full-archive scans. The archivist is not woken
+by the endpoint; it drains the resulting backlog at its normal self-paced
+cadence.
 
 ### Checkpoints and Companion Apps
 

@@ -541,9 +541,9 @@ func (s *ArchiveStore) countSessionMessages(sessionID string) int {
 
 // populateMessageCounts fills the MessageCount field on a slice of sessions
 // using a single grouped query to avoid the N+1 query pattern.
-func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
+func (s *ArchiveStore) populateMessageCounts(sessions []*Session) error {
 	if len(sessions) == 0 {
-		return
+		return nil
 	}
 
 	ids := make([]string, 0, len(sessions))
@@ -553,7 +553,7 @@ func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
 		}
 	}
 	if len(ids) == 0 {
-		return
+		return nil
 	}
 
 	placeholders, args := database.InList(ids)
@@ -566,7 +566,7 @@ func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
 
 	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {
-		return
+		return fmt.Errorf("query session message counts: %w", err)
 	}
 	defer rows.Close()
 
@@ -575,9 +575,12 @@ func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
 		var sessionID string
 		var count int
 		if err := rows.Scan(&sessionID, &count); err != nil {
-			return
+			return fmt.Errorf("scan session message count: %w", err)
 		}
 		counts[sessionID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate session message counts: %w", err)
 	}
 
 	for _, sess := range sessions {
@@ -588,6 +591,7 @@ func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
 			sess.MessageCount = c
 		}
 	}
+	return nil
 }
 
 func (s *ArchiveStore) migrate() error {
@@ -2271,8 +2275,65 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 		return nil, err
 	}
 
-	s.populateMessageCounts(sessions)
+	if err := s.populateMessageCounts(sessions); err != nil {
+		return nil, fmt.Errorf("populate message counts: %w", err)
+	}
 	return sessions, nil
+}
+
+// ListClosedSessionsPage returns one stable, ID-keyset page of closed sessions
+// that ended no later than cutoff. Results are ordered by session ID, and
+// hasMore says whether another page remains after the last returned session.
+// The cutoff freezes a one-time traversal while the normal session-close path
+// continues to handle sessions that finish after it began.
+//
+// Session IDs are the cursor rather than ended_at because historical rows mix
+// timestamp encodings. SQLite datetime() is used only for the inclusive cutoff;
+// pagination itself stays exact and index-backed through the primary key.
+func (s *ArchiveStore) ListClosedSessionsPage(cutoff time.Time, afterID string, limit int) ([]*Session, bool, error) {
+	if cutoff.IsZero() {
+		return nil, false, fmt.Errorf("closed session page cutoff is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       0 AS message_count,
+		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
+		FROM sessions
+		WHERE ended_at IS NOT NULL
+		  AND datetime(ended_at) <= datetime(?)
+		  AND id > ?
+		ORDER BY id ASC
+		LIMIT ?
+	`, cutoff.UTC().Format(time.RFC3339Nano), strings.TrimSpace(afterID), limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list closed session page: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		sess, err := s.scanSessionRow(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(sessions) > limit
+	if hasMore {
+		sessions = sessions[:limit]
+	}
+	if err := s.populateMessageCounts(sessions); err != nil {
+		return nil, false, fmt.Errorf("populate message counts: %w", err)
+	}
+	return sessions, hasMore, nil
 }
 
 // ListClosedSessionsEndedBefore returns closed sessions on the given
@@ -2318,7 +2379,9 @@ func (s *ArchiveStore) ListClosedSessionsEndedBefore(conversationID string, cuto
 		return nil, err
 	}
 
-	s.populateMessageCounts(sessions)
+	if err := s.populateMessageCounts(sessions); err != nil {
+		return nil, fmt.Errorf("populate message counts: %w", err)
+	}
 	return sessions, nil
 }
 
@@ -2350,7 +2413,9 @@ func (s *ArchiveStore) ListChildSessions(parentSessionID string) ([]*Session, er
 		return nil, err
 	}
 
-	s.populateMessageCounts(sessions)
+	if err := s.populateMessageCounts(sessions); err != nil {
+		return nil, fmt.Errorf("populate message counts: %w", err)
+	}
 	return sessions, nil
 }
 
@@ -2404,7 +2469,9 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 	// Populate MessageCount so the worker (and any other caller)
 	// sees accurate counts on returned sessions, even though the
 	// query no longer gates on them.
-	s.populateMessageCounts(sessions)
+	if err := s.populateMessageCounts(sessions); err != nil {
+		return nil, fmt.Errorf("populate message counts: %w", err)
+	}
 	return sessions, nil
 }
 

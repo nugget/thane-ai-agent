@@ -62,6 +62,26 @@ func TestStore_EnqueuePeekAck(t *testing.T) {
 	}
 }
 
+func TestStore_HasRecentWorkIncludesPendingAndCompletions(t *testing.T) {
+	s := newTestStore(t)
+
+	if found, err := s.HasRecentWork(t.Context(), "archivist", "session:missing"); err != nil || found {
+		t.Fatalf("missing found=%v err=%v", found, err)
+	}
+	if err := s.Enqueue(t.Context(), "archivist", "session:abc", 0, nil); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if found, err := s.HasRecentWork(t.Context(), "archivist", "session:abc"); err != nil || !found {
+		t.Fatalf("pending found=%v err=%v", found, err)
+	}
+	if err := s.Ack(t.Context(), "archivist", "session:abc"); err != nil {
+		t.Fatalf("ack: %v", err)
+	}
+	if found, err := s.HasRecentWork(t.Context(), "archivist", "session:abc"); err != nil || !found {
+		t.Fatalf("completed found=%v err=%v", found, err)
+	}
+}
+
 func TestStore_AppendKeepsDuplicateItems(t *testing.T) {
 	s := newTestStore(t)
 

@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
@@ -58,6 +59,16 @@ func (a *App) initServers(s *newState) error {
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
 	server.UseContactStore(a.contactStore)
+	if a.archivistDefinitionEnabled() {
+		contactBackfill := archivist.NewContactDossierBackfill(
+			a.contactStore,
+			a.archiveStore,
+			a.loopQueue,
+			a.opStore,
+			logger,
+		)
+		server.ConfigureContactDossierBackfill(contactBackfill.Run)
+	}
 	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
 	if a.documentStore != nil {
 		server.UseDocumentReader(a.documentStore.Read)

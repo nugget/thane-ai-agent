@@ -440,6 +440,44 @@ func (s *Store) ListAllLimit(limit int) ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
+// ListActivePage returns one stable, ID-keyset page of active contacts that
+// existed at cutoff. Results are ordered by canonical UUID, and hasMore says
+// whether another page remains after the last returned contact. The cutoff
+// freezes a one-time traversal so contacts created while it runs are left to
+// steady-state processing rather than shifting the page boundary.
+func (s *Store) ListActivePage(cutoff time.Time, afterID string, limit int) ([]*Contact, bool, error) {
+	if cutoff.IsZero() {
+		return nil, false, fmt.Errorf("contact page cutoff is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT `+contactColumns+`
+		FROM contacts
+		WHERE `+activeFilter+`
+		  AND datetime(created_at) <= datetime(?)
+		  AND id > ?
+		ORDER BY id ASC
+		LIMIT ?
+	`, cutoff.UTC().Format(time.RFC3339Nano), strings.TrimSpace(afterID), limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("query active contact page: %w", err)
+	}
+	defer rows.Close()
+
+	contacts, err := s.scanContacts(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(contacts) > limit
+	if hasMore {
+		contacts = contacts[:limit]
+	}
+	return contacts, hasMore, nil
+}
+
 // ListAllWithProperties returns all active contacts with their
 // Properties slices populated.  Unlike [ListAll], there is no row
 // limit — this is intended for full-sync use cases like CardDAV.

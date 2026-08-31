@@ -377,6 +377,34 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 	return nil
 }
 
+// HasRecentWork reports whether a key is pending or appears in the retained
+// completion journal for consumerLoop. Completion rows are intentionally
+// time-bounded by [Store.PruneCompletions], so this is a recent-overlap guard,
+// not permanent domain state. A durable producer cursor should remain the
+// authority for whether an older source has already been traversed.
+func (s *Store) HasRecentWork(ctx context.Context, consumerLoop, dedupKey string) (bool, error) {
+	consumerLoop = strings.TrimSpace(consumerLoop)
+	dedupKey = strings.TrimSpace(dedupKey)
+	if consumerLoop == "" || dedupKey == "" {
+		return false, fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
+	}
+
+	var found bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM loop_queue
+			WHERE consumer_loop = ? AND dedup_key = ?
+			UNION ALL
+			SELECT 1 FROM loop_queue_completions
+			WHERE consumer_loop = ? AND dedup_key = ?
+		)
+	`, consumerLoop, dedupKey, consumerLoop, dedupKey).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("loopqueue: inspect recent work %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	return found, nil
+}
+
 // Consumers returns the distinct consumer partitions that currently
 // hold pending work, optionally filtered to names beginning with
 // prefix (empty prefix = all). Used by boot-time recovery sweeps:

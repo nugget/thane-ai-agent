@@ -2,10 +2,12 @@ package memory
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 func newTestArchiveStore(t *testing.T) *ArchiveStore {
@@ -69,6 +71,86 @@ func TestArchiveMessages_BasicInsert(t *testing.T) {
 	if transcript[1].Content != "hi! how can I help?" {
 		t.Errorf("unexpected content: %s", transcript[1].Content)
 	}
+}
+
+func TestListClosedSessionsPage_KeysetCutoffAndMessageCount(t *testing.T) {
+	store := newTestArchiveStore(t)
+	cutoff := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	rows := []struct {
+		id      string
+		endedAt *time.Time
+	}{
+		{"019c0000-0000-7000-8000-000000000001", timePointer(cutoff.Add(-time.Hour))},
+		{"019c0000-0000-7000-8000-000000000002", timePointer(cutoff)},
+		{"019c0000-0000-7000-8000-000000000003", timePointer(cutoff.Add(time.Hour))},
+		{"019c0000-0000-7000-8000-000000000004", nil},
+	}
+	for _, row := range rows {
+		var endedAt any
+		if row.endedAt != nil {
+			endedAt = row.endedAt.Format(time.RFC3339Nano)
+		}
+		if _, err := store.db.Exec(`
+			INSERT INTO sessions (id, conversation_id, started_at, ended_at)
+			VALUES (?, 'signal-test', ?, ?)
+		`, row.id, cutoff.Add(-2*time.Hour).Format(time.RFC3339Nano), endedAt); err != nil {
+			t.Fatalf("insert session %s: %v", row.id, err)
+		}
+	}
+	if err := store.ArchiveMessages([]Message{{
+		ID:             "message-1",
+		ConversationID: "signal-test",
+		SessionID:      rows[0].id,
+		Role:           "user",
+		Content:        "hello",
+		Timestamp:      cutoff.Add(-90 * time.Minute),
+	}}); err != nil {
+		t.Fatalf("archive message: %v", err)
+	}
+
+	first, hasMore, err := store.ListClosedSessionsPage(cutoff, "", 1)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first) != 1 || first[0].ID != rows[0].id || first[0].MessageCount != 1 || !hasMore {
+		t.Fatalf("first page = %#v, hasMore=%v", first, hasMore)
+	}
+
+	second, hasMore, err := store.ListClosedSessionsPage(cutoff, first[0].ID, 1)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != rows[1].id || hasMore {
+		t.Fatalf("second page = %#v, hasMore=%v", second, hasMore)
+	}
+}
+
+func TestListClosedSessionsPage_MessageCountFailure(t *testing.T) {
+	store := newTestArchiveStore(t)
+	cutoff := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.Exec(`
+		INSERT INTO sessions (id, conversation_id, started_at, ended_at)
+		VALUES ('019c0000-0000-7000-8000-000000000001', 'signal-test', ?, ?)
+	`, cutoff.Add(-time.Hour).Format(time.RFC3339Nano), cutoff.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	brokenMessages, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open broken message database: %v", err)
+	}
+	t.Cleanup(func() { brokenMessages.Close() })
+	store.messagesDB = brokenMessages
+	store.msgTableName = "messages"
+
+	_, _, err = store.ListClosedSessionsPage(cutoff, "", 1)
+	if err == nil || !strings.Contains(err.Error(), "populate message counts") {
+		t.Fatalf("ListClosedSessionsPage error = %v, want message count failure", err)
+	}
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
 }
 
 func TestArchiveMessages_Deduplication(t *testing.T) {
