@@ -365,6 +365,12 @@ func (s *CalendarSnapshot) recordSharingDisabled(account string) {
 	s.sharingOff[account] = true
 	s.failures[account] = 0
 	s.retryAt[account] = s.now().Add(calendarSnapshotMaxBackoff)
+	// The operator's choice takes effect in the prompt immediately:
+	// events fetched while sharing was still on must not keep rendering
+	// beside the disabled flag — a connected Mac never hits the render
+	// cutoff, so without this the stale snapshot would outlive the
+	// setting indefinitely.
+	delete(s.snapshots, account)
 	s.mu.Unlock()
 	if transition {
 		s.logger.Info("calendar sharing disabled in the companion app; probing quietly",

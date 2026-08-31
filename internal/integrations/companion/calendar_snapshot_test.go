@@ -799,22 +799,49 @@ func TestCalendarSnapshotSharingDisabledIsAStateNotAFault(t *testing.T) {
 }
 
 // TestCalendarSnapshotRenderNamesSharingDisabled: the model reads the
-// cause, not just the absence.
+// cause, not just the absence — and events fetched while sharing was
+// still on stop rendering the moment the operator turns it off, since
+// a connected Mac never reaches the render cutoff that would otherwise
+// age them out.
 func TestCalendarSnapshotRenderNamesSharingDisabled(t *testing.T) {
 	base := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	now := base
 	fake := &calendarFake{
 		infos: []ProviderInfo{calendarProvider("deepslate", "mac-mini")},
-		err: &Error{
-			Code:    "calendar_sharing_disabled",
-			Message: "Calendar sharing is disabled in the macOS companion app.",
-		},
+		response: snapshotCalendarResponse{Events: []snapshotCalendarEvent{{
+			Title: "Private Standup",
+			Start: base.Add(time.Hour).Format(time.RFC3339),
+			End:   base.Add(2 * time.Hour).Format(time.RFC3339),
+		}}},
 	}
 	s := snapshotUnderTest(t, fake, base)
-	s.refreshAll(context.Background())
+	s.now = func() time.Time { return now }
 
+	// Sharing on: the event renders.
+	s.refreshAll(context.Background())
 	block, err := s.TagContext(context.Background(), agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(block, "Private Standup") {
+		t.Fatalf("expected the fetched event to render while sharing is on:\n%s", block)
+	}
+
+	// The operator turns sharing off: the cached events leave the
+	// prompt immediately, and the block names the cause.
+	fake.err = &Error{
+		Code:    "calendar_sharing_disabled",
+		Message: "Calendar sharing is disabled in the macOS companion app.",
+	}
+	now = now.Add(calendarSnapshotInterval + time.Second)
+	s.refreshAll(context.Background())
+
+	block, err = s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if strings.Contains(block, "Private Standup") {
+		t.Errorf("previously cached events still render after sharing was disabled:\n%s", block)
 	}
 	if !strings.Contains(block, `"sharing_disabled":true`) {
 		t.Errorf("rendered block missing sharing_disabled cause:\n%s", block)

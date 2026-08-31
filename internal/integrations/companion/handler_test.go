@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -800,5 +801,106 @@ func TestCanonicalPathNoDeprecation(t *testing.T) {
 	readJSON(t, conn, &ok)
 	if ok.Deprecation != nil {
 		t.Errorf("canonical path auth_ok carried a deprecation notice: %+v", ok.Deprecation)
+	}
+}
+
+// TestRegistryCallPreservesStructuredRefusal pins the request-boundary
+// contract the calendar snapshot classifies on: a companion answering
+// Success:false with a structured Error must reach callers as the same
+// "code: message" text the path always produced AND classify by code
+// via errors.As. The snapshot lifecycle tests inject *Error directly,
+// so only this test would catch a regression that flattens the refusal
+// back into fmt.Errorf at the boundary.
+func TestRegistryCallPreservesStructuredRefusal(t *testing.T) {
+	registry := NewRegistry(nil)
+	handler := NewHandler(testTokenIndex(), registry, nil)
+	mux := http.NewServeMux()
+	mux.Handle("GET /v1/companion/ws", handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/v1/companion/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	var authReq authRequired
+	readJSON(t, conn, &authReq)
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(authMessage{
+		Type:       typeAuth,
+		Token:      "test-secret",
+		ClientName: "Calendar Host",
+		ClientID:   "test-uuid-refusal",
+	}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
+	var ok authOK
+	readJSON(t, conn, &ok)
+
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(registerCapabilitiesMessage{
+		ID:   1,
+		Type: typeRegisterCaps,
+		Capabilities: []Capability{{
+			Name:    "macos.calendar",
+			Version: "1",
+			Methods: []string{"list_events"},
+		}},
+	}); err != nil {
+		t.Fatalf("send capability registration: %v", err)
+	}
+	var ack Message
+	readJSON(t, conn, &ack)
+	if !ack.Success {
+		t.Fatalf("expected successful capability ack, got %+v", ack)
+	}
+
+	answered := make(chan error, 1)
+	go func() {
+		var req companionRequestMessage
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err := conn.ReadJSON(&req); err != nil {
+			answered <- fmt.Errorf("read companion request: %w", err)
+			return
+		}
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		answered <- conn.WriteJSON(Message{
+			ID:      req.ID,
+			Type:    typeResult,
+			Success: false,
+			Error: &Error{
+				Code:    "calendar_sharing_disabled",
+				Message: "Calendar sharing is disabled in the macOS companion app.",
+			},
+		})
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = registry.Call(ctx, CallRequest{
+		Account:    "nugget",
+		Capability: "macos.calendar",
+		Method:     "list_events",
+	})
+	if err == nil {
+		t.Fatal("expected the structured refusal as an error, got nil")
+	}
+	if sendErr := <-answered; sendErr != nil {
+		t.Fatal(sendErr)
+	}
+
+	const wantText = "calendar_sharing_disabled: Calendar sharing is disabled in the macOS companion app."
+	if err.Error() != wantText {
+		t.Errorf("error text = %q, want byte-identical %q", err.Error(), wantText)
+	}
+	var refusal *Error
+	if !errors.As(err, &refusal) {
+		t.Fatalf("errors.As failed to recover *Error from %T", err)
+	}
+	if refusal.Code != "calendar_sharing_disabled" {
+		t.Errorf("recovered code = %q, want calendar_sharing_disabled", refusal.Code)
 	}
 }
