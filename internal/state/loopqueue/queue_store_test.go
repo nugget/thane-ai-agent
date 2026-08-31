@@ -197,6 +197,71 @@ func TestStore_PriorityOrdering(t *testing.T) {
 	}
 }
 
+func TestStore_DeferPreservesItemBehindCurrentWork(t *testing.T) {
+	s := newTestStore(t)
+	for _, tc := range []struct {
+		key      string
+		priority int
+		payload  string
+	}{
+		{key: "blocked", priority: 10, payload: `{"evidence":"keep"}`},
+		{key: "ordinary", priority: 0, payload: `{}`},
+		{key: "already-low", priority: -3, payload: `{}`},
+	} {
+		if err := s.Enqueue(t.Context(), "archivist", tc.key, tc.priority, []byte(tc.payload)); err != nil {
+			t.Fatalf("enqueue %s: %v", tc.key, err)
+		}
+	}
+	before, err := s.Peek(t.Context(), "archivist", 10)
+	if err != nil {
+		t.Fatalf("peek before defer: %v", err)
+	}
+	var originalEnqueuedAt time.Time
+	for _, item := range before {
+		if item.DedupKey == "blocked" {
+			originalEnqueuedAt = item.EnqueuedAt
+		}
+	}
+
+	if err := s.Defer(t.Context(), "archivist", "blocked"); err != nil {
+		t.Fatalf("defer blocked: %v", err)
+	}
+	items, err := s.Peek(t.Context(), "archivist", 10)
+	if err != nil {
+		t.Fatalf("peek: %v", err)
+	}
+	gotOrder := []string{items[0].DedupKey, items[1].DedupKey, items[2].DedupKey}
+	wantOrder := []string{"ordinary", "already-low", "blocked"}
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Fatalf("drain order = %v, want %v", gotOrder, wantOrder)
+		}
+	}
+	if got := string(items[2].Payload); got != `{"evidence":"keep"}` {
+		t.Errorf("deferred payload = %q, want original evidence", got)
+	}
+	if got := items[2].EnqueuedAt; !got.Equal(originalEnqueuedAt) {
+		t.Errorf("deferred enqueued_at = %v, want original %v", got, originalEnqueuedAt)
+	}
+	var attempts int
+	if err := s.db.QueryRowContext(t.Context(), `
+		SELECT attempts FROM loop_queue
+		WHERE consumer_loop = 'archivist' AND dedup_key = 'blocked'
+	`).Scan(&attempts); err != nil {
+		t.Fatalf("read attempts: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestStore_DeferRejectsMissingItem(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Defer(t.Context(), "archivist", "missing"); err == nil {
+		t.Fatal("defer missing item returned nil error")
+	}
+}
+
 func TestStore_PartitionIsolation(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Enqueue(t.Context(), "archivist", "session:1", 0, nil); err != nil {

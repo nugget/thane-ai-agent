@@ -1,0 +1,62 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
+)
+
+func TestQueueDeferToolRetainsWorkAndMovesItBehindThePartition(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("new loop queue: %v", err)
+	}
+	if err := store.Enqueue(t.Context(), "archivist", "contact:blocked", 5, []byte(`{"source":"session"}`)); err != nil {
+		t.Fatalf("enqueue blocked: %v", err)
+	}
+	if err := store.Enqueue(t.Context(), "archivist", "session:ready", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("enqueue ready: %v", err)
+	}
+
+	tools := buildLoopQueueTools(store, "archivist")
+	var deferToolNameFound bool
+	for _, tool := range tools {
+		if tool.Name != "queue_defer" {
+			continue
+		}
+		deferToolNameFound = true
+		result, err := tool.Handler(context.Background(), map[string]any{"subject": "contact:blocked"})
+		if err != nil {
+			t.Fatalf("queue_defer: %v", err)
+		}
+		var response map[string]string
+		if err := json.Unmarshal([]byte(result), &response); err != nil {
+			t.Fatalf("decode queue_defer result: %v", err)
+		}
+		if response["status"] != "deferred" || response["subject"] != "contact:blocked" {
+			t.Fatalf("queue_defer result = %v", response)
+		}
+	}
+	if !deferToolNameFound {
+		t.Fatal("queue_defer runtime tool was not generated")
+	}
+
+	items, err := store.Peek(t.Context(), "archivist", 10)
+	if err != nil {
+		t.Fatalf("peek: %v", err)
+	}
+	if len(items) != 2 || items[0].DedupKey != "session:ready" || items[1].DedupKey != "contact:blocked" {
+		t.Fatalf("deferred queue order = %#v", items)
+	}
+	if got := string(items[1].Payload); got != `{"source":"session"}` {
+		t.Fatalf("deferred payload = %q", got)
+	}
+}
