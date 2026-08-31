@@ -183,8 +183,9 @@ operator; it does not infer that authority from presence. The legacy
 installations, but it is mutually exclusive with the UUID selector.
 When neither is configured, Thane falls back to the sole `admin`
 contact only when exactly one exists. New `thane init` workspaces create
-an `admin`-zone `Operator` contact stub, write its UUID into the signed
-config, and start with an explicit empty `person.contact_bindings` map.
+a UUID in the signed config first, seed an `admin`-zone `Operator` contact
+stub with that exact ID, and start with an explicit empty
+`person.contact_bindings` map.
 
 `person.contact_bindings` is an exact contact-UUID-to-person-entity map.
 Every referenced contact must exist at startup, every person entity must
@@ -192,8 +193,9 @@ also appear under `person.track`, and a person may belong to only one
 active contact. When the key is present — even as `{}` — startup
 atomically reconciles the stored set to config. CardDAV still emits
 `X-THANE-HA-PERSON`, but treats it as a read-only projection and preserves
-it when clients omit unknown vCard fields. Removing a map entry clears
-that binding on the next restart.
+it when clients omit unknown vCard fields. An explicitly present value must
+match the projection; attempting to change or clear it is rejected. Removing
+a map entry clears that binding on the next restart.
 
 For backward compatibility, omitting `person.contact_bindings` entirely
 keeps the earlier CardDAV-managed behavior: an authenticated PUT may set
@@ -245,11 +247,14 @@ runtime-only tags from source defaults.
 ## Memory & Storage
 
 ```yaml
-data_dir: ~/Thane/data
+data_dir: ./db
 ```
 
-Where SQLite databases live (`thane.db`, `facts.db`). Defaults to
-`~/Thane/data`.
+Where SQLite databases live. Defaults to `./db`. For the normal signed config
+at `{workspace}/core/config.yaml`, relative paths resolve from the workspace,
+so the default is `{workspace}/db` regardless of the directory that launched
+Thane. Absolute paths remain unchanged; a config outside a workspace retains
+working-directory-relative behavior.
 
 ## Document Roots
 

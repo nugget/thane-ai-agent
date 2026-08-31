@@ -536,12 +536,22 @@ func TestConfiguredHAPersonBindingIsReadOnlyInCardDAV(t *testing.T) {
 		t.Fatalf("round-trip of configured value: %v", err)
 	}
 
+	clear := newTestCard("Rejected Clear", operator.ID)
+	clear.SetValue("X-THANE-HA-PERSON", "  ")
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), clear, nil); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
+		t.Fatalf("explicit clear of configured binding error = %v, want config guidance", err)
+	}
+	unchanged, err := b.store.Get(operator.ID)
+	if err != nil || unchanged.FormattedName != "Still Operator" {
+		t.Fatalf("rejected clear changed contact = %+v, %v", unchanged, err)
+	}
+
 	changed := newTestCard("Rejected Rename", operator.ID)
 	changed.SetValue("X-THANE-HA-PERSON", "person.somebody_else")
 	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), changed, nil); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
 		t.Fatalf("changed configured binding error = %v, want config guidance", err)
 	}
-	unchanged, err := b.store.Get(operator.ID)
+	unchanged, err = b.store.Get(operator.ID)
 	if err != nil || unchanged.FormattedName != "Still Operator" {
 		t.Fatalf("rejected PUT changed contact = %+v, %v", unchanged, err)
 	}

@@ -305,7 +305,9 @@ type Config struct {
 	// DataDir is the root directory for SQLite databases and other
 	// opaque runtime state (memory, facts, scheduler, checkpoints).
 	// Keep this separate from human-authored and model-authored
-	// document roots. Default: "./db".
+	// document roots. Relative paths are resolved from the workspace;
+	// without a workspace they remain relative to the working directory.
+	// Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory holding the talent markdown that extends
@@ -2896,9 +2898,7 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
-	if c.DataDir == "" {
-		c.DataDir = "./db"
-	}
+	c.DataDir = ResolveDataDir(c.Workspace.Path, c.DataDir)
 	if c.TalentsDir == "" {
 		// Derived, never authored: talents live inside core so they carry the
 		// same signed history and the same cleanliness rule as the prompts
@@ -3123,6 +3123,22 @@ func (c *Config) applyDefaults() {
 			c.Models.Available[i].Provider = "ollama"
 		}
 	}
+}
+
+// ResolveDataDir applies the data directory default and anchors a relative
+// path to workspace. Config loaded from core always has a derived workspace,
+// so its opaque runtime state follows the instance instead of the process's
+// current working directory. Callers without a workspace retain the historical
+// working-directory-relative behavior.
+func ResolveDataDir(workspace, dataDir string) string {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		dataDir = "./db"
+	}
+	if filepath.IsAbs(dataDir) || strings.TrimSpace(workspace) == "" {
+		return dataDir
+	}
+	return filepath.Join(workspace, dataDir)
 }
 
 // Validate checks that the configuration is internally consistent after

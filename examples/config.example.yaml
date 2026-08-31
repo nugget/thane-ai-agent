@@ -696,7 +696,9 @@ shell_exec:
 # DataDir is the root directory for SQLite databases and other
 # opaque runtime state (memory, facts, scheduler, checkpoints).
 # Keep this separate from human-authored and model-authored
-# document roots. Default: "./db".
+# document roots. Relative paths are resolved from the workspace;
+# without a workspace they remain relative to the working directory.
+# Default: "./db".
 data_dir: ./db
 #
 # (optional) Archive configures session archive behavior.

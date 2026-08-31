@@ -215,6 +215,53 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	}
 }
 
+func TestRunInit_RepairsMissingOperatorDatabaseFromCoreConfig(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true, OperatorName: "Alice Example"}); err != nil {
+		t.Fatalf("first runInit: %v", err)
+	}
+
+	var generated struct {
+		Identity struct {
+			OperatorContactID string `yaml:"operator_contact_id"`
+		} `yaml:"identity"`
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "core", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	operatorID, err := uuid.Parse(generated.Identity.OperatorContactID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "db", "contacts.db")
+	if err := removeContactDatabaseFiles(dbPath); err != nil {
+		t.Fatalf("remove initialized contact database: %v", err)
+	}
+
+	buf.Reset()
+	if err := runInit(&buf, dir, initOptions{SelfSigned: true}); err != nil {
+		t.Fatalf("repair runInit: %v", err)
+	}
+	store, err := contacts.Open(dbPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	operator, err := store.Get(operatorID)
+	if err != nil {
+		t.Fatalf("get repaired operator contact: %v", err)
+	}
+	if operator.FormattedName != "Operator" || operator.TrustZone != contacts.ZoneAdmin {
+		t.Fatalf("repaired operator contact = %+v", operator)
+	}
+}
+
 // TestRunInit_ArchiveBootstrapIdempotent verifies that re-running init
 // over an existing archive skeleton leaves every file untouched (same
 // mtime, same content) — the writeIfMissing path uses O_EXCL.

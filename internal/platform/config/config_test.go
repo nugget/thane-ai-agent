@@ -148,6 +148,58 @@ func TestLoad_ExpandsEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoad_ResolvesDataDirFromDerivedWorkspace(t *testing.T) {
+	absDataDir := t.TempDir()
+	tests := []struct {
+		name    string
+		config  string
+		wantDir func(string) string
+	}{
+		{
+			name:   "default",
+			config: "listen:\n  port: 8080\n",
+			wantDir: func(workspace string) string {
+				return filepath.Join(workspace, "db")
+			},
+		},
+		{
+			name:   "explicit relative",
+			config: "data_dir: state/sqlite\n",
+			wantDir: func(workspace string) string {
+				return filepath.Join(workspace, "state", "sqlite")
+			},
+		},
+		{
+			name:   "absolute remains absolute",
+			config: "data_dir: " + absDataDir + "\n",
+			wantDir: func(string) string {
+				return absDataDir
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			coreDir := filepath.Join(workspace, "core")
+			if err := os.MkdirAll(coreDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(coreDir, "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if want := tt.wantDir(workspace); cfg.DataDir != want {
+				t.Fatalf("DataDir = %q, want %q", cfg.DataDir, want)
+			}
+		})
+	}
+}
+
 func TestLoad_InlineSecrets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

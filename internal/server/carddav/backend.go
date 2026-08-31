@@ -188,8 +188,12 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 				return nil, fmt.Errorf("read configured ha person binding: contact %s disappeared", id)
 			}
 		}
-		incomingEntity := strings.TrimSpace(card.Value("X-THANE-HA-PERSON"))
-		if incomingEntity != "" && incomingEntity != currentEntity {
+		incomingField := card.Get("X-THANE-HA-PERSON")
+		incomingEntity := ""
+		if incomingField != nil {
+			incomingEntity = strings.TrimSpace(incomingField.Value)
+		}
+		if incomingField != nil && incomingEntity != currentEntity {
 			return nil, fmt.Errorf("X-THANE-HA-PERSON is owned by signed person.contact_bindings; edit config and restart Thane")
 		}
 		// Header-less PUTs are normal for clients that discard unknown

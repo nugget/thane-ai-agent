@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"errors"
 	"flag"
@@ -13,9 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
+	platformconfig "github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"gopkg.in/yaml.v3"
 )
 
 //go:generate sh -c "cp ../../examples/config.example.yaml . && cp ../../examples/persona.example.md ."
@@ -68,14 +72,19 @@ type initOptions struct {
 }
 
 type operatorContactBootstrap struct {
-	contact     *contacts.Contact
-	store       *contacts.Store
-	dbPath      string
-	databaseNew bool
+	contact *contacts.Contact
+	store   *contacts.Store
+	created bool
 }
 
-func bootstrapOperatorContact(workspace, name string, logger *slog.Logger) (*operatorContactBootstrap, error) {
-	dbPath := filepath.Join(workspace, "db", "contacts.db")
+func bootstrapOperatorContact(dataDir string, id uuid.UUID, name string, logger *slog.Logger) (*operatorContactBootstrap, error) {
+	if id == uuid.Nil {
+		return nil, errors.New("operator contact ID is empty")
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create contact database directory: %w", err)
+	}
+	dbPath := filepath.Join(dataDir, "contacts.db")
 	_, statErr := os.Stat(dbPath)
 	databaseNew := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !databaseNew {
@@ -89,14 +98,40 @@ func bootstrapOperatorContact(workspace, name string, logger *slog.Logger) (*ope
 		}
 		return nil, fmt.Errorf("open contact database: %w", err)
 	}
+	existing, err := store.Get(id)
+	if err == nil {
+		return &operatorContactBootstrap{contact: existing, store: store}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		store.Close() //nolint:errcheck // preserve the lookup error
+		if databaseNew {
+			return nil, errors.Join(fmt.Errorf("look up operator contact: %w", err), removeContactDatabaseFiles(dbPath))
+		}
+		return nil, fmt.Errorf("look up operator contact: %w", err)
+	}
+
+	active, err := store.ListAllLimit(1)
+	if err != nil {
+		store.Close() //nolint:errcheck // preserve the query error
+		if databaseNew {
+			return nil, errors.Join(fmt.Errorf("inspect contact database: %w", err), removeContactDatabaseFiles(dbPath))
+		}
+		return nil, fmt.Errorf("inspect contact database: %w", err)
+	}
+	if len(active) != 0 {
+		store.Close() //nolint:errcheck // no mutation occurred
+		return nil, fmt.Errorf("operator contact %s is missing from non-empty database %s", id, dbPath)
+	}
+
 	if name = strings.TrimSpace(name); name == "" {
 		name = "Operator"
 	}
-	contact, err := store.Upsert(&contacts.Contact{
+	contact, err := store.UpsertWithProperties(&contacts.Contact{
+		ID:            id,
 		FormattedName: name,
 		Kind:          "individual",
 		TrustZone:     contacts.ZoneAdmin,
-	})
+	}, nil)
 	if err != nil {
 		store.Close() //nolint:errcheck // preserve the contact creation error
 		if databaseNew {
@@ -105,10 +140,9 @@ func bootstrapOperatorContact(workspace, name string, logger *slog.Logger) (*ope
 		return nil, fmt.Errorf("create operator contact: %w", err)
 	}
 	return &operatorContactBootstrap{
-		contact:     contact,
-		store:       store,
-		dbPath:      dbPath,
-		databaseNew: databaseNew,
+		contact: contact,
+		store:   store,
+		created: true,
 	}, nil
 }
 
@@ -131,27 +165,35 @@ func (b *operatorContactBootstrap) close() error {
 	return err
 }
 
-// rollback removes only artifacts this bootstrap created. An existing
-// contact database is never discarded; its new stub is soft-deleted instead.
-func (b *operatorContactBootstrap) rollback() error {
-	if b == nil {
-		return nil
+type operatorBootstrapConfig struct {
+	DataDir  string `yaml:"data_dir"`
+	Identity struct {
+		OperatorContactID string `yaml:"operator_contact_id"`
+	} `yaml:"identity"`
+}
+
+// readOperatorBootstrapConfig reads only the two config values init needs to
+// seed or repair the initial contact. It deliberately does not load the full
+// runtime config: re-running init must remain possible while an operator is in
+// the middle of authoring unrelated settings.
+func readOperatorBootstrapConfig(path, workspace string) (uuid.UUID, string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return uuid.Nil, "", false, fmt.Errorf("read core config: %w", err)
 	}
-	var errs []error
-	if !b.databaseNew && b.store != nil && b.contact != nil {
-		if err := b.store.Delete(b.contact.ID); err != nil {
-			errs = append(errs, err)
-		}
+	var cfg operatorBootstrapConfig
+	if err := yaml.Unmarshal([]byte(os.ExpandEnv(string(data))), &cfg); err != nil {
+		return uuid.Nil, "", false, fmt.Errorf("parse core config: %w", err)
 	}
-	if err := b.close(); err != nil {
-		errs = append(errs, err)
+	rawID := strings.TrimSpace(cfg.Identity.OperatorContactID)
+	if rawID == "" {
+		return uuid.Nil, "", false, nil
 	}
-	if b.databaseNew {
-		if err := removeContactDatabaseFiles(b.dbPath); err != nil {
-			errs = append(errs, err)
-		}
+	id, err := uuid.Parse(rawID)
+	if err != nil || id == uuid.Nil || id.String() != rawID {
+		return uuid.Nil, "", false, fmt.Errorf("identity.operator_contact_id must be a canonical non-zero UUID, got %q", rawID)
 	}
-	return errors.Join(errs...)
+	return id, platformconfig.ResolveDataDir(workspace, cfg.DataDir), true, nil
 }
 
 // resolveOperatorSigner decides which key founds core, and explains the
@@ -243,39 +285,33 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 		return err
 	}
 
-	var contactBootstrap *operatorContactBootstrap
 	coreConfigPath := filepath.Join(absDir, "core", identity.CoreConfigFile)
+	operatorContactID := ""
 	if _, statErr := os.Stat(coreConfigPath); errors.Is(statErr, os.ErrNotExist) {
-		contactBootstrap, err = bootstrapOperatorContact(absDir, opts.OperatorName, slog.Default())
-		if err != nil {
-			return err
+		id, idErr := uuid.NewV7()
+		if idErr != nil {
+			return fmt.Errorf("generate operator contact ID: %w", idErr)
 		}
+		operatorContactID = id.String()
 	} else if statErr != nil {
 		return fmt.Errorf("stat core config: %w", statErr)
 	}
 
-	operatorContactID := ""
-	if contactBootstrap != nil {
-		operatorContactID = contactBootstrap.contact.ID.String()
-	}
 	result, err := identity.BootstrapCore(ctx, filepath.Join(absDir, "core"), filepath.Base(absDir), operator, operatorContactID, bundledTalents, slog.Default())
 	if err != nil {
-		if rollbackErr := contactBootstrap.rollback(); rollbackErr != nil {
-			return errors.Join(fmt.Errorf("bootstrap core identity: %w", err), fmt.Errorf("rollback operator contact: %w", rollbackErr))
-		}
 		return fmt.Errorf("bootstrap core identity: %w", err)
 	}
-	if contactBootstrap != nil && !result.Created {
-		if rollbackErr := contactBootstrap.rollback(); rollbackErr != nil {
-			return fmt.Errorf("core identity already existed after creating an operator contact; rollback failed: %w", rollbackErr)
-		}
-		return fmt.Errorf("core identity already existed after creating an operator contact")
+
+	configuredOperatorID, dataDir, operatorConfigured, err := readOperatorBootstrapConfig(coreConfigPath, absDir)
+	if err != nil {
+		return err
 	}
-	if contactBootstrap != nil {
-		if err := contactBootstrap.close(); err != nil {
-			return fmt.Errorf("close operator contact database: %w", err)
+	var contactBootstrap *operatorContactBootstrap
+	if operatorConfigured {
+		contactBootstrap, err = bootstrapOperatorContact(dataDir, configuredOperatorID, opts.OperatorName, slog.Default())
+		if err != nil {
+			return err
 		}
-		fmt.Fprintf(w, "  ✓ operator contact %q (%s)\n", contactBootstrap.contact.FormattedName, contactBootstrap.contact.ID)
 	}
 	if result.Created {
 		fmt.Fprintf(w, "  ✓ %s (core identity, signing %s)\n", result.CoreDir, result.SigningKeyFingerprint)
@@ -283,6 +319,16 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 		describeCorePosture(w, result, why)
 	} else {
 		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
+	}
+	if contactBootstrap != nil {
+		if err := contactBootstrap.close(); err != nil {
+			return fmt.Errorf("close operator contact database: %w", err)
+		}
+		if contactBootstrap.created {
+			fmt.Fprintf(w, "  ✓ operator contact %q (%s)\n", contactBootstrap.contact.FormattedName, contactBootstrap.contact.ID)
+		} else {
+			fmt.Fprintf(w, "  · operator contact %q (%s) (exists, skipping)\n", contactBootstrap.contact.FormattedName, contactBootstrap.contact.ID)
+		}
 	}
 
 	if err := bootstrapArchive(w, absDir); err != nil {

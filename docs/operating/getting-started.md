@@ -49,9 +49,10 @@ material, `core/config.yaml`, and the bundled talents under
 `core/talents/`. A reference `config.example.yaml` and
 `persona.example.md` are also written at the workspace root.
 
-Initialization also creates an `admin`-zone operator contact stub in
-`db/contacts.db` and records its stable UUID as
-`identity.operator_contact_id` in the signed config. Pass
+Initialization first generates a stable UUID into
+`identity.operator_contact_id` in the signed config, then seeds an
+`admin`-zone operator contact stub with that exact UUID in `db/contacts.db`.
+Pass
 `-operator-name "Your Name"` to `thane init` to name it immediately; the
 default display name is `Operator`. The generated config includes an explicit
 empty `person.contact_bindings` map, ready for UUID-to-Home-Assistant-person

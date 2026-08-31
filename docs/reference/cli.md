@@ -44,8 +44,9 @@ Starts these listeners:
 
 Initialize a Thane workspace with bundled defaults. Creates the directory
 structure, the archive skeleton, and `db/contacts.db` with an initial
-`admin`-zone operator contact. Its stable UUID is written to
-`identity.operator_contact_id` in `core/config.yaml`, and the new config
+`admin`-zone operator contact. Its stable UUID is generated into
+`identity.operator_contact_id` in `core/config.yaml` first, then used to seed
+the contact database. The new config
 starts with an explicit empty `person.contact_bindings` map. The same signed
 core birth commit carries the generated identity material (signing key and
 channel CA), default policy, and bundled talents. Reference copies of the
