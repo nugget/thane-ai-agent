@@ -1159,20 +1159,19 @@ func TestTalentsIgnoreFrontmatterSkipsDeliberately(t *testing.T) {
 	}
 }
 
-// TestTalentsIgnoreBesideGuidanceIsRefused: honoring ignore on a file
-// that also carries real nodes would drop that guidance silently — the
-// exact failure the loader's notices exist to prevent — so it is an
-// authoring error instead.
-func TestTalentsIgnoreBesideGuidanceIsRefused(t *testing.T) {
+// TestTalentsIgnoreInMultiNodeFileIsRefused: which nodes an ignore
+// would silence in a multi-node file is a guess, and a guess drops
+// guidance silently — so it is an authoring error instead.
+func TestTalentsIgnoreInMultiNodeFileIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "mixed.md", "---\nignore: true\n---\n# Notes\n---\nname: real\ntags: ["+TagAlways+"]\n---\n# Real\nGuidance.")
 
 	_, err := NewLoader(dir).Talents()
 	if err == nil {
-		t.Fatal("want error for ignore beside guidance nodes, got nil")
+		t.Fatal("want error for ignore in a multi-node file, got nil")
 	}
-	if !strings.Contains(err.Error(), "ignore: true marks a whole file") {
-		t.Fatalf("error %q does not name the whole-file rule", err)
+	if !strings.Contains(err.Error(), "which nodes it silences would be a guess") {
+		t.Fatalf("error %q does not name the ambiguity rationale", err)
 	}
 }
 
@@ -1190,18 +1189,20 @@ func TestRepoREADMEDeclaresIgnore(t *testing.T) {
 	}
 }
 
-// TestTalentsIgnoreMustStandAlone: ignore beside other frontmatter keys
-// in the same node looks like guidance, and skipping it would drop that
-// guidance silently — so the loader refuses it.
-func TestTalentsIgnoreMustStandAlone(t *testing.T) {
+// TestTalentsIgnoreSupersedesTalentMetadata pins the park-a-talent
+// switch: ignore: true wins over everything else the node declares, by
+// operator choice — one added line silences a real talent without
+// deleting its metadata, and removing the line restores it.
+func TestTalentsIgnoreSupersedesTalentMetadata(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "confused.md", "---\nignore: true\ntags: ["+TagAlways+"]\n---\n# Confused\nGuidance or not?")
+	writeFile(t, dir, "parked.md", "---\nignore: true\nname: parked\ntags: ["+TagAlways+"]\nkind: doctrine\n---\n# Parked\nSilenced but intact.")
+	writeFile(t, dir, "core.md", "---\ntags: ["+TagAlways+"]\n---\n# Core\nAlways loaded.")
 
-	_, err := NewLoader(dir).Talents()
-	if err == nil {
-		t.Fatal("want error for ignore beside other frontmatter keys, got nil")
+	talents, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "must be the only frontmatter key") {
-		t.Fatalf("error %q does not name the stand-alone rule", err)
+	if len(talents) != 1 || talents[0].Name != "core" {
+		t.Fatalf("talents = %+v, want just core — the parked talent must stay silenced", talents)
 	}
 }
