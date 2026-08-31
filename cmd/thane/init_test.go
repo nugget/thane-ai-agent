@@ -46,7 +46,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	out := buf.String()
 
 	// Verify directory structure.
-	for _, sub := range []string{"core", "contacts", "db", filepath.Join("core", "talents")} {
+	for _, sub := range []string{"core", "contacts", "dossiers", "db", filepath.Join("core", "talents")} {
 		info, err := os.Stat(filepath.Join(dir, sub))
 		if err != nil {
 			t.Errorf("expected directory %s: %v", sub, err)
@@ -176,22 +176,31 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	if !contactsRoot.Git.Enabled || !contactsRoot.Git.SignCommits || contactsRoot.Git.VerifySignatures != "required" {
 		t.Fatalf("generated contacts git policy = %#v", contactsRoot.Git)
 	}
-	contactsDir := filepath.Join(dir, platformconfig.ContactsRootName)
-	for _, args := range [][]string{
-		{"rev-list", "--count", "HEAD"},
-		{"status", "--short", "--untracked-files=all"},
-		{"verify-commit", "HEAD"},
-	} {
-		cmd := exec.Command("git", append([]string{"-C", contactsDir}, args...)...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %s in contacts root: %v\n%s", strings.Join(args, " "), err, out)
-		}
-		if args[0] == "rev-list" && strings.TrimSpace(string(out)) != "1" {
-			t.Fatalf("contacts root commit count = %q, want 1", strings.TrimSpace(string(out)))
-		}
-		if args[0] == "status" && strings.TrimSpace(string(out)) != "" {
-			t.Fatalf("contacts root status = %q, want clean", strings.TrimSpace(string(out)))
+	dossiersRoot, ok := generated.Roots[platformconfig.DossiersRootName]
+	if !ok || dossiersRoot.Authoring != "managed" || dossiersRoot.Context.Advertise != "" {
+		t.Fatalf("generated dossiers root = %#v, want managed non-contact dossier policy", dossiersRoot)
+	}
+	if !dossiersRoot.Git.Enabled || !dossiersRoot.Git.SignCommits || dossiersRoot.Git.VerifySignatures != "required" {
+		t.Fatalf("generated dossiers git policy = %#v", dossiersRoot.Git)
+	}
+	for _, root := range []string{platformconfig.ContactsRootName, platformconfig.DossiersRootName} {
+		rootDir := filepath.Join(dir, root)
+		for _, args := range [][]string{
+			{"rev-list", "--count", "HEAD"},
+			{"status", "--short", "--untracked-files=all"},
+			{"verify-commit", "HEAD"},
+		} {
+			cmd := exec.Command("git", append([]string{"-C", rootDir}, args...)...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s in %s root: %v\n%s", strings.Join(args, " "), root, err, out)
+			}
+			if args[0] == "rev-list" && strings.TrimSpace(string(out)) != "1" {
+				t.Fatalf("%s root commit count = %q, want 1", root, strings.TrimSpace(string(out)))
+			}
+			if args[0] == "status" && strings.TrimSpace(string(out)) != "" {
+				t.Fatalf("%s root status = %q, want clean", root, strings.TrimSpace(string(out)))
+			}
 		}
 	}
 

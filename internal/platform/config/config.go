@@ -56,13 +56,15 @@ const DefaultWorkspace = "~/Thane"
 // ConfigFileName is the fixed name of the runtime config inside core.
 const ConfigFileName = "config.yaml"
 
-// CoreRootName, SelfRootName, and ContactsRootName are document roots whose
-// paths are derived from the workspace rather than declared. They may be
-// named in roots: to set policy, and none takes a path from there.
+// CoreRootName, SelfRootName, ContactsRootName, and DossiersRootName are
+// document roots whose paths are derived from the workspace rather than
+// declared. They may be named in roots: to set policy, and none takes a path
+// from there.
 const (
 	CoreRootName     = "core"
 	SelfRootName     = "self"
 	ContactsRootName = "contacts"
+	DossiersRootName = "dossiers"
 )
 
 // legacyConfigLocations are the paths Thane searched before the config
@@ -247,8 +249,9 @@ type Config struct {
 	// Workspace configures the agent's sandboxed file system access.
 	// The workspace root also anchors Thane's derived document roots.
 	// {workspace.path}/core holds what the operator declares Thane to be;
-	// {workspace.path}/self holds what Thane has made of that; and the
-	// optional {workspace.path}/contacts holds contact dossiers.
+	// {workspace.path}/self holds what Thane has made of that; the optional
+	// {workspace.path}/contacts holds contact dossiers; and the optional
+	// {workspace.path}/dossiers holds dossiers for non-contact subjects.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Roots is the unified document-root config. Each entry names one
@@ -276,8 +279,9 @@ type Config struct {
 	//
 	// Typical names: kb (curated knowledge), generated (model-produced
 	// durable outputs), and scratchpad (low-integrity work area). The core,
-	// self, and contacts names are reserved and derived from workspace.path;
-	// declaring them under roots: sets policy, while any path is ignored.
+	// self, contacts, and dossiers names are reserved and derived from
+	// workspace.path; declaring them under roots: sets policy, while any path
+	// is ignored.
 	Roots map[string]RootEntry `yaml:"roots,omitempty"`
 
 	// Paths is the legacy directory-mapping block. Replaced by roots:.
@@ -1006,7 +1010,8 @@ type AllowedSigner struct {
 type RootEntry struct {
 	// Path is the directory the root resolves to. Supports ~ expansion at
 	// resolver construction time. For reserved derived roots (core, self,
-	// and contacts) this is ignored; their paths come from workspace.path.
+	// contacts, and dossiers) this is ignored; their paths come from
+	// workspace.path.
 	Path string `yaml:"path"`
 
 	// Indexing controls whether markdown files in this root are
@@ -2805,7 +2810,7 @@ func (c *Config) normalizeRoots() error {
 				}
 			} else {
 				if pathValue == "" {
-					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName, ContactsRootName)
+					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s, %s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName, ContactsRootName, DossiersRootName)
 				}
 				c.Paths[trimmed] = entry.Path
 			}
@@ -3755,7 +3760,7 @@ func (c *Config) CoreRoot() string {
 // need to treat "this root is missing" as a problem rather than a preference
 // use this to distinguish them.
 func IsDerivedRootName(name string) bool {
-	return name == CoreRootName || name == SelfRootName || name == ContactsRootName
+	return name == CoreRootName || name == SelfRootName || name == ContactsRootName || name == DossiersRootName
 }
 
 // SelfRoot returns the fixed document root holding what Thane writes
@@ -3791,6 +3796,18 @@ func (c *Config) ContactsRoot() string {
 		return ""
 	}
 	return filepath.Join(c.Workspace.Path, ContactsRootName)
+}
+
+// DossiersRoot returns the fixed document root holding dossiers for
+// non-contact subjects, derived from [Workspace.Path] exactly as [CoreRoot]
+// is. The root is opt-in: callers only register it when dossiers is explicitly
+// declared under roots:. When workspace.path is unset, DossiersRoot returns
+// the empty string.
+func (c *Config) DossiersRoot() string {
+	if strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.Workspace.Path, DossiersRootName)
 }
 
 // CoreFile returns the absolute-or-relative path to a named file in the

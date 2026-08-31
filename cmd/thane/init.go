@@ -301,7 +301,11 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	if err != nil {
 		return fmt.Errorf("bootstrap core identity: %w", err)
 	}
-	dossierConfigured, dossierCreated, err := bootstrapContactDossierRoot(ctx, coreConfigPath, absDir, slog.Default())
+	contactDossiersConfigured, contactDossiersCreated, err := bootstrapContactDossierRoot(ctx, coreConfigPath, absDir, slog.Default())
+	if err != nil {
+		return err
+	}
+	subjectDossiersConfigured, subjectDossiersCreated, err := bootstrapSubjectDossierRoot(ctx, coreConfigPath, absDir, slog.Default())
 	if err != nil {
 		return err
 	}
@@ -324,11 +328,18 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	} else {
 		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
 	}
-	if dossierConfigured {
-		if dossierCreated {
+	if contactDossiersConfigured {
+		if contactDossiersCreated {
 			fmt.Fprintf(w, "  ✓ %s (signed contact dossier root)\n", filepath.Join(absDir, platformconfig.ContactsRootName))
 		} else {
 			fmt.Fprintf(w, "  · %s (contact dossier root exists, skipping)\n", filepath.Join(absDir, platformconfig.ContactsRootName))
+		}
+	}
+	if subjectDossiersConfigured {
+		if subjectDossiersCreated {
+			fmt.Fprintf(w, "  ✓ %s (signed dossier root)\n", filepath.Join(absDir, platformconfig.DossiersRootName))
+		} else {
+			fmt.Fprintf(w, "  · %s (dossier root exists, skipping)\n", filepath.Join(absDir, platformconfig.DossiersRootName))
 		}
 	}
 	if contactBootstrap != nil {

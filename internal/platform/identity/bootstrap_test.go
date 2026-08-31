@@ -100,6 +100,19 @@ func TestBootstrapCoreCreatesSignedBirthCommit(t *testing.T) {
 	if len(contactsRoot.SeedSigners) != 1 || contactsRoot.SeedSigners[0].Principal != "thane@provenance.local" {
 		t.Fatalf("generated contacts seed signers = %#v", contactsRoot.SeedSigners)
 	}
+	dossiersRoot, ok := cfg.Roots["dossiers"]
+	if !ok {
+		t.Fatal("generated config is missing roots.dossiers")
+	}
+	if dossiersRoot.Authoring != "managed" || dossiersRoot.Context.Advertise != "" {
+		t.Fatalf("generated dossiers root policy = %#v", dossiersRoot)
+	}
+	if !dossiersRoot.Git.Enabled || !dossiersRoot.Git.SignCommits || dossiersRoot.Git.VerifySignatures != "required" || dossiersRoot.Git.SigningKey != "core:"+SigningPrivateKeyFile {
+		t.Fatalf("generated dossiers git policy = %#v", dossiersRoot.Git)
+	}
+	if len(dossiersRoot.SeedSigners) != 1 || dossiersRoot.SeedSigners[0].Principal != "thane@provenance.local" {
+		t.Fatalf("generated dossiers seed signers = %#v", dossiersRoot.SeedSigners)
+	}
 	if cfg.Identity.SigningKey.Fingerprint != result.SigningKeyFingerprint {
 		t.Fatalf("signing fingerprint = %q, want %q", cfg.Identity.SigningKey.Fingerprint, result.SigningKeyFingerprint)
 	}

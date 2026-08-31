@@ -286,3 +286,19 @@ func TestContactsRootIsDerivedOnlyWhenDeclared(t *testing.T) {
 		t.Fatalf("contacts root = %q, want derived %q", got, want)
 	}
 }
+
+func TestDossiersRootIsDerivedOnlyWhenDeclared(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{Workspace: config.WorkspaceConfig{Path: workspace}}
+	if _, ok := documentRootPaths(cfg, nil)[config.DossiersRootName]; ok {
+		t.Fatal("dossiers root was registered without an explicit policy declaration")
+	}
+
+	cfg.DocRoots = map[string]config.DocumentRootConfig{
+		config.DossiersRootName: {Authoring: "managed"},
+	}
+	paths := documentRootPaths(cfg, nil)
+	if got, want := paths[config.DossiersRootName], filepath.Join(workspace, config.DossiersRootName); got != want {
+		t.Fatalf("dossiers root = %q, want derived %q", got, want)
+	}
+}
