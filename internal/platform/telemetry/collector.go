@@ -293,12 +293,14 @@ func (c *Collector) collectLoops(m *Metrics) {
 
 // collectRequests queries the log index for 24h request and error counts,
 // and computes approximate p50/p95 latencies from request durations.
+// The window anchors on the collector clock so tests can pin the
+// boundary-second behavior deterministically.
 func (c *Collector) collectRequests(ctx context.Context, m *Metrics) {
 	if c.src.LogsDB == nil {
 		return
 	}
 
-	now := time.Now().UTC()
+	now := c.clock().UTC()
 	// The log index's timestamp column compares lexicographically;
 	// logging.FormatTimestamp is its fixed-width shape. A seconds-only
 	// RFC3339 bound excluded every row in the boundary second (rows
