@@ -36,8 +36,15 @@ func validDossierCandidate(id uuid.UUID) documents.DocumentWriteCandidate {
 	}
 }
 
+func dossierValidatorForName(name string) documents.RootWriteValidator {
+	return NewDossierWriteValidator(func(uuid.UUID) (string, error) {
+		return name, nil
+	})
+}
+
 func TestValidateDossierWrite(t *testing.T) {
 	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
+	validator := dossierValidatorForName("Dossier Person")
 	tests := []struct {
 		name    string
 		mutate  func(*documents.DocumentWriteCandidate)
@@ -107,6 +114,28 @@ func TestValidateDossierWrite(t *testing.T) {
 			wantErr: "projection(s) [status_line] repeat the subject contact name",
 		},
 		{
+			name: "spoofed title cannot hide subject name",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Frontmatter["title"] = []string{"Someone Else"}
+				candidate.Body = strings.Replace(candidate.Body, "Relationship is current and steady.", "Dossier Person has a current and steady relationship.", 1)
+			},
+			wantErr: "projection(s) [status_line] repeat the subject contact name",
+		},
+		{
+			name: "missing canonical title",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				delete(candidate.Frontmatter, "title")
+			},
+			wantErr: `must carry exactly one title "Dossier Person"`,
+		},
+		{
+			name: "overridden canonical title",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Frontmatter["title"] = []string{"Someone Else"}
+			},
+			wantErr: `must carry exactly one title "Dossier Person"`,
+		},
+		{
 			name: "case-insensitive subject name in teaser",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "Recent conversations", "Recent conversations with dossier person", 1)
@@ -163,7 +192,7 @@ func TestValidateDossierWrite(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(&candidate)
 			}
-			err := ValidateDossierWrite(candidate)
+			err := validator(candidate)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("ValidateDossierWrite() error = %v, want nil", err)
@@ -294,6 +323,7 @@ func TestContainsFoldedPhraseUsesNameBoundaries(t *testing.T) {
 		{name: "case insensitive", text: "Working with ED's team.", phrase: "Ed", want: true},
 		{name: "not inside word", text: "Shared context is current.", phrase: "Ed", want: false},
 		{name: "unicode name", text: "ÉLODIE's preferences are current.", phrase: "Élodie", want: true},
+		{name: "unicode simple fold", text: "Working with ος.", phrase: "ΟΣ", want: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := containsFoldedPhrase(tt.text, tt.phrase); got != tt.want {
@@ -360,7 +390,7 @@ func TestValidateDossierWriteReportsFacetAndEvidenceViolationsTogether(t *testin
 		Full:       "Complete detail. — evidence: archive:session:019c52f0",
 	})
 
-	err := ValidateDossierWrite(candidate)
+	err := dossierValidatorForName("Dossier Person")(candidate)
 	if err == nil {
 		t.Fatal("ValidateDossierWrite() accepted invalid projections")
 	}
@@ -430,7 +460,7 @@ func TestWriteDossierOwnsDocumentIdentityAndStructure(t *testing.T) {
 	if got, want := writer.args.ReceiptScope, args.ReceiptScope; got != want {
 		t.Errorf("receipt scope = %q, want %q", got, want)
 	}
-	if err := ValidateDossierWrite(documents.DocumentWriteCandidate{
+	if err := dossierValidatorForName(contact.FormattedName)(documents.DocumentWriteCandidate{
 		Path:        strings.TrimPrefix(writer.args.Ref, DossierRootName+":"),
 		Tags:        writer.args.Tags,
 		Frontmatter: map[string][]string{"title": {writer.args.Title}},

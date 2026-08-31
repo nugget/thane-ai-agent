@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -142,9 +141,17 @@ func DossierSubject(id uuid.UUID) string {
 	return "contact:" + id.String()
 }
 
-// ValidateDossierWrite enforces the contact dossier path, subject tag, and
-// complete facet ladder before a managed document write can mutate the root.
-func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
+// NewDossierWriteValidator returns the root policy for canonical contact
+// dossiers. resolveContactName must read the active structured contact on every
+// invocation so contact renames take effect immediately and caller-controlled
+// frontmatter cannot spoof the identity used to validate compact projections.
+func NewDossierWriteValidator(resolveContactName func(uuid.UUID) (string, error)) documents.RootWriteValidator {
+	return func(candidate documents.DocumentWriteCandidate) error {
+		return validateDossierWrite(candidate, resolveContactName)
+	}
+}
+
+func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveContactName func(uuid.UUID) (string, error)) error {
 	id, err := dossierIDFromPath(candidate.Path)
 	if err != nil {
 		return err
@@ -153,6 +160,17 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	wantSubject := DossierSubject(id)
 	if len(candidate.Tags) != 1 || strings.TrimSpace(candidate.Tags[0]) != wantSubject {
 		return fmt.Errorf("dossier %s must carry exactly one frontmatter tag, %q, so no broader subject can advertise this private dossier; use contact_dossier_write to let Go derive dossier identity and structure", candidate.Path, wantSubject)
+	}
+	if resolveContactName == nil {
+		return fmt.Errorf("dossier %s cannot validate identity because the structured contact resolver is not configured", candidate.Path)
+	}
+	contactName, err := resolveContactName(id)
+	if err != nil {
+		return fmt.Errorf("dossier %s cannot resolve active structured contact %s: %w", candidate.Path, id, err)
+	}
+	contactName = strings.TrimSpace(contactName)
+	if contactName == "" {
+		return fmt.Errorf("dossier %s cannot validate identity because structured contact %s has no formatted name", candidate.Path, id)
 	}
 
 	payload, faceted := looppkg.ParseFacetSections(candidate.Body)
@@ -166,10 +184,11 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	if err := validateDossierSubjectIdentity(id, payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
 	}
-	if titles := candidate.Frontmatter["title"]; len(titles) > 0 {
-		if err := validateDossierSubjectName(titles[0], payload); err != nil {
-			validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
-		}
+	if titles := candidate.Frontmatter["title"]; len(titles) != 1 || strings.TrimSpace(titles[0]) != contactName {
+		validationErrs = append(validationErrs, fmt.Errorf("identity contract: dossier must carry exactly one title %q matching active structured contact %s; use contact_dossier_write to let Go derive it", contactName, id))
+	}
+	if err := validateDossierSubjectName(contactName, payload); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
 	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
@@ -242,41 +261,25 @@ func validateDossierSubjectName(name string, payload looppkg.FacetPayload) error
 }
 
 func containsFoldedPhrase(text, phrase string) bool {
-	text = strings.ToLower(text)
-	phrase = strings.ToLower(strings.TrimSpace(phrase))
+	phrase = strings.TrimSpace(phrase)
 	if phrase == "" {
 		return false
 	}
 
-	for offset := 0; offset <= len(text)-len(phrase); {
-		relative := strings.Index(text[offset:], phrase)
-		if relative < 0 {
-			return false
+	textRunes := []rune(text)
+	phraseRunes := []rune(phrase)
+	for start := 0; start+len(phraseRunes) <= len(textRunes); start++ {
+		end := start + len(phraseRunes)
+		if !strings.EqualFold(string(textRunes[start:end]), phrase) {
+			continue
 		}
-		start := offset + relative
-		end := start + len(phrase)
-		leftBoundary := start == 0 || !isDossierNameRune(lastRune(text[:start]))
-		rightBoundary := end == len(text) || !isDossierNameRune(firstRune(text[end:]))
+		leftBoundary := start == 0 || !isDossierNameRune(textRunes[start-1])
+		rightBoundary := end == len(textRunes) || !isDossierNameRune(textRunes[end])
 		if leftBoundary && rightBoundary {
 			return true
 		}
-		_, size := utf8.DecodeRuneInString(text[start:])
-		if size == 0 {
-			return false
-		}
-		offset = start + size
 	}
 	return false
-}
-
-func firstRune(value string) rune {
-	r, _ := utf8.DecodeRuneInString(value)
-	return r
-}
-
-func lastRune(value string) rune {
-	r, _ := utf8.DecodeLastRuneInString(value)
-	return r
 }
 
 func isDossierNameRune(r rune) bool {
