@@ -289,9 +289,14 @@ func TestContactsRootIsDerivedOnlyWhenDeclared(t *testing.T) {
 
 func TestDossiersRootIsDerivedOnlyWhenDeclared(t *testing.T) {
 	workspace := t.TempDir()
-	cfg := &config.Config{Workspace: config.WorkspaceConfig{Path: workspace}}
+	cfg := &config.Config{
+		Workspace: config.WorkspaceConfig{Path: workspace},
+		Paths: map[string]string{
+			config.DossiersRootName: "/legacy/private-dossiers",
+		},
+	}
 	if _, ok := documentRootPaths(cfg, nil)[config.DossiersRootName]; ok {
-		t.Fatal("dossiers root was registered without an explicit policy declaration")
+		t.Fatal("legacy dossiers path was registered without an explicit policy declaration")
 	}
 
 	cfg.DocRoots = map[string]config.DocumentRootConfig{

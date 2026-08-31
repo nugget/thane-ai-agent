@@ -239,14 +239,16 @@ workspace:
 # Typical names: kb (curated knowledge), generated (model-produced
 # durable outputs), and scratchpad (low-integrity work area). The core,
 # self, contacts, and dossiers names are reserved and derived from
-# workspace.path; declaring them under roots: sets policy, while any path
-# is ignored.
+# workspace.path; declaring them under roots: sets policy. Paths on core,
+# self, and contacts are ignored for compatibility; an explicit dossiers
+# path is rejected with its migration recipe.
 roots:
   generated:
     # Path is the directory the root resolves to. Supports ~ expansion at
-    # resolver construction time. For reserved derived roots (core, self,
-    # contacts, and dossiers) this is ignored; their paths come from
-    # workspace.path.
+    # resolver construction time. Reserved derived roots take their paths from
+    # workspace.path. Paths on core, self, and contacts are ignored for
+    # compatibility; an explicit dossiers path is rejected with its migration
+    # recipe.
     path: ./generated
     # Indexing controls whether markdown files in this root are
     # scanned into the document index. Omit to keep indexing enabled.
@@ -360,9 +362,10 @@ roots:
     seed_signers: []
   kb:
     # Path is the directory the root resolves to. Supports ~ expansion at
-    # resolver construction time. For reserved derived roots (core, self,
-    # contacts, and dossiers) this is ignored; their paths come from
-    # workspace.path.
+    # resolver construction time. Reserved derived roots take their paths from
+    # workspace.path. Paths on core, self, and contacts are ignored for
+    # compatibility; an explicit dossiers path is rejected with its migration
+    # recipe.
     path: ./knowledge
     # Indexing controls whether markdown files in this root are
     # scanned into the document index. Omit to keep indexing enabled.
@@ -549,9 +552,10 @@ roots:
         valid_before: ""
   scratchpad:
     # Path is the directory the root resolves to. Supports ~ expansion at
-    # resolver construction time. For reserved derived roots (core, self,
-    # contacts, and dossiers) this is ignored; their paths come from
-    # workspace.path.
+    # resolver construction time. Reserved derived roots take their paths from
+    # workspace.path. Paths on core, self, and contacts are ignored for
+    # compatibility; an explicit dossiers path is rejected with its migration
+    # recipe.
     path: ./scratchpad
     # Indexing controls whether markdown files in this root are
     # scanned into the document index. Omit to keep indexing enabled.

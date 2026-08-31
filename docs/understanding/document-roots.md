@@ -460,9 +460,12 @@ policy in one subsystem.
 
 Four root names are reserved: `core`, `self`, `contacts`, and `dossiers`. Their
 paths come from the workspace, and none takes a path from `roots:`. You may name
-them there to set policy; a path given alongside policy is ignored. `core` and
-`self` are always registered. `contacts` and `dossiers` are opt-in and are
-registered only when their policy is declared.
+them there to set policy. Paths on `core`, `self`, and `contacts` are ignored
+for compatibility. An explicit `dossiers` path is rejected with instructions
+to move or clone the corpus to `{workspace}/dossiers`, preventing an upgrade
+from silently redirecting an existing custom root. `core` and `self` are always
+registered. `contacts` and `dossiers` are opt-in and are registered only when
+their policy is declared.
 
 `core` and `self` are separate roots because they answer to different
 authorities, and that difference is the whole point of their split.

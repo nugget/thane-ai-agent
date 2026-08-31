@@ -279,6 +279,10 @@ roots:
       signing_key: ~/.ssh/id_ed25519
   dossiers:
     authoring: managed
+    seed_signers:
+      - principal: thane@provenance.local
+        key: "ssh-ed25519 AAAA..." # public half of git.signing_key
+        label: agent
     git:
       enabled: true
       sign_commits: true
@@ -304,7 +308,9 @@ roots:
 `core`, `self`, `contacts`, and `dossiers` are reserved roots whose paths
 are derived from `workspace.path`. Declare `contacts` or `dossiers` with policy
 to enable it, but do not give either a path. They resolve to
-`{workspace}/contacts` and `{workspace}/dossiers` respectively.
+`{workspace}/contacts` and `{workspace}/dossiers` respectively. An explicit
+`dossiers` path is rejected with a migration recipe instead of being silently
+discarded.
 
 > **Deprecated:** the older `paths:` / `doc_roots:` split — one block to
 > name the path, a second to attach policy — is still parsed but emits a

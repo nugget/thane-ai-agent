@@ -1623,6 +1623,55 @@ func TestNormalizeRoots_DossiersReservedAcceptsPolicyOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeRoots_DossiersPathRequiresMigration(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		entry RootEntry
+	}{
+		{name: "path only", entry: RootEntry{Path: "/legacy/private-dossiers"}},
+		{name: "path and policy", entry: RootEntry{Path: "/legacy/private-dossiers", Authoring: "managed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Roots: map[string]RootEntry{
+					DossiersRootName: tc.entry,
+				},
+			}
+			err := cfg.normalizeRoots()
+			if err == nil {
+				t.Fatal("normalizeRoots should reject an explicit dossiers path")
+			}
+			for _, want := range []string{"roots.dossiers.path", "/legacy/private-dossiers", "{workspace.path}/dossiers", "remove the explicit path"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want migration detail %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeRoots_LegacyDossiersPathRequiresMigration(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Paths: map[string]string{
+			DossiersRootName: "/legacy/private-dossiers",
+		},
+		DocRoots: map[string]DocumentRootConfig{
+			DossiersRootName: {Authoring: "managed"},
+		},
+	}
+	err := cfg.normalizeRoots()
+	if err == nil {
+		t.Fatal("normalizeRoots should reject a legacy dossiers path")
+	}
+	for _, want := range []string{"paths.dossiers", "/legacy/private-dossiers", "{workspace.path}/dossiers", "roots.dossiers"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want migration detail %q", err, want)
+		}
+	}
+}
+
 // --- Ego loop validation ---
 
 // egoBaseConfig returns a Config with the ego loop enabled and a workspace

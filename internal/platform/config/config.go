@@ -280,8 +280,9 @@ type Config struct {
 	// Typical names: kb (curated knowledge), generated (model-produced
 	// durable outputs), and scratchpad (low-integrity work area). The core,
 	// self, contacts, and dossiers names are reserved and derived from
-	// workspace.path; declaring them under roots: sets policy, while any path
-	// is ignored.
+	// workspace.path; declaring them under roots: sets policy. Paths on core,
+	// self, and contacts are ignored for compatibility; an explicit dossiers
+	// path is rejected with its migration recipe.
 	Roots map[string]RootEntry `yaml:"roots,omitempty"`
 
 	// Paths is the legacy directory-mapping block. Replaced by roots:.
@@ -1009,9 +1010,10 @@ type AllowedSigner struct {
 // mapping with explicit path: and policy fields.
 type RootEntry struct {
 	// Path is the directory the root resolves to. Supports ~ expansion at
-	// resolver construction time. For reserved derived roots (core, self,
-	// contacts, and dossiers) this is ignored; their paths come from
-	// workspace.path.
+	// resolver construction time. Reserved derived roots take their paths from
+	// workspace.path. Paths on core, self, and contacts are ignored for
+	// compatibility; an explicit dossiers path is rejected with its migration
+	// recipe.
 	Path string `yaml:"path"`
 
 	// Indexing controls whether markdown files in this root are
@@ -2800,9 +2802,13 @@ func (c *Config) normalizeRoots() error {
 			}
 			seen[trimmed] = name
 			pathValue := strings.TrimSpace(entry.Path)
-			// Derived roots are reserved — their paths are always
-			// derived from workspace.path. Allow declaring either in
-			// roots: solely to set policy; ignore any path provided.
+			if trimmed == DossiersRootName && pathValue != "" {
+				return dossiersPathMigrationError("roots.dossiers.path", entry.Path)
+			}
+			// Derived roots are reserved — their paths are always derived
+			// from workspace.path. Dossiers rejects an explicit path above so
+			// upgrades cannot silently redirect a prior custom root. The older
+			// derived roots retain their path-ignoring compatibility behavior.
 			if IsDerivedRootName(trimmed) {
 				if pathValue != "" && !entryHasPolicy(entry) {
 					slog.Default().Warn("config: derived root path is ignored (it comes from workspace.path); declare this root only when setting policy",
@@ -2831,9 +2837,18 @@ func (c *Config) normalizeRoots() error {
 	}
 
 	if len(c.Paths) > 0 || len(c.DocRoots) > 0 {
+		for name, path := range c.Paths {
+			if strings.TrimSuffix(strings.TrimSpace(name), ":") == DossiersRootName && strings.TrimSpace(path) != "" {
+				return dossiersPathMigrationError("paths.dossiers", path)
+			}
+		}
 		slog.Default().Warn("config: paths: and doc_roots: are deprecated in favor of the unified roots: block; see docs/understanding/document-roots.md for the new shape")
 	}
 	return nil
+}
+
+func dossiersPathMigrationError(field, configuredPath string) error {
+	return fmt.Errorf("config: %s %q is no longer accepted because dossiers is now a workspace-derived root: move or clone that corpus to {workspace.path}/dossiers, remove the explicit path, and retain its policy under roots.dossiers", field, configuredPath)
 }
 
 // entryHasPolicy reports whether a root entry has any policy fields

@@ -82,14 +82,7 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 		{config.ContactsRootName, cfg.ContactsRoot()},
 		{config.DossiersRootName, cfg.DossiersRoot()},
 	} {
-		if (derivedRoot.name == config.ContactsRootName || derivedRoot.name == config.DossiersRootName) &&
-			!declaresDocumentRoot(cfg.DocRoots, derivedRoot.name) {
-			continue
-		}
 		rootName, derived := derivedRoot.name, derivedRoot.path
-		if derived == "" {
-			continue
-		}
 		for name, path := range out {
 			if strings.TrimSuffix(name, ":") != rootName {
 				continue
@@ -103,6 +96,13 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 				)
 			}
 			delete(out, name)
+		}
+		if (derivedRoot.name == config.ContactsRootName || derivedRoot.name == config.DossiersRootName) &&
+			!declaresDocumentRoot(cfg.DocRoots, derivedRoot.name) {
+			continue
+		}
+		if derived == "" {
+			continue
 		}
 		out[rootName] = derived
 	}
