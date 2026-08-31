@@ -150,9 +150,9 @@ func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
 
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
-		StatusLine: "Current.",
-		Teaser:     "Useful hook.",
-		Digest:     "Enough context to act.",
+		StatusLine: "Current. — evidence: archive:session:019c1111",
+		Teaser:     "Useful hook. — evidence: archive:session:019c2222",
+		Digest:     "Enough context to act. — evidence: archive:session:019c3333",
 		Full: "Two claims. — evidence: archive:session:019c52f0\n" +
 			"Another claim. — evidence: archive:session:01a056ae\n" +
 			"Repeated first claim. — evidence: archive:session:019c52f0",
@@ -162,8 +162,11 @@ func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"correct every listed field",
-		"archive:session:019c52f0",
-		"archive:session:01a056ae",
+		"status_line=archive:session:019c1111",
+		"teaser=archive:session:019c2222",
+		"digest=archive:session:019c3333",
+		"full=archive:session:019c52f0",
+		"full=archive:session:01a056ae",
 		"archive:session:<full-session-uuid>",
 		"short prefixes can be ambiguous",
 	} {
@@ -176,6 +179,33 @@ func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
 	}
 	if writer.calls != 0 {
 		t.Fatalf("ambiguous citations reached writer %d times", writer.calls)
+	}
+}
+
+func TestValidateDossierWriteReportsFacetAndEvidenceViolationsTogether(t *testing.T) {
+	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
+	candidate := validDossierCandidate(id)
+	candidate.Body = dossierOutputContract.RenderFacetDocument(looppkg.FacetPayload{
+		StatusLine: strings.Repeat("s", 121),
+		Teaser:     "Useful hook.",
+		Digest:     "Enough context to act.",
+		Full:       "Complete detail. — evidence: archive:session:019c52f0",
+	})
+
+	err := ValidateDossierWrite(candidate)
+	if err == nil {
+		t.Fatal("ValidateDossierWrite() accepted invalid projections")
+	}
+	for _, want := range []string{
+		"correct every listed field",
+		"facet contract",
+		"status_line is 121 characters",
+		"evidence contract",
+		"full=archive:session:019c52f0",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ValidateDossierWrite() error = %v, want it to mention %q", err, want)
+		}
 	}
 }
 
