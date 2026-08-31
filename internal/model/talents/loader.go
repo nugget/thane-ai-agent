@@ -157,9 +157,11 @@ func noteSkippedDeclared(ctx context.Context, path string) {
 }
 
 // fileDeclaresIgnore reports whether blocks mark the whole file as
-// deliberately not-a-talent. Only a lone ignore node qualifies; ignore
-// beside real guidance nodes is an authoring error, because honoring it
-// would silently drop the guidance and refusing it names the mistake.
+// deliberately not-a-talent. Only a lone node declaring nothing but
+// ignore: true qualifies; ignore beside real guidance — other nodes,
+// or other keys in the same node — is an authoring error, because
+// honoring it would silently drop the guidance and refusing it names
+// the mistake.
 func fileDeclaresIgnore(blocks []Block, path string) (bool, error) {
 	ignored := false
 	for _, block := range blocks {
@@ -173,6 +175,11 @@ func fileDeclaresIgnore(blocks []Block, path string) (bool, error) {
 	}
 	if len(blocks) > 1 {
 		return false, fmt.Errorf("talent %s: ignore: true marks a whole file, but this file has %d frontmatter nodes; split the non-talent prose into its own file", path, len(blocks))
+	}
+	fm := blocks[0].Frontmatter
+	if fm.Name != "" || len(fm.Tags) > 0 || len(fm.TagsAll) > 0 ||
+		fm.Kind != "" || fm.Teaser != "" || len(fm.NextTags) > 0 || fm.Audience != "" {
+		return false, fmt.Errorf("talent %s: ignore: true must be the only frontmatter key, but this file also declares talent metadata; remove the other keys or remove ignore — a file carrying both looks like guidance, and skipping it would drop that guidance silently", path)
 	}
 	return true, nil
 }

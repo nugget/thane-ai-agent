@@ -1189,3 +1189,19 @@ func TestRepoREADMEDeclaresIgnore(t *testing.T) {
 		t.Fatal("talents/README.md must declare ignore: true so deployments skip it quietly")
 	}
 }
+
+// TestTalentsIgnoreMustStandAlone: ignore beside other frontmatter keys
+// in the same node looks like guidance, and skipping it would drop that
+// guidance silently — so the loader refuses it.
+func TestTalentsIgnoreMustStandAlone(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "confused.md", "---\nignore: true\ntags: ["+TagAlways+"]\n---\n# Confused\nGuidance or not?")
+
+	_, err := NewLoader(dir).Talents()
+	if err == nil {
+		t.Fatal("want error for ignore beside other frontmatter keys, got nil")
+	}
+	if !strings.Contains(err.Error(), "must be the only frontmatter key") {
+		t.Fatalf("error %q does not name the stand-alone rule", err)
+	}
+}

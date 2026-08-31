@@ -25,10 +25,11 @@ loader also names it once at boot, because a silent skip is exactly what a
 talent stripped of its frontmatter would look like. A file that is
 *deliberately* not a talent says so instead: open it with a frontmatter block
 declaring only `ignore: true` — that is how this README sits here quietly —
-and the loader skips it without comment. `ignore:` marks whole files only;
-the loader refuses a file that mixes an ignore node with real guidance nodes,
-because honoring it would drop that guidance silently. The filename plays no
-part in any of this.
+and the loader skips it without the boot notice (a single Debug line is all
+that remains). `ignore:` must stand alone and marks whole files only: the
+loader refuses a file that pairs it with other frontmatter keys or with real
+guidance nodes, because honoring either would drop that guidance silently.
+The filename plays no part in any of this.
 
 A file that does declare frontmatter must declare `tags:`, and the loader
 refuses one that does not. Silence is not a shorthand for "every turn": an
