@@ -110,6 +110,11 @@ func (a *App) initServers(s *newState) error {
 	})
 	a.server = server
 
+	// Billing transitions wake the core loop once per edge; wired here
+	// because initServers runs after the message bus, loop registry, and
+	// model runtime all exist.
+	a.wireProviderBillingAttention()
+
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,
 	// scheduled tasks) to enable crash recovery. Also creates a snapshot

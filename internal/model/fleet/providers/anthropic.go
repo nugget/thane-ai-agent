@@ -32,6 +32,12 @@ type AnthropicClient struct {
 
 	rateLimitMu       sync.Mutex
 	rateLimitSnapshot *RateLimitSnapshot
+
+	// billing holds the account's billing-blocked state (#1472); see
+	// anthropic_billing.go. Provider-scoped on purpose: the client is
+	// a retained singleton shared across every anthropic-backed
+	// resource, so one discovery serves them all.
+	billing anthropicBilling
 }
 
 // RateLimitSnapshot is the most recent set of rate-limit headers returned by
@@ -329,6 +335,14 @@ func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []llm
 
 // ChatStream sends a chat request, optionally streaming tokens via callback.
 func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
+	// A billing-blocked account fails fast without an HTTP round-trip
+	// (one probe per interval keeps recovery detection alive): the
+	// operator has been told once, and every retry between probes
+	// would learn nothing at the cost of a real request.
+	if err := c.billingFastFail(); err != nil {
+		return nil, err
+	}
+
 	stream := callback != nil
 
 	// Convert messages and extract system prompt
@@ -403,13 +417,37 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		apiErr := &llm.APIError{Provider: "anthropic", StatusCode: resp.StatusCode, Body: errBody}
+		// A credit-balance 400 is account state, not a request fault:
+		// one WARN on the transition edge, Debug for the probes that
+		// find it unchanged, and the typed error carries the
+		// classification downstream so loops stop failing over into
+		// the same wall.
+		if anthropicBillingBody(resp.StatusCode, errBody) {
+			apiErr.Billing = true
+			if c.noteBillingRefusal(errBody) {
+				log.Warn("anthropic account billing-blocked; failing fast until it clears",
+					"body", errBody,
+					"upstream_request_id", upstreamRequestID,
+				)
+			} else {
+				log.Debug("anthropic billing probe still blocked",
+					"upstream_request_id", upstreamRequestID,
+				)
+			}
+			return nil, apiErr
+		}
 		log.Error("API error",
 			"status", resp.StatusCode,
 			"body", errBody,
 			"upstream_request_id", upstreamRequestID,
 			"elapsed_ms", time.Since(started).Milliseconds(),
 		)
-		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, errBody)
+		return nil, apiErr
+	}
+
+	if c.clearBillingBlocked() {
+		log.Info("anthropic account billing restored")
 	}
 
 	if !stream {
@@ -512,7 +550,19 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 		return fmt.Errorf("invalid API key")
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		// Ping doubles as the active billing probe: a probe that finds
+		// the wall re-arms the standing state (no new edge), and a
+		// clean response below fires recovery — this is what keeps
+		// recovery detection traffic-independent while every loop is
+		// backed off.
+		body := httpkit.ReadErrorBody(httpResp.Body, 4096)
+		if anthropicBillingBody(httpResp.StatusCode, body) {
+			c.noteBillingRefusal(body)
+		}
 		return fmt.Errorf("unexpected status from Anthropic API: %d", httpResp.StatusCode)
+	}
+	if c.clearBillingBlocked() {
+		c.logger.Info("anthropic account billing restored")
 	}
 	return nil
 }

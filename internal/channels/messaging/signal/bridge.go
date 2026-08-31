@@ -1157,7 +1157,14 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		log = log.With("request_id", resp.RequestID)
 	}
 	if err != nil {
-		log.Error("signal agent run failed", "error", err)
+		// Billing-blocked is a standing provider state announced on its
+		// own edge — per-message rediscovery here is Debug, not another
+		// ERROR (the audited outage logged 75 of these for one cause).
+		if llm.IsBillingBlocked(err) {
+			log.Debug("signal agent run blocked by provider billing state", "error", err)
+		} else {
+			log.Error("signal agent run failed", "error", err)
+		}
 		return resp, err
 	}
 	if strings.TrimSpace(resp.Content) == "" && req.FallbackContent != "" {

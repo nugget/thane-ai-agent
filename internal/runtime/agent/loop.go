@@ -2693,7 +2693,18 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
 			return nil, "", cancelErr
 		}
-		iterLog.Error("LLM call failed", "error", err, "model", model)
+		// A billing-blocked provider is a standing state the provider
+		// already announced on its transition edge; each iteration's
+		// rediscovery is Debug, not another ERROR. Failover deliberately
+		// stays in play: the router default may be a different provider
+		// entirely (a healthy local model keeps the loop working through
+		// the outage), and against the same blocked provider the attempt
+		// fails fast without an HTTP round-trip.
+		if llm.IsBillingBlocked(err) {
+			iterLog.Debug("LLM call blocked by provider billing state", "error", err, "model", model)
+		} else {
+			iterLog.Error("LLM call failed", "error", err, "model", model)
+		}
 
 		if isTimeout(err) {
 			// Timeout recovery: retry same model with exponential backoff.
@@ -2830,7 +2841,14 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			}
 			resp, failErr := l.llm.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
 			if failErr != nil {
-				iterLog.Error("failover also failed", "error", failErr, "model", fallbackModel)
+				// Same demotion as above: a failover that ran into the
+				// standing billing wall did so instantly and learned
+				// nothing new.
+				if llm.IsBillingBlocked(failErr) {
+					iterLog.Debug("failover blocked by provider billing state", "error", failErr, "model", fallbackModel)
+				} else {
+					iterLog.Error("failover also failed", "error", failErr, "model", fallbackModel)
+				}
 				return nil, "", failErr
 			}
 			iterLog.Info("failover successful", "model", fallbackModel)
@@ -2988,6 +3006,29 @@ func canceledContextError(err error, contexts ...context.Context) error {
 func isUserFixableModelError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// Typed classification first: providers that wrap llm.APIError
+	// carry the status as structure. The string fallback below only
+	// ever matched the bare "API error " prefix, which Anthropic's
+	// "anthropic API error 400: …" never did — so Anthropic 4xxs
+	// (billing 400s included) wrongly entered failover on every
+	// iteration and produced the failover-also-failed pair. Unlike the
+	// legacy branch's blanket 4xx, the typed branch exempts the two
+	// transient 4xxs: a 429 (rate limit) and 408 (timeout) are exactly
+	// the cases where trying another resource can genuinely help.
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		// Billing is operator-fixable, not user-fixable: no prompt
+		// change helps, and failover must stay available because the
+		// router default may be another provider entirely.
+		if apiErr.Billing {
+			return false
+		}
+		switch apiErr.StatusCode {
+		case 408, 429:
+			return false
+		}
+		return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 	}
 	msg := strings.TrimSpace(err.Error())
 	if !strings.HasPrefix(msg, "API error ") {
