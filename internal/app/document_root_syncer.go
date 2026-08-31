@@ -301,10 +301,17 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 // syncLogCoalesceAfter, instead of narrating one identical WARN per
 // pass; the passes in between log at Debug so the forensic record stays
 // complete.
+//
+// The mutex is held across the gate transition AND its emission (here
+// and in logOutcome): released in between, a concurrent pass could
+// reset the gate and narrate recovery before this pass narrates its
+// failure, leaving the log stream showing a failure newer than the
+// recovery while the gate reads clear. Contention is one pass per
+// interval per root, so narrating under the lock costs nothing.
 func (s *docRootSyncer) logFailure(err error, detail string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	n, warn := s.failGate.admit(s.clock(), detail)
-	s.mu.Unlock()
 	if warn {
 		s.logger.Warn("document root sync failed",
 			"root", s.root, "error", err, "consecutive_failures", n)
@@ -319,19 +326,19 @@ func (s *docRootSyncer) logFailure(err error, detail string) {
 // steady clean pass demoted to Debug — one Info per interval per root
 // narrating "nothing changed" is what buried the warns that mattered.
 func (s *docRootSyncer) logOutcome(res checkout.SyncResult) {
+	// One lock span for the whole transition — gate mutations and their
+	// narration stay ordered against a concurrent pass (see logFailure).
 	s.mu.Lock()
-	recovered := s.failGate.reset()
-	s.mu.Unlock()
-	if recovered > 0 {
+	defer s.mu.Unlock()
+
+	if recovered := s.failGate.reset(); recovered > 0 {
 		s.logger.Info("document root sync recovered",
 			"root", s.root, "outcome", res.Outcome, "failed_passes", recovered)
 	}
 
 	switch res.Outcome {
 	case checkout.SyncBlocked, checkout.SyncDiverged, checkout.SyncRemoteBehind:
-		s.mu.Lock()
 		n, warn := s.attentionGate.admit(s.clock(), string(res.Outcome)+": "+res.Detail)
-		s.mu.Unlock()
 		if warn {
 			s.logger.Warn("document root sync needs attention",
 				"root", s.root, "outcome", res.Outcome, "detail", res.Detail,
@@ -342,10 +349,7 @@ func (s *docRootSyncer) logOutcome(res checkout.SyncResult) {
 				"consecutive_passes", n)
 		}
 	default:
-		s.mu.Lock()
-		cleared := s.attentionGate.reset()
-		s.mu.Unlock()
-		if cleared > 0 {
+		if cleared := s.attentionGate.reset(); cleared > 0 {
 			s.logger.Info("document root sync attention cleared",
 				"root", s.root, "outcome", res.Outcome, "attention_passes", cleared)
 		}
