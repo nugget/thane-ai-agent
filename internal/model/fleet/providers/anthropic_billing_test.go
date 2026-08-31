@@ -103,10 +103,18 @@ func TestAnthropicBillingLifecycle(t *testing.T) {
 		t.Fatalf("HTTP calls after fast-fail window = %d, want still 1", rt.calls)
 	}
 
-	// 3. Snapshot reports the standing state.
+	// 3. Snapshot reports the standing state, carrying the extracted
+	// upstream sentence — operators read this in the annunciator and
+	// the core wake, and a raw JSON blob is not a sentence.
 	snap := c.BillingSnapshot()
 	if snap == nil || !snap.Blocked || !strings.Contains(snap.Detail, "credit balance") {
 		t.Fatalf("BillingSnapshot = %+v, want blocked with detail", snap)
+	}
+	if strings.Contains(snap.Detail, "{") {
+		t.Fatalf("snapshot detail is raw JSON, want the extracted sentence: %q", snap.Detail)
+	}
+	if len(edges) != 1 || strings.Contains(edges[0].detail, "{") {
+		t.Fatalf("hook detail should be the extracted sentence: %+v", edges)
 	}
 
 	// 4. Once the probe window lapses, the next call goes through,
@@ -178,6 +186,25 @@ func TestAnthropicBillingBodyClassification(t *testing.T) {
 	for _, tt := range tests {
 		if got := anthropicBillingBody(tt.status, tt.body); got != tt.want {
 			t.Errorf("%s: anthropicBillingBody = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestAnthropicErrorMessageExtraction: the envelope yields its
+// sentence; unfamiliar shapes fall back to the raw (trimmed) body.
+func TestAnthropicErrorMessageExtraction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, body, want string
+	}{
+		{"envelope", billingRefusalBody, "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},
+		{"plain text", "  credit balance too low  ", "credit balance too low"},
+		{"json without message", `{"error":{}}`, `{"error":{}}`},
+	}
+	for _, tt := range tests {
+		if got := anthropicErrorMessage(tt.body); got != tt.want {
+			t.Errorf("%s: anthropicErrorMessage = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

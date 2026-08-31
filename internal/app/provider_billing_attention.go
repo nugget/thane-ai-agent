@@ -15,24 +15,55 @@ const providerBillingTransitionKind = "provider_billing_transition"
 
 // wireProviderBillingAttention registers the billing transition hook so
 // the edge into (and out of) a billing-blocked provider wakes the core
-// loop exactly once — the push half of #1472, beside the annunciator
-// row's pull half. The hook runs on the provider's request path, so the
-// wake happens on a detached goroutine with its own bound.
+// loop exactly once per edge — the push half of #1472, beside the
+// annunciator row's pull half. Edges flow through one buffered queue
+// drained by a single worker: the provider invokes the hook under its
+// own lock (edge order preserved), the hook only enqueues (the request
+// path never blocks), and the worker delivers wakes in order — a
+// per-edge goroutine could deliver a recovery before the block it
+// recovers from and leave core acting on a stale story.
 func (a *App) wireProviderBillingAttention() {
 	if a == nil || a.modelRuntime == nil || a.messageBus == nil || a.loopRegistry == nil {
 		return
 	}
+	type billingEdge struct {
+		blocked bool
+		detail  string
+	}
+	edges := make(chan billingEdge, 8)
 	registry, bus, logger := a.loopRegistry, a.messageBus, a.logger
-	a.modelRuntime.SetAnthropicBillingHook(func(blocked bool, detail string) {
+
+	a.deferWorker("provider-billing-attention", func(ctx context.Context) error {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			wake := providerBillingWake("anthropic", blocked, detail)
-			if _, err := looppkg.WakeCoreLoop(ctx, registry, bus, wake); err != nil {
-				logger.Warn("provider billing attention wake failed",
-					"provider", "anthropic", "blocked", blocked, "error", err)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case e := <-edges:
+					wakeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+					wake := providerBillingWake("anthropic", e.blocked, e.detail)
+					if _, err := looppkg.WakeCoreLoop(wakeCtx, registry, bus, wake); err != nil {
+						logger.Warn("provider billing attention wake failed",
+							"provider", "anthropic", "blocked", e.blocked, "error", err)
+					}
+					cancel()
+				}
 			}
 		}()
+		return nil
+	})
+
+	a.modelRuntime.SetAnthropicBillingHook(func(blocked bool, detail string) {
+		select {
+		case edges <- billingEdge{blocked: blocked, detail: detail}:
+		default:
+			// Never block the provider's request path. A full queue
+			// means eight undelivered edges — the health lamp still
+			// carries the standing truth, so losing the wake degrades
+			// to pull-only visibility, loudly.
+			logger.Warn("provider billing edge dropped; attention queue full",
+				"provider", "anthropic", "blocked", blocked)
+		}
 	})
 }
 

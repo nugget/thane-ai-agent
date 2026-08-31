@@ -34,6 +34,11 @@ func TestIsUserFixableModelError(t *testing.T) {
 			false,
 		},
 		{
+			"typed 408 is not user-fixable",
+			&llm.APIError{Provider: "anthropic", StatusCode: 408, Body: "request timeout"},
+			false,
+		},
+		{
 			"typed 500 is not user-fixable",
 			&llm.APIError{Provider: "anthropic", StatusCode: 500, Body: "internal"},
 			false,

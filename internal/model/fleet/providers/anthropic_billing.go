@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -44,10 +45,11 @@ type anthropicBilling struct {
 }
 
 // SetBillingTransitionHook registers fn to be called on billing-state
-// edges (blocked=true on entry, false on recovery). Called at most once
-// per edge, synchronously from the request path — the hook must be
-// quick and must not call back into the client; spawn a goroutine for
-// real work.
+// edges (blocked=true on entry, false on recovery). It is invoked under
+// the client's internal lock so edges are delivered in the order they
+// were decided — a recovery can never be observed before the block it
+// recovers from. The hook therefore must be non-blocking and must not
+// call back into the client; hand real work to a queue.
 func (c *AnthropicClient) SetBillingTransitionHook(fn func(blocked bool, detail string)) {
 	if c == nil {
 		return
@@ -55,6 +57,25 @@ func (c *AnthropicClient) SetBillingTransitionHook(fn func(blocked bool, detail 
 	c.billing.mu.Lock()
 	c.billing.hook = fn
 	c.billing.mu.Unlock()
+}
+
+// anthropicErrorMessage extracts the human sentence from Anthropic's
+// error envelope ({"type":"error","error":{"message":…}}), falling back
+// to the raw body when the shape is unfamiliar. The raw body stays on
+// APIError for byte-identical error text; the extracted sentence is
+// what operators read in the annunciator and the core wake.
+func anthropicErrorMessage(body string) string {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &envelope); err == nil {
+		if msg := strings.TrimSpace(envelope.Error.Message); msg != "" {
+			return msg
+		}
+	}
+	return strings.TrimSpace(body)
 }
 
 // BillingSnapshot returns the current billing-blocked state, or nil
@@ -91,28 +112,31 @@ func (c *AnthropicClient) billingFastFail() error {
 
 // noteBillingRefusal records a billing 400 and reports whether this is
 // the transition edge into the blocked state. The hook fires on the
-// edge only.
+// edge only, under the lock, so edge delivery order matches edge
+// decision order.
 func (c *AnthropicClient) noteBillingRefusal(body string) bool {
+	detail := anthropicErrorMessage(body)
 	c.billing.mu.Lock()
+	defer c.billing.mu.Unlock()
 	transition := !c.billing.blocked
 	if transition {
 		c.billing.blocked = true
 		c.billing.since = time.Now()
 	}
-	c.billing.detail = body
+	c.billing.detail = detail
 	c.billing.retryAt = time.Now().Add(billingProbeInterval)
-	hook := c.billing.hook
-	c.billing.mu.Unlock()
-	if transition && hook != nil {
-		hook(true, body)
+	if transition && c.billing.hook != nil {
+		c.billing.hook(true, detail)
 	}
 	return transition
 }
 
 // clearBillingBlocked clears the state on a successful response and
-// reports whether this is the recovery edge.
+// reports whether this is the recovery edge. Hook ordering as in
+// noteBillingRefusal.
 func (c *AnthropicClient) clearBillingBlocked() bool {
 	c.billing.mu.Lock()
+	defer c.billing.mu.Unlock()
 	transition := c.billing.blocked
 	detail := c.billing.detail
 	if transition {
@@ -121,10 +145,8 @@ func (c *AnthropicClient) clearBillingBlocked() bool {
 		c.billing.detail = ""
 		c.billing.retryAt = time.Time{}
 	}
-	hook := c.billing.hook
-	c.billing.mu.Unlock()
-	if transition && hook != nil {
-		hook(false, detail)
+	if transition && c.billing.hook != nil {
+		c.billing.hook(false, detail)
 	}
 	return transition
 }
