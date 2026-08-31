@@ -315,6 +315,14 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		return nil, err
 	}
 	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
+		// Same reasoning-only diagnosis as the streaming path: no
+		// answer to return either way, but "the model thought and
+		// never answered" reads very differently from "the model said
+		// nothing". Sizes only; reasoning text stays out of logs.
+		if r := wire.Choices[0].Message.reasoningText(); r != "" {
+			return nil, fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, wire.Model, len(r), result.StopReason)
+		}
 		return nil, fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
 	}
 	return result, nil

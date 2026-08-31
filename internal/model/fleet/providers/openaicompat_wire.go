@@ -180,12 +180,48 @@ type openAICompatMessageResponse struct {
 	Role      string                      `json:"role,omitempty"`
 	Content   any                         `json:"content,omitempty"`
 	ToolCalls []openAICompatToolCallDelta `json:"tool_calls,omitempty"`
+	// The thinking channel of reasoning models, separate from content.
+	// Runners disagree on the key: Ollama emits "reasoning",
+	// DeepSeek-style servers emit "reasoning_content". Decoded so a
+	// reasoning-only completion can be told apart from an empty one —
+	// undecoded, a gpt-oss answer that died mid-think reported as
+	// "empty" with hundreds of frames.
+	Reasoning        string `json:"reasoning,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+}
+
+// reasoningText returns whichever reasoning-channel key the server
+// populated ("" when neither).
+func (m *openAICompatMessageResponse) reasoningText() string {
+	if m == nil {
+		return ""
+	}
+	if m.Reasoning != "" {
+		return m.Reasoning
+	}
+	return m.ReasoningContent
 }
 
 type openAICompatChatDelta struct {
 	Role      string                      `json:"role,omitempty"`
 	Content   string                      `json:"content,omitempty"`
 	ToolCalls []openAICompatToolCallDelta `json:"tool_calls,omitempty"`
+	// See openAICompatMessageResponse: the same two spellings of the
+	// thinking channel, delivered incrementally.
+	Reasoning        string `json:"reasoning,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+}
+
+// reasoningText returns whichever reasoning-channel key this delta
+// carries ("" when neither).
+func (d *openAICompatChatDelta) reasoningText() string {
+	if d == nil {
+		return ""
+	}
+	if d.Reasoning != "" {
+		return d.Reasoning
+	}
+	return d.ReasoningContent
 }
 
 type openAICompatToolCallDelta struct {
