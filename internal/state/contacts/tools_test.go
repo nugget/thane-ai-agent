@@ -739,12 +739,13 @@ func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
 	}
 
 	tools.ConfigureDossierRoot(true, true)
+	tools.ConfigureDossierDocuments((&recordingDossierWriter{}).Write)
 	writable, err := tools.LookupContact(`{"name":"Dossier Person"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(writable, "if absent, create") {
-		t.Fatalf("managed dossier trailhead omitted creation: %s", writable)
+	if !strings.Contains(writable, "create or replace with contact_dossier_write") {
+		t.Fatalf("managed dossier trailhead omitted the structured write door: %s", writable)
 	}
 }
 

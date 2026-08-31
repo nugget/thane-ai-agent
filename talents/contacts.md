@@ -25,16 +25,18 @@ often reaches for one when the right answer is another:
 
 | You want to store / find... | Surface |
 |---|---|
-| "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`contact_save` with `facts` or `note`) — this leaf |
+| "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`contact_save` with `facts` or `note`) — structured person data |
+| "How Frank and I work together" / evolving preferences, themes, or relationship synthesis | `contacts` (`contact_dossier_write`) — longitudinal dossier prose |
 | "Who operates this host" | `contacts` (`contact_owner`) — this leaf |
 | "Sump pump runs Tuesdays" / "Garage door takes 23s to close" — stable, compact, *non-person* facts | `memory` (`remember_fact`) — see [`memory.md`](memory.md) |
 | "The VLAN renumber plan landed on 2026-04-22" / a project decision / design rationale | `documents` (`kb:`, `core:`) or workspace files — NOT memory, NOT contacts |
 | "What did Frank and I last discuss" | `archive_text` scoped to the conversation — the words live there, not in the contact record |
 
-A contact carries *person* identity. If the same fact would belong on
-*any* person record (e.g., "we use semantic commit messages"), it
-isn't a contact fact. If the fact is large, evolving, or
-document-shaped, it isn't a memory fact either — push to documents.
+A structured contact carries *person* identity. Its optional dossier carries
+large, evolving, person-specific relationship synthesis. If the same claim
+would belong on *any* person record (e.g., "we use semantic commit messages"),
+it isn't contact knowledge at all; push that project or host knowledge to
+ordinary documents instead.
 
 ## Choose by the shape of your question
 
@@ -42,9 +44,14 @@ document-shaped, it isn't a memory fact either — push to documents.
   Find by name, query, kind, or property. Includes the owner-record
   shortcut for asserting "who is this host's primary user."
 
-- **You're creating, updating, or removing a contact** — activate
-  `contacts_save`. Trust-zone assignment is operator-custodied and is
-  deliberately outside these everyday mutation tools.
+- **You're creating, updating, or removing structured contact data** —
+  activate `contacts_save`. Trust-zone assignment is operator-custodied
+  and is deliberately outside these everyday mutation tools.
+
+- **You're maintaining evolving relationship understanding** — use
+  `contact_dossier_write` when the managed `contacts` document root makes
+  it available. Resolve the contact first; the tool takes its canonical UUID
+  and the four content projections, while Go owns document identity and shape.
 
 - **You're exchanging vCard data** — activate `contacts_vcf`. Import
   from external sources, export records for sharing (with trust-zone-
@@ -81,6 +88,12 @@ document-shaped, it isn't a memory fact either — push to documents.
   `contact_owner` as authoritative for "who operates this host"
   rather than guessing from message senders or workspace metadata.
 
+- **Dossier prose is synthesis, never structured authority.** Read the
+  `contacts:<uuid>.md` trailhead with `doc_read`; create or replace it with
+  `contact_dossier_write`. Do not use generic document mutations for ordinary
+  dossier authoring, and do not encode trust, Home Assistant bindings, or
+  companion attribution as if prose changed those sources of truth.
+
 ## Cross-references
 
 - For sending mail after looking up a recipient, bounce to `email` —
@@ -94,6 +107,9 @@ document-shaped, it isn't a memory fact either — push to documents.
   recognition; activate `signal` for the messaging side.
 - For "what did this person and I last discuss" beyond what's in the
   contact note, bounce to `archive_text` scoped to a conversation.
+- For a durable synthesis of how the relationship is evolving, resolve the
+  person here and call `contact_dossier_write`; use the archive as evidence,
+  not as the final home of the synthesis.
 - For project knowledge, technical decisions, or persistent facts that
   aren't person-shaped, `memory` (`remember_fact`) is the right home;
   don't pollute contact notes with non-person content.
@@ -288,11 +304,12 @@ names; the model-facing lookup syntax accepts either form (`key:
 
 ## What does NOT belong in a contact
 
-`contact_save`'s description is explicit: **do not store project
-knowledge, design philosophy, technical insights, or collaboration
-patterns in contact facts**. Those are `memory` (`remember_fact`) or
-workspace-file material. The contact directory is *who*, not *what we
-decided about*.
+`contact_save` is for compact structured person data, not document-shaped
+understanding. Evolving person-specific relationship or collaboration
+synthesis belongs in `contact_dossier_write`. Project knowledge, technical
+decisions, and other claims that are not specifically about this person belong
+in `memory` (`remember_fact`) or ordinary documents. The structured contact
+record is *who*; the dossier is *how this relationship currently makes sense*.
 
 If you find yourself writing `facts: { "decision_about_X": "..." }` in
 a contact, that's a smell. Refactor: store the decision in a doc;
@@ -358,6 +375,9 @@ within the tool surface.
 - For "I want to remember a project decision but the natural place
   is a person record," that's a smell that you actually want
   `memory` (`remember_fact`) instead.
+- For relationship patterns or evolving context that are genuinely about the
+  person, resolve the canonical UUID and use `contact_dossier_write` rather
+  than expanding `note`, `ai_summary`, or `facts` into a document.
 
 ---
 name: contacts_vcf

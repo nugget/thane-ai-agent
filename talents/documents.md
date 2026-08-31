@@ -313,11 +313,14 @@ teaser: "Body, section, or metadata changes inside one existing document."
 
 Three tools, each owning a different mutation shape.
 
-## Create a new document — `doc_create`
+## Create a new ordinary document — `doc_create`
 
-The default way to make a document exist. One call collision-checks the
-corpus (related documents, title/tags/path normalization, root policy)
-and writes when placement is clean:
+The default way to make an ordinary document exist. A contract-owned document
+uses the structured tool that names it: `contact_dossier_write` for a contact
+dossier, or a generated `publish_output_*` / `replace_output_*` tool for a loop
+output. For ordinary corpus knowledge, one `doc_create` call collision-checks
+related documents, title/tags/path normalization, and root policy, then writes
+when placement is clean:
 
 ```json
 {
@@ -337,9 +340,10 @@ remember.
 
 ## Replace — `doc_write`
 
-Use when an existing document should hold *exactly* this body. It can
-also create at a fresh ref, but that skips the collision check — reach
-for `doc_create` unless the destination is already deliberate. Owns
+Use when an existing ordinary document should hold *exactly* this body. It can
+also create at a fresh ref, but that skips the collision check — reach for
+`doc_create` unless the destination is already deliberate. For a contract-owned
+document, use its dedicated structured tool instead. `doc_write` owns
 `title`, `description`, `tags`, `created`, `updated`:
 
 ```json
@@ -364,9 +368,13 @@ under a managed `Journal` section in one call:
 
 ## Surgical edit — `doc_edit`
 
-Use when only part of the document should change. The `mode` parameter
-picks the shape: metadata-only, whole-body replace/append/prepend, or
-section-level upsert/delete.
+Use when only part of an ordinary document should change. Contract-owned
+documents use their dedicated structured tool instead: a section edit to a
+contact dossier's `Details` can leave its status line, teaser, and digest
+describing the previous state, while `contact_dossier_write` republishes all
+four together. The `mode` parameter picks the ordinary-document shape:
+metadata-only, whole-body replace/append/prepend, or section-level
+upsert/delete.
 
 ```json
 {

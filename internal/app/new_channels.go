@@ -171,7 +171,6 @@ func (a *App) initChannels(s *newState) error {
 		loops: &channelLoopAdapter{registry: a.loopRegistry},
 	}).ActiveOwnerChannels
 	contactTools.SetOwnerActivitySource(ownerActivity)
-	a.loop.Tools().SetContactTools(contactTools)
 	a.logger.Info("contact store initialized", "path", a.cfg.DataDir+"/contacts.db")
 
 	// --- Notifications ---
@@ -424,6 +423,10 @@ func (a *App) initChannels(s *newState) error {
 			}
 		}
 	}
+	if a.documentTools != nil {
+		contactTools.ConfigureDossierDocuments(a.documentTools.Write)
+	}
+	a.loop.Tools().SetContactTools(contactTools)
 
 	var talentVerifier func(context.Context, string, string) error
 	if a.documentStore != nil {
