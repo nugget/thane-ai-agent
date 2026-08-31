@@ -29,9 +29,10 @@ func validDossierCandidate(id uuid.UUID) documents.DocumentWriteCandidate {
 		Full:       "# Relationship context\n\nCurrent synthesis — evidence: archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777.",
 	}
 	return documents.DocumentWriteCandidate{
-		Path: id.String() + ".md",
-		Tags: []string{DossierSubject(id)},
-		Body: dossierOutputContract.RenderFacetDocument(payload),
+		Path:        id.String() + ".md",
+		Tags:        []string{DossierSubject(id)},
+		Frontmatter: map[string][]string{"title": {"Dossier Person"}},
+		Body:        dossierOutputContract.RenderFacetDocument(payload),
 	}
 }
 
@@ -96,6 +97,27 @@ func TestValidateDossierWrite(t *testing.T) {
 			name: "related contact uuid remains valid",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "Current synthesis", "Related contact:01a055fc-6b4a-7c67-8c9b-f121b9814c45. Current synthesis", 1)
+			},
+		},
+		{
+			name: "subject name in status line",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "Relationship is current and steady.", "Dossier Person has a current and steady relationship.", 1)
+			},
+			wantErr: "projection(s) [status_line] repeat the subject contact name",
+		},
+		{
+			name: "case-insensitive subject name in teaser",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "Recent conversations", "Recent conversations with dossier person", 1)
+			},
+			wantErr: "projection(s) [teaser] repeat the subject contact name",
+		},
+		{
+			name: "subject name remains valid in standalone prose",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "The contact prefers", "Dossier Person prefers", 1)
+				candidate.Body = strings.Replace(candidate.Body, "Current synthesis", "Dossier Person's current synthesis", 1)
 			},
 		},
 		{
@@ -191,6 +213,93 @@ func TestWriteDossierRejectsSubjectUUIDInEveryProjection(t *testing.T) {
 	}
 	if writer.calls != 0 {
 		t.Fatalf("redundant subject identity reached writer %d times", writer.calls)
+	}
+}
+
+func TestWriteDossierRejectsSubjectNameInCompactProjections(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
+		t.Fatal(err)
+	}
+	contact, err := tools.store.FindByName("Dossier Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDossierWriter{}
+	tools.ConfigureDossierRoot(true, true)
+	tools.ConfigureDossierDocuments(writer.Write)
+
+	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
+		ContactID:  contact.ID.String(),
+		StatusLine: "Dossier Person has a current and steady relationship.",
+		Teaser:     "Open for the latest context about dossier person.",
+		Digest:     "Dossier Person prefers direct technical collaboration.",
+		Full:       "### Relationship context\n\nDossier Person's current synthesis.",
+	})
+	if err == nil {
+		t.Fatal("WriteDossier() accepted the subject name in compact projections")
+	}
+	for _, want := range []string{
+		"correct every listed field",
+		"projection(s) [status_line, teaser]",
+		`subject contact name "Dossier Person"`,
+		"structured contact and dossier title already identify the subject",
+		"digest and full may use it",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("WriteDossier() error = %v, want it to mention %q", err, want)
+		}
+	}
+	if writer.calls != 0 {
+		t.Fatalf("redundant subject name reached writer %d times", writer.calls)
+	}
+}
+
+func TestWriteDossierAllowsSubjectNameInStandaloneProjections(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
+		t.Fatal(err)
+	}
+	contact, err := tools.store.FindByName("Dossier Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDossierWriter{}
+	tools.ConfigureDossierRoot(true, true)
+	tools.ConfigureDossierDocuments(writer.Write)
+
+	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
+		ContactID:  contact.ID.String(),
+		StatusLine: "Relationship is current and steady.",
+		Teaser:     "Open for the latest collaboration context.",
+		Digest:     "Dossier Person prefers direct technical collaboration.",
+		Full:       "### Relationship context\n\nDossier Person's current synthesis.",
+	})
+	if err != nil {
+		t.Fatalf("WriteDossier() rejected subject name in digest/full: %v", err)
+	}
+	if writer.calls != 1 {
+		t.Fatalf("writer calls = %d, want 1", writer.calls)
+	}
+}
+
+func TestContainsFoldedPhraseUsesNameBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		text   string
+		phrase string
+		want   bool
+	}{
+		{name: "exact", text: "Ed is a collaborator.", phrase: "Ed", want: true},
+		{name: "case insensitive", text: "Working with ED's team.", phrase: "Ed", want: true},
+		{name: "not inside word", text: "Shared context is current.", phrase: "Ed", want: false},
+		{name: "unicode name", text: "ÉLODIE's preferences are current.", phrase: "Élodie", want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containsFoldedPhrase(tt.text, tt.phrase); got != tt.want {
+				t.Fatalf("containsFoldedPhrase(%q, %q) = %v, want %v", tt.text, tt.phrase, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -322,9 +431,10 @@ func TestWriteDossierOwnsDocumentIdentityAndStructure(t *testing.T) {
 		t.Errorf("receipt scope = %q, want %q", got, want)
 	}
 	if err := ValidateDossierWrite(documents.DocumentWriteCandidate{
-		Path: strings.TrimPrefix(writer.args.Ref, DossierRootName+":"),
-		Tags: writer.args.Tags,
-		Body: *writer.args.Body,
+		Path:        strings.TrimPrefix(writer.args.Ref, DossierRootName+":"),
+		Tags:        writer.args.Tags,
+		Frontmatter: map[string][]string{"title": {writer.args.Title}},
+		Body:        *writer.args.Body,
 	}); err != nil {
 		t.Fatalf("Go-authored dossier failed root validator: %v", err)
 	}

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -110,6 +112,9 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err := validateDossierSubjectIdentity(id, payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
+	if err := validateDossierSubjectName(contact.FormattedName, payload); err != nil {
+		validationErrs = append(validationErrs, err)
+	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
@@ -161,6 +166,11 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	if err := validateDossierSubjectIdentity(id, payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
 	}
+	if titles := candidate.Frontmatter["title"]; len(titles) > 0 {
+		if err := validateDossierSubjectName(titles[0], payload); err != nil {
+			validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
+		}
+	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
 	}
@@ -199,6 +209,78 @@ func validateDossierSubjectIdentity(id uuid.UUID, payload looppkg.FacetPayload) 
 		return nil
 	}
 	return fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id)
+}
+
+// validateDossierSubjectName keeps the compact lookup projections focused on
+// relationship signal. The structured contact and dossier title already name
+// the subject, while digest and full remain standalone prose where using the
+// name can improve clarity.
+func validateDossierSubjectName(name string, payload looppkg.FacetPayload) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "status_line", value: payload.StatusLine},
+		{name: "teaser", value: payload.Teaser},
+	}
+
+	var redundant []string
+	for _, field := range fields {
+		if containsFoldedPhrase(field.value, name) {
+			redundant = append(redundant, field.name)
+		}
+	}
+	if len(redundant) == 0 {
+		return nil
+	}
+	return fmt.Errorf("projection(s) [%s] repeat the subject contact name %q; omit the name because the structured contact and dossier title already identify the subject; digest and full may use it when standalone prose needs it", strings.Join(redundant, ", "), name)
+}
+
+func containsFoldedPhrase(text, phrase string) bool {
+	text = strings.ToLower(text)
+	phrase = strings.ToLower(strings.TrimSpace(phrase))
+	if phrase == "" {
+		return false
+	}
+
+	for offset := 0; offset <= len(text)-len(phrase); {
+		relative := strings.Index(text[offset:], phrase)
+		if relative < 0 {
+			return false
+		}
+		start := offset + relative
+		end := start + len(phrase)
+		leftBoundary := start == 0 || !isDossierNameRune(lastRune(text[:start]))
+		rightBoundary := end == len(text) || !isDossierNameRune(firstRune(text[end:]))
+		if leftBoundary && rightBoundary {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(text[start:])
+		if size == 0 {
+			return false
+		}
+		offset = start + size
+	}
+	return false
+}
+
+func firstRune(value string) rune {
+	r, _ := utf8.DecodeRuneInString(value)
+	return r
+}
+
+func lastRune(value string) rune {
+	r, _ := utf8.DecodeLastRuneInString(value)
+	return r
+}
+
+func isDossierNameRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // validateDossierEvidenceCitations keeps archive claims independently

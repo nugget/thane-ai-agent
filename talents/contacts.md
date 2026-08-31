@@ -94,9 +94,11 @@ ordinary documents instead.
   dossier authoring. The ref and frontmatter already establish which contact the
   document describes, so pass the UUID only as the contact ID argument: never
   repeat the subject's UUID, derived ref, or private tag in the projections, and
-  do not add a `Subject` section that merely copies directory fields. Do not
-  encode trust, Home Assistant bindings, or companion attribution as if prose
-  changed those sources of truth.
+  do not add a `Subject` section that merely copies directory fields. Omit the
+  contact's canonical name from the status line and teaser because the dossier
+  title already supplies it; digest and full may use the name where standalone
+  prose needs it. Do not encode trust, Home Assistant bindings, or companion
+  attribution as if prose changed those sources of truth.
 
 ## Cross-references
 
