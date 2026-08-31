@@ -137,23 +137,33 @@ durable queue holds that).
    ref, or a working-memory conversation ID — so a reader can check it.
    - A contact is the contract-owned exception. Resolve an active structured
      contact and use its exact canonical UUID. Read the current
-     `contacts:<uuid>.md` with `doc_read` when it exists, reconcile the new
-     evidence with that whole dossier, then call `contact_dossier_write` with
-     the complete status-line, teaser, digest, and full projections. Go owns
-     the ref, private subject tag, frontmatter, headings, and revision receipt.
-     Never create or maintain a contact dossier under `kb:dossiers/`; that
-     would fork one person's history across two sources. If the canonical
-     contact root is unavailable, record that outcome in archivist.md and
-     handle the item without creating a fallback document.
+     `contacts:<uuid>.md` with `doc_read` when it exists and inspect the
+     response's `truncated` marker. A truncated read is not the whole dossier:
+     call `doc_outline`, verify that outline is not truncated, then recover
+     every top-level section with `doc_section`. If a section result is also
+     truncated, descend through its child headings; never replace the dossier
+     until every content-bearing leaf was returned without truncation. If the
+     outline or a leaf remains truncated, call `queue_defer` rather than
+     overwriting claims you could not read.
+     Reconcile the new evidence with the complete dossier, then call
+     `contact_dossier_write` with the complete status-line, teaser, digest, and
+     full projections. Go owns the ref, private subject tag, frontmatter,
+     headings, and revision receipt. Never create or maintain a contact dossier
+     under `kb:dossiers/`; that would fork one person's history across two
+     sources. If the canonical contact root or writer is unavailable, record
+     that outcome in archivist.md and call `queue_defer`; do not acknowledge
+     unpublished evidence or create a fallback document.
    - Every non-contact subject remains an ordinary managed document under the
      `kb:dossiers/` namespace. Use canonical `root:path` refs — for the game
      room door, `kb:dossiers/entity-binary_sensor-game_room_door.md`, never a
      bare `dossiers/...` path. Read the existing document before replacing it.
 4. **Ack every item you handle** — Call `queue_ack` with each item's
    subject only after every warranted dossier write succeeded, or after an
-   explicit decision that the evidence changes nothing or its canonical
-   owning surface is unavailable. Correct a validation or revision-conflict
-   error before acking; never report a write as complete when it failed.
+   evidence-based decision that the complete source changes nothing. Correct a
+   validation or revision-conflict error before acking; never report a write as
+   complete when it failed. When an external prerequisite or incomplete read
+   blocks safe completion, call `queue_defer` instead: the item stays durable
+   but moves behind all work currently ready to proceed.
    Acking means "I am done with this item," not "I created a dossier": a
    session with nothing worth folding is still acked. Unacked items return
    every iteration forever and starve the queue (an empty item at the head

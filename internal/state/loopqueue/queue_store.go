@@ -153,6 +153,44 @@ func (s *Store) PeekAll(ctx context.Context, consumerLoop string) ([]Item, error
 	return s.peek(ctx, consumerLoop, 0)
 }
 
+// Defer keeps one pending item while moving it behind every item currently in
+// the same consumer partition. It is the non-destructive escape hatch for a
+// consumer blocked on an external prerequisite: unlike [Store.Ack], no
+// evidence is removed, and unlike [Store.Enqueue], the original payload is
+// retained. The original enqueue timestamp also remains the queue-age and
+// completion-latency anchor. A later producer enqueue may promote the item
+// again.
+func (s *Store) Defer(ctx context.Context, consumerLoop, dedupKey string) error {
+	consumerLoop = strings.TrimSpace(consumerLoop)
+	dedupKey = strings.TrimSpace(dedupKey)
+	if consumerLoop == "" || dedupKey == "" {
+		return fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
+	}
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE loop_queue
+		SET priority = (
+				SELECT COALESCE(MIN(pending.priority), 0) - 1
+				FROM loop_queue AS pending
+				WHERE pending.consumer_loop = ? AND pending.status = ?
+			),
+			attempts = attempts + 1,
+			updated_at = ?
+		WHERE consumer_loop = ? AND dedup_key = ? AND status = ?
+	`, consumerLoop, StatusPending, now, consumerLoop, dedupKey, StatusPending)
+	if err != nil {
+		return fmt.Errorf("loopqueue: defer %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("loopqueue: defer %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	if updated == 0 {
+		return fmt.Errorf("loopqueue: cannot defer missing pending item %s/%s", consumerLoop, dedupKey)
+	}
+	return nil
+}
+
 func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Item, error) {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	if consumerLoop == "" {

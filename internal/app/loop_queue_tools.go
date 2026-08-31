@@ -21,13 +21,14 @@ const (
 // buildLoopQueueTools returns the loop-private work-queue tools for one
 // consumer loop. The loop's own name is captured in the closure at
 // hydration time and used as the queue partition key, so the model never
-// sees or types it and can only ever drain, ack, or enqueue into its own
+// sees or types it and can only ever drain, ack, defer, or enqueue into its own
 // partition. Attached via Spec.RuntimeTools, so these tools are
 // advertised only on this loop's iterations — never registered globally.
 //
 // This is the consumer side of the queue-consumer pattern (issue #1024):
-// a self-paced loop pulls a batch from its durable inbox, processes it,
-// acks what it finished, and enqueues any newly-discovered subjects.
+// a self-paced loop pulls a batch from its durable inbox, processes it, acks
+// what it finished, defers work blocked on external prerequisites, and
+// enqueues any newly-discovered subjects.
 // Trigger rate (producers calling Enqueue) is fully decoupled from work
 // rate (this loop's sleep cadence).
 func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.RuntimeTool {
@@ -80,7 +81,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 		{
 			Name: "queue_ack",
 			Description: "Mark a queue item done and remove it from your queue. Pass the subject you got from queue_pull. " +
-				"Idempotent: acking a subject that is no longer queued is a harmless no-op. Ack each item once you have folded its evidence into the dossiers.",
+				"Idempotent: acking a subject that is no longer queued is a harmless no-op. Ack only after its evidence is durably folded or you made an evidence-based no-change decision; use queue_defer when an external prerequisite blocks completion.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -101,6 +102,32 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","subject":%q}`, subject), nil
+			},
+		},
+		{
+			Name: "queue_defer",
+			Description: "Keep a pulled item pending but move it behind every item currently in your queue. " +
+				"Use this when an external prerequisite or an unreadable/truncated source prevents a safe write now. The original evidence remains queued and a future producer can promote it again. Do not defer ordinary no-change work; queue_ack that as complete.",
+			SkipContentResolve: true,
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"subject": map[string]any{
+						"type":        "string",
+						"description": "The subject (queue key) to retain for a later iteration, exactly as returned by queue_pull.",
+					},
+				},
+				"required": []string{"subject"},
+			},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				subject := strings.TrimSpace(stringMapValue(args, "subject"))
+				if subject == "" {
+					return "", fmt.Errorf("subject is required")
+				}
+				if err := store.Defer(ctx, loopName, subject); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf(`{"status":"deferred","subject":%q}`, subject), nil
 			},
 		},
 		{

@@ -143,13 +143,18 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 	if slices.Contains(spec.ExcludeTools, "contact_dossier_write") {
 		t.Error("archivist excludes contact_dossier_write despite teaching it as the canonical contact door")
 	}
+	normalizedTask := strings.Join(strings.Fields(spec.Task), " ")
 	for _, want := range []string{
 		"contacts:<uuid>.md",
 		"contact_dossier_write",
 		"Never create or maintain a contact dossier under `kb:dossiers/`",
 		"complete status-line, teaser, digest, and full projections",
+		"response's `truncated` marker",
+		"call `doc_outline`, verify that outline is not truncated",
+		"recover every top-level section with `doc_section`",
+		"call `queue_defer`",
 	} {
-		if !strings.Contains(spec.Task, want) {
+		if !strings.Contains(normalizedTask, want) {
 			t.Errorf("archivist task does not teach %q", want)
 		}
 	}
