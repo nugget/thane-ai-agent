@@ -107,6 +107,9 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
+	if err := validateDossierSubjectIdentity(id, payload); err != nil {
+		validationErrs = append(validationErrs, err)
+	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
@@ -155,6 +158,9 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("facet contract: %w", err))
 	}
+	if err := validateDossierSubjectIdentity(id, payload); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
+	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
 	}
@@ -165,6 +171,34 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 		return fmt.Errorf("dossier %s must use the canonical facet section order with no text outside those sections", candidate.Path)
 	}
 	return nil
+}
+
+// validateDossierSubjectIdentity keeps mechanically owned identity out of the
+// authored projections. The path and private subject tag already carry the
+// dossier's contact UUID; repeating it spends model attention and can drift
+// into a second, less reliable statement of the same identity. Other contact
+// UUIDs remain valid cross-references in relationship content.
+func validateDossierSubjectIdentity(id uuid.UUID, payload looppkg.FacetPayload) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "status_line", value: payload.StatusLine},
+		{name: "teaser", value: payload.Teaser},
+		{name: "digest", value: payload.Digest},
+		{name: "full", value: payload.Full},
+	}
+
+	var redundant []string
+	for _, field := range fields {
+		if strings.Contains(field.value, id.String()) {
+			redundant = append(redundant, field.name)
+		}
+	}
+	if len(redundant) == 0 {
+		return nil
+	}
+	return fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id)
 }
 
 // validateDossierEvidenceCitations keeps archive claims independently

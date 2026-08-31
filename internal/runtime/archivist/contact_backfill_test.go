@@ -1,6 +1,7 @@
 package archivist
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -165,6 +166,9 @@ func TestContactDossierBackfill_BoundedPhasesAndDurableCompletion(t *testing.T) 
 		var payload messages.LoopNotifyPayload
 		if err := json.Unmarshal(enqueue.payload, &payload); err != nil {
 			t.Fatalf("decode payload: %v", err)
+		}
+		if bytes.Contains(enqueue.payload, []byte(`"observed_at"`)) {
+			t.Errorf("payload = %s, want observed_at omitted", enqueue.payload)
 		}
 		if len(payload.Events) != 1 {
 			t.Fatalf("payload events = %+v, want one", payload.Events)

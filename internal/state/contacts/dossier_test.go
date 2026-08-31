@@ -79,6 +79,19 @@ func TestValidateDossierWrite(t *testing.T) {
 			wantErr: "no broader subject",
 		},
 		{
+			name: "subject uuid repeated in prose",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "Relationship is current and steady.", "Contact UUID "+id.String()+" is current.", 1)
+			},
+			wantErr: "Go already binds the document path and frontmatter",
+		},
+		{
+			name: "related contact uuid remains valid",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "Current synthesis", "Related contact:01a055fc-6b4a-7c67-8c9b-f121b9814c45. Current synthesis", 1)
+			},
+		},
+		{
 			name: "missing facet",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "## Digest\n\nThe contact prefers direct technical collaboration and explicit source-of-truth boundaries.\n\n", "", 1)
@@ -132,6 +145,45 @@ func TestValidateDossierWrite(t *testing.T) {
 				t.Fatalf("ValidateDossierWrite() error = %v, want it to mention %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestWriteDossierRejectsSubjectUUIDInEveryProjection(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
+		t.Fatal(err)
+	}
+	contact, err := tools.store.FindByName("Dossier Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDossierWriter{}
+	tools.ConfigureDossierRoot(true, true)
+	tools.ConfigureDossierDocuments(writer.Write)
+
+	id := contact.ID.String()
+	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
+		ContactID:  id,
+		StatusLine: "Current relationship for contact " + id + ".",
+		Teaser:     "Open the canonical dossier contacts:" + id + ".md.",
+		Digest:     "Structured identity is contact:" + id + ".",
+		Full:       "### Subject\n\nContact UUID `" + id + "`.",
+	})
+	if err == nil {
+		t.Fatal("WriteDossier() accepted its subject UUID in authored projections")
+	}
+	for _, want := range []string{
+		"correct every listed field",
+		"projection(s) [status_line, teaser, digest, full]",
+		id,
+		"Go already binds the document path and frontmatter",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("WriteDossier() error = %v, want it to mention %q", err, want)
+		}
+	}
+	if writer.calls != 0 {
+		t.Fatalf("redundant subject identity reached writer %d times", writer.calls)
 	}
 }
 

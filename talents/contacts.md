@@ -91,8 +91,12 @@ ordinary documents instead.
 - **Dossier prose is synthesis, never structured authority.** Read the
   `contacts:<uuid>.md` trailhead with `doc_read`; create or replace it with
   `contact_dossier_write`. Do not use generic document mutations for ordinary
-  dossier authoring, and do not encode trust, Home Assistant bindings, or
-  companion attribution as if prose changed those sources of truth.
+  dossier authoring. The ref and frontmatter already establish which contact the
+  document describes, so pass the UUID only as the contact ID argument: never
+  repeat the subject's UUID, derived ref, or private tag in the projections, and
+  do not add a `Subject` section that merely copies directory fields. Do not
+  encode trust, Home Assistant bindings, or companion attribution as if prose
+  changed those sources of truth.
 
 ## Cross-references
 
