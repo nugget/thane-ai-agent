@@ -334,6 +334,9 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 	required := []string{"contact_id"}
 	for _, field := range fields {
 		description := field.Guidance + looppkg.FormatGuidance(field.Format)
+		if field.Key == "status_line" || field.Key == "teaser" {
+			description += " Omit the contact's canonical name: the structured record and dossier title already identify the subject."
+		}
 		if field.Key == "full" {
 			description += " Cite archive-session evidence as archive:session:<full-session-uuid>; the full canonical session UUID is required because short prefixes can be ambiguous."
 		}
@@ -353,7 +356,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 
 	r.Register(&Tool{
 		Name:               "contact_dossier_write",
-		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass only the canonical contact UUID and all four content projections; Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Archive-session evidence must cite the full canonical session UUID so every claim remains checkable. Every projection is validated together and every violation is returned in one error. Read an existing dossier with doc_read before replacing it so Thane can protect against intervening writes.",
+		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass the canonical contact UUID only as contact_id; do not repeat it or its derived contacts ref or contact tag in any content projection. Omit the contact's canonical name from status_line and teaser because the structured record and dossier title already identify the subject; digest and full may use it when standalone prose needs it. Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Archive-session evidence must cite the full canonical session UUID so every claim remains checkable. Every projection is validated together and every violation is returned in one error. Read an existing dossier with doc_read before replacing it so Thane can protect against intervening writes.",
 		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type":       "object",

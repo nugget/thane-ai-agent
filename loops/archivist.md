@@ -152,11 +152,19 @@ durable queue holds that).
      Reconcile the new evidence with the complete dossier, then call
      `contact_dossier_write` with the complete status-line, teaser, digest, and
      full projections. Go owns the ref, private subject tag, frontmatter,
-     headings, and revision receipt. Never create or maintain a contact dossier
-     under `kb:dossiers/`; that would fork one person's history across two
-     sources. If the canonical contact root or writer is unavailable, record
-     that outcome in archivist.md and call `queue_defer`; do not acknowledge
-     unpublished evidence or create a fallback document.
+     headings, and revision receipt. That mechanical envelope already identifies
+     the subject: never repeat the subject's own UUID, derived `contacts:` ref,
+     or `contact:` tag in any projection, and never add a `### Subject` section.
+     Omit the subject's name from the status line and teaser because the dossier
+     title already supplies it; digest and full may use the name where their
+     standalone prose needs it.
+     Do not copy trust zone, title, organization, phone, or other structured
+     directory fields as identity boilerplate; include such a fact only when it
+     materially supports the relationship synthesis. Never create or maintain a
+     contact dossier under `kb:dossiers/`; that would fork one person's history
+     across two sources. If the canonical contact root or writer is unavailable,
+     record that outcome in archivist.md and call `queue_defer`; do not
+     acknowledge unpublished evidence or create a fallback document.
    - Every non-contact subject remains an ordinary managed document under the
      `kb:dossiers/` namespace. Use canonical `root:path` refs — for the game
      room door, `kb:dossiers/entity-binary_sensor-game_room_door.md`, never a
@@ -228,11 +236,15 @@ plausible-sounding text.
 
 For a contact, pass the four projections to `contact_dossier_write`; do not
 author the outer document structure shown above. The `full` projection carries
-the durable evidence under detail-level headings such as `### Subject`,
-`### Aliases`, `### Relationship Summary`, `### Claims`, `### Open Questions`,
-and `### Connections`. The status line is the one-line current truth, the
-teaser is the reason to open the dossier, and the digest must stand alone as
-enough relationship context to act. All four describe the same revision.
+the durable evidence under detail-level headings such as `### Aliases`,
+`### Relationship Summary`, `### Claims`, `### Open Questions`, and
+`### Connections`. The subject's UUID, ref, and private tag already arrive
+through the document envelope and never belong in the authored content. The
+status line and teaser also omit the subject's name because the dossier title
+supplies it; digest and full may use the name where standalone prose needs it.
+The status line is the one-line current truth, the teaser is the reason to open
+the dossier, and the digest must stand alone as enough relationship context to
+act. All four describe the same revision.
 
 ## What you are NOT for
 

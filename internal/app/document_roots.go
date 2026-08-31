@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -184,7 +185,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 			if opts.RootValidators == nil {
 				opts.RootValidators = make(map[string]documents.RootWriteValidator)
 			}
-			opts.RootValidators[root] = contacts.ValidateDossierWrite
+			opts.RootValidators[root] = contacts.NewDossierWriteValidator(a.resolveDossierContactName)
 		}
 
 		// Construct the writer first when this root signs commits.
@@ -283,6 +284,20 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 		}
 	}
 	return opts, nil
+}
+
+// resolveDossierContactName deliberately reads a.contactStore at validation
+// time. Document roots are assembled before initChannels opens the contact
+// store, so capturing the field's startup value would permanently capture nil.
+func (a *App) resolveDossierContactName(id uuid.UUID) (string, error) {
+	if a == nil || a.contactStore == nil {
+		return "", fmt.Errorf("contact directory is not configured")
+	}
+	contact, err := a.contactStore.Get(id)
+	if err != nil {
+		return "", fmt.Errorf("load contact: %w", err)
+	}
+	return contact.FormattedName, nil
 }
 
 // bootstrapMissingRootDirectory creates the directory for a git-managed

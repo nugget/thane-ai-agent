@@ -14,9 +14,11 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
@@ -138,6 +140,40 @@ func TestBuildDocumentStoreOptionsWiresContactDossierValidator(t *testing.T) {
 	}
 	if err := validator(documents.DocumentWriteCandidate{Path: "notes.md", Body: "plain"}); err == nil {
 		t.Fatal("contacts root validator accepted a noncanonical document")
+	}
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	contactStore, err := contacts.NewStore(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("contacts.NewStore: %v", err)
+	}
+	contactTools := contacts.NewTools(contactStore)
+	if _, err := contactTools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
+		t.Fatalf("SaveContact: %v", err)
+	}
+	contact, err := contactStore.FindByName("Dossier Person")
+	if err != nil {
+		t.Fatalf("FindByName: %v", err)
+	}
+	candidate := documents.DocumentWriteCandidate{
+		Path:        contact.ID.String() + ".md",
+		Tags:        []string{contacts.DossierSubject(contact.ID)},
+		Frontmatter: map[string][]string{"title": {"Dossier Person"}},
+		Body: "## Status Line\n\nDossier Person is current.\n\n" +
+			"## Teaser\n\nOpen for current collaboration context.\n\n" +
+			"## Digest\n\nEnough standalone context to act.\n\n" +
+			"## Details\n\nComplete relationship synthesis.",
+	}
+	if err := validator(candidate); err == nil || !strings.Contains(err.Error(), "contact directory is not configured") {
+		t.Fatalf("validator before contact-store wiring error = %v, want unavailable directory", err)
+	}
+	app.contactStore = contactStore
+	if err := validator(candidate); err == nil || !strings.Contains(err.Error(), "repeat the subject contact name") {
+		t.Fatalf("late-bound validator error = %v, want canonical-name rejection", err)
 	}
 }
 

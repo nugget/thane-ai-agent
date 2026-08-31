@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -107,6 +108,12 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
+	if err := validateDossierSubjectIdentity(id, payload); err != nil {
+		validationErrs = append(validationErrs, err)
+	}
+	if err := validateDossierSubjectName(contact.FormattedName, payload); err != nil {
+		validationErrs = append(validationErrs, err)
+	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
@@ -134,9 +141,17 @@ func DossierSubject(id uuid.UUID) string {
 	return "contact:" + id.String()
 }
 
-// ValidateDossierWrite enforces the contact dossier path, subject tag, and
-// complete facet ladder before a managed document write can mutate the root.
-func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
+// NewDossierWriteValidator returns the root policy for canonical contact
+// dossiers. resolveContactName must read the active structured contact on every
+// invocation so contact renames take effect immediately and caller-controlled
+// frontmatter cannot spoof the identity used to validate compact projections.
+func NewDossierWriteValidator(resolveContactName func(uuid.UUID) (string, error)) documents.RootWriteValidator {
+	return func(candidate documents.DocumentWriteCandidate) error {
+		return validateDossierWrite(candidate, resolveContactName)
+	}
+}
+
+func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveContactName func(uuid.UUID) (string, error)) error {
 	id, err := dossierIDFromPath(candidate.Path)
 	if err != nil {
 		return err
@@ -146,6 +161,17 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	if len(candidate.Tags) != 1 || strings.TrimSpace(candidate.Tags[0]) != wantSubject {
 		return fmt.Errorf("dossier %s must carry exactly one frontmatter tag, %q, so no broader subject can advertise this private dossier; use contact_dossier_write to let Go derive dossier identity and structure", candidate.Path, wantSubject)
 	}
+	if resolveContactName == nil {
+		return fmt.Errorf("dossier %s cannot validate identity because the structured contact resolver is not configured", candidate.Path)
+	}
+	contactName, err := resolveContactName(id)
+	if err != nil {
+		return fmt.Errorf("dossier %s cannot resolve active structured contact %s: %w", candidate.Path, id, err)
+	}
+	contactName = strings.TrimSpace(contactName)
+	if contactName == "" {
+		return fmt.Errorf("dossier %s cannot validate identity because structured contact %s has no formatted name", candidate.Path, id)
+	}
 
 	payload, faceted := looppkg.ParseFacetSections(candidate.Body)
 	if !faceted {
@@ -154,6 +180,15 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	var validationErrs []error
 	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("facet contract: %w", err))
+	}
+	if err := validateDossierSubjectIdentity(id, payload); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
+	}
+	if titles := candidate.Frontmatter["title"]; len(titles) != 1 || strings.TrimSpace(titles[0]) != contactName {
+		validationErrs = append(validationErrs, fmt.Errorf("identity contract: dossier must carry exactly one title %q matching active structured contact %s; use contact_dossier_write to let Go derive it", contactName, id))
+	}
+	if err := validateDossierSubjectName(contactName, payload); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
 	}
 	if err := validateDossierEvidenceCitations(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
@@ -165,6 +200,90 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 		return fmt.Errorf("dossier %s must use the canonical facet section order with no text outside those sections", candidate.Path)
 	}
 	return nil
+}
+
+// validateDossierSubjectIdentity keeps mechanically owned identity out of the
+// authored projections. The path and private subject tag already carry the
+// dossier's contact UUID; repeating it spends model attention and can drift
+// into a second, less reliable statement of the same identity. Other contact
+// UUIDs remain valid cross-references in relationship content.
+func validateDossierSubjectIdentity(id uuid.UUID, payload looppkg.FacetPayload) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "status_line", value: payload.StatusLine},
+		{name: "teaser", value: payload.Teaser},
+		{name: "digest", value: payload.Digest},
+		{name: "full", value: payload.Full},
+	}
+
+	var redundant []string
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field.value), id.String()) {
+			redundant = append(redundant, field.name)
+		}
+	}
+	if len(redundant) == 0 {
+		return nil
+	}
+	return fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id)
+}
+
+// validateDossierSubjectName keeps the compact lookup projections focused on
+// relationship signal. The structured contact and dossier title already name
+// the subject, while digest and full remain standalone prose where using the
+// name can improve clarity.
+func validateDossierSubjectName(name string, payload looppkg.FacetPayload) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "status_line", value: payload.StatusLine},
+		{name: "teaser", value: payload.Teaser},
+	}
+
+	var redundant []string
+	for _, field := range fields {
+		if containsFoldedPhrase(field.value, name) {
+			redundant = append(redundant, field.name)
+		}
+	}
+	if len(redundant) == 0 {
+		return nil
+	}
+	return fmt.Errorf("projection(s) [%s] repeat the subject contact name %q; omit the name because the structured contact and dossier title already identify the subject; digest and full may use it when standalone prose needs it", strings.Join(redundant, ", "), name)
+}
+
+func containsFoldedPhrase(text, phrase string) bool {
+	phrase = strings.TrimSpace(phrase)
+	if phrase == "" {
+		return false
+	}
+
+	textRunes := []rune(text)
+	phraseRunes := []rune(phrase)
+	for start := 0; start+len(phraseRunes) <= len(textRunes); start++ {
+		end := start + len(phraseRunes)
+		if !strings.EqualFold(string(textRunes[start:end]), phrase) {
+			continue
+		}
+		leftBoundary := start == 0 || !isDossierNameRune(textRunes[start-1])
+		rightBoundary := end == len(textRunes) || !isDossierNameRune(textRunes[end])
+		if leftBoundary && rightBoundary {
+			return true
+		}
+	}
+	return false
+}
+
+func isDossierNameRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // validateDossierEvidenceCitations keeps archive claims independently
