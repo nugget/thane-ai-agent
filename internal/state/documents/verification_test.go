@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,5 +199,53 @@ func TestStoreVerifyMutationPath_AllowsUnprotectedManagedRoot(t *testing.T) {
 
 	if err := store.VerifyMutationPath(context.Background(), target, "file_tools_write"); err != nil {
 		t.Fatalf("unprotected managed root should allow raw file mutation: %v", err)
+	}
+}
+
+// TestHandleVerificationFailureClassifiesUnavailable pins the seam the
+// index scan logs across: a check that could not run answers true to
+// errors.Is(err, ErrVerificationUnavailable), while a genuine policy
+// block does not — and the consumer-facing message stays unchanged in
+// both shapes.
+func TestHandleVerificationFailureClassifiesUnavailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		status          SignatureStatus
+		wantUnavailable bool
+		wantSubstring   string
+	}{
+		{
+			name:            "unavailable check classifies as infrastructure fault",
+			status:          SignatureUnavailable,
+			wantUnavailable: true,
+			wantSubstring:   "could not be verified",
+		},
+		{
+			name:            "failed signature classifies as policy block",
+			status:          SignatureFailed,
+			wantUnavailable: false,
+			wantSubstring:   "blocked by signature policy",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := (&Store{}).handleVerificationFailure("core", "a.md", "document_index", SignatureVerification{
+				Mode:    VerificationRequired,
+				Status:  tc.status,
+				Message: "git status failed: signal: killed",
+			})
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if got := errors.Is(err, ErrVerificationUnavailable); got != tc.wantUnavailable {
+				t.Errorf("errors.Is(err, ErrVerificationUnavailable) = %v, want %v", got, tc.wantUnavailable)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstring) {
+				t.Errorf("error %q missing %q", err.Error(), tc.wantSubstring)
+			}
+		})
 	}
 }
