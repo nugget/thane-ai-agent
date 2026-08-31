@@ -1033,3 +1033,37 @@ func TestSeverityRingCapsAndTruncates(t *testing.T) {
 		t.Errorf("message not truncated: %d runes", len([]rune(sum.Recent[0].Msg)))
 	}
 }
+
+func TestIndexHandler_SourceAttrSurvivesIntoAttrs(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db)
+
+	logger := slog.New(h)
+	logger.Warn("gated context provider failed",
+		"source", "always_provider", "msg", "reserved")
+	h.Close()
+
+	var attrs sql.NullString
+	if err := db.QueryRow(`SELECT attrs FROM log_entries LIMIT 1`).Scan(&attrs); err != nil {
+		t.Fatal(err)
+	}
+	if !attrs.Valid {
+		t.Fatal("attrs should not be null")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(attrs.String), &parsed); err != nil {
+		t.Fatalf("parse attrs JSON: %v", err)
+	}
+	// "source" is caller data — built-in source location arrives via
+	// record.PC, never as an attr — so it must land in attrs rather
+	// than being eaten as a reserved key. The eaten variant silently
+	// destroyed the discriminator on several production warns.
+	if got := parsed["source"]; got != "always_provider" {
+		t.Errorf("source = %v, want %q", got, "always_provider")
+	}
+	// Top-level attrs shadowing the record's own fields stay reserved.
+	if _, ok := parsed["msg"]; ok {
+		t.Error("top-level msg attr should remain reserved")
+	}
+}
