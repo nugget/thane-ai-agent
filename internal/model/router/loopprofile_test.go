@@ -234,7 +234,7 @@ func TestLoopProfileJSONRoundTrip(t *testing.T) {
 		t.Errorf("Model = %q, want %q", restored.Model, original.Model)
 	}
 	if restored.QualityFloor != original.QualityFloor {
-		t.Errorf("QualityFloor = %q, want %q", restored.QualityFloor, original.QualityFloor)
+		t.Errorf("QualityFloor = %d, want %d", restored.QualityFloor, original.QualityFloor)
 	}
 	if restored.Mission != original.Mission {
 		t.Errorf("Mission = %q, want %q", restored.Mission, original.Mission)

@@ -427,7 +427,7 @@ func TestBuildScheduledTaskLoopProfile(t *testing.T) {
 				t.Fatalf("LocalOnly = %q, want %q", got.LocalOnly, tt.want.LocalOnly)
 			}
 			if got.QualityFloor != tt.want.QualityFloor {
-				t.Fatalf("QualityFloor = %q, want %q", got.QualityFloor, tt.want.QualityFloor)
+				t.Fatalf("QualityFloor = %d, want %d", got.QualityFloor, tt.want.QualityFloor)
 			}
 			if got.Mission != tt.want.Mission {
 				t.Fatalf("Mission = %q, want %q", got.Mission, tt.want.Mission)
