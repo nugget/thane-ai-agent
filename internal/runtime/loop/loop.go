@@ -1877,10 +1877,23 @@ func (l *Loop) run(ctx context.Context) {
 					)
 					break
 				}
-				iterLog.Warn("loop iteration failed",
-					"error", err,
-					"elapsed_ms", time.Since(iterStartTime).Milliseconds(),
-				)
+				// A billing-blocked provider is a standing state the
+				// provider announced once on its edge; every loop
+				// rediscovering it per iteration is Debug. The error
+				// state and backoff below stay — the loop genuinely
+				// cannot work, and the growing sleep is what throttles
+				// the rediscovery.
+				if llm.IsBillingBlocked(err) {
+					iterLog.Debug("loop iteration blocked by provider billing state",
+						"error", err,
+						"elapsed_ms", time.Since(iterStartTime).Milliseconds(),
+					)
+				} else {
+					iterLog.Warn("loop iteration failed",
+						"error", err,
+						"elapsed_ms", time.Since(iterStartTime).Milliseconds(),
+					)
+				}
 				l.mu.Lock()
 				l.lastError = err.Error()
 				l.consecutiveErrors++

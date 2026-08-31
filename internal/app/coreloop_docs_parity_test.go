@@ -149,6 +149,8 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 		"contact_dossier_write",
 		"Never create or maintain a contact dossier under `kb:dossiers/`",
 		"complete status-line, teaser, digest, and full projections",
+		"archive:session:<full-session-uuid>",
+		"never an 8-character prefix",
 		"response's `truncated` marker",
 		"call `doc_outline`, verify that outline is not truncated",
 		"recover every top-level section with `doc_section`",
