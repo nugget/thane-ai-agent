@@ -48,8 +48,9 @@ type StateReadCache struct {
 	ttl   time.Duration
 	now   func() time.Time // injectable clock; nil uses time.Now
 
-	mu      sync.RWMutex
-	entries map[string]stateCacheEntry
+	mu       sync.RWMutex
+	entries  map[string]stateCacheEntry
+	inflight map[string]*inflightFetch
 }
 
 type stateCacheEntry struct {
@@ -57,15 +58,31 @@ type stateCacheEntry struct {
 	at    time.Time
 }
 
+// inflightFetch coalesces concurrent misses for one entity: the first
+// caller fetches, everyone else waits on done. state/err are written
+// before done closes, so readers after <-done see them without a lock.
+type inflightFetch struct {
+	done  chan struct{}
+	state *State
+	err   error
+}
+
+// stateReadFetchTimeout bounds the shared read-through fetch. The fetch
+// runs on a detached context on purpose: it serves every caller waiting
+// on the same entity, so one caller's cancellation must not poison the
+// result for the rest — an abandoning caller just stops waiting.
+const stateReadFetchTimeout = 15 * time.Second
+
 // NewStateReadCache wraps inner (the REST client in production) with
 // the read cache. Register [StateReadCache.HandleStateChange] on the
 // state watcher to keep ingest-covered entities push-fresh; the cache
 // works (TTL-bounded) without it.
 func NewStateReadCache(inner stateReader) *StateReadCache {
 	return &StateReadCache{
-		inner:   inner,
-		ttl:     stateReadCacheTTL,
-		entries: make(map[string]stateCacheEntry),
+		inner:    inner,
+		ttl:      stateReadCacheTTL,
+		entries:  make(map[string]stateCacheEntry),
+		inflight: make(map[string]*inflightFetch),
 	}
 }
 
@@ -77,10 +94,15 @@ func (c *StateReadCache) clock() time.Time {
 }
 
 // GetState serves the cached entity state when it is younger than the
-// TTL, otherwise fetches through and repopulates. A fetch error passes
-// through unchanged — a stale entry is never substituted for a live
-// failure, so sentinel handling downstream keeps seeing what it sees
-// today.
+// TTL, otherwise fetches through and repopulates. Concurrent misses for
+// the same entity coalesce onto one fetch — at a TTL boundary every
+// assembling loop misses together, and without coalescing the cache
+// would recreate exactly the per-loop REST fan-out it exists to
+// amortize. A fetch error passes through unchanged — a stale entry is
+// never substituted for a live failure, so sentinel handling downstream
+// keeps seeing what it sees today. A caller whose ctx dies stops
+// waiting; the shared fetch completes on its own detached bound and
+// still repopulates for everyone else.
 func (c *StateReadCache) GetState(ctx context.Context, entityID string) (*State, error) {
 	now := c.clock()
 	c.mu.RLock()
@@ -90,12 +112,53 @@ func (c *StateReadCache) GetState(ctx context.Context, entityID string) (*State,
 		return entry.state, nil
 	}
 
-	state, err := c.inner.GetState(ctx, entityID)
-	if err != nil {
-		return nil, err
+	c.mu.Lock()
+	// Re-check under the write lock: an event or a completed fetch may
+	// have landed while we waited for it.
+	if entry, ok := c.entries[entityID]; ok && c.clock().Sub(entry.at) < c.ttl {
+		c.mu.Unlock()
+		return entry.state, nil
 	}
-	c.store(entityID, cloneState(state), now)
-	return state, nil
+	if fl, ok := c.inflight[entityID]; ok {
+		c.mu.Unlock()
+		select {
+		case <-fl.done:
+			return fl.state, fl.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	fl := &inflightFetch{done: make(chan struct{})}
+	c.inflight[entityID] = fl
+	c.mu.Unlock()
+
+	go c.fetch(entityID, fl)
+
+	select {
+	case <-fl.done:
+		return fl.state, fl.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// fetch performs the shared read-through for one entity and completes
+// the in-flight slot. The store is timestamped at fetch start, so an
+// event that arrives mid-flight (stamped later) wins over this
+// response in the monotonic store.
+func (c *StateReadCache) fetch(entityID string, fl *inflightFetch) {
+	ctx, cancel := context.WithTimeout(context.Background(), stateReadFetchTimeout)
+	defer cancel()
+	at := c.clock()
+	state, err := c.inner.GetState(ctx, entityID)
+	if err == nil {
+		c.store(entityID, cloneState(state), at)
+	}
+	fl.state, fl.err = state, err
+	c.mu.Lock()
+	delete(c.inflight, entityID)
+	c.mu.Unlock()
+	close(fl.done)
 }
 
 // HandleStateChange is a [StateChangeHandler]: it refreshes the cache
@@ -109,28 +172,42 @@ func (c *StateReadCache) HandleStateChange(change StateChangedData) {
 	c.store(change.NewState.EntityID, cloneState(change.NewState), c.clock())
 }
 
-// store inserts under the cap: at capacity it first sweeps expired
-// entries, then evicts the single stalest one — the cap is a backstop
-// against an unexpectedly wide event feed, not a tuning knob.
+// store installs an entry, monotonic per entity and bounded overall. A
+// write stamped strictly older than the existing entry is dropped: a
+// slow fetch completion (stamped at fetch start) must not roll the
+// cache back over an event that arrived mid-flight, and an older
+// concurrent fetch must not clobber a newer one. Same-instant writes
+// overwrite, so the in-order event stream always advances the entry
+// even under a coarse test clock. Under the cap, expired entries sweep
+// first and then the single stalest entry is evicted — seeded from the
+// map, never from the incoming timestamp, so an old-stamped insert
+// still makes room for itself.
 func (c *StateReadCache) store(entityID string, state *State, at time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.entries[entityID]; !exists && len(c.entries) >= stateReadCacheMaxEntries {
+	if existing, exists := c.entries[entityID]; exists {
+		if at.Before(existing.at) {
+			return
+		}
+		c.entries[entityID] = stateCacheEntry{state: state, at: at}
+		return
+	}
+	if len(c.entries) >= stateReadCacheMaxEntries {
+		now := c.clock()
 		for id, entry := range c.entries {
-			if at.Sub(entry.at) >= c.ttl {
+			if now.Sub(entry.at) >= c.ttl {
 				delete(c.entries, id)
 			}
 		}
 		if len(c.entries) >= stateReadCacheMaxEntries {
-			oldestID, oldestAt := "", at
+			var oldestID string
+			var oldestAt time.Time
 			for id, entry := range c.entries {
-				if entry.at.Before(oldestAt) {
+				if oldestID == "" || entry.at.Before(oldestAt) {
 					oldestID, oldestAt = id, entry.at
 				}
 			}
-			if oldestID != "" {
-				delete(c.entries, oldestID)
-			}
+			delete(c.entries, oldestID)
 		}
 	}
 	c.entries[entityID] = stateCacheEntry{state: state, at: at}
