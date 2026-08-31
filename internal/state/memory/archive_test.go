@@ -2,10 +2,12 @@ package memory
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 func newTestArchiveStore(t *testing.T) *ArchiveStore {
@@ -120,6 +122,30 @@ func TestListClosedSessionsPage_KeysetCutoffAndMessageCount(t *testing.T) {
 	}
 	if len(second) != 1 || second[0].ID != rows[1].id || hasMore {
 		t.Fatalf("second page = %#v, hasMore=%v", second, hasMore)
+	}
+}
+
+func TestListClosedSessionsPage_MessageCountFailure(t *testing.T) {
+	store := newTestArchiveStore(t)
+	cutoff := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.Exec(`
+		INSERT INTO sessions (id, conversation_id, started_at, ended_at)
+		VALUES ('019c0000-0000-7000-8000-000000000001', 'signal-test', ?, ?)
+	`, cutoff.Add(-time.Hour).Format(time.RFC3339Nano), cutoff.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	brokenMessages, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open broken message database: %v", err)
+	}
+	t.Cleanup(func() { brokenMessages.Close() })
+	store.messagesDB = brokenMessages
+	store.msgTableName = "messages"
+
+	_, _, err = store.ListClosedSessionsPage(cutoff, "", 1)
+	if err == nil || !strings.Contains(err.Error(), "populate message counts") {
+		t.Fatalf("ListClosedSessionsPage error = %v, want message count failure", err)
 	}
 }
 

@@ -282,11 +282,10 @@ func (b *ContactDossierBackfill) enqueueSubject(
 
 	payload := messages.LoopNotifyPayload{
 		Events: []messages.LoopEventPayload{{
-			Source:     "contact_dossier_backfill",
-			Type:       eventType,
-			ID:         id,
-			Summary:    summary,
-			ObservedAt: b.now().UTC(),
+			Source:  "contact_dossier_backfill",
+			Type:    eventType,
+			ID:      id,
+			Summary: summary,
 		}},
 	}
 	raw, err := json.Marshal(payload)

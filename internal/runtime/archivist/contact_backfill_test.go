@@ -166,8 +166,14 @@ func TestContactDossierBackfill_BoundedPhasesAndDurableCompletion(t *testing.T) 
 		if err := json.Unmarshal(enqueue.payload, &payload); err != nil {
 			t.Fatalf("decode payload: %v", err)
 		}
-		if len(payload.Events) != 1 || payload.Events[0].Source != "contact_dossier_backfill" {
-			t.Errorf("payload = %+v", payload)
+		if len(payload.Events) != 1 {
+			t.Fatalf("payload events = %+v, want one", payload.Events)
+		}
+		if payload.Events[0].Source != "contact_dossier_backfill" {
+			t.Errorf("payload source = %q, want contact_dossier_backfill", payload.Events[0].Source)
+		}
+		if !payload.Events[0].ObservedAt.IsZero() {
+			t.Errorf("payload observed_at = %v, want omitted", payload.Events[0].ObservedAt)
 		}
 	}
 }
