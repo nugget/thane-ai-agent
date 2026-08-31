@@ -137,7 +137,7 @@ func buildLiveRequestDetail(rc RequestContent, maxLen int, now time.Time) *Reque
 		OutputTokens:     rc.OutputTokens,
 		Exhausted:        rc.Exhausted,
 		ExhaustReason:    rc.ExhaustReason,
-		CreatedAt:        now.Format(time.RFC3339Nano),
+		CreatedAt:        FormatTimestamp(now),
 		Messages:         retainedMessages(rc.Messages, maxLen),
 		ToolCalls:        extractToolDetails(rc.Messages, maxLen),
 	}

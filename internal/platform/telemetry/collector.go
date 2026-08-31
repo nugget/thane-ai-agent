@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -298,7 +299,11 @@ func (c *Collector) collectRequests(ctx context.Context, m *Metrics) {
 	}
 
 	now := time.Now().UTC()
-	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
+	// The log index's timestamp column compares lexicographically;
+	// logging.FormatTimestamp is its fixed-width shape. A seconds-only
+	// RFC3339 bound excluded every row in the boundary second (rows
+	// carry fractions, and "." sorts below "Z").
+	since := logging.FormatTimestamp(now.Add(-24 * time.Hour))
 
 	// Count distinct request IDs (non-empty) in the last 24h.
 	var reqCount int
