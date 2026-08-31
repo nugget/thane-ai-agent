@@ -498,7 +498,7 @@ func (h *IndexHandler) drain() {
 
 	for e := range h.shared.ch {
 		if _, err := stmt.Exec(
-			e.Timestamp.UTC().Format(time.RFC3339Nano),
+			FormatTimestamp(e.Timestamp),
 			e.Level,
 			e.Msg,
 			nullString(e.RequestID),
@@ -671,7 +671,7 @@ func nullInt(n int) sql.NullInt64 {
 // prunes DEBUG and TRACE entries while keeping INFO, WARN, and ERROR.
 // Returns the number of rows deleted.
 func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, error) {
-	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	cutoff := FormatTimestamp(time.Now().Add(-maxAge))
 
 	// Build a list of levels to prune (those below minKeepLevel).
 	// Uses normalizeLevel so level strings match the DB values
@@ -850,14 +850,14 @@ func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
 	}
 	if !params.Since.IsZero() {
 		query += " AND timestamp >= ?"
-		args = append(args, params.Since.UTC().Format(time.RFC3339Nano))
+		args = append(args, FormatTimestamp(params.Since))
 	}
 	until := params.Until
 	if until.IsZero() {
 		until = time.Now()
 	}
 	query += " AND timestamp <= ?"
-	args = append(args, until.UTC().Format(time.RFC3339Nano))
+	args = append(args, FormatTimestamp(until))
 
 	if params.Pattern != "" {
 		query += " AND msg LIKE '%' || ? || '%'"

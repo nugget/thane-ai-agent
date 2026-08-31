@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -358,5 +359,36 @@ func TestCollect_TruncatedColdSnapshotNotCached(t *testing.T) {
 	}
 	if replay := c.Collect(context.Background()); replay == truncated {
 		t.Fatal("a snapshot collected under a dead ctx must not be cached")
+	}
+}
+
+// TestCollect_RequestsBoundarySecond pins the window's lower edge: a
+// row stamped fractionally inside the 24h boundary second must count.
+// The old seconds-only RFC3339 bound excluded every such row ('.'
+// sorts below 'Z' against the index's fractional timestamps), so this
+// test fails against that bound and holds the fixed-width formatter in
+// place.
+func TestCollect_RequestsBoundarySecond(t *testing.T) {
+	db := openTestLogsDB(t)
+
+	fixed := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	edge := fixed.Add(-24 * time.Hour).Add(300 * time.Millisecond)
+	if _, err := db.Exec(
+		`INSERT INTO log_entries (timestamp, level, msg, request_id, session_id, conversation_id, subsystem, tool, model)
+		 VALUES (?, 'ERROR', 'boundary row', 'req-edge', '', '', '', '', '')`,
+		logging.FormatTimestamp(edge),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCollector(Sources{LogsDB: db})
+	c.now = func() time.Time { return fixed }
+
+	m := c.Collect(context.Background())
+	if m.Requests24h != 1 {
+		t.Errorf("Requests24h = %d, want 1 (boundary-second row must count)", m.Requests24h)
+	}
+	if m.Errors24h != 1 {
+		t.Errorf("Errors24h = %d, want 1 (boundary-second row must count)", m.Errors24h)
 	}
 }
