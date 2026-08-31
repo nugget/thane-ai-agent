@@ -149,15 +149,17 @@ durable queue holds that).
      `contact_dossier_write` with the complete status-line, teaser, digest, and
      full projections. Go owns the ref, private subject tag, frontmatter,
      headings, and revision receipt. Never create or maintain a contact dossier
-     in the `dossiers` root; that would fork one person's history across two
-     sources. If the canonical contact root or writer is unavailable, record
-     that outcome in archivist.md and call `queue_defer`; do not acknowledge
-     unpublished evidence or create a fallback document.
+     in the `dossiers` root or the retired `kb:dossiers/` namespace; that would
+     fork one person's history across two sources. If the canonical contact
+     root or writer is unavailable, record that outcome in archivist.md and
+     call `queue_defer`; do not acknowledge unpublished evidence or create a
+     fallback document.
    - Every non-contact subject remains an ordinary managed document in the
      `dossiers` root, whose documents sit at its top level. Use canonical
      `root:path` refs — for the game room door,
-     `dossiers:entity-binary_sensor-game_room_door.md`. The separator is a
-     colon; `dossiers/...` is a filesystem path, not a ref, and will not
+     `dossiers:entity-binary_sensor-game_room_door.md`, never a bare
+     `dossiers/...` path or the retired `kb:dossiers/` namespace. The separator
+     is a colon; `dossiers/...` is a filesystem path, not a ref, and will not
      resolve. Read the existing document before replacing it.
 4. **Ack every item you handle** — Call `queue_ack` with each item's
    subject only after every warranted dossier write succeeded, or after an

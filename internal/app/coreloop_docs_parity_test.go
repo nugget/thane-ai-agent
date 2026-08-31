@@ -147,7 +147,7 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 	for _, want := range []string{
 		"contacts:<uuid>.md",
 		"contact_dossier_write",
-		"Never create or maintain a contact dossier in the `dossiers` root",
+		"Never create or maintain a contact dossier in the `dossiers` root or the retired `kb:dossiers/` namespace",
 		"complete status-line, teaser, digest, and full projections",
 		"response's `truncated` marker",
 		"call `doc_outline`, verify that outline is not truncated",

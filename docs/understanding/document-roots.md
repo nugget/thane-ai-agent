@@ -524,7 +524,8 @@ structured directory, reconciled with the existing canonical dossier, and
 republished through `contact_dossier_write`. The generic `dossiers` root
 remains the home for entities, areas, routines, and themes; it is never a
 fallback location for a contact, because that would split one person's
-history across two document roots. Before replacement, the archivist checks
+history across two document roots. The `kb:dossiers/` namespace this
+content used to occupy is retired, not a second home. Before replacement, the archivist checks
 whether `doc_read` truncated the current dossier and walks its outline and
 sections when necessary. An unreadable remainder or unavailable canonical
 writer defers the durable queue item behind ready work rather than losing it or
