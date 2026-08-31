@@ -29,6 +29,29 @@ const (
 	defaultWSHandshakeTimeout = 15 * time.Second
 )
 
+// Event delivery. The events channel decouples the socket readLoop from
+// its consumer; the readLoop must never block on a slow consumer.
+const (
+	// eventChanCapacity sizes the subscribed-event channel. The consumer
+	// (the ha-state-watcher loop) drains in batches with a few
+	// milliseconds of iteration bookkeeping between batches, and Home
+	// Assistant polling integrations refresh hundreds of entities in a
+	// single burst — the buffer must absorb a whole burst landing inside
+	// one such gap. 100 slots measurably did not (drops on every poll
+	// cycle in production); 1024 covers the worst observed storm with
+	// headroom.
+	eventChanCapacity = 1024
+
+	// dropLogInterval coalesces the channel-overflow warning. Logging
+	// every dropped event amplifies load exactly when the pipeline is
+	// already saturated — an overflow storm would push hundreds of warn
+	// records through the same process that is failing to keep up. The
+	// first drop after a quiet stretch logs immediately; further drops
+	// fold into one summary per interval, and a tail flush reports the
+	// remainder within one interval of a burst's last drop.
+	dropLogInterval = 30 * time.Second
+)
+
 // WSClient manages a self-healing WebSocket connection to Home Assistant.
 //
 // Once Start is called, the client owns its own connection lifecycle: it
@@ -55,8 +78,21 @@ type WSClient struct {
 
 	// Event channel for subscribed events. Created once and reused across
 	// reconnects so downstream consumers (e.g. the state watcher) keep a
-	// stable channel.
+	// stable channel. Overflow evicts the oldest queued event — see
+	// enqueueEvent.
 	events chan Event
+
+	// Overflow accounting for the events channel, all under dropMu.
+	// droppedTotal counts every event discarded because the channel was
+	// full; droppedLogged is the total as of the last warning, so each
+	// warning reports the difference; dropFlushTimer holds the pending
+	// tail flush that surfaces a burst's folded drops when no later
+	// drop arrives to trigger the next summary (see recordDroppedEvent).
+	dropMu         sync.Mutex
+	droppedTotal   uint64
+	droppedLogged  uint64
+	lastDropLog    time.Time
+	dropFlushTimer *time.Timer
 
 	// desired is the set of event types we want subscribed. It is sticky:
 	// recorded on Subscribe regardless of connection state and re-applied
@@ -123,7 +159,7 @@ func NewWSClient(baseURL, token string, logger *slog.Logger) *WSClient {
 		baseURL:           baseURL,
 		token:             token,
 		pending:           make(map[int64]chan wsResponse),
-		events:            make(chan Event, 100),
+		events:            make(chan Event, eventChanCapacity),
 		desired:           make(map[string]struct{}),
 		lost:              make(chan struct{}, 1),
 		retryNow:          make(chan struct{}, 1),
@@ -571,11 +607,7 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 		case "event":
 			// Subscribed event.
 			if msg.Event != nil {
-				select {
-				case c.events <- *msg.Event:
-				default:
-					c.logger.Warn("event channel full, dropping event", "type", msg.Event.Type)
-				}
+				c.enqueueEvent(*msg.Event)
 			}
 
 		case "pong":
@@ -585,6 +617,87 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 			c.logger.Debug("unhandled WebSocket message type", "type", msg.Type)
 		}
 	}
+}
+
+// enqueueEvent delivers a subscribed event to the events channel without
+// ever blocking the readLoop. When the channel is full, the oldest queued
+// event is evicted to make room: for state tracking the newest transition
+// is the most valuable and the stalest the most disposable, so overflow
+// keeps fresh state flowing instead of preserving a backlog nobody has
+// read yet.
+func (c *WSClient) enqueueEvent(ev Event) {
+	for {
+		select {
+		case c.events <- ev:
+			return
+		default:
+		}
+
+		// Channel full: evict the oldest entry and retry the send. The
+		// evict races the consumer — when the consumer drains a slot
+		// first, the receive misses, nothing is dropped, and the next
+		// send attempt takes the freed capacity instead. Only a
+		// successful evict counts as a drop. The loop terminates
+		// because every pass either sends or frees a slot, and the
+		// readLoop is the only sustained producer.
+		select {
+		case <-c.events:
+			c.recordDroppedEvent()
+		default:
+		}
+	}
+}
+
+// recordDroppedEvent counts one discarded event and coalesces the
+// overflow warning: the first drop after a quiet stretch logs
+// immediately, further drops inside dropLogInterval fold into a summary,
+// and a tail-flush timer guarantees the summary lands within one
+// interval of a burst's last drop even when no later drop arrives to
+// trigger it. An overflow storm therefore costs one log record per
+// interval instead of hundreds, and every drop is eventually reported.
+func (c *WSClient) recordDroppedEvent() {
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	c.droppedTotal++
+	now := time.Now()
+	if now.Sub(c.lastDropLog) >= dropLogInterval {
+		c.logDropsLocked(now)
+		return
+	}
+	if c.dropFlushTimer == nil {
+		delay := dropLogInterval - now.Sub(c.lastDropLog)
+		c.dropFlushTimer = time.AfterFunc(delay, c.flushDroppedEvents)
+	}
+}
+
+// flushDroppedEvents reports drops that folded into the quiet window
+// with no later drop to surface them — the tail of a finite burst.
+func (c *WSClient) flushDroppedEvents() {
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	c.dropFlushTimer = nil
+	if c.droppedTotal == c.droppedLogged {
+		return
+	}
+	c.logDropsLocked(time.Now())
+}
+
+// logDropsLocked emits the coalesced overflow warning and advances the
+// window bookkeeping. The caller holds dropMu.
+func (c *WSClient) logDropsLocked(now time.Time) {
+	c.logger.Warn("event channel full; dropped events",
+		"dropped_since_last", c.droppedTotal-c.droppedLogged,
+		"dropped_total", c.droppedTotal)
+	c.droppedLogged = c.droppedTotal
+	c.lastDropLog = now
+}
+
+// droppedCount reports the cumulative number of events discarded to
+// channel overflow.
+func (c *WSClient) droppedCount() uint64 {
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	return c.droppedTotal
 }
 
 // signalLost notifies the supervisor of a connection loss without blocking.

@@ -194,7 +194,14 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 func hydrateHAStateWatcherSpec(spec looppkg.Spec, watcher *homeassistant.StateWatcher) looppkg.Spec {
 	const haCleanupInterval = 5 * time.Minute
 	const haBatchWindow = 1 * time.Second
-	const haBatchMax = 100
+	// haBatchMax bounds one handler batch. Keep it well below the WS
+	// client's event channel capacity: while the loop is between batches
+	// (handler dispatch plus iteration bookkeeping) nobody reads the
+	// channel, and the buffer alone must absorb whatever a Home
+	// Assistant polling burst delivers into that gap. When the two were
+	// equal (100/100), any burst larger than one batch plus one buffer
+	// overflowed and dropped events.
+	const haBatchMax = 256
 
 	haEvents := watcher.Events()
 	lastCleanup := time.Now()
