@@ -2693,6 +2693,14 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
 			return nil, "", cancelErr
 		}
+		// A billing-blocked provider is a standing state the provider
+		// already announced on its transition edge; each iteration's
+		// rediscovery is Debug, not another ERROR, and failover is
+		// pointless — the default model is usually the same account.
+		if llm.IsBillingBlocked(err) {
+			iterLog.Debug("LLM call blocked by provider billing state", "error", err, "model", model)
+			return nil, "", err
+		}
 		iterLog.Error("LLM call failed", "error", err, "model", model)
 
 		if isTimeout(err) {
@@ -2988,6 +2996,23 @@ func canceledContextError(err error, contexts ...context.Context) error {
 func isUserFixableModelError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// Typed classification first: providers that wrap llm.APIError
+	// carry the status as structure. The string fallback below only
+	// ever matched the bare "API error " prefix, which Anthropic's
+	// "anthropic API error 400: …" never did — so Anthropic 4xxs
+	// (billing 400s included) wrongly entered failover on every
+	// iteration and produced the failover-also-failed pair. Unlike the
+	// legacy branch's blanket 4xx, the typed branch exempts the two
+	// transient 4xxs: a 429 (rate limit) and 408 (timeout) are exactly
+	// the cases where trying another resource can genuinely help.
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 408, 429:
+			return false
+		}
+		return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 	}
 	msg := strings.TrimSpace(err.Error())
 	if !strings.HasPrefix(msg, "API error ") {

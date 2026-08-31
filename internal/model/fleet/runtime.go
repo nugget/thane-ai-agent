@@ -204,6 +204,26 @@ func (r *Runtime) AnthropicRateLimitSnapshot() *AnthropicRateLimitSnapshot {
 	return anthropicRateLimitSnapshotFromProvider(r.bundle.AnthropicClient.RateLimitSnapshot())
 }
 
+// AnthropicBillingSnapshot returns the account's billing-blocked state,
+// or nil when the Anthropic provider is not configured or the account
+// is not blocked.
+func (r *Runtime) AnthropicBillingSnapshot() *modelproviders.BillingSnapshot {
+	if r == nil || r.bundle == nil || r.bundle.AnthropicClient == nil {
+		return nil
+	}
+	return r.bundle.AnthropicClient.BillingSnapshot()
+}
+
+// SetAnthropicBillingHook registers fn for billing-state transition
+// edges (blocked on entry, cleared on recovery). No-op when the
+// Anthropic provider is not configured.
+func (r *Runtime) SetAnthropicBillingHook(fn func(blocked bool, detail string)) {
+	if r == nil || r.bundle == nil || r.bundle.AnthropicClient == nil {
+		return
+	}
+	r.bundle.AnthropicClient.SetBillingTransitionHook(fn)
+}
+
 func anthropicRateLimitSnapshotFromProvider(snap *modelproviders.RateLimitSnapshot) *AnthropicRateLimitSnapshot {
 	if snap == nil {
 		return nil
