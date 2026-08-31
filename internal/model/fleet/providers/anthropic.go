@@ -837,16 +837,20 @@ type CacheBreakpointDrop struct {
 // request rejection.
 //
 // Returns the list of drops it performed so callers can fold them
-// into a single observability line; the function also continues to
-// emit Warn logs for each drop so production alerting still fires
-// without depending on aggregated logs.
+// into a single observability line (see logOutboundCacheMarkers).
+// Over-the-cap drops also emit a Warn each — a request asking for more
+// than four breakpoints means the assembly plan changed and someone
+// should look. Under-minimum drops log at Debug: a small trailing
+// section under the cacheable minimum is a structural fact of the
+// prompt shape that recurs on every request, and warning about normal
+// operation buries the warns that matter.
 //
 // The guard policy:
 //
 //  1. For each system block that carries a cache_control, compute the
 //     prefix length through that block. If the prefix is below the
-//     model-specific minimum, strip cache_control and warn. The block
-//     itself remains; only the breakpoint is removed.
+//     model-specific minimum, strip cache_control. The block itself
+//     remains; only the breakpoint is removed.
 //  2. Count surviving system breakpoints plus the one blanket tool
 //     cache (if any). If the total still exceeds 4, drop the tool
 //     cache first — it is an undifferentiated "cache the last tool"
@@ -867,7 +871,7 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 			continue
 		}
 		if prefixChars/estimatedCharsPerToken < minTokens {
-			logger.Warn("dropping under-minimum Anthropic cache breakpoint",
+			logger.Debug("dropping under-minimum Anthropic cache breakpoint",
 				"model", model,
 				"block_index", i,
 				"prefix_chars", prefixChars,
