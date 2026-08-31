@@ -202,11 +202,10 @@ embeddings:
   # falls back to the default model resource/provider selection.
   baseurl: ""
 # Workspace configures the agent's sandboxed file system access.
-# The workspace root is also the anchor for Thane's two derived
-# document roots. {workspace.path}/core holds what the operator
-# declares Thane to be — axioms.md, persona.md, mission.md — and
-# {workspace.path}/self holds what Thane has made of that, written
-# by the core service loops: ego.md, metacognitive.md, archivist.md.
+# The workspace root also anchors Thane's derived document roots.
+# {workspace.path}/core holds what the operator declares Thane to be;
+# {workspace.path}/self holds what Thane has made of that; and the
+# optional {workspace.path}/contacts holds contact dossiers.
 workspace:
   # ReadOnlyDirs are additional directories the agent can read from
   # but not write to. Useful for compatibility or reference roots that
@@ -237,16 +236,14 @@ workspace:
 #         signing_key: ~/Thane/core/identity/signing_ed25519
 # 
 # Typical names: kb (curated knowledge), generated (model-produced
-# durable outputs), scratchpad (low-integrity work area), dossiers.
-# The core: name is reserved and always derived from
-# {workspace.path}/core; declaring it under roots: lets you set
-# policy for it but the path is ignored.
+# durable outputs), and scratchpad (low-integrity work area). The core,
+# self, and contacts names are reserved and derived from workspace.path;
+# declaring them under roots: sets policy, while any path is ignored.
 roots:
   generated:
-    # Path is the directory the root resolves to. Supports ~
-    # expansion at resolver construction time. For the reserved
-    # core: name this is ignored; the path is always derived from
-    # workspace.path.
+    # Path is the directory the root resolves to. Supports ~ expansion at
+    # resolver construction time. For reserved derived roots (core, self,
+    # and contacts) this is ignored; their paths come from workspace.path.
     path: ./generated
     # Indexing controls whether markdown files in this root are
     # scanned into the document index. Omit to keep indexing enabled.
@@ -306,15 +303,17 @@ roots:
       # enforce, and the right shape when an entire corpus is only
       # relevant while a capability is active.
       # 
-      # It applies to injection only, so it requires inject: tagged.
-      # Gating search the same way would need the document store to see
-      # active capability tags, which it deliberately does not.
+      # It applies to tagged injection and tagged advertising. Gating search
+      # the same way would need the document store to see active capability
+      # tags, which it deliberately does not.
       requires_tag: ""
       # Advertise controls whether this root's documents may offer
       # themselves to context assembly through the advertisement rail
       # (#1431): "never" (default), "tagged" (offers only while
-      # RequiresTag's capability tag is active), or "always" (ambient
-      # offers on every eligible turn). Advertising is a third door
+      # RequiresTag's capability tag is active), "always" (ambient offers
+      # on every eligible turn), or "exact_subject" (offers only when a
+      # document tag exactly matches a canonical request subject).
+      # Advertising is a third door
       # beside Inject and Search rather than a mode of either: injection
       # pushes whole documents on a tag, search answers an explicit ask,
       # and advertising lets a document compete for a bounded slice of
@@ -357,10 +356,9 @@ roots:
     # establish or re-establish on its own.
     seed_signers: []
   kb:
-    # Path is the directory the root resolves to. Supports ~
-    # expansion at resolver construction time. For the reserved
-    # core: name this is ignored; the path is always derived from
-    # workspace.path.
+    # Path is the directory the root resolves to. Supports ~ expansion at
+    # resolver construction time. For reserved derived roots (core, self,
+    # and contacts) this is ignored; their paths come from workspace.path.
     path: ./knowledge
     # Indexing controls whether markdown files in this root are
     # scanned into the document index. Omit to keep indexing enabled.
@@ -474,15 +472,17 @@ roots:
       # enforce, and the right shape when an entire corpus is only
       # relevant while a capability is active.
       # 
-      # It applies to injection only, so it requires inject: tagged.
-      # Gating search the same way would need the document store to see
-      # active capability tags, which it deliberately does not.
+      # It applies to tagged injection and tagged advertising. Gating search
+      # the same way would need the document store to see active capability
+      # tags, which it deliberately does not.
       requires_tag: ""
       # Advertise controls whether this root's documents may offer
       # themselves to context assembly through the advertisement rail
       # (#1431): "never" (default), "tagged" (offers only while
-      # RequiresTag's capability tag is active), or "always" (ambient
-      # offers on every eligible turn). Advertising is a third door
+      # RequiresTag's capability tag is active), "always" (ambient offers
+      # on every eligible turn), or "exact_subject" (offers only when a
+      # document tag exactly matches a canonical request subject).
+      # Advertising is a third door
       # beside Inject and Search rather than a mode of either: injection
       # pushes whole documents on a tag, search answers an explicit ask,
       # and advertising lets a document compete for a bounded slice of
@@ -544,10 +544,9 @@ roots:
         valid_after: ""
         valid_before: ""
   scratchpad:
-    # Path is the directory the root resolves to. Supports ~
-    # expansion at resolver construction time. For the reserved
-    # core: name this is ignored; the path is always derived from
-    # workspace.path.
+    # Path is the directory the root resolves to. Supports ~ expansion at
+    # resolver construction time. For reserved derived roots (core, self,
+    # and contacts) this is ignored; their paths come from workspace.path.
     path: ./scratchpad
     # Indexing controls whether markdown files in this root are
     # scanned into the document index. Omit to keep indexing enabled.
@@ -607,15 +606,17 @@ roots:
       # enforce, and the right shape when an entire corpus is only
       # relevant while a capability is active.
       # 
-      # It applies to injection only, so it requires inject: tagged.
-      # Gating search the same way would need the document store to see
-      # active capability tags, which it deliberately does not.
+      # It applies to tagged injection and tagged advertising. Gating search
+      # the same way would need the document store to see active capability
+      # tags, which it deliberately does not.
       requires_tag: ""
       # Advertise controls whether this root's documents may offer
       # themselves to context assembly through the advertisement rail
       # (#1431): "never" (default), "tagged" (offers only while
-      # RequiresTag's capability tag is active), or "always" (ambient
-      # offers on every eligible turn). Advertising is a third door
+      # RequiresTag's capability tag is active), "always" (ambient offers
+      # on every eligible turn), or "exact_subject" (offers only when a
+      # document tag exactly matches a canonical request subject).
+      # Advertising is a third door
       # beside Inject and Search rather than a mode of either: injection
       # pushes whole documents on a tag, search answers an explicit ask,
       # and advertising lets a document compete for a bounded slice of

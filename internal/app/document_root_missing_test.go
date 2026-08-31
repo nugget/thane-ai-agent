@@ -35,8 +35,9 @@ func TestCheckRootAdmissionReportsMissingDerivedRoots(t *testing.T) {
 	cfg := &config.Config{
 		Workspace: config.WorkspaceConfig{Path: workspace},
 		DocRoots: map[string]config.DocumentRootConfig{
-			config.CoreRootName: signedRoot(),
-			config.SelfRootName: signedRoot(),
+			config.CoreRootName:     signedRoot(),
+			config.SelfRootName:     signedRoot(),
+			config.ContactsRootName: signedRoot(),
 		},
 	}
 
@@ -47,7 +48,7 @@ func TestCheckRootAdmissionReportsMissingDerivedRoots(t *testing.T) {
 		byRoot[r.Root] = r
 	}
 
-	for _, root := range []string{config.CoreRootName, config.SelfRootName} {
+	for _, root := range []string{config.CoreRootName, config.SelfRootName, config.ContactsRootName} {
 		t.Run(root, func(t *testing.T) {
 			got, ok := byRoot[root]
 			if !ok {

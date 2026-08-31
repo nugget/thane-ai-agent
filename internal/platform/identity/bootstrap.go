@@ -334,12 +334,26 @@ type channelPolicy struct {
 	AllowedKeyTypes []string `yaml:"allowed_key_types"`
 }
 
-// coreRootPolicy carries the seed declaration for core in the generated
-// config. Only seed_signers is emitted: everything else about core's policy is
-// the operator's to author, but the seed set has to exist from birth or
-// admission has nothing to judge the root against.
+// coreRootPolicy carries one generated document-root declaration. Core emits
+// only seed_signers; contacts also emits its managed authoring, exact-subject
+// context, and signed-history policy so a fresh instance has a complete
+// dossier root without post-init path surgery.
 type coreRootPolicy struct {
-	SeedSigners []coreSeedSigner `yaml:"seed_signers,omitempty"`
+	Authoring   string                `yaml:"authoring,omitempty"`
+	Context     coreRootContextPolicy `yaml:"context,omitempty"`
+	SeedSigners []coreSeedSigner      `yaml:"seed_signers,omitempty"`
+	Git         coreRootGitPolicy     `yaml:"git,omitempty"`
+}
+
+type coreRootContextPolicy struct {
+	Advertise string `yaml:"advertise,omitempty"`
+}
+
+type coreRootGitPolicy struct {
+	Enabled          bool   `yaml:"enabled,omitempty"`
+	SignCommits      bool   `yaml:"sign_commits,omitempty"`
+	VerifySignatures string `yaml:"verify_signatures,omitempty"`
+	SigningKey       string `yaml:"signing_key,omitempty"`
 }
 
 type coreSeedSigner struct {
@@ -369,9 +383,32 @@ func coreSeedDeclaration(signing *SigningKeyPair, operator *OperatorSigner) core
 	}}}
 }
 
+func contactsRootDeclaration(signing *SigningKeyPair) coreRootPolicy {
+	return coreRootPolicy{
+		Authoring: "managed",
+		Context: coreRootContextPolicy{
+			Advertise: "exact_subject",
+		},
+		SeedSigners: []coreSeedSigner{{
+			Principal: provenance.AgentPrincipal,
+			Key:       strings.TrimSpace(signing.Public),
+			Label:     "agent",
+		}},
+		Git: coreRootGitPolicy{
+			Enabled:          true,
+			SignCommits:      true,
+			VerifySignatures: "required",
+			SigningKey:       "core:" + SigningPrivateKeyFile,
+		},
+	}
+}
+
 func renderCoreConfig(instanceName string, generatedAt time.Time, signing *SigningKeyPair, ca *CertificateAuthority, operator *OperatorSigner, operatorContactID string) ([]byte, error) {
 	cfg := coreConfig{
-		Roots:       map[string]coreRootPolicy{"core": coreSeedDeclaration(signing, operator)},
+		Roots: map[string]coreRootPolicy{
+			"core":     coreSeedDeclaration(signing, operator),
+			"contacts": contactsRootDeclaration(signing),
+		},
 		Version:     1,
 		GeneratedAt: generatedAt.Format(time.RFC3339),
 		Identity: identityPolicy{

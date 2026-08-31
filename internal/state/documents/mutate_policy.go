@@ -28,6 +28,18 @@ func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, 
 	if err := s.ensureRootAuthoringAllowed(root); err != nil {
 		return "", err
 	}
+	if validator := s.rootValidator(root); validator != nil {
+		frontmatter, body := splitFrontmatter(raw)
+		candidate := DocumentWriteCandidate{
+			Path:        filepath.ToSlash(relPath),
+			Tags:        append([]string(nil), frontmatter["tags"]...),
+			Frontmatter: frontmatter,
+			Body:        body,
+		}
+		if err := validator(candidate); err != nil {
+			return "", fmt.Errorf("validate %s write: %w", makeRef(root, relPath), err)
+		}
+	}
 	if writer := s.rootWriter(root); writer != nil {
 		message := documentWriteMessage("doc_write", root, relPath, raw)
 		expectedRevision = strings.TrimSpace(expectedRevision)

@@ -86,6 +86,7 @@ type Store struct {
 	rootWriters     map[string]RootWriter
 	rootVerifiers   map[string]RootVerifier
 	rootRevisers    map[string]RootReviser
+	rootValidators  map[string]RootWriteValidator
 	verificationMu  sync.Mutex
 	verification    map[string]SignatureVerification
 	logger          *slog.Logger
@@ -161,6 +162,7 @@ func NewStoreWithOptions(db *sql.DB, roots map[string]string, logger *slog.Logge
 		rootWriters:     normalizeRootWriters(normalizedRoots, opts.RootWriters),
 		rootVerifiers:   normalizeRootVerifiers(normalizedRoots, opts.RootVerifiers),
 		rootRevisers:    normalizeRootRevisers(normalizedRoots, opts.RootRevisers),
+		rootValidators:  normalizeRootValidators(normalizedRoots, opts.RootValidators),
 		verification:    make(map[string]SignatureVerification),
 		logger:          logger,
 		refreshInterval: defaultRefreshInterval,

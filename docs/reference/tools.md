@@ -275,7 +275,7 @@ being reimplemented in each loop prompt.
 | Tool | Description |
 |------|-------------|
 | `contact_save` | Create or update a contact with vCard properties. |
-| `contact_lookup` | Search by name, query, kind, or property. |
+| `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured contact-dossier ref. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
 | `contact_forget` | Delete a contact. |
 | `contact_list` | List and filter contacts. |
@@ -288,7 +288,7 @@ being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `contact_owner` | Return the runtime operator contact. Protected tag; name retained for compatibility. |
+| `contact_owner` | Return the runtime operator contact, canonical UUID, configured dossier ref, and active operator channels. Protected tag; name retained for compatibility. |
 
 Operator channel activity recency is reported with delta fields such as
 `last_active_delta`.

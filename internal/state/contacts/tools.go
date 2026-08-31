@@ -46,6 +46,7 @@ type Tools struct {
 	operatorContactID uuid.UUID
 	ownerContactName  string
 	ownerActivity     func() []OwnerChannelActivity
+	dossiersEnabled   bool
 }
 
 // NewTools creates contact tools using the given store.
@@ -70,6 +71,12 @@ func (t *Tools) ConfigureOperatorContactID(id uuid.UUID) {
 	t.operatorContactID = id
 }
 
+// ConfigureDossierRoot controls whether rich contact results expose the
+// deterministic managed-document trailhead for the contact.
+func (t *Tools) ConfigureDossierRoot(enabled bool) {
+	t.dossiersEnabled = enabled
+}
+
 // SetOwnerContactName sets the contact name used to resolve the
 // primary human operator contact for legacy configurations.
 func (t *Tools) SetOwnerContactName(name string) {
@@ -90,7 +97,7 @@ func (t *Tools) OwnerContact(_ string) (string, error) {
 		return "", err
 	}
 	var sb strings.Builder
-	sb.WriteString(formatContact(c))
+	sb.WriteString(t.formatContact(c))
 	if summary := t.formatOwnerActivitySummary(); summary != "" {
 		sb.WriteString("\n\n")
 		sb.WriteString(summary)
@@ -410,7 +417,7 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("get contact details: %w", err)
 		}
-		return formatContact(c), nil
+		return t.formatContact(c), nil
 	}
 
 	// Property filter.
@@ -1037,6 +1044,14 @@ func formatContact(c *Contact) string {
 	}
 
 	return sb.String()
+}
+
+func (t *Tools) formatContact(c *Contact) string {
+	formatted := formatContact(c)
+	if t == nil || !t.dossiersEnabled || c == nil || c.ID == uuid.Nil {
+		return formatted
+	}
+	return fmt.Sprintf("%s\nContact ID: %s\nDossier: %s (doc_read; if absent, create with tag %s and the standard Status Line/Teaser/Digest/Details sections)", formatted, c.ID, DossierRef(c.ID), DossierSubject(c.ID))
 }
 
 func (t *Tools) formatOwnerActivitySummary() string {

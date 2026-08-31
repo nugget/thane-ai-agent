@@ -270,3 +270,19 @@ func TestSelfRootIgnoresAConfiguredPath(t *testing.T) {
 		t.Errorf("self root = %q, want the derived %q; a configured path must not win", got, want)
 	}
 }
+
+func TestContactsRootIsDerivedOnlyWhenDeclared(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{Workspace: config.WorkspaceConfig{Path: workspace}}
+	if _, ok := documentRootPaths(cfg, nil)[config.ContactsRootName]; ok {
+		t.Fatal("contacts root was registered without an explicit policy declaration")
+	}
+
+	cfg.DocRoots = map[string]config.DocumentRootConfig{
+		config.ContactsRootName: {Authoring: "managed"},
+	}
+	paths := documentRootPaths(cfg, nil)
+	if got, want := paths[config.ContactsRootName], filepath.Join(workspace, config.ContactsRootName); got != want {
+		t.Fatalf("contacts root = %q, want derived %q", got, want)
+	}
+}

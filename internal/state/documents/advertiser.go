@@ -155,6 +155,7 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 			if policy.RequiresTag == "" || !req.ActiveTags[policy.RequiresTag] {
 				continue
 			}
+		case "exact_subject":
 		default:
 			continue
 		}
@@ -165,15 +166,24 @@ func (d *DocumentAdvertiser) ContextAdvertisements(ctx context.Context, req agen
 			continue
 		}
 
-		matches := []agentctx.ContextMatchSignal{{
-			Kind:     agentctx.ContextMatchAmbient,
-			Strength: d.freshnessStrength(row, now),
-		}}
-		if m, ok := lexicalMatch(req.UserMessage, row); ok {
-			matches = append(matches, m)
-		}
-		if m, ok := subjectMatch(subjects, row); ok {
-			matches = append(matches, m)
+		var matches []agentctx.ContextMatchSignal
+		if policy.Mode == "exact_subject" {
+			m, ok := subjectMatch(subjects, row)
+			if !ok {
+				continue
+			}
+			matches = []agentctx.ContextMatchSignal{m}
+		} else {
+			matches = []agentctx.ContextMatchSignal{{
+				Kind:     agentctx.ContextMatchAmbient,
+				Strength: d.freshnessStrength(row, now),
+			}}
+			if m, ok := lexicalMatch(req.UserMessage, row); ok {
+				matches = append(matches, m)
+			}
+			if m, ok := subjectMatch(subjects, row); ok {
+				matches = append(matches, m)
+			}
 		}
 
 		// The envelope is rendered now, with this offer's real values,

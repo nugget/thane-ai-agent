@@ -33,13 +33,16 @@ func (a *App) initAgentLoop(s *newState) error {
 	// LoopOptions instead of post-construction setters.
 	if cfg.Workspace.Path != "" {
 		cfg.Paths = documentRootPaths(cfg, logger)
-		// Both derived roots are created, because both are written on a
-		// default install: core holds what the operator declares, self
-		// holds what the loops write about themselves. A self root that
-		// only appeared once a loop first wrote would leave an operator
-		// unable to declare policy on a directory that does not exist.
-		for _, root := range []string{config.CoreRootName, config.SelfRootName} {
-			if err := os.MkdirAll(cfg.Paths[root], 0o755); err != nil {
+		// Core and self are created on every install; contacts joins them
+		// when its canonical dossier policy is declared. Creating derived
+		// roots before resolver construction keeps policy and filesystem
+		// identity from depending on which subsystem happens to write first.
+		for _, root := range []string{config.CoreRootName, config.SelfRootName, config.ContactsRootName} {
+			path := cfg.Paths[root]
+			if strings.TrimSpace(path) == "" {
+				continue
+			}
+			if err := os.MkdirAll(path, 0o755); err != nil {
 				return fmt.Errorf("create %s document root: %w", root, err)
 			}
 		}

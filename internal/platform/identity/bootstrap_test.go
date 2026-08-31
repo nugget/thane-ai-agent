@@ -87,6 +87,19 @@ func TestBootstrapCoreCreatesSignedBirthCommit(t *testing.T) {
 	if cfg.Person.ContactBindings == nil || len(cfg.Person.ContactBindings) != 0 {
 		t.Fatalf("person.contact_bindings = %#v, want explicit empty map", cfg.Person.ContactBindings)
 	}
+	contactsRoot, ok := cfg.Roots["contacts"]
+	if !ok {
+		t.Fatal("generated config is missing roots.contacts")
+	}
+	if contactsRoot.Authoring != "managed" || contactsRoot.Context.Advertise != "exact_subject" {
+		t.Fatalf("generated contacts root policy = %#v", contactsRoot)
+	}
+	if !contactsRoot.Git.Enabled || !contactsRoot.Git.SignCommits || contactsRoot.Git.VerifySignatures != "required" || contactsRoot.Git.SigningKey != "core:"+SigningPrivateKeyFile {
+		t.Fatalf("generated contacts git policy = %#v", contactsRoot.Git)
+	}
+	if len(contactsRoot.SeedSigners) != 1 || contactsRoot.SeedSigners[0].Principal != "thane@provenance.local" {
+		t.Fatalf("generated contacts seed signers = %#v", contactsRoot.SeedSigners)
+	}
 	if cfg.Identity.SigningKey.Fingerprint != result.SigningKeyFingerprint {
 		t.Fatalf("signing fingerprint = %q, want %q", cfg.Identity.SigningKey.Fingerprint, result.SigningKeyFingerprint)
 	}

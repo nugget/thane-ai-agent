@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,47 @@ func TestStoreWriteAndReadManagedDocument(t *testing.T) {
 	}
 	if !strings.Contains(record.Body, "Helpful body.") {
 		t.Fatalf("Read body = %q, want helpful body", record.Body)
+	}
+}
+
+func TestStoreRootValidatorRefusesBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	called := false
+	store, err := NewStoreWithOptions(db, map[string]string{"contacts": rootDir}, nil, StoreOptions{
+		RootValidators: map[string]RootWriteValidator{
+			"contacts": func(candidate DocumentWriteCandidate) error {
+				called = true
+				if candidate.Path != "person.md" || len(candidate.Tags) != 1 || candidate.Tags[0] != "contact:test" || strings.TrimSpace(candidate.Body) != "body" {
+					t.Fatalf("validator candidate = %#v", candidate)
+				}
+				return fmt.Errorf("domain contract rejected")
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.Write(context.Background(), WriteArgs{
+		Ref:  "contacts:person.md",
+		Tags: []string{"contact:test"},
+		Body: stringPtr("body"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "domain contract rejected") {
+		t.Fatalf("Write() error = %v, want validator refusal", err)
+	}
+	if !called {
+		t.Fatal("root validator was not called")
+	}
+	if _, statErr := os.Stat(filepath.Join(rootDir, "person.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected write changed the filesystem; stat error = %v", statErr)
 	}
 }
 

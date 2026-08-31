@@ -65,6 +65,7 @@ const (
 type RootContextPolicy struct {
 	Inject      string `json:"inject,omitempty"`
 	Search      string `json:"search,omitempty"`
+	Advertise   string `json:"advertise,omitempty"`
 	RequiresTag string `json:"requires_tag,omitempty"`
 	Untagged    string `json:"untagged,omitempty"`
 }
@@ -95,6 +96,15 @@ func (p RootContextPolicy) EffectiveSearch() string {
 	return p.Search
 }
 
+// EffectiveAdvertise resolves context-advertisement eligibility, defaulting
+// to never.
+func (p RootContextPolicy) EffectiveAdvertise() string {
+	if p.Advertise == "" {
+		return "never"
+	}
+	return p.Advertise
+}
+
 // RootGitPolicy describes git-backed provenance policy for a managed
 // document root.
 type RootGitPolicy struct {
@@ -121,6 +131,7 @@ type RootPolicySummary struct {
 type RootContextSummary struct {
 	Inject      string `json:"inject"`
 	Search      string `json:"search"`
+	Advertise   string `json:"advertise"`
 	RequiresTag string `json:"requires_tag,omitempty"`
 	// Untagged says what a document carrying no tags means here. It is
 	// emitted always rather than only when refusing, because it changes
@@ -212,13 +223,28 @@ type RootVerifier interface {
 	VerifyRoot(ctx context.Context) (SignatureVerification, error)
 }
 
+// DocumentWriteCandidate is the parsed semantic shape presented to a
+// root-specific write validator before any bytes reach the filesystem or Git.
+type DocumentWriteCandidate struct {
+	Path        string              `json:"path"`
+	Tags        []string            `json:"tags,omitempty"`
+	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
+	Body        string              `json:"body"`
+}
+
+// RootWriteValidator enforces a domain contract on every managed write into
+// one root. Returning an error leaves both the worktree and Git history
+// unchanged.
+type RootWriteValidator func(DocumentWriteCandidate) error
+
 // StoreOptions configures optional root policy and backing writers for
 // [Store].
 type StoreOptions struct {
-	RootPolicies  map[string]RootPolicy
-	RootWriters   map[string]RootWriter
-	RootVerifiers map[string]RootVerifier
-	RootRevisers  map[string]RootReviser
+	RootPolicies   map[string]RootPolicy
+	RootWriters    map[string]RootWriter
+	RootVerifiers  map[string]RootVerifier
+	RootRevisers   map[string]RootReviser
+	RootValidators map[string]RootWriteValidator
 }
 
 func defaultRootPolicy() RootPolicy {
@@ -313,6 +339,24 @@ func normalizeRootRevisers(roots map[string]string, revisers map[string]RootRevi
 	return out
 }
 
+func normalizeRootValidators(roots map[string]string, validators map[string]RootWriteValidator) map[string]RootWriteValidator {
+	if len(validators) == 0 {
+		return nil
+	}
+	out := make(map[string]RootWriteValidator, len(validators))
+	for root, validator := range validators {
+		root = normalizeRootName(root)
+		if root == "" || validator == nil {
+			continue
+		}
+		if _, ok := roots[root]; !ok {
+			continue
+		}
+		out[root] = validator
+	}
+	return out
+}
+
 func normalizeRootName(root string) string {
 	return strings.TrimSuffix(strings.TrimSpace(root), ":")
 }
@@ -343,6 +387,7 @@ func (s *Store) rootPolicySummary(root string) RootPolicySummary {
 		Context: RootContextSummary{
 			Inject:      policy.Context.EffectiveInject(),
 			Search:      policy.Context.EffectiveSearch(),
+			Advertise:   policy.Context.EffectiveAdvertise(),
 			RequiresTag: policy.Context.RequiresTag,
 			Untagged:    policy.Context.EffectiveUntagged(),
 		},
@@ -371,4 +416,12 @@ func (s *Store) rootReviser(root string) RootReviser {
 		return nil
 	}
 	return s.rootRevisers[root]
+}
+
+func (s *Store) rootValidator(root string) RootWriteValidator {
+	root = normalizeRootName(root)
+	if s == nil || len(s.rootValidators) == 0 {
+		return nil
+	}
+	return s.rootValidators[root]
 }

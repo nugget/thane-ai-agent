@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	platformconfig "github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"gopkg.in/yaml.v3"
 )
@@ -42,7 +43,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	out := buf.String()
 
 	// Verify directory structure.
-	for _, sub := range []string{"core", "db", filepath.Join("core", "talents")} {
+	for _, sub := range []string{"core", "contacts", "db", filepath.Join("core", "talents")} {
 		info, err := os.Stat(filepath.Join(dir, sub))
 		if err != nil {
 			t.Errorf("expected directory %s: %v", sub, err)
@@ -149,6 +150,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		Person struct {
 			ContactBindings map[string]string `yaml:"contact_bindings"`
 		} `yaml:"person"`
+		Roots map[string]platformconfig.RootEntry `yaml:"roots"`
 	}
 	configData, err := os.ReadFile(filepath.Join(dir, "core", "config.yaml"))
 	if err != nil {
@@ -163,6 +165,31 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	}
 	if generated.Person.ContactBindings == nil || len(generated.Person.ContactBindings) != 0 {
 		t.Fatalf("generated person.contact_bindings = %#v, want explicit empty map", generated.Person.ContactBindings)
+	}
+	contactsRoot, ok := generated.Roots[platformconfig.ContactsRootName]
+	if !ok || contactsRoot.Context.Advertise != platformconfig.RootAdvertiseExactSubject {
+		t.Fatalf("generated contacts root = %#v, want exact-subject policy", contactsRoot)
+	}
+	if !contactsRoot.Git.Enabled || !contactsRoot.Git.SignCommits || contactsRoot.Git.VerifySignatures != "required" {
+		t.Fatalf("generated contacts git policy = %#v", contactsRoot.Git)
+	}
+	contactsDir := filepath.Join(dir, platformconfig.ContactsRootName)
+	for _, args := range [][]string{
+		{"rev-list", "--count", "HEAD"},
+		{"status", "--short", "--untracked-files=all"},
+		{"verify-commit", "HEAD"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", contactsDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s in contacts root: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		if args[0] == "rev-list" && strings.TrimSpace(string(out)) != "1" {
+			t.Fatalf("contacts root commit count = %q, want 1", strings.TrimSpace(string(out)))
+		}
+		if args[0] == "status" && strings.TrimSpace(string(out)) != "" {
+			t.Fatalf("contacts root status = %q, want clean", strings.TrimSpace(string(out)))
+		}
 	}
 
 	contactStore, err := contacts.Open(filepath.Join(dir, "db", "contacts.db"), nil)

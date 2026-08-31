@@ -706,6 +706,36 @@ func TestFormatContact_TrustZone(t *testing.T) {
 	}
 }
 
+func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
+		t.Fatal(err)
+	}
+	contact, err := tools.store.FindByName("Dossier Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	without, err := tools.LookupContact(`{"name":"Dossier Person"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, "Dossier:") || strings.Contains(without, "Contact ID:") {
+		t.Fatalf("unconfigured dossier root leaked a dead trailhead: %s", without)
+	}
+
+	tools.ConfigureDossierRoot(true)
+	with, err := tools.LookupContact(`{"name":"Dossier Person"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Contact ID: " + contact.ID.String(), "Dossier: " + DossierRef(contact.ID)} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("configured result = %q, want %q", with, want)
+		}
+	}
+}
+
 func TestGenerateMissingEmbeddings(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.5, 0.5}})

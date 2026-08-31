@@ -89,6 +89,9 @@ func TestBuildDocumentStoreOptionsMapsConfigPolicy(t *testing.T) {
 			"kb:": {
 				Indexing:  &indexing,
 				Authoring: "read_only",
+				Context: config.RootContextPolicy{
+					Advertise: config.RootAdvertiseExactSubject,
+				},
 				Git: config.DocumentRootGitConfig{
 					Enabled:          true,
 					VerifySignatures: "warn",
@@ -108,8 +111,33 @@ func TestBuildDocumentStoreOptionsMapsConfigPolicy(t *testing.T) {
 	if !policy.Git.Enabled || policy.Git.VerifySignatures != documents.VerificationWarn {
 		t.Fatalf("policy.Git = %#v, want enabled warn verification", policy.Git)
 	}
+	if policy.Context.Advertise != config.RootAdvertiseExactSubject {
+		t.Fatalf("policy.Context.Advertise = %q, want exact_subject", policy.Context.Advertise)
+	}
 	if len(opts.RootWriters) != 0 {
 		t.Fatalf("RootWriters = %#v, want none without sign_commits", opts.RootWriters)
+	}
+}
+
+func TestBuildDocumentStoreOptionsWiresContactDossierValidator(t *testing.T) {
+	t.Parallel()
+	app := &App{cfg: &config.Config{
+		DocRoots: map[string]config.DocumentRootConfig{
+			config.ContactsRootName: {Authoring: "managed"},
+		},
+	}}
+	opts, err := app.buildDocumentStoreOptions(map[string]string{
+		config.ContactsRootName: t.TempDir(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildDocumentStoreOptions: %v", err)
+	}
+	validator := opts.RootValidators[config.ContactsRootName]
+	if validator == nil {
+		t.Fatal("contacts root has no dossier write validator")
+	}
+	if err := validator(documents.DocumentWriteCandidate{Path: "notes.md", Body: "plain"}); err == nil {
+		t.Fatal("contacts root validator accepted a noncanonical document")
 	}
 }
 
