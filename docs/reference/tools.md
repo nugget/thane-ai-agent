@@ -276,7 +276,7 @@ being reimplemented in each loop prompt.
 |------|-------------|
 | `contact_save` | Create or update a contact with vCard properties. |
 | `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured contact-dossier ref. |
-| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout. Available only for a managed-writable `contacts` root. |
+| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Available only for a managed-writable `contacts` root. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
 | `contact_forget` | Delete a contact. |
 | `contact_list` | List and filter contacts. |

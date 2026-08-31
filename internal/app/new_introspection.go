@@ -132,6 +132,20 @@ func (a *App) initInspector() {
 	if a.eventBus != nil {
 		src.BusDropped = a.eventBus.DroppedCount
 	}
+	if a.modelRuntime != nil {
+		runtime := a.modelRuntime
+		src.ProviderBilling = func() []introspection.ProviderBillingState {
+			snap := runtime.AnthropicBillingSnapshot()
+			if snap == nil {
+				return nil
+			}
+			return []introspection.ProviderBillingState{{
+				Provider: "anthropic",
+				Since:    snap.Since,
+				Detail:   snap.Detail,
+			}}
+		}
+	}
 	if a.indexHandler != nil {
 		src.IndexStats = a.indexHandler.Stats
 		src.LogSeverity = a.indexHandler.SeveritySnapshot

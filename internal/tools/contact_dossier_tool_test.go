@@ -63,6 +63,12 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 			t.Errorf("%s description = %q, want %q", field, description, budget)
 		}
 	}
+	fullDescription := properties["full"].(map[string]any)["description"].(string)
+	for _, want := range []string{"archive:session:<full-session-uuid>", "full canonical session UUID", "short prefixes can be ambiguous"} {
+		if !strings.Contains(fullDescription, want) {
+			t.Errorf("full description = %q, want %q", fullDescription, want)
+		}
+	}
 	wantRequired := []string{"contact_id", "status_line", "teaser", "digest", "full"}
 	if got := tool.Parameters["required"].([]string); !reflect.DeepEqual(got, wantRequired) {
 		t.Fatalf("required fields = %#v, want %#v", got, wantRequired)

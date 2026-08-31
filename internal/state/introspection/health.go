@@ -42,6 +42,15 @@ type HealthRow struct {
 	LastCheck string `json:"last_check,omitempty"` // delta, e.g. "-42s"
 }
 
+// ProviderBillingState describes one cloud provider account refusing
+// service over billing (e.g. Anthropic credit exhaustion) — a state
+// only the operator can clear.
+type ProviderBillingState struct {
+	Provider string
+	Since    time.Time
+	Detail   string
+}
+
 // HostInfo is the stdlib-only host snapshot: process shape and the disk
 // under the data directory. No gopsutil — everything here comes from
 // runtime, syscall, and os.
@@ -299,6 +308,10 @@ type HealthSources struct {
 	SyncStates func() []checkout.SyncState
 	// QueueStats reports live work-queue backlog per partition.
 	QueueStats func(ctx context.Context) ([]loopqueue.ConsumerPending, error)
+	// ProviderBilling reports cloud provider accounts refusing service
+	// over billing state — persistent, operator-actionable, and not
+	// fixable by any retry. Nil-safe; an empty slice means healthy.
+	ProviderBilling func() []ProviderBillingState
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
@@ -434,6 +447,21 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 				row.Detail = fmt.Sprintf("%s: %s", st.Outcome, st.Detail)
 			}
 			snap.Annunciator = append(snap.Annunciator, row)
+		}
+	}
+
+	// Provider billing: an account refusing service over billing is the
+	// most operator-actionable lamp the panel can carry — the provider
+	// is fully unusable until a human adds credits, and no retry or
+	// failover changes that.
+	if i.src.ProviderBilling != nil {
+		for _, b := range i.src.ProviderBilling() {
+			snap.Annunciator = append(snap.Annunciator, HealthRow{
+				Name:   "billing:" + b.Provider,
+				Status: HealthFailed,
+				Detail: fmt.Sprintf("%s is refusing service over account billing (since %s): %s The operator must add credits; no retry will fix this.",
+					b.Provider, promptfmt.FormatDeltaOnly(b.Since, now), strings.TrimSpace(b.Detail)),
+			})
 		}
 	}
 
