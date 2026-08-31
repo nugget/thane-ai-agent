@@ -368,9 +368,13 @@ under a managed `Journal` section in one call:
 
 ## Surgical edit — `doc_edit`
 
-Use when only part of the document should change. The `mode` parameter
-picks the shape: metadata-only, whole-body replace/append/prepend, or
-section-level upsert/delete.
+Use when only part of an ordinary document should change. Contract-owned
+documents use their dedicated structured tool instead: a section edit to a
+contact dossier's `Details` can leave its status line, teaser, and digest
+describing the previous state, while `contact_dossier_write` republishes all
+four together. The `mode` parameter picks the ordinary-document shape:
+metadata-only, whole-body replace/append/prepend, or section-level
+upsert/delete.
 
 ```json
 {

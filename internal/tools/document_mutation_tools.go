@@ -90,7 +90,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_edit",
-		Description:          "Edit a managed markdown document without leaving semantic refs behind. Supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations. On revision-backed roots Thane automatically uses this loop's last read as the comparison base. If another loop or operator changed the document, no edit occurs and the result includes a bounded diff to reconcile before retrying.",
+		Description:          "Edit an ordinary managed markdown document without leaving semantic refs behind. Contract-owned documents use their dedicated structured tool instead—for example, contact_dossier_write must update every dossier projection together, while publish_output_* owns loop outputs. A section edit on one of those documents can leave its other projections describing stale state. For ordinary documents, this supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations. On revision-backed roots Thane automatically uses this loop's last read as the comparison base. If another loop or operator changed the document, no edit occurs and the result includes a bounded diff to reconcile before retrying.",
 		ContentResolveExempt: []string{"ref", "mode", "section", "heading", "level", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",

@@ -43,7 +43,7 @@ func TestNumericArgSupportsCommonTypesAndBounds(t *testing.T) {
 
 func TestGenericDocumentMutationDescriptionsDeferToContractOwnedTools(t *testing.T) {
 	registry, _ := newTestDocumentRegistry(t)
-	for _, name := range []string{"doc_create", "doc_write"} {
+	for _, name := range []string{"doc_create", "doc_write", "doc_edit"} {
 		tool := registry.Get(name)
 		if tool == nil {
 			t.Fatalf("%s not registered", name)

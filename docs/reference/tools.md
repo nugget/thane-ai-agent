@@ -241,7 +241,7 @@ structured edits can safely derive a fresh base as part of the operation.
 | `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
 | `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
 | `doc_write` | Replace an ordinary document's content with automatic stale-write protection (contract-owned documents use their dedicated structured tool). |
-| `doc_edit` | Targeted edit within a document, with automatic stale-write protection. |
+| `doc_edit` | Targeted edit within an ordinary document, with automatic stale-write protection; contract-owned documents use their dedicated structured tool. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |
 | `doc_delete` | Delete a document. |
