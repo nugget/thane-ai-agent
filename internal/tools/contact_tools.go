@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -341,6 +343,10 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 		}
 		required = append(required, field.Key)
 	}
+	allowedParameters := make(map[string]struct{}, len(required))
+	for _, name := range required {
+		allowedParameters[name] = struct{}{}
+	}
 
 	r.Register(&Tool{
 		Name:               "contact_dossier_write",
@@ -352,10 +358,15 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 			"required":   required,
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			for _, unsupported := range []string{"ref", "tags", "frontmatter", "body", "expected_revision"} {
-				if _, exists := args[unsupported]; exists {
-					return "", fmt.Errorf("contact_dossier_write has no %q parameter; pass contact_id plus status_line, teaser, digest, and full—Go derives document identity and structure, and tracks revisions automatically", unsupported)
+			unexpected := make([]string, 0)
+			for name := range args {
+				if _, allowed := allowedParameters[name]; !allowed {
+					unexpected = append(unexpected, name)
 				}
+			}
+			if len(unexpected) > 0 {
+				sort.Strings(unexpected)
+				return "", fmt.Errorf("contact_dossier_write accepts only contact_id, status_line, teaser, digest, and full; remove unsupported parameter(s) [%s]—Go derives document identity and structure, and tracks revisions automatically", strings.Join(unexpected, ", "))
 			}
 			return contactTools.WriteDossier(ctx, contacts.DossierWriteArgs{
 				ContactID:    stringArg(args, "contact_id"),

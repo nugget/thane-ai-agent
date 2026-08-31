@@ -108,7 +108,7 @@ func TestContactDossierWriteToolUnavailableWithoutManagedDocuments(t *testing.T)
 	}
 }
 
-func TestContactDossierWriteToolRejectsGenericDocumentArguments(t *testing.T) {
+func TestContactDossierWriteToolRejectsEveryUnknownArgument(t *testing.T) {
 	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -124,8 +124,23 @@ func TestContactDossierWriteToolRejectsGenericDocumentArguments(t *testing.T) {
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 
-	_, err = registry.Get("contact_dossier_write").Handler(context.Background(), map[string]any{"body": "wrong door"})
-	if err == nil || !strings.Contains(err.Error(), "pass contact_id plus status_line, teaser, digest, and full") {
-		t.Fatalf("generic argument error = %v, want one-step redirect", err)
+	_, err = registry.Get("contact_dossier_write").Handler(context.Background(), map[string]any{
+		"title":         "Ignored title",
+		"description":   "Ignored description",
+		"journal_entry": "Ignored journal entry",
+		"statuz_line":   "Misspelled facet",
+		"unexpected":    "Arbitrary unknown key",
+	})
+	if err == nil {
+		t.Fatal("unknown arguments were silently accepted")
+	}
+	for _, want := range []string{
+		"accepts only contact_id, status_line, teaser, digest, and full",
+		"description, journal_entry, statuz_line, title, unexpected",
+		"Go derives document identity and structure",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("unknown argument error = %v, want it to mention %q", err, want)
+		}
 	}
 }
