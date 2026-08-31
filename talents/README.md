@@ -1,3 +1,7 @@
+---
+ignore: true
+---
+
 # Talents
 
 Talents are markdown files that shape the model's posture and decision-making in
@@ -16,9 +20,19 @@ right shape, and the loader does the rest.
 ## Every talent declares when it applies
 
 Frontmatter is what makes a file a talent. A `.md` file in this directory that
-opens with no frontmatter is not guidance and is never injected — that is how
-this README sits here safely, and it is the only rule that decides. The
-filename plays no part in it.
+opens with no frontmatter is not guidance and is never injected — but the
+loader also names it once at boot, because a silent skip is exactly what a
+talent stripped of its frontmatter would look like. A file that is
+*deliberately* not a talent says so instead: open it with a frontmatter block
+declaring `ignore: true` — that is how this README sits here quietly — and
+the loader skips it without the boot notice (a single Debug line is all that
+remains; a parked talent is instead named once at Info, so muted guidance
+never disappears invisibly). `ignore:` supersedes everything else the node
+declares, on purpose:
+adding the one line to a real talent's frontmatter parks that talent without
+deleting its metadata, and removing the line restores it. It marks whole
+files only — the loader refuses it in a multi-node file, where which nodes it
+silences would be a guess. The filename plays no part in any of this.
 
 A file that does declare frontmatter must declare `tags:`, and the loader
 refuses one that does not. Silence is not a shorthand for "every turn": an

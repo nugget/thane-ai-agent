@@ -67,6 +67,17 @@ type Frontmatter struct {
 	// into model context even when tagged. Parsed here so the KB
 	// article scanner can honor it; meaningless on talents themselves.
 	Audience string
+	// Ignore declares a file in the talents directory that is
+	// deliberately not loaded — a README, an authoring guide, or a
+	// real talent the operator has parked (ignore supersedes any other
+	// keys the node declares, so one added line silences a talent
+	// without deleting its metadata). The loader skips it silently,
+	// unlike a file with no frontmatter at all, which earns a
+	// once-per-process notice because a silent skip is also what
+	// guidance stripped of its frontmatter looks like. Honored only as
+	// a whole-file marker (see TalentsVerified); the KB article path
+	// expresses the same intent with audience: internal.
+	Ignore bool
 }
 
 // Block represents a single parsed frontmatter + content pair from a
@@ -137,6 +148,57 @@ func noteSkippedUndeclared(ctx context.Context, path string) {
 		"path", path)
 }
 
+// noteSkippedDeclared reports, once per file per process and only at
+// Debug, a file that declared ignore: true and nothing else — a chosen
+// state, not a condition anyone needs to act on.
+func noteSkippedDeclared(ctx context.Context, path string) {
+	if _, already := skipNoticed.LoadOrStore("ignore\x00"+path, struct{}{}); already {
+		return
+	}
+	logging.Logger(ctx).Debug("skipping markdown file in talents directory: declares ignore: true",
+		"path", path)
+}
+
+// noteSkippedMuted reports, once per file per process, a real talent
+// parked by ignore: true. Info rather than Debug: the mute is chosen,
+// but muted guidance whose absence nobody can see is the same silent
+// loss the no-frontmatter notice exists to prevent — one line names it.
+func noteSkippedMuted(ctx context.Context, path string) {
+	if _, already := skipNoticed.LoadOrStore("muted\x00"+path, struct{}{}); already {
+		return
+	}
+	logging.Logger(ctx).Info("skipping talent: parked by ignore: true",
+		"path", path)
+}
+
+// fileDeclaresIgnore reports whether blocks mark the whole file as
+// deliberately not-a-talent. On a single-node file, ignore: true
+// supersedes everything else the node declares — by operator choice,
+// so adding the one line to a real talent's frontmatter parks that
+// talent without deleting its metadata, and removing the line restores
+// it. mutedGuidance distinguishes that parked talent (named once at
+// Info) from a bare marker like a README (Debug). Ignore across
+// multiple nodes stays an authoring error: which nodes it silences is
+// ambiguous, and a guess would drop guidance silently.
+func fileDeclaresIgnore(blocks []Block, path string) (ignored, mutedGuidance bool, err error) {
+	for _, block := range blocks {
+		if block.Frontmatter.Ignore {
+			ignored = true
+			break
+		}
+	}
+	if !ignored {
+		return false, false, nil
+	}
+	if len(blocks) > 1 {
+		return false, false, fmt.Errorf("talent %s: ignore: true in a multi-node file is refused — which nodes it silences would be a guess; give the ignored prose its own file", path)
+	}
+	fm := blocks[0].Frontmatter
+	mutedGuidance = fm.Name != "" || len(fm.Tags) > 0 || len(fm.TagsAll) > 0 ||
+		fm.Kind != "" || fm.Teaser != "" || len(fm.NextTags) > 0 || fm.Audience != ""
+	return true, mutedGuidance, nil
+}
+
 // Talents reads all .md files from the talents directory, parses their
 // YAML frontmatter, and returns one Talent per file. Tags are extracted
 // from frontmatter; Content has the frontmatter stripped. Use
@@ -192,6 +254,26 @@ func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, c
 		blocks, err := parseBlocksStrict(raw)
 		if err != nil {
 			return nil, fmt.Errorf("talent %s: %w", path, err)
+		}
+		// ignore: true is the deliberate sibling of the no-frontmatter
+		// skip above, and it supersedes everything else in the file: a
+		// lone marker is a permanent non-talent (a README, skipped at
+		// Debug), while ignore atop real talent metadata is the
+		// operator's one-line mute switch — honored, and named once at
+		// Info, because muted guidance whose absence nobody can see is
+		// the same silent loss the notices in this loader exist to
+		// prevent.
+		ignored, mutedGuidance, err := fileDeclaresIgnore(blocks, path)
+		if err != nil {
+			return nil, err
+		}
+		if ignored {
+			if mutedGuidance {
+				noteSkippedMuted(ctx, path)
+			} else {
+				noteSkippedDeclared(ctx, path)
+			}
+			continue
 		}
 		filename := strings.TrimSuffix(f, ".md")
 		fileTalents, err := talentsFromBlocks(blocks, filename, path)
@@ -395,8 +477,8 @@ func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 // "---" lines and is followed by the body content up to the next
 // node boundary (or EOF). A node boundary is a "---" line followed by
 // a recognized frontmatter key (name, tags, tags_all, kind, teaser,
-// next_tags, audience); a "---" followed by anything else stays as body
-// content (a markdown horizontal rule).
+// next_tags, audience, ignore); a "---" followed by anything else stays
+// as body content (a markdown horizontal rule).
 //
 // Single-node files (the historical shape) return a length-1 slice.
 // Multi-node files return one [Block] per node. Returns a length-1
@@ -536,7 +618,7 @@ func splitAtNextNodeBoundary(body string) (content, remainder string) {
 // markdown horizontal rule (followed by prose or a different key).
 func isFrontmatterKey(key string) bool {
 	switch key {
-	case "name", "tags", "tags_all", "kind", "teaser", "next_tags", "audience":
+	case "name", "tags", "tags_all", "kind", "teaser", "next_tags", "audience", "ignore":
 		return true
 	default:
 		return false
@@ -575,6 +657,10 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 			value := strings.TrimSpace(strings.TrimPrefix(line, "audience:"))
 			value = strings.Trim(value, `"'`)
 			meta.Audience = value
+		case strings.HasPrefix(line, "ignore:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "ignore:"))
+			value = strings.Trim(value, `"'`)
+			meta.Ignore = strings.EqualFold(value, "true")
 		default:
 			continue
 		}

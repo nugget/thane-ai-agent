@@ -1137,3 +1137,72 @@ func TestTalents_EntryPointAliasNormalizesToTrailhead(t *testing.T) {
 		t.Errorf("Kind = %q, want %q (legacy entry_point should normalize)", all[0].Kind, KindTrailhead)
 	}
 }
+
+// TestTalentsIgnoreFrontmatterSkipsDeliberately pins the deliberate
+// sibling of the no-frontmatter skip: a file declaring only
+// ignore: true is skipped without error and without the once-per-boot
+// notice — the mechanism that lets a README (with the marker) live in
+// the directory quietly, while a file with no frontmatter at all keeps
+// earning the notice, because that is also what stripped guidance
+// looks like.
+func TestTalentsIgnoreFrontmatterSkipsDeliberately(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "README.md", "---\nignore: true\n---\n# Talents\nAuthoring guide, not guidance.")
+	writeFile(t, dir, "core.md", "---\ntags: ["+TagAlways+"]\n---\n# Core\nAlways loaded.")
+
+	talents, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents() error = %v", err)
+	}
+	if len(talents) != 1 || talents[0].Name != "core" {
+		t.Fatalf("talents = %+v, want just core", talents)
+	}
+}
+
+// TestTalentsIgnoreInMultiNodeFileIsRefused: which nodes an ignore
+// would silence in a multi-node file is a guess, and a guess drops
+// guidance silently — so it is an authoring error instead.
+func TestTalentsIgnoreInMultiNodeFileIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "mixed.md", "---\nignore: true\n---\n# Notes\n---\nname: real\ntags: ["+TagAlways+"]\n---\n# Real\nGuidance.")
+
+	_, err := NewLoader(dir).Talents()
+	if err == nil {
+		t.Fatal("want error for ignore in a multi-node file, got nil")
+	}
+	if !strings.Contains(err.Error(), "which nodes it silences would be a guess") {
+		t.Fatalf("error %q does not name the ambiguity rationale", err)
+	}
+}
+
+// TestRepoREADMEDeclaresIgnore keeps the shipped README carrying the
+// marker this mechanism exists for: if someone strips its frontmatter,
+// every deployment goes back to a boot notice about it.
+func TestRepoREADMEDeclaresIgnore(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "talents", "README.md"))
+	if err != nil {
+		t.Skipf("repo talents/README.md not readable from test dir: %v", err)
+	}
+	meta, _ := ParseFrontmatterMetadata(string(data))
+	if !meta.Ignore {
+		t.Fatal("talents/README.md must declare ignore: true so deployments skip it quietly")
+	}
+}
+
+// TestTalentsIgnoreSupersedesTalentMetadata pins the park-a-talent
+// switch: ignore: true wins over everything else the node declares, by
+// operator choice — one added line silences a real talent without
+// deleting its metadata, and removing the line restores it.
+func TestTalentsIgnoreSupersedesTalentMetadata(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "parked.md", "---\nignore: true\nname: parked\ntags: ["+TagAlways+"]\nkind: doctrine\n---\n# Parked\nSilenced but intact.")
+	writeFile(t, dir, "core.md", "---\ntags: ["+TagAlways+"]\n---\n# Core\nAlways loaded.")
+
+	talents, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents() error = %v", err)
+	}
+	if len(talents) != 1 || talents[0].Name != "core" {
+		t.Fatalf("talents = %+v, want just core — the parked talent must stay silenced", talents)
+	}
+}
