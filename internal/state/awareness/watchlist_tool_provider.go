@@ -99,7 +99,7 @@ func retiredTagsError(param string) error {
 func (w *WatchlistTools) Tools() []*tools.Tool {
 	ownerParam := map[string]any{
 		"type":        "string",
-		"description": "Who owns the subscription. Omit (or pass \"core\") for an always-visible subscription: it lands on core — the root container whose context every turn shares — and appears everywhere. Pass a loop definition name to subscribe that loop instead: the entry lands on its spec's subscriptions and follows the loop's lifecycle. From inside a loop's own turn, prefer watch_entity (no name needed). The reserved owner \"system\" is read-only (runtime-seeded rows such as the person-presence ingestion floor, configured via person.track).",
+		"description": "Who owns the subscription. Omit (or pass \"core\") for an always-visible subscription: it lands on core — the root container whose context every turn shares — and appears everywhere. Pass a loop definition name to subscribe that loop instead: the entry lands on its spec's subscriptions and follows the loop's lifecycle. From inside a loop's own turn, prefer watch_entity (no name needed). The reserved owner \"system\" is read-only (the runtime-seeded presence ingestion floor: person.track plus HA-linked device trackers).",
 	}
 	return []*tools.Tool{
 		{
@@ -176,7 +176,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 		},
 		{
 			Name: "list_entity_subscriptions",
-			Description: "List the entity-subscription registry: every subscription with its owner — always-visible rows (owner \"\"), loop-owned rows compiled from loop specs, and system-seeded rows such as the person-presence ingestion floor. " +
+			Description: "List the entity-subscription registry: every subscription with its owner — always-visible rows (owner \"\"), loop-owned rows compiled from loop specs, and the system-seeded presence ingestion floor (person.track plus HA-linked device trackers). " +
 				"When Home Assistant is connected, each glob or area/label/floor subscription carries an expansion object with its current member count and a sample, so a subscription that currently matches nothing is visible at a glance. " +
 				"Inherited effective sets for a running loop (own + container ancestors') are surfaced by loop_definition_get on that loop's name.",
 			Parameters: map[string]any{
@@ -227,7 +227,7 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 
 	owner := strings.TrimSpace(stringArg(args, "owner"))
 	if owner == OwnerSystem {
-		return "", fmt.Errorf("owner %q is reserved for runtime-seeded rows (the person-presence ingestion floor, configured via person.track) and cannot be written by tools; omit owner for an always-visible subscription or name a loop", OwnerSystem)
+		return "", fmt.Errorf("owner %q is reserved for the runtime-seeded presence ingestion floor (person.track plus HA-linked device trackers) and cannot be written by tools; omit owner for an always-visible subscription or name a loop", OwnerSystem)
 	}
 	// The anonymous always-visible tier collapsed into core (#1208):
 	// omitted owner means core, and core routes store-direct — it has
@@ -603,7 +603,7 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, arg
 	}
 	switch {
 	case owner == OwnerSystem:
-		return "", fmt.Errorf("system-owned rows are seeded from configuration (person.track) and re-appear at the next startup; change the configuration instead of removing them here")
+		return "", fmt.Errorf("system-owned rows are seeded from person.track and live HA device-tracker linkage; change the person configuration or HA linkage instead of removing them here")
 	case owner != OwnerCore:
 		// The mutator persists the spec, and the app's persist hook
 		// re-mirrors the registry and rebuilds the ingestion filter —

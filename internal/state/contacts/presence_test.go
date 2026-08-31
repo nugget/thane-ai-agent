@@ -28,6 +28,12 @@ func (m *mockStateGetter) GetState(_ context.Context, entityID string) (*homeass
 	return s, nil
 }
 
+func (m *mockStateGetter) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
+	return nil, nil
+}
+
+func (m *mockStateGetter) InvalidateRegistryCache() {}
+
 func TestNewPresenceTracker(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice", "person.bob"}, "America/Chicago", nil)
 
@@ -762,7 +768,7 @@ func TestPresenceSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("tracked entity not found")
 	}
-	if snap.Room != "office" || snap.RoomProvider != "bermuda" || snap.RoomSource != "device_tracker.alice_bermuda" {
+	if snap.Room != "office" || snap.RoomProvider != "bermuda" || snap.RoomSource != "" {
 		t.Errorf("snapshot = %+v", snap)
 	}
 	if _, ok := tracker.Snapshot("person.nobody"); ok {

@@ -1932,10 +1932,11 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
-// PersonConfig configures household member presence tracking. When
-// Track contains entity IDs, the person tracker maintains in-memory
-// state from Home Assistant and injects a presence summary into the
-// agent's system prompt on every wake.
+// PersonConfig configures household member presence tracking. When Track
+// contains entity IDs, the person tracker maintains in-memory state from Home
+// Assistant, follows each person's linked device trackers for supported room
+// providers, and injects a presence summary into the agent's system prompt on
+// every wake.
 type PersonConfig struct {
 	// Track is a list of Home Assistant person entity IDs to monitor
 	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin

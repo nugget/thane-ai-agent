@@ -67,10 +67,12 @@ the workhorse for most HA interactions.
 Persistent connection for real-time `state_changed` events. The event feed
 is gated client-side by the subscription registry: ingest-mode entity
 subscriptions (ids or globs like `binary_sensor.*door*`, added via
-`add_entity_subscription` from any owner) plus the system-seeded person
-floor from `person.track` decide what is captured. This is the same
-mechanism used by the HA frontend and mobile apps — the official,
-first-class event bus.
+`add_entity_subscription` from any owner) plus the system-seeded presence
+floor decide what is captured. That floor contains `person.track` and the
+device trackers linked from each person's HA `device_trackers` attribute,
+allowing attribute-only Bermuda room changes through without ingesting the
+whole `device_tracker.*` domain. This is the same mechanism used by the HA
+frontend and mobile apps — the official, first-class event bus.
 
 WebSocket events can trigger agent wakes, enabling proactive behavior without
 polling.

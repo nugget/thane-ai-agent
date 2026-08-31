@@ -18,10 +18,11 @@ func TestPresenceTrackerObserveRoomConsensus(t *testing.T) {
 		Room:       "Office",
 		Provider:   " Bermuda ",
 		Source:     "device_tracker.phone_bermuda",
+		Via:        "Desk Presence",
 		ObservedAt: phoneAt,
 	})
 	first, _ := tracker.Snapshot("person.alice")
-	if first.Room != "Office" || first.RoomProvider != "bermuda" || first.RoomSource != "device_tracker.phone_bermuda" {
+	if first.Room != "Office" || first.RoomProvider != "bermuda" || first.RoomSource != "Desk Presence" {
 		t.Fatalf("single-source resolution = %+v", first)
 	}
 
@@ -29,10 +30,11 @@ func TestPresenceTrackerObserveRoomConsensus(t *testing.T) {
 		Room:       " office ",
 		Provider:   "bermuda",
 		Source:     "device_tracker.watch_bermuda",
+		Via:        "Desk Presence",
 		ObservedAt: watchAt,
 	})
 	providerConsensus, _ := tracker.Snapshot("person.alice")
-	if providerConsensus.Room != "Office" || providerConsensus.RoomProvider != "bermuda" || providerConsensus.RoomSource != "" {
+	if providerConsensus.Room != "Office" || providerConsensus.RoomProvider != "bermuda" || providerConsensus.RoomSource != "Desk Presence" {
 		t.Fatalf("same-provider consensus = %+v", providerConsensus)
 	}
 	if providerConsensus.RoomConflict {
@@ -95,7 +97,7 @@ func TestPresenceTrackerRoomConflictAndRecovery(t *testing.T) {
 
 	tracker.WithdrawRoom("person.alice", "unifi", "ap-kitchen")
 	recovered, _ := tracker.Snapshot("person.alice")
-	if recovered.RoomConflict || recovered.Room != "office" || recovered.RoomProvider != "bermuda" || recovered.RoomSource != "device_tracker.phone_bermuda" {
+	if recovered.RoomConflict || recovered.Room != "office" || recovered.RoomProvider != "bermuda" || recovered.RoomSource != "" {
 		t.Fatalf("resolution after withdrawal = %+v", recovered)
 	}
 	if recovered.RoomSince.IsZero() {
@@ -115,7 +117,7 @@ func TestPresenceTrackerWithdrawRoomPreservesOtherEvidence(t *testing.T) {
 
 	tracker.WithdrawRoom("person.alice", " BERMUDA ", "device_tracker.watch_bermuda")
 	after, _ := tracker.Snapshot("person.alice")
-	if after.Room != "office" || after.RoomProvider != "bermuda" || after.RoomSource != "device_tracker.phone_bermuda" {
+	if after.Room != "office" || after.RoomProvider != "bermuda" || after.RoomSource != "" {
 		t.Fatalf("remaining observation did not resolve: %+v", after)
 	}
 	if len(after.RoomObservations) != 1 {
@@ -150,6 +152,47 @@ func TestPresenceTrackerObservationRefresh(t *testing.T) {
 	}
 	if !second.RoomSince.Equal(first.RoomSince) {
 		t.Errorf("semantic refresh reset RoomSince: %v then %v", first.RoomSince, second.RoomSince)
+	}
+
+	observation.Via = "Desk Presence"
+	observation.ObservedAt = secondAt.Add(time.Second)
+	tracker.ObserveRoom("person.alice", observation)
+	withEvidence, _ := tracker.Snapshot("person.alice")
+	if notifications != 2 {
+		t.Errorf("evidence change emitted %d notifications, want 2 total", notifications)
+	}
+	if withEvidence.RoomSource != "Desk Presence" || !withEvidence.RoomSince.Equal(first.RoomSince) {
+		t.Errorf("evidence refresh = %+v", withEvidence)
+	}
+}
+
+func TestRoomObservationEvidenceKeepsBermudaIdentityPrivate(t *testing.T) {
+	tests := []struct {
+		name        string
+		observation RoomObservation
+		want        string
+	}{
+		{
+			name:        "Bermuda without scanner",
+			observation: RoomObservation{Provider: BermudaRoomProvider, Source: "device_tracker.private_watch"},
+		},
+		{
+			name:        "Bermuda scanner",
+			observation: RoomObservation{Provider: BermudaRoomProvider, Source: "device_tracker.private_watch", Via: "Desk Presence"},
+			want:        "Desk Presence",
+		},
+		{
+			name:        "UniFi AP compatibility fallback",
+			observation: RoomObservation{Provider: "unifi", Source: "ap-office"},
+			want:        "ap-office",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := roomObservationEvidence(tt.observation); got != tt.want {
+				t.Errorf("evidence = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

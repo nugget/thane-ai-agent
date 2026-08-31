@@ -7,13 +7,15 @@ import (
 )
 
 // RoomObservation is one provider-attributed claim about a tracked person's
-// current room. Provider identifies the integration family, Source identifies
-// the concrete device or sensor within that provider, and ObservedAt records
-// when that source produced the claim.
+// current room. Provider identifies the integration family, Source is the
+// stable device or sensor identity within that provider, Via is optional
+// human-readable evidence such as a scanner or access-point name, and
+// ObservedAt records when that source produced the claim.
 type RoomObservation struct {
 	Room       string    `json:"room"`
 	Provider   string    `json:"provider"`
 	Source     string    `json:"source,omitempty"`
+	Via        string    `json:"via,omitempty"`
 	ObservedAt time.Time `json:"observed_at"`
 }
 
@@ -46,9 +48,17 @@ func (t *PresenceTracker) OnRoomChange(fn RoomObserver) {
 // every observation but clears the resolved room and marks a conflict.
 //
 // An empty room withdraws this exact provider/source observation. A zero
-// ObservedAt is replaced with the current time. Exact semantic refreshes update
+// ObservedAt is replaced with the current time. Observations older than the
+// retained provider/source claim are ignored. Exact semantic refreshes update
 // freshness without notifying observers or resetting RoomSince.
 func (t *PresenceTracker) ObserveRoom(entityID string, observation RoomObservation) {
+	t.observeRoom(entityID, observation, false)
+}
+
+// observeRoom records an observation and optionally requires the person to be
+// home at the same locked instant. Bermuda uses the guarded path so tracker
+// updates received while a person is away cannot become latent room claims.
+func (t *PresenceTracker) observeRoom(entityID string, observation RoomObservation, requireHome bool) {
 	now := time.Now()
 	observation = normalizeRoomObservation(observation, now)
 	if observation.Room == "" {
@@ -64,7 +74,24 @@ func (t *PresenceTracker) ObserveRoom(entityID string, observation RoomObservati
 		t.mu.Unlock()
 		return
 	}
+	if requireHome && !strings.EqualFold(p.State, "home") {
+		t.mu.Unlock()
+		return
+	}
 	previous, existed := p.roomObservations[key]
+	if existed && observation.ObservedAt.Before(previous.ObservedAt) {
+		friendlyName := p.FriendlyName
+		t.mu.Unlock()
+		t.logger.Debug("ignored stale person room observation",
+			"entity_id", entityID,
+			"friendly_name", friendlyName,
+			"room_provider", observation.Provider,
+			"room_source", observation.Source,
+			"observed_at", observation.ObservedAt,
+			"current_observed_at", previous.ObservedAt,
+		)
+		return
+	}
 	p.roomObservations[key] = observation
 	resolvePersonRoom(p, now)
 	friendlyName := p.FriendlyName
@@ -72,7 +99,7 @@ func (t *PresenceTracker) ObserveRoom(entityID string, observation RoomObservati
 	observers := append([]RoomObserver(nil), t.observers...)
 	t.mu.Unlock()
 
-	if existed && normalizedRoomName(previous.Room) == normalizedRoomName(observation.Room) {
+	if existed && normalizedRoomName(previous.Room) == normalizedRoomName(observation.Room) && previous.Via == observation.Via {
 		return
 	}
 	t.logRoomObservation("observed", entityID, friendlyName, observation, resolution)
@@ -83,6 +110,13 @@ func (t *PresenceTracker) ObserveRoom(entityID string, observation RoomObservati
 // providers and sources remain available to the resolver. Missing observations
 // and untracked entities are no-ops.
 func (t *PresenceTracker) WithdrawRoom(entityID, provider, source string) {
+	t.withdrawRoomAt(entityID, provider, source, time.Time{})
+}
+
+// withdrawRoomAt withdraws an observation unless the provider timestamp is
+// older than the claim it would remove. A zero timestamp remains the explicit,
+// unconditional compatibility behavior of [PresenceTracker.WithdrawRoom].
+func (t *PresenceTracker) withdrawRoomAt(entityID, provider, source string, observedAt time.Time) {
 	provider, source = normalizeRoomObservationIdentity(provider, source)
 	key := roomObservationKey{provider: provider, source: source}
 
@@ -94,6 +128,10 @@ func (t *PresenceTracker) WithdrawRoom(entityID, provider, source string) {
 	}
 	observation, exists := p.roomObservations[key]
 	if !exists {
+		t.mu.Unlock()
+		return
+	}
+	if !observedAt.IsZero() && observedAt.Before(observation.ObservedAt) {
 		t.mu.Unlock()
 		return
 	}
@@ -200,6 +238,7 @@ func (t *PresenceTracker) logRoomObservation(operation, entityID, friendlyName s
 		"room", observation.Room,
 		"room_provider", observation.Provider,
 		"room_source", observation.Source,
+		"room_via", observation.Via,
 		"observed_at", observation.ObservedAt,
 		"resolved_room", resolution.room,
 		"resolved_room_provider", resolution.provider,
@@ -228,6 +267,7 @@ func (t *PresenceTracker) notifyRoomObservers(observers []RoomObserver, entityID
 func normalizeRoomObservation(observation RoomObservation, now time.Time) RoomObservation {
 	observation.Room = strings.TrimSpace(observation.Room)
 	observation.Provider, observation.Source = normalizeRoomObservationIdentity(observation.Provider, observation.Source)
+	observation.Via = strings.TrimSpace(observation.Via)
 	if observation.ObservedAt.IsZero() {
 		observation.ObservedAt = now
 	}
@@ -259,14 +299,14 @@ func resolvePersonRoom(person *Person, now time.Time) {
 
 	room := observations[0].Room
 	provider := observations[0].Provider
-	source := observations[0].Source
+	source := roomObservationEvidence(observations[0])
 	for _, observation := range observations[1:] {
 		if observation.Provider != provider {
 			provider = ""
 			source = ""
 			continue
 		}
-		if observation.Source != source {
+		if roomObservationEvidence(observation) != source {
 			source = ""
 		}
 	}
@@ -278,6 +318,19 @@ func resolvePersonRoom(person *Person, now time.Time) {
 	person.RoomProvider = provider
 	person.RoomSource = source
 	person.roomConflict = false
+}
+
+func roomObservationEvidence(observation RoomObservation) string {
+	if observation.Via != "" {
+		return observation.Via
+	}
+	// Bermuda's Source is a private device_tracker identity. Its optional Via
+	// is the only model-safe evidence. Other providers retain the compatibility
+	// fallback because sources such as UniFi AP names are operator-readable.
+	if observation.Provider == BermudaRoomProvider {
+		return ""
+	}
+	return observation.Source
 }
 
 func clearResolvedRoom(person *Person, conflict bool) {

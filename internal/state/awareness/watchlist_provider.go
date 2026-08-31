@@ -89,7 +89,7 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, req agentctx.Context
 	// the root container and every context is de facto core's context.
 	// Loop-owned rows are rendered by [LoopSubscriptionProvider] after
 	// walking the ancestor chain, and system-owned rows (the
-	// person-entity ingestion floor) never render — they are
+	// presence ingestion floor) never render — they are
 	// ingest-mode by construction.
 	rows, err := p.store.ListOwner(looppkg.CoreLoopName)
 	if err != nil {
