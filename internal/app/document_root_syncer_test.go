@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -410,5 +412,111 @@ func TestRunOnceErrorRecordsState(t *testing.T) {
 	}
 	if got, ok := reg.Get("kb"); !ok || got.OK {
 		t.Errorf("registry state = %+v, ok=%v; want recorded not-OK", got, ok)
+	}
+}
+
+// TestRunOnceCoalescesPersistentFailure drives the exact shape of the
+// 2026-08-31 production storm — the same fetch error pass after pass
+// for days — and asserts the gate: WARN on arrival, Debug in between,
+// a WARN reminder once the coalesce window lapses, a fresh WARN when
+// the error changes, and an Info recovery carrying the streak length.
+func TestRunOnceCoalescesPersistentFailure(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	errDNS := fmt.Errorf("fetch: dns lookup failed")
+	errRefused := fmt.Errorf("fetch: connection refused")
+	eng := &fakeEngine{
+		errs:    []error{errDNS, errDNS, errDNS, errRefused, nil},
+		results: []checkout.SyncResult{{}, {}, {}, {}, {Outcome: checkout.SyncClean}},
+	}
+
+	current := time.Date(2026, 8, 24, 9, 40, 0, 0, time.UTC)
+	s := &docRootSyncer{
+		root:     "kb",
+		engine:   eng,
+		request:  checkout.SyncRequest{Branch: "main"},
+		registry: checkout.NewSyncStateRegistry(),
+		logger:   logger,
+		now:      func() time.Time { return current },
+	}
+
+	ctx := context.Background()
+	s.runOnce(ctx) // errDNS: first failure → WARN
+	s.runOnce(ctx) // errDNS again → Debug
+	current = current.Add(2 * time.Hour)
+	s.runOnce(ctx) // errDNS, window lapsed → WARN reminder
+	s.runOnce(ctx) // errRefused: error changed → WARN
+	s.runOnce(ctx) // success → Info recovery, Debug steady line
+
+	out := buf.String()
+	count := func(substr string) int {
+		return strings.Count(out, substr)
+	}
+	if got := count(`level=WARN msg="document root sync failed"`); got != 3 {
+		t.Errorf("WARN failed lines = %d, want 3\nlog:\n%s", got, out)
+	}
+	if got := count(`level=DEBUG msg="document root sync still failing"`); got != 1 {
+		t.Errorf("DEBUG still-failing lines = %d, want 1\nlog:\n%s", got, out)
+	}
+	if got := count(`level=INFO msg="document root sync recovered"`); got != 1 {
+		t.Errorf("INFO recovered lines = %d, want 1\nlog:\n%s", got, out)
+	}
+	if !strings.Contains(out, "failed_passes=4") {
+		t.Errorf("recovery line missing failed_passes=4\nlog:\n%s", out)
+	}
+	// The steady clean pass narrates at Debug, not Info. The closing
+	// quote keeps this from matching the recovered/cleared messages.
+	if got := count(`level=INFO msg="document root sync"`); got != 0 {
+		t.Errorf("INFO steady lines = %d, want 0\nlog:\n%s", got, out)
+	}
+	if got := count(`level=DEBUG msg="document root sync"`); got == 0 {
+		t.Errorf("expected a DEBUG steady line\nlog:\n%s", out)
+	}
+}
+
+// TestRunOnceCoalescesAttentionOutcomes pins the same gate on the
+// needs-attention path: a diverged root warns once, repeats at Debug,
+// and logs an Info clearing line when the outcome returns to normal.
+func TestRunOnceCoalescesAttentionOutcomes(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	eng := &fakeEngine{
+		results: []checkout.SyncResult{
+			{Outcome: checkout.SyncDiverged, Detail: "local and remote diverged"},
+			{Outcome: checkout.SyncDiverged, Detail: "local and remote diverged"},
+			{Outcome: checkout.SyncFastForwarded},
+		},
+	}
+
+	current := time.Date(2026, 8, 24, 9, 40, 0, 0, time.UTC)
+	s := &docRootSyncer{
+		root:     "kb",
+		engine:   eng,
+		request:  checkout.SyncRequest{Branch: "main"},
+		registry: checkout.NewSyncStateRegistry(),
+		logger:   logger,
+		now:      func() time.Time { return current },
+	}
+
+	ctx := context.Background()
+	s.runOnce(ctx)
+	s.runOnce(ctx)
+	s.runOnce(ctx)
+
+	out := buf.String()
+	if got := strings.Count(out, `level=WARN msg="document root sync needs attention"`); got != 1 {
+		t.Errorf("WARN attention lines = %d, want 1\nlog:\n%s", got, out)
+	}
+	if got := strings.Count(out, `level=DEBUG msg="document root sync still needs attention"`); got != 1 {
+		t.Errorf("DEBUG attention lines = %d, want 1\nlog:\n%s", got, out)
+	}
+	if got := strings.Count(out, `level=INFO msg="document root sync attention cleared"`); got != 1 {
+		t.Errorf("INFO cleared lines = %d, want 1\nlog:\n%s", got, out)
+	}
+	// A fast-forward is content movement and keeps its Info line.
+	if got := strings.Count(out, `level=INFO msg="document root sync"`); got != 1 {
+		t.Errorf("INFO sync lines = %d, want 1\nlog:\n%s", got, out)
 	}
 }
