@@ -151,7 +151,7 @@ func TestBuildDocumentStoreOptionsWiresContactDossierValidator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("contacts.NewStore: %v", err)
 	}
-	contactTools := contacts.NewTools(contactStore)
+	contactTools := contacts.NewTools(contactStore, nil)
 	if _, err := contactTools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
 		t.Fatalf("SaveContact: %v", err)
 	}

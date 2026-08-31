@@ -26,7 +26,7 @@ often reaches for one when the right answer is another:
 | You want to store / find... | Surface |
 |---|---|
 | "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`contact_save` with `facts` or `note`) — structured person data |
-| "How Frank and I work together" / evolving preferences, themes, or relationship synthesis | `contacts` (`contact_dossier_write`) — longitudinal dossier prose |
+| "How Frank and I work together" / evolving preferences, themes, or relationship synthesis | `contacts` (`contact_dossier_read`, then `contact_dossier_write`) — longitudinal dossier prose |
 | "Who operates this host" | `contacts` (`contact_owner`) — this leaf |
 | "Sump pump runs Tuesdays" / "Garage door takes 23s to close" — stable, compact, *non-person* facts | `memory` (`remember_fact`) — see [`memory.md`](memory.md) |
 | "The VLAN renumber plan landed on 2026-04-22" / a project decision / design rationale | `documents` (`kb:`, `core:`) or workspace files — NOT memory, NOT contacts |
@@ -49,9 +49,11 @@ ordinary documents instead.
   and is deliberately outside these everyday mutation tools.
 
 - **You're maintaining evolving relationship understanding** — use
-  `contact_dossier_write` when the managed `contacts` document root makes
-  it available. Resolve the contact first; the tool takes its canonical UUID
-  and the four content projections, while Go owns document identity and shape.
+  `contact_dossier_read`, then `contact_dossier_write` when the managed
+  `contacts` document root makes them available. Resolve the contact first;
+  both tools take its canonical UUID while Go owns document identity and shape.
+  A read of an absent dossier succeeds with the exact create action, so do not
+  retry the same read or guess a `contacts:` ref.
 
 - **You're exchanging vCard data** — activate `contacts_vcf`. Import
   from external sources, export records for sharing (with trust-zone-
@@ -81,6 +83,12 @@ ordinary documents instead.
   tombstone. Lookup before forgetting; the cost of removing the wrong
   record is real.
 
+- **A real save queues synthesis once.** A committed model-authored change
+  records turn provenance on the property rows it adds or replaces and
+  coalesces one `contact:<uuid>` archivist item. Rejected, rolled-back, and
+  identical no-op calls do neither. The later dossier pass is for synthesis,
+  not a reason to copy directory fields into prose during the save turn.
+
 - **The operator is a contact too.** The host's primary operator lives in
   the same table as everyone else, marked by the stable
   `identity.operator_contact_id` config, the legacy name selector, or
@@ -89,16 +97,17 @@ ordinary documents instead.
   rather than guessing from message senders or workspace metadata.
 
 - **Dossier prose is synthesis, never structured authority.** Read the
-  `contacts:<uuid>.md` trailhead with `doc_read`; create or replace it with
-  `contact_dossier_write`. Do not use generic document mutations for ordinary
-  dossier authoring. The ref and frontmatter already establish which contact the
-  document describes, so pass the UUID only as the contact ID argument: never
-  repeat the subject's UUID, derived ref, or private tag in the projections, and
-  do not add a `Subject` section that merely copies directory fields. Omit the
-  contact's canonical name from the status line and teaser because the dossier
-  title already supplies it; digest and full may use the name where standalone
-  prose needs it. Do not encode trust, Home Assistant bindings, or companion
-  attribution as if prose changed those sources of truth.
+  canonical dossier with `contact_dossier_read`; create or replace it with
+  `contact_dossier_write`. Do not construct `contacts:<uuid>.md` for `doc_read`
+  or use generic document mutations for ordinary dossier authoring. The ref and
+  frontmatter already establish which contact the document describes, so pass
+  the UUID only as the contact ID argument: never repeat the subject's UUID,
+  derived ref, or private tag in the projections, and do not add a `Subject`
+  section that merely copies directory fields. Omit the contact's canonical
+  name from the status line and teaser because the dossier title already
+  supplies it; digest and full may use the name where standalone prose needs
+  it. Do not encode trust, Home Assistant bindings, or companion attribution as
+  if prose changed those sources of truth.
 
 ## Cross-references
 
@@ -114,8 +123,9 @@ ordinary documents instead.
 - For "what did this person and I last discuss" beyond what's in the
   contact note, bounce to `archive_text` scoped to a conversation.
 - For a durable synthesis of how the relationship is evolving, resolve the
-  person here and call `contact_dossier_write`; use the archive as evidence,
-  not as the final home of the synthesis.
+  person here, call `contact_dossier_read`, and then call
+  `contact_dossier_write` when the synthesis changes; use the archive as
+  evidence, not as the final home of the synthesis.
 - For project knowledge, technical decisions, or persistent facts that
   aren't person-shaped, `memory` (`remember_fact`) is the right home;
   don't pollute contact notes with non-person content.
@@ -382,8 +392,9 @@ within the tool surface.
   is a person record," that's a smell that you actually want
   `memory` (`remember_fact`) instead.
 - For relationship patterns or evolving context that are genuinely about the
-  person, resolve the canonical UUID and use `contact_dossier_write` rather
-  than expanding `note`, `ai_summary`, or `facts` into a document.
+  person, resolve the canonical UUID and use `contact_dossier_read` followed by
+  `contact_dossier_write` rather than expanding `note`, `ai_summary`, or
+  `facts` into a document.
 
 ---
 name: contacts_vcf

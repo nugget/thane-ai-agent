@@ -3,6 +3,7 @@ package contacts
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -45,14 +46,33 @@ type DossierWriteArgs struct {
 	ReceiptScope string `json:"-"`
 }
 
+// DossierReadArgs identifies one canonical contact dossier without exposing
+// its derived document ref to the model.
+type DossierReadArgs struct {
+	ContactID string `json:"contact_id"`
+	// ReceiptScope is runtime-owned concurrency state and is never exposed to
+	// the model.
+	ReceiptScope string `json:"-"`
+}
+
 // ConfigureDossierDocuments installs the managed document surface used by
-// [Tools.WriteDossier]. Configure it only after the document store has been
-// initialized so an advertised mutation tool is always callable.
-func (t *Tools) ConfigureDossierDocuments(write func(context.Context, documents.WriteArgs) (string, error)) {
+// [Tools.ReadDossier] and [Tools.WriteDossier]. Configure it only after the
+// document store has been initialized so every advertised tool is callable.
+func (t *Tools) ConfigureDossierDocuments(
+	read func(context.Context, documents.RefArgs) (string, error),
+	write func(context.Context, documents.WriteArgs) (string, error),
+) {
 	if t == nil {
 		return
 	}
+	t.dossierRead = read
 	t.dossierWrite = write
+}
+
+// DossierReadsEnabled reports whether the configured canonical dossier root
+// has a live managed document read surface.
+func (t *Tools) DossierReadsEnabled() bool {
+	return t != nil && t.dossiersEnabled && t.dossierRead != nil
 }
 
 // DossierWritesEnabled reports whether the configured contact tools have a
@@ -65,6 +85,35 @@ func (t *Tools) DossierWritesEnabled() bool {
 // document order. Callers receive a copy and may safely enrich descriptions.
 func DossierFacetFields() []looppkg.FacetField {
 	return dossierOutputContract.FacetFields()
+}
+
+// ReadDossier reads the canonical dossier for one active structured contact.
+// An absent dossier is a successful, structured result that names the write
+// door; retrying an unchanged document read cannot make an absent file appear.
+func (t *Tools) ReadDossier(ctx context.Context, args DossierReadArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("contact directory not configured")
+	}
+	if !t.dossiersEnabled {
+		return "", fmt.Errorf("contact dossiers are not configured")
+	}
+	if t.dossierRead == nil {
+		return "", fmt.Errorf("contact dossier document reader is not configured")
+	}
+
+	contact, id, err := t.resolveDossierContact(args.ContactID)
+	if err != nil {
+		return "", err
+	}
+	ref := DossierRef(id)
+	result, err := t.dossierRead(ctx, documents.RefArgs{Ref: ref, ReceiptScope: args.ReceiptScope})
+	if documents.IsNotFound(err) {
+		return marshalDossierAbsence(contact, ref, t.DossierWritesEnabled())
+	}
+	if err != nil {
+		return "", fmt.Errorf("read contact dossier %s: %w", id, err)
+	}
+	return result, nil
 }
 
 // WriteDossier creates or replaces one contact's canonical longitudinal
@@ -85,17 +134,9 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		return "", fmt.Errorf("contact dossier document tools are not configured")
 	}
 
-	rawID := strings.TrimSpace(args.ContactID)
-	id, err := uuid.Parse(rawID)
-	if err != nil || id == uuid.Nil || id.String() != rawID {
-		return "", fmt.Errorf("contact_id must be a canonical non-zero UUID from contact_lookup or contact_owner; got %q", args.ContactID)
-	}
-	contact, err := t.store.Get(id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("contact_id %s is not an active structured contact; use contact_lookup to resolve the intended contact before writing a dossier", id)
-	}
+	contact, id, err := t.resolveDossierContact(args.ContactID)
 	if err != nil {
-		return "", fmt.Errorf("load structured contact %s: %w", id, err)
+		return "", err
 	}
 
 	payload := looppkg.FacetPayload{
@@ -128,6 +169,50 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Body:         &body,
 		ReceiptScope: args.ReceiptScope,
 	})
+}
+
+func (t *Tools) resolveDossierContact(rawID string) (*Contact, uuid.UUID, error) {
+	rawID = strings.TrimSpace(rawID)
+	id, err := uuid.Parse(rawID)
+	if err != nil || id == uuid.Nil || id.String() != rawID {
+		return nil, uuid.Nil, fmt.Errorf("contact_id must be a canonical non-zero UUID from contact_lookup or contact_owner; got %q", rawID)
+	}
+	contact, err := t.store.Get(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, uuid.Nil, fmt.Errorf("contact_id %s is not an active structured contact; call contact_lookup to resolve the intended contact instead of retrying this UUID", id)
+	}
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("load structured contact %s: %w", id, err)
+	}
+	return contact, id, nil
+}
+
+func marshalDossierAbsence(contact *Contact, ref string, writable bool) (string, error) {
+	result := map[string]any{
+		"contact_id":   contact.ID.String(),
+		"contact_name": contact.FormattedName,
+		"dossier": map[string]any{
+			"exists": false,
+			"ref":    ref,
+		},
+	}
+	if writable {
+		result["next_action"] = map[string]any{
+			"tool":       "contact_dossier_write",
+			"contact_id": contact.ID.String(),
+			"instruction": "Create the dossier with all four projections; do not retry " +
+				"contact_dossier_read until a write succeeds.",
+		}
+	} else {
+		result["next_action"] = map[string]any{
+			"instruction": "No canonical dossier exists and this contact root is read-only; do not retry the read.",
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("encode absent contact dossier result: %w", err)
+	}
+	return string(raw), nil
 }
 
 // DossierRef returns the stable document ref for a contact UUID.

@@ -75,6 +75,11 @@ var schema = database.Schema{
 				updated_at TEXT NOT NULL
 			)`,
 		},
+		// Model-authored property rows carry their turn provenance as a
+		// compact JSON object. NULL is the deliberate legacy/unknown posture:
+		// migration must never invent an author for existing rows or for
+		// CardDAV/vCard writes whose caller supplied no provenance.
+		database.ColumnAdd{Table: "contact_properties", Column: "provenance", Typedef: "TEXT"},
 		database.IndexCreate{Name: "idx_cp_contact", SQL: `CREATE INDEX IF NOT EXISTS idx_cp_contact ON contact_properties(contact_id)`},
 		database.IndexCreate{Name: "idx_cp_property", SQL: `CREATE INDEX IF NOT EXISTS idx_cp_property ON contact_properties(property)`},
 		database.IndexCreate{Name: "idx_cp_property_value", SQL: `CREATE INDEX IF NOT EXISTS idx_cp_property_value ON contact_properties(property, value)`},
