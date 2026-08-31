@@ -213,9 +213,16 @@ func classifyDatasetAttr(attr slog.Attr, projection *datasetProjection, groups [
 		}
 	}
 
-	switch key {
-	case slog.TimeKey, slog.LevelKey, slog.MessageKey, slog.SourceKey:
-		return
+	// Same contract as IndexHandler.classifyAttr: only top-level keys that
+	// collide with the record's own fields are reserved, and "source" is
+	// not one of them — built-in source location arrives via record.PC,
+	// so an attr named "source" is always caller data and must survive
+	// into the payload.
+	if len(groups) == 0 {
+		switch key {
+		case slog.TimeKey, slog.LevelKey, slog.MessageKey:
+			return
+		}
 	}
 	projection.Attrs[qualifiedKey] = attrValue(attr)
 }

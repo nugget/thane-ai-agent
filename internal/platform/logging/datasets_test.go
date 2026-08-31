@@ -457,3 +457,23 @@ func TestDatasetHandler_EnabledWithStdoutOnly(t *testing.T) {
 		t.Error("Enabled(info) = false, want true with stdout enabled")
 	}
 }
+
+func TestDatasetProjection_SourceAttrSurvivesIntoPayload(t *testing.T) {
+	record := slog.NewRecord(time.Now(), slog.LevelWarn, "context source ran long", 0)
+	record.AddAttrs(
+		slog.String("source", "tag_context"),
+		slog.String("detail", "metacognitive"),
+	)
+
+	projection := (&DatasetHandler{}).projectRecord(record)
+
+	// The envelope's own source field is derived from component/subsystem;
+	// an attr literally named "source" is caller data and must survive
+	// into the payload instead of being eaten as slog.SourceKey.
+	if got := projection.Attrs["source"]; got != "tag_context" {
+		t.Errorf("payload source = %v, want %q", got, "tag_context")
+	}
+	if got := projection.Attrs["detail"]; got != "metacognitive" {
+		t.Errorf("payload detail = %v, want %q", got, "metacognitive")
+	}
+}
