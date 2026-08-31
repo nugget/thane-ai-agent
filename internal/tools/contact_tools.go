@@ -334,6 +334,9 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 	required := []string{"contact_id"}
 	for _, field := range fields {
 		description := field.Guidance + looppkg.FormatGuidance(field.Format)
+		if field.Key == "full" {
+			description += " Cite archive-session evidence as archive:session:<full-session-uuid>; the full canonical session UUID is required because short prefixes can be ambiguous."
+		}
 		if field.MaxRunes > 0 {
 			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
 		}
@@ -350,7 +353,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 
 	r.Register(&Tool{
 		Name:               "contact_dossier_write",
-		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass only the canonical contact UUID and all four content projections; Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Every projection is validated together and every violation is returned in one error. Read an existing dossier with doc_read before replacing it so Thane can protect against intervening writes.",
+		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass only the canonical contact UUID and all four content projections; Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Archive-session evidence must cite the full canonical session UUID so every claim remains checkable. Every projection is validated together and every violation is returned in one error. Read an existing dossier with doc_read before replacing it so Thane can protect against intervening writes.",
 		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type":       "object",

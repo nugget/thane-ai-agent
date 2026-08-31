@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -25,6 +27,8 @@ var dossierOutputContract = looppkg.OutputSpec{
 		{Name: looppkg.OutputFacetDigest},
 	},
 }
+
+var archiveSessionCitationPattern = regexp.MustCompile(`archive:session([:-])([[:alnum:]-]*)`)
 
 // DossierWriteArgs carries the content projections for one canonical contact
 // dossier. The contact UUID selects the structured identity; Go derives the
@@ -99,8 +103,15 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Digest:     args.Digest,
 		Full:       args.Full,
 	}
+	var validationErrs []error
 	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
-		return "", fmt.Errorf("contact dossier projections are invalid; correct every listed field and retry once: %w", err)
+		validationErrs = append(validationErrs, err)
+	}
+	if err := validateDossierEvidenceCitations(args.Full); err != nil {
+		validationErrs = append(validationErrs, err)
+	}
+	if len(validationErrs) > 0 {
+		return "", fmt.Errorf("contact dossier projections are invalid; correct every listed field and retry once: %w", errors.Join(validationErrs...))
 	}
 	body := dossierOutputContract.RenderFacetDocument(payload)
 	return t.dossierWrite(ctx, documents.WriteArgs{
@@ -143,10 +154,45 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
 		return fmt.Errorf("dossier %s facet contract: %w", candidate.Path, err)
 	}
+	if err := validateDossierEvidenceCitations(payload.Full); err != nil {
+		return fmt.Errorf("dossier %s evidence contract: %w", candidate.Path, err)
+	}
 	if got, want := strings.TrimSpace(candidate.Body), dossierOutputContract.RenderFacetDocument(payload); got != want {
 		return fmt.Errorf("dossier %s must use the canonical facet section order with no text outside those sections", candidate.Path)
 	}
 	return nil
+}
+
+// validateDossierEvidenceCitations keeps archive claims independently
+// checkable. Archive tools accept short session prefixes for interactive
+// convenience, but imported sessions can share those prefixes; durable
+// citations therefore need the full canonical UUID.
+func validateDossierEvidenceCitations(full string) error {
+	matches := archiveSessionCitationPattern.FindAllStringSubmatch(full, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(matches))
+	invalid := make([]string, 0)
+	for _, match := range matches {
+		citation := match[0]
+		rawID := match[2]
+		id, err := uuid.Parse(rawID)
+		if match[1] == ":" && err == nil && id != uuid.Nil && id.String() == rawID {
+			continue
+		}
+		if _, duplicate := seen[citation]; duplicate {
+			continue
+		}
+		seen[citation] = struct{}{}
+		invalid = append(invalid, citation)
+	}
+	if len(invalid) == 0 {
+		return nil
+	}
+	sort.Strings(invalid)
+	return fmt.Errorf("full has archive-session citation(s) [%s] without a full canonical UUID; replace each with archive:session:<full-session-uuid> from archive_search or archive_sessions because short prefixes can be ambiguous", strings.Join(invalid, ", "))
 }
 
 func dossierIDFromPath(relPath string) (uuid.UUID, error) {

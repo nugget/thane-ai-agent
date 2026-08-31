@@ -26,7 +26,7 @@ func validDossierCandidate(id uuid.UUID) documents.DocumentWriteCandidate {
 		StatusLine: "Relationship is current and steady.",
 		Teaser:     "Recent conversations clarified the operator's preferred collaboration style.",
 		Digest:     "The contact prefers direct technical collaboration and explicit source-of-truth boundaries.",
-		Full:       "# Relationship context\n\nCurrent synthesis with cited evidence.",
+		Full:       "# Relationship context\n\nCurrent synthesis — evidence: archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777.",
 	}
 	return documents.DocumentWriteCandidate{
 		Path: id.String() + ".md",
@@ -92,6 +92,27 @@ func TestValidateDossierWrite(t *testing.T) {
 			},
 			wantErr: "canonical facet section order",
 		},
+		{
+			name: "short archive session citation",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777", "archive:session:019c52f0", 1)
+			},
+			wantErr: "full canonical UUID",
+		},
+		{
+			name: "legacy archive session separator",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "archive:session:", "archive:session-", 1)
+			},
+			wantErr: "archive:session:<full-session-uuid>",
+		},
+		{
+			name: "noncanonical archive session uuid",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "019c52f0-9ce8-7708-867f-35da2e6b4777", "019C52F0-9CE8-7708-867F-35DA2E6B4777", 1)
+			},
+			wantErr: "full canonical UUID",
+		},
 	}
 
 	for _, tt := range tests {
@@ -111,6 +132,50 @@ func TestValidateDossierWrite(t *testing.T) {
 				t.Fatalf("ValidateDossierWrite() error = %v, want it to mention %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Dossier Person","kind":"individual"}`); err != nil {
+		t.Fatal(err)
+	}
+	contact, err := tools.store.FindByName("Dossier Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDossierWriter{}
+	tools.ConfigureDossierRoot(true, true)
+	tools.ConfigureDossierDocuments(writer.Write)
+
+	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
+		ContactID:  contact.ID.String(),
+		StatusLine: "Current.",
+		Teaser:     "Useful hook.",
+		Digest:     "Enough context to act.",
+		Full: "Two claims. — evidence: archive:session:019c52f0\n" +
+			"Another claim. — evidence: archive:session:01a056ae\n" +
+			"Repeated first claim. — evidence: archive:session:019c52f0",
+	})
+	if err == nil {
+		t.Fatal("WriteDossier() accepted ambiguous archive session citations")
+	}
+	for _, want := range []string{
+		"correct every listed field",
+		"archive:session:019c52f0",
+		"archive:session:01a056ae",
+		"archive:session:<full-session-uuid>",
+		"short prefixes can be ambiguous",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("WriteDossier() error = %v, want it to mention %q", err, want)
+		}
+	}
+	if strings.Count(err.Error(), "archive:session:019c52f0") != 1 {
+		t.Errorf("WriteDossier() error = %v, want duplicate invalid citation reported once", err)
+	}
+	if writer.calls != 0 {
+		t.Fatalf("ambiguous citations reached writer %d times", writer.calls)
 	}
 }
 
@@ -194,12 +259,18 @@ func TestWriteDossierReportsAllProjectionViolationsBeforeWriting(t *testing.T) {
 		StatusLine: strings.Repeat("s", 121),
 		Teaser:     "Useful hook.",
 		Digest:     strings.Repeat("d", 2049),
-		Full:       "Complete detail.",
+		Full:       "Complete detail. — evidence: archive:session:019c52f0",
 	})
 	if err == nil {
 		t.Fatal("WriteDossier() accepted invalid projections")
 	}
-	for _, want := range []string{"correct every listed field", "status_line is 121 characters", "digest is 2049 characters"} {
+	for _, want := range []string{
+		"correct every listed field",
+		"status_line is 121 characters",
+		"digest is 2049 characters",
+		"archive:session:019c52f0",
+		"full canonical UUID",
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("WriteDossier() error = %v, want it to mention %q", err, want)
 		}
