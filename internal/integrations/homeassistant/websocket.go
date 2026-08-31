@@ -47,7 +47,8 @@ const (
 	// already saturated — an overflow storm would push hundreds of warn
 	// records through the same process that is failing to keep up. The
 	// first drop after a quiet stretch logs immediately; further drops
-	// fold into one summary per interval.
+	// fold into one summary per interval, and a tail flush reports the
+	// remainder within one interval of a burst's last drop.
 	dropLogInterval = 30 * time.Second
 )
 
@@ -81,13 +82,17 @@ type WSClient struct {
 	// enqueueEvent.
 	events chan Event
 
-	// Overflow accounting for the events channel. droppedEvents is the
-	// cumulative count of events discarded because the channel was full;
-	// droppedLogged and lastDropLogNano window the coalesced warning
-	// (see recordDroppedEvent).
-	droppedEvents   atomic.Uint64
-	droppedLogged   atomic.Uint64
-	lastDropLogNano atomic.Int64
+	// Overflow accounting for the events channel, all under dropMu.
+	// droppedTotal counts every event discarded because the channel was
+	// full; droppedLogged is the total as of the last warning, so each
+	// warning reports the difference; dropFlushTimer holds the pending
+	// tail flush that surfaces a burst's folded drops when no later
+	// drop arrives to trigger the next summary (see recordDroppedEvent).
+	dropMu         sync.Mutex
+	droppedTotal   uint64
+	droppedLogged  uint64
+	lastDropLog    time.Time
+	dropFlushTimer *time.Timer
 
 	// desired is the set of event types we want subscribed. It is sticky:
 	// recorded on Subscribe regardless of connection state and re-applied
@@ -621,56 +626,78 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 // keeps fresh state flowing instead of preserving a backlog nobody has
 // read yet.
 func (c *WSClient) enqueueEvent(ev Event) {
-	select {
-	case c.events <- ev:
-		return
-	default:
-	}
+	for {
+		select {
+		case c.events <- ev:
+			return
+		default:
+		}
 
-	// Channel full: evict the oldest entry, then retry once. Both the
-	// evict and the retry race the consumer, so either can still miss;
-	// the final default preserves the never-block guarantee if a
-	// concurrent sender refills the freed slot.
-	evictedType := ""
-	select {
-	case old := <-c.events:
-		evictedType = old.Type
-	default:
-		// The consumer drained the channel between the failed send and
-		// the evict — the retry below will almost certainly succeed.
-	}
-	select {
-	case c.events <- ev:
-		if evictedType != "" {
-			c.recordDroppedEvent(evictedType)
+		// Channel full: evict the oldest entry and retry the send. The
+		// evict races the consumer — when the consumer drains a slot
+		// first, the receive misses, nothing is dropped, and the next
+		// send attempt takes the freed capacity instead. Only a
+		// successful evict counts as a drop. The loop terminates
+		// because every pass either sends or frees a slot, and the
+		// readLoop is the only sustained producer.
+		select {
+		case <-c.events:
+			c.recordDroppedEvent()
+		default:
 		}
-	default:
-		if evictedType != "" {
-			c.recordDroppedEvent(evictedType)
-		}
-		c.recordDroppedEvent(ev.Type)
 	}
 }
 
-// recordDroppedEvent counts one discarded event and emits a coalesced
-// warning: the first drop after a quiet interval logs immediately, and
-// further drops inside dropLogInterval fold into the next summary, so an
-// overflow storm costs one log record instead of hundreds.
-func (c *WSClient) recordDroppedEvent(eventType string) {
-	total := c.droppedEvents.Add(1)
-	now := time.Now().UnixNano()
-	last := c.lastDropLogNano.Load()
-	if now-last < int64(dropLogInterval) {
+// recordDroppedEvent counts one discarded event and coalesces the
+// overflow warning: the first drop after a quiet stretch logs
+// immediately, further drops inside dropLogInterval fold into a summary,
+// and a tail-flush timer guarantees the summary lands within one
+// interval of a burst's last drop even when no later drop arrives to
+// trigger it. An overflow storm therefore costs one log record per
+// interval instead of hundreds, and every drop is eventually reported.
+func (c *WSClient) recordDroppedEvent() {
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	c.droppedTotal++
+	now := time.Now()
+	if now.Sub(c.lastDropLog) >= dropLogInterval {
+		c.logDropsLocked(now)
 		return
 	}
-	if !c.lastDropLogNano.CompareAndSwap(last, now) {
-		return // another goroutine won the race and logs this window
+	if c.dropFlushTimer == nil {
+		delay := dropLogInterval - now.Sub(c.lastDropLog)
+		c.dropFlushTimer = time.AfterFunc(delay, c.flushDroppedEvents)
 	}
-	logged := c.droppedLogged.Swap(total)
+}
+
+// flushDroppedEvents reports drops that folded into the quiet window
+// with no later drop to surface them — the tail of a finite burst.
+func (c *WSClient) flushDroppedEvents() {
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	c.dropFlushTimer = nil
+	if c.droppedTotal == c.droppedLogged {
+		return
+	}
+	c.logDropsLocked(time.Now())
+}
+
+// logDropsLocked emits the coalesced overflow warning and advances the
+// window bookkeeping. The caller holds dropMu.
+func (c *WSClient) logDropsLocked(now time.Time) {
 	c.logger.Warn("event channel full; dropped events",
-		"dropped_since_last", total-logged,
-		"dropped_total", total,
-		"type", eventType)
+		"dropped_since_last", c.droppedTotal-c.droppedLogged,
+		"dropped_total", c.droppedTotal)
+	c.droppedLogged = c.droppedTotal
+	c.lastDropLog = now
+}
+
+// droppedCount reports the cumulative number of events discarded to
+// channel overflow.
+func (c *WSClient) droppedCount() uint64 {
+	c.dropMu.Lock()
+	defer c.dropMu.Unlock()
+	return c.droppedTotal
 }
 
 // signalLost notifies the supervisor of a connection loss without blocking.

@@ -18,13 +18,13 @@ func TestEnqueueEventEvictsOldestOnOverflow(t *testing.T) {
 
 	for i, payload := range []string{`1`, `2`, `3`} {
 		c.enqueueEvent(Event{Type: "state_changed", Data: json.RawMessage(payload)})
-		if i < 2 && c.droppedEvents.Load() != 0 {
+		if i < 2 && c.droppedCount() != 0 {
 			t.Fatalf("event %d dropped before the channel was full", i+1)
 		}
 	}
 
-	if got := c.droppedEvents.Load(); got != 1 {
-		t.Fatalf("droppedEvents = %d, want 1", got)
+	if got := c.droppedCount(); got != 1 {
+		t.Fatalf("droppedCount = %d, want 1", got)
 	}
 	want := []string{`2`, `3`}
 	for i, exp := range want {
@@ -40,14 +40,15 @@ func TestEnqueueEventEvictsOldestOnOverflow(t *testing.T) {
 }
 
 // TestRecordDroppedEventCoalescesWarnings verifies the log contract: an
-// overflow storm emits one warning per dropLogInterval, and the next
-// window's summary carries every drop folded in since the last record.
+// overflow storm emits one warning per dropLogInterval, and the tail
+// flush surfaces every drop folded into the quiet window even when no
+// later drop arrives to trigger the next summary.
 func TestRecordDroppedEventCoalescesWarnings(t *testing.T) {
 	h := &captureHandler{}
 	c := NewWSClient("http://ha.invalid", "token", slog.New(h))
 
 	for range 100 {
-		c.recordDroppedEvent("state_changed")
+		c.recordDroppedEvent()
 	}
 	if len(h.records) != 1 {
 		t.Fatalf("storm of 100 drops emitted %d warnings, want 1", len(h.records))
@@ -56,18 +57,44 @@ func TestRecordDroppedEventCoalescesWarnings(t *testing.T) {
 		t.Errorf("first warning dropped_since_last = %d, want 1", got)
 	}
 
-	// Age the window out and drop once more: the summary must fold in
-	// the 99 silent drops plus this one.
-	c.lastDropLogNano.Store(time.Now().Add(-dropLogInterval - time.Second).UnixNano())
-	c.recordDroppedEvent("state_changed")
+	// The 99 folded drops must have a tail flush scheduled; fire it
+	// directly rather than waiting out the real timer.
+	c.dropMu.Lock()
+	scheduled := c.dropFlushTimer != nil
+	c.dropMu.Unlock()
+	if !scheduled {
+		t.Fatal("folded drops left no tail flush scheduled")
+	}
+	c.flushDroppedEvents()
 	if len(h.records) != 2 {
-		t.Fatalf("aged-out window emitted %d warnings total, want 2", len(h.records))
+		t.Fatalf("tail flush emitted %d warnings total, want 2", len(h.records))
 	}
-	if got := attrUint64(t, h.records[1], "dropped_since_last"); got != 100 {
-		t.Errorf("second warning dropped_since_last = %d, want 100", got)
+	if got := attrUint64(t, h.records[1], "dropped_since_last"); got != 99 {
+		t.Errorf("tail flush dropped_since_last = %d, want 99", got)
 	}
-	if got := attrUint64(t, h.records[1], "dropped_total"); got != 101 {
-		t.Errorf("second warning dropped_total = %d, want 101", got)
+	if got := attrUint64(t, h.records[1], "dropped_total"); got != 100 {
+		t.Errorf("tail flush dropped_total = %d, want 100", got)
+	}
+
+	// A flush with nothing new folded stays silent.
+	c.flushDroppedEvents()
+	if len(h.records) != 2 {
+		t.Fatalf("idle flush emitted a warning; records = %d, want 2", len(h.records))
+	}
+
+	// Age the window out: the next drop logs immediately again.
+	c.dropMu.Lock()
+	c.lastDropLog = time.Now().Add(-dropLogInterval - time.Second)
+	c.dropMu.Unlock()
+	c.recordDroppedEvent()
+	if len(h.records) != 3 {
+		t.Fatalf("aged-out window emitted %d warnings total, want 3", len(h.records))
+	}
+	if got := attrUint64(t, h.records[2], "dropped_since_last"); got != 1 {
+		t.Errorf("post-window warning dropped_since_last = %d, want 1", got)
+	}
+	if got := attrUint64(t, h.records[2], "dropped_total"); got != 101 {
+		t.Errorf("post-window warning dropped_total = %d, want 101", got)
 	}
 }
 
