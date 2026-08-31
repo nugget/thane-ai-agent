@@ -219,9 +219,19 @@ func (s *Store) describeMutationConflict(ctx context.Context, action, ref, expec
 	}
 	snapshot, snapshotErr := reviser.Snapshot(ctx, relPath)
 	if snapshotErr != nil {
-		if conflict != nil && conflict.Actual == revisionAbsent {
+		actual := ""
+		if conflict != nil {
+			actual = strings.TrimSpace(conflict.Actual)
+		}
+		switch actual {
+		case revisionAbsent:
 			result.message = "No change was made because this document was deleted after this loop last read it. Reconcile that deletion with the intended update, then retry."
 			result.receiptRevision = revisionAbsent
+		case "", "worktree_dirty":
+			result.message = "No change was made because the document changed, but Thane could not load its current content. Read the document again before retrying so the intended update can be reconciled safely."
+		default:
+			result.message = "No change was made because the document changed. Thane could not load its current content to show the intervening diff, so read the document again before retrying; the comparison base has advanced to the observed revision."
+			result.receiptRevision = actual
 		}
 		return result
 	}

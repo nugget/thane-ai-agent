@@ -14,10 +14,11 @@ import (
 )
 
 type revisionMutationBackend struct {
-	root     string
-	revision string
-	next     int
-	contents map[string]string
+	root        string
+	revision    string
+	next        int
+	contents    map[string]string
+	snapshotErr error
 }
 
 func (b *revisionMutationBackend) Write(_ context.Context, filename, content, _ string) error {
@@ -71,6 +72,9 @@ func (b *revisionMutationBackend) Content(context.Context, string, string) (Revi
 }
 
 func (b *revisionMutationBackend) Snapshot(_ context.Context, filename string) (RevisionContent, error) {
+	if b.snapshotErr != nil {
+		return RevisionContent{}, b.snapshotErr
+	}
 	content, err := os.ReadFile(filepath.Join(b.root, filename))
 	if err != nil {
 		return RevisionContent{}, err
@@ -202,6 +206,66 @@ func TestHiddenRevisionReceiptReturnsConflictDiffAndAdvances(t *testing.T) {
 	var retried modelMutationResult
 	if err := json.Unmarshal([]byte(retryJSON), &retried); err != nil {
 		t.Fatalf("unmarshal retry result: %v", err)
+	}
+	if !retried.Applied {
+		t.Fatalf("retry applied = false, want true: %s", retryJSON)
+	}
+}
+
+func TestHiddenRevisionReceiptAdvancesFromConflictWhenSnapshotFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	backend := &revisionMutationBackend{root: root, contents: make(map[string]string)}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := NewStoreWithOptions(db, map[string]string{"contacts": root}, nil, StoreOptions{
+		RootWriters:  map[string]RootWriter{"contacts": backend},
+		RootRevisers: map[string]RootReviser{"contacts": backend},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreWithOptions: %v", err)
+	}
+	tools := NewTools(store)
+	ctx := t.Context()
+	const scope = "loop:archivist-contacts"
+
+	if _, err := tools.Write(ctx, WriteArgs{Ref: "contacts:person.md", Body: stringPtr("First fact."), ReceiptScope: scope}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := tools.Read(ctx, RefArgs{Ref: "contacts:person.md", ReceiptScope: scope}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := backend.Write(ctx, "person.md", "Second fact.", "operator update"); err != nil {
+		t.Fatalf("external update: %v", err)
+	}
+	backend.snapshotErr = fmt.Errorf("snapshot unavailable")
+
+	conflict := store.describeMutationConflict(ctx, "edit", "contacts:person.md", "rev-1", &RootRevisionConflictError{
+		Expected: "rev-1",
+		Actual:   backend.revision,
+	})
+	if conflict.receiptRevision != backend.revision || !strings.Contains(conflict.message, "could not load") || !strings.Contains(conflict.message, "comparison base has advanced") {
+		t.Fatalf("conflict = %#v, want honest snapshot failure with advanced base", conflict)
+	}
+	tools.rememberRevisionReceipt(scope, "contacts:person.md", conflict.receiptRevision)
+
+	backend.snapshotErr = nil
+	retryJSON, err := tools.Edit(ctx, EditArgs{
+		Ref:          "contacts:person.md",
+		Mode:         "append_body",
+		Body:         "Reconciled fact.",
+		ReceiptScope: scope,
+	})
+	if err != nil {
+		t.Fatalf("retry edit: %v", err)
+	}
+	var retried modelMutationResult
+	if err := json.Unmarshal([]byte(retryJSON), &retried); err != nil {
+		t.Fatalf("unmarshal retry: %v", err)
 	}
 	if !retried.Applied {
 		t.Fatalf("retry applied = false, want true: %s", retryJSON)

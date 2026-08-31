@@ -165,7 +165,7 @@ func (s *Store) commitFile(ctx context.Context, filename, message string) (strin
 }
 
 func (s *Store) fileTracked(ctx context.Context, filename string) (bool, error) {
-	err := s.git(ctx, nil, nil, "ls-files", "--error-unmatch", "--", filename)
+	err := s.git(ctx, nil, nil, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", filename)
 	if err == nil {
 		return true, nil
 	}
@@ -219,7 +219,43 @@ func (s *Store) commitFiles(ctx context.Context, filenames []string, message str
 		parent = strings.TrimSpace(parentBuf.String())
 	}
 
-	// Build the commit object.
+	commitHash, err := s.writeSignedCommitObject(ctx, tree, parent, message)
+	if err != nil {
+		return "", err
+	}
+
+	// Update HEAD only if it still names the parent used above. The Store mutex
+	// coordinates Thane writers; update-ref's old-value guard also catches a
+	// concurrent operator git operation or transport fast-forward.
+	expectedHead := parent
+	if expectedHead == "" {
+		expectedHead = strings.Repeat("0", len(commitHash))
+	}
+	if err := s.git(ctx, nil, nil,
+		"update-ref", "HEAD", commitHash, expectedHead); err != nil {
+		return "", fmt.Errorf("git update-ref: %w", err)
+	}
+
+	// Reset the index to match HEAD so subsequent operations see a
+	// clean index. HEAD already contains the mutation, so context cancellation
+	// or an index-cleanup failure must not turn that success into an apparent
+	// failure that a caller may retry.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitTimeout)
+	defer cancel()
+	if err := s.git(cleanupCtx, nil, nil, "reset", "--mixed", "HEAD"); err != nil {
+		s.logger.Warn("provenance commit succeeded but index cleanup failed",
+			"commit", shorten(commitHash),
+			"files", filenames,
+			"error", err,
+		)
+	}
+
+	return commitHash, nil
+}
+
+// writeSignedCommitObject creates a signed commit object without moving a ref.
+// Callers choose and guard the parent when they publish the returned object.
+func (s *Store) writeSignedCommitObject(ctx context.Context, tree, parent, message string) (string, error) {
 	now := time.Now()
 	unixTime := now.Unix()
 	_, offset := now.Zone()
@@ -266,35 +302,7 @@ func (s *Store) commitFiles(ctx context.Context, filenames []string, message str
 		"hash-object", "-t", "commit", "-w", "--stdin"); err != nil {
 		return "", fmt.Errorf("git hash-object: %w", err)
 	}
-	commitHash := strings.TrimSpace(hashBuf.String())
-
-	// Update HEAD only if it still names the parent used above. The Store mutex
-	// coordinates Thane writers; update-ref's old-value guard also catches a
-	// concurrent operator git operation or transport fast-forward.
-	expectedHead := parent
-	if expectedHead == "" {
-		expectedHead = strings.Repeat("0", len(commitHash))
-	}
-	if err := s.git(ctx, nil, nil,
-		"update-ref", "HEAD", commitHash, expectedHead); err != nil {
-		return "", fmt.Errorf("git update-ref: %w", err)
-	}
-
-	// Reset the index to match HEAD so subsequent operations see a
-	// clean index. HEAD already contains the mutation, so context cancellation
-	// or an index-cleanup failure must not turn that success into an apparent
-	// failure that a caller may retry.
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitTimeout)
-	defer cancel()
-	if err := s.git(cleanupCtx, nil, nil, "reset", "--mixed", "HEAD"); err != nil {
-		s.logger.Warn("provenance commit succeeded but index cleanup failed",
-			"commit", shorten(commitHash),
-			"files", filenames,
-			"error", err,
-		)
-	}
-
-	return commitHash, nil
+	return strings.TrimSpace(hashBuf.String()), nil
 }
 
 // fileHistory reads git log for a file and returns structured metadata.
