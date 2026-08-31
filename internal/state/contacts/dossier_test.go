@@ -86,6 +86,13 @@ func TestValidateDossierWrite(t *testing.T) {
 			wantErr: "Go already binds the document path and frontmatter",
 		},
 		{
+			name: "uppercase subject uuid repeated in prose",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "explicit source-of-truth boundaries.", "contact "+strings.ToUpper(id.String())+".", 1)
+			},
+			wantErr: "Go already binds the document path and frontmatter",
+		},
+		{
 			name: "related contact uuid remains valid",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "Current synthesis", "Related contact:01a055fc-6b4a-7c67-8c9b-f121b9814c45. Current synthesis", 1)

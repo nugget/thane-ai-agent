@@ -191,7 +191,7 @@ func validateDossierSubjectIdentity(id uuid.UUID, payload looppkg.FacetPayload) 
 
 	var redundant []string
 	for _, field := range fields {
-		if strings.Contains(field.value, id.String()) {
+		if strings.Contains(strings.ToLower(field.value), id.String()) {
 			redundant = append(redundant, field.name)
 		}
 	}

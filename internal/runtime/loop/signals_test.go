@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -859,6 +860,36 @@ func TestSummarizeNotifyEnvelopesOrdersUrgentFirst(t *testing.T) {
 	}
 	if idxNormal1 >= idxNormal2 {
 		t.Fatalf("normal ordering not stable: %s", summary)
+	}
+}
+
+func TestSummarizeNotifyEnvelopesOmitsLegacyZeroObservedAt(t *testing.T) {
+	t.Parallel()
+
+	var legacyPayload map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"events":[{
+			"source":"contact_dossier_backfill",
+			"type":"session",
+			"id":"019c8729-41d7-7bfe-8a53-4b163ebcea82",
+			"summary":"Historical closed session seeded for one-time contact dossier backfill.",
+			"observed_at":"0001-01-01T00:00:00Z"
+		}]
+	}`), &legacyPayload); err != nil {
+		t.Fatalf("decode legacy payload: %v", err)
+	}
+
+	summary := summarizeNotifyEnvelopes([]messages.Envelope{{
+		ID:       "legacy-backfill",
+		From:     messages.Identity{Kind: messages.IdentitySystem, Name: "contact_dossier_backfill"},
+		Priority: messages.PriorityLow,
+		Payload:  legacyPayload,
+	}})
+	if strings.Contains(summary, "observed_at") || strings.Contains(summary, "0001-01-01") {
+		t.Fatalf("model-facing summary retained legacy zero observed_at: %s", summary)
+	}
+	if !strings.Contains(summary, "contact_dossier_backfill") || !strings.Contains(summary, "019c8729-41d7-7bfe-8a53-4b163ebcea82") {
+		t.Fatalf("model-facing summary lost the backfill event: %s", summary)
 	}
 }
 
