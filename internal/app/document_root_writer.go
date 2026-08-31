@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
@@ -15,6 +17,13 @@ func (w *documentRootProvenanceWriter) WriteIfRevision(ctx context.Context, file
 	}
 	revision, err := store.WriteIfRevision(ctx, w.storeFilename(filename), content, w.withTurnProvenance(ctx, message), expectedRevision)
 	if err != nil {
+		var conflict *provenance.RevisionConflictError
+		if errors.As(err, &conflict) {
+			return "", &documents.RootRevisionConflictError{
+				Expected: conflict.Expected,
+				Actual:   conflict.Actual,
+			}
+		}
 		return "", err
 	}
 	return revision.Short, nil

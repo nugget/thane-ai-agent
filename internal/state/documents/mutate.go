@@ -25,56 +25,56 @@ type DocumentRecord struct {
 	ModifiedAt  string              `json:"modified_at"`
 	WordCount   int                 `json:"word_count"`
 	SizeBytes   int64               `json:"size_bytes"`
-	// Revision is the newest commit touching this document on a
-	// revision-backed root. Pass it as expected_revision on a later
-	// mutation to reject stale read-modify-write cycles.
-	Revision string `json:"revision,omitempty"`
+	// Revision is internal coordination state for a revision-backed root.
+	// Model-facing adapters retain it as a hidden read receipt.
+	Revision string `json:"-"`
 }
 
 // WriteArgs creates or replaces a whole managed document.
 type WriteArgs struct {
-	Ref          string              `json:"ref"`
-	Title        string              `json:"title,omitempty"`
-	Description  string              `json:"description,omitempty"`
-	Tags         []string            `json:"tags,omitempty"`
-	Frontmatter  map[string][]string `json:"frontmatter,omitempty"`
-	Body         *string             `json:"body,omitempty"`
-	JournalEntry string              `json:"journal_entry,omitempty"`
-	// ExpectedRevision rejects a stale mutation on a revision-backed root.
-	ExpectedRevision string `json:"expected_revision,omitempty"`
+	Ref              string              `json:"ref"`
+	Title            string              `json:"title,omitempty"`
+	Description      string              `json:"description,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
+	Frontmatter      map[string][]string `json:"frontmatter,omitempty"`
+	Body             *string             `json:"body,omitempty"`
+	JournalEntry     string              `json:"journal_entry,omitempty"`
+	ExpectedRevision string              `json:"-"`
+	ReceiptScope     string              `json:"-"`
+	RequirePriorRead bool                `json:"-"`
 }
 
 // EditArgs updates part of a managed document without leaving the
 // semantic document abstraction.
 type EditArgs struct {
-	Ref         string              `json:"ref"`
-	Mode        string              `json:"mode"`
-	Body        string              `json:"body,omitempty"`
-	Section     string              `json:"section,omitempty"`
-	Heading     string              `json:"heading,omitempty"`
-	Level       int                 `json:"level,omitempty"`
-	Title       string              `json:"title,omitempty"`
-	Description string              `json:"description,omitempty"`
-	Tags        []string            `json:"tags,omitempty"`
-	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
-	// ExpectedRevision rejects a stale mutation on a revision-backed root.
-	ExpectedRevision string `json:"expected_revision,omitempty"`
+	Ref              string              `json:"ref"`
+	Mode             string              `json:"mode"`
+	Body             string              `json:"body,omitempty"`
+	Section          string              `json:"section,omitempty"`
+	Heading          string              `json:"heading,omitempty"`
+	Level            int                 `json:"level,omitempty"`
+	Title            string              `json:"title,omitempty"`
+	Description      string              `json:"description,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
+	Frontmatter      map[string][]string `json:"frontmatter,omitempty"`
+	ExpectedRevision string              `json:"-"`
+	ReceiptScope     string              `json:"-"`
 }
 
 // JournalUpdateArgs appends a timestamped note into a rolling window
 // journal document while keeping window headings and timestamps stable.
 type JournalUpdateArgs struct {
-	Ref          string              `json:"ref"`
-	Entry        string              `json:"entry"`
-	Window       string              `json:"window,omitempty"`
-	MaxWindows   int                 `json:"max_windows,omitempty"`
-	HeadingLevel int                 `json:"heading_level,omitempty"`
-	Title        string              `json:"title,omitempty"`
-	Description  string              `json:"description,omitempty"`
-	Tags         []string            `json:"tags,omitempty"`
-	Frontmatter  map[string][]string `json:"frontmatter,omitempty"`
-	// ExpectedRevision rejects a stale mutation on a revision-backed root.
-	ExpectedRevision string `json:"expected_revision,omitempty"`
+	Ref              string              `json:"ref"`
+	Entry            string              `json:"entry"`
+	Window           string              `json:"window,omitempty"`
+	MaxWindows       int                 `json:"max_windows,omitempty"`
+	HeadingLevel     int                 `json:"heading_level,omitempty"`
+	Title            string              `json:"title,omitempty"`
+	Description      string              `json:"description,omitempty"`
+	Tags             []string            `json:"tags,omitempty"`
+	Frontmatter      map[string][]string `json:"frontmatter,omitempty"`
+	ExpectedRevision string              `json:"-"`
+	ReceiptScope     string              `json:"-"`
 }
 
 // MutationResult summarizes one managed document write/edit.
@@ -94,8 +94,20 @@ type MutationResult struct {
 	SizeBytes   int64    `json:"size_bytes"`
 	Section     string   `json:"section,omitempty"`
 	Window      string   `json:"window,omitempty"`
-	// Revision is the exact revision produced by a conditional mutation.
-	Revision string `json:"revision,omitempty"`
+	// Revision advances the hidden read receipt after a successful mutation.
+	Revision string `json:"-"`
+}
+
+// PriorReadRequiredError prevents a scoped whole-document replacement from
+// overwriting an existing revision-backed document the caller has not read.
+type PriorReadRequiredError struct {
+	// Ref is the semantic document ref that must be read first.
+	Ref string `json:"-"`
+}
+
+// Error implements error.
+func (e *PriorReadRequiredError) Error() string {
+	return fmt.Sprintf("read %s before replacing its whole body", e.Ref)
 }
 
 // IsNotFound reports whether err means the document does not exist, as
@@ -200,11 +212,14 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	var existingRecord *DocumentRecord
 	if _, err := os.Stat(absPath); err == nil {
 		existed = true
-		record, _, _, readErr := s.readDocumentFile(absPath, root, relPath)
+		record, _, _, readErr := s.readCurrentDocumentParts(ctx, absPath, root, relPath)
 		if readErr != nil {
 			return nil, readErr
 		}
 		existingRecord = record
+	}
+	if existed && args.RequirePriorRead && args.ExpectedRevision == "" && args.Body != nil && s.rootWriter(root) != nil && s.rootReviser(root) != nil {
+		return nil, &PriorReadRequiredError{Ref: args.Ref}
 	}
 
 	// A new document with no body at all is almost never intent — it is
@@ -235,7 +250,8 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	meta := mergeDocumentFrontmatter(existingRecord, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 	raw := renderDocument(meta, body)
 
-	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, args.ExpectedRevision)
+	expectedRevision := s.automaticExpectedRevision(root, existed, existingRecord, args.ExpectedRevision)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, expectedRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +277,7 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 		return nil, err
 	}
 
-	record, rawFrontmatter, body, err := s.readDocumentFile(absPath, root, relPath)
+	record, rawFrontmatter, body, err := s.readCurrentDocumentParts(ctx, absPath, root, relPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
@@ -306,7 +322,8 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 		raw = touchDocumentFrontmatter(raw, record, time.Now())
 	}
 	rendered := renderDocumentFromParts(raw, editedBody)
-	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, args.ExpectedRevision)
+	expectedRevision := s.automaticExpectedRevision(root, true, record, args.ExpectedRevision)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, expectedRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +355,7 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 	var body string
 	if _, err := os.Stat(absPath); err == nil {
 		existed = true
-		record, rawFrontmatter, body, err = s.readDocumentFile(absPath, root, relPath)
+		record, rawFrontmatter, body, err = s.readCurrentDocumentParts(ctx, absPath, root, relPath)
 		if err != nil {
 			return nil, err
 		}
@@ -381,7 +398,8 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 		meta := mergeDocumentFrontmatter(record, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 		rendered = renderDocument(meta, updatedBody)
 	}
-	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, args.ExpectedRevision)
+	expectedRevision := s.automaticExpectedRevision(root, existed, record, args.ExpectedRevision)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, expectedRevision)
 	if err != nil {
 		return nil, err
 	}

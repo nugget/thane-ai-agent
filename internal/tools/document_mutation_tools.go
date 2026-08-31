@@ -15,8 +15,8 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_write",
-		Description:          "Write (replace) a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths. For brand-new documents prefer doc_create, which collision-checks the corpus and normalizes placement first — doc_write creating a fresh ref is for destinations that are already deliberate. On a revision-backed root, pass the revision returned by doc_read as expected_revision (or `absent` for a deliberate create) when another loop or operator may edit the same document; a stale write fails instead of silently replacing newer work.",
-		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter", "expected_revision"},
+		Description:          "Write (replace) a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths. For brand-new documents prefer doc_create, which collision-checks the corpus and normalizes placement first — doc_write creating a fresh ref is for destinations that are already deliberate. On revision-backed roots Thane automatically protects a document you read from intervening edits; if it changed, no write occurs and the result includes the bounded intervening diff. Read an existing document before replacing its whole body.",
+		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -50,10 +50,6 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 					"type":        "string",
 					"description": "Optional timestamped note to append under the managed `Journal` section while writing the current document state.",
 				},
-				"expected_revision": map[string]any{
-					"type":        "string",
-					"description": "Optional compare-and-write token for revision-backed roots: use the revision returned by doc_read, or `absent` to require that a new ref does not already exist. A stale token returns the current revision and makes no change.",
-				},
 			},
 			"required": []string{"ref"},
 		},
@@ -74,26 +70,28 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			if _, hasMode := args["mode"]; hasMode {
 				return "", fmt.Errorf("doc_write has no %q parameter — it always creates or replaces the whole document. For mode-based edits (replace_body, append_body, upsert_section, ...) use doc_edit", "mode")
 			}
+			if _, hasRevision := args["expected_revision"]; hasRevision {
+				return "", fmt.Errorf("doc_write has no %q parameter — Thane tracks revision preconditions automatically. Omit it; read an existing document before replacing its whole body", "expected_revision")
+			}
 			title, _ := args["title"].(string)
 			description, _ := args["description"].(string)
-			expectedRevision, _ := args["expected_revision"].(string)
 			return dt.Write(ctx, documents.WriteArgs{
-				Ref:              ref,
-				Title:            title,
-				Description:      description,
-				Tags:             documentStringSliceArg(args["tags"]),
-				Frontmatter:      documentFrontmatterArg(args["frontmatter"]),
-				Body:             optionalStringArg(args, "body"),
-				JournalEntry:     stringArg(args, "journal_entry"),
-				ExpectedRevision: expectedRevision,
+				Ref:          ref,
+				Title:        title,
+				Description:  description,
+				Tags:         documentStringSliceArg(args["tags"]),
+				Frontmatter:  documentFrontmatterArg(args["frontmatter"]),
+				Body:         optionalStringArg(args, "body"),
+				JournalEntry: stringArg(args, "journal_entry"),
+				ReceiptScope: documentRevisionScope(ctx),
 			})
 		},
 	})
 
 	r.Register(&Tool{
 		Name:                 "doc_edit",
-		Description:          "Edit a managed markdown document without leaving semantic refs behind. Supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations. On a revision-backed root, pass the revision returned by doc_read as expected_revision when another loop or operator may edit the same document; a stale edit fails instead of silently replacing newer work.",
-		ContentResolveExempt: []string{"ref", "mode", "section", "heading", "level", "title", "description", "tags", "frontmatter", "expected_revision"},
+		Description:          "Edit a managed markdown document without leaving semantic refs behind. Supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations. On revision-backed roots Thane automatically uses this loop's last read as the comparison base. If another loop or operator changed the document, no edit occurs and the result includes a bounded diff to reconcile before retrying.",
+		ContentResolveExempt: []string{"ref", "mode", "section", "heading", "level", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -139,10 +137,6 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 					"description":          "Optional extra frontmatter fields. Values may be strings or arrays of strings.",
 					"additionalProperties": true,
 				},
-				"expected_revision": map[string]any{
-					"type":        "string",
-					"description": "Optional compare-and-write token for revision-backed roots. Use the revision returned by doc_read; a stale token returns a conflict and makes no change.",
-				},
 			},
 			"required": []string{"ref", "mode"},
 		},
@@ -162,32 +156,34 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			if _, hasContent := args["content"]; hasContent {
 				return "", fmt.Errorf("doc_edit's markdown parameter is %q (the %q parameter was renamed for consistency with doc_write) — re-call with body", "body", "content")
 			}
+			if _, hasRevision := args["expected_revision"]; hasRevision {
+				return "", fmt.Errorf("doc_edit has no %q parameter — Thane tracks revision preconditions automatically. Omit it and retry", "expected_revision")
+			}
 			content, _ := args["body"].(string)
 			section, _ := args["section"].(string)
 			heading, _ := args["heading"].(string)
 			title, _ := args["title"].(string)
 			description, _ := args["description"].(string)
-			expectedRevision, _ := args["expected_revision"].(string)
 			return dt.Edit(ctx, documents.EditArgs{
-				Ref:              ref,
-				Mode:             mode,
-				Body:             content,
-				Section:          section,
-				Heading:          heading,
-				Level:            numericArg(args["level"], 2, 6),
-				Title:            title,
-				Description:      description,
-				Tags:             documentStringSliceArg(args["tags"]),
-				Frontmatter:      documentFrontmatterArg(args["frontmatter"]),
-				ExpectedRevision: expectedRevision,
+				Ref:          ref,
+				Mode:         mode,
+				Body:         content,
+				Section:      section,
+				Heading:      heading,
+				Level:        numericArg(args["level"], 2, 6),
+				Title:        title,
+				Description:  description,
+				Tags:         documentStringSliceArg(args["tags"]),
+				Frontmatter:  documentFrontmatterArg(args["frontmatter"]),
+				ReceiptScope: documentRevisionScope(ctx),
 			})
 		},
 	})
 
 	r.Register(&Tool{
 		Name:                 "doc_journal_update",
-		Description:          "Append a timestamped note into a rolling managed journal document. The tool creates the document if needed, keeps created/updated timestamps current, groups entries by day/week/month window headings, and prunes older windows for you. On a revision-backed root, pass the revision returned by doc_read as expected_revision (or `absent` for a deliberate create) when another loop or operator may edit the same journal; a stale update fails instead of silently replacing newer work.",
-		ContentResolveExempt: []string{"ref", "window", "max_windows", "heading_level", "title", "description", "tags", "frontmatter", "expected_revision"},
+		Description:          "Append a timestamped note into a rolling managed journal document. The tool creates the document if needed, keeps created/updated timestamps current, groups entries by day/week/month window headings, and prunes older windows for you. On revision-backed roots Thane automatically protects the update against intervening edits; a conflict makes no change and returns a bounded diff to reconcile before retrying.",
+		ContentResolveExempt: []string{"ref", "window", "max_windows", "heading_level", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -229,10 +225,6 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 					"description":          "Optional extra frontmatter fields. Values may be strings or arrays of strings.",
 					"additionalProperties": true,
 				},
-				"expected_revision": map[string]any{
-					"type":        "string",
-					"description": "Optional compare-and-write token for revision-backed roots. Use the revision returned by doc_read, or `absent` to require a new journal.",
-				},
 			},
 			"required": []string{"ref", "entry"},
 		},
@@ -245,21 +237,23 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			if entry == "" {
 				return "", fmt.Errorf("entry is required")
 			}
+			if _, hasRevision := args["expected_revision"]; hasRevision {
+				return "", fmt.Errorf("doc_journal_update has no %q parameter — Thane tracks revision preconditions automatically. Omit it and retry", "expected_revision")
+			}
 			window, _ := args["window"].(string)
 			title, _ := args["title"].(string)
 			description, _ := args["description"].(string)
-			expectedRevision, _ := args["expected_revision"].(string)
 			return dt.JournalUpdate(ctx, documents.JournalUpdateArgs{
-				Ref:              ref,
-				Entry:            entry,
-				Window:           window,
-				MaxWindows:       numericArg(args["max_windows"], 0, 365),
-				HeadingLevel:     numericArg(args["heading_level"], 2, 6),
-				Title:            title,
-				Description:      description,
-				Tags:             documentStringSliceArg(args["tags"]),
-				Frontmatter:      documentFrontmatterArg(args["frontmatter"]),
-				ExpectedRevision: expectedRevision,
+				Ref:          ref,
+				Entry:        entry,
+				Window:       window,
+				MaxWindows:   numericArg(args["max_windows"], 0, 365),
+				HeadingLevel: numericArg(args["heading_level"], 2, 6),
+				Title:        title,
+				Description:  description,
+				Tags:         documentStringSliceArg(args["tags"]),
+				Frontmatter:  documentFrontmatterArg(args["frontmatter"]),
+				ReceiptScope: documentRevisionScope(ctx),
 			})
 		},
 	})

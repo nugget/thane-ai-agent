@@ -325,18 +325,27 @@ policy, git history, and signatures.
 ### Concurrent writers
 
 Git history makes a mistaken overwrite recoverable, but history alone does
-not stop a stale loop from replacing another writer's current work. Managed
-reads therefore expose the newest file revision on git-backed roots. When a
-loop reads, transforms, and writes a document that another loop or operator
-may also edit, it should return that token as `expected_revision` on
-`doc_write`, `doc_edit`, or `doc_journal_update`.
+not stop a stale loop from replacing another writer's current work. On writable
+git-backed roots, a managed read therefore records the current file revision as
+a hidden receipt keyed by loop/conversation and document ref. The model never
+passes hashes between tools. A later `doc_write`, `doc_edit`, or
+`doc_journal_update` supplies that receipt to the root writer internally.
+Read-only history roots do not create mutation receipts.
 
-The root writer compares the token and commits under the same lock. A stale
-token returns a revision conflict and leaves the worktree and HEAD unchanged;
-the caller can read the new version, reconcile its intended change, and retry.
-`expected_revision: absent` is the creation precondition for a deliberate ref
-that must have no prior file history. Omitting the field retains unconditional
-mutation behavior for compatibility and for roots with a single writer.
+The root writer compares and commits managed mutations under the same lock, and
+the Git ref update also verifies its expected parent. A stale receipt returns
+`applied: false`, leaves the worktree and HEAD unchanged, and provides a bounded
+base-to-current patch. The receipt advances to current HEAD so the caller can
+reconcile and retry without another hash-bearing parameter. A missing or
+oversized patch falls back to a bounded current excerpt. A scoped whole-body
+replacement of an existing document requires a prior managed read; structured
+edits and creates derive a safe current/absent base within the operation.
+
+This coordinates Thane's managed writers and rejects operator edits that are
+already dirty when the mutation begins. It is not a general filesystem lock:
+an editor that ignores this coordination can still save in the narrow window
+between the final worktree check and replacement. Git history remains the
+recovery boundary for that external race.
 
 Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`,
 `file_search`, `file_grep`) intentionally do not consult the verifier.

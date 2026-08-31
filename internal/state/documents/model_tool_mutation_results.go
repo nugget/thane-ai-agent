@@ -4,6 +4,7 @@ import "time"
 
 type modelMutationResult struct {
 	Action        string   `json:"action"`
+	Applied       bool     `json:"applied"`
 	Ref           string   `json:"ref"`
 	Root          string   `json:"root"`
 	Path          string   `json:"path"`
@@ -18,7 +19,6 @@ type modelMutationResult struct {
 	SizeBytes     int64    `json:"size_bytes"`
 	Section       string   `json:"section,omitempty"`
 	Window        string   `json:"window,omitempty"`
-	Revision      string   `json:"revision,omitempty"`
 }
 
 type modelDeleteResult struct {
@@ -110,6 +110,7 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 	}
 	return &modelMutationResult{
 		Action:        result.Action,
+		Applied:       true,
 		Ref:           result.Ref,
 		Root:          result.Root,
 		Path:          result.Path,
@@ -124,7 +125,6 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 		SizeBytes:     result.SizeBytes,
 		Section:       result.Section,
 		Window:        result.Window,
-		Revision:      result.Revision,
 	}
 }
 

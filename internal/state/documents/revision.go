@@ -40,22 +40,30 @@ func (s *Store) attachMutationRevision(ctx context.Context, record *DocumentReco
 }
 
 func (s *Store) readCurrentDocument(ctx context.Context, absPath, root, relPath string) (*DocumentRecord, error) {
+	record, _, _, err := s.readCurrentDocumentParts(ctx, absPath, root, relPath)
+	return record, err
+}
+
+// readCurrentDocumentParts pairs the bytes used for a structured mutation
+// with their backing revision. The parsed record, raw frontmatter, and body
+// therefore all share the token used by the later conditional write.
+func (s *Store) readCurrentDocumentParts(ctx context.Context, absPath, root, relPath string) (*DocumentRecord, string, string, error) {
 	reviser := s.rootReviser(root)
 	if reviser != nil {
 		snapshot, err := reviser.Snapshot(ctx, relPath)
 		if err != nil {
-			return nil, err
+			return nil, "", "", err
 		}
-		record, _, _, err := readDocumentRecordBytes(absPath, root, relPath, []byte(snapshot.Content))
+		record, rawFrontmatter, body, err := readDocumentRecordBytes(absPath, root, relPath, []byte(snapshot.Content))
 		if err != nil {
-			return nil, err
+			return nil, "", "", err
 		}
 		record.Revision = snapshot.Revision.Short
-		return record, nil
+		return record, rawFrontmatter, body, nil
 	}
-	record, _, _, err := s.readDocumentFile(absPath, root, relPath)
+	record, rawFrontmatter, body, err := s.readDocumentFile(absPath, root, relPath)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	// A conditional writer without atomic read snapshots must not advertise a
 	// token that may describe newer bytes than this read. The production git
@@ -63,7 +71,7 @@ func (s *Store) readCurrentDocument(ctx context.Context, absPath, root, relPath 
 	if s.rootWriter(root) == nil {
 		s.attachCurrentRevision(ctx, record)
 	}
-	return record, nil
+	return record, rawFrontmatter, body, nil
 }
 
 // RootReviser exposes read-only revision history, diff, and point-in-time

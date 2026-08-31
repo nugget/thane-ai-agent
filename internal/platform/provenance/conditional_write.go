@@ -28,15 +28,18 @@ type RevisionConflictError struct {
 	Actual string
 }
 
-// Error implements error with a retry-oriented message suitable for passing
-// through model-facing document tools.
+// Error implements error.
 func (e *RevisionConflictError) Error() string {
-	return fmt.Sprintf("revision conflict for %s: expected %s, current is %s; read the current document and retry against its revision", e.Filename, e.Expected, e.Actual)
+	return fmt.Sprintf("revision conflict for %s: expected %s, current is %s", e.Filename, e.Expected, e.Actual)
 }
 
 // WriteIfRevision writes and commits content only when filename is still at
-// expectedRevision. The comparison and commit share the store mutex, so a
-// concurrent managed write or remote fast-forward cannot land between them.
+// expectedRevision. The comparison and commit share the store mutex, and the
+// HEAD update itself compares the parent, so concurrent managed writes and git
+// ref updates cannot land between them. An already-dirty target is rejected.
+// Editors that ignore Thane's coordination can still race in the narrow window
+// between the final worktree check and replacement; callers must not interpret
+// this as a general filesystem lock for arbitrary external writers.
 // Use [RevisionAbsent] to require creation of a file with no current history.
 // The returned revision is the exact commit produced by this call (or the
 // existing current revision when the content was already identical).
@@ -52,7 +55,8 @@ func (s *Store) WriteIfRevision(ctx context.Context, filename, content, message,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.checkExpectedRevisionLocked(ctx, filename, expectedRevision); err != nil {
+	current, err := s.checkExpectedRevisionLocked(ctx, filename, expectedRevision)
+	if err != nil {
 		return Revision{}, err
 	}
 	absPath := filepath.Join(s.path, filename)
@@ -62,67 +66,61 @@ func (s *Store) WriteIfRevision(ctx context.Context, filename, content, message,
 	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
 		return Revision{}, fmt.Errorf("provenance: write %s: %w", filename, err)
 	}
-	committed, err := s.commitFile(ctx, filename, message)
+	commitHash, err := s.commitFile(ctx, filename, message)
 	if err != nil {
 		return Revision{}, fmt.Errorf("provenance: commit %s: %w", filename, err)
 	}
-	if committed {
+	if commitHash != "" {
 		s.logger.Info("provenance file committed",
 			"file", filename,
 			"bytes", len(content),
 			"message", messageSubject(message),
 		)
+		return Revision{Commit: commitHash, Short: shorten(commitHash)}, nil
 	}
-	revision, found, err := s.currentFileRevisionLocked(ctx, filename)
-	if err != nil {
-		return Revision{}, fmt.Errorf("provenance: resolve committed revision for %s: %w", filename, err)
-	}
-	if !found {
-		return Revision{}, fmt.Errorf("provenance: committed file %s has no revision", filename)
-	}
-	return revision, nil
+	return current, nil
 }
 
 // checkExpectedRevisionLocked compares one file's latest committed revision
 // while the caller holds s.mu. A dirty target is always a conflict: resolving
 // only committed history and then overwriting uncommitted operator bytes would
 // satisfy the hash comparison while violating its purpose.
-func (s *Store) checkExpectedRevisionLocked(ctx context.Context, filename, expectedRevision string) error {
+func (s *Store) checkExpectedRevisionLocked(ctx context.Context, filename, expectedRevision string) (Revision, error) {
 	dirty, err := s.fileDirty(ctx, filename)
 	if err != nil {
-		return fmt.Errorf("provenance: inspect worktree state for %s: %w", filename, err)
+		return Revision{}, fmt.Errorf("provenance: inspect worktree state for %s: %w", filename, err)
 	}
 	if dirty {
-		return &RevisionConflictError{Filename: filename, Expected: expectedRevision, Actual: "worktree_dirty"}
+		return Revision{}, &RevisionConflictError{Filename: filename, Expected: expectedRevision, Actual: "worktree_dirty"}
 	}
 
 	current, hasCurrent, err := s.currentFileRevisionLocked(ctx, filename)
 	if err != nil {
-		return fmt.Errorf("provenance: resolve current revision for %s: %w", filename, err)
+		return Revision{}, fmt.Errorf("provenance: resolve current revision for %s: %w", filename, err)
 	}
 	if strings.EqualFold(expectedRevision, RevisionAbsent) {
 		if hasCurrent {
-			return &RevisionConflictError{Filename: filename, Expected: RevisionAbsent, Actual: current.Short}
+			return Revision{}, &RevisionConflictError{Filename: filename, Expected: RevisionAbsent, Actual: current.Short}
 		}
 		if _, statErr := os.Stat(filepath.Join(s.path, filename)); statErr == nil {
-			return &RevisionConflictError{Filename: filename, Expected: RevisionAbsent, Actual: "worktree_dirty"}
+			return Revision{}, &RevisionConflictError{Filename: filename, Expected: RevisionAbsent, Actual: "worktree_dirty"}
 		} else if !os.IsNotExist(statErr) {
-			return fmt.Errorf("provenance: stat %s: %w", filename, statErr)
+			return Revision{}, fmt.Errorf("provenance: stat %s: %w", filename, statErr)
 		}
-		return nil
+		return Revision{}, nil
 	}
 	if !hasCurrent {
-		return &RevisionConflictError{Filename: filename, Expected: expectedRevision, Actual: RevisionAbsent}
+		return Revision{}, &RevisionConflictError{Filename: filename, Expected: expectedRevision, Actual: RevisionAbsent}
 	}
 
 	expected, err := resolveRevision(ctx, s.path, filename, expectedRevision)
 	if err != nil {
-		return fmt.Errorf("provenance: resolve expected revision %q for %s: %w", expectedRevision, filename, err)
+		return Revision{}, fmt.Errorf("provenance: resolve expected revision %q for %s: %w", expectedRevision, filename, err)
 	}
 	if expected.Commit != current.Commit {
-		return &RevisionConflictError{Filename: filename, Expected: expected.Short, Actual: current.Short}
+		return Revision{}, &RevisionConflictError{Filename: filename, Expected: expected.Short, Actual: current.Short}
 	}
-	return nil
+	return current, nil
 }
 
 // currentFileRevisionLocked distinguishes a missing file history from a git

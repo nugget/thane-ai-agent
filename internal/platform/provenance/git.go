@@ -75,11 +75,11 @@ func (s *Store) BootstrapBirthCommit(ctx context.Context) error {
 		return fmt.Errorf("stat .allowed_signers: %w", err)
 	}
 
-	committed, err := s.commitFiles(ctx, bootstrapFiles, "bootstrap document root")
+	commitHash, err := s.commitFiles(ctx, bootstrapFiles, "bootstrap document root")
 	if err != nil {
 		return fmt.Errorf("birth commit: %w", err)
 	}
-	if committed {
+	if commitHash != "" {
 		s.logger.Info("created document root birth commit",
 			"path", s.path,
 			"files", bootstrapFiles,
@@ -157,8 +157,10 @@ func (s *Store) ensureRepo() error {
 	return nil
 }
 
-// commitFile stages a file and creates a signed commit.
-func (s *Store) commitFile(ctx context.Context, filename, message string) (bool, error) {
+// commitFile stages a file and creates a signed commit. It returns the exact
+// commit hash, or an empty string when the file already has the requested
+// content.
+func (s *Store) commitFile(ctx context.Context, filename, message string) (string, error) {
 	return s.commitFiles(ctx, []string{filename}, message)
 }
 
@@ -175,16 +177,18 @@ func (s *Store) fileTracked(ctx context.Context, filename string) (bool, error) 
 }
 
 // commitFiles stages files and creates one signed commit containing all
-// staged changes. It reports whether a commit was created.
-func (s *Store) commitFiles(ctx context.Context, filenames []string, message string) (bool, error) {
+// staged changes. It returns the exact commit hash, or an empty string when no
+// commit was needed. Once HEAD advances, later index cleanup is best-effort so
+// callers never receive a failure for a mutation that was actually committed.
+func (s *Store) commitFiles(ctx context.Context, filenames []string, message string) (string, error) {
 	if len(filenames) == 0 {
-		return false, fmt.Errorf("no files to commit")
+		return "", fmt.Errorf("no files to commit")
 	}
 
 	// Stage additions, modifications, and removals for the pathspecs.
 	args := append([]string{"add", "-A", "--"}, filenames...)
 	if err := s.git(ctx, nil, nil, args...); err != nil {
-		return false, fmt.Errorf("git add: %w", err)
+		return "", fmt.Errorf("git add: %w", err)
 	}
 
 	// Check if there are staged changes — skip commit if nothing changed.
@@ -194,17 +198,17 @@ func (s *Store) commitFiles(ctx context.Context, filenames []string, message str
 	if diffErr == nil {
 		// Exit code 0 means no differences — nothing to commit.
 		s.logger.Debug("no changes to commit", "files", filenames)
-		return false, nil
+		return "", nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(diffErr, &exitErr) && exitErr.ExitCode() != 1 {
-		return false, fmt.Errorf("git diff --cached: %w", diffErr)
+		return "", fmt.Errorf("git diff --cached: %w", diffErr)
 	}
 
 	// Get the tree hash.
 	var treeBuf bytes.Buffer
 	if err := s.git(ctx, nil, &treeBuf, "write-tree"); err != nil {
-		return false, fmt.Errorf("git write-tree: %w", err)
+		return "", fmt.Errorf("git write-tree: %w", err)
 	}
 	tree := strings.TrimSpace(treeBuf.String())
 
@@ -242,7 +246,7 @@ func (s *Store) commitFiles(ctx context.Context, filenames []string, message str
 	commitForSigning := commitObj.String() + "\n" + message + "\n"
 	armoredSig, err := s.signer.Sign([]byte(commitForSigning))
 	if err != nil {
-		return false, fmt.Errorf("sign commit: %w", err)
+		return "", fmt.Errorf("sign commit: %w", err)
 	}
 
 	// Insert the gpgsig header between the last header line and the
@@ -260,23 +264,37 @@ func (s *Store) commitFiles(ctx context.Context, filenames []string, message str
 	commitBytes := []byte(commitObj.String())
 	if err := s.git(ctx, bytes.NewReader(commitBytes), &hashBuf,
 		"hash-object", "-t", "commit", "-w", "--stdin"); err != nil {
-		return false, fmt.Errorf("git hash-object: %w", err)
+		return "", fmt.Errorf("git hash-object: %w", err)
 	}
 	commitHash := strings.TrimSpace(hashBuf.String())
 
-	// Update HEAD to point to the new commit.
+	// Update HEAD only if it still names the parent used above. The Store mutex
+	// coordinates Thane writers; update-ref's old-value guard also catches a
+	// concurrent operator git operation or transport fast-forward.
+	expectedHead := parent
+	if expectedHead == "" {
+		expectedHead = strings.Repeat("0", len(commitHash))
+	}
 	if err := s.git(ctx, nil, nil,
-		"update-ref", "HEAD", commitHash); err != nil {
-		return false, fmt.Errorf("git update-ref: %w", err)
+		"update-ref", "HEAD", commitHash, expectedHead); err != nil {
+		return "", fmt.Errorf("git update-ref: %w", err)
 	}
 
 	// Reset the index to match HEAD so subsequent operations see a
-	// clean working tree.
-	if err := s.git(ctx, nil, nil, "reset", "--mixed", "HEAD"); err != nil {
-		return false, fmt.Errorf("git reset: %w", err)
+	// clean index. HEAD already contains the mutation, so context cancellation
+	// or an index-cleanup failure must not turn that success into an apparent
+	// failure that a caller may retry.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitTimeout)
+	defer cancel()
+	if err := s.git(cleanupCtx, nil, nil, "reset", "--mixed", "HEAD"); err != nil {
+		s.logger.Warn("provenance commit succeeded but index cleanup failed",
+			"commit", shorten(commitHash),
+			"files", filenames,
+			"error", err,
+		)
 	}
 
-	return true, nil
+	return commitHash, nil
 }
 
 // fileHistory reads git log for a file and returns structured metadata.

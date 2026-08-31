@@ -34,7 +34,7 @@ func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, 
 		if expectedRevision != "" {
 			revision, err := writer.WriteIfRevision(ctx, relPath, raw, message, expectedRevision)
 			if err != nil {
-				return "", fmt.Errorf("write %s with expected_revision %q: %w", makeRef(root, relPath), expectedRevision, err)
+				return "", fmt.Errorf("write %s with revision precondition: %w", makeRef(root, relPath), err)
 			}
 			if err := s.refreshDocumentWrite(ctx, root, relPath); err != nil {
 				return "", err
@@ -49,7 +49,7 @@ func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, 
 		return "", nil
 	}
 	if strings.TrimSpace(expectedRevision) != "" {
-		return "", fmt.Errorf("expected_revision requires a revision-backed document root; root %q writes directly to the filesystem", root)
+		return "", fmt.Errorf("revision preconditions require a revision-backed document root; root %q writes directly to the filesystem", root)
 	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return "", fmt.Errorf("create document directories: %w", err)

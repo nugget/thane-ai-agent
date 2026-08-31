@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
@@ -16,6 +17,7 @@ type revisionMutationBackend struct {
 	root     string
 	revision string
 	next     int
+	contents map[string]string
 }
 
 func (b *revisionMutationBackend) Write(_ context.Context, filename, content, _ string) error {
@@ -28,7 +30,7 @@ func (b *revisionMutationBackend) WriteIfRevision(_ context.Context, filename, c
 		actual = "absent"
 	}
 	if expectedRevision != actual {
-		return "", fmt.Errorf("revision conflict: expected %s, current is %s", expectedRevision, actual)
+		return "", &RootRevisionConflictError{Expected: expectedRevision, Actual: actual}
 	}
 	if err := b.write(filename, content); err != nil {
 		return "", err
@@ -51,8 +53,17 @@ func (b *revisionMutationBackend) History(context.Context, string, RevisionQuery
 	return RevisionListing{}, nil
 }
 
-func (b *revisionMutationBackend) Diff(context.Context, string, string, string, string) (RevisionDiff, error) {
-	return RevisionDiff{}, nil
+func (b *revisionMutationBackend) Diff(_ context.Context, _ string, from, to, _ string) (RevisionDiff, error) {
+	before, beforeOK := b.contents[from]
+	after, afterOK := b.contents[to]
+	if !beforeOK || !afterOK {
+		return RevisionDiff{}, fmt.Errorf("unknown diff endpoint")
+	}
+	return RevisionDiff{
+		Added:   1,
+		Removed: 1,
+		Body:    fmt.Sprintf("--- a/person.md\n+++ b/person.md\n-%s\n+%s\n", before, after),
+	}, nil
 }
 
 func (b *revisionMutationBackend) Content(context.Context, string, string) (RevisionContent, error) {
@@ -80,14 +91,18 @@ func (b *revisionMutationBackend) write(filename, content string) error {
 	}
 	b.next++
 	b.revision = fmt.Sprintf("rev-%d", b.next)
+	if b.contents == nil {
+		b.contents = make(map[string]string)
+	}
+	b.contents[b.revision] = content
 	return nil
 }
 
-func TestRevisionCheckedMutationRoundTripAndConflict(t *testing.T) {
+func TestHiddenRevisionReceiptReturnsConflictDiffAndAdvances(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	backend := &revisionMutationBackend{root: root}
+	backend := &revisionMutationBackend{root: root, contents: make(map[string]string)}
 	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("OpenMemory: %v", err)
@@ -104,9 +119,9 @@ func TestRevisionCheckedMutationRoundTripAndConflict(t *testing.T) {
 	ctx := t.Context()
 
 	createdJSON, err := tools.Write(ctx, WriteArgs{
-		Ref:              "contacts:person.md",
-		Body:             stringPtr("First fact."),
-		ExpectedRevision: "absent",
+		Ref:          "contacts:person.md",
+		Body:         stringPtr("First fact."),
+		ReceiptScope: "loop:archivist-contacts",
 	})
 	if err != nil {
 		t.Fatalf("Write with absent revision: %v", err)
@@ -115,47 +130,57 @@ func TestRevisionCheckedMutationRoundTripAndConflict(t *testing.T) {
 	if err := json.Unmarshal([]byte(createdJSON), &created); err != nil {
 		t.Fatalf("unmarshal create result: %v", err)
 	}
-	if created.Revision != "rev-1" {
-		t.Fatalf("create revision = %q, want rev-1", created.Revision)
+	if !created.Applied {
+		t.Fatalf("create applied = false, want true: %s", createdJSON)
+	}
+	if strings.Contains(createdJSON, "revision") {
+		t.Fatalf("create exposed revision machinery: %s", createdJSON)
 	}
 
-	readJSON, err := tools.Read(ctx, RefArgs{Ref: "contacts:person.md"})
+	readJSON, err := tools.Read(ctx, RefArgs{Ref: "contacts:person.md", ReceiptScope: "loop:archivist-contacts"})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	var read modelDocumentRecord
-	if err := json.Unmarshal([]byte(readJSON), &read); err != nil {
-		t.Fatalf("unmarshal read result: %v", err)
+	if strings.Contains(readJSON, "revision") {
+		t.Fatalf("read exposed revision machinery: %s", readJSON)
 	}
-	if read.Revision != created.Revision {
-		t.Fatalf("read revision = %q, want %q", read.Revision, created.Revision)
-	}
-
-	updatedJSON, err := tools.Edit(ctx, EditArgs{
-		Ref:              "contacts:person.md",
-		Mode:             "append_body",
-		Body:             "Second fact.",
-		ExpectedRevision: created.Revision,
+	blindJSON, err := tools.Write(ctx, WriteArgs{
+		Ref:          "contacts:person.md",
+		Body:         stringPtr("Blind replacement."),
+		ReceiptScope: "loop:different-writer",
 	})
 	if err != nil {
-		t.Fatalf("Edit with current revision: %v", err)
+		t.Fatalf("blind replacement: %v", err)
 	}
-	var updated modelMutationResult
-	if err := json.Unmarshal([]byte(updatedJSON), &updated); err != nil {
-		t.Fatalf("unmarshal edit result: %v", err)
+	var blind modelMutationConflict
+	if err := json.Unmarshal([]byte(blindJSON), &blind); err != nil {
+		t.Fatalf("unmarshal blind replacement: %v", err)
 	}
-	if updated.Revision != "rev-2" {
-		t.Fatalf("updated revision = %q, want rev-2", updated.Revision)
+	if blind.Applied || !strings.Contains(blind.Message, "Read contacts:person.md first") {
+		t.Fatalf("blind replacement = %#v, want read-first refusal", blind)
 	}
 
-	_, err = tools.Edit(ctx, EditArgs{
-		Ref:              "contacts:person.md",
-		Mode:             "append_body",
-		Body:             "Stale fact.",
-		ExpectedRevision: created.Revision,
+	if err := backend.Write(ctx, "person.md", "Second fact.", "operator update"); err != nil {
+		t.Fatalf("external update: %v", err)
+	}
+	conflictJSON, err := tools.Edit(ctx, EditArgs{
+		Ref:          "contacts:person.md",
+		Mode:         "append_body",
+		Body:         "Stale fact.",
+		ReceiptScope: "loop:archivist-contacts",
 	})
-	if err == nil || !strings.Contains(err.Error(), "revision conflict") {
-		t.Fatalf("stale Edit error = %v, want revision conflict", err)
+	if err != nil {
+		t.Fatalf("stale Edit: %v", err)
+	}
+	var conflict modelMutationConflict
+	if err := json.Unmarshal([]byte(conflictJSON), &conflict); err != nil {
+		t.Fatalf("unmarshal conflict result: %v", err)
+	}
+	if conflict.Applied || !strings.Contains(conflict.ChangedSinceRead, "Second fact.") {
+		t.Fatalf("conflict = %#v, want unapplied result with intervening diff", conflict)
+	}
+	if strings.Contains(conflictJSON, "rev-1") || strings.Contains(conflictJSON, "rev-2") {
+		t.Fatalf("conflict exposed hidden revision tokens: %s", conflictJSON)
 	}
 	record, err := store.Read(ctx, "contacts:person.md")
 	if err != nil {
@@ -163,5 +188,30 @@ func TestRevisionCheckedMutationRoundTripAndConflict(t *testing.T) {
 	}
 	if !strings.Contains(record.Body, "Second fact.") || strings.Contains(record.Body, "Stale fact.") {
 		t.Fatalf("body after stale edit = %q, want second fact without stale fact", record.Body)
+	}
+
+	retryJSON, err := tools.Edit(ctx, EditArgs{
+		Ref:          "contacts:person.md",
+		Mode:         "append_body",
+		Body:         "Reconciled fact.",
+		ReceiptScope: "loop:archivist-contacts",
+	})
+	if err != nil {
+		t.Fatalf("retry Edit: %v", err)
+	}
+	var retried modelMutationResult
+	if err := json.Unmarshal([]byte(retryJSON), &retried); err != nil {
+		t.Fatalf("unmarshal retry result: %v", err)
+	}
+	if !retried.Applied {
+		t.Fatalf("retry applied = false, want true: %s", retryJSON)
+	}
+}
+
+func TestTruncateRevisionConflictTextPreservesUTF8(t *testing.T) {
+	t.Parallel()
+	got, truncated := truncateRevisionConflictText("one 🧭 two", 6)
+	if !truncated || !strings.HasPrefix(got, "one") || !strings.Contains(got, "…") || !utf8.ValidString(got) {
+		t.Fatalf("truncateRevisionConflictText = %q, %v; want valid truncated UTF-8", got, truncated)
 	}
 }

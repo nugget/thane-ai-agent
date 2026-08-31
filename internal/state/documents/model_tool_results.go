@@ -93,7 +93,6 @@ type modelDocumentRecord struct {
 	ModifiedDelta string              `json:"modified_delta,omitempty"`
 	WordCount     int                 `json:"word_count"`
 	SizeBytes     int64               `json:"size_bytes"`
-	Revision      string              `json:"revision,omitempty"`
 }
 
 type modelBacklink struct {
@@ -237,7 +236,6 @@ func toModelDocumentRecord(record *DocumentRecord, now time.Time) *modelDocument
 		ModifiedDelta: modelDelta(record.ModifiedAt, now),
 		WordCount:     record.WordCount,
 		SizeBytes:     record.SizeBytes,
-		Revision:      record.Revision,
 	}
 }
 

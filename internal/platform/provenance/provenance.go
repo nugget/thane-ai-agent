@@ -255,12 +255,12 @@ func (s *Store) Write(ctx context.Context, filename, content, message string) er
 		return fmt.Errorf("provenance: write %s: %w", filename, err)
 	}
 
-	committed, err := s.commitFile(ctx, filename, message)
+	commitHash, err := s.commitFile(ctx, filename, message)
 	if err != nil {
 		return fmt.Errorf("provenance: commit %s: %w", filename, err)
 	}
 
-	if committed {
+	if commitHash != "" {
 		s.logger.Info("provenance file committed",
 			"file", filename,
 			"bytes", len(content),
@@ -303,12 +303,12 @@ func (s *Store) WriteFiles(ctx context.Context, files map[string]string, message
 		}
 	}
 
-	committed, err := s.commitFiles(ctx, filenames, message)
+	commitHash, err := s.commitFiles(ctx, filenames, message)
 	if err != nil {
 		return fmt.Errorf("provenance: commit files: %w", err)
 	}
 
-	if committed {
+	if commitHash != "" {
 		s.logger.Info("provenance files committed",
 			"files", filenames,
 			"message", messageSubject(message),
@@ -342,11 +342,11 @@ func (s *Store) Delete(ctx context.Context, filename, message string) error {
 		return fmt.Errorf("provenance: delete %s: %w", filename, err)
 	}
 
-	committed, err := s.commitFile(ctx, filename, message)
+	commitHash, err := s.commitFile(ctx, filename, message)
 	if err != nil {
 		return fmt.Errorf("provenance: commit delete %s: %w", filename, err)
 	}
-	if committed {
+	if commitHash != "" {
 		s.logger.Info("provenance file deletion committed",
 			"file", filename,
 			"message", messageSubject(message),

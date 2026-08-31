@@ -143,14 +143,10 @@ func TestDocWriteHandlerAppendsJournalEntry(t *testing.T) {
 	}
 }
 
-func TestDocumentMutationToolsExposeAndForwardExpectedRevision(t *testing.T) {
+func TestDocumentMutationToolsHideRevisionPreconditions(t *testing.T) {
 	t.Parallel()
 
-	reg, store := newTestDocumentRegistry(t)
-	body := "Existing body."
-	if _, err := store.Write(t.Context(), documents.WriteArgs{Ref: "kb:existing.md", Body: &body}); err != nil {
-		t.Fatalf("seed existing document: %v", err)
-	}
+	reg, _ := newTestDocumentRegistry(t)
 
 	tests := []struct {
 		name string
@@ -193,12 +189,12 @@ func TestDocumentMutationToolsExposeAndForwardExpectedRevision(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s properties have unexpected shape", tc.name)
 			}
-			if _, ok := properties["expected_revision"]; !ok {
-				t.Fatalf("%s schema omits expected_revision", tc.name)
+			if _, ok := properties["expected_revision"]; ok {
+				t.Fatalf("%s schema exposes internal expected_revision", tc.name)
 			}
 			_, err := tool.Handler(t.Context(), tc.args)
-			if err == nil || !strings.Contains(err.Error(), "expected_revision requires a revision-backed document root") {
-				t.Fatalf("%s error = %v, want forwarded expected_revision policy error", tc.name, err)
+			if err == nil || !strings.Contains(err.Error(), "tracks revision preconditions automatically") {
+				t.Fatalf("%s error = %v, want legacy-parameter redirect", tc.name, err)
 			}
 		})
 	}
