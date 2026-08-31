@@ -522,7 +522,12 @@ The boundary is strict: SQLite contacts remain authoritative for UUIDs,
 structured identity, communication properties, trust zones, Home Assistant
 bindings, and companion attribution. Dossier prose is relationship synthesis,
 not a way to mutate those fields. `contact_lookup` and `contact_owner` expose a
-bounded dossier ref; `doc_read` opens it when the prose is useful.
+bounded `contact_dossier_read` trailhead. That tool accepts the active contact
+UUID, derives the canonical ref in Go, and either returns the dossier with a
+revision receipt or returns a successful structured absence with the exact
+create action. This keeps a missing dossier from becoming a retry loop over
+manually transcribed refs.
+
 `contact_dossier_write` is the canonical mutation door on a managed-writable
 root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
@@ -534,16 +539,17 @@ should not author dossier structure through them.
 The archivist uses the same contract-owned door. Contact-shaped queue subjects
 and contact evidence discovered in closed sessions are resolved through the
 structured directory, reconciled with the existing canonical dossier, and
-republished through `contact_dossier_write`. The separate `dossiers:` root is
+read through `contact_dossier_read` before being republished through
+`contact_dossier_write`. The separate `dossiers:` root is
 the home for entities, areas, routines, and themes; it is never a fallback
 location for a contact, because that would split one person's history across
 two document roots. The legacy `kb:dossiers/` namespace is retired once its
 documents have moved to `dossiers:` and must not remain indexed alongside the
-new root. Before replacement, the archivist checks
-whether `doc_read` truncated the current dossier and walks its outline and
-sections when necessary. An unreadable remainder or unavailable canonical
-writer defers the durable queue item behind ready work rather than losing it or
-letting it block the queue.
+new root. Before replacement, the archivist checks whether the canonical read
+truncated the current dossier and walks its outline and sections when
+necessary. An absent read proceeds directly to one create attempt; an unreadable
+remainder or unavailable canonical writer defers the durable queue item behind
+ready work rather than losing it or letting it block the queue.
 
 Archive evidence in a contact dossier uses
 `archive:session:<full-session-uuid>`. Archive tools accept short prefixes as

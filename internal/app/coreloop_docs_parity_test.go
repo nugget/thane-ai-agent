@@ -128,8 +128,9 @@ func TestEmbeddedDocumentsMatchTheRepoSources(t *testing.T) {
 
 // TestArchivistUsesCanonicalContactDossiers pins the model-facing routing
 // contract that keeps one person's history out of the generic dossier root.
-// A configured runtime exposes contact_dossier_write through the archivist's
-// contacts tag; the shipped task must teach the loop to choose it.
+// A configured runtime exposes the canonical contact dossier read/write pair
+// through the archivist's contacts tag; the shipped task must teach the loop
+// to choose them.
 func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 	spec, err := decodeCoreLoopDefinition(filepath.Join("..", "..", "loops", "archivist.md"))
 	if err != nil {
@@ -140,12 +141,17 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 			t.Errorf("archivist tags = %#v, want %q so the canonical dossier tools are reachable", spec.Tags, tag)
 		}
 	}
-	if slices.Contains(spec.ExcludeTools, "contact_dossier_write") {
-		t.Error("archivist excludes contact_dossier_write despite teaching it as the canonical contact door")
+	for _, tool := range []string{"contact_dossier_read", "contact_dossier_write"} {
+		if slices.Contains(spec.ExcludeTools, tool) {
+			t.Errorf("archivist excludes %s despite teaching it as a canonical contact door", tool)
+		}
 	}
 	normalizedTask := strings.Join(strings.Fields(spec.Task), " ")
 	for _, want := range []string{
 		"contacts:<uuid>.md",
+		"contact_dossier_read",
+		"An absent dossier is a successful, actionable result",
+		"A `contact:<uuid>` item from `contact_save` names the exact current contact",
 		"contact_dossier_write",
 		"Never create or maintain a contact dossier under `dossiers:`",
 		"`dossiers:entity-binary_sensor-game_room_door.md`",
@@ -153,10 +159,11 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 		"complete status-line, teaser, digest, and full projections",
 		"archive:session:<full-session-uuid>",
 		"never an 8-character prefix",
-		"response's `truncated` marker",
-		"call `doc_outline`, verify that outline is not truncated",
+		"`dossier.document.truncated`",
+		"use the returned canonical ref with `doc_outline`, verify that outline is not truncated",
 		"recover every top-level section with `doc_section`",
 		"call `queue_defer`",
+		"a stale ack returns `retained_newer`",
 	} {
 		if !strings.Contains(normalizedTask, want) {
 			t.Errorf("archivist task does not teach %q", want)

@@ -49,12 +49,33 @@ type Tools struct {
 	ownerActivity     func() []OwnerChannelActivity
 	dossiersEnabled   bool
 	dossiersWritable  bool
+	dossierRead       func(context.Context, documents.RefArgs) (string, error)
 	dossierWrite      func(context.Context, documents.WriteArgs) (string, error)
+	mutationSink      func(context.Context, ContactMutation) error
 }
 
-// NewTools creates contact tools using the given store.
-func NewTools(store *Store) *Tools {
-	return &Tools{store: store}
+// ContactMutation describes one committed contact_save change for downstream
+// consumers such as the archivist queue. Fields names the structured scalar
+// or property keys whose authority changed.
+type ContactMutation struct {
+	ContactID   uuid.UUID           `json:"contact_id"`
+	ContactName string              `json:"contact_name"`
+	Created     bool                `json:"created"`
+	Fields      []string            `json:"fields"`
+	Provenance  *PropertyProvenance `json:"provenance"`
+}
+
+// NewTools creates contact tools using the given store and optional committed
+// mutation sink. The sink is a construction dependency so a live tool surface
+// cannot race with post-startup rewiring.
+func NewTools(store *Store, mutationSink func(context.Context, ContactMutation) error) *Tools {
+	return &Tools{store: store, mutationSink: mutationSink}
+}
+
+// ContactRefreshesEnabled reports whether committed model-authored changes
+// have a configured downstream dossier-refresh consumer.
+func (t *Tools) ContactRefreshesEnabled() bool {
+	return t != nil && t.mutationSink != nil
 }
 
 // SetEmbeddingClient sets the embedding client for semantic search.
@@ -208,6 +229,21 @@ var saveContactKnownFields = map[string]bool{
 // (e.g., "email", "phone") are automatically rescued into the Facts
 // map or contact_properties, since models frequently flatten them.
 func (t *Tools) SaveContact(argsJSON string) (string, error) {
+	return t.saveContact(context.Background(), argsJSON, nil, false)
+}
+
+// SaveContactFromModel applies contact_save with the current model turn's
+// provenance and emits the configured post-commit mutation signal.
+func (t *Tools) SaveContactFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance) (string, error) {
+	return t.saveContact(ctx, argsJSON, provenance, true)
+}
+
+func (t *Tools) saveContact(
+	ctx context.Context,
+	argsJSON string,
+	provenance *PropertyProvenance,
+	notify bool,
+) (string, error) {
 	var args SaveContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
@@ -258,139 +294,238 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("find contact: %w", err)
 	}
 
-	if existing != nil {
-		// Update existing contact — only non-empty fields overwrite.
-		if args.Kind != "" {
-			existing.Kind = args.Kind
+	created := existing == nil
+	var contact *Contact
+	if created {
+		contact = &Contact{
+			FormattedName: args.Name,
+			Kind:          args.Kind,
+			GivenName:     args.GivenName,
+			FamilyName:    args.FamilyName,
+			Nickname:      args.Nickname,
+			Org:           args.Org,
+			Title:         args.Title,
+			Role:          args.Role,
+			Note:          args.Note,
+			AISummary:     args.AISummary,
 		}
-		if args.GivenName != "" {
-			existing.GivenName = args.GivenName
-		}
-		if args.FamilyName != "" {
-			existing.FamilyName = args.FamilyName
-		}
-		if args.Nickname != "" {
-			existing.Nickname = args.Nickname
-		}
-		if args.Org != "" {
-			existing.Org = args.Org
-		}
-		if args.Title != "" {
-			existing.Title = args.Title
-		}
-		if args.Role != "" {
-			existing.Role = args.Role
-		}
-		if args.Note != "" {
-			existing.Note = args.Note
-		}
-		if args.AISummary != "" {
-			existing.AISummary = args.AISummary
-		}
-
-		updated, err := t.store.Upsert(existing)
+	} else {
+		contact, err = t.store.GetWithProperties(existing.ID)
 		if err != nil {
-			return "", fmt.Errorf("update contact: %w", err)
+			return "", fmt.Errorf("load contact for update: %w", err)
 		}
-
-		if err := t.saveProperties(updated.ID, args.Facts); err != nil {
-			return "", err
-		}
-		if err := t.saveOriginPolicyProperties(updated.ID, args.OriginTags, args.OriginContextRefs); err != nil {
-			return "", err
-		}
-
-		t.generateEmbedding(updated)
-
-		return fmt.Sprintf("Updated contact: **%s** (%s)", updated.FormattedName, updated.Kind), nil
 	}
 
-	// Create new contact.
-	c := &Contact{
-		FormattedName: args.Name,
-		Kind:          args.Kind,
-		GivenName:     args.GivenName,
-		FamilyName:    args.FamilyName,
-		Nickname:      args.Nickname,
-		Org:           args.Org,
-		Title:         args.Title,
-		Role:          args.Role,
-		Note:          args.Note,
-		AISummary:     args.AISummary,
+	changedFields := make(map[string]struct{})
+	contactChanged := created
+	if created {
+		markCreatedContactFields(args, changedFields)
+	} else {
+		contactChanged = applyContactScalarUpdates(contact, args, changedFields)
 	}
 
-	created, err := t.store.Upsert(c)
+	additions := additiveProperties(args.Facts, contact.Properties, provenance)
+	for _, property := range additions {
+		changedFields["property:"+property.Property] = struct{}{}
+	}
+	replacements := make(map[string][]Property)
+	collectReplacement := func(property string, provided []string) {
+		if provided == nil {
+			return
+		}
+		values := cleanReplacementValues(property, provided)
+		if propertyValuesEqual(contact.Properties, property, values) {
+			return
+		}
+		props := make([]Property, 0, len(values))
+		for _, value := range values {
+			props = append(props, Property{Property: property, Value: value, Provenance: provenance})
+		}
+		replacements[property] = props
+		changedFields["property:"+property] = struct{}{}
+	}
+	collectReplacement(PropertyOriginTag, args.OriginTags)
+	collectReplacement(PropertyOriginContextRef, args.OriginContextRefs)
+
+	saved, changed, err := t.store.applyContactSave(contact, contactChanged, additions, replacements)
 	if err != nil {
-		return "", fmt.Errorf("create contact: %w", err)
+		if created {
+			return "", fmt.Errorf("create contact: %w", err)
+		}
+		return "", fmt.Errorf("update contact: %w", err)
+	}
+	if !changed {
+		return fmt.Sprintf("Contact unchanged: **%s** (%s); no dossier refresh was queued", saved.FormattedName, saved.Kind), nil
 	}
 
-	if err := t.saveProperties(created.ID, args.Facts); err != nil {
-		return "", err
+	fields := sortedKeys(changedFields)
+	if notify && t.mutationSink != nil {
+		mutation := ContactMutation{
+			ContactID:   saved.ID,
+			ContactName: saved.FormattedName,
+			Created:     created,
+			Fields:      fields,
+			Provenance:  provenance,
+		}
+		if err := t.mutationSink(ctx, mutation); err != nil {
+			return "", fmt.Errorf("contact write committed for %s but dossier refresh enqueue failed; do not repeat contact_save: %w", saved.ID, err)
+		}
 	}
-	if err := t.saveOriginPolicyProperties(created.ID, args.OriginTags, args.OriginContextRefs); err != nil {
-		return "", err
+	// The durable refresh is part of the authoritative-write contract;
+	// optional embedding maintenance must never delay or prevent it.
+	t.generateEmbedding(saved)
+
+	if created {
+		return fmt.Sprintf("Saved new contact: **%s** (%s)", saved.FormattedName, saved.Kind), nil
 	}
-
-	t.generateEmbedding(created)
-
-	return fmt.Sprintf("Saved new contact: **%s** (%s)", created.FormattedName, created.Kind), nil
+	return fmt.Sprintf("Updated contact: **%s** (%s)", saved.FormattedName, saved.Kind), nil
 }
 
-func (t *Tools) saveOriginPolicyProperties(contactID uuid.UUID, tags, refs []string) error {
-	if tags != nil {
-		if err := t.store.DeleteContactProperties(contactID, PropertyOriginTag); err != nil {
-			return err
-		}
-		for _, tag := range cleanOriginValues(tags) {
-			if err := t.store.AddProperty(contactID, &Property{
-				Property: PropertyOriginTag,
-				Value:    tag,
-			}); err != nil {
-				return fmt.Errorf("add origin tag: %w", err)
-			}
-		}
-	}
-	if refs != nil {
-		if err := t.store.DeleteContactProperties(contactID, PropertyOriginContextRef); err != nil {
-			return err
-		}
-		for _, ref := range cleanOriginValues(refs) {
-			if err := t.store.AddProperty(contactID, &Property{
-				Property: PropertyOriginContextRef,
-				Value:    ref,
-			}); err != nil {
-				return fmt.Errorf("add origin context ref: %w", err)
-			}
+func markCreatedContactFields(args SaveContactArgs, changed map[string]struct{}) {
+	changed["formatted_name"] = struct{}{}
+	changed["kind"] = struct{}{}
+	for field, value := range map[string]string{
+		"given_name":  args.GivenName,
+		"family_name": args.FamilyName,
+		"nickname":    args.Nickname,
+		"org":         args.Org,
+		"title":       args.Title,
+		"role":        args.Role,
+		"note":        args.Note,
+		"ai_summary":  args.AISummary,
+	} {
+		if value != "" {
+			changed[field] = struct{}{}
 		}
 	}
-	return nil
 }
 
-// saveProperties stores all fact entries as contact_properties. Known
-// vCard keys (email, phone, signal, matrix) are mapped to their
-// standard property names (EMAIL, TEL, IMPP); all others are stored
-// with their original key as the property name.
-func (t *Tools) saveProperties(contactID uuid.UUID, facts map[string]string) error {
-	for k, v := range facts {
-		propName, isVCard := propertyKeys[k]
-		if !isVCard {
-			propName = k
+func applyContactScalarUpdates(contact *Contact, args SaveContactArgs, changed map[string]struct{}) bool {
+	updated := false
+	set := func(field string, target *string, value string) {
+		if value == "" || *target == value {
+			return
 		}
-		value := v
-		// For IMPP properties, prefix with the protocol scheme if not
-		// already present.  Use HasPrefix rather than Contains so that
-		// Matrix IDs like @user:server.com still get the scheme prepended.
-		if propName == "IMPP" && !strings.HasPrefix(v, k+":") {
-			value = k + ":" + v
+		*target = value
+		changed[field] = struct{}{}
+		updated = true
+	}
+	set("kind", &contact.Kind, args.Kind)
+	set("given_name", &contact.GivenName, args.GivenName)
+	set("family_name", &contact.FamilyName, args.FamilyName)
+	set("nickname", &contact.Nickname, args.Nickname)
+	set("org", &contact.Org, args.Org)
+	set("title", &contact.Title, args.Title)
+	set("role", &contact.Role, args.Role)
+	set("note", &contact.Note, args.Note)
+	set("ai_summary", &contact.AISummary, args.AISummary)
+	return updated
+}
+
+func additiveProperties(facts map[string]string, existing []Property, provenance *PropertyProvenance) []Property {
+	keys := make([]string, 0, len(facts))
+	for key := range facts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	properties := make([]Property, 0, len(keys))
+	for _, key := range keys {
+		property := propertyKeys[key]
+		if property == "" {
+			property = key
 		}
-		if err := t.store.AddProperty(contactID, &Property{
-			Property: propName,
-			Value:    value,
-		}); err != nil {
-			return fmt.Errorf("add property %s: %w", propName, err)
+		value := facts[key]
+		if property == "IMPP" && !strings.HasPrefix(value, key+":") {
+			value = key + ":" + value
+		}
+		if hasProperty(existing, property, value) {
+			continue
+		}
+		properties = append(properties, Property{
+			Property:   property,
+			Value:      value,
+			Provenance: provenance,
+		})
+	}
+	return properties
+}
+
+func hasProperty(properties []Property, property, value string) bool {
+	for _, candidate := range properties {
+		if candidate.Property == property && propertyValueEqual(property, candidate.Value, value) {
+			return true
 		}
 	}
-	return nil
+	return false
+}
+
+func propertyValuesEqual(properties []Property, property string, want []string) bool {
+	got := make([]string, 0, len(want))
+	for _, candidate := range properties {
+		if candidate.Property == property {
+			got = append(got, candidate.Value)
+		}
+	}
+	if len(got) != len(want) {
+		return false
+	}
+	matched := make([]bool, len(want))
+	for _, actual := range got {
+		found := false
+		for i, expected := range want {
+			if !matched[i] && propertyValueEqual(property, actual, expected) {
+				matched[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func cleanReplacementValues(property string, values []string) []string {
+	cleaned := cleanOriginValues(values)
+	if len(cleaned) < 2 {
+		return cleaned
+	}
+	deduplicated := make([]string, 0, len(cleaned))
+	for _, value := range cleaned {
+		duplicate := false
+		for _, existing := range deduplicated {
+			if propertyValueEqual(property, existing, value) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			deduplicated = append(deduplicated, value)
+		}
+	}
+	return deduplicated
+}
+
+// propertyValueEqual is the single equality contract for model-authored
+// properties, whether they arrive through additive facts or replace-style
+// origin fields. Existing additive contact facts are case-insensitive;
+// document refs remain byte-exact because case can select a different path on
+// a case-sensitive root.
+func propertyValueEqual(property, left, right string) bool {
+	if property == PropertyOriginContextRef {
+		return left == right
+	}
+	return strings.EqualFold(left, right)
+}
+
+func sortedKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // LookupContactArgs are arguments for the contact_lookup tool.
@@ -1056,11 +1191,14 @@ func (t *Tools) formatContact(c *Contact) string {
 	if t == nil || !t.dossiersEnabled || c == nil || c.ID == uuid.Nil {
 		return formatted
 	}
-	trailhead := "doc_read"
+	if t.DossierReadsEnabled() {
+		return fmt.Sprintf("%s\nContact ID: %s\nDossier access: contact_dossier_read(contact_id=%q)", formatted, c.ID, c.ID.String())
+	}
+	trailhead := "may be absent; probe once with doc_read"
 	if t.DossierWritesEnabled() {
 		trailhead += "; create or replace with contact_dossier_write"
 	}
-	return fmt.Sprintf("%s\nContact ID: %s\nDossier: %s (%s)", formatted, c.ID, DossierRef(c.ID), trailhead)
+	return fmt.Sprintf("%s\nContact ID: %s\nDossier target: %s (%s)", formatted, c.ID, DossierRef(c.ID), trailhead)
 }
 
 func (t *Tools) formatOwnerActivitySummary() string {

@@ -274,8 +274,9 @@ being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `contact_save` | Create or update a contact with vCard properties. |
-| `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured contact-dossier ref. |
+| `contact_save` | Create or update a contact with vCard properties. Model-authored property rows retain turn provenance. When an archivist refresh consumer is enabled, a committed change coalesces one canonical contact refresh; identical no-ops never enqueue one. |
+| `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured `contact_dossier_read` trailhead. |
+| `contact_dossier_read` | Read or probe the canonical dossier for an active contact UUID. Go derives the ref and tracks revision state. Every success exposes `dossier.exists`, `dossier.ref`, and `dossier.document`; an absent dossier is a successful result with a null document and the exact create action. |
 | `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Available only for a managed-writable `contacts` root. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
 | `contact_forget` | Delete a contact. |
@@ -289,7 +290,8 @@ being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `contact_owner` | Return the runtime operator contact, canonical UUID, configured dossier ref, and active operator channels. Protected tag; name retained for compatibility. |
+| `contact_owner` | Return the runtime operator contact, canonical UUID, configured dossier trailhead, and active operator channels. Protected tag; name retained for compatibility. |
+| `contact_dossier_read` | Read or probe the operator's canonical dossier when the managed `contacts` root is available; also exposed through the `contacts` capability. |
 | `contact_dossier_write` | Write a canonical dossier from an operator-origin turn when the managed `contacts` root is available; also exposed through the `contacts` capability. |
 
 Operator channel activity recency is reported with delta fields such as

@@ -297,7 +297,7 @@ func TestContactChannelBindingResolverCachesLegacyConfiguredContactName(t *testi
 		t.Fatalf("NewStore: %v", err)
 	}
 
-	tools := contacts.NewTools(store)
+	tools := contacts.NewTools(store, nil)
 	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`); err != nil {
 		t.Fatalf("SaveContact: %v", err)
 	}

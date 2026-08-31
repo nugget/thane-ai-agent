@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
@@ -32,6 +33,7 @@ const (
 // Trigger rate (producers calling Enqueue) is fully decoupled from work
 // rate (this loop's sleep cadence).
 func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.RuntimeTool {
+	receipts := newQueueReceipts()
 	return []looppkg.RuntimeTool{
 		{
 			Name: "queue_pull",
@@ -66,6 +68,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				now := time.Now().UTC()
 				views := make([]queueItemView, 0, len(items))
 				for _, it := range items {
+					receipts.remember(it.DedupKey, it.Receipt)
 					source, summary := projectQueuePayload(it.Payload)
 					views = append(views, queueItemView{
 						Subject:  it.DedupKey,
@@ -80,8 +83,8 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 		},
 		{
 			Name: "queue_ack",
-			Description: "Mark a queue item done and remove it from your queue. Pass the subject you got from queue_pull. " +
-				"Idempotent: acking a subject that is no longer queued is a harmless no-op. Ack only after its evidence is durably folded or you made an evidence-based no-change decision; use queue_defer when an external prerequisite blocks completion.",
+			Description: "Mark a queue item done and remove the exact item returned by queue_pull. Pass only its subject; Go retains a hidden one-shot receipt and discards it after acknowledgement. " +
+				"If newer evidence arrived while you worked, that newer item remains queued and the result tells you to pull it later. Ack only after its evidence is durably folded or you made an evidence-based no-change decision; use queue_defer when an external prerequisite blocks completion.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -98,10 +101,25 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				if subject == "" {
 					return "", fmt.Errorf("subject is required")
 				}
-				if err := store.Ack(ctx, loopName, subject); err != nil {
+				receipt, ok := receipts.receipt(subject)
+				if !ok {
+					return "", fmt.Errorf("subject %q has no receipt from queue_pull in this loop run; call queue_pull before queue_ack", subject)
+				}
+				outcome, err := store.Ack(ctx, loopName, subject, receipt)
+				if err != nil {
 					return "", err
 				}
-				return fmt.Sprintf(`{"status":"ok","subject":%q}`, subject), nil
+				receipts.forget(subject, receipt)
+				switch outcome {
+				case loopqueue.Acked:
+					return fmt.Sprintf(`{"status":"ok","subject":%q}`, subject), nil
+				case loopqueue.AckMissing:
+					return fmt.Sprintf(`{"status":"already_acknowledged","subject":%q}`, subject), nil
+				case loopqueue.AckSuperseded:
+					return fmt.Sprintf(`{"status":"retained_newer","subject":%q,"instruction":"Newer evidence arrived while this item was being processed. The newer item remains queued; call queue_pull before handling it."}`, subject), nil
+				default:
+					return "", fmt.Errorf("unexpected queue acknowledgement outcome %q", outcome)
+				}
 			},
 		},
 		{
@@ -127,6 +145,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				if err := store.Defer(ctx, loopName, subject); err != nil {
 					return "", err
 				}
+				receipts.forgetSubject(subject)
 				return fmt.Sprintf(`{"status":"deferred","subject":%q}`, subject), nil
 			},
 		},
@@ -183,6 +202,45 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 			},
 		},
 	}
+}
+
+type queueReceipts struct {
+	mu        sync.Mutex
+	bySubject map[string]string
+}
+
+func newQueueReceipts() *queueReceipts {
+	return &queueReceipts{bySubject: make(map[string]string)}
+}
+
+func (r *queueReceipts) remember(subject, receipt string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.bySubject[subject]; ok {
+		return
+	}
+	r.bySubject[subject] = receipt
+}
+
+func (r *queueReceipts) receipt(subject string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	receipt, ok := r.bySubject[subject]
+	return receipt, ok
+}
+
+func (r *queueReceipts) forget(subject, expectedReceipt string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if receipt, ok := r.bySubject[subject]; ok && receipt == expectedReceipt {
+		delete(r.bySubject, subject)
+	}
+}
+
+func (r *queueReceipts) forgetSubject(subject string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.bySubject, subject)
 }
 
 type queueItemView struct {

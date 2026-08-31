@@ -157,8 +157,12 @@ func TestQueueStatusToolReportsAuditView(t *testing.T) {
 	if err := queue.Enqueue(ctx, "archivist", "session:done", 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := queue.Ack(ctx, "archivist", "session:done"); err != nil {
-		t.Fatal(err)
+	items, err := queue.Peek(ctx, "archivist", 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("peek queue item: items=%#v err=%v", items, err)
+	}
+	if outcome, err := queue.Ack(ctx, "archivist", "session:done", items[0].Receipt); err != nil || outcome != loopqueue.Acked {
+		t.Fatalf("ack queue item outcome=%q err=%v", outcome, err)
 	}
 	if err := queue.Enqueue(ctx, "archivist", "session:waiting", 0, nil); err != nil {
 		t.Fatal(err)

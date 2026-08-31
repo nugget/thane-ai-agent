@@ -318,9 +318,12 @@ Three tools, each owning a different mutation shape.
 The default way to make an ordinary document exist. A contract-owned document
 uses the structured tool that names it: `contact_dossier_write` for a contact
 dossier, or a generated `publish_output_*` / `replace_output_*` tool for a loop
-output. For ordinary corpus knowledge, one `doc_create` call collision-checks
-related documents, title/tags/path normalization, and root policy, then writes
-when placement is clean:
+output. Probe a contact dossier with `contact_dossier_read` first and branch on
+its stable `dossier.exists` field; an absent
+result is successful and names the exact create action, so never guess its ref
+for `doc_read`. For ordinary corpus knowledge, one `doc_create` call
+collision-checks related documents, title/tags/path normalization, and root
+policy, then writes when placement is clean:
 
 ```json
 {

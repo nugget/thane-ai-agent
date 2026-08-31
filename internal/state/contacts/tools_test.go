@@ -2,19 +2,32 @@ package contacts
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // fakeEmbedder returns a fixed embedding for any text.
 type fakeEmbedder struct {
 	embedding []float32
 	err       error
+}
+
+type callbackEmbedder struct {
+	generate func()
+}
+
+func (e *callbackEmbedder) Generate(_ context.Context, _ string) ([]float32, error) {
+	e.generate()
+	return []float32{0.25}, nil
 }
 
 func (f *fakeEmbedder) Generate(_ context.Context, _ string) ([]float32, error) {
@@ -24,7 +37,7 @@ func (f *fakeEmbedder) Generate(_ context.Context, _ string) ([]float32, error) 
 func newTestTools(t *testing.T) *Tools {
 	t.Helper()
 	store := newTestStore(t)
-	return NewTools(store)
+	return NewTools(store, nil)
 }
 
 func TestSaveContact_New(t *testing.T) {
@@ -116,6 +129,132 @@ func TestSaveContact_WithFacts(t *testing.T) {
 	}
 	if !foundTZ {
 		t.Error("expected timezone property for America/Chicago")
+	}
+}
+
+func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.T) {
+	iteration := 3
+	provenance := &PropertyProvenance{
+		Source:         "contact_save",
+		Model:          "test-model",
+		LoopID:         "loop-archivist-1",
+		ConversationID: "loop-archivist-1-123",
+		SessionID:      "019c52f0-9ce8-7708-867f-35da2e6b4777",
+		RequestID:      "r_contact",
+		ToolCallID:     "call_contact",
+		Iteration:      &iteration,
+	}
+	var mutations []ContactMutation
+	store := newTestStore(t)
+	tools := NewTools(store, func(_ context.Context, mutation ContactMutation) error {
+		mutations = append(mutations, mutation)
+		return nil
+	})
+
+	result, err := tools.SaveContactFromModel(context.Background(), `{
+		"name":"Provenance Person",
+		"kind":"individual",
+		"facts":{"email":"person@example.com","timezone":"America/Chicago"},
+		"origin_tags":["signal","SIGNAL","projects"]
+	}`, provenance)
+	if err != nil {
+		t.Fatalf("SaveContactFromModel() error = %v", err)
+	}
+	if !strings.Contains(result, "Saved new contact") {
+		t.Fatalf("result = %q, want new-contact result", result)
+	}
+	if len(mutations) != 1 {
+		t.Fatalf("mutation calls = %d, want 1", len(mutations))
+	}
+	wantFields := []string{"formatted_name", "kind", "property:EMAIL", "property:X-THANE-ORIGIN-TAG", "property:timezone"}
+	if !reflect.DeepEqual(mutations[0].Fields, wantFields) {
+		t.Errorf("mutation fields = %#v, want %#v", mutations[0].Fields, wantFields)
+	}
+	if mutations[0].Provenance != provenance {
+		t.Error("mutation did not preserve the model-turn provenance")
+	}
+
+	contact, err := tools.store.FindByName("Provenance Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties, err := tools.store.GetProperties(contact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(properties) != 4 {
+		t.Fatalf("properties = %#v, want 4", properties)
+	}
+	for _, property := range properties {
+		if !reflect.DeepEqual(property.Provenance, provenance) {
+			t.Errorf("property %s provenance = %#v, want %#v", property.Property, property.Provenance, provenance)
+		}
+	}
+
+	newer := &PropertyProvenance{Source: "contact_save", RequestID: "r_retry"}
+	result, err = tools.SaveContactFromModel(context.Background(), `{
+		"name":"Provenance Person",
+		"kind":"individual",
+		"facts":{"email":"PERSON@example.com","timezone":"america/chicago"},
+		"origin_tags":["PROJECTS","SIGNAL"]
+	}`, newer)
+	if err != nil {
+		t.Fatalf("repeated SaveContactFromModel() error = %v", err)
+	}
+	if !strings.Contains(result, "Contact unchanged") || !strings.Contains(result, "no dossier refresh") {
+		t.Fatalf("no-op result = %q, want explicit unchanged result", result)
+	}
+	if len(mutations) != 1 {
+		t.Fatalf("no-op mutation calls = %d, want 1 total", len(mutations))
+	}
+	properties, err = tools.store.GetProperties(contact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, property := range properties {
+		if !reflect.DeepEqual(property.Provenance, provenance) {
+			t.Errorf("no-op rewrote property %s provenance to %#v", property.Property, property.Provenance)
+		}
+	}
+}
+
+func TestSaveContactFromModelDoesNotSignalRejectedOrRolledBackWrites(t *testing.T) {
+	calls := 0
+	store := newTestStore(t)
+	tools := NewTools(store, func(context.Context, ContactMutation) error {
+		calls++
+		return nil
+	})
+	provenance := &PropertyProvenance{Source: "contact_save", RequestID: "r_rejected"}
+
+	if _, err := tools.SaveContactFromModel(context.Background(), `{
+		"name":"Custody Rejection",
+		"kind":"individual",
+		"trust_zone":"admin"
+	}`, provenance); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+		t.Fatalf("trust-zone rejection error = %v", err)
+	}
+	if _, err := tools.store.db.Exec(`
+		CREATE TRIGGER fail_model_property
+		BEFORE INSERT ON contact_properties
+		BEGIN
+			SELECT RAISE(ABORT, 'forced property rollback');
+		END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools.SaveContactFromModel(context.Background(), `{
+		"name":"Rollback Rejection",
+		"kind":"individual",
+		"facts":{"email":"nobody@example.com"}
+	}`, provenance); err == nil || !strings.Contains(err.Error(), "forced property rollback") {
+		t.Fatalf("property rollback error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("rejected/rolled-back writes signaled %d mutations, want 0", calls)
+	}
+	if _, err := tools.store.FindByName("Rollback Rejection"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rolled-back contact lookup error = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -403,6 +542,24 @@ func TestSaveContact_WithEmbedding(t *testing.T) {
 	}
 	if len(contacts) != 1 || contacts[0].ID != c.ID {
 		t.Error("expected semantic search to find the contact with embedding")
+	}
+}
+
+func TestSaveContactFromModelQueuesRefreshBeforeEmbedding(t *testing.T) {
+	var order []string
+	tools := NewTools(newTestStore(t), func(context.Context, ContactMutation) error {
+		order = append(order, "refresh")
+		return nil
+	})
+	tools.SetEmbeddingClient(&callbackEmbedder{generate: func() {
+		order = append(order, "embedding")
+	}})
+
+	if _, err := tools.SaveContactFromModel(t.Context(), `{"name":"Ordered Contact","kind":"individual"}`, &PropertyProvenance{Source: "contact_save"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"refresh", "embedding"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("post-commit order = %#v, want %#v", order, want)
 	}
 }
 
@@ -729,7 +886,7 @@ func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Contact ID: " + contact.ID.String(), "Dossier: " + DossierRef(contact.ID)} {
+	for _, want := range []string{"Contact ID: " + contact.ID.String(), "Dossier target: " + DossierRef(contact.ID), "may be absent"} {
 		if !strings.Contains(with, want) {
 			t.Fatalf("configured result = %q, want %q", with, want)
 		}
@@ -739,13 +896,19 @@ func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
 	}
 
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments((&recordingDossierWriter{}).Write)
+	tools.ConfigureDossierDocuments(func(_ context.Context, args documents.RefArgs) (string, error) {
+		return args.Ref, nil
+	}, (&recordingDossierWriter{}).Write)
 	writable, err := tools.LookupContact(`{"name":"Dossier Person"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(writable, "create or replace with contact_dossier_write") {
-		t.Fatalf("managed dossier trailhead omitted the structured write door: %s", writable)
+	wantCall := `Dossier access: contact_dossier_read(contact_id="` + contact.ID.String() + `")`
+	if !strings.Contains(writable, wantCall) {
+		t.Fatalf("managed dossier trailhead = %q, want exact read call %q", writable, wantCall)
+	}
+	if strings.Contains(writable, DossierRef(contact.ID)) || strings.Contains(writable, "doc_read") {
+		t.Fatalf("managed dossier trailhead exposed the error-prone raw ref path: %s", writable)
 	}
 }
 

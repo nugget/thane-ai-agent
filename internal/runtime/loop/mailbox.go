@@ -29,6 +29,9 @@ type MailboxItem struct {
 	ID         string
 	Payload    []byte
 	EnqueuedAt time.Time
+	// Receipt is the runtime-only queue receipt retained across delivery
+	// and acknowledgement; mailbox payloads never expose it to the model.
+	Receipt string `json:"-"`
 }
 
 // MailboxReceipt summarizes the effect of enqueuing a mailbox item.
@@ -186,7 +189,7 @@ func (m *Mailbox) Enqueue(ctx context.Context, loopName, keyPrefix string, paylo
 	if err != nil {
 		return MailboxItem{}, err
 	}
-	return MailboxItem{ID: key, Payload: append([]byte(nil), payload...), EnqueuedAt: time.Now().UTC()}, nil
+	return MailboxItem{ID: key, Payload: append([]byte(nil), payload...), EnqueuedAt: time.Now().UTC(), Receipt: key}, nil
 }
 
 func (m *Mailbox) drain(ctx context.Context, loopName string, limit int) ([]MailboxItem, error) {
@@ -220,6 +223,7 @@ func (m *Mailbox) Peek(ctx context.Context, loopName string, limit int) ([]Mailb
 			ID:         it.DedupKey,
 			Payload:    append([]byte(nil), it.Payload...),
 			EnqueuedAt: it.EnqueuedAt,
+			Receipt:    it.Receipt,
 		})
 	}
 	return items, nil
@@ -230,8 +234,12 @@ func (m *Mailbox) ack(ctx context.Context, loopName string, items []MailboxItem)
 		return nil
 	}
 	for _, item := range items {
-		if err := m.store.Ack(ctx, loopName, item.ID); err != nil {
+		outcome, err := m.store.Ack(ctx, loopName, item.ID, item.Receipt)
+		if err != nil {
 			return err
+		}
+		if outcome == loopqueue.AckSuperseded {
+			return fmt.Errorf("loop mailbox item %s advanced while being handled", item.ID)
 		}
 	}
 	return nil

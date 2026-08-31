@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1414,5 +1415,108 @@ func TestForeignKeysEnabled(t *testing.T) {
 	err = store.AddProperty(bogusID, &Property{Property: "EMAIL", Value: "nobody@example.com"})
 	if err == nil {
 		t.Error("expected foreign key violation for bogus contact_id")
+	}
+}
+
+func TestPropertyProvenanceRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	contact, err := store.Upsert(&Contact{FormattedName: "Provenance", Kind: "individual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iteration := 4
+	want := &PropertyProvenance{
+		Source:         "contact_save",
+		Model:          "model-a",
+		LoopID:         "loop-a",
+		ConversationID: "conversation-a",
+		SessionID:      "session-a",
+		RequestID:      "request-a",
+		ToolCallID:     "tool-a",
+		Iteration:      &iteration,
+	}
+	if err := store.AddProperty(contact.ID, &Property{
+		Property: "EMAIL", Value: "person@example.com", Provenance: want,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	properties, err := store.GetProperties(contact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(properties) != 1 || !reflect.DeepEqual(properties[0].Provenance, want) {
+		t.Fatalf("property provenance = %#v, want %#v", properties, want)
+	}
+}
+
+func TestUpsertWithPropertiesDoesNotAcceptCallerSuppliedProvenance(t *testing.T) {
+	store := newTestStore(t)
+	contact, err := store.UpsertWithProperties(&Contact{
+		FormattedName: "API Authored",
+		Kind:          "individual",
+	}, []Property{{
+		Property: "EMAIL",
+		Value:    "api@example.com",
+		Provenance: &PropertyProvenance{
+			Source:    "forged-model-write",
+			RequestID: "r_forged",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties, err := store.GetProperties(contact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(properties) != 1 || properties[0].Provenance != nil {
+		t.Fatalf("full-record write accepted caller provenance: %#v", properties)
+	}
+}
+
+func TestPropertyProvenanceMigrationKeepsLegacyRowsUnknown(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE contact_properties (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			contact_id TEXT NOT NULL,
+			property TEXT NOT NULL,
+			value TEXT NOT NULL,
+			type TEXT,
+			pref INTEGER,
+			label TEXT,
+			mediatype TEXT,
+			verified INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`
+		INSERT INTO contact_properties (contact_id, property, value, created_at, updated_at)
+		VALUES (?, 'EMAIL', 'legacy@example.com', ?, ?)
+	`, id.String(), stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties, err := store.GetProperties(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(properties) != 1 {
+		t.Fatalf("legacy properties = %d, want 1", len(properties))
+	}
+	if properties[0].Provenance != nil {
+		t.Fatalf("legacy row fabricated provenance: %#v", properties[0].Provenance)
 	}
 }

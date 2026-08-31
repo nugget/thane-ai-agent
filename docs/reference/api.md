@@ -54,9 +54,9 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `PUT` | `/v1/models/registry/resource-policy` | Set a resource policy. |
 | `DELETE` | `/v1/models/registry/resource-policy?resource=...` | Clear a resource policy. |
 | `GET` | `/v1/contacts` | List or search contacts. Supports `query`, `kind`, `trust_zone`, `property`, `value`, `exact=true`, and `limit` (default 100, max 500). |
-| `GET` | `/v1/contacts/{id}` | Get one contact with structured properties. |
-| `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`. |
-| `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties. |
+| `GET` | `/v1/contacts/{id}` | Get one contact with structured properties; property objects include model-turn provenance when known and `null` for legacy or non-model authorship. |
+| `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`; API-authored properties retain unknown provenance. |
+| `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties; API-authored properties retain unknown provenance. |
 | `DELETE` | `/v1/contacts/{id}` | Soft-delete a contact. |
 | `GET` | `/v1/loops` | Running loop status snapshots. Optional `?state=` filter (`pending`, `sleeping`, `waiting`, `processing`, `error`, `stopped`). |
 | `GET` | `/v1/loops/{id}` | One running loop's status. |

@@ -132,6 +132,10 @@ durable queue holds that).
      the documents tools to read any existing dossier and adjacent KB
      content. Record every alias you discover in the dossier's Aliases
      section so future passes don't re-derive them.
+     A `contact:<uuid>` item from `contact_save` names the exact current
+     contact and changed structured fields in its summary: resolve that exact
+     name with `contact_lookup`, use the UUID from the subject for
+     `contact_dossier_read`, and treat the fresh directory record as authority.
 3. **Write each dossier through its owning surface.** Every claim carries an
    evidence citation — an archive session ID, a fact category+key, a document
    ref, or a working-memory conversation ID — so a reader can check it.
@@ -140,15 +144,19 @@ durable queue holds that).
    can share a prefix, turning a shortened durable citation into an ambiguous
    one that cannot be checked later.
    - A contact is the contract-owned exception. Resolve an active structured
-     contact and use its exact canonical UUID. Read the current
-     `contacts:<uuid>.md` with `doc_read` when it exists and inspect the
-     response's `truncated` marker. A truncated read is not the whole dossier:
-     call `doc_outline`, verify that outline is not truncated, then recover
-     every top-level section with `doc_section`. If a section result is also
-     truncated, descend through its child headings; never replace the dossier
-     until every content-bearing leaf was returned without truncation. If the
-     outline or a leaf remains truncated, call `queue_defer` rather than
-     overwriting claims you could not read.
+     contact and use its exact canonical UUID. Call `contact_dossier_read` with
+     that UUID; Go derives the canonical ref so never transcribe or construct
+     `contacts:<uuid>.md` for `doc_read`. An absent dossier is a successful,
+     actionable result: create it once with `contact_dossier_write` and do not
+     retry the unchanged read. The response shape is stable in both cases:
+     trust `dossier.exists`, and for an existing dossier inspect
+     `dossier.document.truncated`. A truncated read is not the whole dossier: use the
+     returned canonical ref with `doc_outline`, verify that outline is not
+     truncated, then recover every top-level section with `doc_section`. If a
+     section result is also truncated, descend through its child headings;
+     never replace the dossier until every content-bearing leaf was returned
+     without truncation. If the outline or a leaf remains truncated, call
+     `queue_defer` rather than overwriting claims you could not read.
      Reconcile the new evidence with the complete dossier, then call
      `contact_dossier_write` with the complete status-line, teaser, digest, and
      full projections. Go owns the ref, private subject tag, frontmatter,
@@ -178,6 +186,9 @@ durable queue holds that).
    complete when it failed. When an external prerequisite or incomplete read
    blocks safe completion, call `queue_defer` instead: the item stays durable
    but moves behind all work currently ready to proceed.
+   Go retains a hidden one-shot receipt from `queue_pull`. If newer evidence
+   for the same subject arrives while you work, a stale ack returns
+   `retained_newer` and leaves that newer item queued for a later pull.
    Acking means "I am done with this item," not "I created a dossier": a
    session with nothing worth folding is still acked. Unacked items return
    every iteration forever and starve the queue (an empty item at the head

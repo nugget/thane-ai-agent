@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,9 @@ const (
 		note, photo_uri, trust_zone, ai_summary, rev, etag,
 		embedding, last_interaction, last_interaction_meta,
 		created_at, updated_at`
+
+	propertyColumns = `id, contact_id, property, value, type, pref, label,
+		mediatype, verified, provenance, created_at, updated_at`
 
 	activeFilter = "deleted_at IS NULL"
 )
@@ -89,17 +93,32 @@ type Contact struct {
 // KEY, CATEGORIES, RELATED, MEMBER, etc.) are stored here rather than
 // on the Contact struct directly.
 type Property struct {
-	ID        int64     `json:"id"`
-	ContactID uuid.UUID `json:"contact_id"`
-	Property  string    `json:"property"` // EMAIL, TEL, ADR, IMPP, URL, KEY, etc.
-	Value     string    `json:"value"`
-	Type      string    `json:"type,omitempty"`      // TYPE param: work, home, cell, etc.
-	Pref      int       `json:"pref,omitempty"`      // PREF param: 1-100, 0 = unset
-	Label     string    `json:"label,omitempty"`     // LABEL param
-	MediaType string    `json:"mediatype,omitempty"` // MEDIATYPE param
-	Verified  bool      `json:"verified,omitempty"`  // has Thane verified traffic from this?
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         int64               `json:"id"`
+	ContactID  uuid.UUID           `json:"contact_id"`
+	Property   string              `json:"property"` // EMAIL, TEL, ADR, IMPP, URL, KEY, etc.
+	Value      string              `json:"value"`
+	Type       string              `json:"type,omitempty"`      // TYPE param: work, home, cell, etc.
+	Pref       int                 `json:"pref,omitempty"`      // PREF param: 1-100, 0 = unset
+	Label      string              `json:"label,omitempty"`     // LABEL param
+	MediaType  string              `json:"mediatype,omitempty"` // MEDIATYPE param
+	Verified   bool                `json:"verified,omitempty"`  // has Thane verified traffic from this?
+	Provenance *PropertyProvenance `json:"provenance"`
+	CreatedAt  time.Time           `json:"created_at"`
+	UpdatedAt  time.Time           `json:"updated_at"`
+}
+
+// PropertyProvenance identifies the model-facing turn that authored a
+// structured contact property. A nil Property.Provenance means legacy or
+// otherwise unknown authorship; it never grants authority to the value.
+type PropertyProvenance struct {
+	Source         string `json:"source"`
+	Model          string `json:"model,omitempty"`
+	LoopID         string `json:"loop_id,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	ToolCallID     string `json:"tool_call_id,omitempty"`
+	Iteration      *int   `json:"iteration,omitempty"`
 }
 
 // InteractionMeta holds structured metadata about a contact's most
@@ -502,7 +521,7 @@ func (s *Store) ListAllWithProperties() ([]*Contact, error) {
 
 	// Batch-load all properties in one query.
 	propRows, err := s.db.Query(`
-		SELECT id, contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at
+		SELECT ` + propertyColumns + `
 		FROM contact_properties
 		WHERE contact_id IN (SELECT id FROM contacts WHERE ` + activeFilter + `)
 		ORDER BY contact_id, property, pref NULLS LAST, id
@@ -580,6 +599,14 @@ func (s *Store) UpsertWithPropertiesAndHAPerson(c *Contact, props []Property, ha
 }
 
 func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPersonEntity *string) (*Contact, error) {
+	// Full-record writers (CardDAV, vCard import, and the native contacts API)
+	// do not execute inside a model turn. Ignore any caller-supplied JSON here
+	// so those surfaces cannot fabricate model provenance; their authored rows
+	// deliberately retain the nil/unknown posture.
+	props = append([]Property(nil), props...)
+	for i := range props {
+		props[i].Provenance = nil
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -587,35 +614,68 @@ func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPers
 	defer tx.Rollback() //nolint:errcheck // best-effort on defer
 
 	now := time.Now().UTC()
+	// Full-record replacement historically stamps the stored representation
+	// at write time. Existing rows retain their database created_at through
+	// ON CONFLICT, while a client-selected new UUID cannot inject one.
+	c.CreatedAt = now
+	if err := upsertContactTx(tx, c, now); err != nil {
+		return nil, err
+	}
 
+	// Replace all properties.
+	if _, err := tx.Exec(
+		`DELETE FROM contact_properties WHERE contact_id = ?`,
+		c.ID.String()); err != nil {
+		return nil, fmt.Errorf("clear properties: %w", err)
+	}
+	for _, p := range props {
+		if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
+			return nil, err
+		}
+	}
+
+	if haPersonEntity != nil {
+		if err := applyHAPersonEntity(tx, c.ID, *haPersonEntity); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	s.rebuildFTS()
+	return c, nil
+}
+
+func upsertContactTx(tx *sql.Tx, c *Contact, now time.Time) error {
 	if c.Kind == "" {
 		c.Kind = "individual"
 	}
 	if !ValidKinds[c.Kind] {
-		return nil, fmt.Errorf("invalid kind %q (valid: individual, group, org, location)", c.Kind)
+		return fmt.Errorf("invalid kind %q (valid: individual, group, org, location)", c.Kind)
 	}
 	if c.TrustZone == "" {
 		c.TrustZone = ZoneKnown
 	}
 	if !ValidTrustZones[c.TrustZone] {
-		return nil, fmt.Errorf("invalid trust zone %q (valid: admin, household, trusted, known)", c.TrustZone)
+		return fmt.Errorf("invalid trust zone %q (valid: admin, household, trusted, known)", c.TrustZone)
 	}
-
-	c.Rev = now.Format(time.RFC3339)
-	c.UpdatedAt = now
-
 	if c.ID == uuid.Nil {
-		id, idErr := uuid.NewV7()
-		if idErr != nil {
-			return nil, fmt.Errorf("generate id: %w", idErr)
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate id: %w", err)
 		}
 		c.ID = id
 	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = now
+	}
+	c.Rev = now.Format(time.RFC3339)
+	c.UpdatedAt = now
 
-	// INSERT or UPDATE via ON CONFLICT so both new and existing IDs
-	// work correctly.
-	c.CreatedAt = now
-	_, err = tx.Exec(`
+	// INSERT or UPDATE via ON CONFLICT so both new and existing IDs work.
+	_, err := tx.Exec(`
 		INSERT INTO contacts (id, kind, formatted_name, family_name, given_name,
 			additional_names, name_prefix, name_suffix, nickname,
 			birthday, anniversary, gender, org, title, role,
@@ -655,41 +715,131 @@ func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPers
 		nullStr(c.Note), nullStr(c.PhotoURI),
 		c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
 		nullTime(c.LastInteraction), nullInteractionMeta(c.LastInteractionMeta),
-		now.Format(time.RFC3339), now.Format(time.RFC3339))
+		c.CreatedAt.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
-		return nil, fmt.Errorf("upsert contact: %w", err)
+		return fmt.Errorf("upsert contact: %w", err)
 	}
+	return nil
+}
 
-	// Replace all properties.
-	if _, err := tx.Exec(
-		`DELETE FROM contact_properties WHERE contact_id = ?`,
-		c.ID.String()); err != nil {
-		return nil, fmt.Errorf("clear properties: %w", err)
+func insertPropertyTx(tx *sql.Tx, contactID uuid.UUID, p Property, now time.Time) error {
+	provenance, err := marshalPropertyProvenance(p.Provenance)
+	if err != nil {
+		return fmt.Errorf("encode property %s provenance: %w", p.Property, err)
 	}
-	for _, p := range props {
-		propNow := now.Format(time.RFC3339)
-		if _, err := tx.Exec(`
-			INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, c.ID.String(), p.Property, p.Value,
-			nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
-			boolToInt(p.Verified), propNow, propNow); err != nil {
-			return nil, fmt.Errorf("add property %s: %w", p.Property, err)
+	_, err = tx.Exec(`
+		INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, provenance, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, contactID.String(), p.Property, p.Value,
+		nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
+		boolToInt(p.Verified), provenance, now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("add property %s: %w", p.Property, err)
+	}
+	return nil
+}
+
+// applyContactSave atomically applies the model-facing contact_save merge.
+// The caller has already decided which scalar fields differ and which
+// replace-style property families changed; additive properties are rechecked
+// inside the transaction so a concurrent identical insert remains a true
+// no-op. The returned changed bit is therefore safe to use as the archivist
+// refresh gate.
+func (s *Store) applyContactSave(
+	c *Contact,
+	contactChanged bool,
+	additions []Property,
+	replacements map[string][]Property,
+) (*Contact, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, false, fmt.Errorf("begin contact save: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on defer
+
+	now := time.Now().UTC()
+	isNew := c.ID == uuid.Nil
+	if isNew {
+		if err := upsertContactTx(tx, c, now); err != nil {
+			return nil, false, err
 		}
 	}
 
-	if haPersonEntity != nil {
-		if err := applyHAPersonEntity(tx, c.ID, *haPersonEntity); err != nil {
-			return nil, err
+	propertyChanged := false
+	replacementNames := make([]string, 0, len(replacements))
+	for property := range replacements {
+		replacementNames = append(replacementNames, property)
+	}
+	sort.Strings(replacementNames)
+	for _, property := range replacementNames {
+		if _, err := tx.Exec(
+			`DELETE FROM contact_properties WHERE contact_id = ? AND property = ?`,
+			c.ID.String(), property); err != nil {
+			return nil, false, fmt.Errorf("replace contact property %s: %w", property, err)
 		}
+		for _, p := range replacements[property] {
+			if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
+				return nil, false, err
+			}
+		}
+		propertyChanged = true
 	}
 
+	for _, p := range additions {
+		exists, err := propertyExistsTx(tx, c.ID, p.Property, p.Value)
+		if err != nil {
+			return nil, false, fmt.Errorf("check existing property %s: %w", p.Property, err)
+		}
+		if exists {
+			continue
+		}
+		if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
+			return nil, false, err
+		}
+		propertyChanged = true
+	}
+
+	changed := isNew || contactChanged || propertyChanged
+	if !changed {
+		return c, false, nil
+	}
+	if !isNew {
+		// A property mutation advances the parent contact revision and CTag
+		// just as the pre-provenance contact_save path did.
+		if err := upsertContactTx(tx, c, now); err != nil {
+			return nil, false, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit: %w", err)
+		return nil, false, fmt.Errorf("commit contact save: %w", err)
 	}
-
 	s.rebuildFTS()
-	return c, nil
+	return c, true, nil
+}
+
+func propertyExistsTx(tx *sql.Tx, contactID uuid.UUID, property, value string) (bool, error) {
+	rows, err := tx.Query(`
+		SELECT value FROM contact_properties
+		WHERE contact_id = ? AND property = ?
+	`, contactID.String(), property)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var candidate string
+		if err := rows.Scan(&candidate); err != nil {
+			return false, err
+		}
+		if propertyValueEqual(property, candidate, value) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // Delete soft-deletes a contact by ID.
@@ -773,12 +923,16 @@ func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	provenance, err := marshalPropertyProvenance(p.Provenance)
+	if err != nil {
+		return fmt.Errorf("encode property provenance: %w", err)
+	}
 	result, err := s.db.Exec(`
-		INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, provenance, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, contactID.String(), p.Property, p.Value,
 		nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
-		boolToInt(p.Verified), now, now)
+		boolToInt(p.Verified), provenance, now, now)
 	if err != nil {
 		return fmt.Errorf("add property: %w", err)
 	}
@@ -793,7 +947,7 @@ func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 // property name then preference.
 func (s *Store) GetProperties(contactID uuid.UUID) ([]Property, error) {
 	rows, err := s.db.Query(`
-		SELECT id, contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at
+		SELECT `+propertyColumns+`
 		FROM contact_properties
 		WHERE contact_id = ?
 		ORDER BY property, pref NULLS LAST, id
@@ -830,7 +984,7 @@ func (s *Store) GetPropertiesForContacts(contactIDs []uuid.UUID) (map[uuid.UUID]
 	}
 
 	rows, err := s.db.Query(`
-		SELECT id, contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at
+		SELECT `+propertyColumns+`
 		FROM contact_properties
 		WHERE contact_id IN (`+placeholders+`)
 		ORDER BY contact_id, property, pref NULLS LAST, id
@@ -1237,14 +1391,14 @@ func (s *Store) scanContacts(rows *sql.Rows) ([]*Contact, error) {
 func scanProperty(rows *sql.Rows) (Property, error) {
 	var p Property
 	var contactIDStr string
-	var typ, label, mediatype sql.NullString
+	var typ, label, mediatype, provenance sql.NullString
 	var pref sql.NullInt64
 	var verified int
 	var createdStr, updatedStr string
 
 	err := rows.Scan(&p.ID, &contactIDStr, &p.Property, &p.Value,
 		&typ, &pref, &label, &mediatype, &verified,
-		&createdStr, &updatedStr)
+		&provenance, &createdStr, &updatedStr)
 	if err != nil {
 		return Property{}, fmt.Errorf("scan property: %w", err)
 	}
@@ -1260,6 +1414,13 @@ func scanProperty(rows *sql.Rows) (Property, error) {
 	p.Label = label.String
 	p.MediaType = mediatype.String
 	p.Verified = verified != 0
+	if provenance.Valid && strings.TrimSpace(provenance.String) != "" {
+		var parsed PropertyProvenance
+		if err := json.Unmarshal([]byte(provenance.String), &parsed); err != nil {
+			return Property{}, fmt.Errorf("decode property provenance: %w", err)
+		}
+		p.Provenance = &parsed
+	}
 	p.CreatedAt, err = database.ParseTimestamp(createdStr)
 	if err != nil {
 		return Property{}, fmt.Errorf("parse property created_at: %w", err)
@@ -1270,6 +1431,17 @@ func scanProperty(rows *sql.Rows) (Property, error) {
 	}
 
 	return p, nil
+}
+
+func marshalPropertyProvenance(provenance *PropertyProvenance) (sql.NullString, error) {
+	if provenance == nil {
+		return sql.NullString{}, nil
+	}
+	raw, err := json.Marshal(provenance)
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	return sql.NullString{String: string(raw), Valid: true}, nil
 }
 
 // --- FTS helpers ---

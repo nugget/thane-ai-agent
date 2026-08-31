@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -58,5 +59,102 @@ func TestQueueDeferToolRetainsWorkAndMovesItBehindThePartition(t *testing.T) {
 	}
 	if got := string(items[1].Payload); got != `{"source":"session"}` {
 		t.Fatalf("deferred payload = %q", got)
+	}
+}
+
+func TestQueueAckToolRetainsNewerCoalescedItem(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const subject = "contact:changing"
+	if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := buildLoopQueueTools(store, "archivist")
+	var pull, ack func(context.Context, map[string]any) (string, error)
+	for _, tool := range tools {
+		switch tool.Name {
+		case "queue_pull":
+			pull = tool.Handler
+		case "queue_ack":
+			ack = tool.Handler
+		}
+	}
+	if pull == nil || ack == nil {
+		t.Fatal("queue pull/ack tools not generated")
+	}
+	if _, err := pull(t.Context(), map[string]any{"limit": 1}); err != nil {
+		t.Fatalf("queue_pull: %v", err)
+	}
+	if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{"v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ack(t.Context(), map[string]any{"subject": subject})
+	if err != nil {
+		t.Fatalf("queue_ack: %v", err)
+	}
+	var response map[string]string
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "retained_newer" {
+		t.Fatalf("queue_ack response = %v, want retained_newer", response)
+	}
+	items, err := store.Peek(t.Context(), "archivist", 1)
+	if err != nil || len(items) != 1 || string(items[0].Payload) != `{"v":2}` {
+		t.Fatalf("newer item was not retained: items=%#v err=%v", items, err)
+	}
+}
+
+func TestQueueAckToolDiscardsCompletedReceiptBeforeKeyRecreation(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const subject = "contact:recreated"
+	if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := buildLoopQueueTools(store, "archivist")
+	var pull, ack func(context.Context, map[string]any) (string, error)
+	for _, tool := range tools {
+		switch tool.Name {
+		case "queue_pull":
+			pull = tool.Handler
+		case "queue_ack":
+			ack = tool.Handler
+		}
+	}
+	if _, err := pull(t.Context(), map[string]any{"limit": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := ack(t.Context(), map[string]any{"subject": subject}); err != nil || !strings.Contains(result, `"status":"ok"`) {
+		t.Fatalf("first ack result=%q err=%v", result, err)
+	}
+	if _, err := ack(t.Context(), map[string]any{"subject": subject}); err == nil || !strings.Contains(err.Error(), "no receipt from queue_pull") {
+		t.Fatalf("repeated ack error = %v, want discarded receipt", err)
+	}
+	if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{"v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ack(t.Context(), map[string]any{"subject": subject}); err == nil || !strings.Contains(err.Error(), "no receipt from queue_pull") {
+		t.Fatalf("delayed ack after recreation error = %v, want no receipt", err)
+	}
+	items, err := store.Peek(t.Context(), "archivist", 1)
+	if err != nil || len(items) != 1 || string(items[0].Payload) != `{"v":2}` {
+		t.Fatalf("recreated item was not retained: items=%#v err=%v", items, err)
 	}
 }
