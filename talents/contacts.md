@@ -49,7 +49,8 @@ ordinary documents instead.
   and is deliberately outside these everyday mutation tools.
 
 - **You're maintaining evolving relationship understanding** — use
-  `contact_dossier_read`, then `contact_dossier_write` when the managed
+  `contact_dossier_read`, trust its stable `dossier.exists` field, then use
+  `contact_dossier_write` when the managed
   `contacts` document root makes them available. Resolve the contact first;
   both tools take its canonical UUID while Go owns document identity and shape.
   A read of an absent dossier succeeds with the exact create action, so do not

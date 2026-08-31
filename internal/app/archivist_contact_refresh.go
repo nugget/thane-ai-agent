@@ -62,7 +62,12 @@ func (a *App) enqueueContactDossierRefresh(ctx context.Context, mutation contact
 	if err != nil {
 		return fmt.Errorf("marshal contact dossier refresh: %w", err)
 	}
-	if err := a.loopQueue.Enqueue(ctx, archivist.DefinitionName, "contact:"+mutation.ContactID.String(), 0, raw); err != nil {
+	// The structured contact is already committed when this handoff runs.
+	// Detach request cancellation so a disconnect cannot erase the durable
+	// refresh, while retaining the shared bounded delivery window.
+	deliveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), queueWakeDeliveryTimeout)
+	defer cancel()
+	if err := a.loopQueue.Enqueue(deliveryCtx, archivist.DefinitionName, "contact:"+mutation.ContactID.String(), 0, raw); err != nil {
 		return fmt.Errorf("enqueue contact dossier refresh: %w", err)
 	}
 	return nil

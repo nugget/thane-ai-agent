@@ -148,8 +148,9 @@ durable queue holds that).
      that UUID; Go derives the canonical ref so never transcribe or construct
      `contacts:<uuid>.md` for `doc_read`. An absent dossier is a successful,
      actionable result: create it once with `contact_dossier_write` and do not
-     retry the unchanged read. For an existing dossier, inspect the response's
-     `truncated` marker. A truncated read is not the whole dossier: use the
+     retry the unchanged read. The response shape is stable in both cases:
+     trust `dossier.exists`, and for an existing dossier inspect
+     `dossier.document.truncated`. A truncated read is not the whole dossier: use the
      returned canonical ref with `doc_outline`, verify that outline is not
      truncated, then recover every top-level section with `doc_section`. If a
      section result is also truncated, descend through its child headings;
@@ -185,6 +186,9 @@ durable queue holds that).
    complete when it failed. When an external prerequisite or incomplete read
    blocks safe completion, call `queue_defer` instead: the item stays durable
    but moves behind all work currently ready to proceed.
+   Go retains the hidden generation receipt from `queue_pull`. If newer
+   evidence for the same subject arrives while you work, a stale ack returns
+   `retained_newer` and leaves that newer generation queued for a later pull.
    Acking means "I am done with this item," not "I created a dossier": a
    session with nothing worth folding is still acked. Unacked items return
    every iteration forever and starve the queue (an empty item at the head

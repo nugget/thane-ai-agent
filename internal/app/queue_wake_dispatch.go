@@ -189,8 +189,16 @@ func (d *queuedWakeDispatcher) drain(partition string) {
 // deliver replays one queued record onto the message bus, then acks it.
 func (d *queuedWakeDispatcher) deliver(partition string, item loopqueue.Item) {
 	ack := func() {
-		if err := d.queue.Ack(context.Background(), partition, item.DedupKey); err != nil {
+		outcome, err := d.queue.Ack(context.Background(), partition, item.DedupKey, item.Generation)
+		if err != nil {
 			d.logger.Warn("queued wake ack failed", "partition", partition, "dedup_key", item.DedupKey, "error", err)
+			return
+		}
+		if outcome == loopqueue.AckSuperseded {
+			d.logger.Debug("queued wake retained newer coalesced generation",
+				"partition", partition,
+				"dedup_key", item.DedupKey,
+			)
 		}
 	}
 

@@ -346,7 +346,7 @@ func registerContactDossierReadTool(r *Registry, contactTools *contacts.Tools) {
 	}
 	r.Register(&Tool{
 		Name:        "contact_dossier_read",
-		Description: "Read or probe one contact's canonical longitudinal dossier. Pass only the canonical contact UUID returned by contact_lookup or contact_owner; Go derives and validates the document ref and records the revision receipt needed for a safe later contact_dossier_write. A contact with no dossier is a successful result that says exactly how to create it. Do not retry an absent dossier read until a write succeeds, and never manually construct contacts:<uuid>.md for doc_read.",
+		Description: "Read or probe one contact's canonical longitudinal dossier. Pass only the canonical contact UUID returned by contact_lookup or contact_owner; Go derives and validates the document ref and records the revision receipt needed for a safe later contact_dossier_write. Every success has the same envelope: dossier.exists is authoritative, dossier.ref is canonical, dossier.document contains the document payload or null, and next_action is null unless absence requires guidance. Do not retry an absent dossier read until a write succeeds, and never manually construct contacts:<uuid>.md for doc_read.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

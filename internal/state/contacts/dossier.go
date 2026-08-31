@@ -113,7 +113,7 @@ func (t *Tools) ReadDossier(ctx context.Context, args DossierReadArgs) (string, 
 	if err != nil {
 		return "", fmt.Errorf("read contact dossier %s: %w", id, err)
 	}
-	return result, nil
+	return marshalDossierPresence(contact, ref, result)
 }
 
 // WriteDossier creates or replaces one contact's canonical longitudinal
@@ -187,30 +187,69 @@ func (t *Tools) resolveDossierContact(rawID string) (*Contact, uuid.UUID, error)
 	return contact, id, nil
 }
 
+type dossierReadResult struct {
+	ContactID   string             `json:"contact_id"`
+	ContactName string             `json:"contact_name"`
+	Dossier     dossierReadState   `json:"dossier"`
+	NextAction  *dossierNextAction `json:"next_action"`
+}
+
+type dossierReadState struct {
+	Exists   bool            `json:"exists"`
+	Ref      string          `json:"ref"`
+	Document json.RawMessage `json:"document"`
+}
+
+type dossierNextAction struct {
+	Tool        string `json:"tool,omitempty"`
+	ContactID   string `json:"contact_id,omitempty"`
+	Instruction string `json:"instruction"`
+}
+
+func marshalDossierPresence(contact *Contact, ref, document string) (string, error) {
+	raw := json.RawMessage(document)
+	if !json.Valid(raw) {
+		return "", fmt.Errorf("contact dossier reader returned invalid JSON for %s", contact.ID)
+	}
+	return marshalDossierReadResult(dossierReadResult{
+		ContactID:   contact.ID.String(),
+		ContactName: contact.FormattedName,
+		Dossier: dossierReadState{
+			Exists:   true,
+			Ref:      ref,
+			Document: raw,
+		},
+	})
+}
+
 func marshalDossierAbsence(contact *Contact, ref string, writable bool) (string, error) {
-	result := map[string]any{
-		"contact_id":   contact.ID.String(),
-		"contact_name": contact.FormattedName,
-		"dossier": map[string]any{
-			"exists": false,
-			"ref":    ref,
+	result := dossierReadResult{
+		ContactID:   contact.ID.String(),
+		ContactName: contact.FormattedName,
+		Dossier: dossierReadState{
+			Exists: false,
+			Ref:    ref,
 		},
 	}
 	if writable {
-		result["next_action"] = map[string]any{
-			"tool":       "contact_dossier_write",
-			"contact_id": contact.ID.String(),
-			"instruction": "Create the dossier with all four projections; do not retry " +
+		result.NextAction = &dossierNextAction{
+			Tool:      "contact_dossier_write",
+			ContactID: contact.ID.String(),
+			Instruction: "Create the dossier with all four projections; do not retry " +
 				"contact_dossier_read until a write succeeds.",
 		}
 	} else {
-		result["next_action"] = map[string]any{
-			"instruction": "No canonical dossier exists and this contact root is read-only; do not retry the read.",
+		result.NextAction = &dossierNextAction{
+			Instruction: "No canonical dossier exists and this contact root is read-only; do not retry the read.",
 		}
 	}
+	return marshalDossierReadResult(result)
+}
+
+func marshalDossierReadResult(result dossierReadResult) (string, error) {
 	raw, err := json.Marshal(result)
 	if err != nil {
-		return "", fmt.Errorf("encode absent contact dossier result: %w", err)
+		return "", fmt.Errorf("encode contact dossier result: %w", err)
 	}
 	return string(raw), nil
 }

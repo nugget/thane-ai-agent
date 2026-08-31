@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -353,7 +352,6 @@ func (t *Tools) saveContact(
 		return fmt.Sprintf("Contact unchanged: **%s** (%s); no dossier refresh was queued", saved.FormattedName, saved.Kind), nil
 	}
 
-	t.generateEmbedding(saved)
 	fields := sortedKeys(changedFields)
 	if notify && t.mutationSink != nil {
 		mutation := ContactMutation{
@@ -367,6 +365,9 @@ func (t *Tools) saveContact(
 			return "", fmt.Errorf("contact write committed for %s but dossier refresh enqueue failed; do not repeat contact_save: %w", saved.ID, err)
 		}
 	}
+	// The durable refresh is part of the authoritative-write contract;
+	// optional embedding maintenance must never delay or prevent it.
+	t.generateEmbedding(saved)
 
 	if created {
 		return fmt.Sprintf("Saved new contact: **%s** (%s)", saved.FormattedName, saved.Kind), nil
@@ -445,7 +446,7 @@ func additiveProperties(facts map[string]string, existing []Property, provenance
 
 func hasProperty(properties []Property, property, value string) bool {
 	for _, candidate := range properties {
-		if candidate.Property == property && strings.EqualFold(candidate.Value, value) {
+		if candidate.Property == property && propertyValueEqual(property, candidate.Value, value) {
 			return true
 		}
 	}
@@ -459,7 +460,36 @@ func propertyValuesEqual(properties []Property, property string, want []string) 
 			got = append(got, candidate.Value)
 		}
 	}
-	return slices.Equal(got, want)
+	if len(got) != len(want) {
+		return false
+	}
+	matched := make([]bool, len(want))
+	for _, actual := range got {
+		found := false
+		for i, expected := range want {
+			if !matched[i] && propertyValueEqual(property, actual, expected) {
+				matched[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// propertyValueEqual is the single equality contract for model-authored
+// properties, whether they arrive through additive facts or replace-style
+// origin fields. Existing additive contact facts are case-insensitive;
+// document refs remain byte-exact because case can select a different path on
+// a case-sensitive root.
+func propertyValueEqual(property, left, right string) bool {
+	if property == PropertyOriginContextRef {
+		return left == right
+	}
+	return strings.EqualFold(left, right)
 }
 
 func sortedKeys(values map[string]struct{}) []string {

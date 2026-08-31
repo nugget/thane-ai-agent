@@ -212,6 +212,25 @@ func TestEnqueueContactDossierRefreshCoalescesByContact(t *testing.T) {
 	}
 }
 
+func TestEnqueueContactDossierRefreshSurvivesRequestCancellation(t *testing.T) {
+	a, store := newQueueTestApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
+	err := a.enqueueContactDossierRefresh(ctx, contacts.ContactMutation{
+		ContactID:   id,
+		ContactName: "Canceled Request Contact",
+		Fields:      []string{"note"},
+	})
+	if err != nil {
+		t.Fatalf("detached contact refresh enqueue: %v", err)
+	}
+	items, err := store.Peek(context.Background(), archivist.DefinitionName, 1)
+	if err != nil || len(items) != 1 || items[0].DedupKey != "contact:"+id.String() {
+		t.Fatalf("durable refresh after cancellation: items=%#v err=%v", items, err)
+	}
+}
+
 // TestEnqueueSessionCloseWork_SkipsAutomationOrigins verifies the archival
 // policy (issue #1024): sessions from autonomous/automation/auxiliary origins
 // are not enqueued for the archivist, so it isn't drowned in service-loop and

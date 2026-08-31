@@ -786,14 +786,11 @@ func (s *Store) applyContactSave(
 	}
 
 	for _, p := range additions {
-		var exists int
-		if err := tx.QueryRow(`
-			SELECT COUNT(*) FROM contact_properties
-			WHERE contact_id = ? AND property = ? AND LOWER(value) = LOWER(?)
-		`, c.ID.String(), p.Property, p.Value).Scan(&exists); err != nil {
+		exists, err := propertyExistsTx(tx, c.ID, p.Property, p.Value)
+		if err != nil {
 			return nil, false, fmt.Errorf("check existing property %s: %w", p.Property, err)
 		}
-		if exists > 0 {
+		if exists {
 			continue
 		}
 		if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
@@ -818,6 +815,31 @@ func (s *Store) applyContactSave(
 	}
 	s.rebuildFTS()
 	return c, true, nil
+}
+
+func propertyExistsTx(tx *sql.Tx, contactID uuid.UUID, property, value string) (bool, error) {
+	rows, err := tx.Query(`
+		SELECT value FROM contact_properties
+		WHERE contact_id = ? AND property = ?
+	`, contactID.String(), property)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var candidate string
+		if err := rows.Scan(&candidate); err != nil {
+			return false, err
+		}
+		if propertyValueEqual(property, candidate, value) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // Delete soft-deletes a contact by ID.

@@ -21,6 +21,15 @@ type fakeEmbedder struct {
 	err       error
 }
 
+type callbackEmbedder struct {
+	generate func()
+}
+
+func (e *callbackEmbedder) Generate(_ context.Context, _ string) ([]float32, error) {
+	e.generate()
+	return []float32{0.25}, nil
+}
+
 func (f *fakeEmbedder) Generate(_ context.Context, _ string) ([]float32, error) {
 	return f.embedding, f.err
 }
@@ -145,7 +154,8 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 	result, err := tools.SaveContactFromModel(context.Background(), `{
 		"name":"Provenance Person",
 		"kind":"individual",
-		"facts":{"email":"person@example.com","timezone":"America/Chicago"}
+		"facts":{"email":"person@example.com","timezone":"America/Chicago"},
+		"origin_tags":["signal","projects"]
 	}`, provenance)
 	if err != nil {
 		t.Fatalf("SaveContactFromModel() error = %v", err)
@@ -156,7 +166,7 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 	if len(mutations) != 1 {
 		t.Fatalf("mutation calls = %d, want 1", len(mutations))
 	}
-	wantFields := []string{"formatted_name", "kind", "property:EMAIL", "property:timezone"}
+	wantFields := []string{"formatted_name", "kind", "property:EMAIL", "property:X-THANE-ORIGIN-TAG", "property:timezone"}
 	if !reflect.DeepEqual(mutations[0].Fields, wantFields) {
 		t.Errorf("mutation fields = %#v, want %#v", mutations[0].Fields, wantFields)
 	}
@@ -172,8 +182,8 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(properties) != 2 {
-		t.Fatalf("properties = %#v, want 2", properties)
+	if len(properties) != 4 {
+		t.Fatalf("properties = %#v, want 4", properties)
 	}
 	for _, property := range properties {
 		if !reflect.DeepEqual(property.Provenance, provenance) {
@@ -185,7 +195,8 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 	result, err = tools.SaveContactFromModel(context.Background(), `{
 		"name":"Provenance Person",
 		"kind":"individual",
-		"facts":{"email":"person@example.com","timezone":"America/Chicago"}
+		"facts":{"email":"PERSON@example.com","timezone":"america/chicago"},
+		"origin_tags":["PROJECTS","SIGNAL"]
 	}`, newer)
 	if err != nil {
 		t.Fatalf("repeated SaveContactFromModel() error = %v", err)
@@ -531,6 +542,24 @@ func TestSaveContact_WithEmbedding(t *testing.T) {
 	}
 	if len(contacts) != 1 || contacts[0].ID != c.ID {
 		t.Error("expected semantic search to find the contact with embedding")
+	}
+}
+
+func TestSaveContactFromModelQueuesRefreshBeforeEmbedding(t *testing.T) {
+	var order []string
+	tools := NewTools(newTestStore(t), func(context.Context, ContactMutation) error {
+		order = append(order, "refresh")
+		return nil
+	})
+	tools.SetEmbeddingClient(&callbackEmbedder{generate: func() {
+		order = append(order, "embedding")
+	}})
+
+	if _, err := tools.SaveContactFromModel(t.Context(), `{"name":"Ordered Contact","kind":"individual"}`, &PropertyProvenance{Source: "contact_save"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"refresh", "embedding"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("post-commit order = %#v, want %#v", order, want)
 	}
 }
 

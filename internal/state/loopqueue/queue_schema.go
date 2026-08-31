@@ -24,6 +24,11 @@ var queueSchema = database.Schema{
 				PRIMARY KEY (consumer_loop, dedup_key)
 			)`,
 		},
+		// generation is the queue's hidden read receipt. Every coalescing
+		// Enqueue advances it so a consumer can acknowledge only the exact
+		// payload generation it actually processed; legacy pending rows begin
+		// at generation 1.
+		database.ColumnAdd{Table: "loop_queue", Column: "generation", Typedef: "INTEGER NOT NULL DEFAULT 1"},
 		database.IndexCreate{
 			Name: "idx_loop_queue_drain",
 			// Supports the per-partition drain query: pending items for

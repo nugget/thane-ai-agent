@@ -159,10 +159,11 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 		"complete status-line, teaser, digest, and full projections",
 		"archive:session:<full-session-uuid>",
 		"never an 8-character prefix",
-		"response's `truncated` marker",
+		"`dossier.document.truncated`",
 		"use the returned canonical ref with `doc_outline`, verify that outline is not truncated",
 		"recover every top-level section with `doc_section`",
 		"call `queue_defer`",
+		"a stale ack returns `retained_newer`",
 	} {
 		if !strings.Contains(normalizedTask, want) {
 			t.Errorf("archivist task does not teach %q", want)

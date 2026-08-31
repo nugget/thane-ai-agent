@@ -75,10 +75,12 @@ func TestContactDossierReadToolOwnsRefAndMakesAbsenceActionable(t *testing.T) {
 		t.Errorf("receipt scope = %q, want %q", got, want)
 	}
 	var decoded struct {
-		ContactID string `json:"contact_id"`
-		Dossier   struct {
-			Exists bool   `json:"exists"`
-			Ref    string `json:"ref"`
+		ContactID   string `json:"contact_id"`
+		ContactName string `json:"contact_name"`
+		Dossier     struct {
+			Exists   bool            `json:"exists"`
+			Ref      string          `json:"ref"`
+			Document json.RawMessage `json:"document"`
 		} `json:"dossier"`
 		NextAction struct {
 			Tool        string `json:"tool"`
@@ -91,6 +93,9 @@ func TestContactDossierReadToolOwnsRefAndMakesAbsenceActionable(t *testing.T) {
 	}
 	if decoded.ContactID != contact.ID.String() || decoded.Dossier.Exists || decoded.Dossier.Ref != contacts.DossierRef(contact.ID) {
 		t.Errorf("absence result = %#v", decoded)
+	}
+	if decoded.ContactName != contact.FormattedName || string(decoded.Dossier.Document) != "null" {
+		t.Errorf("absence envelope = %#v, want stable identity and null document", decoded)
 	}
 	if decoded.NextAction.Tool != "contact_dossier_write" || decoded.NextAction.ContactID != contact.ID.String() {
 		t.Errorf("next action = %#v, want exact dossier write", decoded.NextAction)
@@ -151,7 +156,7 @@ func TestContactDossierReadToolReturnsExistingDocumentPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := &contactDossierReaderRecorder{result: `{"ref":"contacts:existing.md","content":"current"}`}
+	reader := &contactDossierReaderRecorder{result: `{"ref":"contacts:existing.md","body":"current","word_count":1}`}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, false)
 	contactTools.ConfigureDossierDocuments(reader.Read, nil)
@@ -164,8 +169,24 @@ func TestContactDossierReadToolReturnsExistingDocumentPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != reader.result {
-		t.Fatalf("existing dossier result = %q, want %q", result, reader.result)
+	var decoded struct {
+		ContactID   string `json:"contact_id"`
+		ContactName string `json:"contact_name"`
+		Dossier     struct {
+			Exists   bool            `json:"exists"`
+			Ref      string          `json:"ref"`
+			Document json.RawMessage `json:"document"`
+		} `json:"dossier"`
+		NextAction json.RawMessage `json:"next_action"`
+	}
+	if err := json.Unmarshal([]byte(result), &decoded); err != nil {
+		t.Fatalf("decode existing result: %v", err)
+	}
+	if decoded.ContactID != contact.ID.String() || decoded.ContactName != contact.FormattedName || !decoded.Dossier.Exists || decoded.Dossier.Ref != contacts.DossierRef(contact.ID) {
+		t.Fatalf("existing dossier envelope = %#v", decoded)
+	}
+	if string(decoded.Dossier.Document) != reader.result || string(decoded.NextAction) != "null" {
+		t.Fatalf("existing dossier payload = %s next_action=%s", decoded.Dossier.Document, decoded.NextAction)
 	}
 }
 
