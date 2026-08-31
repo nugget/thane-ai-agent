@@ -335,9 +335,9 @@ type channelPolicy struct {
 }
 
 // coreRootPolicy carries one generated document-root declaration. Core emits
-// only seed_signers; contacts also emits its managed authoring, exact-subject
-// context, and signed-history policy so a fresh instance has a complete
-// dossier root without post-init path surgery.
+// only seed_signers; the dossier roots also emit their managed authoring and
+// signed-history policy so a fresh instance has complete roots without
+// post-init path surgery. Contacts additionally advertises exact subjects.
 type coreRootPolicy struct {
 	Authoring   string                `yaml:"authoring,omitempty"`
 	Context     coreRootContextPolicy `yaml:"context,omitempty"`
@@ -384,11 +384,20 @@ func coreSeedDeclaration(signing *SigningKeyPair, operator *OperatorSigner) core
 }
 
 func contactsRootDeclaration(signing *SigningKeyPair) coreRootPolicy {
+	policy := managedDossierRootDeclaration(signing)
+	policy.Context = coreRootContextPolicy{
+		Advertise: "exact_subject",
+	}
+	return policy
+}
+
+func dossiersRootDeclaration(signing *SigningKeyPair) coreRootPolicy {
+	return managedDossierRootDeclaration(signing)
+}
+
+func managedDossierRootDeclaration(signing *SigningKeyPair) coreRootPolicy {
 	return coreRootPolicy{
 		Authoring: "managed",
-		Context: coreRootContextPolicy{
-			Advertise: "exact_subject",
-		},
 		SeedSigners: []coreSeedSigner{{
 			Principal: provenance.AgentPrincipal,
 			Key:       strings.TrimSpace(signing.Public),
@@ -408,6 +417,7 @@ func renderCoreConfig(instanceName string, generatedAt time.Time, signing *Signi
 		Roots: map[string]coreRootPolicy{
 			"core":     coreSeedDeclaration(signing, operator),
 			"contacts": contactsRootDeclaration(signing),
+			"dossiers": dossiersRootDeclaration(signing),
 		},
 		Version:     1,
 		GeneratedAt: generatedAt.Format(time.RFC3339),

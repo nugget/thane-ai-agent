@@ -38,6 +38,7 @@ func TestCheckRootAdmissionReportsMissingDerivedRoots(t *testing.T) {
 			config.CoreRootName:     signedRoot(),
 			config.SelfRootName:     signedRoot(),
 			config.ContactsRootName: signedRoot(),
+			config.DossiersRootName: signedRoot(),
 		},
 	}
 
@@ -48,7 +49,7 @@ func TestCheckRootAdmissionReportsMissingDerivedRoots(t *testing.T) {
 		byRoot[r.Root] = r
 	}
 
-	for _, root := range []string{config.CoreRootName, config.SelfRootName, config.ContactsRootName} {
+	for _, root := range []string{config.CoreRootName, config.SelfRootName, config.ContactsRootName, config.DossiersRootName} {
 		t.Run(root, func(t *testing.T) {
 			got, ok := byRoot[root]
 			if !ok {

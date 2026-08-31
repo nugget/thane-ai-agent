@@ -147,7 +147,9 @@ func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
 	for _, want := range []string{
 		"contacts:<uuid>.md",
 		"contact_dossier_write",
-		"Never create or maintain a contact dossier under `kb:dossiers/`",
+		"Never create or maintain a contact dossier under `dossiers:`",
+		"`dossiers:entity-binary_sensor-game_room_door.md`",
+		"retired `kb:dossiers/` namespace",
 		"complete status-line, teaser, digest, and full projections",
 		"archive:session:<full-session-uuid>",
 		"never an 8-character prefix",

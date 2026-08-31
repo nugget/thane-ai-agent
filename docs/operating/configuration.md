@@ -278,8 +278,16 @@ roots:
       verify_signatures: warn
       signing_key: ~/.ssh/id_ed25519
   dossiers:
-    path: ~/Vaults/private-dossiers
-    authoring: read_only
+    authoring: managed
+    seed_signers:
+      - principal: thane@provenance.local
+        key: "ssh-ed25519 AAAA..." # public half of git.signing_key
+        label: agent
+    git:
+      enabled: true
+      sign_commits: true
+      verify_signatures: required
+      signing_key: core:identity/signing_ed25519
   scratchpad:
     path: ~/Thane/scratchpad
     indexing: false
@@ -296,6 +304,13 @@ string when it needs no policy beyond its path:
 roots:
   kb: ~/Thane/knowledge
 ```
+
+`core`, `self`, `contacts`, and `dossiers` are reserved roots whose paths
+are derived from `workspace.path`. Declare `contacts` or `dossiers` with policy
+to enable it, but do not give either a path. They resolve to
+`{workspace}/contacts` and `{workspace}/dossiers` respectively. An explicit
+`dossiers` path is rejected with a migration recipe instead of being silently
+discarded.
 
 > **Deprecated:** the older `paths:` / `doc_roots:` split — one block to
 > name the path, a second to attach policy — is still parsed but emits a
@@ -354,7 +369,7 @@ Good uses for custom roots:
 - knowledge bases
 - scratch work you want to revisit
 - generated reports
-- dossiers
+- custom private note collections
 - imported research notes
 
 See [Document Roots](../understanding/document-roots.md) for the fuller

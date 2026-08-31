@@ -10,7 +10,8 @@ tell Thane which local collections matter.
 roots:
   kb: ./knowledge
   scratchpad: ./scratchpad
-  dossiers: ~/Vaults/private-dossiers
+  dossiers:
+    authoring: managed
 ```
 
 > The legacy `paths:` / `doc_roots:` split is still parsed with a
@@ -20,7 +21,9 @@ roots:
 Each entry gives a directory a stable identity. Instead of treating your
 files as one anonymous pile, Thane can understand that some notes live
 in a knowledge base, some are scratch work, and some belong to a more
-private long-form collection.
+private long-form collection. Most roots declare their path. The reserved
+`dossiers` root above takes its path from the workspace and is enabled by
+declaring its policy.
 
 ## Why This Helps
 
@@ -75,7 +78,7 @@ Example:
 roots:
   kb: ~/Thane/knowledge
   scratchpad: ~/Thane/scratchpad
-  dossiers: ~/Vaults/private-dossiers
+  private_notes: ~/Vaults/private-notes
   research: ~/Work/research-notes
 ```
 
@@ -455,11 +458,14 @@ policy in one subsystem.
 
 ## Special Case: the Derived Roots
 
-Three root names are reserved: `core`, `self`, and `contacts`. Their paths come
-from the workspace, and none takes a path from `roots:`. You may name them
-there to set policy; a path given alongside policy is ignored. `core` and
-`self` are always registered. `contacts` is opt-in and is registered only when
-its policy is declared.
+Four root names are reserved: `core`, `self`, `contacts`, and `dossiers`. Their
+paths come from the workspace, and none takes a path from `roots:`. You may name
+them there to set policy. Paths on `core`, `self`, and `contacts` are ignored
+for compatibility. An explicit `dossiers` path is rejected with instructions
+to move or clone the corpus to `{workspace}/dossiers`, preventing an upgrade
+from silently redirecting an existing custom root. `core` and `self` are always
+registered. `contacts` and `dossiers` are opt-in and are registered only when
+their policy is declared.
 
 `core` and `self` are separate roots because they answer to different
 authorities, and that difference is the whole point of their split.
@@ -494,6 +500,13 @@ Both are always registered because the core service loops write `self` on
 every install. A root an operator had to remember to declare would leave a
 fresh install with nowhere for those documents to land.
 
+`contacts` and `dossiers` are opt-in because not every instance enables the
+archivist's longitudinal documents. When declared, their fixed sibling paths
+are `{workspace}/contacts` and `{workspace}/dossiers`. A fresh `thane init`
+declares and establishes both as managed, signed roots. Existing instances can
+adopt either independently by adding its policy and restoring or initializing
+the repository at that derived path.
+
 ### Contact dossiers
 
 `contacts` is the optional longitudinal document side of the structured
@@ -521,10 +534,12 @@ should not author dossier structure through them.
 The archivist uses the same contract-owned door. Contact-shaped queue subjects
 and contact evidence discovered in closed sessions are resolved through the
 structured directory, reconciled with the existing canonical dossier, and
-republished through `contact_dossier_write`. The generic `kb:dossiers/`
-namespace remains the home for entities, areas, routines, and themes; it is
-never a fallback location for a contact, because that would split one person's
-history across two document roots. Before replacement, the archivist checks
+republished through `contact_dossier_write`. The separate `dossiers:` root is
+the home for entities, areas, routines, and themes; it is never a fallback
+location for a contact, because that would split one person's history across
+two document roots. The legacy `kb:dossiers/` namespace is retired once its
+documents have moved to `dossiers:` and must not remain indexed alongside the
+new root. Before replacement, the archivist checks
 whether `doc_read` truncated the current dossier and walks its outline and
 sections when necessary. An unreadable remainder or unavailable canonical
 writer defers the durable queue item behind ready work rather than losing it or

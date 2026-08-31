@@ -33,11 +33,11 @@ func (a *App) initAgentLoop(s *newState) error {
 	// LoopOptions instead of post-construction setters.
 	if cfg.Workspace.Path != "" {
 		cfg.Paths = documentRootPaths(cfg, logger)
-		// Core and self are created on every install; contacts joins them
-		// when its canonical dossier policy is declared. Creating derived
+		// Core and self are created on every install; contacts and dossiers
+		// join them when their dossier policies are declared. Creating derived
 		// roots before resolver construction keeps policy and filesystem
 		// identity from depending on which subsystem happens to write first.
-		for _, root := range []string{config.CoreRootName, config.SelfRootName, config.ContactsRootName} {
+		for _, root := range []string{config.CoreRootName, config.SelfRootName, config.ContactsRootName, config.DossiersRootName} {
 			path := cfg.Paths[root]
 			if strings.TrimSpace(path) == "" {
 				continue
