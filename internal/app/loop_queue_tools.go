@@ -68,7 +68,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				now := time.Now().UTC()
 				views := make([]queueItemView, 0, len(items))
 				for _, it := range items {
-					receipts.remember(it.DedupKey, it.Generation)
+					receipts.remember(it.DedupKey, it.Receipt)
 					source, summary := projectQueuePayload(it.Payload)
 					views = append(views, queueItemView{
 						Subject:  it.DedupKey,
@@ -83,8 +83,8 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 		},
 		{
 			Name: "queue_ack",
-			Description: "Mark a queue item done and remove the exact generation returned by queue_pull. Pass only its subject; Go retains the hidden generation receipt. " +
-				"If newer evidence arrived while you worked, that newer generation remains queued and the result tells you to pull it later. Acking a subject that is no longer queued is harmless. Ack only after its evidence is durably folded or you made an evidence-based no-change decision; use queue_defer when an external prerequisite blocks completion.",
+			Description: "Mark a queue item done and remove the exact item returned by queue_pull. Pass only its subject; Go retains a hidden one-shot receipt and discards it after acknowledgement. " +
+				"If newer evidence arrived while you worked, that newer item remains queued and the result tells you to pull it later. Ack only after its evidence is durably folded or you made an evidence-based no-change decision; use queue_defer when an external prerequisite blocks completion.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -101,24 +101,22 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				if subject == "" {
 					return "", fmt.Errorf("subject is required")
 				}
-				generation, ok := receipts.generation(subject)
+				receipt, ok := receipts.receipt(subject)
 				if !ok {
 					return "", fmt.Errorf("subject %q has no receipt from queue_pull in this loop run; call queue_pull before queue_ack", subject)
 				}
-				outcome, err := store.Ack(ctx, loopName, subject, generation)
+				outcome, err := store.Ack(ctx, loopName, subject, receipt)
 				if err != nil {
 					return "", err
 				}
+				receipts.forget(subject, receipt)
 				switch outcome {
 				case loopqueue.Acked:
-					receipts.complete(subject, generation)
 					return fmt.Sprintf(`{"status":"ok","subject":%q}`, subject), nil
 				case loopqueue.AckMissing:
-					receipts.complete(subject, generation)
 					return fmt.Sprintf(`{"status":"already_acknowledged","subject":%q}`, subject), nil
 				case loopqueue.AckSuperseded:
-					receipts.forget(subject, generation)
-					return fmt.Sprintf(`{"status":"retained_newer","subject":%q,"instruction":"Newer evidence arrived while this generation was being processed. The newer item remains queued; call queue_pull before handling it."}`, subject), nil
+					return fmt.Sprintf(`{"status":"retained_newer","subject":%q,"instruction":"Newer evidence arrived while this item was being processed. The newer item remains queued; call queue_pull before handling it."}`, subject), nil
 				default:
 					return "", fmt.Errorf("unexpected queue acknowledgement outcome %q", outcome)
 				}
@@ -206,50 +204,35 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 	}
 }
 
-type queueReceipt struct {
-	generation int64
-	complete   bool
-}
-
 type queueReceipts struct {
 	mu        sync.Mutex
-	bySubject map[string]queueReceipt
+	bySubject map[string]string
 }
 
 func newQueueReceipts() *queueReceipts {
-	return &queueReceipts{bySubject: make(map[string]queueReceipt)}
+	return &queueReceipts{bySubject: make(map[string]string)}
 }
 
-func (r *queueReceipts) remember(subject string, generation int64) {
+func (r *queueReceipts) remember(subject, receipt string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, ok := r.bySubject[subject]
-	if ok && !current.complete {
+	if _, ok := r.bySubject[subject]; ok {
 		return
 	}
-	r.bySubject[subject] = queueReceipt{generation: generation}
+	r.bySubject[subject] = receipt
 }
 
-func (r *queueReceipts) generation(subject string) (int64, bool) {
+func (r *queueReceipts) receipt(subject string) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	receipt, ok := r.bySubject[subject]
-	return receipt.generation, ok
+	return receipt, ok
 }
 
-func (r *queueReceipts) complete(subject string, generation int64) {
+func (r *queueReceipts) forget(subject, expectedReceipt string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if receipt, ok := r.bySubject[subject]; ok && receipt.generation == generation {
-		receipt.complete = true
-		r.bySubject[subject] = receipt
-	}
-}
-
-func (r *queueReceipts) forget(subject string, generation int64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if receipt, ok := r.bySubject[subject]; ok && receipt.generation == generation {
+	if receipt, ok := r.bySubject[subject]; ok && receipt == expectedReceipt {
 		delete(r.bySubject, subject)
 	}
 }

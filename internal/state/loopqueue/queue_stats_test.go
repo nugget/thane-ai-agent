@@ -28,14 +28,14 @@ func TestAckJournalsExactlyOnce(t *testing.T) {
 	if err := s.Enqueue(ctx, "archivist", "session:a", 3, []byte(`{}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	generation := ackPending(t, s, "archivist", "session:a")
+	receipt := ackPending(t, s, "archivist", "session:a")
 	if got := completionCount(t, s, "archivist"); got != 1 {
 		t.Fatalf("completions after ack = %d, want 1", got)
 	}
 
 	// Re-acking the same key is idempotent for the queue AND for the
 	// journal: no phantom completion rows, no double-counted throughput.
-	if outcome, err := s.Ack(ctx, "archivist", "session:a", generation); err != nil || outcome != AckMissing {
+	if outcome, err := s.Ack(ctx, "archivist", "session:a", receipt); err != nil || outcome != AckMissing {
 		t.Fatalf("re-ack outcome=%q err=%v", outcome, err)
 	}
 	if got := completionCount(t, s, "archivist"); got != 1 {

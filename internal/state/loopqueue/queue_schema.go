@@ -24,11 +24,21 @@ var queueSchema = database.Schema{
 				PRIMARY KEY (consumer_loop, dedup_key)
 			)`,
 		},
-		// generation is the queue's hidden read receipt. Every coalescing
-		// Enqueue advances it so a consumer can acknowledge only the exact
-		// payload generation it actually processed; legacy pending rows begin
-		// at generation 1.
-		database.ColumnAdd{Table: "loop_queue", Column: "generation", Typedef: "INTEGER NOT NULL DEFAULT 1"},
+		// receipt is the queue's hidden read receipt. Every Enqueue writes a
+		// new opaque value, including an insert after an earlier row with the
+		// same key was acknowledged and deleted, so delayed acknowledgements
+		// can never match later work.
+		database.ColumnAdd{Table: "loop_queue", Column: "receipt", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.Raw{
+			Description: "seed receipts for legacy pending loop queue rows",
+			SQL: `UPDATE loop_queue
+				SET receipt = lower(hex(randomblob(16)))
+				WHERE receipt = ''`,
+		},
+		database.IndexCreate{
+			Name: "idx_loop_queue_receipt_unique",
+			SQL:  `CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_queue_receipt_unique ON loop_queue(receipt)`,
+		},
 		database.IndexCreate{
 			Name: "idx_loop_queue_drain",
 			// Supports the per-partition drain query: pending items for

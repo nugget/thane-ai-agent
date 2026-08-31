@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -65,5 +66,29 @@ func TestContactSaveToolStampsCurrentTurnProvenance(t *testing.T) {
 	}
 	if len(properties) != 1 || !reflect.DeepEqual(properties[0].Provenance, want) {
 		t.Fatalf("stored property provenance = %#v, want %#v", properties, want)
+	}
+}
+
+func TestContactSaveDescriptionReflectsArchivistRefreshWiring(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := contacts.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutRefresh := NewEmptyRegistry()
+	withoutRefresh.SetContactTools(contacts.NewTools(store, nil))
+	if description := withoutRefresh.Get("contact_save").Description; !strings.Contains(description, "No archivist refresh consumer is enabled") || strings.Contains(description, "A committed change is queued once") {
+		t.Fatalf("unwired contact_save description = %q", description)
+	}
+
+	withRefresh := NewEmptyRegistry()
+	withRefresh.SetContactTools(contacts.NewTools(store, func(context.Context, contacts.ContactMutation) error { return nil }))
+	if description := withRefresh.Get("contact_save").Description; !strings.Contains(description, "A committed change is queued once") || strings.Contains(description, "No archivist refresh consumer is enabled") {
+		t.Fatalf("wired contact_save description = %q", description)
 	}
 }

@@ -21,10 +21,16 @@ func (r *Registry) registerContactTools() {
 	if r.contactTools == nil {
 		return
 	}
+	saveDescription := "Store or update structured identity for a person, organization, or group. Properties should be compact personal attributes such as communication coordinates, aliases, roles, and stable preferences. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Evolving person-specific relationship or collaboration synthesis belongs in contact_dossier_write when available; project knowledge, technical decisions, and other non-person knowledge belong in remember_fact or documents. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field."
+	if r.contactTools.ContactRefreshesEnabled() {
+		saveDescription += " A committed change is queued once for later archivist dossier reconsideration; an identical no-op is not, so do not duplicate structured identity into dossier prose."
+	} else {
+		saveDescription += " No archivist refresh consumer is enabled in this runtime, so committed changes are not queued for dossier reconsideration; do not duplicate structured identity into dossier prose."
+	}
 
 	r.Register(&Tool{
 		Name:        "contact_save",
-		Description: "Store or update structured identity for a person, organization, or group. Properties should be compact personal attributes such as communication coordinates, aliases, roles, and stable preferences. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Evolving person-specific relationship or collaboration synthesis belongs in contact_dossier_write when available; project knowledge, technical decisions, and other non-person knowledge belong in remember_fact or documents. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field. A committed change is queued once for later archivist dossier reconsideration; an identical no-op is not, so do not duplicate structured identity into dossier prose.",
+		Description: saveDescription,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

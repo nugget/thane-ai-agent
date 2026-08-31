@@ -155,7 +155,7 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 		"name":"Provenance Person",
 		"kind":"individual",
 		"facts":{"email":"person@example.com","timezone":"America/Chicago"},
-		"origin_tags":["signal","projects"]
+		"origin_tags":["signal","SIGNAL","projects"]
 	}`, provenance)
 	if err != nil {
 		t.Fatalf("SaveContactFromModel() error = %v", err)

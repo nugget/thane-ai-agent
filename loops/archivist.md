@@ -186,9 +186,9 @@ durable queue holds that).
    complete when it failed. When an external prerequisite or incomplete read
    blocks safe completion, call `queue_defer` instead: the item stays durable
    but moves behind all work currently ready to proceed.
-   Go retains the hidden generation receipt from `queue_pull`. If newer
-   evidence for the same subject arrives while you work, a stale ack returns
-   `retained_newer` and leaves that newer generation queued for a later pull.
+   Go retains a hidden one-shot receipt from `queue_pull`. If newer evidence
+   for the same subject arrives while you work, a stale ack returns
+   `retained_newer` and leaves that newer item queued for a later pull.
    Acking means "I am done with this item," not "I created a dossier": a
    session with nothing worth folding is still acked. Unacked items return
    every iteration forever and starve the queue (an empty item at the head

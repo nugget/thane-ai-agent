@@ -72,6 +72,12 @@ func NewTools(store *Store, mutationSink func(context.Context, ContactMutation) 
 	return &Tools{store: store, mutationSink: mutationSink}
 }
 
+// ContactRefreshesEnabled reports whether committed model-authored changes
+// have a configured downstream dossier-refresh consumer.
+func (t *Tools) ContactRefreshesEnabled() bool {
+	return t != nil && t.mutationSink != nil
+}
+
 // SetEmbeddingClient sets the embedding client for semantic search.
 func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 	t.embeddings = client
@@ -327,7 +333,7 @@ func (t *Tools) saveContact(
 		if provided == nil {
 			return
 		}
-		values := cleanOriginValues(provided)
+		values := cleanReplacementValues(property, provided)
 		if propertyValuesEqual(contact.Properties, property, values) {
 			return
 		}
@@ -478,6 +484,27 @@ func propertyValuesEqual(properties []Property, property string, want []string) 
 		}
 	}
 	return true
+}
+
+func cleanReplacementValues(property string, values []string) []string {
+	cleaned := cleanOriginValues(values)
+	if len(cleaned) < 2 {
+		return cleaned
+	}
+	deduplicated := make([]string, 0, len(cleaned))
+	for _, value := range cleaned {
+		duplicate := false
+		for _, existing := range deduplicated {
+			if propertyValueEqual(property, existing, value) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			deduplicated = append(deduplicated, value)
+		}
+	}
+	return deduplicated
 }
 
 // propertyValueEqual is the single equality contract for model-authored
