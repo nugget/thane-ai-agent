@@ -583,10 +583,17 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 		return
 	}
 
-	// Skip built-in keys that are already stored as dedicated fields.
-	switch key {
-	case slog.TimeKey, slog.LevelKey, slog.MessageKey, slog.SourceKey:
-		return
+	// Skip top-level keys that collide with the record's own dedicated
+	// fields. slog.SourceKey is deliberately NOT here: built-in source
+	// location arrives via record.PC (stored as source_file/source_line),
+	// never as an attr, so an attr literally named "source" can only be
+	// caller data — eating it silently destroyed the discriminator on
+	// several production warns before this was understood.
+	if len(groups) == 0 {
+		switch key {
+		case slog.TimeKey, slog.LevelKey, slog.MessageKey:
+			return
+		}
 	}
 
 	extras[qualifiedKey] = attrValue(a)

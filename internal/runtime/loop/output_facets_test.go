@@ -188,6 +188,24 @@ func TestValidateFacetPayloadRejectsUnfacetedOutput(t *testing.T) {
 	}
 }
 
+func TestValidateFacetPayloadReportsEveryFieldViolation(t *testing.T) {
+	output := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
+	err := output.ValidateFacetPayload(FacetPayload{
+		StatusLine: strings.Repeat("s", statusLineMaxRunes+1),
+		Teaser:     "Useful hook.",
+		Digest:     strings.Repeat("d", digestMaxRunes+1),
+		Full:       "Complete detail.",
+	})
+	if err == nil {
+		t.Fatal("multiple over-budget projections should refuse")
+	}
+	for _, want := range []string{"status_line is 121 characters", "digest is 2049 characters"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("aggregate error = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
 func TestRenderFacetDocumentUsesCanonicalSections(t *testing.T) {
 	out := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser)
 	body := out.RenderFacetDocument(FacetPayload{

@@ -2,6 +2,7 @@ package loop
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -197,13 +198,14 @@ func (o OutputSpec) HasFacets() bool {
 }
 
 // ValidateFacetPayload checks one payload against the output's declared
-// ladder. Errors name the field, the limit, and the observed size so the
-// model can correct the offending projection in one more attempt without
-// re-deriving the whole payload.
+// ladder. Its error names every independently correctable field violation so
+// the model can repair the whole payload in one retry without serially
+// rediscovering the contract.
 func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 	if !o.HasFacets() {
 		return fmt.Errorf("output %q does not declare facets", o.Name)
 	}
+	var validationErrors []error
 	for _, field := range o.FacetFields() {
 		section, ok := facetSectionByKey(field.Key)
 		if !ok {
@@ -211,21 +213,22 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 		}
 		value := strings.TrimSpace(*section.value(&payload))
 		if value == "" {
-			return fmt.Errorf("%s is required; every declared projection is published together so they cannot describe different moments", field.Key)
+			validationErrors = append(validationErrors, fmt.Errorf("%s is required; every declared projection is published together so they cannot describe different moments", field.Key))
+			continue
 		}
 		if err := validateFacetFormat(field, value); err != nil {
-			return err
+			validationErrors = append(validationErrors, err)
 		}
 		if field.SingleLine && strings.ContainsAny(value, "\r\n") {
-			return fmt.Errorf("%s must be a single line with no line breaks; it renders as one row on surfaces that show nothing else", field.Key)
+			validationErrors = append(validationErrors, fmt.Errorf("%s must be a single line with no line breaks; it renders as one row on surfaces that show nothing else", field.Key))
 		}
 		if field.MaxRunes > 0 {
 			if runes := utf8.RuneCountInString(value); runes > field.MaxRunes {
-				return fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than letting it be cut, because a clipped projection reads as a fragment with no sign that anything is missing", field.Key, runes, field.MaxRunes)
+				validationErrors = append(validationErrors, fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than letting it be cut, because a clipped projection reads as a fragment with no sign that anything is missing", field.Key, runes, field.MaxRunes))
 			}
 		}
 		if heading, found := firstReservedFacetHeading(value); found {
-			return fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
+			validationErrors = append(validationErrors, fmt.Errorf("%s contains the reserved section heading %q; the facet headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading))
 		}
 	}
 	// The full projection is the document's substance and the only
@@ -235,11 +238,18 @@ func (o OutputSpec) ValidateFacetPayload(payload FacetPayload) error {
 	// whole — the projections and their headings render into one body,
 	// and a full sitting exactly at the ceiling would put the composite
 	// over it.
+	fullTooLarge := false
 	if err := ValidateOutputBodySize(payload.Full); err != nil {
-		return fmt.Errorf("full: %w", err)
+		validationErrors = append(validationErrors, fmt.Errorf("full: %w", err))
+		fullTooLarge = true
 	}
-	if err := ValidateOutputBodySize(o.RenderFacetDocument(payload)); err != nil {
-		return fmt.Errorf("the rendered document (every projection plus its headings): %w — full is the lever; the other projections are already budget-capped", err)
+	if !fullTooLarge {
+		if err := ValidateOutputBodySize(o.RenderFacetDocument(payload)); err != nil {
+			validationErrors = append(validationErrors, fmt.Errorf("the rendered document (every projection plus its headings): %w — full is the lever; the other projections are already budget-capped", err))
+		}
+	}
+	if len(validationErrors) > 0 {
+		return errors.Join(validationErrors...)
 	}
 	return nil
 }
