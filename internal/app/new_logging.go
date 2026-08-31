@@ -12,6 +12,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
+// contentArchiverFirstRunAfter delays the archiver's first pass past
+// the startup write burst, mirroring the loop-event recorder's first-
+// prune delay (introspection.recorderFirstPruneAfter) and for the same
+// reason: both fight the log indexer for the logs.db write lock at the
+// moment it is busiest.
+const contentArchiverFirstRunAfter = 5 * time.Minute
+
 // initLogging reconfigures the logger with the desired stdout policy and
 // structured dataset storage. It also opens the SQLite log index, content
 // writer, and registers background workers for log index pruning and content
@@ -167,6 +174,20 @@ func (a *App) initLogging(augmentedDirs []string) error {
 				archiver := logging.NewArchiver(a.indexDB, archiveDir, logger)
 				a.deferWorker("content-archiver", func(ctx context.Context) error {
 					go func() {
+						// Hold the first pass past the boot write burst,
+						// for the same reason the loop-event recorder
+						// delays its first prune: a 30-minute DELETE
+						// pass against logs.db at the exact moment the
+						// indexer is busiest costs SQLITE_BUSY failures
+						// on both sides (observed at every deploy), and
+						// content a day stale can wait five minutes.
+						first := time.NewTimer(contentArchiverFirstRunAfter)
+						defer first.Stop()
+						select {
+						case <-ctx.Done():
+							return
+						case <-first.C:
+						}
 						ticker := time.NewTicker(24 * time.Hour)
 						defer ticker.Stop()
 						for {

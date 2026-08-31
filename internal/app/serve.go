@@ -95,7 +95,16 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}
 
+	// Serve waits on shutdownDone before returning: everything after the
+	// server drain below — archiving conversations, ending sessions, the
+	// shutdown checkpoint — reads the stores that the deferred
+	// a.shutdown() closes the moment Serve returns. Without the wait,
+	// those tail steps race the close and lose ("sql: database is
+	// closed" at every restart), which meant the shutdown checkpoint
+	// silently never happened.
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		a.logger.Info("shutdown signal received")
 
@@ -154,6 +163,18 @@ func (a *App) Serve(ctx context.Context) error {
 	if err := a.server.Start(ctx); err != nil {
 		if ctx.Err() == nil {
 			return fmt.Errorf("server failed: %w", err)
+		}
+	}
+
+	// Only a cancelled ctx means the shutdown goroutine is running; on a
+	// fatal server error it is still parked on ctx.Done and waiting here
+	// would hang. The timeout is a backstop against a wedged tail step —
+	// resources still close, but loudly instead of racily.
+	if ctx.Err() != nil {
+		select {
+		case <-shutdownDone:
+		case <-time.After(60 * time.Second):
+			a.logger.Warn("shutdown tasks still running at exit; closing resources anyway")
 		}
 	}
 
