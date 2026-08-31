@@ -147,9 +147,19 @@ func (a *App) initAwareness(s *newState) error {
 	var (
 		watchlistProvider *awareness.WatchlistProvider
 		loopSubProvider   *awareness.LoopSubscriptionProvider
+		haStateReads      *homeassistant.StateReadCache
 	)
 	if a.ha != nil {
-		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
+		// The read cache sits between the renderers and the REST
+		// client so the serial context walk stops paying one HTTP
+		// round-trip per subscribed entity per turn (#1473). It is
+		// constructed here, before the state watcher exists, and its
+		// event tap is attached in the watcher section below — the
+		// same deferred-wiring pattern the state-window provider uses.
+		// The registry client stays the concrete a.ha: registry reads
+		// are a different interface with their own cache.
+		haStateReads = homeassistant.NewStateReadCache(a.ha)
+		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, haStateReads, logger)
 		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
@@ -160,7 +170,7 @@ func (a *App) initAwareness(s *newState) error {
 		// scope_tag indirection. Loop-scoped, not always-on: a loop's
 		// declared watch set is its eyes, and a task-mode worker keeps
 		// its eyes while shedding the ambient identity (#1363).
-		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, a.ha, logger)
+		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, haStateReads, logger)
 		loopSubProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterLoopScopedContextProvider(loopSubProvider)
 
@@ -516,6 +526,12 @@ func (a *App) initAwareness(s *newState) error {
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
 		if s.personTracker != nil {
 			watcher.AddStateChangeHandler(s.personTracker.HandleHAStateChange)
+		}
+		// Keep the read cache push-fresh for every entity the ingest
+		// filter admits; entities outside the filter stay TTL-bounded
+		// read-through, which is the cache's correctness floor anyway.
+		if haStateReads != nil {
+			watcher.AddStateChangeHandler(haStateReads.HandleStateChange)
 		}
 		a.haStateWatcher = watcher
 		a.ingestFilterRebuild = func() {

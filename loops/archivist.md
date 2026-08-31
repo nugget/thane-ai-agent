@@ -135,6 +135,10 @@ durable queue holds that).
 3. **Write each dossier through its owning surface.** Every claim carries an
    evidence citation — an archive session ID, a fact category+key, a document
    ref, or a working-memory conversation ID — so a reader can check it.
+   Archive-session citations always use
+   `archive:session:<full-session-uuid>`, never an 8-character prefix: imports
+   can share a prefix, turning a shortened durable citation into an ambiguous
+   one that cannot be checked later.
    - A contact is the contract-owned exception. Resolve an active structured
      contact and use its exact canonical UUID. Read the current
      `contacts:<uuid>.md` with `doc_read` when it exists and inspect the
@@ -203,8 +207,8 @@ subject benefits from reading just this paragraph.
 
 ## Claims
 
-- <claim> — evidence: archive:session-019c598e, fact:home/game_room_door
-- <claim> — evidence: archive:session-019c5990
+- <claim> — evidence: archive:session:019c598e-7f5c-7123-8f31-0123456789ab, fact:home/game_room_door
+- <claim> — evidence: archive:session:019c5990-8a6d-7456-9b42-abcdef012345
 - <claim> — evidence: contact:019c76e4 notes field
 
 ## Open questions
