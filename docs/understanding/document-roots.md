@@ -530,6 +530,13 @@ sections when necessary. An unreadable remainder or unavailable canonical
 writer defers the durable queue item behind ready work rather than losing it or
 letting it block the queue.
 
+Archive evidence in a contact dossier uses
+`archive:session:<full-session-uuid>`. Archive tools accept short prefixes as
+an interactive convenience, but durable dossier citations do not: imported
+sessions can share a prefix, making a shortened citation impossible to resolve
+unambiguously. `contact_dossier_write` and the contacts-root validator reject
+those ambiguous citations before Git changes.
+
 Fresh `thane init` workspaces declare and establish the root with the agent's
 signing key, required signature verification, and this context policy:
 
