@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/app/coreloops"
@@ -120,6 +122,35 @@ func TestEmbeddedDocumentsMatchTheRepoSources(t *testing.T) {
 		}
 		if string(source) != string(embedded) {
 			t.Errorf("loops/%s.md and its embedded copy differ; run `just generate`", name)
+		}
+	}
+}
+
+// TestArchivistUsesCanonicalContactDossiers pins the model-facing routing
+// contract that keeps one person's history out of the generic dossier root.
+// A configured runtime exposes contact_dossier_write through the archivist's
+// contacts tag; the shipped task must teach the loop to choose it.
+func TestArchivistUsesCanonicalContactDossiers(t *testing.T) {
+	spec, err := decodeCoreLoopDefinition(filepath.Join("..", "..", "loops", "archivist.md"))
+	if err != nil {
+		t.Fatalf("decode archivist definition: %v", err)
+	}
+	for _, tag := range []string{"contacts", "documents"} {
+		if !slices.Contains(spec.Tags, tag) {
+			t.Errorf("archivist tags = %#v, want %q so the canonical dossier tools are reachable", spec.Tags, tag)
+		}
+	}
+	if slices.Contains(spec.ExcludeTools, "contact_dossier_write") {
+		t.Error("archivist excludes contact_dossier_write despite teaching it as the canonical contact door")
+	}
+	for _, want := range []string{
+		"contacts:<uuid>.md",
+		"contact_dossier_write",
+		"Never create or maintain a contact dossier under `kb:dossiers/`",
+		"complete status-line, teaser, digest, and full projections",
+	} {
+		if !strings.Contains(spec.Task, want) {
+			t.Errorf("archivist task does not teach %q", want)
 		}
 	}
 }

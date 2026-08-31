@@ -518,6 +518,14 @@ call reports every independently correctable projection violation together.
 The generic document tools remain available for operator recovery, but models
 should not author dossier structure through them.
 
+The archivist uses the same contract-owned door. Contact-shaped queue subjects
+and contact evidence discovered in closed sessions are resolved through the
+structured directory, reconciled with the existing canonical dossier, and
+republished through `contact_dossier_write`. The generic `kb:dossiers/`
+namespace remains the home for entities, areas, routines, and themes; it is
+never a fallback location for a contact, because that would split one person's
+history across two document roots.
+
 Fresh `thane init` workspaces declare and establish the root with the agent's
 signing key, required signature verification, and this context policy:
 
