@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -291,8 +292,19 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 		}
 		if needVerify {
 			if err := s.verifyDocumentForConsumer(ctx, root, rel, "document_index"); err != nil {
-				s.logger.Warn("document index skipped file blocked by signature policy",
-					"root", root, "path", rel, "error", err)
+				// An interrupted pass (shutdown, deadline) proves nothing
+				// about the file; abort the walk quietly instead of
+				// warning about a policy that never got to speak — and
+				// instead of deleting index rows the next pass would
+				// only rebuild.
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				msg := "document index skipped file blocked by signature policy"
+				if errors.Is(err, ErrVerificationUnavailable) {
+					msg = "document index skipped file; signature verification could not run"
+				}
+				s.logger.Warn(msg, "root", root, "path", rel, "error", err)
 				if err := s.deleteIndexedDocumentRows(ctx, root, rel); err != nil {
 					return err
 				}

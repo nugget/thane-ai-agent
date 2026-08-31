@@ -191,6 +191,7 @@ type App struct {
 	emailPoller        *email.Poller
 	mediaFeedPoller    *media.FeedPoller
 	telemetryPublisher *telemetry.Publisher
+	telCollector       *telemetry.Collector // shared; see App.telemetryCollector
 
 	// Set in initAwareness once the state watcher exists; invoked
 	// after any subscription-registry mutation (tool writes, spec

@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
@@ -21,7 +24,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_save",
-		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field.",
+		Description: "Store or update structured identity for a person, organization, or group. Properties should be compact personal attributes such as communication coordinates, aliases, roles, and stable preferences. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Evolving person-specific relationship or collaboration synthesis belongs in contact_dossier_write when available; project knowledge, technical decisions, and other non-person knowledge belong in remember_fact or documents. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -93,9 +96,11 @@ func (r *Registry) registerContactTools() {
 		},
 	})
 
+	registerContactDossierWriteTool(r, r.contactTools)
+
 	r.Register(&Tool{
 		Name:        "contact_lookup",
-		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. An exact name result includes the canonical contact UUID and optional contacts:<uuid>.md dossier ref when the dossier root is configured; use doc_read for the dossier rather than treating its prose as structured identity authority. With no arguments, returns directory statistics.",
+		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. An exact name result includes the canonical contact UUID and optional contacts:<uuid>.md dossier ref when the dossier root is configured; use doc_read to inspect the dossier and contact_dossier_write to create or replace it when that tool is available. Dossier prose is not structured identity authority. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -133,7 +138,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_owner",
-		Description: "Return the primary operator contact record with rich details and contact properties, its canonical UUID and optional contacts:<uuid>.md dossier ref, plus a structured summary of currently active operator-scoped channels. Use doc_read for the dossier; its prose is longitudinal synthesis, while this contact record remains authoritative for structured identity and bindings. Uses identity.operator_contact_id when configured; otherwise supports the legacy name selector and finally the sole admin contact if exactly one exists.",
+		Description: "Return the primary operator contact record with rich details and contact properties, its canonical UUID and optional contacts:<uuid>.md dossier ref, plus a structured summary of currently active operator-scoped channels. Use doc_read to inspect the dossier and contact_dossier_write to create or replace it when available; its prose is longitudinal synthesis, while this contact record remains authoritative for structured identity and bindings. Uses identity.operator_contact_id when configured; otherwise supports the legacy name selector and finally the sole admin contact if exactly one exists.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -311,6 +316,66 @@ func (r *Registry) registerContactTools() {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
 			return r.contactTools.ExportVCFQR(string(argsJSON))
+		},
+	})
+}
+
+func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) {
+	if contactTools == nil || !contactTools.DossierWritesEnabled() {
+		return
+	}
+
+	fields := contacts.DossierFacetFields()
+	properties := make(map[string]any, len(fields)+1)
+	properties["contact_id"] = map[string]any{
+		"type":        "string",
+		"description": "Canonical contact UUID returned by contact_lookup or contact_owner. Go derives the contacts:<uuid>.md ref and matching private subject tag.",
+	}
+	required := []string{"contact_id"}
+	for _, field := range fields {
+		description := field.Guidance + looppkg.FormatGuidance(field.Format)
+		if field.MaxRunes > 0 {
+			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
+		}
+		properties[field.Key] = map[string]any{
+			"type":        "string",
+			"description": description,
+		}
+		required = append(required, field.Key)
+	}
+	allowedParameters := make(map[string]struct{}, len(required))
+	for _, name := range required {
+		allowedParameters[name] = struct{}{}
+	}
+
+	r.Register(&Tool{
+		Name:               "contact_dossier_write",
+		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass only the canonical contact UUID and all four content projections; Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Every projection is validated together and every violation is returned in one error. Read an existing dossier with doc_read before replacing it so Thane can protect against intervening writes.",
+		SkipContentResolve: true,
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": properties,
+			"required":   required,
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			unexpected := make([]string, 0)
+			for name := range args {
+				if _, allowed := allowedParameters[name]; !allowed {
+					unexpected = append(unexpected, name)
+				}
+			}
+			if len(unexpected) > 0 {
+				sort.Strings(unexpected)
+				return "", fmt.Errorf("contact_dossier_write accepts only contact_id, status_line, teaser, digest, and full; remove unsupported parameter(s) [%s]—Go derives document identity and structure, and tracks revisions automatically", strings.Join(unexpected, ", "))
+			}
+			return contactTools.WriteDossier(ctx, contacts.DossierWriteArgs{
+				ContactID:    stringArg(args, "contact_id"),
+				StatusLine:   stringArg(args, "status_line"),
+				Teaser:       stringArg(args, "teaser"),
+				Digest:       stringArg(args, "digest"),
+				Full:         stringArg(args, "full"),
+				ReceiptScope: documentRevisionScope(ctx),
+			})
 		},
 	})
 }

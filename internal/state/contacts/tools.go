@@ -17,6 +17,7 @@ import (
 	"github.com/emersion/go-vcard"
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // EmbeddingClient generates embeddings for semantic search.
@@ -48,6 +49,7 @@ type Tools struct {
 	ownerActivity     func() []OwnerChannelActivity
 	dossiersEnabled   bool
 	dossiersWritable  bool
+	dossierWrite      func(context.Context, documents.WriteArgs) (string, error)
 }
 
 // NewTools creates contact tools using the given store.
@@ -1055,8 +1057,8 @@ func (t *Tools) formatContact(c *Contact) string {
 		return formatted
 	}
 	trailhead := "doc_read"
-	if t.dossiersWritable {
-		trailhead += fmt.Sprintf("; if absent, create with tag %s and the standard Status Line/Teaser/Digest/Details sections", DossierSubject(c.ID))
+	if t.DossierWritesEnabled() {
+		trailhead += "; create or replace with contact_dossier_write"
 	}
 	return fmt.Sprintf("%s\nContact ID: %s\nDossier: %s (%s)", formatted, c.ID, DossierRef(c.ID), trailhead)
 }

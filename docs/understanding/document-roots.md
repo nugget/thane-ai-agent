@@ -510,6 +510,25 @@ structured identity, communication properties, trust zones, Home Assistant
 bindings, and companion attribution. Dossier prose is relationship synthesis,
 not a way to mutate those fields. `contact_lookup` and `contact_owner` expose a
 bounded dossier ref; `doc_read` opens it when the prose is useful.
+`contact_dossier_write` is the canonical mutation door on a managed-writable
+root. It accepts the contact UUID plus status-line, teaser, digest, and full
+content, then derives the ref, exact private tag, frontmatter, and section
+layout in Go. Projection budgets are advertised in the schema, and one failed
+call reports every independently correctable projection violation together.
+The generic document tools remain available for operator recovery, but models
+should not author dossier structure through them.
+
+The archivist uses the same contract-owned door. Contact-shaped queue subjects
+and contact evidence discovered in closed sessions are resolved through the
+structured directory, reconciled with the existing canonical dossier, and
+republished through `contact_dossier_write`. The generic `kb:dossiers/`
+namespace remains the home for entities, areas, routines, and themes; it is
+never a fallback location for a contact, because that would split one person's
+history across two document roots. Before replacement, the archivist checks
+whether `doc_read` truncated the current dossier and walks its outline and
+sections when necessary. An unreadable remainder or unavailable canonical
+writer defers the durable queue item behind ready work rather than losing it or
+letting it block the queue.
 
 Fresh `thane init` workspaces declare and establish the root with the agent's
 signing key, required signature verification, and this context policy:

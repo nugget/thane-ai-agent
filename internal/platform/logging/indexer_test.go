@@ -1033,3 +1033,90 @@ func TestSeverityRingCapsAndTruncates(t *testing.T) {
 		t.Errorf("message not truncated: %d runes", len([]rune(sum.Recent[0].Msg)))
 	}
 }
+
+func TestIndexHandler_SourceAttrSurvivesIntoAttrs(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db)
+
+	logger := slog.New(h)
+	logger.Warn("gated context provider failed",
+		"source", "always_provider", "msg", "reserved")
+	h.Close()
+
+	var attrs sql.NullString
+	if err := db.QueryRow(`SELECT attrs FROM log_entries LIMIT 1`).Scan(&attrs); err != nil {
+		t.Fatal(err)
+	}
+	if !attrs.Valid {
+		t.Fatal("attrs should not be null")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(attrs.String), &parsed); err != nil {
+		t.Fatalf("parse attrs JSON: %v", err)
+	}
+	// "source" is caller data — built-in source location arrives via
+	// record.PC, never as an attr — so it must land in attrs rather
+	// than being eaten as a reserved key. The eaten variant silently
+	// destroyed the discriminator on several production warns.
+	if got := parsed["source"]; got != "always_provider" {
+		t.Errorf("source = %v, want %q", got, "always_provider")
+	}
+	// Top-level attrs shadowing the record's own fields stay reserved.
+	if _, ok := parsed["msg"]; ok {
+		t.Error("top-level msg attr should remain reserved")
+	}
+}
+
+// TestMigrate_LegacySchemaGainsLevelTimestampIndex pins the checked
+// migration step for idx_log_level_ts: a database created before the
+// index existed (the legacy production shape) must come out of Migrate
+// with the index verifiably present — the #1385 post-mortem found the
+// multi-statement path could report success while declared indexes
+// were absent.
+func TestMigrate_LegacySchemaGainsLevelTimestampIndex(t *testing.T) {
+	db, err := sql.Open("sqlite-thane", "file:"+t.TempDir()+"/legacy.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// The pre-index production shape: table plus the original indexes,
+	// no idx_log_level_ts.
+	legacy := `
+	CREATE TABLE log_entries (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp TEXT NOT NULL,
+		level TEXT NOT NULL,
+		msg TEXT NOT NULL,
+		request_id TEXT,
+		session_id TEXT,
+		conversation_id TEXT,
+		subsystem TEXT,
+		tool TEXT,
+		model TEXT,
+		loop_id TEXT,
+		loop_name TEXT,
+		source_file TEXT,
+		source_line INTEGER,
+		attrs TEXT,
+		raw_file TEXT,
+		raw_line INTEGER
+	);
+	CREATE INDEX idx_log_timestamp ON log_entries(timestamp);
+	CREATE INDEX idx_log_level ON log_entries(level);
+	`
+	if _, err := db.Exec(legacy); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate over legacy schema: %v", err)
+	}
+
+	var name string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_log_level_ts'`).Scan(&name)
+	if err != nil {
+		t.Fatalf("idx_log_level_ts absent after Migrate: %v", err)
+	}
+}

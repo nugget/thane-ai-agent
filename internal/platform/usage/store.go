@@ -160,7 +160,14 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 
 // Summary returns aggregated totals for records within [start, end).
 func (s *Store) Summary(start, end time.Time) (*Summary, error) {
-	row := s.db.QueryRow(
+	return s.SummaryContext(context.Background(), start, end)
+}
+
+// SummaryContext is Summary honoring ctx cancellation — background
+// collectors on a bounded budget use this so a wedged query cannot
+// outlive its caller's deadline.
+func (s *Store) SummaryContext(ctx context.Context, start, end time.Time) (*Summary, error) {
+	row := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(cost_usd), 0)
@@ -180,38 +187,44 @@ func (s *Store) Summary(start, end time.Time) (*Summary, error) {
 // SummaryByModel returns per-model aggregated totals for records within
 // [start, end), ordered by cost descending.
 func (s *Store) SummaryByModel(start, end time.Time) ([]GroupedSummary, error) {
-	return s.summaryGroupedBy("model", start, end)
+	return s.summaryGroupedBy(context.Background(), "model", start, end)
+}
+
+// SummaryByModelContext is SummaryByModel honoring ctx cancellation;
+// see SummaryContext.
+func (s *Store) SummaryByModelContext(ctx context.Context, start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy(ctx, "model", start, end)
 }
 
 // SummaryByUpstreamModel returns per-upstream-model aggregated totals
 // for records within [start, end), ordered by cost descending.
 func (s *Store) SummaryByUpstreamModel(start, end time.Time) ([]GroupedSummary, error) {
-	return s.summaryGroupedBy("upstream_model", start, end)
+	return s.summaryGroupedBy(context.Background(), "upstream_model", start, end)
 }
 
 // SummaryByProvider returns per-provider aggregated totals for records
 // within [start, end), ordered by cost descending.
 func (s *Store) SummaryByProvider(start, end time.Time) ([]GroupedSummary, error) {
-	return s.summaryGroupedBy("provider", start, end)
+	return s.summaryGroupedBy(context.Background(), "provider", start, end)
 }
 
 // SummaryByResource returns per-resource aggregated totals for records
 // within [start, end), ordered by cost descending.
 func (s *Store) SummaryByResource(start, end time.Time) ([]GroupedSummary, error) {
-	return s.summaryGroupedBy("resource", start, end)
+	return s.summaryGroupedBy(context.Background(), "resource", start, end)
 }
 
 // SummaryByRole returns per-role aggregated totals for records within
 // [start, end), ordered by cost descending.
 func (s *Store) SummaryByRole(start, end time.Time) ([]GroupedSummary, error) {
-	return s.summaryGroupedBy("role", start, end)
+	return s.summaryGroupedBy(context.Background(), "role", start, end)
 }
 
 // SummaryByTask returns per-task aggregated totals for records within
 // [start, end), ordered by cost descending. Records with empty
 // task_name are grouped under the key "".
 func (s *Store) SummaryByTask(start, end time.Time) ([]GroupedSummary, error) {
-	return s.summaryGroupedBy("task_name", start, end)
+	return s.summaryGroupedBy(context.Background(), "task_name", start, end)
 }
 
 // SummaryByGroup dispatches the grouped summary query based on the
@@ -235,7 +248,7 @@ func (s *Store) SummaryByGroup(groupBy string, start, end time.Time) ([]GroupedS
 	}
 }
 
-func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]GroupedSummary, error) {
+func (s *Store) summaryGroupedBy(ctx context.Context, column string, start, end time.Time) ([]GroupedSummary, error) {
 	// column is always a compile-time constant from our own methods,
 	// never user input, so embedding it directly is safe.
 	query := fmt.Sprintf(
@@ -248,7 +261,7 @@ func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]Grouped
 		column, column,
 	)
 
-	rows, err := s.db.Query(query,
+	rows, err := s.db.QueryContext(ctx, query,
 		start.UTC().Format(time.RFC3339),
 		end.UTC().Format(time.RFC3339),
 	)

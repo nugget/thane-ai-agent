@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
@@ -143,6 +144,49 @@ type docRootSyncer struct {
 	registry         *checkout.SyncStateRegistry
 	logger           *slog.Logger
 	now              func() time.Time // injectable clock; nil uses time.Now
+
+	// mu guards the log gates: the ticker in Run and an on-demand pass
+	// (the operability POST endpoint) can drive runOnce concurrently.
+	mu            sync.Mutex
+	failGate      syncLogGate
+	attentionGate syncLogGate
+}
+
+// syncLogCoalesceAfter bounds how long a persistent, unchanged failure
+// or attention state stays quiet between WARN reminders.
+const syncLogCoalesceAfter = time.Hour
+
+// syncLogGate coalesces a condition that repeats every pass into log
+// lines that carry information: admit passes on the first occurrence,
+// on a change of detail, and once per syncLogCoalesceAfter as a
+// reminder; everything in between belongs at Debug. A multi-day remote
+// outage once produced 18,285 identical WARN rows — 64% of a
+// production week — one full-severity line per pass at a time.
+type syncLogGate struct {
+	detail string
+	warnAt time.Time
+	count  int
+}
+
+// admit records one more pass of the condition and reports whether this
+// pass should log at full severity, along with the streak length.
+func (g *syncLogGate) admit(now time.Time, detail string) (int, bool) {
+	g.count++
+	changed := detail != g.detail
+	g.detail = detail
+	if changed || now.Sub(g.warnAt) >= syncLogCoalesceAfter {
+		g.warnAt = now
+		return g.count, true
+	}
+	return g.count, false
+}
+
+// reset clears the gate and returns how many passes the condition
+// lasted, so the clearing pass can say what it recovered from.
+func (g *syncLogGate) reset() int {
+	n := g.count
+	*g = syncLogGate{}
+	return n
 }
 
 func (s *docRootSyncer) clock() time.Time {
@@ -218,7 +262,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 	if err != nil {
 		st.OK = false
 		st.Detail = err.Error()
-		s.logger.Warn("document root sync failed", "root", s.root, "error", err)
+		s.logFailure(err, st.Detail)
 		s.recordState(ctx, st)
 		return st
 	}
@@ -229,14 +273,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 	st.LocalHead, st.RemoteHead = res.LocalHead, res.RemoteHead
 	st.Detail = res.Detail
 
-	switch res.Outcome {
-	case checkout.SyncBlocked, checkout.SyncDiverged, checkout.SyncRemoteBehind:
-		s.logger.Warn("document root sync needs attention",
-			"root", s.root, "outcome", res.Outcome, "detail", res.Detail)
-	default:
-		s.logger.Info("document root sync",
-			"root", s.root, "outcome", res.Outcome, "ahead", res.Ahead, "behind", res.Behind)
-	}
+	s.logOutcome(res)
 
 	// A fast-forward moved the worktree; re-index so reads see the new content
 	// without waiting for the periodic refresher.
@@ -257,6 +294,73 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 		s.registry.AdvanceRemote(s.root, res.RemoteHead)
 	}
 	return st
+}
+
+// logFailure reports a failed sync pass. A persistent outage — a remote
+// down for days — warns on arrival, on a change of error, and once per
+// syncLogCoalesceAfter, instead of narrating one identical WARN per
+// pass; the passes in between log at Debug so the forensic record stays
+// complete.
+//
+// The mutex is held across the gate transition AND its emission (here
+// and in logOutcome): released in between, a concurrent pass could
+// reset the gate and narrate recovery before this pass narrates its
+// failure, leaving the log stream showing a failure newer than the
+// recovery while the gate reads clear. Contention is one pass per
+// interval per root, so narrating under the lock costs nothing.
+func (s *docRootSyncer) logFailure(err error, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, warn := s.failGate.admit(s.clock(), detail)
+	if warn {
+		s.logger.Warn("document root sync failed",
+			"root", s.root, "error", err, "consecutive_failures", n)
+		return
+	}
+	s.logger.Debug("document root sync still failing",
+		"root", s.root, "error", err, "consecutive_failures", n)
+}
+
+// logOutcome reports a successful pass: recovery from a failure streak,
+// attention outcomes coalesced the same way failures are, and the
+// steady clean pass demoted to Debug — one Info per interval per root
+// narrating "nothing changed" is what buried the warns that mattered.
+func (s *docRootSyncer) logOutcome(res checkout.SyncResult) {
+	// One lock span for the whole transition — gate mutations and their
+	// narration stay ordered against a concurrent pass (see logFailure).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if recovered := s.failGate.reset(); recovered > 0 {
+		s.logger.Info("document root sync recovered",
+			"root", s.root, "outcome", res.Outcome, "failed_passes", recovered)
+	}
+
+	switch res.Outcome {
+	case checkout.SyncBlocked, checkout.SyncDiverged, checkout.SyncRemoteBehind:
+		n, warn := s.attentionGate.admit(s.clock(), string(res.Outcome)+": "+res.Detail)
+		if warn {
+			s.logger.Warn("document root sync needs attention",
+				"root", s.root, "outcome", res.Outcome, "detail", res.Detail,
+				"consecutive_passes", n)
+		} else {
+			s.logger.Debug("document root sync still needs attention",
+				"root", s.root, "outcome", res.Outcome, "detail", res.Detail,
+				"consecutive_passes", n)
+		}
+	default:
+		if cleared := s.attentionGate.reset(); cleared > 0 {
+			s.logger.Info("document root sync attention cleared",
+				"root", s.root, "outcome", res.Outcome, "attention_passes", cleared)
+		}
+		if res.Outcome == checkout.SyncClean {
+			s.logger.Debug("document root sync",
+				"root", s.root, "outcome", res.Outcome, "ahead", res.Ahead, "behind", res.Behind)
+		} else {
+			s.logger.Info("document root sync",
+				"root", s.root, "outcome", res.Outcome, "ahead", res.Ahead, "behind", res.Behind)
+		}
+	}
 }
 
 // Run drives runOnce immediately and then on the configured interval until the

@@ -1,6 +1,9 @@
 package contacts
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,6 +24,92 @@ var dossierOutputContract = looppkg.OutputSpec{
 		{Name: looppkg.OutputFacetTeaser},
 		{Name: looppkg.OutputFacetDigest},
 	},
+}
+
+// DossierWriteArgs carries the content projections for one canonical contact
+// dossier. The contact UUID selects the structured identity; Go derives the
+// document ref, subject tag, frontmatter, and section structure.
+type DossierWriteArgs struct {
+	ContactID  string `json:"contact_id"`
+	StatusLine string `json:"status_line"`
+	Teaser     string `json:"teaser"`
+	Digest     string `json:"digest"`
+	Full       string `json:"full"`
+	// ReceiptScope is runtime-owned concurrency state and is never exposed to
+	// the model.
+	ReceiptScope string `json:"-"`
+}
+
+// ConfigureDossierDocuments installs the managed document surface used by
+// [Tools.WriteDossier]. Configure it only after the document store has been
+// initialized so an advertised mutation tool is always callable.
+func (t *Tools) ConfigureDossierDocuments(write func(context.Context, documents.WriteArgs) (string, error)) {
+	if t == nil {
+		return
+	}
+	t.dossierWrite = write
+}
+
+// DossierWritesEnabled reports whether the configured contact tools have a
+// writable canonical dossier root and a live managed document surface.
+func (t *Tools) DossierWritesEnabled() bool {
+	return t != nil && t.dossiersWritable && t.dossierWrite != nil
+}
+
+// DossierFacetFields returns the canonical model-facing projection fields in
+// document order. Callers receive a copy and may safely enrich descriptions.
+func DossierFacetFields() []looppkg.FacetField {
+	return dossierOutputContract.FacetFields()
+}
+
+// WriteDossier creates or replaces one contact's canonical longitudinal
+// dossier. It verifies the structured contact first, validates every content
+// projection together, and leaves identity, frontmatter, and markdown
+// structure to Go.
+func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("contact directory not configured")
+	}
+	if !t.dossiersEnabled {
+		return "", fmt.Errorf("contact dossiers are not configured")
+	}
+	if !t.dossiersWritable {
+		return "", fmt.Errorf("the contacts dossier root is not managed-writable")
+	}
+	if t.dossierWrite == nil {
+		return "", fmt.Errorf("contact dossier document tools are not configured")
+	}
+
+	rawID := strings.TrimSpace(args.ContactID)
+	id, err := uuid.Parse(rawID)
+	if err != nil || id == uuid.Nil || id.String() != rawID {
+		return "", fmt.Errorf("contact_id must be a canonical non-zero UUID from contact_lookup or contact_owner; got %q", args.ContactID)
+	}
+	contact, err := t.store.Get(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("contact_id %s is not an active structured contact; use contact_lookup to resolve the intended contact before writing a dossier", id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("load structured contact %s: %w", id, err)
+	}
+
+	payload := looppkg.FacetPayload{
+		StatusLine: args.StatusLine,
+		Teaser:     args.Teaser,
+		Digest:     args.Digest,
+		Full:       args.Full,
+	}
+	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
+		return "", fmt.Errorf("contact dossier projections are invalid; correct every listed field and retry once: %w", err)
+	}
+	body := dossierOutputContract.RenderFacetDocument(payload)
+	return t.dossierWrite(ctx, documents.WriteArgs{
+		Ref:          DossierRef(id),
+		Title:        contact.FormattedName,
+		Tags:         []string{DossierSubject(id)},
+		Body:         &body,
+		ReceiptScope: args.ReceiptScope,
+	})
 }
 
 // DossierRef returns the stable document ref for a contact UUID.
@@ -44,7 +133,7 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 
 	wantSubject := DossierSubject(id)
 	if len(candidate.Tags) != 1 || strings.TrimSpace(candidate.Tags[0]) != wantSubject {
-		return fmt.Errorf("dossier %s must carry exactly one frontmatter tag, %q, so no broader subject can advertise this private dossier", candidate.Path, wantSubject)
+		return fmt.Errorf("dossier %s must carry exactly one frontmatter tag, %q, so no broader subject can advertise this private dossier; use contact_dossier_write to let Go derive dossier identity and structure", candidate.Path, wantSubject)
 	}
 
 	payload, faceted := looppkg.ParseFacetSections(candidate.Body)

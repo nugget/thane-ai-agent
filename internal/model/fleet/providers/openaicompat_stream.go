@@ -41,6 +41,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		toolAcc        = make(map[int]*openAICompatToolAccumulator)
 		done           bool
 		chunks         int
+		reasoningBytes int
 		finishReason   string
 		upstreamID     string
 		firstToken     time.Time
@@ -93,6 +94,17 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 			}
 			if choice.Delta.Role != "" {
 				role = choice.Delta.Role
+			}
+			// The thinking channel counts as generation for timing (the
+			// model is producing tokens, so prefill and queueing are
+			// over) and for the emptiness verdict below — but it is not
+			// content, so it neither accumulates nor streams to the
+			// callback.
+			if r := choice.Delta.reasoningText(); r != "" {
+				if firstToken.IsZero() {
+					firstToken = time.Now()
+				}
+				reasoningBytes += len(r)
 			}
 			if choice.Delta.Content != "" {
 				// First content, not first frame: the role-only opener
@@ -171,9 +183,49 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	// a chunks>0 check and return Done:true with no content, no tool
 	// calls, and zero tokens — the fabricated success this client exists
 	// to refuse. Judge the same thing the non-streaming path judges:
-	// whether an assistant actually said or did anything.
+	// whether an assistant actually said or did anything. A stream that
+	// carried only reasoning is still a refusal — there is no answer to
+	// return — but it is a different diagnosis: the model was working
+	// (production saw 814-frame streams reported as "empty") and the
+	// answer never reached the content channel, either because the
+	// token budget died mid-think or because the runner's template
+	// routes the final answer into the reasoning field. That verdict
+	// requires terminal evidence: a reasoning stream that closed
+	// silently is the runner/proxy truncation the guard further down
+	// already refuses, and must be named as such, not as a budget or
+	// template problem. Sizes only in the error; reasoning text stays
+	// out of logs.
+	//
+	// failStream narrates each refusal with the timing the success line
+	// carries — the production case was undiagnosable partly because a
+	// failed stream left no telemetry at all.
+	failStream := func(refusal error) (*llm.ChatResponse, error) {
+		attrs := []any{
+			"model", requestedModel,
+			"frames", chunks,
+			"reasoning_bytes", reasoningBytes,
+			"finish_reason", finishReason,
+			"total_ms", time.Since(trace.started).Milliseconds(),
+			"error", refusal.Error(),
+		}
+		if !firstToken.IsZero() {
+			attrs = append(attrs, "first_token_ms", firstToken.Sub(trace.started).Milliseconds())
+		}
+		trace.log.Debug("stream refused as not-a-completion", attrs...)
+		return nil, refusal
+	}
 	if strings.TrimSpace(contentBuilder.String()) == "" && len(toolCalls) == 0 {
-		return nil, fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks)
+		silentClose := !done && finishReason == ""
+		switch {
+		case reasoningBytes > 0 && silentClose:
+			return failStream(fmt.Errorf("%s ended the stream for model %q without a terminal marker after %d frames and %d reasoning bytes (truncated response)",
+				c.provider, requestedModel, chunks, reasoningBytes))
+		case reasoningBytes > 0:
+			return failStream(fmt.Errorf("%s produced only reasoning for model %q (%d bytes over %d frames, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, requestedModel, reasoningBytes, chunks, finishReason))
+		default:
+			return failStream(fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks))
+		}
 	}
 
 	// Content alone does not mean the answer finished. A proxy or runner
@@ -185,7 +237,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	// [DONE] sentinel or a finish_reason on some choice. Servers vary in
 	// which they send, so either suffices; neither is silence.
 	if !done && finishReason == "" {
-		return nil, fmt.Errorf("%s ended the stream for model %q without a terminal marker after %d frames (truncated response)", c.provider, requestedModel, chunks)
+		return failStream(fmt.Errorf("%s ended the stream for model %q without a terminal marker after %d frames (truncated response)", c.provider, requestedModel, chunks))
 	}
 
 	result := &llm.ChatResponse{

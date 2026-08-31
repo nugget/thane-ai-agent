@@ -50,9 +50,12 @@ func NewPublisher(collector *Collector, mqttPub MQTTPublisher, builder *SensorBu
 
 // Publish collects a fresh metrics snapshot and publishes all sensor
 // states to MQTT. Called by the mqtt-telemetry loop handler on each
-// iteration.
+// iteration. CollectFresh, not Collect: the publish cadence is long,
+// so serving the cache here would compound the TTL onto the interval
+// and age every sensor reading by both. This is also what keeps the
+// shared cache warm for the assembly-path readers.
 func (p *Publisher) Publish(ctx context.Context) error {
-	m := p.collector.Collect(ctx)
+	m := p.collector.CollectFresh(ctx)
 
 	// Track publish errors but don't abort — publish as many as possible.
 	var errs int

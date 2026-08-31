@@ -752,27 +752,12 @@ func (a *App) initServers(s *newState) error {
 
 		a.mqttPub.RegisterSensors(telBuilder.StaticSensors())
 
-		dbPaths := a.telemetryDBPaths()
-
-		telSources := telemetry.Sources{
-			LoopRegistry: a.loopRegistry,
-			UsageStore:   a.usageStore,
-			ArchiveStore: a.archiveStore,
-			LogsDB:       a.indexDB,
-			DBPaths:      dbPaths,
-			Logger:       logger,
-		}
-		if a.attachmentStore != nil {
-			telSources.AttachmentSource = a.attachmentStore
-		}
-
-		telCollector := telemetry.NewCollector(telSources)
-		telPub := telemetry.NewPublisher(telCollector, a.mqttPub, telBuilder, logger)
+		telPub := telemetry.NewPublisher(a.telemetryCollector(), a.mqttPub, telBuilder, logger)
 		a.telemetryPublisher = telPub
 
 		logger.Info("mqtt telemetry enabled",
 			"interval", cfg.MQTT.Telemetry.Interval,
-			"db_paths", len(dbPaths),
+			"db_paths", len(a.telemetryDBPaths()),
 		)
 	}
 

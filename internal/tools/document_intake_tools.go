@@ -10,7 +10,7 @@ import (
 func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 	r.Register(&Tool{
 		Name: "doc_create",
-		Description: "Create a new managed markdown document safely — the default way to make a document exist. Runs the corpus-aware placement analysis (related-document search, title/tags/path normalization, root policy) and, when placement is clean, writes the document in the same call. " +
+		Description: "Create a new ordinary managed markdown document safely. Contract-owned documents use their dedicated structured tool instead—for example, contact_dossier_write owns contact dossiers and publish_output_* owns loop outputs. For ordinary documents, this runs the corpus-aware placement analysis (related-document search, title/tags/path normalization, root policy) and, when placement is clean, writes the document in the same call. " +
 			"When a similar document already exists or policy wants review, nothing is written: the result comes back created=false with the analysis and an intake_id for doc_commit. " +
 			"Prefer this over doc_write for any brand-new document; doc_write's create is for destinations that are already deliberate.",
 		ContentResolveExempt: []string{"root", "title", "ref", "tags", "path_prefix"},
