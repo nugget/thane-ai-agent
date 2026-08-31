@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -92,7 +93,12 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 		addr = "0.0.0.0"
 	}
 	s.logger.Info("starting Ollama-compatible API server", "address", addr, "port", s.port)
-	return s.server.ListenAndServe()
+	// ErrServerClosed is the expected return on graceful Shutdown; don't surface
+	// it as an error (App.Serve would log it). Mirrors the other API servers.
+	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // Shutdown gracefully stops the server.

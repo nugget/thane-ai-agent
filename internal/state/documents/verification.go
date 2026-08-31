@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,25 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrVerificationUnavailable marks a refusal whose signature check could
+// not run — git killed, context canceled, repository unreadable — as
+// opposed to content that actually failed signature policy. Both refuse
+// the read (failing closed is the point of a trust boundary), but they
+// send the investigation to different places: one is an infrastructure
+// fault, the other a trust decision about signers and history.
+var ErrVerificationUnavailable = errors.New("signature verification unavailable")
+
+// verificationUnavailableError carries the consumer-facing refusal text
+// unchanged while letting callers classify it via
+// errors.Is(err, ErrVerificationUnavailable).
+type verificationUnavailableError struct{ msg string }
+
+func (e *verificationUnavailableError) Error() string { return e.msg }
+
+func (e *verificationUnavailableError) Is(target error) bool {
+	return target == ErrVerificationUnavailable
+}
 
 func (s *Store) verifyDocumentForConsumer(ctx context.Context, root, relPath, consumer string) error {
 	root = normalizeRootName(root)
@@ -224,8 +244,9 @@ func (s *Store) handleVerificationFailure(root, relPath, consumer string, result
 	// "blocked by signature policy" when git was killed buys an
 	// investigation into signers and history that were never involved.
 	if result.Status == SignatureUnavailable {
-		return fmt.Errorf("document %s:%s could not be verified for %s (refused because this root requires verification, not because the content failed it): %s",
-			root, relPath, consumer, message)
+		return &verificationUnavailableError{msg: fmt.Sprintf(
+			"document %s:%s could not be verified for %s (refused because this root requires verification, not because the content failed it): %s",
+			root, relPath, consumer, message)}
 	}
 	return fmt.Errorf("document %s:%s blocked by signature policy for %s: %s", root, relPath, consumer, message)
 }

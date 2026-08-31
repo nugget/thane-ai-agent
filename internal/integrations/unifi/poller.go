@@ -237,7 +237,10 @@ func (p *Poller) tolerateFailure(err error, summary map[string]any) error {
 		return fmt.Errorf("UniFi controller failing for %d consecutive polls: %w", n, err)
 	}
 
-	p.cfg.Logger.Warn("UniFi poll failed; tolerating as transient",
+	// Debug, not Warn: a tolerated failure is by definition not yet a
+	// problem — the threshold crossing above is the operator signal, and
+	// the dashboard summary below carries the streak in the meantime.
+	p.cfg.Logger.Debug("UniFi poll failed; tolerating as transient",
 		"consecutive_failures", n,
 		"threshold", threshold,
 		"error", err,
