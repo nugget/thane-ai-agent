@@ -1550,7 +1550,7 @@ components:
         version: v0.9.2-596-gf92a9208
         git_commit: f92a9208
         git_branch: main
-        go_version: go1.26.1
+        go_version: go1.27.0
         uptime: 133h30m0s
 
     LogEntry:
@@ -1872,7 +1872,7 @@ components:
           version: v0.9.2-596-gf92a9208
           git_commit: f92a9208
           git_branch: main
-          go_version: go1.26.1
+          go_version: go1.27.0
           uptime: 133h30m0s
         health:
           home_assistant: { name: Home Assistant, ready: true, last_check: "2026-06-24T14:30:55Z" }
@@ -3407,7 +3407,7 @@ components:
           version: v0.9.2-596-gf92a9208
           git_commit: f92a9208
           git_branch: main
-          go_version: go1.26.1
+          go_version: go1.27.0
 
     SessionMessage:
       type: object
