@@ -67,6 +67,14 @@ type Frontmatter struct {
 	// into model context even when tagged. Parsed here so the KB
 	// article scanner can honor it; meaningless on talents themselves.
 	Audience string
+	// Ignore declares a file in the talents directory that is
+	// deliberately not a talent — a README, an authoring guide. The
+	// loader skips it silently, unlike a file with no frontmatter at
+	// all, which earns a once-per-process notice because a silent skip
+	// is also what guidance stripped of its frontmatter looks like.
+	// Honored only as a whole-file marker (see TalentsVerified); the KB
+	// article path expresses the same intent with audience: internal.
+	Ignore bool
 }
 
 // Block represents a single parsed frontmatter + content pair from a
@@ -137,6 +145,38 @@ func noteSkippedUndeclared(ctx context.Context, path string) {
 		"path", path)
 }
 
+// noteSkippedDeclared reports, once per file per process and only at
+// Debug, a file that declared ignore: true — a chosen state, not a
+// condition anyone needs to act on.
+func noteSkippedDeclared(ctx context.Context, path string) {
+	if _, already := skipNoticed.LoadOrStore("ignore\x00"+path, struct{}{}); already {
+		return
+	}
+	logging.Logger(ctx).Debug("skipping markdown file in talents directory: declares ignore: true",
+		"path", path)
+}
+
+// fileDeclaresIgnore reports whether blocks mark the whole file as
+// deliberately not-a-talent. Only a lone ignore node qualifies; ignore
+// beside real guidance nodes is an authoring error, because honoring it
+// would silently drop the guidance and refusing it names the mistake.
+func fileDeclaresIgnore(blocks []Block, path string) (bool, error) {
+	ignored := false
+	for _, block := range blocks {
+		if block.Frontmatter.Ignore {
+			ignored = true
+			break
+		}
+	}
+	if !ignored {
+		return false, nil
+	}
+	if len(blocks) > 1 {
+		return false, fmt.Errorf("talent %s: ignore: true marks a whole file, but this file has %d frontmatter nodes; split the non-talent prose into its own file", path, len(blocks))
+	}
+	return true, nil
+}
+
 // Talents reads all .md files from the talents directory, parses their
 // YAML frontmatter, and returns one Talent per file. Tags are extracted
 // from frontmatter; Content has the frontmatter stripped. Use
@@ -192,6 +232,18 @@ func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, c
 		blocks, err := parseBlocksStrict(raw)
 		if err != nil {
 			return nil, fmt.Errorf("talent %s: %w", path, err)
+		}
+		// ignore: true is the deliberate sibling of the no-frontmatter
+		// skip above: the file has declared it is not a talent, so
+		// there is nothing to notice an operator about. It marks whole
+		// files only — an ignore node sharing a file with real guidance
+		// would silently drop that guidance, which is the exact failure
+		// the notices in this loader exist to prevent.
+		if ignored, err := fileDeclaresIgnore(blocks, path); err != nil {
+			return nil, err
+		} else if ignored {
+			noteSkippedDeclared(ctx, path)
+			continue
 		}
 		filename := strings.TrimSuffix(f, ".md")
 		fileTalents, err := talentsFromBlocks(blocks, filename, path)
@@ -395,8 +447,8 @@ func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 // "---" lines and is followed by the body content up to the next
 // node boundary (or EOF). A node boundary is a "---" line followed by
 // a recognized frontmatter key (name, tags, tags_all, kind, teaser,
-// next_tags, audience); a "---" followed by anything else stays as body
-// content (a markdown horizontal rule).
+// next_tags, audience, ignore); a "---" followed by anything else stays
+// as body content (a markdown horizontal rule).
 //
 // Single-node files (the historical shape) return a length-1 slice.
 // Multi-node files return one [Block] per node. Returns a length-1
@@ -536,7 +588,7 @@ func splitAtNextNodeBoundary(body string) (content, remainder string) {
 // markdown horizontal rule (followed by prose or a different key).
 func isFrontmatterKey(key string) bool {
 	switch key {
-	case "name", "tags", "tags_all", "kind", "teaser", "next_tags", "audience":
+	case "name", "tags", "tags_all", "kind", "teaser", "next_tags", "audience", "ignore":
 		return true
 	default:
 		return false
@@ -575,6 +627,10 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 			value := strings.TrimSpace(strings.TrimPrefix(line, "audience:"))
 			value = strings.Trim(value, `"'`)
 			meta.Audience = value
+		case strings.HasPrefix(line, "ignore:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "ignore:"))
+			value = strings.Trim(value, `"'`)
+			meta.Ignore = strings.EqualFold(value, "true")
 		default:
 			continue
 		}

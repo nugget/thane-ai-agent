@@ -1137,3 +1137,55 @@ func TestTalents_EntryPointAliasNormalizesToTrailhead(t *testing.T) {
 		t.Errorf("Kind = %q, want %q (legacy entry_point should normalize)", all[0].Kind, KindTrailhead)
 	}
 }
+
+// TestTalentsIgnoreFrontmatterSkipsDeliberately pins the deliberate
+// sibling of the no-frontmatter skip: a file declaring only
+// ignore: true is skipped without error and without the once-per-boot
+// notice — the mechanism that lets a README (with the marker) live in
+// the directory quietly, while a file with no frontmatter at all keeps
+// earning the notice, because that is also what stripped guidance
+// looks like.
+func TestTalentsIgnoreFrontmatterSkipsDeliberately(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "README.md", "---\nignore: true\n---\n# Talents\nAuthoring guide, not guidance.")
+	writeFile(t, dir, "core.md", "---\ntags: ["+TagAlways+"]\n---\n# Core\nAlways loaded.")
+
+	talents, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents() error = %v", err)
+	}
+	if len(talents) != 1 || talents[0].Name != "core" {
+		t.Fatalf("talents = %+v, want just core", talents)
+	}
+}
+
+// TestTalentsIgnoreBesideGuidanceIsRefused: honoring ignore on a file
+// that also carries real nodes would drop that guidance silently — the
+// exact failure the loader's notices exist to prevent — so it is an
+// authoring error instead.
+func TestTalentsIgnoreBesideGuidanceIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "mixed.md", "---\nignore: true\n---\n# Notes\n---\nname: real\ntags: ["+TagAlways+"]\n---\n# Real\nGuidance.")
+
+	_, err := NewLoader(dir).Talents()
+	if err == nil {
+		t.Fatal("want error for ignore beside guidance nodes, got nil")
+	}
+	if !strings.Contains(err.Error(), "ignore: true marks a whole file") {
+		t.Fatalf("error %q does not name the whole-file rule", err)
+	}
+}
+
+// TestRepoREADMEDeclaresIgnore keeps the shipped README carrying the
+// marker this mechanism exists for: if someone strips its frontmatter,
+// every deployment goes back to a boot notice about it.
+func TestRepoREADMEDeclaresIgnore(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "talents", "README.md"))
+	if err != nil {
+		t.Skipf("repo talents/README.md not readable from test dir: %v", err)
+	}
+	meta, _ := ParseFrontmatterMetadata(string(data))
+	if !meta.Ignore {
+		t.Fatal("talents/README.md must declare ignore: true so deployments skip it quietly")
+	}
+}
