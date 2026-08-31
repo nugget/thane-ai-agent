@@ -76,9 +76,10 @@ func providerBillingWake(provider string, blocked bool, detail string) looppkg.C
 	if blocked {
 		priority = messages.PriorityUrgent
 		forceSupervisor = true
-		concern = fmt.Sprintf("The %s account is refusing service over billing state: %s Requests fail fast until the operator adds credits — no retry or failover fixes this.",
-			provider, strings.TrimSpace(detail))
-		action = "Tell the operator now, through whatever channel reaches them: the account needs credits, and every cloud-model capability is down until then."
+		concern = fmt.Sprintf("The %s account is refusing service over billing state: %s Requests to %s-backed models fail fast until the operator adds credits — no retry against this provider fixes it, though models on other providers keep working.",
+			provider, strings.TrimSpace(detail), provider)
+		action = fmt.Sprintf("Tell the operator now, through whatever channel reaches them: the %s account needs credits, and %s-backed capability is down until it is funded. Other providers are unaffected.",
+			provider, provider)
 		title = "Provider billing blocked"
 	}
 

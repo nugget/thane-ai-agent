@@ -24,9 +24,13 @@ func TestIsUserFixableModelError(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{
-			"typed anthropic billing 400",
+			// Billing is operator-fixable, not user-fixable: failover
+			// stays available because the router default may be another
+			// provider entirely, and against the same blocked provider
+			// the attempt fails fast without an HTTP round-trip.
+			"typed anthropic billing 400 keeps failover available",
 			&llm.APIError{Provider: "anthropic", StatusCode: 400, Body: "credit balance too low", Billing: true},
-			true,
+			false,
 		},
 		{
 			"typed anthropic 429 is not user-fixable",

@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -9,12 +10,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
-// billingProbeInterval is how often one real request is let through
-// while the account is billing-blocked. The old behavior retried on
-// every loop iteration — which is also how recovery was detected — so
-// the probe keeps recovery detection within a minute of a credit top-up
-// while everything between probes fails fast without an HTTP call.
+// billingProbeInterval is the recovery-detection cadence while the
+// account is billing-blocked: the fast-fail gate lets the first caller
+// after each window through, and the active probe below fires on the
+// same cadence regardless of traffic. The old behavior retried on
+// every loop iteration — which is also how recovery was detected — and
+// a billing outage drives every loop into exponential backoff (sleep
+// caps reach hours), so without the active probe a top-up on a quiet
+// deployment could go undiscovered far past the promised minute.
 const billingProbeInterval = time.Minute
+
+// billingProbeTimeout bounds one active probe request.
+const billingProbeTimeout = 30 * time.Second
 
 // billingBlockedMarker identifies Anthropic's credit-balance refusal in
 // a 400 body ("Your credit balance is too low to access the Anthropic
@@ -41,6 +48,7 @@ type anthropicBilling struct {
 	since   time.Time
 	detail  string
 	retryAt time.Time
+	probing bool // an active probe goroutine is running
 	hook    func(blocked bool, detail string)
 }
 
@@ -117,7 +125,6 @@ func (c *AnthropicClient) billingFastFail() error {
 func (c *AnthropicClient) noteBillingRefusal(body string) bool {
 	detail := anthropicErrorMessage(body)
 	c.billing.mu.Lock()
-	defer c.billing.mu.Unlock()
 	transition := !c.billing.blocked
 	if transition {
 		c.billing.blocked = true
@@ -128,7 +135,42 @@ func (c *AnthropicClient) noteBillingRefusal(body string) bool {
 	if transition && c.billing.hook != nil {
 		c.billing.hook(true, detail)
 	}
+	startProbe := transition && !c.billing.probing
+	if startProbe {
+		c.billing.probing = true
+	}
+	c.billing.mu.Unlock()
+	if startProbe {
+		go c.billingProbeLoop()
+	}
 	return transition
+}
+
+// billingProbeLoop actively probes for recovery while the account is
+// blocked, independent of caller traffic — the outage itself drives
+// every loop into backoff, so waiting for a caller could stretch
+// recovery detection to the longest sleep cap. Each probe is a 1-token
+// Ping, which the billing wall refuses for free; Ping itself notes or
+// clears the billing state. The goroutine exits with the blocked state.
+func (c *AnthropicClient) billingProbeLoop() {
+	defer func() {
+		c.billing.mu.Lock()
+		c.billing.probing = false
+		c.billing.mu.Unlock()
+	}()
+	ticker := time.NewTicker(billingProbeInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if c.BillingSnapshot() == nil {
+			return // cleared by regular traffic
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), billingProbeTimeout)
+		_ = c.Ping(ctx)
+		cancel()
+		if c.BillingSnapshot() == nil {
+			return
+		}
+	}
 }
 
 // clearBillingBlocked clears the state on a successful response and

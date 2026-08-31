@@ -550,7 +550,19 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 		return fmt.Errorf("invalid API key")
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		// Ping doubles as the active billing probe: a probe that finds
+		// the wall re-arms the standing state (no new edge), and a
+		// clean response below fires recovery — this is what keeps
+		// recovery detection traffic-independent while every loop is
+		// backed off.
+		body := httpkit.ReadErrorBody(httpResp.Body, 4096)
+		if anthropicBillingBody(httpResp.StatusCode, body) {
+			c.noteBillingRefusal(body)
+		}
 		return fmt.Errorf("unexpected status from Anthropic API: %d", httpResp.StatusCode)
+	}
+	if c.clearBillingBlocked() {
+		c.logger.Info("anthropic account billing restored")
 	}
 	return nil
 }

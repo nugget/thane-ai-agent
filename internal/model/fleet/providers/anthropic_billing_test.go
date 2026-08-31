@@ -208,3 +208,45 @@ func TestAnthropicErrorMessageExtraction(t *testing.T) {
 		}
 	}
 }
+
+// TestAnthropicPingDrivesBillingState pins the active probe's engine:
+// Ping clears the blocked state on success (firing the recovery edge)
+// and re-arms it quietly when the wall is still up — this is what keeps
+// recovery detection traffic-independent while every loop is backed
+// off past the probe window.
+func TestAnthropicPingDrivesBillingState(t *testing.T) {
+	t.Parallel()
+
+	rt := &scriptedRoundTripper{responses: []*http.Response{
+		cannedResponse(400, billingRefusalBody),                  // ChatStream: enter blocked
+		cannedResponse(400, billingRefusalBody),                  // Ping: wall still up
+		cannedResponse(200, `{"content":[],"stop_reason":null}`), // Ping: recovered
+	}}
+	c := billingClientUnderTest(rt)
+	hookEdges := 0
+	c.SetBillingTransitionHook(func(bool, string) { hookEdges++ })
+
+	ctx := context.Background()
+	_, _ = c.ChatStream(ctx, "claude-test", []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
+	if c.BillingSnapshot() == nil {
+		t.Fatal("setup: not blocked after billing 400")
+	}
+
+	_ = c.Ping(ctx) // still walled: re-arms, no new edge
+	if c.BillingSnapshot() == nil {
+		t.Fatal("Ping against the wall must keep the blocked state")
+	}
+	if hookEdges != 1 {
+		t.Fatalf("hook edges after walled probe = %d, want 1", hookEdges)
+	}
+
+	if err := c.Ping(ctx); err != nil {
+		t.Fatalf("recovered Ping: %v", err)
+	}
+	if c.BillingSnapshot() != nil {
+		t.Fatal("Ping success must clear the blocked state")
+	}
+	if hookEdges != 2 {
+		t.Fatalf("hook edges after recovery = %d, want 2", hookEdges)
+	}
+}
