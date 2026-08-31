@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -720,5 +721,129 @@ func TestCalendarSnapshotUnavailableRowCarriesNoSnapshotAge(t *testing.T) {
 	out, _ := s.TagContext(context.Background(), agentctx.ContextRequest{})
 	if strings.Contains(out, `"snapshot_age"`) {
 		t.Fatalf("a row stating no snapshot exists must not carry an empty age:\n%s", out)
+	}
+}
+
+// TestCalendarSnapshotSharingDisabledIsAStateNotAFault pins the
+// classification the production deepslate account needed: the
+// companion's calendar_sharing_disabled refusal is an operator setting.
+// No WARN, no failure count — one Info on the transition in, silence
+// through re-probes and connection churn, and one Info on the way out.
+func TestCalendarSnapshotSharingDisabledIsAStateNotAFault(t *testing.T) {
+	base := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	now := base
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("deepslate", "mac-mini")},
+		err: &Error{
+			Code:    "calendar_sharing_disabled",
+			Message: "Calendar sharing is disabled in the macOS companion app.",
+		},
+	}
+	var logBuf strings.Builder
+	s := newCalendarSnapshot(fake.list, fake.call, chicagoZone(t),
+		slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	s.now = func() time.Time { return now }
+
+	s.refreshAll(context.Background())
+
+	if got := strings.Count(logBuf.String(), "level=WARN"); got != 0 {
+		t.Errorf("WARN lines = %d, want 0\nlog:\n%s", got, logBuf.String())
+	}
+	if got := strings.Count(logBuf.String(), "calendar sharing disabled"); got != 1 {
+		t.Errorf("disabled-transition Info lines = %d, want 1\nlog:\n%s", got, logBuf.String())
+	}
+	s.mu.RLock()
+	failures, sharingOff := s.failures["deepslate"], s.sharingOff["deepslate"]
+	s.mu.RUnlock()
+	if failures != 0 {
+		t.Errorf("failures = %d, want 0 — a setting is not a fault", failures)
+	}
+	if !sharingOff {
+		t.Fatal("sharingOff not recorded")
+	}
+
+	// Quiet: passes inside the probe window do not call, connection
+	// churn (fingerprint reset clears retryAt) re-probes silently, and
+	// a still-disabled probe logs nothing new.
+	for i := 0; i < 5; i++ {
+		s.refreshAll(context.Background())
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("probe window eroded: %d calls, want 1", len(fake.calls))
+	}
+	fake.infos = []ProviderInfo{calendarProviderIncarnation("deepslate", "mac-mini", "conn-2")}
+	s.refreshAll(context.Background()) // reconnect → immediate silent re-probe
+	if len(fake.calls) != 2 {
+		t.Fatalf("reconnect did not re-probe: %d calls", len(fake.calls))
+	}
+	if got := strings.Count(logBuf.String(), "calendar sharing disabled"); got != 1 {
+		t.Errorf("still-disabled re-probe logged again: %d transition lines\nlog:\n%s", got, logBuf.String())
+	}
+
+	// The operator flips the setting back on: the next probe restores
+	// the account with one Info and a real snapshot.
+	fake.err = nil
+	fake.response = snapshotCalendarResponse{}
+	now = now.Add(calendarSnapshotMaxBackoff + time.Second)
+	s.refreshAll(context.Background())
+	if got := strings.Count(logBuf.String(), "calendar sharing re-enabled"); got != 1 {
+		t.Errorf("re-enabled Info lines = %d, want 1\nlog:\n%s", got, logBuf.String())
+	}
+	s.mu.RLock()
+	_, haveSnap := s.snapshots["deepslate"]
+	stillOff := s.sharingOff["deepslate"]
+	s.mu.RUnlock()
+	if !haveSnap || stillOff {
+		t.Fatalf("restore incomplete: snapshot=%v sharingOff=%v", haveSnap, stillOff)
+	}
+}
+
+// TestCalendarSnapshotRenderNamesSharingDisabled: the model reads the
+// cause, not just the absence — and events fetched while sharing was
+// still on stop rendering the moment the operator turns it off, since
+// a connected Mac never reaches the render cutoff that would otherwise
+// age them out.
+func TestCalendarSnapshotRenderNamesSharingDisabled(t *testing.T) {
+	base := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	now := base
+	fake := &calendarFake{
+		infos: []ProviderInfo{calendarProvider("deepslate", "mac-mini")},
+		response: snapshotCalendarResponse{Events: []snapshotCalendarEvent{{
+			Title: "Private Standup",
+			Start: base.Add(time.Hour).Format(time.RFC3339),
+			End:   base.Add(2 * time.Hour).Format(time.RFC3339),
+		}}},
+	}
+	s := snapshotUnderTest(t, fake, base)
+	s.now = func() time.Time { return now }
+
+	// Sharing on: the event renders.
+	s.refreshAll(context.Background())
+	block, err := s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(block, "Private Standup") {
+		t.Fatalf("expected the fetched event to render while sharing is on:\n%s", block)
+	}
+
+	// The operator turns sharing off: the cached events leave the
+	// prompt immediately, and the block names the cause.
+	fake.err = &Error{
+		Code:    "calendar_sharing_disabled",
+		Message: "Calendar sharing is disabled in the macOS companion app.",
+	}
+	now = now.Add(calendarSnapshotInterval + time.Second)
+	s.refreshAll(context.Background())
+
+	block, err = s.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if strings.Contains(block, "Private Standup") {
+		t.Errorf("previously cached events still render after sharing was disabled:\n%s", block)
+	}
+	if !strings.Contains(block, `"sharing_disabled":true`) {
+		t.Errorf("rendered block missing sharing_disabled cause:\n%s", block)
 	}
 }

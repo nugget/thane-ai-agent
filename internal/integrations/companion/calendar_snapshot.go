@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -104,6 +105,13 @@ type CalendarSnapshot struct {
 	retryAt   map[string]time.Time
 	capable   map[string]string // account → sorted capable client_ids fingerprint
 	attempts  map[string]time.Time
+	// sharingOff marks accounts whose companion refused with
+	// calendar_sharing_disabled — an operator setting, not a fault.
+	// Deliberately NOT cleared by the capability-fingerprint reset:
+	// connection churn on a still-disabled account must stay silent,
+	// while the reset's retryAt clearing already re-probes each fresh
+	// connection immediately.
+	sharingOff map[string]bool
 
 	nudge chan struct{}
 }
@@ -122,18 +130,19 @@ func newCalendarSnapshot(list calendarProviderLister, call func(context.Context,
 		homeZone = time.Local
 	}
 	return &CalendarSnapshot{
-		list:      list,
-		call:      call,
-		homeZone:  homeZone,
-		now:       time.Now,
-		logger:    logger.With("component", "calendar_snapshot"),
-		snapshots: make(map[string]accountCalendarSnapshot),
-		pinned:    make(map[string]string),
-		failures:  make(map[string]int),
-		retryAt:   make(map[string]time.Time),
-		capable:   make(map[string]string),
-		attempts:  make(map[string]time.Time),
-		nudge:     make(chan struct{}, 1),
+		list:       list,
+		call:       call,
+		homeZone:   homeZone,
+		now:        time.Now,
+		logger:     logger.With("component", "calendar_snapshot"),
+		snapshots:  make(map[string]accountCalendarSnapshot),
+		pinned:     make(map[string]string),
+		failures:   make(map[string]int),
+		retryAt:    make(map[string]time.Time),
+		capable:    make(map[string]string),
+		attempts:   make(map[string]time.Time),
+		sharingOff: make(map[string]bool),
+		nudge:      make(chan struct{}, 1),
 	}
 }
 
@@ -299,6 +308,14 @@ func (s *CalendarSnapshot) refreshAccount(ctx context.Context, account, clientID
 		if ctx.Err() != nil {
 			return
 		}
+		// A refusal that encodes configuration is not a fault: the
+		// operator switched calendar sharing off on purpose, and no
+		// amount of retrying changes a setting.
+		var refusal *Error
+		if errors.As(err, &refusal) && refusal.Code == calendarErrCodeSharingDisabled {
+			s.recordSharingDisabled(account)
+			return
+		}
 		s.recordFailure(account, err)
 		return
 	}
@@ -311,8 +328,10 @@ func (s *CalendarSnapshot) refreshAccount(ctx context.Context, account, clientID
 
 	s.mu.Lock()
 	recovered := s.failures[account] > 0
+	restored := s.sharingOff[account]
 	s.failures[account] = 0
 	delete(s.retryAt, account)
+	delete(s.sharingOff, account)
 	s.snapshots[account] = accountCalendarSnapshot{
 		Account:   account,
 		ClientID:  clientID,
@@ -321,8 +340,41 @@ func (s *CalendarSnapshot) refreshAccount(ctx context.Context, account, clientID
 		Truncated: resp.Truncated,
 	}
 	s.mu.Unlock()
+	if restored {
+		s.logger.Info("calendar sharing re-enabled", "account", account, "events", len(resp.Events))
+	}
 	if recovered {
 		s.logger.Info("calendar snapshot recovered", "account", account, "events", len(resp.Events))
+	}
+}
+
+// calendarErrCodeSharingDisabled is the companion app's refusal code for
+// an account whose operator has calendar sharing switched off.
+const calendarErrCodeSharingDisabled = "calendar_sharing_disabled"
+
+// recordSharingDisabled handles that refusal as what it is — a chosen
+// setting, not a fault. The account takes no failure count and no WARN;
+// the transition logs once at Info, and the account re-probes quietly at
+// the backoff cap so a flipped setting is noticed within the cap even
+// without a reconnect (a reconnect re-probes immediately: the
+// capability-fingerprint reset clears retryAt but not sharingOff, so
+// connection churn on a still-disabled account stays silent).
+func (s *CalendarSnapshot) recordSharingDisabled(account string) {
+	s.mu.Lock()
+	transition := !s.sharingOff[account]
+	s.sharingOff[account] = true
+	s.failures[account] = 0
+	s.retryAt[account] = s.now().Add(calendarSnapshotMaxBackoff)
+	// The operator's choice takes effect in the prompt immediately:
+	// events fetched while sharing was still on must not keep rendering
+	// beside the disabled flag — a connected Mac never hits the render
+	// cutoff, so without this the stale snapshot would outlive the
+	// setting indefinitely.
+	delete(s.snapshots, account)
+	s.mu.Unlock()
+	if transition {
+		s.logger.Info("calendar sharing disabled in the companion app; probing quietly",
+			"account", account)
 	}
 }
 
@@ -369,6 +421,10 @@ func (s *CalendarSnapshot) TagContext(context.Context, agentctx.ContextRequest) 
 	for account, at := range s.attempts {
 		attempts[account] = at
 	}
+	sharingOff := make(map[string]bool, len(s.sharingOff))
+	for account, off := range s.sharingOff {
+		sharingOff[account] = off
+	}
 	s.mu.RUnlock()
 
 	// Connectivity means calendar-capable connectivity: an account whose
@@ -390,7 +446,9 @@ func (s *CalendarSnapshot) TagContext(context.Context, agentctx.ContextRequest) 
 		if !connected[snap.Account] && now.Sub(snap.FetchedAt) > calendarSnapshotRenderCutoff {
 			continue
 		}
-		accounts = append(accounts, s.renderAccount(snap, now, connected[snap.Account]))
+		row := s.renderAccount(snap, now, connected[snap.Account])
+		row.SharingDisabled = sharingOff[snap.Account]
+		accounts = append(accounts, row)
 	}
 	// The honest-absence row: a capable companion is connected but no
 	// fetch has ever succeeded. Without it, a permission-blocked Mac and
@@ -401,6 +459,7 @@ func (s *CalendarSnapshot) TagContext(context.Context, agentctx.ContextRequest) 
 			continue
 		}
 		row := renderedCalendarAccount{Account: account, Client: clientID, Unavailable: true}
+		row.SharingDisabled = sharingOff[account]
 		if at, ok := attempts[account]; ok {
 			row.LastAttemptAge = promptfmt.FormatDeltaOnly(at, now)
 		}
@@ -444,6 +503,14 @@ type renderedCalendarAccount struct {
 	// design forbids.
 	Unavailable    bool   `json:"unavailable,omitempty"`
 	LastAttemptAge string `json:"last_attempt_age,omitempty"`
+
+	// SharingDisabled names the cause when the companion is connected
+	// but refuses calendar reads: the operator has calendar sharing
+	// switched off in the companion app. This absence is chosen —
+	// don't suggest fixing connectivity or permissions; the operator
+	// can enable it in the companion app's Settings > Calendar if they
+	// want this account's calendar visible.
+	SharingDisabled bool `json:"sharing_disabled,omitempty"`
 }
 
 // renderedCalendarEvent reuses the tool renderer's field vocabulary. The

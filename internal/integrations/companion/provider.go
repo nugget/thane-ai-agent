@@ -259,7 +259,9 @@ func (r *Registry) Call(ctx context.Context, req CallRequest) (json.RawMessage, 
 		}
 		if !msg.Success {
 			if msg.Error != nil {
-				return nil, fmt.Errorf("%s: %s", msg.Error.Code, msg.Error.Message)
+				// Returned as-is (same "code: message" text) so callers
+				// can classify by Code via errors.As.
+				return nil, msg.Error
 			}
 			return nil, fmt.Errorf("companion request failed")
 		}

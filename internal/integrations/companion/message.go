@@ -57,6 +57,16 @@ type Error struct {
 	Message string `json:"message"`
 }
 
+// Error implements the error interface so a companion refusal can be
+// classified by Code via errors.As without losing the wire text. The
+// format is byte-identical to the "code: message" string the request
+// path has always produced — some refusals encode configuration rather
+// than failure (calendar_sharing_disabled), and flattening them to a
+// string forced consumers to treat every refusal as a fault.
+func (e *Error) Error() string {
+	return e.Code + ": " + e.Message
+}
+
 // authRequired is the first message the server sends after WebSocket upgrade.
 type authRequired struct {
 	Type    string `json:"type"`

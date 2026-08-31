@@ -70,6 +70,11 @@ How to work here:
   snapshot-age, stale, and offline fields over assumptions about
   freshness; when it reads truncated, or you need more than two days
   out, pull the window you need with `macos_calendar_events`.
+  An account marked `sharing_disabled` has calendar sharing switched
+  off in its companion app by the operator — a chosen setting, not a
+  fault. Don't retry, and don't diagnose connectivity or permissions;
+  if the operator wants that account visible, they enable it in the
+  companion app's Settings > Calendar.
 - These are read surfaces — inspect before you expect to change
   anything. Writing host data (e.g. creating calendar events) is gated
   separately and is not available just because a read tool is.
