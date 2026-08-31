@@ -665,6 +665,17 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 			wantIn: "empty stream",
 		},
 		{
+			// A reasoning stream that closed with no [DONE] and no
+			// finish_reason is the runner/proxy dying, not a budget or
+			// template problem — the reasoning-only diagnosis requires
+			// terminal evidence.
+			name: "reasoning then silent close is truncation, not budget death",
+			frames: []string{
+				`{"choices":[{"delta":{"reasoning":"deep in thought"}}]}`,
+			},
+			wantIn: "truncated response",
+		},
+		{
 			name: "reasoning then content is a real completion",
 			frames: []string{
 				`{"choices":[{"delta":{"reasoning":"think think"}}]}`,
