@@ -11,9 +11,10 @@ import (
 )
 
 type registryPresenceGetter struct {
-	states   map[string]*homeassistant.State
-	registry []homeassistant.EntityRegistryEntry
-	gets     []string
+	states        map[string]*homeassistant.State
+	registry      []homeassistant.EntityRegistryEntry
+	gets          []string
+	invalidations int
 }
 
 type retryRegistryGetter struct {
@@ -32,6 +33,8 @@ func (g *retryRegistryGetter) GetEntityRegistry(context.Context) ([]homeassistan
 	return []homeassistant.EntityRegistryEntry{{EntityID: "device_tracker.phone", Platform: "bermuda"}}, nil
 }
 
+func (g *retryRegistryGetter) InvalidateRegistryCache() {}
+
 func (g *registryPresenceGetter) GetState(_ context.Context, entityID string) (*homeassistant.State, error) {
 	g.gets = append(g.gets, entityID)
 	state, ok := g.states[entityID]
@@ -43,6 +46,10 @@ func (g *registryPresenceGetter) GetState(_ context.Context, entityID string) (*
 
 func (g *registryPresenceGetter) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
 	return g.registry, nil
+}
+
+func (g *registryPresenceGetter) InvalidateRegistryCache() {
+	g.invalidations++
 }
 
 func TestPresenceTrackerInitializesProductionBermudaShape(t *testing.T) {
@@ -123,14 +130,15 @@ func TestPresenceTrackerHandlesAttributeOnlyBermudaUpdatesAndUnlink(t *testing.T
 		phoneID  = "device_tracker.alice_phone_bermuda_tracker"
 		watchID  = "device_tracker.alice_watch_bermuda_tracker"
 	)
+	initialUpdated := time.Date(2026, 8, 30, 23, 40, 0, 0, time.UTC)
 	getter := &registryPresenceGetter{
 		states: map[string]*homeassistant.State{
 			personID: {
 				EntityID: personID, State: "home", LastChanged: time.Now().Add(-time.Hour),
 				Attributes: map[string]any{"device_trackers": []any{phoneID, watchID}},
 			},
-			phoneID: bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", time.Now().Add(-time.Minute)),
-			watchID: bermudaTrackerState(watchID, "home", "Office", "Desk Presence", time.Now().Add(-time.Minute)),
+			phoneID: bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", initialUpdated),
+			watchID: bermudaTrackerState(watchID, "home", "Office", "Desk Presence", initialUpdated),
 		},
 		registry: []homeassistant.EntityRegistryEntry{
 			{EntityID: phoneID, Platform: "bermuda"},
@@ -194,6 +202,157 @@ func TestPresenceTrackerHandlesAttributeOnlyBermudaUpdatesAndUnlink(t *testing.T
 	}
 }
 
+func TestPresenceTrackerRejectsStalePersonState(t *testing.T) {
+	const (
+		personID = "person.alice"
+		phoneID  = "device_tracker.alice_phone_bermuda_tracker"
+	)
+	initialAt := time.Date(2026, 8, 30, 23, 0, 0, 0, time.UTC)
+	getter := &registryPresenceGetter{
+		states: map[string]*homeassistant.State{
+			personID: personHAState(personID, "home", []any{phoneID}, initialAt),
+			phoneID:  bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", initialAt),
+		},
+		registry: []homeassistant.EntityRegistryEntry{{EntityID: phoneID, Platform: "bermuda"}},
+	}
+	tracker := NewPresenceTracker([]string{personID}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+
+	newerAt := initialAt.Add(2 * time.Minute)
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: personID,
+		NewState: personHAState(personID, "not_home", []any{phoneID}, newerAt),
+	})
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: personID,
+		NewState: personHAState(personID, "home", []any{phoneID}, initialAt.Add(time.Minute)),
+	})
+
+	snapshot, _ := tracker.Snapshot(personID)
+	if snapshot.State != "not_home" || !snapshot.Since.Equal(newerAt) || len(snapshot.RoomObservations) != 0 {
+		t.Fatalf("stale person state overwrote newer away state: %+v", snapshot)
+	}
+}
+
+func TestPresenceTrackerRejectsStaleBermudaState(t *testing.T) {
+	const (
+		personID = "person.alice"
+		phoneID  = "device_tracker.alice_phone_bermuda_tracker"
+	)
+	initialAt := time.Date(2026, 8, 30, 23, 0, 0, 0, time.UTC)
+	getter := &registryPresenceGetter{
+		states: map[string]*homeassistant.State{
+			personID: personHAState(personID, "home", []any{phoneID}, initialAt),
+			phoneID:  bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", initialAt),
+		},
+		registry: []homeassistant.EntityRegistryEntry{{EntityID: phoneID, Platform: "bermuda"}},
+	}
+	tracker := NewPresenceTracker([]string{personID}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+
+	newerAt := initialAt.Add(3 * time.Minute)
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: phoneID,
+		NewState: bermudaTrackerState(phoneID, "home", "Kitchen", "Kitchen Proxy", newerAt),
+	})
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: phoneID,
+		NewState: bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", initialAt.Add(2*time.Minute)),
+	})
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: phoneID,
+		NewState: bermudaTrackerState(phoneID, "not_home", "", "", initialAt.Add(time.Minute)),
+	})
+
+	snapshot, _ := tracker.Snapshot(personID)
+	if snapshot.Room != "Kitchen" || snapshot.RoomSource != "Kitchen Proxy" || len(snapshot.RoomObservations) != 1 || !snapshot.RoomObservations[0].ObservedAt.Equal(newerAt) {
+		t.Fatalf("stale Bermuda state overwrote newer room: %+v", snapshot)
+	}
+}
+
+func TestPresenceTrackerDoesNotAccumulateBermudaRoomWhileAway(t *testing.T) {
+	const (
+		personID = "person.alice"
+		phoneID  = "device_tracker.alice_phone_bermuda_tracker"
+	)
+	initialAt := time.Date(2026, 8, 30, 23, 0, 0, 0, time.UTC)
+	getter := &registryPresenceGetter{
+		states: map[string]*homeassistant.State{
+			personID: personHAState(personID, "home", []any{phoneID}, initialAt),
+			phoneID:  bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", initialAt),
+		},
+		registry: []homeassistant.EntityRegistryEntry{{EntityID: phoneID, Platform: "bermuda"}},
+	}
+	tracker := NewPresenceTracker([]string{personID}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: personID,
+		NewState: personHAState(personID, "not_home", []any{phoneID}, initialAt.Add(time.Minute)),
+	})
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: phoneID,
+		NewState: bermudaTrackerState(phoneID, "home", "Kitchen", "Kitchen Proxy", initialAt.Add(2*time.Minute)),
+	})
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: personID,
+		NewState: personHAState(personID, "home", []any{phoneID}, initialAt.Add(3*time.Minute)),
+	})
+
+	snapshot, _ := tracker.Snapshot(personID)
+	if snapshot.State != "home" || snapshot.Room != "" || len(snapshot.RoomObservations) != 0 {
+		t.Fatalf("away-time Bermuda claim resurfaced on return: %+v", snapshot)
+	}
+}
+
+func TestPresenceTrackerRefreshesNewlyLinkedBermudaTracker(t *testing.T) {
+	const (
+		personID = "person.alice"
+		phoneID  = "device_tracker.alice_phone_bermuda_tracker"
+	)
+	initialAt := time.Date(2026, 8, 30, 23, 0, 0, 0, time.UTC)
+	getter := &registryPresenceGetter{
+		states: map[string]*homeassistant.State{
+			personID: personHAState(personID, "home", nil, initialAt),
+			phoneID:  bermudaTrackerState(phoneID, "home", "Office", "Desk Presence", initialAt.Add(time.Minute)),
+		},
+		registry: []homeassistant.EntityRegistryEntry{{EntityID: phoneID, Platform: "bermuda"}},
+	}
+	tracker := NewPresenceTracker([]string{personID}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		refreshed  []string
+		refreshErr error
+	)
+	tracker.OnLinkedTrackersChange(func(entityIDs []string) {
+		refreshed = append([]string(nil), entityIDs...)
+		refreshErr = tracker.RefreshLinkedTrackers(context.Background(), getter, entityIDs)
+	})
+
+	tracker.HandleHAStateChange(homeassistant.StateChangedData{
+		EntityID: personID,
+		NewState: personHAState(personID, "home", []any{phoneID}, initialAt.Add(2*time.Minute)),
+	})
+	if refreshErr != nil {
+		t.Fatal(refreshErr)
+	}
+	if !slices.Equal(refreshed, []string{phoneID}) || getter.invalidations != 1 {
+		t.Fatalf("linked refresh = %v, invalidations = %d", refreshed, getter.invalidations)
+	}
+	snapshot, _ := tracker.Snapshot(personID)
+	if snapshot.Room != "Office" || snapshot.RoomSource != "Desk Presence" || len(snapshot.RoomObservations) != 1 {
+		t.Fatalf("newly linked tracker was not hydrated: %+v", snapshot)
+	}
+}
+
 func TestLinkedDeviceTrackerIDs(t *testing.T) {
 	tooMany := make([]any, maxLinkedDeviceTrackersPerPerson+1)
 	for i := range tooMany {
@@ -252,5 +411,15 @@ func bermudaTrackerState(entityID, state, area, scanner string, updatedAt time.T
 			"scanner":     scanner,
 			"source_type": "bluetooth_le",
 		},
+	}
+}
+
+func personHAState(entityID, state string, trackers []any, updatedAt time.Time) *homeassistant.State {
+	return &homeassistant.State{
+		EntityID:    entityID,
+		State:       state,
+		LastChanged: updatedAt,
+		LastUpdated: updatedAt,
+		Attributes:  map[string]any{"device_trackers": trackers},
 	}
 }

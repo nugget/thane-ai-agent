@@ -26,12 +26,14 @@ var entityRegistryRetryDelays = [...]time.Duration{
 	4 * time.Second,
 }
 
-// StateGetter abstracts the Home Assistant state and entity-registry reads the
-// presence tracker needs. The registry platform is the authority for deciding
-// whether a linked device tracker may contribute Bermuda room evidence.
+// StateGetter abstracts the Home Assistant state and entity-registry operations
+// the presence tracker needs. The registry platform is the authority for
+// deciding whether a linked device tracker may contribute Bermuda room
+// evidence; invalidation ensures a just-created linked entity is discoverable.
 type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 	GetEntityRegistry(ctx context.Context) ([]homeassistant.EntityRegistryEntry, error)
+	InvalidateRegistryCache()
 }
 
 type presenceFetchResult struct {
@@ -45,28 +47,6 @@ type roomWithdrawal struct {
 	observation RoomObservation
 }
 
-// OnIngestEntitiesChange registers the callback that mirrors the presence
-// tracker's person entities and HA-linked device trackers into the ingestion
-// registry. Registration immediately publishes the current set. The callback
-// is invoked outside the tracker's lock.
-func (t *PresenceTracker) OnIngestEntitiesChange(callback func([]string)) {
-	t.mu.Lock()
-	t.ingestObserver = callback
-	entityIDs := t.ingestEntityIDsLocked()
-	t.mu.Unlock()
-	if callback != nil {
-		callback(entityIDs)
-	}
-}
-
-// IngestEntityIDs returns the tracked person entities followed by the
-// deduplicated HA device trackers currently linked from those people.
-func (t *PresenceTracker) IngestEntityIDs() []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.ingestEntityIDsLocked()
-}
-
 // Initialize refreshes tracked people, their linked HA device trackers, and
 // registry-verified Bermuda room observations. Person-state failures leave the
 // affected person unchanged; registry or tracker failures retain previously
@@ -75,10 +55,6 @@ func (t *PresenceTracker) IngestEntityIDs() []string {
 func (t *PresenceTracker) Initialize(ctx context.Context, ha StateGetter) error {
 	personResults := fetchPresenceStates(ctx, ha, t.EntityIDs())
 	var firstErr error
-	linked := make(map[string]bool)
-	for _, entityID := range t.linkedTrackerEntityIDs() {
-		linked[entityID] = true
-	}
 	for _, result := range personResults {
 		if result.err != nil {
 			t.logger.Warn("failed to fetch person state", "entity_id", result.entityID, "error", result.err)
@@ -87,21 +63,17 @@ func (t *PresenceTracker) Initialize(ctx context.Context, ha StateGetter) error 
 			}
 			continue
 		}
-		trackers, err := linkedDeviceTrackerIDs(result.state.Attributes)
-		if err != nil {
-			t.logger.Warn("person device tracker links are malformed; retaining previous links",
-				"entity_id", result.entityID, "error", err)
+		if _, err := linkedDeviceTrackerIDs(result.state.Attributes); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("parse %s device trackers: %w", result.entityID, err)
 			}
-			continue
 		}
-		for _, entityID := range trackers {
-			linked[entityID] = true
-		}
+		// Apply immediately: registry discovery may retry for several seconds,
+		// while the live WebSocket watcher remains active on reconnects.
+		t.applyPersonState(result.entityID, result.state, true)
 	}
 
-	if len(linked) > 0 {
+	if len(t.linkedTrackerEntityIDs()) > 0 {
 		entries, err := getEntityRegistryWithRetry(ctx, ha, entityRegistryRetryDelays[:])
 		if err != nil {
 			t.logger.Warn("failed to identify linked HA device tracker platforms; retaining previous provider map", "error", err)
@@ -117,11 +89,6 @@ func (t *PresenceTracker) Initialize(ctx context.Context, ha StateGetter) error 
 		}
 	}
 
-	for _, result := range personResults {
-		if result.err == nil {
-			t.applyPersonState(result.entityID, result.state, true)
-		}
-	}
 	t.pruneInvalidBermudaObservations()
 
 	bermudaIDs := t.linkedTrackersForPlatform(BermudaRoomProvider)
@@ -181,7 +148,15 @@ func (t *PresenceTracker) HandleHAStateChange(change homeassistant.StateChangedD
 	_, isPerson := t.people[entityID]
 	t.mu.RUnlock()
 	if isPerson {
-		t.applyPersonState(entityID, change.NewState, true)
+		newlyLinked := t.applyPersonState(entityID, change.NewState, true)
+		if len(newlyLinked) > 0 {
+			t.mu.RLock()
+			observer := t.linkedObserver
+			t.mu.RUnlock()
+			if observer != nil {
+				observer(newlyLinked)
+			}
+		}
 		return
 	}
 	t.applyBermudaState(entityID, change.NewState)
@@ -210,10 +185,11 @@ func fetchPresenceStates(ctx context.Context, ha StateGetter, entityIDs []string
 	return results
 }
 
-func (t *PresenceTracker) applyPersonState(entityID string, state *homeassistant.State, updateLinks bool) {
+func (t *PresenceTracker) applyPersonState(entityID string, state *homeassistant.State, updateLinks bool) []string {
 	if state == nil {
-		return
+		return nil
 	}
+	updatedAt := stateUpdatedAt(state)
 	var linked []string
 	if updateLinks {
 		var err error
@@ -229,15 +205,26 @@ func (t *PresenceTracker) applyPersonState(entityID string, state *homeassistant
 	person, ok := t.people[entityID]
 	if !ok {
 		t.mu.Unlock()
-		return
+		return nil
 	}
+	if !person.lastUpdated.IsZero() && updatedAt.Before(person.lastUpdated) {
+		currentUpdatedAt := person.lastUpdated
+		t.mu.Unlock()
+		t.logger.Debug("ignored stale person state",
+			"entity_id", entityID,
+			"updated_at", updatedAt,
+			"current_updated_at", currentUpdatedAt,
+		)
+		return nil
+	}
+	person.lastUpdated = updatedAt
 	oldState := person.State
 	stateChanged := oldState != state.State
 	person.State = state.State
 	if stateChanged {
 		person.Since = state.LastChanged
 		if person.Since.IsZero() {
-			person.Since = time.Now()
+			person.Since = updatedAt
 		}
 	}
 	if name, ok := state.Attributes["friendly_name"].(string); ok && strings.TrimSpace(name) != "" {
@@ -246,7 +233,9 @@ func (t *PresenceTracker) applyPersonState(entityID string, state *homeassistant
 	friendlyName := person.FriendlyName
 
 	ingestChanged := false
+	var newlyLinked []string
 	if updateLinks && !slices.Equal(t.linkedByPerson[entityID], linked) {
+		newlyLinked = addedEntityIDs(t.linkedByPerson[entityID], linked)
 		t.linkedByPerson[entityID] = linked
 		t.rebuildTrackerOwnersLocked()
 		ingestChanged = true
@@ -282,19 +271,32 @@ func (t *PresenceTracker) applyPersonState(entityID string, state *homeassistant
 	if ingestChanged && ingestObserver != nil {
 		ingestObserver(ingestEntityIDs)
 	}
+	return newlyLinked
 }
 
 func (t *PresenceTracker) applyBermudaState(entityID string, state *homeassistant.State) {
 	if state == nil {
 		return
 	}
-	t.mu.RLock()
+	observedAt := stateUpdatedAt(state)
+	t.mu.Lock()
 	platform := t.trackerPlatform[entityID]
 	owners := append([]string(nil), t.ownersByTracker[entityID]...)
-	t.mu.RUnlock()
 	if platform != BermudaRoomProvider || len(owners) == 0 {
+		t.mu.Unlock()
 		return
 	}
+	if current := t.trackerUpdated[entityID]; !current.IsZero() && observedAt.Before(current) {
+		t.mu.Unlock()
+		t.logger.Debug("ignored stale Bermuda tracker state",
+			"entity_id", entityID,
+			"updated_at", observedAt,
+			"current_updated_at", current,
+		)
+		return
+	}
+	t.trackerUpdated[entityID] = observedAt
+	t.mu.Unlock()
 
 	room, roomOK := stringAttribute(state.Attributes, "area")
 	via, viaOK := stringAttribute(state.Attributes, "scanner")
@@ -314,87 +316,19 @@ func (t *PresenceTracker) applyBermudaState(entityID string, state *homeassistan
 	if !strings.EqualFold(state.State, "home") {
 		room = ""
 	}
-	observedAt := state.LastUpdated
-	if observedAt.IsZero() {
-		observedAt = time.Now()
-	}
 	for _, owner := range owners {
 		if room == "" {
-			t.WithdrawRoom(owner, BermudaRoomProvider, entityID)
+			t.withdrawRoomAt(owner, BermudaRoomProvider, entityID, observedAt)
 			continue
 		}
-		t.ObserveRoom(owner, RoomObservation{
+		t.observeRoom(owner, RoomObservation{
 			Room:       room,
 			Provider:   BermudaRoomProvider,
 			Source:     entityID,
 			Via:        via,
 			ObservedAt: observedAt,
-		})
+		}, true)
 	}
-}
-
-func (t *PresenceTracker) replaceTrackerPlatforms(platforms map[string]string) {
-	t.mu.Lock()
-	t.trackerPlatform = platforms
-	t.mu.Unlock()
-}
-
-func (t *PresenceTracker) linkedTrackersForPlatform(platform string) []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	var result []string
-	for entityID := range t.ownersByTracker {
-		if t.trackerPlatform[entityID] == platform {
-			result = append(result, entityID)
-		}
-	}
-	sort.Strings(result)
-	return result
-}
-
-func (t *PresenceTracker) linkedTrackerEntityIDs() []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	result := make([]string, 0, len(t.ownersByTracker))
-	for entityID := range t.ownersByTracker {
-		result = append(result, entityID)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func (t *PresenceTracker) rebuildTrackerOwnersLocked() {
-	owners := make(map[string][]string)
-	seenPeople := make(map[string]bool, len(t.order))
-	for _, personID := range t.order {
-		if seenPeople[personID] {
-			continue
-		}
-		seenPeople[personID] = true
-		for _, trackerID := range t.linkedByPerson[personID] {
-			owners[trackerID] = append(owners[trackerID], personID)
-		}
-	}
-	t.ownersByTracker = owners
-}
-
-func (t *PresenceTracker) ingestEntityIDsLocked() []string {
-	result := make([]string, 0, len(t.order)+len(t.ownersByTracker))
-	seen := make(map[string]bool, cap(result))
-	for _, entityID := range t.order {
-		if !seen[entityID] {
-			result = append(result, entityID)
-			seen[entityID] = true
-		}
-	}
-	linked := make([]string, 0, len(t.ownersByTracker))
-	for entityID := range t.ownersByTracker {
-		if !seen[entityID] {
-			linked = append(linked, entityID)
-		}
-	}
-	sort.Strings(linked)
-	return append(result, linked...)
 }
 
 func (t *PresenceTracker) pruneInvalidBermudaObservations() {
@@ -488,4 +422,14 @@ func stringAttribute(attributes map[string]any, key string) (string, bool) {
 	}
 	text, ok := value.(string)
 	return strings.TrimSpace(text), ok
+}
+
+func stateUpdatedAt(state *homeassistant.State) time.Time {
+	if !state.LastUpdated.IsZero() {
+		return state.LastUpdated
+	}
+	if !state.LastChanged.IsZero() {
+		return state.LastChanged
+	}
+	return time.Now()
 }

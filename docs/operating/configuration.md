@@ -177,9 +177,10 @@ attribute and adds those linked entities to the system ingestion floor. A
 linked tracker contributes room presence only when its entity-registry
 platform is `bermuda`, its state is `home`, and its `area` attribute is a
 non-empty string. The tracker entity ID remains the stable observation identity;
-the human-readable `scanner` attribute is surfaced as source evidence. The
-configured UniFi poller remains a second room provider and uses the AP name as
-its evidence. Observations that agree resolve to one room, while disagreement
+a non-empty human-readable `scanner` attribute is surfaced as source evidence,
+while missing scanner evidence stays empty rather than exposing the tracker ID.
+The configured UniFi poller remains a second room provider and uses the AP name
+as its evidence. Observations that agree resolve to one room, while disagreement
 reports `room_conflict` and withholds a guessed room.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the

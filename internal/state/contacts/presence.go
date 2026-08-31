@@ -79,6 +79,9 @@ type Person struct {
 
 	roomObservations map[roomObservationKey]RoomObservation
 	roomConflict     bool
+	// lastUpdated prevents a reconnect snapshot fetched before a live HA event
+	// from overwriting that newer event after slower registry I/O completes.
+	lastUpdated time.Time
 }
 
 // RoomObserver is called when a tracked person's room observation changes.
@@ -101,7 +104,11 @@ type PresenceTracker struct {
 	linkedByPerson  map[string][]string
 	ownersByTracker map[string][]string
 	trackerPlatform map[string]string
-	ingestObserver  func([]string)
+	// trackerUpdated retains provider timestamps even after withdrawals so a
+	// delayed home event cannot resurrect an older room claim.
+	trackerUpdated map[string]time.Time
+	ingestObserver func([]string)
+	linkedObserver func([]string)
 
 	mu     sync.RWMutex
 	loc    *time.Location
@@ -144,6 +151,7 @@ func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger
 		linkedByPerson:  make(map[string][]string),
 		ownersByTracker: make(map[string][]string),
 		trackerPlatform: make(map[string]string),
+		trackerUpdated:  make(map[string]time.Time),
 		loc:             loc,
 		logger:          logger,
 	}

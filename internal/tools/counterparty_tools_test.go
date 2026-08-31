@@ -34,6 +34,8 @@ func (g staticWhereaboutsStateGetter) GetEntityRegistry(context.Context) ([]home
 	return nil, nil
 }
 
+func (g staticWhereaboutsStateGetter) InvalidateRegistryCache() {}
+
 type registryWhereaboutsStateGetter struct {
 	states   map[string]*homeassistant.State
 	registry []homeassistant.EntityRegistryEntry
@@ -50,6 +52,8 @@ func (g registryWhereaboutsStateGetter) GetState(_ context.Context, entityID str
 func (g registryWhereaboutsStateGetter) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
 	return g.registry, nil
 }
+
+func (g registryWhereaboutsStateGetter) InvalidateRegistryCache() {}
 
 // newWhereaboutsFixture builds a contact ("Alice Operator") with an HA
 // person binding, one bound companion account carrying the given
@@ -276,6 +280,42 @@ func TestContactWhereaboutsProductionBermudaConsensusUsesScannerEvidence(t *test
 	}
 	if strings.Contains(out, phoneID) || strings.Contains(out, watchID) {
 		t.Fatalf("model-facing result leaked observation identity instead of scanner evidence: %s", out)
+	}
+}
+
+func TestContactWhereaboutsBermudaWithoutScannerKeepsTrackerPrivate(t *testing.T) {
+	now := time.Now().UTC()
+	const trackerID = "device_tracker.alice_private_watch_bermuda_tracker"
+	getter := registryWhereaboutsStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID: "person.alice", State: "home", LastChanged: now.Add(-2 * time.Hour), LastUpdated: now.Add(-2 * time.Hour),
+				Attributes: map[string]any{"device_trackers": []any{trackerID}},
+			},
+			trackerID: {
+				EntityID: trackerID, State: "home", LastUpdated: now.Add(-time.Minute),
+				Attributes: map[string]any{"area": "Office"},
+			},
+		},
+		registry: []homeassistant.EntityRegistryEntry{{EntityID: trackerID, Platform: "bermuda"}},
+	}
+	tracker := contacts.NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	if err := tracker.Initialize(context.Background(), getter); err != nil {
+		t.Fatal(err)
+	}
+
+	fx := newWhereaboutsFixture(t, "home", "", nil)
+	fx.deps.Presence = tracker.Snapshot
+	out, err := handleContactWhereabouts(context.Background(), fx.deps, "Alice Operator", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := decodeWhereabouts(t, out)
+	if len(res.Sources) < 2 || res.Sources[0].Source != "bermuda_room" || res.Sources[0].Room != "Office" || res.Sources[0].RoomVia != "" {
+		t.Fatalf("Bermuda room without scanner = %+v", res.Sources)
+	}
+	if strings.Contains(out, trackerID) {
+		t.Fatalf("model-facing result leaked private tracker identity: %s", out)
 	}
 }
 

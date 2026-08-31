@@ -313,6 +313,19 @@ func (a *App) initAwareness(s *newState) error {
 	if len(cfg.Person.Track) > 0 {
 		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
 		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
+		s.personTracker.OnLinkedTrackersChange(func(entityIDs []string) {
+			if a.ha == nil || len(entityIDs) == 0 {
+				return
+			}
+			linked := append([]string(nil), entityIDs...)
+			go func() {
+				refreshCtx, refreshCancel := context.WithTimeout(s.ctx, 10*time.Second)
+				defer refreshCancel()
+				if err := s.personTracker.RefreshLinkedTrackers(refreshCtx, a.ha, linked); err != nil {
+					logger.Warn("newly linked HA presence tracker refresh incomplete", "error", err)
+				}
+			}()
+		})
 		a.loop.RegisterAlwaysContextProvider(s.personTracker)
 
 		// Configure device MAC addresses from config.
