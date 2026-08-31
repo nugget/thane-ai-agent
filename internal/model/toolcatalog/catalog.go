@@ -194,6 +194,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"contact_export_all_vcf":        {CanonicalID: "native:contact_export_all_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"contact_export_vcf":            {CanonicalID: "native:contact_export_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"contact_export_vcf_qr":         {CanonicalID: "native:contact_export_vcf_qr", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"contact_dossier_write":         {CanonicalID: "native:contact_dossier_write", Source: NativeToolSource, Tags: []string{"contacts", "owner"}},
 	"file_edit":                     {CanonicalID: "native:file_edit", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_grep":                     {CanonicalID: "native:file_grep", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_list":                     {CanonicalID: "native:file_list", Source: NativeToolSource, Tags: []string{"files"}},

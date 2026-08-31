@@ -41,6 +41,21 @@ func TestNumericArgSupportsCommonTypesAndBounds(t *testing.T) {
 	}
 }
 
+func TestGenericDocumentMutationDescriptionsDeferToContractOwnedTools(t *testing.T) {
+	registry, _ := newTestDocumentRegistry(t)
+	for _, name := range []string{"doc_create", "doc_write"} {
+		tool := registry.Get(name)
+		if tool == nil {
+			t.Fatalf("%s not registered", name)
+		}
+		for _, want := range []string{"Contract-owned", "contact_dossier_write"} {
+			if !strings.Contains(tool.Description, want) {
+				t.Errorf("%s description = %q, want it to mention %q", name, tool.Description, want)
+			}
+		}
+	}
+}
+
 func TestDocumentFrontmatterArgSupportsStringsAndArrays(t *testing.T) {
 	t.Parallel()
 

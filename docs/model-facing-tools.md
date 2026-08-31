@@ -126,6 +126,13 @@ An actionable error usually includes:
 - whether the failure was ambiguity, absence, gating, or upstream error
 - enough echoed context to understand the failed selection
 
+When one call carries several independently validatable fields, report every
+field violation together. Making the model repair one over-budget projection
+only to discover the next on a later call turns deterministic validation into
+a serial guessing game and repeatedly retransmits the largest arguments. A
+single bounded error should name every field, observed value or size, and
+constraint needed for one complete retry.
+
 ### Multi-account ambiguity
 
 If a tool can target multiple accounts, clients, or tenants, ambiguity

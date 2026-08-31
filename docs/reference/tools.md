@@ -237,10 +237,10 @@ structured edits can safely derive a fresh base as part of the operation.
 | `doc_search` | Full-text and tagged search across roots. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
-| `doc_create` | Create a new document safely: corpus collision check + normalized placement + write in one call; declines with an analysis when a similar document exists. |
+| `doc_create` | Create a new ordinary document safely: corpus collision check + normalized placement + write in one call; contract-owned documents use their dedicated structured tool. |
 | `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
 | `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
-| `doc_write` | Replace a document's content with automatic stale-write protection (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
+| `doc_write` | Replace an ordinary document's content with automatic stale-write protection (contract-owned documents use their dedicated structured tool). |
 | `doc_edit` | Targeted edit within a document, with automatic stale-write protection. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |
@@ -276,6 +276,7 @@ being reimplemented in each loop prompt.
 |------|-------------|
 | `contact_save` | Create or update a contact with vCard properties. |
 | `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured contact-dossier ref. |
+| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout. Available only for a managed-writable `contacts` root. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
 | `contact_forget` | Delete a contact. |
 | `contact_list` | List and filter contacts. |
@@ -289,6 +290,7 @@ being reimplemented in each loop prompt.
 | Tool | Description |
 |------|-------------|
 | `contact_owner` | Return the runtime operator contact, canonical UUID, configured dossier ref, and active operator channels. Protected tag; name retained for compatibility. |
+| `contact_dossier_write` | Write a canonical dossier from an operator-origin turn when the managed `contacts` root is available; also exposed through the `contacts` capability. |
 
 Operator channel activity recency is reported with delta fields such as
 `last_active_delta`.
