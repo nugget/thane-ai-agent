@@ -29,6 +29,28 @@ const (
 	defaultWSHandshakeTimeout = 15 * time.Second
 )
 
+// Event delivery. The events channel decouples the socket readLoop from
+// its consumer; the readLoop must never block on a slow consumer.
+const (
+	// eventChanCapacity sizes the subscribed-event channel. The consumer
+	// (the ha-state-watcher loop) drains in batches with a few
+	// milliseconds of iteration bookkeeping between batches, and Home
+	// Assistant polling integrations refresh hundreds of entities in a
+	// single burst — the buffer must absorb a whole burst landing inside
+	// one such gap. 100 slots measurably did not (drops on every poll
+	// cycle in production); 1024 covers the worst observed storm with
+	// headroom.
+	eventChanCapacity = 1024
+
+	// dropLogInterval coalesces the channel-overflow warning. Logging
+	// every dropped event amplifies load exactly when the pipeline is
+	// already saturated — an overflow storm would push hundreds of warn
+	// records through the same process that is failing to keep up. The
+	// first drop after a quiet stretch logs immediately; further drops
+	// fold into one summary per interval.
+	dropLogInterval = 30 * time.Second
+)
+
 // WSClient manages a self-healing WebSocket connection to Home Assistant.
 //
 // Once Start is called, the client owns its own connection lifecycle: it
@@ -55,8 +77,17 @@ type WSClient struct {
 
 	// Event channel for subscribed events. Created once and reused across
 	// reconnects so downstream consumers (e.g. the state watcher) keep a
-	// stable channel.
+	// stable channel. Overflow evicts the oldest queued event — see
+	// enqueueEvent.
 	events chan Event
+
+	// Overflow accounting for the events channel. droppedEvents is the
+	// cumulative count of events discarded because the channel was full;
+	// droppedLogged and lastDropLogNano window the coalesced warning
+	// (see recordDroppedEvent).
+	droppedEvents   atomic.Uint64
+	droppedLogged   atomic.Uint64
+	lastDropLogNano atomic.Int64
 
 	// desired is the set of event types we want subscribed. It is sticky:
 	// recorded on Subscribe regardless of connection state and re-applied
@@ -123,7 +154,7 @@ func NewWSClient(baseURL, token string, logger *slog.Logger) *WSClient {
 		baseURL:           baseURL,
 		token:             token,
 		pending:           make(map[int64]chan wsResponse),
-		events:            make(chan Event, 100),
+		events:            make(chan Event, eventChanCapacity),
 		desired:           make(map[string]struct{}),
 		lost:              make(chan struct{}, 1),
 		retryNow:          make(chan struct{}, 1),
@@ -571,11 +602,7 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 		case "event":
 			// Subscribed event.
 			if msg.Event != nil {
-				select {
-				case c.events <- *msg.Event:
-				default:
-					c.logger.Warn("event channel full, dropping event", "type", msg.Event.Type)
-				}
+				c.enqueueEvent(*msg.Event)
 			}
 
 		case "pong":
@@ -585,6 +612,65 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 			c.logger.Debug("unhandled WebSocket message type", "type", msg.Type)
 		}
 	}
+}
+
+// enqueueEvent delivers a subscribed event to the events channel without
+// ever blocking the readLoop. When the channel is full, the oldest queued
+// event is evicted to make room: for state tracking the newest transition
+// is the most valuable and the stalest the most disposable, so overflow
+// keeps fresh state flowing instead of preserving a backlog nobody has
+// read yet.
+func (c *WSClient) enqueueEvent(ev Event) {
+	select {
+	case c.events <- ev:
+		return
+	default:
+	}
+
+	// Channel full: evict the oldest entry, then retry once. Both the
+	// evict and the retry race the consumer, so either can still miss;
+	// the final default preserves the never-block guarantee if a
+	// concurrent sender refills the freed slot.
+	evictedType := ""
+	select {
+	case old := <-c.events:
+		evictedType = old.Type
+	default:
+		// The consumer drained the channel between the failed send and
+		// the evict — the retry below will almost certainly succeed.
+	}
+	select {
+	case c.events <- ev:
+		if evictedType != "" {
+			c.recordDroppedEvent(evictedType)
+		}
+	default:
+		if evictedType != "" {
+			c.recordDroppedEvent(evictedType)
+		}
+		c.recordDroppedEvent(ev.Type)
+	}
+}
+
+// recordDroppedEvent counts one discarded event and emits a coalesced
+// warning: the first drop after a quiet interval logs immediately, and
+// further drops inside dropLogInterval fold into the next summary, so an
+// overflow storm costs one log record instead of hundreds.
+func (c *WSClient) recordDroppedEvent(eventType string) {
+	total := c.droppedEvents.Add(1)
+	now := time.Now().UnixNano()
+	last := c.lastDropLogNano.Load()
+	if now-last < int64(dropLogInterval) {
+		return
+	}
+	if !c.lastDropLogNano.CompareAndSwap(last, now) {
+		return // another goroutine won the race and logs this window
+	}
+	logged := c.droppedLogged.Swap(total)
+	c.logger.Warn("event channel full; dropped events",
+		"dropped_since_last", total-logged,
+		"dropped_total", total,
+		"type", eventType)
 }
 
 // signalLost notifies the supervisor of a connection loss without blocking.
