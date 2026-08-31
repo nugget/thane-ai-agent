@@ -320,3 +320,29 @@ func TestSuppressAlwaysContext(t *testing.T) {
 		}
 	})
 }
+
+func TestDocumentRevisionScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{name: "none", ctx: context.Background(), want: ""},
+		{name: "conversation", ctx: WithConversationID(context.Background(), "conv-1"), want: "conversation:conv-1"},
+		{name: "loop and conversation", ctx: WithConversationID(WithLoopID(context.Background(), "loop-1"), "conv-1"), want: "loop:loop-1/conversation:conv-1"},
+		{name: "loop", ctx: WithLoopID(context.Background(), "loop-1"), want: "loop:loop-1"},
+		{name: "session fallback", ctx: WithSessionID(context.Background(), "session-1"), want: "session:session-1"},
+		{name: "request fallback", ctx: WithRequestID(context.Background(), "request-1"), want: "request:request-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := documentRevisionScope(tt.ctx); got != tt.want {
+				t.Fatalf("documentRevisionScope() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -143,6 +143,63 @@ func TestDocWriteHandlerAppendsJournalEntry(t *testing.T) {
 	}
 }
 
+func TestDocumentMutationToolsHideRevisionPreconditions(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newTestDocumentRegistry(t)
+
+	tests := []struct {
+		name string
+		args map[string]any
+	}{
+		{
+			name: "doc_write",
+			args: map[string]any{
+				"ref":               "kb:new.md",
+				"body":              "New body.",
+				"expected_revision": "absent",
+			},
+		},
+		{
+			name: "doc_edit",
+			args: map[string]any{
+				"ref":               "kb:existing.md",
+				"mode":              "append_body",
+				"body":              "New line.",
+				"expected_revision": "rev-1",
+			},
+		},
+		{
+			name: "doc_journal_update",
+			args: map[string]any{
+				"ref":               "kb:journal.md",
+				"entry":             "New entry.",
+				"expected_revision": "absent",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := reg.Get(tc.name)
+			if tool == nil {
+				t.Fatalf("%s not registered", tc.name)
+			}
+			properties, ok := tool.Parameters["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s properties have unexpected shape", tc.name)
+			}
+			if _, ok := properties["expected_revision"]; ok {
+				t.Fatalf("%s schema exposes internal expected_revision", tc.name)
+			}
+			_, err := tool.Handler(t.Context(), tc.args)
+			if err == nil || !strings.Contains(err.Error(), "tracks revision preconditions automatically") {
+				t.Fatalf("%s error = %v, want legacy-parameter redirect", tc.name, err)
+			}
+		})
+	}
+}
+
 func TestDocumentSearchAndLinksHandlersSupportStructuredNavigation(t *testing.T) {
 	t.Parallel()
 

@@ -216,12 +216,23 @@ Document tool results use model-facing time deltas such as
 absolute timestamps. Timestamp filter inputs still accept RFC3339 values
 or signed deltas like `-604800s`.
 
+On writable git-backed roots, Thane retains a hidden read receipt for each
+loop/conversation and document ref. `doc_write`, `doc_edit`, and
+`doc_journal_update` use that receipt automatically; revision hashes are not
+part of their model-facing contract. If the document changed after the read,
+the mutation returns `applied: false` without replacing newer content and
+includes a bounded `changed_since_read` patch. The receipt then advances to the
+current document so a reconciled retry has the right comparison base. When a
+patch is unavailable or truncated, the result includes a bounded current
+excerpt instead. Replacing an existing whole body requires reading it first;
+structured edits can safely derive a fresh base as part of the operation.
+
 | Tool | Description |
 |------|-------------|
 | `doc_roots` | List configured document roots with policy, health, and counts. |
 | `doc_browse` | Walk a document root by folder. |
 | `doc_outline` | Emit the heading/section outline for a document. |
-| `doc_read` | Read a document by prefixed path. |
+| `doc_read` | Read a document by prefixed path; on writable git-backed roots, also retain a hidden comparison base for this loop/conversation. |
 | `doc_section` | Retrieve a named section from a document. |
 | `doc_search` | Full-text and tagged search across roots. |
 | `doc_links` | List inbound/outbound links for a document. |
@@ -229,14 +240,14 @@ or signed deltas like `-604800s`.
 | `doc_create` | Create a new document safely: corpus collision check + normalized placement + write in one call; declines with an analysis when a similar document exists. |
 | `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
 | `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
-| `doc_write` | Replace a document's content (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
-| `doc_edit` | Targeted edit within a document. |
+| `doc_write` | Replace a document's content with automatic stale-write protection (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
+| `doc_edit` | Targeted edit within a document, with automatic stale-write protection. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |
 | `doc_delete` | Delete a document. |
 | `doc_copy_section` | Copy one named section into another document. |
 | `doc_move_section` | Move one named section into another document. |
-| `doc_journal_update` | Append or update a journal-style entry. |
+| `doc_journal_update` | Append or update a journal-style entry, with automatic stale-write protection. |
 
 Loop-declared document output tools are request-scoped and do not appear
 in the global catalog above. When a loop declares an output, Thane

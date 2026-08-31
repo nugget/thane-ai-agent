@@ -32,6 +32,14 @@ func (r *documentRootProvenanceReviser) Resolve(ctx context.Context, filename, s
 	return revisionRefFromProvenance(rev), nil
 }
 
+func (r *documentRootProvenanceReviser) Snapshot(ctx context.Context, filename string) (documents.RevisionContent, error) {
+	revision, content, err := r.reader.Snapshot(ctx, r.storeFilename(filename))
+	if err != nil {
+		return documents.RevisionContent{}, err
+	}
+	return documents.RevisionContent{Revision: revisionRefFromProvenance(revision), Content: content}, nil
+}
+
 func (r *documentRootProvenanceReviser) History(ctx context.Context, filename string, opts documents.RevisionQuery) (documents.RevisionListing, error) {
 	page, err := r.reader.Revisions(ctx, r.storeFilename(filename), provenance.RevisionOptions{
 		Limit:       opts.Limit,

@@ -18,6 +18,10 @@ import (
 // filename is always repo-relative; callers that map a repository onto a
 // subtree translate the prefix before calling.
 type Reader interface {
+	// Snapshot returns the current worktree bytes and newest commit touching
+	// filename under one backend lock. Revision is zero for untracked files.
+	Snapshot(ctx context.Context, filename string) (revision Revision, content string, err error)
+
 	// ResolveRevision maps a selector onto a concrete revision of filename.
 	// Accepted selectors: "" / "HEAD" / "latest" (newest commit touching the
 	// file), an RFC3339 timestamp (newest commit at or before it), or a

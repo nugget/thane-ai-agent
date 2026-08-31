@@ -4,6 +4,7 @@ import "time"
 
 type modelMutationResult struct {
 	Action        string   `json:"action"`
+	Applied       bool     `json:"applied"`
 	Ref           string   `json:"ref"`
 	Root          string   `json:"root"`
 	Path          string   `json:"path"`
@@ -109,6 +110,7 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 	}
 	return &modelMutationResult{
 		Action:        result.Action,
+		Applied:       true,
 		Ref:           result.Ref,
 		Root:          result.Root,
 		Path:          result.Path,

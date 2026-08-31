@@ -52,7 +52,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			}
 			level, _ := args["level"].(string)
 			if level = strings.TrimSpace(level); level == "" {
-				return dt.Read(ctx, documents.RefArgs{Ref: ref})
+				return dt.Read(ctx, documents.RefArgs{Ref: ref, ReceiptScope: documentRevisionScope(ctx)})
 			}
 			return readDocumentFacet(ctx, dt, ref, level)
 		},
@@ -419,7 +419,7 @@ func readDocumentFacet(ctx context.Context, dt *documents.Tools, ref, level stri
 	if !looppkg.IsFacetKey(level) {
 		return "", fmt.Errorf("unknown level %q; valid levels are %s", level, strings.Join(looppkg.FacetKeys(), ", "))
 	}
-	doc, err := dt.Record(ctx, ref)
+	doc, err := dt.RecordWithReceipt(ctx, documents.RefArgs{Ref: ref, ReceiptScope: documentRevisionScope(ctx)})
 	if err != nil {
 		return "", err
 	}

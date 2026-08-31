@@ -24,14 +24,20 @@ const (
 
 // Tools exposes model-facing document navigation tools.
 type Tools struct {
-	store    *Store
-	intakeMu sync.Mutex
-	intakes  map[string]intakeEntry
+	store     *Store
+	intakeMu  sync.Mutex
+	intakes   map[string]intakeEntry
+	receiptMu sync.Mutex
+	receipts  map[string]revisionReceipt
 }
 
 // NewTools creates a document tool surface.
 func NewTools(store *Store) *Tools {
-	return &Tools{store: store, intakes: make(map[string]intakeEntry)}
+	return &Tools{
+		store:    store,
+		intakes:  make(map[string]intakeEntry),
+		receipts: make(map[string]revisionReceipt),
+	}
 }
 
 type intakeEntry struct {
@@ -62,7 +68,8 @@ type SearchArgs struct {
 
 // RefArgs identifies one managed document by canonical semantic ref.
 type RefArgs struct {
-	Ref string `json:"ref"`
+	Ref          string `json:"ref"`
+	ReceiptScope string `json:"-"`
 }
 
 // SectionArgs selects one document section by ref and optional heading.
@@ -111,6 +118,7 @@ func (t *Tools) ReadWithResultBudget(ctx context.Context, args RefArgs, resultBu
 	if err != nil {
 		return "", err
 	}
+	t.rememberDocumentReceipt(args.ReceiptScope, doc)
 	return marshalToolResultBudget(toModelDocumentRecord(doc, nowUTC()), resultBudget)
 }
 
@@ -123,13 +131,24 @@ func (t *Tools) ReadWithResultBudget(ctx context.Context, args RefArgs, resultBu
 // that does know do the work, instead of this one growing a second
 // understanding of what a document's sections mean.
 func (t *Tools) Record(ctx context.Context, ref string) (*DocumentRecord, error) {
+	return t.RecordWithReceipt(ctx, RefArgs{Ref: ref})
+}
+
+// RecordWithReceipt returns one document as stored and retains its hidden
+// revision receipt for the supplied caller scope.
+func (t *Tools) RecordWithReceipt(ctx context.Context, args RefArgs) (*DocumentRecord, error) {
 	if t == nil || t.store == nil {
 		return nil, fmt.Errorf("document index not configured")
 	}
-	if strings.TrimSpace(ref) == "" {
+	if strings.TrimSpace(args.Ref) == "" {
 		return nil, fmt.Errorf("ref is required")
 	}
-	return t.store.Read(ctx, ref)
+	doc, err := t.store.Read(ctx, args.Ref)
+	if err != nil {
+		return nil, err
+	}
+	t.rememberDocumentReceipt(args.ReceiptScope, doc)
+	return doc, nil
 }
 
 // Roots returns summaries of the indexed document roots.
@@ -279,11 +298,9 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
 	}
+	t.prepareWriteReceipt(&args)
 	result, err := t.store.Write(ctx, args)
-	if err != nil {
-		return "", err
-	}
-	return marshalToolResult(toModelMutationResult(result, nowUTC()))
+	return t.marshalMutationResult(ctx, "doc_write", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
 }
 
 // Edit applies one structured edit to a managed document.
@@ -294,11 +311,9 @@ func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
 	}
+	t.prepareEditReceipt(&args)
 	result, err := t.store.Edit(ctx, args)
-	if err != nil {
-		return "", err
-	}
-	return marshalToolResult(toModelMutationResult(result, nowUTC()))
+	return t.marshalMutationResult(ctx, "doc_edit", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
 }
 
 // JournalUpdate appends one journal-window entry to a managed document.
@@ -309,11 +324,9 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
 	}
+	t.prepareJournalReceipt(&args)
 	result, err := t.store.JournalUpdate(ctx, args)
-	if err != nil {
-		return "", err
-	}
-	return marshalToolResult(toModelMutationResult(result, nowUTC()))
+	return t.marshalMutationResult(ctx, "doc_journal_update", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
 }
 
 // Delete removes one managed document.

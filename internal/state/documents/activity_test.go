@@ -19,6 +19,10 @@ type recordingReviser struct {
 	diffBases map[string]string
 }
 
+func (r *recordingReviser) Snapshot(context.Context, string) (RevisionContent, error) {
+	return RevisionContent{}, nil
+}
+
 func (r *recordingReviser) Resolve(context.Context, string, string) (RevisionRef, error) {
 	return RevisionRef{}, nil
 }

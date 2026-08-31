@@ -16,6 +16,10 @@ type stubReviser struct {
 	content RevisionContent
 }
 
+func (s stubReviser) Snapshot(context.Context, string) (RevisionContent, error) {
+	return s.content, nil
+}
+
 func (s stubReviser) Resolve(context.Context, string, string) (RevisionRef, error) {
 	return s.content.Revision, nil
 }

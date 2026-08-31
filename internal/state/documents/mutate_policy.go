@@ -12,45 +12,68 @@ import (
 )
 
 func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string) error {
+	_, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, "")
+	return err
+}
+
+// writeDocumentFileAtRevision applies an optional compare-and-write
+// precondition. Empty preserves the unconditional mutation contract used by
+// existing callers; a non-empty revision requires a writer that can compare
+// and commit atomically.
+func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, raw, expectedRevision string) (string, error) {
 	absPath, err := s.resolveDocumentWritePath(root, relPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := s.ensureRootAuthoringAllowed(root); err != nil {
-		return err
+		return "", err
 	}
 	if writer := s.rootWriter(root); writer != nil {
-		if err := writer.Write(ctx, relPath, raw, documentWriteMessage("doc_write", root, relPath, raw)); err != nil {
-			return fmt.Errorf("write document through root policy: %w", err)
+		message := documentWriteMessage("doc_write", root, relPath, raw)
+		expectedRevision = strings.TrimSpace(expectedRevision)
+		if expectedRevision != "" {
+			revision, err := writer.WriteIfRevision(ctx, relPath, raw, message, expectedRevision)
+			if err != nil {
+				return "", fmt.Errorf("write %s with revision precondition: %w", makeRef(root, relPath), err)
+			}
+			if err := s.refreshDocumentWrite(ctx, root, relPath); err != nil {
+				return "", err
+			}
+			return revision, nil
+		} else if err := writer.Write(ctx, relPath, raw, message); err != nil {
+			return "", fmt.Errorf("write document through root policy: %w", err)
 		}
 		if err := s.refreshDocumentWrite(ctx, root, relPath); err != nil {
-			return err
+			return "", err
 		}
-		return nil
+		return "", nil
+	}
+	if strings.TrimSpace(expectedRevision) != "" {
+		return "", fmt.Errorf("revision preconditions require a revision-backed document root; root %q writes directly to the filesystem", root)
 	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return fmt.Errorf("create document directories: %w", err)
+		return "", fmt.Errorf("create document directories: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(absPath), ".thane-doc-*")
 	if err != nil {
-		return fmt.Errorf("create temp document: %w", err)
+		return "", fmt.Errorf("create temp document: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.WriteString(raw); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("write temp document: %w", err)
+		return "", fmt.Errorf("write temp document: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp document: %w", err)
+		return "", fmt.Errorf("close temp document: %w", err)
 	}
 	if err := os.Rename(tmpPath, absPath); err != nil {
-		return fmt.Errorf("replace document: %w", err)
+		return "", fmt.Errorf("replace document: %w", err)
 	}
 	if err := s.refreshDocumentWrite(ctx, root, relPath); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return "", nil
 }
 
 func (s *Store) refreshDocumentWrite(ctx context.Context, root, relPath string) error {

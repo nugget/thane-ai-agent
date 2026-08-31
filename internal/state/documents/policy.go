@@ -183,7 +183,26 @@ type SignatureVerification struct {
 // the model.
 type RootWriter interface {
 	Write(ctx context.Context, filename, content, message string) error
+	// WriteIfRevision compares, commits, and returns the exact new revision
+	// atomically. expectedRevision may be the reserved creation token absent.
+	WriteIfRevision(ctx context.Context, filename, content, message, expectedRevision string) (revision string, err error)
 	Delete(ctx context.Context, filename, message string) error
+}
+
+// RootRevisionConflictError reports a failed conditional root write without
+// coupling the documents package to the backing revision system. Expected and
+// Actual are internal coordination tokens; model-facing tools translate this
+// into a bounded narrative conflict instead of exposing them.
+type RootRevisionConflictError struct {
+	// Expected is the hidden revision receipt used by the attempted write.
+	Expected string `json:"-"`
+	// Actual is the current revision or a named worktree state.
+	Actual string `json:"-"`
+}
+
+// Error implements error.
+func (e *RootRevisionConflictError) Error() string {
+	return "document changed since the caller's read"
 }
 
 // RootVerifier verifies that a git-backed root or file is clean and

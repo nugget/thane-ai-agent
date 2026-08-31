@@ -322,6 +322,31 @@ cannot mutate roots with signed git provenance; those changes must go
 through managed document tools so root writers can preserve authoring
 policy, git history, and signatures.
 
+### Concurrent writers
+
+Git history makes a mistaken overwrite recoverable, but history alone does
+not stop a stale loop from replacing another writer's current work. On writable
+git-backed roots, a managed read therefore records the current file revision as
+a hidden receipt keyed by loop/conversation and document ref. The model never
+passes hashes between tools. A later `doc_write`, `doc_edit`, or
+`doc_journal_update` supplies that receipt to the root writer internally.
+Read-only history roots do not create mutation receipts.
+
+The root writer compares and commits managed mutations under the same lock, and
+the Git ref update also verifies its expected parent. A stale receipt returns
+`applied: false`, leaves the worktree and HEAD unchanged, and provides a bounded
+base-to-current patch. The receipt advances to current HEAD so the caller can
+reconcile and retry without another hash-bearing parameter. A missing or
+oversized patch falls back to a bounded current excerpt. A scoped whole-body
+replacement of an existing document requires a prior managed read; structured
+edits and creates derive a safe current/absent base within the operation.
+
+This coordinates Thane's managed writers and rejects operator edits that are
+already dirty when the mutation begins. It is not a general filesystem lock:
+an editor that ignores this coordination can still save in the narrow window
+between the final worktree check and replacement. Git history remains the
+recovery boundary for that external race.
+
 Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`,
 `file_search`, `file_grep`) intentionally do not consult the verifier.
 `file_list`, `file_tree`, `file_stat`, and `file_search` return only

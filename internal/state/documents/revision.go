@@ -5,6 +5,75 @@ import (
 	"time"
 )
 
+// attachCurrentRevision adds the round-trippable revision token when the
+// document's root exposes history. Revision lookup is supplementary to a
+// successful read or write: failing it must not turn an already-committed
+// mutation into an apparent failure that a caller may retry.
+func (s *Store) attachCurrentRevision(ctx context.Context, record *DocumentRecord) {
+	if s == nil || record == nil {
+		return
+	}
+	reviser := s.rootReviser(record.Root)
+	if reviser == nil {
+		return
+	}
+	rev, err := reviser.Resolve(ctx, record.Path, "HEAD")
+	if err != nil {
+		s.logger.Debug("document revision unavailable", "ref", record.Ref, "error", err)
+		return
+	}
+	record.Revision = rev.Short
+}
+
+func (s *Store) attachMutationRevision(ctx context.Context, record *DocumentRecord, revision string) {
+	if record == nil {
+		return
+	}
+	if revision != "" {
+		record.Revision = revision
+		return
+	}
+	if s.rootWriter(record.Root) != nil {
+		return
+	}
+	s.attachCurrentRevision(ctx, record)
+}
+
+func (s *Store) readCurrentDocument(ctx context.Context, absPath, root, relPath string) (*DocumentRecord, error) {
+	record, _, _, err := s.readCurrentDocumentParts(ctx, absPath, root, relPath)
+	return record, err
+}
+
+// readCurrentDocumentParts pairs the bytes used for a structured mutation
+// with their backing revision. The parsed record, raw frontmatter, and body
+// therefore all share the token used by the later conditional write.
+func (s *Store) readCurrentDocumentParts(ctx context.Context, absPath, root, relPath string) (*DocumentRecord, string, string, error) {
+	reviser := s.rootReviser(root)
+	if reviser != nil {
+		snapshot, err := reviser.Snapshot(ctx, relPath)
+		if err != nil {
+			return nil, "", "", err
+		}
+		record, rawFrontmatter, body, err := readDocumentRecordBytes(absPath, root, relPath, []byte(snapshot.Content))
+		if err != nil {
+			return nil, "", "", err
+		}
+		record.Revision = snapshot.Revision.Short
+		return record, rawFrontmatter, body, nil
+	}
+	record, rawFrontmatter, body, err := s.readDocumentFile(absPath, root, relPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	// A conditional writer without atomic read snapshots must not advertise a
+	// token that may describe newer bytes than this read. The production git
+	// adapter supports snapshots; this guard keeps alternate adapters safe.
+	if s.rootWriter(root) == nil {
+		s.attachCurrentRevision(ctx, record)
+	}
+	return record, rawFrontmatter, body, nil
+}
+
 // RootReviser exposes read-only revision history, diff, and point-in-time
 // recall for a git-backed document root. It is the documents-layer,
 // verifier-neutral counterpart to [RootWriter] and [RootVerifier]: the app
@@ -16,6 +85,8 @@ import (
 // Selectors are resolved forms — "HEAD"/"latest", an RFC3339 timestamp, or a
 // commit hash. Relative deltas are normalized to timestamps by the caller.
 type RootReviser interface {
+	// Snapshot returns current content and its revision under one backend lock.
+	Snapshot(ctx context.Context, filename string) (RevisionContent, error)
 	// Resolve maps a selector onto a concrete revision of the file.
 	Resolve(ctx context.Context, filename, selector string) (RevisionRef, error)
 	// History returns a newest-first page of the file's revisions.
