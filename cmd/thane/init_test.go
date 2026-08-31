@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	platformconfig "github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"gopkg.in/yaml.v3"
 )
@@ -42,7 +46,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	out := buf.String()
 
 	// Verify directory structure.
-	for _, sub := range []string{"core", "db", filepath.Join("core", "talents")} {
+	for _, sub := range []string{"core", "contacts", "db", filepath.Join("core", "talents")} {
 		info, err := os.Stat(filepath.Join(dir, sub))
 		if err != nil {
 			t.Errorf("expected directory %s: %v", sub, err)
@@ -149,6 +153,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		Person struct {
 			ContactBindings map[string]string `yaml:"contact_bindings"`
 		} `yaml:"person"`
+		Roots map[string]platformconfig.RootEntry `yaml:"roots"`
 	}
 	configData, err := os.ReadFile(filepath.Join(dir, "core", "config.yaml"))
 	if err != nil {
@@ -163,6 +168,31 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	}
 	if generated.Person.ContactBindings == nil || len(generated.Person.ContactBindings) != 0 {
 		t.Fatalf("generated person.contact_bindings = %#v, want explicit empty map", generated.Person.ContactBindings)
+	}
+	contactsRoot, ok := generated.Roots[platformconfig.ContactsRootName]
+	if !ok || contactsRoot.Context.Advertise != platformconfig.RootAdvertiseExactSubject {
+		t.Fatalf("generated contacts root = %#v, want exact-subject policy", contactsRoot)
+	}
+	if !contactsRoot.Git.Enabled || !contactsRoot.Git.SignCommits || contactsRoot.Git.VerifySignatures != "required" {
+		t.Fatalf("generated contacts git policy = %#v", contactsRoot.Git)
+	}
+	contactsDir := filepath.Join(dir, platformconfig.ContactsRootName)
+	for _, args := range [][]string{
+		{"rev-list", "--count", "HEAD"},
+		{"status", "--short", "--untracked-files=all"},
+		{"verify-commit", "HEAD"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", contactsDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s in contacts root: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		if args[0] == "rev-list" && strings.TrimSpace(string(out)) != "1" {
+			t.Fatalf("contacts root commit count = %q, want 1", strings.TrimSpace(string(out)))
+		}
+		if args[0] == "status" && strings.TrimSpace(string(out)) != "" {
+			t.Fatalf("contacts root status = %q, want clean", strings.TrimSpace(string(out)))
+		}
 	}
 
 	contactStore, err := contacts.Open(filepath.Join(dir, "db", "contacts.db"), nil)
@@ -212,6 +242,43 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		if info.Size() == 0 {
 			t.Errorf("archive skeleton: %s is empty", rel)
 		}
+	}
+}
+
+func TestBootstrapContactDossierRootHonorsRepoPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := runInit(io.Discard, dir, initOptions{SelfSigned: true, OperatorName: "Test Operator"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	contactsDir := filepath.Join(dir, platformconfig.ContactsRootName)
+	if err := os.RemoveAll(contactsDir); err != nil {
+		t.Fatalf("remove standalone contacts root: %v", err)
+	}
+
+	configPath := filepath.Join(dir, platformconfig.CoreRootName, "config.yaml")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	old := "            signing_key: core:identity/signing_ed25519"
+	replacement := "            repo_path: " + dir + "\n" + old
+	configData = []byte(strings.Replace(string(configData), old, replacement, 1))
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatalf("write config with repo_path: %v", err)
+	}
+
+	configured, created, err := bootstrapContactDossierRoot(context.Background(), configPath, dir, slog.Default())
+	if err != nil {
+		t.Fatalf("bootstrapContactDossierRoot: %v", err)
+	}
+	if !configured || !created {
+		t.Fatalf("configured=%v created=%v, want both true", configured, created)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		t.Fatalf("configured backing repository was not initialized: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(contactsDir, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("contacts worktree unexpectedly became a separate repository: %v", err)
 	}
 }
 

@@ -137,6 +137,10 @@ The current policy fields are:
 - `git.sign_commits`: signs and commits each managed write/delete.
 - `git.verify_signatures`: sets the consumer policy: `none`, `warn`,
   or `required`.
+- `context.advertise`: controls bounded document offers: `never`,
+  capability-`tagged`, `always` ambient, or `exact_subject`. The last mode
+  offers a document only when one of its tags exactly matches a canonical
+  request subject; it has no lexical or ambient fallback.
 
 ### Signed roots
 
@@ -449,15 +453,16 @@ of truth. The generated tools still write through document roots. That
 keeps path resolution, indexing, provenance, and root-level integrity
 policy in one subsystem.
 
-## Special Case: the Derived Roots, `core` and `self`
+## Special Case: the Derived Roots
 
-Two roots are reserved. Both come from the workspace — `{workspace.path}/core`
-and `{workspace.path}/self` — and neither takes a path from `roots:`. You may
-still name either one there to set policy; a path given alongside policy is
-ignored.
+Three root names are reserved: `core`, `self`, and `contacts`. Their paths come
+from the workspace, and none takes a path from `roots:`. You may name them
+there to set policy; a path given alongside policy is ignored. `core` and
+`self` are always registered. `contacts` is opt-in and is registered only when
+its policy is declared.
 
-They are two roots rather than one because they answer to different
-authorities, and that difference is the whole point of the split.
+`core` and `self` are separate roots because they answer to different
+authorities, and that difference is the whole point of their split.
 
 `core` is what an operator declares Thane to be, and what constrains it:
 axioms, persona, mission, the runtime config, talents, and loop definitions.
@@ -485,9 +490,52 @@ That distinction is why the injection had to follow the document rather than
 stay pointed at `core`: an ego loop writing to one root while the prompt reads
 another leaves the agent composing self-reflection it never reads back.
 
-Both are derived rather than declared because the core service loops write
-`self` on every install. A root an operator had to remember to declare would
-leave a fresh install with nowhere for those documents to land.
+Both are always registered because the core service loops write `self` on
+every install. A root an operator had to remember to declare would leave a
+fresh install with nowhere for those documents to land.
+
+### Contact dossiers
+
+`contacts` is the optional longitudinal document side of the structured
+contact directory. Its canonical document is
+`contacts:<canonical-contact-uuid>.md`; using the UUID rather than a name keeps
+the dossier stable across renames. Every dossier must carry the matching
+`contact:<uuid>` as its only frontmatter tag and the complete status-line /
+teaser / digest / full facet ladder. The single-tag rule prevents a broader
+subject such as `household` from advertising a private dossier. Go enforces
+that shape before any managed write reaches the worktree or Git history.
+
+The boundary is strict: SQLite contacts remain authoritative for UUIDs,
+structured identity, communication properties, trust zones, Home Assistant
+bindings, and companion attribution. Dossier prose is relationship synthesis,
+not a way to mutate those fields. `contact_lookup` and `contact_owner` expose a
+bounded dossier ref; `doc_read` opens it when the prose is useful.
+
+Fresh `thane init` workspaces declare and establish the root with the agent's
+signing key, required signature verification, and this context policy:
+
+```yaml
+roots:
+  contacts:
+    authoring: managed
+    context:
+      advertise: exact_subject
+    seed_signers:
+      - principal: thane@provenance.local
+        key: "ssh-ed25519 AAAA..." # core/identity/signing_ed25519.pub
+        label: agent
+    git:
+      enabled: true
+      sign_commits: true
+      verify_signatures: required
+      signing_key: core:identity/signing_ed25519
+```
+
+`exact_subject` is the privacy and attention boundary: a request carrying
+`contact:<uuid>` may receive that contact's compact dossier projection, while
+unrelated dossiers get neither ambient nor loose lexical offers. Existing
+workspaces can add the same declaration and re-run `thane init` to establish
+the signed sibling repository before deployment.
 
 ## The Human-Level Rule
 

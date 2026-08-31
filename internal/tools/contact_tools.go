@@ -95,7 +95,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_lookup",
-		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. With no arguments, returns directory statistics.",
+		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. An exact name result includes the canonical contact UUID and optional contacts:<uuid>.md dossier ref when the dossier root is configured; use doc_read for the dossier rather than treating its prose as structured identity authority. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -133,7 +133,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_owner",
-		Description: "Return the primary operator contact record with rich details and contact properties, plus a structured summary of currently active operator-scoped channels. Uses identity.operator_contact_id when configured; otherwise supports the legacy name selector and finally the sole admin contact if exactly one exists.",
+		Description: "Return the primary operator contact record with rich details and contact properties, its canonical UUID and optional contacts:<uuid>.md dossier ref, plus a structured summary of currently active operator-scoped channels. Use doc_read for the dossier; its prose is longitudinal synthesis, while this contact record remains authoritative for structured identity and bindings. Uses identity.operator_contact_id when configured; otherwise supports the legacy name selector and finally the sole admin contact if exactly one exists.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

@@ -44,11 +44,12 @@ func resolveRootPaths(root, rootPath string, gitCfg config.DocumentRootGitConfig
 }
 
 // documentRootPaths returns the path prefixes for this instance's document
-// roots, with the reserved derived roots — core and self — forced to the
-// locations derived from workspace.path.
+// roots, with reserved derived roots forced to locations beneath
+// workspace.path. Core and self are always present; contacts is present when
+// its policy is explicitly declared.
 //
 // The derived roots are what make this worth centralizing. They carry
-// policy under roots.core / roots.self but never a path, so they are
+// policy under roots.core / roots.self / roots.contacts but never a path, so they are
 // simply absent from cfg.Paths as loaded and appear only once derived.
 // Any caller that enumerates roots without this step silently omits them
 // — which for a per-root check means reporting on every root except the
@@ -60,14 +61,14 @@ func resolveRootPaths(root, rootPath string, gitCfg config.DocumentRootGitConfig
 // The returned map is a copy. Creating the directories is left to the
 // caller, so read-only callers stay read-only.
 func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]string {
-	out := make(map[string]string, len(cfg.Paths)+2)
+	out := make(map[string]string, len(cfg.Paths)+3)
 	for name, path := range cfg.Paths {
 		out[name] = path
 	}
 	if cfg.Workspace.Path == "" {
 		return out
 	}
-	// Both derived roots get the same treatment, so adding one is an
+	// Derived roots get the same treatment, so adding one is an
 	// entry here rather than a second copy of this loop. A slice, not a
 	// map: iteration order decides log order, and a diagnostic that
 	// shuffles between runs reads as two different problems.
@@ -77,7 +78,11 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 	}{
 		{config.CoreRootName, cfg.CoreRoot()},
 		{config.SelfRootName, cfg.SelfRoot()},
+		{config.ContactsRootName, cfg.ContactsRoot()},
 	} {
+		if derivedRoot.name == config.ContactsRootName && !declaresDocumentRoot(cfg.DocRoots, config.ContactsRootName) {
+			continue
+		}
 		rootName, derived := derivedRoot.name, derivedRoot.path
 		if derived == "" {
 			continue
@@ -101,13 +106,27 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 	return out
 }
 
+func declaresDocumentRoot(roots map[string]config.DocumentRootConfig, want string) bool {
+	_, ok := declaredDocumentRoot(roots, want)
+	return ok
+}
+
+func declaredDocumentRoot(roots map[string]config.DocumentRootConfig, want string) (config.DocumentRootConfig, bool) {
+	for name, root := range roots {
+		if strings.TrimSuffix(strings.TrimSpace(name), ":") == want {
+			return root, true
+		}
+	}
+	return config.DocumentRootConfig{}, false
+}
+
 // missingDerivedRoot reports a derived root that does not exist on disk.
 //
 // For a declared root, silence is right: validate creates nothing, and serve
 // bootstraps a missing signing root and births it, so calling it unadmitted
 // would be a false alarm about a root that does not exist to judge.
 //
-// That reasoning does not carry to core and self. Serve signs the birth commit
+// That reasoning does not carry to derived roots. Serve signs the birth commit
 // it creates with the root's own signing key, and admission then demands that
 // commit be signed by a declared seed signer. Where the two differ — the common
 // case for a derived root, whose seed signers name the operator while its
@@ -122,9 +141,14 @@ func missingDerivedRoot(cfg *config.Config, root string, mode documents.Verifica
 	if !config.IsDerivedRootName(root) {
 		return RootAdmission{}, false
 	}
-	path := cfg.CoreRoot()
-	if root == config.SelfRootName {
+	var path string
+	switch root {
+	case config.CoreRootName:
+		path = cfg.CoreRoot()
+	case config.SelfRootName:
 		path = cfg.SelfRoot()
+	case config.ContactsRootName:
+		path = cfg.ContactsRoot()
 	}
 	// RepoPath stays empty: it reports the repository admission judged, and
 	// admission never ran here. Naming a directory that does not exist would
@@ -246,7 +270,7 @@ func (a *App) verifyRootAdmission(root, rootPath string, rootCfg config.Document
 // serve would create and birth-commit it, so reporting it as unadmitted would
 // be a false alarm about a root that does not exist to judge.
 //
-// core and self are the exception, for the reason [missingDerivedRoot] gives:
+// Derived roots are the exception, for the reason [missingDerivedRoot] gives:
 // the bootstrap serve would perform is the very thing admission then refuses.
 func CheckRootAdmission(ctx context.Context, cfg *config.Config) []RootAdmission {
 	if cfg == nil || len(cfg.DocRoots) == 0 {

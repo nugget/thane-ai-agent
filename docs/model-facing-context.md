@@ -381,6 +381,12 @@ Providers own domain matching and materialization. A
 model-authored facet can describe why it is useful, but it cannot grant itself
 injection or assign its own rank.
 
+For a private per-subject corpus, configure the document root with
+`advertise: exact_subject`. That mode requires an exact match between a
+canonical request subject and a document tag; it deliberately supplies no
+ambient or lexical evidence. Contact dossiers use this so `contact:<uuid>` can
+surface only `contacts:<uuid>.md`, never a neighboring person's dossier.
+
 Advertising should be cheaper than materializing. Do not read a full document
 or render an expensive view merely to discover that the discriminator will
 drop it. Estimates are admission hints, not permission to overflow: the

@@ -56,12 +56,13 @@ const DefaultWorkspace = "~/Thane"
 // ConfigFileName is the fixed name of the runtime config inside core.
 const ConfigFileName = "config.yaml"
 
-// CoreRootName and SelfRootName are the two document roots whose paths
-// are derived from the workspace rather than declared. Both may be named
-// in roots: to set policy, and neither takes a path from there.
+// CoreRootName, SelfRootName, and ContactsRootName are document roots whose
+// paths are derived from the workspace rather than declared. They may be
+// named in roots: to set policy, and none takes a path from there.
 const (
-	CoreRootName = "core"
-	SelfRootName = "self"
+	CoreRootName     = "core"
+	SelfRootName     = "self"
+	ContactsRootName = "contacts"
 )
 
 // legacyConfigLocations are the paths Thane searched before the config
@@ -244,11 +245,10 @@ type Config struct {
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
 
 	// Workspace configures the agent's sandboxed file system access.
-	// The workspace root is also the anchor for Thane's two derived
-	// document roots. {workspace.path}/core holds what the operator
-	// declares Thane to be — axioms.md, persona.md, mission.md — and
-	// {workspace.path}/self holds what Thane has made of that, written
-	// by the core service loops: ego.md, metacognitive.md, archivist.md.
+	// The workspace root also anchors Thane's derived document roots.
+	// {workspace.path}/core holds what the operator declares Thane to be;
+	// {workspace.path}/self holds what Thane has made of that; and the
+	// optional {workspace.path}/contacts holds contact dossiers.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Roots is the unified document-root config. Each entry names one
@@ -275,10 +275,9 @@ type Config struct {
 	//         signing_key: ~/Thane/core/identity/signing_ed25519
 	//
 	// Typical names: kb (curated knowledge), generated (model-produced
-	// durable outputs), scratchpad (low-integrity work area), dossiers.
-	// The core: name is reserved and always derived from
-	// {workspace.path}/core; declaring it under roots: lets you set
-	// policy for it but the path is ignored.
+	// durable outputs), and scratchpad (low-integrity work area). The core,
+	// self, and contacts names are reserved and derived from workspace.path;
+	// declaring them under roots: sets policy, while any path is ignored.
 	Roots map[string]RootEntry `yaml:"roots,omitempty"`
 
 	// Paths is the legacy directory-mapping block. Replaced by roots:.
@@ -1005,10 +1004,9 @@ type AllowedSigner struct {
 // (the entire entry is the path, all policy fields default) or a
 // mapping with explicit path: and policy fields.
 type RootEntry struct {
-	// Path is the directory the root resolves to. Supports ~
-	// expansion at resolver construction time. For the reserved
-	// core: name this is ignored; the path is always derived from
-	// workspace.path.
+	// Path is the directory the root resolves to. Supports ~ expansion at
+	// resolver construction time. For reserved derived roots (core, self,
+	// and contacts) this is ignored; their paths come from workspace.path.
 	Path string `yaml:"path"`
 
 	// Indexing controls whether markdown files in this root are
@@ -1109,6 +1107,12 @@ const (
 	// schedule root, whose freshest signal is worth a standing seat at
 	// the discriminator's table.
 	RootAdvertiseAlways = "always"
+	// RootAdvertiseExactSubject lets a document offer itself only when one
+	// of its tags exactly matches a canonical request subject. It is the
+	// posture for private per-subject corpora such as contact dossiers:
+	// relevant records get a trailhead without unrelated records spending
+	// ambient attention or matching on loose words.
+	RootAdvertiseExactSubject = "exact_subject"
 )
 
 // RootContextPolicy declares how one document root may reach a model.
@@ -1131,16 +1135,18 @@ type RootContextPolicy struct {
 	// enforce, and the right shape when an entire corpus is only
 	// relevant while a capability is active.
 	//
-	// It applies to injection only, so it requires inject: tagged.
-	// Gating search the same way would need the document store to see
-	// active capability tags, which it deliberately does not.
+	// It applies to tagged injection and tagged advertising. Gating search
+	// the same way would need the document store to see active capability
+	// tags, which it deliberately does not.
 	RequiresTag string `yaml:"requires_tag,omitempty"`
 
 	// Advertise controls whether this root's documents may offer
 	// themselves to context assembly through the advertisement rail
 	// (#1431): "never" (default), "tagged" (offers only while
-	// RequiresTag's capability tag is active), or "always" (ambient
-	// offers on every eligible turn). Advertising is a third door
+	// RequiresTag's capability tag is active), "always" (ambient offers
+	// on every eligible turn), or "exact_subject" (offers only when a
+	// document tag exactly matches a canonical request subject).
+	// Advertising is a third door
 	// beside Inject and Search rather than a mode of either: injection
 	// pushes whole documents on a tag, search answers an explicit ask,
 	// and advertising lets a document compete for a bounded slice of
@@ -1219,9 +1225,9 @@ func (p RootContextPolicy) Validate(rootName string) error {
 		return fmt.Errorf("roots.%s.context.search must be %q, %q, or %q, got %q", rootName, RootSearchDefault, RootSearchOnRequest, RootSearchNever, p.Search)
 	}
 	switch p.Advertise {
-	case "", RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways:
+	case "", RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways, RootAdvertiseExactSubject:
 	default:
-		return fmt.Errorf("roots.%s.context.advertise must be %q, %q, or %q, got %q", rootName, RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways, p.Advertise)
+		return fmt.Errorf("roots.%s.context.advertise must be %q, %q, %q, or %q, got %q", rootName, RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways, RootAdvertiseExactSubject, p.Advertise)
 	}
 	if p.Advertise == RootAdvertiseTagged && p.RequiresTag == "" {
 		return fmt.Errorf("roots.%s.context.advertise %q needs requires_tag to name the gating capability tag", rootName, RootAdvertiseTagged)
@@ -2789,7 +2795,7 @@ func (c *Config) normalizeRoots() error {
 			}
 			seen[trimmed] = name
 			pathValue := strings.TrimSpace(entry.Path)
-			// core: and self: are reserved — their paths are always
+			// Derived roots are reserved — their paths are always
 			// derived from workspace.path. Allow declaring either in
 			// roots: solely to set policy; ignore any path provided.
 			if IsDerivedRootName(trimmed) {
@@ -2799,7 +2805,7 @@ func (c *Config) normalizeRoots() error {
 				}
 			} else {
 				if pathValue == "" {
-					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName)
+					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName, ContactsRootName)
 				}
 				c.Paths[trimmed] = entry.Path
 			}
@@ -3744,12 +3750,12 @@ func (c *Config) CoreRoot() string {
 // IsDerivedRootName reports whether a root takes its path from the
 // workspace rather than from roots:.
 //
-// The derived roots are load-bearing in a way declared roots are not: the
-// instance's own configuration lives in one and its core service loops write
-// the other on every install. Callers that need to treat "this root is missing"
-// as a problem rather than a preference use this to tell the two apart.
+// The derived roots are load-bearing in a way ordinary declared roots are not:
+// their stable refs depend on one workspace-relative location. Callers that
+// need to treat "this root is missing" as a problem rather than a preference
+// use this to distinguish them.
 func IsDerivedRootName(name string) bool {
-	return name == CoreRootName || name == SelfRootName
+	return name == CoreRootName || name == SelfRootName || name == ContactsRootName
 }
 
 // SelfRoot returns the fixed document root holding what Thane writes
@@ -3774,6 +3780,17 @@ func (c *Config) SelfRoot() string {
 		return ""
 	}
 	return filepath.Join(c.Workspace.Path, SelfRootName)
+}
+
+// ContactsRoot returns the fixed document root holding contact dossiers,
+// derived from [Workspace.Path] exactly as [CoreRoot] is. The root is opt-in:
+// callers only register it when contacts is explicitly declared under roots:.
+// When workspace.path is unset, ContactsRoot returns the empty string.
+func (c *Config) ContactsRoot() string {
+	if strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.Workspace.Path, ContactsRootName)
 }
 
 // CoreFile returns the absolute-or-relative path to a named file in the

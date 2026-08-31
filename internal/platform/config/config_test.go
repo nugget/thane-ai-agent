@@ -1584,6 +1584,27 @@ func TestNormalizeRoots_CoreReservedAcceptsPolicyOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeRoots_ContactsReservedAcceptsPolicyOnly(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Roots: map[string]RootEntry{
+			ContactsRootName: {
+				Authoring: "managed",
+				Context:   RootContextPolicy{Advertise: RootAdvertiseExactSubject},
+			},
+		},
+	}
+	if err := cfg.normalizeRoots(); err != nil {
+		t.Fatalf("normalizeRoots: %v", err)
+	}
+	if _, ok := cfg.Paths[ContactsRootName]; ok {
+		t.Errorf("contacts path must be derived; Paths = %#v", cfg.Paths)
+	}
+	if got := cfg.DocRoots[ContactsRootName].Context.Advertise; got != RootAdvertiseExactSubject {
+		t.Errorf("contacts advertise policy = %q, want %q", got, RootAdvertiseExactSubject)
+	}
+}
+
 // --- Ego loop validation ---
 
 // egoBaseConfig returns a Config with the ego loop enabled and a workspace

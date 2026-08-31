@@ -301,6 +301,10 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	if err != nil {
 		return fmt.Errorf("bootstrap core identity: %w", err)
 	}
+	dossierConfigured, dossierCreated, err := bootstrapContactDossierRoot(ctx, coreConfigPath, absDir, slog.Default())
+	if err != nil {
+		return err
+	}
 
 	configuredOperatorID, dataDir, operatorConfigured, err := readOperatorBootstrapConfig(coreConfigPath, absDir)
 	if err != nil {
@@ -319,6 +323,13 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 		describeCorePosture(w, result, why)
 	} else {
 		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
+	}
+	if dossierConfigured {
+		if dossierCreated {
+			fmt.Fprintf(w, "  ✓ %s (signed contact dossier root)\n", filepath.Join(absDir, platformconfig.ContactsRootName))
+		} else {
+			fmt.Fprintf(w, "  · %s (contact dossier root exists, skipping)\n", filepath.Join(absDir, platformconfig.ContactsRootName))
+		}
 	}
 	if contactBootstrap != nil {
 		if err := contactBootstrap.close(); err != nil {

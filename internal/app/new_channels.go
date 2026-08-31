@@ -155,6 +155,9 @@ func (a *App) initChannels(s *newState) error {
 	})
 
 	contactTools := contacts.NewTools(contactStore)
+	dossierRoot, dossiersEnabled := declaredDocumentRoot(a.cfg.DocRoots, contacts.DossierRootName)
+	dossiersWritable := dossiersEnabled && documentRootPolicyFromConfig(dossierRoot).Authoring == documents.AuthoringManaged
+	contactTools.ConfigureDossierRoot(dossiersEnabled, dossiersWritable)
 	if a.cfg.Identity.ContactName != "" {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
 	}

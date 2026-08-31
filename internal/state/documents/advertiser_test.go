@@ -195,6 +195,72 @@ func TestDocumentAdvertiserMatchEvidence(t *testing.T) {
 	}
 }
 
+func TestDocumentAdvertiserExactSubjectHasNoAmbientOrLexicalFallback(t *testing.T) {
+	store, dirs := newAdvertiseStore(t)
+	writeFile(t, filepath.Join(dirs["beta"], "other-dossier.md"), `---
+title: California Dossier
+tags: [california]
+---
+
+## Status Line
+
+California plans are quiet
+
+## Teaser
+
+The unrelated dossier has its own compact signal.
+
+## Details
+
+Unrelated detail.
+`)
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	adv := NewDocumentAdvertiser(DocumentAdvertiserConfig{
+		Store: store,
+		RootPolicy: func(root string) DocumentRootAdvertisePolicy {
+			if root == "beta" {
+				return DocumentRootAdvertisePolicy{Mode: "exact_subject"}
+			}
+			return DocumentRootAdvertisePolicy{}
+		},
+		HomeZone: time.UTC,
+	})
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		req  agentctx.ContextRequest
+	}{
+		{name: "no subject", ctx: context.Background()},
+		{name: "lexical mention only", ctx: context.Background(), req: agentctx.ContextRequest{UserMessage: "tell me about the Utah trip"}},
+		{name: "unrelated subject", ctx: knowledge.WithSubjects(context.Background(), []string{"contact:someone-else"})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ads, err := adv.ContextAdvertisements(tc.ctx, tc.req)
+			if err != nil {
+				t.Fatalf("ContextAdvertisements: %v", err)
+			}
+			if len(ads) != 0 {
+				t.Fatalf("exact-subject policy offered %v without an exact subject", ads)
+			}
+		})
+	}
+
+	ctx := knowledge.WithSubjects(context.Background(), []string{"utah"})
+	ads, err := adv.ContextAdvertisements(ctx, agentctx.ContextRequest{UserMessage: "unrelated words"})
+	if err != nil || len(ads) != 1 {
+		t.Fatalf("ContextAdvertisements exact subject: %v (%d ads)", err, len(ads))
+	}
+	if ads[0].Ref != "beta:dossier.md" {
+		t.Fatalf("exact-subject refs = %v, want only beta:dossier.md", ads)
+	}
+	if len(ads[0].Matches) != 1 || ads[0].Matches[0].Kind != agentctx.ContextMatchExactSubject {
+		t.Fatalf("exact-subject matches = %v, want only exact_subject evidence", ads[0].Matches)
+	}
+}
+
 func TestDocumentAdvertiserMaterializesWithEnvelopeAndTemplates(t *testing.T) {
 	store, dirs := newAdvertiseStore(t)
 	_ = dirs

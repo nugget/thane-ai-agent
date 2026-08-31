@@ -34,6 +34,7 @@ func TestRootContextPolicyValidate(t *testing.T) {
 			wantErr: "requires_tag gates tagged injection and tagged advertising",
 		},
 		{name: "always advertising", policy: RootContextPolicy{Advertise: RootAdvertiseAlways}},
+		{name: "exact subject advertising", policy: RootContextPolicy{Advertise: RootAdvertiseExactSubject}},
 		{
 			name:   "tagged advertising with its gate",
 			policy: RootContextPolicy{Advertise: RootAdvertiseTagged, RequiresTag: "schedule"},

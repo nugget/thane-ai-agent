@@ -391,3 +391,13 @@ func TestRootSummaryTellsTheModelWhatUntaggedMeans(t *testing.T) {
 		})
 	}
 }
+
+func TestRootSummaryTellsTheModelAdvertisementPolicy(t *testing.T) {
+	t.Parallel()
+	store := &Store{rootPolicies: map[string]RootPolicy{
+		"contacts": {Context: RootContextPolicy{Advertise: "exact_subject"}},
+	}}
+	if got := store.rootPolicySummary("contacts").Context.Advertise; got != "exact_subject" {
+		t.Fatalf("summary advertise = %q, want exact_subject", got)
+	}
+}
