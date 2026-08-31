@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -285,7 +286,7 @@ func TestDetachedLoopCompletionDispatcherRequiresConversationID(t *testing.T) {
 	}
 }
 
-func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T) {
+func TestContactChannelBindingResolverCachesLegacyConfiguredContactName(t *testing.T) {
 	db, err := database.Open(t.TempDir() + "/contacts.db")
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
@@ -297,23 +298,112 @@ func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T)
 	}
 
 	tools := contacts.NewTools(store)
-	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"admin","facts":{"email":"aimee@example.com"}}`); err != nil {
+	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`); err != nil {
 		t.Fatalf("SaveContact: %v", err)
+	}
+	// Zones are operator custody (#1450): seed through the store, the
+	// path contact_save deliberately refuses.
+	aimee, err := store.FindByName("Aimee")
+	if err != nil {
+		t.Fatalf("FindByName: %v", err)
+	}
+	aimee.TrustZone = contacts.ZoneAdmin
+	if _, err := store.Upsert(aimee); err != nil {
+		t.Fatalf("Upsert zone: %v", err)
 	}
 
 	resolver := &contactChannelBindingResolver{
-		store:            store,
-		ownerContactName: "Aimee",
+		store:                  store,
+		legacyOwnerContactName: "Aimee",
 	}
 
-	first := resolver.cachedOwnerContactID()
+	first := resolver.resolvedOperatorContactID()
 	if first == uuid.Nil {
-		t.Fatal("cachedOwnerContactID() returned zero UUID")
+		t.Fatal("resolvedOperatorContactID() returned zero UUID")
 	}
 
-	resolver.ownerContactName = "Nobody"
-	second := resolver.cachedOwnerContactID()
+	resolver.legacyOwnerContactName = "Nobody"
+	second := resolver.resolvedOperatorContactID()
 	if second != first {
-		t.Fatalf("cachedOwnerContactID() after rename = %v, want cached %v", second, first)
+		t.Fatalf("resolvedOperatorContactID() after rename = %v, want cached %v", second, first)
 	}
+}
+
+func TestContactChannelBindingResolverUsesConfiguredOperatorID(t *testing.T) {
+	configured := uuid.New()
+	resolver := &contactChannelBindingResolver{operatorContactID: configured}
+	if got := resolver.resolvedOperatorContactID(); got != configured {
+		t.Fatalf("resolvedOperatorContactID() = %v, want configured %v", got, configured)
+	}
+}
+
+// TestContactLookupCounterpartyEnrichment pins #1450's channel-side
+// presentation: a counterparty's contact context joins presence
+// (through the HA person binding) and bound companion devices, and
+// both joins degrade to absence — never errors — when unwired or
+// unbound.
+func TestContactLookupCounterpartyEnrichment(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := contacts.NewStore(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	alice, err := store.Upsert(&contacts.Contact{FormattedName: "Alice Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetHAPersonEntity(alice.ID, "person.alice"); err != nil {
+		t.Fatal(err)
+	}
+	bob, err := store.Upsert(&contacts.Contact{FormattedName: "Bob Guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lookup := &contactNameLookup{store: store, logger: slog.Default()}
+
+	// Unwired seams: plain context, no enrichment, no error.
+	cc := lookup.LookupContact(context.Background(), "Alice Operator", "signal")
+	if cc == nil || cc.Presence != nil || cc.Devices != nil {
+		t.Fatalf("unwired lookup = %+v, want plain context", cc)
+	}
+
+	lookup.presenceFor = func(entity string) *agent.CounterpartyPresence {
+		if entity != "person.alice" {
+			t.Errorf("presence joined via %q, want person.alice", entity)
+		}
+		return &agent.CounterpartyPresence{State: "Home", Room: "office", Since: "-2h"}
+	}
+	lookup.devicesFor = func(_ context.Context, contactID string) []agent.CounterpartyDevice {
+		if contactID != alice.ID.String() {
+			return nil
+		}
+		return []agent.CounterpartyDevice{{Name: "Alice's iPhone", Platform: "ios", Availability: "offline", LastSeenAgo: "-40m"}}
+	}
+
+	cc = lookup.LookupContact(context.Background(), "Alice Operator", "signal")
+	if cc == nil || cc.Presence == nil || cc.Presence.Room != "office" {
+		t.Fatalf("presence not joined: %+v", cc)
+	}
+	if len(cc.Devices) != 1 || cc.Devices[0].Availability != "offline" {
+		t.Fatalf("devices not joined: %+v", cc.Devices)
+	}
+
+	// By-ID lookups enrich identically.
+	cc = lookup.LookupContactByID(context.Background(), alice.ID.String(), "signal")
+	if cc == nil || cc.Presence == nil || len(cc.Devices) != 1 {
+		t.Fatalf("by-ID lookup not enriched: %+v", cc)
+	}
+
+	// A contact with no HA binding gets no presence; devicesFor still
+	// consulted (it returns nil for unbound contacts).
+	cc = lookup.LookupContact(context.Background(), "Bob Guest", "signal")
+	if cc == nil || cc.Presence != nil || cc.Devices != nil {
+		t.Fatalf("unbound contact leaked joins: %+v", cc)
+	}
+	_ = bob
 }

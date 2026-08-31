@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,7 +63,7 @@ func TestSelectContextAdvertisementsRanksEvidenceDeterministically(t *testing.T)
 		for _, ad := range order {
 			candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
 		}
-		selected := selectContextAdvertisements(candidates)
+		selected, _ := selectContextAdvertisements(candidates)
 		if len(selected) != 3 {
 			t.Fatalf("order %d selected %d advertisements, want 3", i, len(selected))
 		}
@@ -126,7 +127,7 @@ func TestSelectContextAdvertisementsChoosesProjectionForMatchAndBudget(t *testin
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			selected := selectContextAdvertisements([]contextAdvertisementCandidate{{advertiser: provider, advertisement: tt.ad}})
+			selected, _ := selectContextAdvertisements([]contextAdvertisementCandidate{{advertiser: provider, advertisement: tt.ad}})
 			if tt.empty {
 				if len(selected) != 0 {
 					t.Fatalf("selected = %#v, want none", selected)
@@ -154,7 +155,7 @@ func TestSelectContextAdvertisementsDeduplicatesAndLimits(t *testing.T) {
 		candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
 	}
 
-	selected := selectContextAdvertisements(candidates)
+	selected, _ := selectContextAdvertisements(candidates)
 	if len(selected) != maxSelectedContextAdvertisements {
 		t.Fatalf("selected %d advertisements, want cap %d", len(selected), maxSelectedContextAdvertisements)
 	}
@@ -222,7 +223,7 @@ func TestSelectContextAdvertisementsDuplicateWithoutProjectionDoesNotSuppressLat
 	usable := testAdvertisement("memory", "same", agentctx.ContextMatchAmbient, 0.5,
 		testProjection("signal", agentctx.ContextRoleSignal, 100))
 
-	selected := selectContextAdvertisements([]contextAdvertisementCandidate{
+	selected, _ := selectContextAdvertisements([]contextAdvertisementCandidate{
 		{advertiser: provider, advertisement: empty},
 		{advertiser: provider, advertisement: usable},
 	})
@@ -264,5 +265,95 @@ func TestMaterializeDropsPayloadExceedingItsOwnEstimate(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "fits fine") {
 		t.Fatalf("honest payload should survive, got: %q", rendered)
+	}
+}
+
+func TestSelectContextAdvertisementsCountsWithheldOffers(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	// Twelve genuinely selectable offers against a cap of eight: four are
+	// withheld and the count must say so. A thirteenth offers only detail —
+	// never selectable, so it is a non-offer, not a withheld one.
+	var candidates []contextAdvertisementCandidate
+	for i := 0; i < 12; i++ {
+		ad := testAdvertisement("memory", fmt.Sprintf("doc-%02d", i), agentctx.ContextMatchSemantic, 1,
+			testProjection("digest", agentctx.ContextRoleContext, 64))
+		candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
+	}
+	detailOnly := testAdvertisement("memory", "detail-only", agentctx.ContextMatchSemantic, 0.9,
+		testProjection("full", agentctx.ContextRoleDetail, 64))
+	candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: detailOnly})
+
+	selected, withheld := selectContextAdvertisements(candidates)
+
+	if len(selected) != maxSelectedContextAdvertisements {
+		t.Fatalf("selected %d, want the cap %d", len(selected), maxSelectedContextAdvertisements)
+	}
+	if withheld != 4 {
+		t.Fatalf("withheld = %d, want 4 (selectable losers only, never the detail-only non-offer)", withheld)
+	}
+}
+
+func TestMaterializeRendersTheWithheldLine(t *testing.T) {
+	t.Parallel()
+
+	provider := &testContextAdvertiser{}
+	provider.content = map[string]string{}
+	var candidates []contextAdvertisementCandidate
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("doc-%02d", i)
+		ad := testAdvertisement("memory", id, agentctx.ContextMatchSemantic, 1,
+			testProjection("digest", agentctx.ContextRoleContext, 64))
+		provider.content["memory/"+id+"/digest"] = "content for " + id
+		candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
+	}
+
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{})
+	buckets := assembler.materializeContextAdvertisements(context.Background(), agentctx.ContextRequest{}, candidates)
+
+	related := buckets[agentctx.ContextBucketRelated]
+	if !strings.Contains(related, "2 context offer(s) withheld") {
+		t.Fatalf("expected a withheld line naming 2 offers, got: %q", related)
+	}
+	if !strings.Contains(related, "doc_search") {
+		t.Fatalf("the withheld line must name the pull door, got: %q", related)
+	}
+}
+
+// ctxHonoringAdvertiser materializes like a real provider: a dead context
+// is an error, not something to ignore. The plain test advertiser never
+// looks at ctx, which would let a detach regression pass unnoticed.
+type ctxHonoringAdvertiser struct{ testContextAdvertiser }
+
+func (p *ctxHonoringAdvertiser) MaterializeContextAdvertisement(ctx context.Context, req agentctx.ContextRequest, selection agentctx.ContextSelection) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return p.testContextAdvertiser.MaterializeContextAdvertisement(ctx, req, selection)
+}
+
+func TestMaterializeDetachesFromADepletedWalkBudget(t *testing.T) {
+	t.Parallel()
+
+	provider := &ctxHonoringAdvertiser{}
+	provider.advertisements = []agentctx.ContextAdvertisement{
+		testAdvertisement("memory", "survivor", agentctx.ContextMatchSemantic, 1,
+			testProjection("digest", agentctx.ContextRoleContext, 64)),
+	}
+	provider.content = map[string]string{"memory/survivor/digest": "made it"}
+
+	// The walk's context is already dead — the exact state at the tail of
+	// a slow turn. The winners must not inherit it.
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{})
+	buckets := assembler.materializeContextAdvertisements(dead, agentctx.ContextRequest{}, []contextAdvertisementCandidate{
+		{advertiser: provider, advertisement: provider.advertisements[0]},
+	})
+
+	if !strings.Contains(buckets[agentctx.ContextBucketRelated], "made it") {
+		t.Fatalf("materialization must survive a dead walk context, got: %#v", buckets)
 	}
 }

@@ -630,90 +630,66 @@ func TestListContacts_Empty(t *testing.T) {
 	}
 }
 
-func TestSaveContact_TrustZone(t *testing.T) {
-	tools := newTestTools(t)
+// TestSaveContact_TrustZoneIsOperatorCustody pins the #1450 security
+// boundary: trust zones confer inherited authority on every companion
+// device bound to a contact, so the everyday save path must never be a
+// promotion path. Any attempt is a hard, teaching error — for create
+// and update alike — and a zone the operator assigned survives every
+// tool-driven update untouched.
 
-	_, err := tools.SaveContact(`{"name":"Trusted Pal","kind":"individual","trust_zone":"trusted"}`)
+// setZone assigns a trust zone through the store directly — the
+// operator-custody path — since contact_save refuses zone mutation by
+// design (#1450).
+func setZone(t *testing.T, tools *Tools, name, zone string) {
+	t.Helper()
+	c, err := tools.store.FindByName(name)
 	if err != nil {
-		t.Fatalf("SaveContact() error = %v", err)
+		t.Fatalf("setZone find %s: %v", name, err)
 	}
-
-	c, err := tools.store.FindByName("Trusted Pal")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.TrustZone != "trusted" {
-		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "trusted")
+	c.TrustZone = zone
+	if _, err := tools.store.Upsert(c); err != nil {
+		t.Fatalf("setZone upsert %s: %v", name, err)
 	}
 }
 
-func TestSaveContact_TrustZoneUpdate(t *testing.T) {
+func TestSaveContact_TrustZoneIsOperatorCustody(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"name":"Zone Updater","kind":"individual"}`)
-	if err != nil {
-		t.Fatal(err)
+	_, err := tools.SaveContact(`{"name":"Trusted Pal","kind":"individual","trust_zone":"trusted"}`)
+	if err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+		t.Fatalf("zone set on create must be refused with custody teaching, got %v", err)
 	}
 
-	c, err := tools.store.FindByName("Zone Updater")
+	if _, err := tools.SaveContact(`{"name":"Zone Holder","kind":"individual"}`); err != nil {
+		t.Fatal(err)
+	}
+	c, err := tools.store.FindByName("Zone Holder")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.TrustZone != "known" {
-		t.Fatalf("initial TrustZone = %q, want %q", c.TrustZone, "known")
+		t.Fatalf("create default TrustZone = %q, want %q", c.TrustZone, "known")
 	}
 
-	_, err = tools.SaveContact(`{"name":"Zone Updater","trust_zone":"trusted"}`)
+	_, err = tools.SaveContact(`{"name":"Zone Holder","trust_zone":"admin"}`)
+	if err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+		t.Fatalf("zone promotion via update must be refused, got %v", err)
+	}
+
+	// Operator-assigned zones survive tool-driven updates untouched.
+	c.TrustZone = ZoneTrusted
+	if _, err := tools.store.Upsert(c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools.SaveContact(`{"name":"Zone Holder","ai_summary":"New summary"}`); err != nil {
+		t.Fatal(err)
+	}
+	c, err = tools.store.FindByName("Zone Holder")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	c, err = tools.store.FindByName("Zone Updater")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.TrustZone != "trusted" {
-		t.Errorf("updated TrustZone = %q, want %q", c.TrustZone, "trusted")
-	}
-
-	// Update with empty trust_zone should preserve the existing value.
-	_, err = tools.SaveContact(`{"name":"Zone Updater","ai_summary":"New summary"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	c, err = tools.store.FindByName("Zone Updater")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.TrustZone != "trusted" {
-		t.Errorf("TrustZone after empty update = %q, want %q (should be preserved)", c.TrustZone, "trusted")
-	}
-}
-
-func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
-	tools := newTestTools(t)
-
-	_, err := tools.SaveContact(`{"name":"Zone Not Fact","trust_zone":"admin"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	c, err := tools.store.FindByName("Zone Not Fact")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	propsMap, err := tools.store.GetPropertiesMap(c.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, exists := propsMap["trust_zone"]; exists {
-		t.Error("trust_zone should not be rescued as a property")
-	}
-	if c.TrustZone != "admin" {
-		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "admin")
+	if c.TrustZone != ZoneTrusted {
+		t.Errorf("TrustZone after unrelated update = %q, want preserved %q", c.TrustZone, ZoneTrusted)
 	}
 }
 
@@ -869,10 +845,11 @@ func TestExportVCF_SelfContact(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetSelfContactName("Thane Agent")
 
-	_, err := tools.SaveContact(`{"name":"Thane Agent","kind":"individual","trust_zone":"admin","facts":{"email":"thane@example.com"}}`)
+	_, err := tools.SaveContact(`{"name":"Thane Agent","kind":"individual","facts":{"email":"thane@example.com"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	setZone(t, tools, "Thane Agent", "admin")
 
 	result, err := tools.ExportVCF(`{"name":"self","format":"text"}`)
 	if err != nil {
@@ -899,10 +876,11 @@ func TestExportVCF_SelfWithTrustZoneFilter(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetSelfContactName("Agent Self")
 
-	_, err := tools.SaveContact(`{"name":"Agent Self","kind":"individual","trust_zone":"admin","facts":{"email":"agent@example.com","phone":"555-0000"}}`)
+	_, err := tools.SaveContact(`{"name":"Agent Self","kind":"individual","facts":{"email":"agent@example.com","phone":"555-0000"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	setZone(t, tools, "Agent Self", "admin")
 
 	// Export for unknown zone — should strip email and phone.
 	result, err := tools.ExportVCF(`{"name":"self","format":"text","recipient_trust_zone":"unknown"}`)
@@ -921,10 +899,11 @@ func TestOwnerContact_ConfiguredName(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetOwnerContactName("Aimee")
 
-	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"household","facts":{"email":"aimee@example.com"}}`)
+	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	setZone(t, tools, "Aimee", "household")
 
 	result, err := tools.OwnerContact(`{}`)
 	if err != nil {
@@ -938,13 +917,39 @@ func TestOwnerContact_ConfiguredName(t *testing.T) {
 	}
 }
 
-func TestOwnerContact_FallsBackToSoleAdmin(t *testing.T) {
+func TestOwnerContact_ConfiguredOperatorID(t *testing.T) {
 	tools := newTestTools(t)
-
-	_, err := tools.SaveContact(`{"name":"Nugget","kind":"individual","trust_zone":"admin","facts":{"phone":"+15551234567"}}`)
+	if _, err := tools.SaveContact(`{"name":"Original Name","kind":"individual","facts":{"email":"operator@example.com"}}`); err != nil {
+		t.Fatal(err)
+	}
+	operator, err := tools.store.FindByName("Original Name")
 	if err != nil {
 		t.Fatal(err)
 	}
+	tools.ConfigureOperatorContactID(operator.ID)
+
+	operator.FormattedName = "Renamed Operator"
+	if _, err := tools.store.Upsert(operator); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.OwnerContact(`{}`)
+	if err != nil {
+		t.Fatalf("OwnerContact() error = %v", err)
+	}
+	if !strings.Contains(result, "**Renamed Operator**") {
+		t.Fatalf("OwnerContact() = %q, want UUID-selected renamed contact", result)
+	}
+}
+
+func TestOwnerContact_FallsBackToSoleAdmin(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, err := tools.SaveContact(`{"name":"Nugget","kind":"individual","facts":{"phone":"+15551234567"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setZone(t, tools, "Nugget", "admin")
 
 	result, err := tools.OwnerContact(`{}`)
 	if err != nil {
@@ -980,10 +985,11 @@ func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
 		}
 	})
 
-	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"household","facts":{"email":"aimee@example.com"}}`)
+	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	setZone(t, tools, "Aimee", "household")
 
 	result, err := tools.OwnerContact(`{}`)
 	if err != nil {
@@ -1004,17 +1010,18 @@ func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {
 	tools := newTestTools(t)
 
 	for _, name := range []string{"Aimee", "Nugget"} {
-		_, err := tools.SaveContact(fmt.Sprintf(`{"name":%q,"kind":"individual","trust_zone":"admin"}`, name))
+		_, err := tools.SaveContact(fmt.Sprintf(`{"name":%q,"kind":"individual"}`, name))
 		if err != nil {
 			t.Fatal(err)
 		}
+		setZone(t, tools, name, "admin")
 	}
 
 	_, err := tools.OwnerContact(`{}`)
 	if err == nil {
 		t.Fatal("expected ambiguity error when multiple admin contacts exist")
 	}
-	if !strings.Contains(err.Error(), "identity.owner_contact_name") {
+	if !strings.Contains(err.Error(), "identity.operator_contact_id") {
 		t.Fatalf("error = %v, want owner contact config hint", err)
 	}
 }
@@ -1035,11 +1042,12 @@ func TestOwnerContact_LimitsOwnerActivitySummary(t *testing.T) {
 		return out
 	})
 
-	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"household","facts":{"email":"aimee@example.com"}}`); err != nil {
+	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`); err != nil {
 		t.Fatal(err)
 	}
 
 	result, err := tools.OwnerContact(`{}`)
+	setZone(t, tools, "Aimee", "household")
 	if err != nil {
 		t.Fatalf("OwnerContact() error = %v", err)
 	}
@@ -1132,8 +1140,10 @@ func TestExportAllVCF_FilterByKind(t *testing.T) {
 func TestExportAllVCF_FilterByTrustZone(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"TZ A","kind":"individual","trust_zone":"trusted"}`)
-	_, _ = tools.SaveContact(`{"name":"TZ B","kind":"individual","trust_zone":"known"}`)
+	_, _ = tools.SaveContact(`{"name":"TZ A","kind":"individual"}`)
+	setZone(t, tools, "TZ A", "trusted")
+	_, _ = tools.SaveContact(`{"name":"TZ B","kind":"individual"}`)
+	setZone(t, tools, "TZ B", "known")
 
 	result, err := tools.ExportAllVCF(`{"trust_zone":"trusted"}`)
 	if err != nil {
@@ -1149,9 +1159,12 @@ func TestExportAllVCF_FilterByTrustZone(t *testing.T) {
 func TestExportAllVCF_FilterBothKindAndTrustZone(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"Both A","kind":"individual","trust_zone":"trusted"}`)
-	_, _ = tools.SaveContact(`{"name":"Both B","kind":"org","trust_zone":"trusted"}`)
-	_, _ = tools.SaveContact(`{"name":"Both C","kind":"individual","trust_zone":"known"}`)
+	_, _ = tools.SaveContact(`{"name":"Both A","kind":"individual"}`)
+	setZone(t, tools, "Both A", "trusted")
+	_, _ = tools.SaveContact(`{"name":"Both B","kind":"org"}`)
+	setZone(t, tools, "Both B", "trusted")
+	_, _ = tools.SaveContact(`{"name":"Both C","kind":"individual"}`)
+	setZone(t, tools, "Both C", "known")
 
 	result, err := tools.ExportAllVCF(`{"kind":"individual","trust_zone":"trusted"}`)
 	if err != nil {
@@ -1202,10 +1215,11 @@ func TestImportVCF_MergeByEmail(t *testing.T) {
 	tools := newTestTools(t)
 
 	// Pre-existing contact with email.
-	_, err := tools.SaveContact(`{"name":"Existing Bob","kind":"individual","trust_zone":"trusted","ai_summary":"Original summary","facts":{"email":"bob@example.com"}}`)
+	_, err := tools.SaveContact(`{"name":"Existing Bob","kind":"individual","ai_summary":"Original summary","facts":{"email":"bob@example.com"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	setZone(t, tools, "Existing Bob", "trusted")
 
 	// Import a vCard with same email but different name and added fields.
 	vcardText := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Robert Smith\r\nN:Smith;Robert;;;\r\nEMAIL:bob@example.com\r\nORG:Acme Corp\r\nEND:VCARD"
@@ -1445,5 +1459,60 @@ func TestImportExportVCF_RoundTrip(t *testing.T) {
 	}
 	if c.GivenName != "Round" {
 		t.Errorf("GivenName = %q, want %q", c.GivenName, "Round")
+	}
+}
+
+// TestImportVCF_TrustZoneNotImportable pins the #1450 custody boundary
+// on the sibling import path: a model-supplied vCard cannot mint an
+// elevated contact through X-THANE-TRUST-ZONE — new contacts start at
+// the default zone regardless of the header, on both the merge:false
+// and unique-name create branches.
+func TestImportVCF_TrustZoneNotImportable(t *testing.T) {
+	tools := newTestTools(t)
+
+	vcf := "BEGIN:VCARD\nVERSION:4.0\nFN:Mallory Escalation\nX-THANE-TRUST-ZONE:admin\nEND:VCARD"
+	for _, merge := range []bool{false, true} {
+		payload, _ := json.Marshal(map[string]any{"text": vcf, "merge": merge})
+		if _, err := tools.ImportVCF(string(payload)); err != nil {
+			t.Fatalf("ImportVCF(merge=%v): %v", merge, err)
+		}
+		c, err := tools.store.FindByName("Mallory Escalation")
+		if err != nil {
+			t.Fatalf("find imported (merge=%v): %v", merge, err)
+		}
+		if c.TrustZone != ZoneKnown {
+			t.Errorf("merge=%v: imported contact zone = %q, want %q — X-THANE-TRUST-ZONE must not confer authority via a model tool", merge, c.TrustZone, ZoneKnown)
+		}
+		// Clean up so the second iteration exercises the create branch too.
+		_ = tools.store.Delete(c.ID)
+	}
+}
+
+// TestImportVCF_HAPersonNotImportable pins custody symmetry with trust
+// zones (#1450): X-THANE-HA-PERSON is honored only by the CardDAV
+// backend; a model-supplied vCard can neither set the binding nor
+// smuggle the header in as a generic property.
+func TestImportVCF_HAPersonNotImportable(t *testing.T) {
+	tools := newTestTools(t)
+	vcf := "BEGIN:VCARD\nVERSION:4.0\nFN:Sneaky Binder\nX-THANE-HA-PERSON:person.alice\nEND:VCARD"
+	payload, _ := json.Marshal(map[string]any{"text": vcf, "merge": false})
+	if _, err := tools.ImportVCF(string(payload)); err != nil {
+		t.Fatalf("ImportVCF: %v", err)
+	}
+	c, err := tools.store.FindByName("Sneaky Binder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entity, _, _ := tools.store.HAPersonEntity(c.ID); entity != "" {
+		t.Errorf("model import set the HA person binding: %q", entity)
+	}
+	props, err := tools.store.GetPropertiesMap(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k := range props {
+		if strings.Contains(strings.ToLower(k), "ha-person") || strings.Contains(strings.ToLower(k), "ha_person") {
+			t.Errorf("header rescued as property %q", k)
+		}
 	}
 }

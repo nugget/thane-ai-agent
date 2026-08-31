@@ -196,6 +196,42 @@ Use the shared helpers in `internal/model/promptfmt/timefmt.go`:
 When a tool naturally wants relative scheduling, accept delta syntax as
 input instead of forcing the model to invent RFC3339 timestamps.
 
+### Interpret conversational rhythm once, render it as prose
+
+The conversation-timing block ("You're in an active conversation that's
+been going on for about 25 minutes…", "This is the first contact today.
+The previous conversation was last night, about…") is the worked example
+of the "prose is genuinely the clearer contract" escape hatch: once Go
+has bucketed the gap and chosen the day word, there is no structure left
+to convey, and a `gap_class` enum would hand the interpretation work
+back to the model. The precise deltas stay in the Older Sessions catalog
+rendered beside it — narrative and catalog are two altitudes over the
+same timestamps, not two copies of the data. Rendering lives in
+`promptfmt.ConversationRecency`; grow its vocabularies rather than
+inventing parallel fuzzy-time prose elsewhere.
+
+Its vocabulary is part of the contract. The *current turn* is what the
+loop is processing now — a *contact* (counterparty communication, either
+direction) or a *wake* (internally originated); the *previous contact*
+is the most recent contact before the current turn, which wakes never
+move. Wherever a current-turn anchor exists, the term is *previous*,
+never *last* — "last message" is ambiguous the moment a just-arrived
+message is in frame. "Last" stays legal only in contexts with no
+current-turn referent (the summarizer's idle scan, for example).
+
+Curated prose gets the same treatment through temporal templates:
+`{{delta:2026-09-18}}` (bare date or RFC3339 value) expands at read
+time via `promptfmt.ExpandTemporalTemplates` — day words for a date
+("today", "+20d"), a signed compact delta for an instant ("+3d16h") —
+so an authored document stays true between rewrites. Only reader
+surfaces expand — tagged-article injection and advertisement
+materialization; author surfaces
+(`doc_read`, the publish tools, git) keep the raw template so the
+round-trip is byte-exact, and a malformed template renders verbatim
+rather than disappearing. Templates render values, never claims —
+prose whose truth changes with data is a wake concern, not a
+substitution concern (#1431).
+
 ### Keep schemas stable and deterministic
 
 For model-facing data:
@@ -338,7 +374,10 @@ Projection roles describe what a consumer gets:
   escalation, never selected automatically.
 
 Go owns evidence ordering, deduplication, projection choice, stable ties, and
-count and byte limits. Providers own domain matching and materialization. A
+count and byte limits. When those limits refuse a genuinely selectable offer,
+the refusal is rendered — a closing line counts the withheld offers and names
+the pull door — because a capped rail must never read as a complete one.
+Providers own domain matching and materialization. A
 model-authored facet can describe why it is useful, but it cannot grant itself
 injection or assign its own rank.
 
@@ -411,6 +450,7 @@ right track.
 Good places to look for existing patterns:
 
 - `internal/model/promptfmt/timefmt.go`
+- `internal/integrations/companion/calendar_snapshot.go`
 - `internal/state/awareness/entity_format.go`
 - `loops/ego.md` — an instruction document shaped by the job each form
   does (prose stance, numbered protocol, constraints at their point of

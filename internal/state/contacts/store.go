@@ -118,6 +118,31 @@ type Store struct {
 	logger     *slog.Logger
 }
 
+// Open creates a contact store at path and owns the resulting database
+// connection. Call [Store.Close] when the store is no longer needed.
+func Open(path string, logger *slog.Logger) (*Store, error) {
+	db, err := database.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	store, err := NewStore(db, logger)
+	if err != nil {
+		db.Close() //nolint:errcheck // preserve the initialization error
+		return nil, err
+	}
+	return store, nil
+}
+
+// Close closes the database connection owned by a store created with
+// [Open]. Callers that use [NewStore] may continue to close their database
+// directly.
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
 // NewStore creates a contact store backed by db. The caller owns db's
 // lifecycle; NewStore applies the schema and sets up the optional
 // FTS5 index.
@@ -504,6 +529,19 @@ func (s *Store) DeleteAllProperties(contactID uuid.UUID) error {
 // database is INSERT-ed (enabling CardDAV clients to create contacts
 // by PUTing to a new URL).
 func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, error) {
+	return s.upsertWithPropertiesBinding(c, props, nil)
+}
+
+// UpsertWithPropertiesAndHAPerson atomically upserts the contact, its
+// properties, and its HA person binding in one transaction — the
+// CardDAV PUT path, where a binding rejection after a committed upsert
+// would violate PUT atomicity (#1450). An empty entity clears the
+// binding.
+func (s *Store) UpsertWithPropertiesAndHAPerson(c *Contact, props []Property, haPersonEntity string) (*Contact, error) {
+	return s.upsertWithPropertiesBinding(c, props, &haPersonEntity)
+}
+
+func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPersonEntity *string) (*Contact, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -599,6 +637,12 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 			nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
 			boolToInt(p.Verified), propNow, propNow); err != nil {
 			return nil, fmt.Errorf("add property %s: %w", p.Property, err)
+		}
+	}
+
+	if haPersonEntity != nil {
+		if err := applyHAPersonEntity(tx, c.ID, *haPersonEntity); err != nil {
+			return nil, err
 		}
 	}
 

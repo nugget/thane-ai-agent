@@ -148,20 +148,21 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 // contactChannelBindingResolver resolves a channel/address pair to a
 // typed conversation binding with contact identity when available.
 type contactChannelBindingResolver struct {
-	store            *contacts.Store
-	ownerContactName string
+	store                  *contacts.Store
+	operatorContactID      uuid.UUID
+	legacyOwnerContactName string
 
-	mu                 sync.Mutex
-	ownerContactID     uuid.UUID
-	ownerContactCached bool
+	mu                      sync.Mutex
+	legacyOperatorContactID uuid.UUID
+	legacyOperatorCached    bool
 }
 
 // ResolveChannelBinding returns a typed binding for the given
 // channel/address pair. It always returns a channel-scoped binding when
 // the inputs are non-empty, even if no contact match is found.
 func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
-	ownerConfigured := strings.TrimSpace(r.ownerContactName) != ""
-	return resolveChannelBinding(r.store, channel, address, ownerConfigured, r.cachedOwnerContactID())
+	operatorConfigured := r.operatorContactID != uuid.Nil || strings.TrimSpace(r.legacyOwnerContactName) != ""
+	return resolveChannelBinding(r.store, channel, address, operatorConfigured, r.resolvedOperatorContactID())
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
@@ -169,6 +170,36 @@ func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address s
 type contactNameLookup struct {
 	store  *contacts.Store
 	logger *slog.Logger
+
+	// presenceFor joins live whereabouts through the contact's HA
+	// person binding; devicesFor joins bound companion devices. Both
+	// are optional (#1450) — wired late in initServers once the
+	// presence tracker and companion stores exist — and read-only.
+	presenceFor func(haPersonEntity string) *agent.CounterpartyPresence
+	devicesFor  func(ctx context.Context, contactID string) []agent.CounterpartyDevice
+}
+
+// enrichCounterparty joins presence and device reachability onto a
+// built contact context. Failures degrade to the un-enriched view —
+// channel context must never break because a join source is down.
+func (r *contactNameLookup) enrichCounterparty(ctx context.Context, c *contacts.Contact, cc *agent.ContactContext) {
+	if cc == nil {
+		return
+	}
+	if r.presenceFor != nil {
+		entity, ok, err := r.store.HAPersonEntity(c.ID)
+		switch {
+		case err != nil:
+			// Degrade to no presence, but say why: an unbound contact
+			// and a broken join must be distinguishable in logs.
+			r.logger.Warn("counterparty presence join failed", "contact_id", c.ID, "error", err)
+		case ok && entity != "":
+			cc.Presence = r.presenceFor(entity)
+		}
+	}
+	if r.devicesFor != nil {
+		cc.Devices = r.devicesFor(ctx, c.ID.String())
+	}
 }
 
 func (r *contactNameLookup) contactWithPropertiesByName(name string) (*contacts.Contact, []contacts.Property, bool) {
@@ -216,7 +247,7 @@ func (r *contactNameLookup) propertiesForContact(c *contacts.Contact) ([]contact
 // only see the channel matching the current source. Database errors
 // other than "not found" are logged so operational issues don't
 // silently disable contact context injection.
-func (r *contactNameLookup) LookupContact(name string, source string) *agent.ContactContext {
+func (r *contactNameLookup) LookupContact(ctx context.Context, name string, source string) *agent.ContactContext {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -227,12 +258,14 @@ func (r *contactNameLookup) LookupContact(name string, source string) *agent.Con
 	}
 
 	policy := contacts.Policy(c.TrustZone)
-	return buildContactContext(c, props, policy, source, time.Now())
+	cc := buildContactContext(c, props, policy, source, time.Now())
+	r.enrichCounterparty(ctx, c, cc)
+	return cc
 }
 
 // LookupContactByID returns a ContactContext for the exact contact UUID,
 // or nil if no matching contact is found.
-func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.ContactContext {
+func (r *contactNameLookup) LookupContactByID(ctx context.Context, id string, source string) *agent.ContactContext {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -243,14 +276,16 @@ func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.C
 	}
 
 	policy := contacts.Policy(c.TrustZone)
-	return buildContactContext(c, props, policy, source, time.Now())
+	cc := buildContactContext(c, props, policy, source, time.Now())
+	r.enrichCounterparty(ctx, c, cc)
+	return cc
 }
 
 // LookupContactOriginPolicy returns contact-owned origin policy from the
 // contact directory. Policy lives with the contact record so adding,
 // removing, or changing origin tags does not require editing config or
 // restarting the agent.
-func (r *contactNameLookup) LookupContactOriginPolicy(id string, name string, source string) *agent.ContactOriginPolicy {
+func (r *contactNameLookup) LookupContactOriginPolicy(_ context.Context, id string, name string, source string) *agent.ContactOriginPolicy {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -535,23 +570,32 @@ func resolveChannelBinding(store *contacts.Store, channel, address string, owner
 	return binding.Normalize()
 }
 
-func (r *contactChannelBindingResolver) cachedOwnerContactID() uuid.UUID {
-	if r == nil || r.store == nil || strings.TrimSpace(r.ownerContactName) == "" {
+func (r *contactChannelBindingResolver) resolvedOperatorContactID() uuid.UUID {
+	if r == nil {
+		return uuid.Nil
+	}
+	if r.operatorContactID != uuid.Nil {
+		return r.operatorContactID
+	}
+	if r.store == nil {
+		return uuid.Nil
+	}
+	if strings.TrimSpace(r.legacyOwnerContactName) == "" {
 		return uuid.Nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.ownerContactCached {
-		return r.ownerContactID
+	if r.legacyOperatorCached {
+		return r.legacyOperatorContactID
 	}
 
-	owner, err := r.store.ResolveContact(r.ownerContactName)
-	if err == nil && owner != nil {
-		r.ownerContactID = owner.ID
+	operator, err := r.store.ResolveContact(r.legacyOwnerContactName)
+	if err == nil && operator != nil {
+		r.legacyOperatorContactID = operator.ID
 	}
-	r.ownerContactCached = true
-	return r.ownerContactID
+	r.legacyOperatorCached = true
+	return r.legacyOperatorContactID
 }
 
 func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerConfigured bool, ownerContactID uuid.UUID) bool {
@@ -623,7 +667,7 @@ func (n *conversationSystemInjector) InjectSystemMessage(conversationID, message
 	if conversationID == "" || strings.TrimSpace(message) == "" {
 		return nil
 	}
-	return n.mem.AddMessage(conversationID, "system", message)
+	return n.mem.AddMessage(conversationID, "system", message, memory.OriginInternal)
 }
 
 // InjectAssistantMessage adds an assistant-authored message to the
@@ -636,7 +680,7 @@ func (n *conversationSystemInjector) InjectAssistantMessage(conversationID, mess
 	if conversationID == "" || strings.TrimSpace(message) == "" {
 		return nil
 	}
-	return n.mem.AddMessage(conversationID, "assistant", message)
+	return n.mem.AddMessage(conversationID, "assistant", message, memory.OriginInternal)
 }
 
 // IsSessionAlive reports whether the conversation has an active
@@ -708,7 +752,10 @@ func (r *signalMemoryRecorder) RecordOutbound(phone, message string) error {
 		}
 	}
 	convID := "signal-" + sb.String()
-	return r.mem.AddMessage(convID, "assistant", message)
+	// OriginChannel: this row records an outbound send that crossed the
+	// Signal transport to the counterparty — outbound contact, with
+	// direction carried by the assistant role.
+	return r.mem.AddMessage(convID, "assistant", message, memory.OriginChannel)
 }
 
 // channelActivityAdapter bridges [notifications.ChannelActivitySource]
@@ -1056,6 +1103,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 	msgs := make([]agent.Message, len(req.Messages))
 	for i, m := range req.Messages {
 		msgs[i] = agent.Message{
+			Origin:  m.Origin,
 			Role:    m.Role,
 			Content: m.Content,
 			Images:  append([]llm.ImageContent(nil), m.Images...),
@@ -1074,6 +1122,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		RoutingFactors:        cloneStringMap(req.RoutingFactors),
 		Bindings:              cloneStringMap(req.Bindings),
 		DelegationGating:      req.DelegationGating,
+		MessageOrigin:         req.MessageOrigin,
 		InitialTags:           append([]string(nil), req.InitialTags...),
 		RuntimeTags:           append([]string(nil), req.RuntimeTags...),
 		RuntimeTools:          compileLoopRuntimeTools(req.RuntimeTools),

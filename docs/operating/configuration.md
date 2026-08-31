@@ -139,14 +139,88 @@ enable it to sync contacts with macOS/iOS/Thunderbird.
 companion:
   enabled: true
   providers:
-    nugget:
+    alice:
       tokens:
         - your-shared-token
+      contact: 0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41
 ```
 
 Optional. Companion apps connect inward to Thane and expose local host
 capabilities, such as macOS Calendar access from
 [thane-agent-macos](https://github.com/nugget/thane-agent-macos).
+
+`contact` (optional) binds every device that authenticates through the
+account to one contact record, by contact UUID — the counterparty
+layer's person attribution. Devices then present and report as that
+contact's devices, and inherit authority from the contact's trust zone
+at read time, so a zone change reaches every bound device immediately.
+Configuration is deliberately the only place this binding can be made:
+bindings confer inherited trust, and neither they nor trust zones are
+writable through model-facing contact tools. A malformed (non-UUID)
+value is rejected at config load; a UUID that matches no contact fails
+closed at render time — the devices degrade to account-only
+attribution and a warning names the unresolved binding.
+
+The second counterparty edge binds a contact to its Home Assistant
+person entity, through which zone state and separately resolved,
+provider-attributed room presence flow into that contact's channel
+context. Signed config is the preferred source of truth:
+
+```yaml
+identity:
+  operator_contact_id: 019c76e4-2ff1-7918-8d6f-6c2488f5098d
+
+person:
+  track:
+    - person.nugget
+  contact_bindings:
+    019c76e4-2ff1-7918-8d6f-6c2488f5098d: person.nugget
+```
+
+`identity.operator_contact_id` says which stable contact is the human
+operator; it does not infer that authority from presence. The legacy
+`identity.owner_contact_name` selector remains accepted for existing
+installations, but it is mutually exclusive with the UUID selector.
+When neither is configured, Thane falls back to the sole `admin`
+contact only when exactly one exists. New `thane init` workspaces create
+a UUID in the signed config first, seed an `admin`-zone `Operator` contact
+stub with that exact ID, and start with an explicit empty
+`person.contact_bindings` map.
+
+`person.contact_bindings` is an exact contact-UUID-to-person-entity map.
+Every referenced contact must exist at startup, every person entity must
+also appear under `person.track`, and a person may belong to only one
+active contact. When the key is present — even as `{}` — startup
+atomically reconciles the stored set to config. CardDAV still emits
+`X-THANE-HA-PERSON`, but treats it as a read-only projection and preserves
+it when clients omit unknown vCard fields. An explicitly present value must
+match the projection; attempting to change or clear it is rejected. Removing
+a map entry clears that binding on the next restart. A contact with a
+configured binding cannot be deleted through CardDAV until its map entry is
+removed and Thane restarts; unbound contacts remain deletable.
+
+Configs loaded through `-insecure-config` cannot declare these identity
+relationships. Thane ignores `person.contact_bindings`,
+`identity.operator_contact_id`, and the legacy
+`identity.owner_contact_name`: it does not reconcile stored bindings or grant
+operator authority from unsigned input, and CardDAV retains its legacy
+authenticated custody mode for bindings during recovery.
+
+For backward compatibility, omitting `person.contact_bindings` entirely
+keeps the earlier CardDAV-managed behavior: an authenticated PUT may set
+or clear `X-THANE-HA-PERSON`. Model-facing vCard import never honors that
+field in either mode.
+
+The person tracker follows each person's Home Assistant `device_trackers`
+attribute and adds those linked entities to the system ingestion floor. A
+linked tracker contributes room presence only when its entity-registry
+platform is `bermuda`, its state is `home`, and its `area` attribute is a
+non-empty string. The tracker entity ID remains the stable observation identity;
+a non-empty human-readable `scanner` attribute is surfaced as source evidence,
+while missing scanner evidence stays empty rather than exposing the tracker ID.
+The configured UniFi poller remains a second room provider and uses the AP name
+as its evidence. Observations that agree resolve to one room, while disagreement
+reports `room_conflict` and withholds a guessed room.
 Use `companion:`. A top-level `platform:` section is rejected at config
 load with an actionable error and must be renamed to `companion:` (the
 field shape is unchanged).
@@ -182,11 +256,14 @@ runtime-only tags from source defaults.
 ## Memory & Storage
 
 ```yaml
-data_dir: ~/Thane/data
+data_dir: ./db
 ```
 
-Where SQLite databases live (`thane.db`, `facts.db`). Defaults to
-`~/Thane/data`.
+Where SQLite databases live. Defaults to `./db`. For the normal signed config
+at `{workspace}/core/config.yaml`, relative paths resolve from the workspace,
+so the default is `{workspace}/db` regardless of the directory that launched
+Thane. Absolute paths remain unchanged; a config outside a workspace retains
+working-directory-relative behavior.
 
 ## Document Roots
 

@@ -8,17 +8,23 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
+	"github.com/nugget/thane-ai-agent/internal/state/companions"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -221,6 +227,19 @@ func (a *App) initServers(s *newState) error {
 	// --- Companion app endpoint ---
 	// Optional: WebSocket endpoint for native companion apps (e.g. macOS)
 	// to connect and register capabilities for bidirectional service dispatch.
+	// Observation ingestion remains registered when companion auth is disabled
+	// so the documented route reports a structured 503 instead of disappearing.
+	var observationAuthenticator companion.ObservationAuthenticator
+	if cfg.Companion.Configured() {
+		observationAuthenticator = companion.NewBearerObservationAuthenticator(
+			cfg.Companion.TokenIndex(), a.companionDevices.ResolveObservationIdentity,
+		)
+	}
+	server.SetCompanionObservationHandler(companion.NewObservationHandler(
+		observationAuthenticator,
+		a.companionDevices,
+		logger,
+	))
 	if cfg.Companion.Configured() {
 		a.companionRegistry = companion.NewRegistry(logger)
 
@@ -249,35 +268,210 @@ func (a *App) initServers(s *newState) error {
 		// mid-session. A Mac-authored tool shadows the legacy floor by name.
 		registrar := tools.NewCompanionRegistrar(a.companionRegistry, companionHome, logger)
 		a.loop.SetDynamicToolSource(registrar)
-		a.companionRegistry.SetOnChange(registrar.Rebuild)
 
-		// On companion-tagged turns, tell the model which companions are
-		// connected and what they currently offer (uncached live state).
-		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry))
-
-		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
-		server.SetCompanionHandler(handler)
-
-		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-			Name: "companion",
-			Probe: func(_ context.Context) error {
-				if a.companionRegistry.Count() == 0 {
-					return fmt.Errorf("no providers connected")
-				}
-				return nil
-			},
-			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  logger,
+		// The mechanical calendar block (#1432): an in-memory snapshot of
+		// every connected account's near-term calendar, refreshed on the
+		// runner's own clock and rendered into Live State every turn.
+		// Wall-clock truth deliberately does not ride the advertisement
+		// rail — ambient evidence loses to request-matched offers by
+		// design, and today's calendar must not lose a lottery on busy
+		// turns. The registry's single change callback fans out to both
+		// consumers: tool synthesis rebuilds, and the snapshot refreshes
+		// so a Mac reconnecting after a night away repopulates without
+		// waiting out the interval.
+		calendarSnapshot := companion.NewCalendarSnapshot(a.companionRegistry, companionHome, logger)
+		a.companionRegistry.SetOnChange(func() {
+			registrar.Rebuild()
+			calendarSnapshot.NudgeRefresh()
+		})
+		a.loop.RegisterAlwaysContextProvider(calendarSnapshot)
+		a.deferWorker("companion-calendar-snapshot", func(ctx context.Context) error {
+			go calendarSnapshot.Run(ctx)
+			return nil
 		})
 
+		// On companion-tagged turns, render the joined device view
+		// (#1437): every paired device from the durable inventory merged
+		// with live connectivity, so an iPhone that locked stays visible
+		// as an offline device with honest freshness instead of
+		// vanishing. Uncached live state.
+		deviceContext := companions.NewContextProvider(a.companionDevices, a.companionRegistry.List, logger)
+
+		// Counterparty attribution (#1450): each account's configured
+		// contact binding resolves at read time — never copied onto
+		// device rows — so a trust-zone change on the contact reaches
+		// every bound device instantly. Resolution fails closed: an
+		// unknown or deleted contact degrades the device to
+		// account-only attribution, loudly.
+		contactBindings := make(map[string]uuid.UUID, len(cfg.Companion.Providers))
+		for account, provider := range cfg.Companion.Providers {
+			if provider.Contact == "" {
+				continue
+			}
+			id, err := uuid.Parse(provider.Contact)
+			if err != nil {
+				// Config validation rejects non-UUIDs; defensive only.
+				logger.Error("companion contact binding is not a UUID", "account", account)
+				continue
+			}
+			contactBindings[account] = id
+		}
+		var contactResolver companions.ContactResolver
+		if len(contactBindings) > 0 && a.contactStore != nil {
+			contactResolver = func(_ context.Context, account string) (companions.ContactBinding, bool) {
+				id, ok := contactBindings[account]
+				if !ok {
+					return companions.ContactBinding{}, false
+				}
+				contact, err := a.contactStore.Get(id)
+				if err != nil || contact == nil {
+					logger.Warn("companion contact binding did not resolve",
+						"account", account,
+						"contact_id", id.String(),
+						"error", err,
+					)
+					return companions.ContactBinding{}, false
+				}
+				return companions.ContactBinding{
+					ContactID: contact.ID.String(),
+					Name:      contact.FormattedName,
+					TrustZone: contact.TrustZone,
+				}, true
+			}
+			deviceContext.SetContactResolver(contactResolver)
+		}
+		a.loop.RegisterTagContextProvider("companion", deviceContext)
+
+		// Server-native observation tools (#1437 slice 4): answer from
+		// the durable store, so they work while every device is
+		// offline — and they attribute their answers to the bound
+		// counterparty (#1450).
+		a.loop.Tools().EnableCompanionObservationTools(a.companionDevices, contactResolver)
+
+		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
+		// Durable inventory: authentication upserts the device record,
+		// disconnect stamps timestamps without deleting it (#1437).
+		// The LIFO closer drains queued inventory writes before the
+		// memory store closes the database they land in.
+		handler.SetDeviceRecorder(a.companionDevices)
+		a.onClose("companion-device-recorder", handler.CloseDeviceRecorder)
+		server.SetCompanionHandler(handler)
+
+		// Deliberately NOT a connwatch watcher: companions are phones
+		// and laptops that sleep, roam, and background their apps — zero
+		// connected providers is a normal state, not an integration
+		// failure (#1437). The old zero-providers probe degraded
+		// /health and lit a red annunciator lamp every time the last
+		// device went to sleep. Reachability now lives per-device in the
+		// durable inventory and the joined context view above.
 		logger.Info("companion app endpoint enabled")
+	}
+
+	// Counterparty enrichment of channel context (#1450): the contact
+	// block a conversation renders about its counterparty joins live
+	// presence and bound companion-device reachability. The two joins
+	// are independent by design — presence needs only a person tracker
+	// and rides the HA person binding, so it must not require companion
+	// apps to be configured — and both degrade to absence when their
+	// source is missing.
+	// Canonical contact-UUID → bound companion accounts, shared by the
+	// channel enrichment join and the fused whereabouts tool. Config
+	// may spell a binding in any form uuid.Parse accepts; lookups
+	// compare against contact.ID.String().
+	accountsByContact := companionAccountsByContact(cfg.Companion)
+
+	if s.contactLookup != nil {
+		if s.personTracker != nil {
+			tracker := s.personTracker
+			s.contactLookup.presenceFor = func(entity string) *agent.CounterpartyPresence {
+				snap, ok := tracker.Snapshot(entity)
+				if !ok {
+					return nil
+				}
+				return counterpartyPresenceView(snap, time.Now())
+			}
+		}
+		if len(accountsByContact) > 0 && a.companionDevices != nil {
+			s.contactLookup.devicesFor = func(ctx context.Context, contactID string) []agent.CounterpartyDevice {
+				accounts := accountsByContact[contactID]
+				if len(accounts) == 0 {
+					return nil
+				}
+				owned := make(map[string]bool, len(accounts))
+				for _, acct := range accounts {
+					owned[acct] = true
+				}
+				devices, err := a.companionDevices.List(ctx)
+				if err != nil {
+					logger.Warn("counterparty device join failed", "error", err)
+					return nil
+				}
+				live := make(map[[2]string]bool)
+				if a.companionRegistry != nil {
+					for _, info := range a.companionRegistry.List() {
+						live[[2]string{info.Account, info.ClientID}] = true
+					}
+				}
+				now := time.Now()
+				var views []agent.CounterpartyDevice
+				for _, d := range devices {
+					if !owned[d.Account] || d.State != companions.DeviceStateActive {
+						continue
+					}
+					availability := "offline"
+					if live[[2]string{d.Account, d.ClientID}] {
+						availability = "online"
+					}
+					view := agent.CounterpartyDevice{
+						Name:         d.ClientName,
+						Platform:     d.Platform,
+						Availability: availability,
+					}
+					if !d.LastSeenAt.IsZero() {
+						view.LastSeenAgo = promptfmt.FormatDeltaOnly(d.LastSeenAt, now)
+					}
+					views = append(views, view)
+				}
+				return views
+			}
+		}
+	}
+
+	// Fused counterparty view (#1450 slice C): contact_whereabouts
+	// composes every whereabouts source the contact record roots.
+	// Registered whenever contacts exist — a presence-only household
+	// without companion apps still gets the fused answer.
+	if a.contactStore != nil {
+		deps := tools.CounterpartyToolDeps{
+			Contacts:   a.contactStore,
+			Companions: a.companionDevices,
+		}
+		if s.personTracker != nil {
+			deps.Presence = s.personTracker.Snapshot
+		}
+		if len(accountsByContact) > 0 {
+			deps.AccountsForContact = func(contactID string) []string {
+				return accountsByContact[contactID]
+			}
+		}
+		if a.companionRegistry != nil {
+			registry := a.companionRegistry
+			deps.LiveIdentities = func() map[[2]string]bool {
+				live := make(map[[2]string]bool)
+				for _, info := range registry.List() {
+					live[[2]string{info.Account, info.ClientID}] = true
+				}
+				return live
+			}
+		}
+		a.loop.Tools().EnableCounterpartyTools(deps)
 	}
 
 	// --- CardDAV server ---
 	// Optional: exposes the contacts store as a CardDAV address book so
 	// native contact apps (macOS Contacts.app, iOS, Thunderbird) can sync.
 	if cfg.CardDAV.Configured() {
-		carddavBackend := cdav.NewBackend(a.contactStore, logger)
+		carddavBackend := cdav.NewBackend(a.contactStore, a.contactBindingsConfigOwned, logger)
 		a.carddavServer = cdav.NewServer(
 			cfg.CardDAV.Listen,
 			cfg.CardDAV.Username,
@@ -500,15 +694,25 @@ func (a *App) initServers(s *newState) error {
 		a.mqttPub.RegisterSensors(apSensors)
 
 		// Route room changes from person tracker to MQTT publishes.
-		s.personTracker.OnRoomChange(func(entityID, room, source string) {
+		s.personTracker.OnRoomChange(func(entityID, room, provider, source string) {
+			// This legacy MQTT sensor specifically represents UniFi AP
+			// association. Other room providers must not masquerade as AP data.
+			if !shouldPublishUnifiAPRoom(provider) {
+				return
+			}
 			shortName := entityID
 			if idx := strings.IndexByte(entityID, '.'); idx >= 0 {
 				shortName = entityID[idx+1:]
 			}
 			suffix := shortName + "_ap"
 
+			apName := source
+			if room == "" {
+				apName = ""
+			}
 			attrs, err := json.Marshal(map[string]string{
-				"ap_name":      source,
+				"ap_name":      apName,
+				"provider":     provider,
 				"last_changed": time.Now().Format(time.RFC3339),
 			})
 			if err != nil {
@@ -525,7 +729,8 @@ func (a *App) initServers(s *newState) error {
 					"entity_id", entityID, "room", room, "error", err)
 			} else {
 				logger.Debug("mqtt AP presence published",
-					"entity_id", entityID, "room", room, "source", source)
+					"entity_id", entityID, "room", room,
+					"room_provider", provider, "room_source", source)
 			}
 		})
 
@@ -688,4 +893,54 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	return nil
+}
+
+// shouldPublishUnifiAPRoom keeps the legacy AP sensor scoped to observation
+// changes and withdrawals from the UniFi provider.
+func shouldPublishUnifiAPRoom(provider string) bool {
+	return provider == unifi.RoomProvider
+}
+
+// counterpartyPresenceView renders the contact-context presence join. The
+// tracker clears rooms on not_home but can retain one across a direct home to
+// named-zone transition, so room detail and its provenance are truthful only
+// while the person state is home.
+func counterpartyPresenceView(snap contacts.PersonSnapshot, now time.Time) *agent.CounterpartyPresence {
+	view := &agent.CounterpartyPresence{State: snap.State}
+	if !snap.Since.IsZero() {
+		view.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
+	}
+	if strings.EqualFold(snap.State, "home") {
+		view.RoomConflict = snap.RoomConflict
+		if !snap.RoomConflict && snap.Room != "" {
+			view.Room = snap.Room
+			view.RoomProvider = snap.RoomProvider
+			view.RoomSource = snap.RoomSource
+			if !snap.RoomSince.IsZero() {
+				view.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+			}
+		}
+	}
+	return view
+}
+
+// companionAccountsByContact exposes counterparty bindings only while the
+// companion source is configured. Provider entries may remain in disabled
+// config, but they must not keep persisted companion data reachable through
+// contact joins after the operator disables the integration.
+func companionAccountsByContact(cfg config.CompanionConfig) map[string][]string {
+	if !cfg.Configured() {
+		return nil
+	}
+	accountsByContact := make(map[string][]string)
+	for account, provider := range cfg.Providers {
+		if provider.Contact == "" {
+			continue
+		}
+		if id, err := uuid.Parse(provider.Contact); err == nil {
+			canonicalID := id.String()
+			accountsByContact[canonicalID] = append(accountsByContact[canonicalID], account)
+		}
+	}
+	return accountsByContact
 }

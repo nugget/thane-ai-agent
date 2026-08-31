@@ -20,6 +20,7 @@ const channelBindingKey contextKey = "channel_binding"
 const inheritableCapabilityTagsKey contextKey = "inheritable_capability_tags"
 const requestIDKey contextKey = "request_id"
 const modelKey contextKey = "model"
+const messageOriginKey contextKey = "message_origin"
 
 // WithConversationID adds the conversation ID to the context.
 func WithConversationID(ctx context.Context, id string) context.Context {
@@ -33,6 +34,26 @@ func ConversationIDFromContext(ctx context.Context) string {
 		return id
 	}
 	return "default"
+}
+
+// WithMessageOrigin adds the current turn's message provenance (the
+// memory.Origin* constants) to the context, so context providers can
+// tell a counterparty-contact turn from an internal wake while building
+// the prompt.
+func WithMessageOrigin(ctx context.Context, origin string) context.Context {
+	if origin == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, messageOriginKey, origin)
+}
+
+// MessageOriginFromContext extracts the current turn's message
+// provenance, or "" when the turn did not declare one.
+func MessageOriginFromContext(ctx context.Context) string {
+	if origin, ok := ctx.Value(messageOriginKey).(string); ok {
+		return origin
+	}
+	return ""
 }
 
 // WithRequestID adds the model request ID (r_…) of the current turn to the

@@ -36,6 +36,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
@@ -303,7 +305,9 @@ type Config struct {
 	// DataDir is the root directory for SQLite databases and other
 	// opaque runtime state (memory, facts, scheduler, checkpoints).
 	// Keep this separate from human-authored and model-authored
-	// document roots. Default: "./db".
+	// document roots. Relative paths are resolved from the workspace;
+	// without a workspace they remain relative to the working directory.
+	// Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory holding the talent markdown that extends
@@ -349,7 +353,7 @@ type Config struct {
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
 	// ChannelTags maps source channels to broad optional capability tags.
-	// Use this for coarse source defaults, not runtime facts such as owner
+	// Use this for coarse source defaults, not runtime facts such as operator
 	// identity or current message-channel affordances. Runtime-only tags
 	// such as owner and message_channel are skipped here; they must be
 	// asserted by trusted current-run evidence. This is additive to
@@ -387,8 +391,7 @@ type Config struct {
 	// email server subprocess.
 	Email email.Config `yaml:"email"`
 
-	// Identity configures the agent's own contact identity for vCard
-	// export and self-referencing operations.
+	// Identity configures contact identities for the agent and human operator.
 	Identity IdentityConfig `yaml:"identity"`
 
 	// Attachments configures content-addressed attachment storage.
@@ -803,6 +806,15 @@ type MemoryGuardConfig struct {
 // companion app (e.g. thane-agent-macos on a laptop vs desktop).
 type CompanionProviderConfig struct {
 	Tokens []string `yaml:"tokens"`
+
+	// Contact binds every device authenticating through this account to
+	// one contact record (a contact UUID): the counterparty layer's
+	// person attribution (#1450). The account names a credential
+	// namespace; this names whose devices those are. Optional — empty
+	// means unbound, and devices degrade to account-only attribution.
+	// Living in config is deliberate custody: bindings confer inherited
+	// trust and must not be writable through contact-editing tools.
+	Contact string `yaml:"contact"`
 }
 
 // Configured reports whether the companion endpoint is enabled
@@ -832,6 +844,11 @@ func (c CompanionConfig) Validate() error {
 	hasToken := false
 	seen := make(map[string]string) // token → account
 	for account, p := range c.Providers {
+		if p.Contact != "" {
+			if _, err := uuid.Parse(p.Contact); err != nil {
+				return fmt.Errorf("companion: account %q contact binding %q is not a contact UUID", account, p.Contact)
+			}
+		}
 		for _, tok := range p.Tokens {
 			if tok == "" {
 				continue
@@ -860,21 +877,29 @@ func (c CompanionConfig) TokenIndex() map[string]string {
 	return idx
 }
 
-// IdentityConfig configures the agent's own contact identity. The
-// ContactName must match a contact record in the directory to enable
-// self-referencing operations like vCard export.
+// IdentityConfig configures the agent's own contact identity and the primary
+// human operator's stable contact reference. ContactName must match a contact
+// record in the directory to enable self-referencing operations like vCard
+// export.
 type IdentityConfig struct {
 	// ContactName is the formatted name of the agent's own contact
 	// record. When set, contact_export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
 
+	// OperatorContactID is the stable UUID of the primary human operator's
+	// contact record. It is preferred over the legacy name-based selector
+	// because contact display names can change. The referenced active
+	// contact must exist at startup. Ignored when the config is unverified.
+	OperatorContactID string `yaml:"operator_contact_id"`
+
 	// OwnerContactName is the formatted name of the primary human
-	// owner/operator contact record. When set, the contact_owner tool
-	// resolves directly to this contact instead of guessing from trust
-	// zones. When empty, contact_owner falls back to the sole admin
-	// contact if exactly one exists.
-	OwnerContactName string `yaml:"owner_contact_name"`
+	// operator's contact record. This legacy selector remains for
+	// compatibility; prefer OperatorContactID. The two selectors are
+	// mutually exclusive. When neither is set, contact_owner falls back
+	// to the sole admin contact if exactly one exists. Ignored when the
+	// config is unverified.
+	OwnerContactName string `yaml:"owner_contact_name,omitempty"`
 }
 
 // AttachmentsConfig configures content-addressed attachment storage.
@@ -1070,6 +1095,20 @@ const (
 	// refuses says which file is unclassified instead of inferring an
 	// answer from its name.
 	RootUntaggedRefuse = "refuse"
+
+	// RootAdvertiseNever keeps this root's documents off the context
+	// advertisement rail entirely. The default: ambient attention is a
+	// per-turn spend, and a corpus earns it by opting in.
+	RootAdvertiseNever = "never"
+	// RootAdvertiseTagged lets documents offer themselves only while the
+	// root's requires_tag capability tag is active on the turn, so a
+	// specialist corpus surfaces exactly when its capability does.
+	RootAdvertiseTagged = "tagged"
+	// RootAdvertiseAlways lets documents make ambient offers on every
+	// eligible turn — the posture for a small curated corpus like a
+	// schedule root, whose freshest signal is worth a standing seat at
+	// the discriminator's table.
+	RootAdvertiseAlways = "always"
 )
 
 // RootContextPolicy declares how one document root may reach a model.
@@ -1097,6 +1136,18 @@ type RootContextPolicy struct {
 	// active capability tags, which it deliberately does not.
 	RequiresTag string `yaml:"requires_tag,omitempty"`
 
+	// Advertise controls whether this root's documents may offer
+	// themselves to context assembly through the advertisement rail
+	// (#1431): "never" (default), "tagged" (offers only while
+	// RequiresTag's capability tag is active), or "always" (ambient
+	// offers on every eligible turn). Advertising is a third door
+	// beside Inject and Search rather than a mode of either: injection
+	// pushes whole documents on a tag, search answers an explicit ask,
+	// and advertising lets a document compete for a bounded slice of
+	// unasked-for attention. A root must opt in — the safe reading of
+	// silence is that a corpus does not volunteer itself.
+	Advertise string `yaml:"advertise,omitempty"`
+
 	// Untagged decides what a document carrying no tags means in this
 	// root: "ignore" (default) skips it, "refuse" makes it an error.
 	//
@@ -1111,7 +1162,7 @@ type RootContextPolicy struct {
 // An undeclared policy keeps the root's historical behavior so an
 // existing config does not silently change how context is assembled.
 func (p RootContextPolicy) Declared() bool {
-	return p.Inject != "" || p.Search != "" || p.RequiresTag != ""
+	return p.Inject != "" || p.Search != "" || p.RequiresTag != "" || p.Advertise != ""
 }
 
 // EffectiveInject resolves the injection policy. A root that declares a
@@ -1135,6 +1186,17 @@ func (p RootContextPolicy) EffectiveSearch() string {
 	return p.Search
 }
 
+// EffectiveAdvertise resolves the advertisement policy. The default is
+// "never" for the same reason EffectiveInject defaults closed: ambient
+// attention is spent on every turn, and a corpus earns it by explicit
+// opt-in, not by existing.
+func (p RootContextPolicy) EffectiveAdvertise() string {
+	if p.Advertise == "" {
+		return RootAdvertiseNever
+	}
+	return p.Advertise
+}
+
 // EffectiveUntagged resolves what a tagless document means here,
 // defaulting to skipping it.
 func (p RootContextPolicy) EffectiveUntagged() string {
@@ -1156,6 +1218,14 @@ func (p RootContextPolicy) Validate(rootName string) error {
 	default:
 		return fmt.Errorf("roots.%s.context.search must be %q, %q, or %q, got %q", rootName, RootSearchDefault, RootSearchOnRequest, RootSearchNever, p.Search)
 	}
+	switch p.Advertise {
+	case "", RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways:
+	default:
+		return fmt.Errorf("roots.%s.context.advertise must be %q, %q, or %q, got %q", rootName, RootAdvertiseNever, RootAdvertiseTagged, RootAdvertiseAlways, p.Advertise)
+	}
+	if p.Advertise == RootAdvertiseTagged && p.RequiresTag == "" {
+		return fmt.Errorf("roots.%s.context.advertise %q needs requires_tag to name the gating capability tag", rootName, RootAdvertiseTagged)
+	}
 	switch p.Untagged {
 	case "", RootUntaggedIgnore, RootUntaggedRefuse:
 	default:
@@ -1168,12 +1238,13 @@ func (p RootContextPolicy) Validate(rootName string) error {
 		// for, which reads as a broken config rather than a policy.
 		return fmt.Errorf("roots.%s.context.untagged is %q but the root does not inject; set inject: %q or drop the untagged policy", rootName, RootUntaggedRefuse, RootInjectTagged)
 	}
-	// requires_tag gates prompt injection only. Search runs below the
-	// capability layer — the document store has no view of which tags
-	// are active — so accepting the field on a root that does not inject
-	// would silently do nothing, which is worse than refusing it.
-	if p.RequiresTag != "" && p.EffectiveInject() != RootInjectTagged {
-		return fmt.Errorf("roots.%s.context.requires_tag gates prompt injection and requires inject: %q (got %q); it does not gate search, because search does not see active capability tags", rootName, RootInjectTagged, p.EffectiveInject())
+	// requires_tag gates the capability-aware doors: tagged injection
+	// and tagged advertising. Search runs below the capability layer —
+	// the document store has no view of which tags are active — so
+	// accepting the field on a root that neither injects nor advertises
+	// by tag would silently do nothing, which is worse than refusing it.
+	if p.RequiresTag != "" && p.EffectiveInject() != RootInjectTagged && p.EffectiveAdvertise() != RootAdvertiseTagged {
+		return fmt.Errorf("roots.%s.context.requires_tag gates tagged injection and tagged advertising; set inject: %q or advertise: %q (got inject %q, advertise %q). It does not gate search, because search does not see active capability tags", rootName, RootInjectTagged, RootAdvertiseTagged, p.EffectiveInject(), p.EffectiveAdvertise())
 	}
 	return nil
 }
@@ -1870,15 +1941,25 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
-// PersonConfig configures household member presence tracking. When
-// Track contains entity IDs, the person tracker maintains in-memory
-// state from Home Assistant and injects a presence summary into the
-// agent's system prompt on every wake.
+// PersonConfig configures household member presence tracking. When Track
+// contains entity IDs, the person tracker maintains in-memory state from Home
+// Assistant, follows each person's linked device trackers for supported room
+// providers, and injects a presence summary into the agent's system prompt on
+// every wake.
 type PersonConfig struct {
 	// Track is a list of Home Assistant person entity IDs to monitor
 	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin
 	// with "person.". An empty list disables person tracking.
 	Track []string `yaml:"track"`
+
+	// ContactBindings maps stable contact UUIDs to tracked Home
+	// Assistant person entity IDs. When this key is present, including
+	// as an empty map, signed configuration is the exact source of truth:
+	// startup atomically replaces the stored bindings and CardDAV exposes
+	// X-THANE-HA-PERSON as read-only. When absent, legacy CardDAV-managed
+	// bindings remain enabled. Unverified configs cannot own or reconcile
+	// bindings; this key is ignored in recovery mode.
+	ContactBindings map[string]string `yaml:"contact_bindings"`
 
 	// Devices maps tracked person entity IDs to their wireless device
 	// MAC addresses. Used by the UniFi poller to determine which person
@@ -2819,9 +2900,7 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
-	if c.DataDir == "" {
-		c.DataDir = "./db"
-	}
+	c.DataDir = ResolveDataDir(c.Workspace.Path, c.DataDir)
 	if c.TalentsDir == "" {
 		// Derived, never authored: talents live inside core so they carry the
 		// same signed history and the same cleanliness rule as the prompts
@@ -3048,6 +3127,22 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// ResolveDataDir applies the data directory default and anchors a relative
+// path to workspace. Config loaded from core always has a derived workspace,
+// so its opaque runtime state follows the instance instead of the process's
+// current working directory. Callers without a workspace retain the historical
+// working-directory-relative behavior.
+func ResolveDataDir(workspace, dataDir string) string {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		dataDir = "./db"
+	}
+	if filepath.IsAbs(dataDir) || strings.TrimSpace(workspace) == "" {
+		return dataDir
+	}
+	return filepath.Join(workspace, dataDir)
+}
+
 // Validate checks that the configuration is internally consistent after
 // defaults have been applied. It returns an error describing the first
 // problem found, or nil if the configuration is valid.
@@ -3078,6 +3173,15 @@ func (c *Config) Validate() error {
 			if _, _, err := net.SplitHostPort(addr); err != nil {
 				return fmt.Errorf("carddav.listen %q: %w", addr, err)
 			}
+		}
+	}
+	if c.Identity.OperatorContactID != "" {
+		operatorID, err := uuid.Parse(c.Identity.OperatorContactID)
+		if err != nil || operatorID == uuid.Nil || operatorID.String() != c.Identity.OperatorContactID {
+			return fmt.Errorf("identity.operator_contact_id %q must be a canonical non-nil UUID", c.Identity.OperatorContactID)
+		}
+		if strings.TrimSpace(c.Identity.OwnerContactName) != "" {
+			return fmt.Errorf("identity.operator_contact_id and legacy identity.owner_contact_name are mutually exclusive")
 		}
 	}
 	// Validate logging — both new and deprecated fields.
@@ -3194,6 +3298,29 @@ func (c *Config) Validate() error {
 	for _, id := range c.Person.Track {
 		tracked[id] = true
 	}
+	contactIDs := make([]string, 0, len(c.Person.ContactBindings))
+	for contactID := range c.Person.ContactBindings {
+		contactIDs = append(contactIDs, contactID)
+	}
+	sort.Strings(contactIDs)
+	claimedPeople := make(map[string]string, len(contactIDs))
+	for _, contactID := range contactIDs {
+		parsed, err := uuid.Parse(contactID)
+		if err != nil || parsed == uuid.Nil || parsed.String() != contactID {
+			return fmt.Errorf("person.contact_bindings key %q must be a canonical non-nil contact UUID", contactID)
+		}
+		entityID := c.Person.ContactBindings[contactID]
+		if !validHAPersonEntityID(entityID) {
+			return fmt.Errorf("person.contact_bindings[%s] %q must match person.<object_id> (lowercase letters, digits, underscores)", contactID, entityID)
+		}
+		if !tracked[entityID] {
+			return fmt.Errorf("person.contact_bindings[%s] references untracked entity %q", contactID, entityID)
+		}
+		if holder, exists := claimedPeople[entityID]; exists {
+			return fmt.Errorf("person.contact_bindings assigns %q to both %s and %s", entityID, holder, contactID)
+		}
+		claimedPeople[entityID] = contactID
+	}
 	for entityID := range c.Person.Devices {
 		if !tracked[entityID] {
 			return fmt.Errorf("person.devices references untracked entity %q", entityID)
@@ -3286,6 +3413,19 @@ func (c *Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func validHAPersonEntityID(entityID string) bool {
+	const prefix = "person."
+	if !strings.HasPrefix(entityID, prefix) || len(entityID) == len(prefix) {
+		return false
+	}
+	for _, r := range entityID[len(prefix):] {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Config) validateModels() error {

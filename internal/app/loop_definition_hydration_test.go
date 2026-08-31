@@ -54,7 +54,7 @@ type testRoomUpdater struct {
 	updates int
 }
 
-func (u *testRoomUpdater) UpdateRoom(entityID, room, source string) {
+func (u *testRoomUpdater) UpdateRoom(entityID, room, provider, source string) {
 	u.updates++
 }
 

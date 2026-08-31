@@ -34,11 +34,6 @@ func (r *Registry) registerContactTools() {
 					"enum":        []string{"individual", "group", "org", "location"},
 					"description": "Type of contact (default: individual)",
 				},
-				"trust_zone": map[string]any{
-					"type":        "string",
-					"enum":        []string{"admin", "household", "trusted", "known"},
-					"description": "Trust zone for this contact. Gates model access, tool permissions, and send policy. admin=full access, household=family members, trusted=established relationship, known=default/gated.",
-				},
 				"given_name": map[string]any{
 					"type":        "string",
 					"description": "First/given name (vCard N given-name component)",
@@ -138,7 +133,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_owner",
-		Description: "Return the primary owner/operator contact record with rich details and contact properties, plus a structured summary of currently active owner-scoped channels. Uses identity.owner_contact_name when configured; otherwise falls back to the sole admin contact if exactly one exists.",
+		Description: "Return the primary operator contact record with rich details and contact properties, plus a structured summary of currently active operator-scoped channels. Uses identity.operator_contact_id when configured; otherwise supports the legacy name selector and finally the sole admin contact if exactly one exists.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -261,7 +256,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_import_vcf",
-		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, TrustZone and AISummary are never overwritten. Use dry_run to preview changes.",
+		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, and TrustZone and AISummary are never overwritten. New contacts are always created at the default trust zone; a vCard X-THANE-TRUST-ZONE is ignored on import (trust zones are operator-assigned). Use dry_run to preview changes.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

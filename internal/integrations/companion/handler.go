@@ -1,9 +1,12 @@
 package companion
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -45,7 +48,13 @@ var upgrader = websocket.Upgrader{
 type Handler struct {
 	tokenIndex map[string]string // token → account name
 	registry   *Registry
+	devices    DeviceRecorder             // optional durable inventory sink; nil disables
+	deviceOps  chan func(context.Context) // ordered async inventory writes
 	logger     *slog.Logger
+
+	deviceOpsMu     sync.Mutex    // guards enqueue vs. close
+	deviceOpsClosed bool          // no new ops accepted once set
+	deviceOpsDone   chan struct{} // closed when the recording goroutine exits
 }
 
 // NewHandler creates a new companion WebSocket handler. The tokenIndex
@@ -119,10 +128,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register the provider before confirming to the client, so the
-	// registry is consistent by the time the client reads auth_ok.
+	// registry is consistent by the time the client reads auth_ok. The
+	// durable inventory upsert is stamped at the same moment but
+	// written asynchronously so a slow database can never delay the
+	// handshake; the disconnect stamp mirrors it on the way out —
+	// timestamps only, the record itself outlives the connection
+	// (#1437).
 	h.registry.Add(provider)
+	h.recordConnected(provider)
 	defer func() {
 		h.registry.Remove(provider.ID)
+		h.recordDisconnected(provider)
 		close(provider.done)
 		conn.Close()
 	}()
@@ -198,12 +214,18 @@ func (h *Handler) authenticate(conn *websocket.Conn, requestType string) (*Provi
 
 	// Build the provider — auth_ok is sent by ServeHTTP after
 	// the provider is registered, ensuring registry consistency.
+	// Identity and metadata are normalized (trimmed) exactly once,
+	// here; the registry and the durable inventory both hold these
+	// bytes verbatim so the durable/live join always lines up.
 	providerID := generateProviderID()
 	return &Provider{
 		ID:          providerID,
 		Account:     account,
-		ClientName:  msg.ClientName,
-		ClientID:    msg.ClientID,
+		ClientName:  strings.TrimSpace(msg.ClientName),
+		ClientID:    strings.TrimSpace(msg.ClientID),
+		Platform:    strings.TrimSpace(msg.Platform),
+		AppVersion:  strings.TrimSpace(msg.AppVersion),
+		OSVersion:   strings.TrimSpace(msg.OSVersion),
 		Conn:        conn,
 		ConnectedAt: time.Now(),
 		requestType: requestType,
@@ -333,6 +355,9 @@ func (h *Handler) handleRegisterCapabilities(p *Provider, id int64, payload []by
 		h.writeErrorResult(p, id, "provider_not_found", err.Error())
 		return
 	}
+	// Persist the normalized manifest as the device's most recently
+	// advertised capability set.
+	h.recordCapabilities(p)
 
 	if err := p.writeJSON(Message{
 		ID:      id,

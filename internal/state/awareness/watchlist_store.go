@@ -13,11 +13,11 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// OwnerSystem is the reserved owner for rows the runtime seeds and
-// maintains itself — today the person-entity ingestion floor, re-seeded
-// from config at every boot. System rows are visible in
+// OwnerSystem is the reserved owner for rows the runtime seeds and maintains
+// itself — today the presence ingestion floor: configured person entities plus
+// their HA-linked device trackers. System rows are visible in
 // list_entity_subscriptions like any other row but refuse tool-driven
-// mutation; the configuration is their source of truth.
+// mutation; person.track and live HA linkage are their sources of truth.
 const OwnerSystem = "system"
 
 // OwnerCore is the owner of the always-visible tier: core is the root

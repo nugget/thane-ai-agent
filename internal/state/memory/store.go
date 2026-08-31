@@ -26,11 +26,40 @@ import (
 // and SQLite). Both [Store] and [SQLiteStore] satisfy it.
 type MemoryStore interface {
 	GetMessages(conversationID string) []Message
-	AddMessage(conversationID, role, content string) error
+	AddMessage(conversationID, role, content, origin string) error
 	GetConversation(id string) *Conversation
 	Clear(conversationID string) error
 	Stats() map[string]any
 }
+
+// Origin values for [Message.Origin]. Each enqueue site stamps the value
+// it knows to be true; a site that cannot know passes "" rather than
+// guessing, so an empty origin always means "unstamped", never "wrong".
+const (
+	// OriginChannel marks a message that crossed a channel transport
+	// to or from the conversation's human counterparty — an inbound
+	// message recorded by a channel bridge, or an outbound send
+	// recorded by a delivery path. Channel-shaped turn builders MUST
+	// declare this on their requests; undeclared turn-builder turns
+	// default to OriginWake.
+	OriginChannel = "channel"
+
+	// OriginWake marks an internally-originated wake prompt: a turn
+	// opened by loop_wake, a subscription fire, a scheduled trigger,
+	// or another internal source rather than by counterparty contact.
+	OriginWake = "wake"
+
+	// OriginAPI marks a message that entered through an operator-facing
+	// API surface (REST endpoints, foreign-protocol compat shims).
+	OriginAPI = "api"
+
+	// OriginInternal marks rows the system authored into the
+	// conversation itself: the loop's own generated output, detached
+	// completion injections, and system notices. Whether such a row was
+	// also delivered to a channel counterparty is a delivery-path fact,
+	// recorded separately (see OriginChannel).
+	OriginInternal = "internal"
+)
 
 // Message represents a conversation message. This is the unified type for
 // both active working-memory messages and archived session transcripts.
@@ -53,6 +82,15 @@ type Message struct {
 	// opening its own turn. The structured contract that replaces
 	// substring-matching the channel-rendered arrival marker.
 	MidTurn bool `json:"mid_turn,omitempty"`
+	// Origin records how the row entered the conversation — see the
+	// Origin* constants. Stamped at ingest by the enqueue site; empty on
+	// rows written before provenance stamping existed and on paths that
+	// cannot know their provenance (notably mid-turn mailbox merges,
+	// whose per-item origin is flattened before recording). Same
+	// structured-contract lineage as MidTurn: a stamped value is the
+	// source of truth, and content sniffing is permissible only as a
+	// documented fallback for rows whose Origin is empty.
+	Origin string `json:"origin,omitempty"`
 }
 
 // Conversation holds the state of a single conversation.
@@ -117,19 +155,22 @@ func (s *Store) GetOrCreateConversation(id string) *Conversation {
 	return conv.copy()
 }
 
-// AddMessage adds a message to a conversation.
-func (s *Store) AddMessage(conversationID string, role, content string) error {
-	return s.addMessage(conversationID, role, content, false)
+// AddMessage adds a message to a conversation. origin records how the
+// message entered the conversation (see the Origin* constants); pass ""
+// when the enqueue site cannot know.
+func (s *Store) AddMessage(conversationID string, role, content, origin string) error {
+	return s.addMessage(conversationID, role, content, origin, false)
 }
 
 // AddMidTurnMessage adds a message that arrived mid-turn and was merged into
 // an in-flight turn (#1230), tagging it so consumers can identify the
-// injection without substring-matching the rendered arrival marker.
-func (s *Store) AddMidTurnMessage(conversationID string, role, content string) error {
-	return s.addMessage(conversationID, role, content, true)
+// injection without substring-matching the rendered arrival marker. origin
+// follows the same contract as [Store.AddMessage].
+func (s *Store) AddMidTurnMessage(conversationID string, role, content, origin string) error {
+	return s.addMessage(conversationID, role, content, origin, true)
 }
 
-func (s *Store) addMessage(conversationID string, role, content string, midTurn bool) error {
+func (s *Store) addMessage(conversationID string, role, content, origin string, midTurn bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -153,6 +194,7 @@ func (s *Store) addMessage(conversationID string, role, content string, midTurn 
 		Content:   content,
 		Timestamp: time.Now(),
 		MidTurn:   midTurn,
+		Origin:    origin,
 	})
 	conv.UpdatedAt = time.Now()
 

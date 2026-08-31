@@ -26,7 +26,7 @@ often reaches for one when the right answer is another:
 | You want to store / find... | Surface |
 |---|---|
 | "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`contact_save` with `facts` or `note`) — this leaf |
-| "Who is the owner of this host" | `contacts` (`contact_owner`) — this leaf |
+| "Who operates this host" | `contacts` (`contact_owner`) — this leaf |
 | "Sump pump runs Tuesdays" / "Garage door takes 23s to close" — stable, compact, *non-person* facts | `memory` (`remember_fact`) — see [`memory.md`](memory.md) |
 | "The VLAN renumber plan landed on 2026-04-22" / a project decision / design rationale | `documents` (`kb:`, `core:`) or workspace files — NOT memory, NOT contacts |
 | "What did Frank and I last discuss" | `archive_text` scoped to the conversation — the words live there, not in the contact record |
@@ -43,8 +43,8 @@ document-shaped, it isn't a memory fact either — push to documents.
   shortcut for asserting "who is this host's primary user."
 
 - **You're creating, updating, or removing a contact** — activate
-  `contacts_save`. This is also where the trust-zone decision lives,
-  and trust zones gate downstream tools.
+  `contacts_save`. Trust-zone assignment is operator-custodied and is
+  deliberately outside these everyday mutation tools.
 
 - **You're exchanging vCard data** — activate `contacts_vcf`. Import
   from external sources, export records for sharing (with trust-zone-
@@ -52,7 +52,7 @@ document-shaped, it isn't a memory fact either — push to documents.
 
 ## Constants across all branches
 
-- **Trust zones gate downstream tools.** Every contact carries a zone:
+- **Trust zones drive downstream policy.** Every contact carries a zone:
   `admin` (full access), `household` (family-level), `trusted`
   (established relationship), `known` (default; lower-privilege gated
   access). The zone is what `email_send`'s recipient gate reads and
@@ -60,7 +60,8 @@ document-shaped, it isn't a memory fact either — push to documents.
   filtering on vCard exports is a separate axis — it uses the
   *recipient*'s trust zone passed at export time, and only when
   exporting the agent's own card via `name: "self"`. Assigning a
-  zone is a policy decision, not a metadata field.
+  zone is a policy decision, not a metadata field, and
+  `contact_save` cannot assign or change it.
 
 - **save merges; forget soft-deletes.** `contact_save` with an
   existing name merges into the current record — non-empty scalar
@@ -73,10 +74,11 @@ document-shaped, it isn't a memory fact either — push to documents.
   tombstone. Lookup before forgetting; the cost of removing the wrong
   record is real.
 
-- **The owner is a contact too.** The host's primary user lives in the
-  same table as everyone else, marked by `identity.owner_contact_name`
-  config or (fallback) by being the sole `admin`-zone contact. Treat
-  `contact_owner` as authoritative for "who is this host's user"
+- **The operator is a contact too.** The host's primary operator lives in
+  the same table as everyone else, marked by the stable
+  `identity.operator_contact_id` config, the legacy name selector, or
+  (fallback) by being the sole `admin`-zone contact. Treat
+  `contact_owner` as authoritative for "who operates this host"
   rather than guessing from message senders or workspace metadata.
 
 ## Cross-references
@@ -175,21 +177,22 @@ anchor — useful for "show me everyone" or "show me all orgs":
 `kind` is `individual` / `group` / `org` / `location`. Without `kind`,
 all types appear. Use `limit` to bound the result size.
 
-## You need the host's owner
+## You need the host's operator
 
 `contact_owner` returns the primary operator's record with rich
-detail plus a structured summary of currently active owner-scoped
+detail plus a structured summary of currently active operator-scoped
 channels:
 
 ```json
 {}
 ```
 
-No arguments needed. Uses `identity.owner_contact_name` from config
-when set; otherwise falls back to the sole `admin`-zone contact if
-exactly one exists. Right tool when the model needs to assert "this is
-the user I'm talking to" or "what channels does the owner have active
-right now."
+No arguments needed. Uses `identity.operator_contact_id` from config
+when set, accepts the legacy name selector for existing installs, and
+otherwise falls back to the sole `admin`-zone contact if exactly one
+exists. Right tool when the model needs to assert "this is the operator
+I'm talking to" or "what channels does the operator have active right
+now."
 
 ## Cross-references
 
@@ -206,19 +209,23 @@ right now."
 name: contacts_save
 tags: [contacts_save]
 kind: trailhead
-teaser: "Create or update a contact — the trust-zone decision is the central call."
+teaser: "Create, update, or remove ordinary contact data; trust zones remain operator-custodied."
 ---
 
 # Save
 
-You're mutating the directory. Two tools — one to write, one to
-delete — and one big decision: what trust zone does this contact
-belong in.
+You're mutating ordinary directory data. Two tools cover this surface:
+one writes and one deletes. Trust zones and identity bindings are not
+ordinary contact data and cannot be changed here.
 
-## The trust-zone decision
+## Trust-zone custody
 
-`contact_save` assigns a `trust_zone`, and that zone gates downstream
-tool access. The four zones:
+`contact_save` rejects `trust_zone`. A zone now confers inherited
+authority on bound companion devices, so only the operator may assign
+or change it through the authenticated CardDAV field
+`X-THANE-TRUST-ZONE` or direct curation. If a request needs a different
+zone, ask the operator to make that policy decision rather than trying
+to smuggle it through ordinary contact facts. The four zones are:
 
 - **`admin`** — full access. The host's primary user(s). Mail sends
   through, channels resolve, owner-scoped tools work. Almost always
@@ -234,21 +241,20 @@ tool access. The four zones:
   `known` recipient is **rejected** by the trust gate until
   explicitly promoted or authorized.
 
-When uncertain, **`known` is the safe default**: the record exists,
-the contact is recognized inbound, but no outbound action goes through
-without a deliberate decision. Promoting to `trusted` later is easy;
-demoting after the contact has been used for sends is messy.
+New contacts default to **`known`**: the record exists and the contact
+is recognized inbound, but no outbound action goes through without a
+deliberate operator decision. The operator can promote it later through
+the custody path.
 
 ## Create or update a person
 
-`contact_save` with `name` and `trust_zone`. Properties are person
-attributes; the merge semantics let you add details incrementally:
+`contact_save` takes `name` plus ordinary person attributes; the merge
+semantics let you add details incrementally:
 
 ```json
 {
   "name": "Frank Smith",
   "kind": "individual",
-  "trust_zone": "trusted",
   "given_name": "Frank",
   "family_name": "Smith",
   "org": "Anthropic",
@@ -346,8 +352,9 @@ within the tool surface.
 - Before saving, almost always do a `contacts_lookup` first — the
   merge semantics mean partial duplicates are easy to create through
   typos in the name.
-- After a save assigns a trust zone, the `email` send gate reads
-  that zone immediately — no extra step needed.
+- After the operator changes a trust zone through its custody path,
+  the `email` send gate reads that zone immediately — no extra step
+  or contact rewrite is needed.
 - For "I want to remember a project decision but the natural place
   is a person record," that's a smell that you actually want
   `memory` (`remember_fact`) instead.
@@ -387,9 +394,9 @@ create duplicates.
 Trust-zone semantics on import: **`trust_zone` and `ai_summary` are
 never overwritten by import.** The import can fill missing fields, but
 it cannot demote a `trusted` contact to `known` just because the
-incoming vCard didn't carry a zone. Promoting/demoting a contact's
-trust is a deliberate `contact_save` action, not a side effect of
-import.
+incoming vCard didn't carry a zone. Promoting or demoting a contact's
+trust is an operator-custodied action, not a side effect of import or
+an ordinary `contact_save`.
 
 ## Export one contact as a vCard
 
@@ -468,3 +475,7 @@ keeps the encoded vCard small enough to scan reliably. As with
 - For "merge two contacts" — there's no native merge tool. The
   workflow above (save absorbs, forget removes) is the supported
   pattern.
+
+- Asked where a contact is, `contact_whereabouts` fuses their
+  presence and device locations into one ranked, provenance-carrying
+  answer — start there rather than assembling it yourself.

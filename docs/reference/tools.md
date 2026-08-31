@@ -265,6 +265,7 @@ being reimplemented in each loop prompt.
 |------|-------------|
 | `contact_save` | Create or update a contact with vCard properties. |
 | `contact_lookup` | Search by name, query, kind, or property. |
+| `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
 | `contact_forget` | Delete a contact. |
 | `contact_list` | List and filter contacts. |
 | `contact_export_vcf` | Export one contact as a vCard. |
@@ -276,9 +277,9 @@ being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `contact_owner` | Return the runtime owner identity. Protected tag. |
+| `contact_owner` | Return the runtime operator contact. Protected tag; name retained for compatibility. |
 
-Owner channel activity recency is reported with delta fields such as
+Operator channel activity recency is reported with delta fields such as
 `last_active_delta`.
 
 ## `files` — workspace filesystem access
@@ -525,6 +526,8 @@ tools for Signal-specific workflows.
 
 | Tool | Description |
 |------|-------------|
+| `contact_whereabouts` | Resolve a person first, then rank their presence and bound-device location sources without guessing through room conflicts. |
+| `companion_last_known_location` | Read one device's durable last location with provenance and freshness. |
 | `macos_calendar_events` | Query the local macOS Calendar (companion app required). |
 
 ## `models` — model registry and routing

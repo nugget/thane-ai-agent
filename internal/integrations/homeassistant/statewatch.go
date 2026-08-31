@@ -17,6 +17,12 @@ import (
 // integration's original class). Empty when the entity has none.
 type StateWatchHandler func(entityID, oldState, newState, deviceClass string)
 
+// StateChangeHandler receives the complete Home Assistant state-change
+// payload after the event passes the ingestion filter and rate limiter.
+// NewState is guaranteed non-nil. Handlers must treat the state objects and
+// their attribute maps as read-only.
+type StateChangeHandler func(change StateChangedData)
+
 // EntityFilter selects which entity IDs to process using glob patterns.
 // An empty filter matches all entities.
 type EntityFilter struct {
@@ -153,6 +159,8 @@ type StateWatcher struct {
 	filter   *EntityFilter
 	limiter  *EntityRateLimiter
 	handler  StateWatchHandler
+	changeMu sync.RWMutex
+	changes  []StateChangeHandler
 	logger   *slog.Logger
 }
 
@@ -189,6 +197,18 @@ func NewStateWatcher(events <-chan Event, filter *EntityFilter, limiter *EntityR
 		handler: handler,
 		logger:  logger,
 	}
+}
+
+// AddStateChangeHandler registers a complete-state handler. Complete-state
+// handlers complement the compact legacy handler passed to [NewStateWatcher]
+// and are intended for consumers that need attributes or HA timestamps.
+func (w *StateWatcher) AddStateChangeHandler(handler StateChangeHandler) {
+	if handler == nil {
+		return
+	}
+	w.changeMu.Lock()
+	w.changes = append(w.changes, handler)
+	w.changeMu.Unlock()
 }
 
 // cleanupInterval is how often the rate limiter's stale counters are
@@ -288,6 +308,14 @@ func (w *StateWatcher) handleEvent(ev Event) bool {
 		deviceClass = dc
 	}
 
-	w.handler(data.EntityID, oldState, data.NewState.State, deviceClass)
+	if w.handler != nil {
+		w.handler(data.EntityID, oldState, data.NewState.State, deviceClass)
+	}
+	w.changeMu.RLock()
+	changes := w.changes
+	w.changeMu.RUnlock()
+	for _, handler := range changes {
+		handler(data)
+	}
 	return true
 }

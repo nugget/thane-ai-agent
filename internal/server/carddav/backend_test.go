@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/emersion/go-vcard"
@@ -16,6 +17,10 @@ import (
 )
 
 func newTestBackend(t *testing.T) *Backend {
+	return newTestBackendWithConfigBindings(t, false)
+}
+
+func newTestBackendWithConfigBindings(t *testing.T, configOwnsHAPersonBindings bool) *Backend {
 	t.Helper()
 	tmp, err := os.CreateTemp("", "thane-carddav-test-*.db")
 	if err != nil {
@@ -35,7 +40,7 @@ func newTestBackend(t *testing.T) *Backend {
 		t.Fatal(err)
 	}
 
-	return NewBackend(store, slog.Default())
+	return NewBackend(store, configOwnsHAPersonBindings, slog.Default())
 }
 
 func TestBackend_ListAddressBooks(t *testing.T) {
@@ -403,5 +408,178 @@ func TestBackend_RoundTrip(t *testing.T) {
 	emails := got[vcard.FieldEmail]
 	if len(emails) != 1 || emails[0].Value != "rt@example.com" {
 		t.Errorf("EMAIL = %+v", emails)
+	}
+}
+
+// newTestCard builds a minimal valid vCard for one contact.
+func newTestCard(name string, id uuid.UUID) vcard.Card {
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldUID, id.String())
+	card.SetValue(vcard.FieldFormattedName, name)
+	card.SetKind(vcard.KindIndividual)
+	return card
+}
+
+// TestHAPersonBindingRoundTrip pins the operator custody path (#1450):
+// CardDAV is the one surface that honors X-THANE-HA-PERSON — a PUT
+// sets the binding, reads emit it, clearing the header clears the
+// binding, and a claim already held by another contact fails the PUT.
+func TestHAPersonBindingRoundTrip(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	id := uuid.New()
+	card := newTestCard("Alice Operator", id)
+	card.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(id), card, nil); err != nil {
+		t.Fatalf("put with binding: %v", err)
+	}
+	entity, ok, err := b.store.HAPersonEntity(id)
+	if err != nil || !ok || entity != "person.alice" {
+		t.Fatalf("binding not stored: %q ok=%v err=%v", entity, ok, err)
+	}
+
+	got, err := b.GetAddressObject(ctx, objectPath(id), nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Card.Value("X-THANE-HA-PERSON") != "person.alice" {
+		t.Errorf("read did not emit binding: %q", got.Card.Value("X-THANE-HA-PERSON"))
+	}
+
+	// A second contact claiming the same person entity fails the PUT.
+	rivalID := uuid.New()
+	rival := newTestCard("Mallory Rival", rivalID)
+	rival.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(rivalID), rival, nil); err == nil {
+		t.Fatal("duplicate person claim accepted over CardDAV")
+	}
+
+	// Clearing the header clears the binding.
+	card2 := newTestCard("Alice Operator", id)
+	if _, err := b.PutAddressObject(ctx, objectPath(id), card2, nil); err != nil {
+		t.Fatalf("put without binding: %v", err)
+	}
+	entity, _, _ = b.store.HAPersonEntity(id)
+	if entity != "" {
+		t.Errorf("binding not cleared by header-less PUT: %q", entity)
+	}
+}
+
+// TestHAPersonBindingPutIsAtomic pins PUT atomicity (#1450): a PUT
+// whose binding is rejected must apply nothing — a brand-new contact
+// with a claim another contact holds is not created at all.
+func TestHAPersonBindingPutIsAtomic(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	holderID := uuid.New()
+	holder := newTestCard("Alice Operator", holderID)
+	holder.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(holderID), holder, nil); err != nil {
+		t.Fatalf("holder put: %v", err)
+	}
+
+	rivalID := uuid.New()
+	rival := newTestCard("Mallory Rival", rivalID)
+	rival.SetValue("X-THANE-HA-PERSON", "person.alice")
+	if _, err := b.PutAddressObject(ctx, objectPath(rivalID), rival, nil); err == nil {
+		t.Fatal("duplicate-claim PUT accepted")
+	}
+	// Atomicity: the rival contact must not exist at all.
+	if _, err := b.store.GetWithProperties(rivalID); err == nil {
+		t.Fatal("rejected PUT still created the contact — binding write is not atomic with the upsert")
+	}
+}
+
+func TestConfiguredHAPersonBindingIsReadOnlyInCardDAV(t *testing.T) {
+	b := newTestBackendWithConfigBindings(t, true)
+	ctx := context.Background()
+
+	operator, err := b.store.Upsert(&contacts.Contact{FormattedName: "Operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.store.ReplaceHAPersonBindings(map[uuid.UUID]string{
+		operator.ID: "person.operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := b.GetAddressObject(ctx, objectPath(operator.ID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entity := got.Card.Value("X-THANE-HA-PERSON"); entity != "person.operator" {
+		t.Fatalf("GET binding = %q, want person.operator", entity)
+	}
+
+	// Clients commonly discard unknown X- fields. A header-less update
+	// must preserve the configured binding while applying ordinary data.
+	headerless := newTestCard("Renamed Operator", operator.ID)
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), headerless, nil); err != nil {
+		t.Fatalf("header-less PUT: %v", err)
+	}
+	entity, ok, err := b.store.HAPersonEntity(operator.ID)
+	if err != nil || !ok || entity != "person.operator" {
+		t.Fatalf("binding after header-less PUT = %q, %v, %v", entity, ok, err)
+	}
+	updated, err := b.store.Get(operator.ID)
+	if err != nil || updated.FormattedName != "Renamed Operator" {
+		t.Fatalf("ordinary contact update = %+v, %v", updated, err)
+	}
+
+	equal := newTestCard("Still Operator", operator.ID)
+	equal.SetValue("X-THANE-HA-PERSON", "person.operator")
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), equal, nil); err != nil {
+		t.Fatalf("round-trip of configured value: %v", err)
+	}
+
+	clear := newTestCard("Rejected Clear", operator.ID)
+	clear.SetValue("X-THANE-HA-PERSON", "  ")
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), clear, nil); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
+		t.Fatalf("explicit clear of configured binding error = %v, want config guidance", err)
+	}
+	unchanged, err := b.store.Get(operator.ID)
+	if err != nil || unchanged.FormattedName != "Still Operator" {
+		t.Fatalf("rejected clear changed contact = %+v, %v", unchanged, err)
+	}
+
+	changed := newTestCard("Rejected Rename", operator.ID)
+	changed.SetValue("X-THANE-HA-PERSON", "person.somebody_else")
+	if _, err := b.PutAddressObject(ctx, objectPath(operator.ID), changed, nil); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
+		t.Fatalf("changed configured binding error = %v, want config guidance", err)
+	}
+	unchanged, err = b.store.Get(operator.ID)
+	if err != nil || unchanged.FormattedName != "Still Operator" {
+		t.Fatalf("rejected PUT changed contact = %+v, %v", unchanged, err)
+	}
+
+	newID := uuid.New()
+	claim := newTestCard("New Claim", newID)
+	claim.SetValue("X-THANE-HA-PERSON", "person.new_claim")
+	if _, err := b.PutAddressObject(ctx, objectPath(newID), claim, nil); err == nil {
+		t.Fatal("CardDAV created a binding while config owns the set")
+	}
+	if _, err := b.store.Get(newID); err == nil {
+		t.Fatal("rejected configured-binding PUT still created the contact")
+	}
+	if err := b.DeleteAddressObject(ctx, objectPath(operator.ID)); err == nil || !strings.Contains(err.Error(), "person.contact_bindings") {
+		t.Fatalf("delete configured-bound contact error = %v, want config guidance", err)
+	}
+	if entity, exists, err := b.store.HAPersonEntity(operator.ID); err != nil || !exists || entity != "person.operator" {
+		t.Fatalf("binding after rejected DELETE = %q, %v, %v", entity, exists, err)
+	}
+
+	headerlessID := uuid.New()
+	if _, err := b.PutAddressObject(ctx, objectPath(headerlessID), newTestCard("Ordinary Contact", headerlessID), nil); err != nil {
+		t.Fatalf("header-less new contact should remain writable: %v", err)
+	}
+	if err := b.DeleteAddressObject(ctx, objectPath(headerlessID)); err != nil {
+		t.Fatalf("delete unbound contact: %v", err)
+	}
+	if _, err := b.store.Get(headerlessID); err == nil {
+		t.Fatal("unbound contact still exists after DELETE")
 	}
 }

@@ -46,6 +46,14 @@ type Request struct {
 	SkipTagFilter    bool              `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
 	RoutingFactors   map[string]string `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
 	DelegationGating string            `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"` // Typed feature switch; "disabled" gives the model direct tool access (no orchestrator-and-delegate gating).
+	// MessageOrigin is the provenance stamped onto this request's
+	// Messages when the agent loop records them in conversation memory
+	// (memory.Origin* constants). Channel-shaped turn builders MUST set
+	// memory.OriginChannel; a turn-builder request that leaves this
+	// empty is defaulted to memory.OriginWake in
+	// [Loop.prepareAgentTurnRequest], because an undeclared turn-builder
+	// turn is by definition an internally-originated wake.
+	MessageOrigin string `yaml:"-" json:"-"`
 	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to core and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
@@ -113,6 +121,14 @@ type Message struct {
 	// runtime-only because persisted loop specs should stay textual and
 	// portable; HTTP ingress paths such as OWU populate it per request.
 	Images []llm.ImageContent `yaml:"-" json:"-"`
+
+	// Origin optionally overrides the request's MessageOrigin for this
+	// one message when it is recorded in conversation memory
+	// (memory.Origin* constants). Turn builders that mix provenance in
+	// a single request use it — a notify summary riding a mailbox turn
+	// is a wake even though the turn is contact. Empty inherits the
+	// request stamp.
+	Origin string `yaml:"-" json:"-"`
 }
 
 // RunMessage is a compatibility alias for [Message], the primary
@@ -2362,6 +2378,10 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	// "disabled" default reaches descendants when nothing closer
 	// declares a value.
 	req.DelegationGating = firstNonEmpty(l.requestOverride.DelegationGating, req.DelegationGating, l.config.DelegationGating, l.requestBase.DelegationGating, cascade.DelegationGating)
+	// Every loop-prepared turn is internally originated unless its
+	// builder declared otherwise (channel bridges declare
+	// memory.OriginChannel on their requests) — see Request.MessageOrigin.
+	req.MessageOrigin = firstNonEmpty(req.MessageOrigin, memory.OriginWake)
 	req.OnProgress = composeProgressFuncs(l.makeProgressFunc(), req.OnProgress, l.requestOverride.OnProgress)
 	req.InitialTags = mergeUniqueStrings(configuredInitialTags, l.activatedTags)
 	req.RuntimeTools = mergeRuntimeTools(l.config.RuntimeTools, req.RuntimeTools)

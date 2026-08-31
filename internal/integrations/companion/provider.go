@@ -26,11 +26,16 @@ type capabilityState struct {
 
 // Provider represents a connected companion app (e.g. a macOS app instance).
 // Account is the server-assigned identity resolved from the token at auth time.
+// Platform, AppVersion, and OSVersion are optional client-reported device
+// metadata carried through to the durable inventory.
 type Provider struct {
 	ID          string
 	Account     string
 	ClientName  string
 	ClientID    string
+	Platform    string
+	AppVersion  string
+	OSVersion   string
 	Conn        *websocket.Conn
 	ConnectedAt time.Time
 	requestType string
@@ -55,6 +60,9 @@ type ProviderInfo struct {
 	Account      string       `json:"account"`
 	ClientName   string       `json:"client_name"`
 	ClientID     string       `json:"client_id"`
+	Platform     string       `json:"platform,omitempty"`
+	AppVersion   string       `json:"app_version,omitempty"`
+	OSVersion    string       `json:"os_version,omitempty"`
 	ConnectedAt  time.Time    `json:"connected_at"`
 	Capabilities []Capability `json:"capabilities,omitempty"`
 }
@@ -263,7 +271,11 @@ func (r *Registry) Call(ctx context.Context, req CallRequest) (json.RawMessage, 
 	}
 }
 
-// Count returns the number of connected providers.
+// Count returns the number of connected providers. Zero is a normal
+// state — companions are phones and laptops that sleep and roam — and
+// must never feed health or failure semantics; the connwatch probe
+// that once did exactly that was retired by #1437's reachability
+// rework. Today's callers are tests and introspection convenience.
 func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -620,6 +632,9 @@ func providerToInfo(p *Provider) ProviderInfo {
 		Account:      p.Account,
 		ClientName:   p.ClientName,
 		ClientID:     p.ClientID,
+		Platform:     p.Platform,
+		AppVersion:   p.AppVersion,
+		OSVersion:    p.OSVersion,
 		ConnectedAt:  p.ConnectedAt,
 		Capabilities: p.capabilitiesSnapshot(),
 	}

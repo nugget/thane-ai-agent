@@ -4,6 +4,18 @@
 # the commands when debugging.
 set quiet
 
+# Every recipe runs under one pinned Go toolchain rather than whatever
+# Homebrew last installed, so the gates' verdicts are identical on every
+# machine and match both CI (GO_VERSION in ci.yml) and the release path,
+# which builds with the local go. The lesson behind the pin: a `brew
+# upgrade` to 1.27 changed gofmt's comment alignment and failed fmt-check
+# on files main had always considered formatted — on two hosts, weeks
+# apart — because GOTOOLCHAIN=auto never downgrades, an unpinned repo
+# re-inherits that skew at every future Homebrew bump. The `go` command
+# downloads this toolchain on first use; bump it together with ci.yml's
+# GO_VERSION.
+export GOTOOLCHAIN := "go1.27.0"
+
 pkg := "github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 version := env("THANE_VERSION", `git describe --tags --always --dirty 2>/dev/null || echo "dev"`)
 git_commit := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
@@ -106,10 +118,12 @@ test: generate
 cover: generate
     go test -race -coverprofile=coverage.out ./...
 
-# Check formatting
+# Check formatting. gofmt comes from the pinned toolchain's GOROOT, not
+# the PATH: the bare `gofmt` binary ignores GOTOOLCHAIN, so calling it
+# directly would reintroduce the per-machine skew the pin exists to end.
 [group('test')]
 fmt-check:
-    @test -z "$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
+    @test -z "$("$(go env GOROOT)/bin/gofmt" -l .)" || (echo "Files need formatting:" && "$(go env GOROOT)/bin/gofmt" -l . && exit 1)
 
 # Run linter
 [group('test')]

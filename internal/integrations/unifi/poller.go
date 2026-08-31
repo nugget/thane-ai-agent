@@ -15,8 +15,12 @@ import (
 // poller to push room updates. Keeps the unifi package decoupled from
 // the person package.
 type RoomUpdater interface {
-	UpdateRoom(entityID, room, source string)
+	UpdateRoom(entityID, room, provider, source string)
 }
+
+// RoomProvider is the stable provider name attached to room observations
+// produced by the UniFi poller.
+const RoomProvider = "unifi"
 
 // PollerConfig configures the UniFi room presence poller.
 type PollerConfig struct {
@@ -175,7 +179,8 @@ func (p *Poller) Poll(ctx context.Context) error {
 			p.cfg.Logger.Debug("room change candidate",
 				"entity_id", entityID,
 				"candidate_room", best.room,
-				"source", best.source,
+				"room_provider", RoomProvider,
+				"room_source", best.source,
 			)
 			continue
 		}
@@ -183,12 +188,13 @@ func (p *Poller) Poll(ctx context.Context) error {
 		// Same candidate as last poll — increment.
 		pend.count++
 		if pend.count >= debounceThreshold {
-			p.cfg.Updater.UpdateRoom(entityID, best.room, best.source)
+			p.cfg.Updater.UpdateRoom(entityID, best.room, RoomProvider, best.source)
 			roomsUpdated++
 			p.cfg.Logger.Log(ctx, slog.Level(-8), "room update committed", // config.LevelTrace
 				"entity_id", entityID,
 				"room", best.room,
-				"source", best.source,
+				"room_provider", RoomProvider,
+				"room_source", best.source,
 				"polls", pend.count,
 			)
 		} else {

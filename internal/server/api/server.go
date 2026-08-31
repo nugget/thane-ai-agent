@@ -86,6 +86,7 @@ type Server struct {
 	owuTracker                         *OWUTracker
 	webServer                          WebServerRegistrar
 	companionHandler                   http.Handler
+	companionObservationHandler        http.Handler
 	modelRegistry                      *fleet.Registry
 	contactStore                       *contacts.Store
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
@@ -158,6 +159,12 @@ func (s *Server) SetWebServer(ws WebServerRegistrar) {
 // companion app connections.
 func (s *Server) SetCompanionHandler(h http.Handler) {
 	s.companionHandler = h
+}
+
+// SetCompanionObservationHandler configures authenticated background
+// observation ingestion for native companion apps.
+func (s *Server) SetCompanionObservationHandler(h http.Handler) {
+	s.companionObservationHandler = h
 }
 
 // UseContactStore configures the native contact-directory API.
@@ -544,6 +551,9 @@ func (s *Server) Start(ctx context.Context) error {
 			mux.Handle(alias.Route(), s.companionHandler)
 		}
 	}
+	if s.companionObservationHandler != nil {
+		mux.Handle("POST /v1/companion/observations", s.companionObservationHandler)
+	}
 
 	// When a WebServerRegistrar is wired in, it owns "/" and related
 	// UI routes. Otherwise, fall back to the JSON root handler.
@@ -766,6 +776,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		RoutingFactors:   hints,
 		DelegationGating: delegationGating,
 		SystemPrompt:     systemPrompt,
+		MessageOrigin:    memory.OriginAPI,
 	}
 
 	if req.Stream {
@@ -856,6 +867,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		RoutingFactors: map[string]string{
 			"channel": "api",
 		},
+		MessageOrigin: memory.OriginAPI,
 	}
 
 	resp, err := s.runChatLoop(ctx, agentReq, nil, "api/simple-chat")

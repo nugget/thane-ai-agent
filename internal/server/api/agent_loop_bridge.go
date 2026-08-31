@@ -18,6 +18,7 @@ func loopRequestFromAgent(req *agent.Request) loop.Request {
 			Role:    msg.Role,
 			Content: msg.Content,
 			Images:  append(msg.Images[:0:0], msg.Images...),
+			Origin:  msg.Origin,
 		}
 	}
 	runtimeTools := make([]loop.RuntimeTool, 0, len(req.RuntimeTools))
@@ -45,6 +46,7 @@ func loopRequestFromAgent(req *agent.Request) loop.Request {
 		SkipTagFilter:         req.SkipTagFilter,
 		RoutingFactors:        cloneStringMap(req.RoutingFactors),
 		DelegationGating:      req.DelegationGating,
+		MessageOrigin:         req.MessageOrigin,
 		InitialTags:           append([]string(nil), req.InitialTags...),
 		RuntimeTags:           append([]string(nil), req.RuntimeTags...),
 		RuntimeTools:          runtimeTools,

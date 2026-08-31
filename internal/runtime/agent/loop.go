@@ -42,6 +42,10 @@ type Message struct {
 	Role    string             `json:"role"` // system, user, assistant
 	Content string             `json:"content"`
 	Images  []llm.ImageContent `json:"-"`
+	// Origin optionally overrides Request.MessageOrigin for this one
+	// message when it is recorded in conversation memory (memory.Origin*
+	// constants). Empty inherits the request stamp.
+	Origin string `json:"-"`
 }
 
 // Request represents an incoming agent request.
@@ -55,23 +59,32 @@ type Request struct {
 	// resources (see loop.Spec.Bindings). They reach tool handlers and
 	// context providers through the execution context, where each
 	// subsystem reads its own key.
-	Bindings         map[string]string                   `json:"bindings,omitempty"`
-	DelegationGating string                              `json:"delegation_gating,omitempty"` // Typed feature switch: "disabled" gives the model direct access to all tools instead of the orchestrator-and-delegate gating pattern
-	SkipContext      bool                                `json:"-"`                           // Skip memory, tools, and context injection (for lightweight completions)
-	AllowedTools     []string                            `json:"-"`                           // Optional allowlist of tools visible for this run
-	ExcludeTools     []string                            `json:"-"`                           // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
-	SkipTagFilter    bool                                `json:"-"`                           // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	InitialTags      []string                            `json:"-"`                           // Tags to activate at Run start (carried forward from previous loop iterations)
-	RuntimeTags      []string                            `json:"-"`                           // Trusted runtime-asserted tags pinned for this run only
-	RuntimeTools     []*tools.Tool                       `json:"-"`                           // Request-scoped tools visible only to this run
-	PullInput        func(context.Context) []llm.Message `json:"-"`                           // Polled at each iteration boundary and at closure to merge newly-arrived input into the live turn (#1221); nil disables
-	MaxIterations    int                                 `json:"-"`                           // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens  int                                 `json:"-"`                           // Optional output-token budget across all iterations (0 = unlimited)
-	ToolTimeout      time.Duration                       `json:"-"`                           // Optional per-tool timeout (0 = no extra timeout)
-	UsageRole        string                              `json:"-"`                           // Optional usage role override (e.g., "delegate")
-	UsageTaskName    string                              `json:"-"`                           // Optional usage task name override
-	FallbackContent  string                              `json:"-"`                           // Optional static fallback text when the run yields no content
-	PromptMode       agentctx.PromptMode                 `json:"-"`                           // Optional system-prompt shape override.
+	Bindings         map[string]string `json:"bindings,omitempty"`
+	DelegationGating string            `json:"delegation_gating,omitempty"` // Typed feature switch: "disabled" gives the model direct access to all tools instead of the orchestrator-and-delegate gating pattern
+	// MessageOrigin is the provenance stamped onto this request's
+	// Messages when they are recorded in conversation memory (see the
+	// memory.Origin* constants). Channel bridges declare
+	// memory.OriginChannel, API surfaces memory.OriginAPI; turn-builder
+	// wake requests that declare nothing default to memory.OriginWake in
+	// the loop runtime's request preparation. Empty means unstamped. A
+	// message carrying its own Message.Origin overrides this stamp for
+	// that one row.
+	MessageOrigin   string                              `json:"-"`
+	SkipContext     bool                                `json:"-"` // Skip memory, tools, and context injection (for lightweight completions)
+	AllowedTools    []string                            `json:"-"` // Optional allowlist of tools visible for this run
+	ExcludeTools    []string                            `json:"-"` // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter   bool                                `json:"-"` // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	InitialTags     []string                            `json:"-"` // Tags to activate at Run start (carried forward from previous loop iterations)
+	RuntimeTags     []string                            `json:"-"` // Trusted runtime-asserted tags pinned for this run only
+	RuntimeTools    []*tools.Tool                       `json:"-"` // Request-scoped tools visible only to this run
+	PullInput       func(context.Context) []llm.Message `json:"-"` // Polled at each iteration boundary and at closure to merge newly-arrived input into the live turn (#1221); nil disables
+	MaxIterations   int                                 `json:"-"` // Optional per-request iteration cap (0 = default)
+	MaxOutputTokens int                                 `json:"-"` // Optional output-token budget across all iterations (0 = unlimited)
+	ToolTimeout     time.Duration                       `json:"-"` // Optional per-tool timeout (0 = no extra timeout)
+	UsageRole       string                              `json:"-"` // Optional usage role override (e.g., "delegate")
+	UsageTaskName   string                              `json:"-"` // Optional usage task name override
+	FallbackContent string                              `json:"-"` // Optional static fallback text when the run yields no content
+	PromptMode      agentctx.PromptMode                 `json:"-"` // Optional system-prompt shape override.
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
@@ -170,12 +183,15 @@ type Response struct {
 // loop can build prompts and enforce context-window limits.
 type MemoryStore interface {
 	GetMessages(conversationID string) []memory.Message
-	AddMessage(conversationID, role, content string) error
+	// AddMessage records a message. origin is the provenance stamp for
+	// the row (memory.Origin* constants); callers pass "" when the
+	// enqueue site cannot know how the message entered the conversation.
+	AddMessage(conversationID, role, content, origin string) error
 	// AddMidTurnMessage records a user message that arrived mid-turn and was
 	// merged into the in-flight turn (#1230), tagging the record so consumers
 	// identify the injection structurally rather than by substring-matching
-	// the rendered arrival marker.
-	AddMidTurnMessage(conversationID, role, content string) error
+	// the rendered arrival marker. origin follows the AddMessage contract.
+	AddMidTurnMessage(conversationID, role, content, origin string) error
 	GetTokenCount(conversationID string) int
 	Clear(conversationID string) error
 	Stats() map[string]any
@@ -701,6 +717,7 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	assembler = NewTagContextAssembler(TagContextAssemblerConfig{
 		HAInject: l.haInject,
 		Logger:   l.logger,
+		Timezone: l.timezone,
 	})
 	for tag, p := range pendingTagged {
 		assembler.RegisterTaggedProvider(tag, p)
@@ -1229,6 +1246,12 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 			IncludeAlways:     !taskPrompt && !suppressAlways,
 			IncludeLoopScoped: !suppressAlways,
 		}
+		// Refs the session-origin policy injects whole are pinned so
+		// advertisers do not spend rail budget offering a document the
+		// prompt already carries in full.
+		if result := sessionOriginPolicyResultFromContext(ctx); result != nil {
+			req.PinnedRefs = result.ContextRefs
+		}
 		for _, contextSection := range assembler.BuildSections(haCtx, req) {
 			title := contextSection.Bucket.Title()
 			appendTrackedMarkdown(strings.ToUpper(title), 2, title, contextSection.Content)
@@ -1257,7 +1280,7 @@ func (l *Loop) renderSessionOriginContext(ctx context.Context) string {
 		ContextRefs []string                   `json:"context_refs,omitempty"`
 	}{
 		Origin:      result.Origin,
-		Contact:     l.originContactContext(result),
+		Contact:     l.originContactContext(ctx, result),
 		Applied:     result.Applied,
 		Tags:        result.Tags,
 		ContextRefs: result.ContextRefs,
@@ -1286,7 +1309,7 @@ func (l *Loop) renderSessionOriginContext(ctx context.Context) string {
 	return sb.String()
 }
 
-func (l *Loop) originContactContext(result *SessionOriginPolicyResult) *ContactContext {
+func (l *Loop) originContactContext(ctx context.Context, result *SessionOriginPolicyResult) *ContactContext {
 	if result == nil || l.contactLookup == nil {
 		return nil
 	}
@@ -1295,17 +1318,17 @@ func (l *Loop) originContactContext(result *SessionOriginPolicyResult) *ContactC
 		source = result.Origin.Channel
 	}
 	if result.Origin.ContactID != "" {
-		if contact := l.contactLookup.LookupContactByID(result.Origin.ContactID, source); contact != nil {
+		if contact := l.contactLookup.LookupContactByID(ctx, result.Origin.ContactID, source); contact != nil {
 			return contact
 		}
 	}
 	if result.Origin.ContactName != "" {
-		return l.contactLookup.LookupContact(result.Origin.ContactName, source)
+		return l.contactLookup.LookupContact(ctx, result.Origin.ContactName, source)
 	}
 	return nil
 }
 
-func (l *Loop) contactOriginPolicy(origin SessionOrigin) *ContactOriginPolicy {
+func (l *Loop) contactOriginPolicy(ctx context.Context, origin SessionOrigin) *ContactOriginPolicy {
 	if l.contactLookup == nil {
 		return nil
 	}
@@ -1316,7 +1339,7 @@ func (l *Loop) contactOriginPolicy(origin SessionOrigin) *ContactOriginPolicy {
 	if source == "" {
 		source = origin.Channel
 	}
-	policy := l.contactLookup.LookupContactOriginPolicy(origin.ContactID, origin.ContactName, source)
+	policy := l.contactLookup.LookupContactOriginPolicy(ctx, origin.ContactID, origin.ContactName, source)
 	if policy == nil || (len(policy.Tags) == 0 && len(policy.ContextRefs) == 0) {
 		return nil
 	}
@@ -1636,11 +1659,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if !req.SkipContext {
 		history = l.memory.GetMessages(convID)
 
+		// Per-message Origin overrides the request stamp so one turn can
+		// carry mixed provenance — a notify summary riding a mailbox
+		// batch is a wake row even though the turn is contact.
+		originFor := func(m Message) string {
+			if m.Origin != "" {
+				return m.Origin
+			}
+			return req.MessageOrigin
+		}
 		if strings.HasPrefix(convID, "owu-") {
 			// External client (Open WebUI): only add the last user message
 			for i := len(req.Messages) - 1; i >= 0; i-- {
 				if req.Messages[i].Role == "user" {
-					if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content); err != nil {
+					if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content, originFor(req.Messages[i])); err != nil {
 						log.Warn("failed to store message", "error", err)
 					}
 					break
@@ -1649,7 +1681,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		} else {
 			// Internal/API clients: store all messages
 			for _, m := range req.Messages {
-				if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
+				if err := l.memory.AddMessage(convID, m.Role, m.Content, originFor(m)); err != nil {
 					log.Warn("failed to store message", "error", err)
 				}
 			}
@@ -1669,7 +1701,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if isSimpleGreeting(userMessage) {
 		log.Debug("simple greeting detected, responding directly")
 		response := getGreetingResponse()
-		if err := l.memory.AddMessage(convID, "assistant", response); err != nil {
+		if err := l.memory.AddMessage(convID, "assistant", response, memory.OriginInternal); err != nil {
 			log.Warn("failed to store greeting response", "error", err)
 		}
 		return &Response{
@@ -1768,7 +1800,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	ctx = withChannelSubjects(ctx, channelBinding)
 	origin := newSessionOrigin(req.RoutingFactors, channelBinding)
 	originResult := SessionOriginPolicyResult{Origin: origin}
-	if contactPolicy := l.contactOriginPolicy(origin); contactPolicy != nil {
+	if contactPolicy := l.contactOriginPolicy(ctx, origin); contactPolicy != nil {
 		originResult.addApplied(SessionOriginAppliedRule{
 			Name:        "contact_origin",
 			Source:      "contacts",
@@ -1873,10 +1905,19 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// painted door this narrowing exists to remove. Everything derived
 	// from ctx now inherits it.
 	ctx = loop.WithBindings(ctx, req.Bindings)
-	promptCtx := tools.WithConversationID(ctx, convID)
-	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
-	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
-	promptCtx = tools.WithSuppressAlwaysContext(promptCtx, req.SuppressAlwaysContext)
+	// Every value a context provider reads goes on the run context for
+	// the same reason as bindings: conversation ID, hints, channel
+	// binding, the suppress flag, and turn provenance must all survive
+	// the per-iteration rebuilds. Stamping only promptCtx silently
+	// emptied conversation-scoped providers (working memory, the
+	// message-channel blocks) from iteration 1 onward — the same
+	// painted-door shape the bindings stamp above fixed.
+	ctx = tools.WithMessageOrigin(ctx, req.MessageOrigin)
+	ctx = tools.WithConversationID(ctx, convID)
+	ctx = tools.WithHints(ctx, req.RoutingFactors)
+	ctx = tools.WithChannelBinding(ctx, channelBinding)
+	ctx = tools.WithSuppressAlwaysContext(ctx, req.SuppressAlwaysContext)
+	promptCtx := ctx
 
 	var systemPrompt string
 	var systemSections []llm.PromptSection
@@ -2244,7 +2285,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if m.Role != "user" || m.Content == "" {
 					continue
 				}
-				if err := l.memory.AddMidTurnMessage(convID, "user", m.Content); err != nil {
+				// Origin "": mailbox items of mixed provenance (channel
+				// arrivals, internal notifies) are rendered to plain
+				// llm.Messages before this wrapper sees them, so the
+				// per-item origin is not recoverable here.
+				if err := l.memory.AddMidTurnMessage(convID, "user", m.Content, ""); err != nil {
 					logging.Logger(pctx).Warn("failed to record mid-turn input in conversation store",
 						"conversation_id", convID, "error", err)
 				}
@@ -2477,7 +2522,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		// Post-response: memory storage, fact extraction, compaction.
 		OnTextResponse: func(iterCtx context.Context, content string, msgs []llm.Message) {
-			if err := l.memory.AddMessage(convID, "assistant", content); err != nil {
+			if err := l.memory.AddMessage(convID, "assistant", content, memory.OriginInternal); err != nil {
 				logging.Logger(iterCtx).Warn("failed to store response", "error", err)
 			}
 			// Async fact extraction.
@@ -2540,7 +2585,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// For exhausted runs, store the forced text in memory.
 	if iterResult.Exhausted && iterResult.Content != "" {
-		if err := l.memory.AddMessage(convID, "assistant", iterResult.Content); err != nil {
+		if err := l.memory.AddMessage(convID, "assistant", iterResult.Content, memory.OriginInternal); err != nil {
 			log.Warn("failed to store response", "error", err)
 		}
 	}
@@ -3211,7 +3256,7 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 		return fmt.Errorf("clear memory for split: %w", err)
 	}
 	for _, m := range postSplit {
-		if err := l.memory.AddMessage(conversationID, m.Role, m.Content); err != nil {
+		if err := l.memory.AddMessage(conversationID, m.Role, m.Content, m.Origin); err != nil {
 			l.logger.Error("failed to re-add post-split message", "error", err, "role", m.Role)
 		}
 	}

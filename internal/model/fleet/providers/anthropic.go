@@ -16,6 +16,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 const (
@@ -341,11 +342,14 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	// ignored by the API, so we drop them here and warn instead.
 	var cacheDrops []CacheBreakpointDrop
 	if blocks, ok := systemPayload.([]anthropicContent); ok {
-		cacheDrops = applyCacheBreakpointGuards(blocks, anthropicTools, model, c.logger)
+		cacheDrops = applyCacheBreakpointGuards(blocks, anthropicTools, model, c.callLogger(ctx))
 	}
 	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
-	c.logger.Debug("preparing request",
+	log := c.callLogger(ctx)
+	started := time.Now()
+
+	log.Debug("preparing request",
 		"model", model,
 		"messages", len(anthropicMsgs),
 		"tools", len(anthropicTools),
@@ -371,7 +375,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
+	log.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", anthropicAPIURL, bytes.NewReader(jsonData))
 	if err != nil {
@@ -392,17 +396,26 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	// are documented per-call invariants, not per-success.
 	c.captureRateLimitHeaders(resp.Header)
 
+	// Read before the status check: the header is present on error
+	// responses too, and a failed call is precisely when the upstream's
+	// own identifier is worth having.
+	upstreamRequestID := resp.Header.Get("x-request-id")
+
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
-		c.logger.Error("API error", "status", resp.StatusCode, "body", errBody)
+		log.Error("API error",
+			"status", resp.StatusCode,
+			"body", errBody,
+			"upstream_request_id", upstreamRequestID,
+			"elapsed_ms", time.Since(started).Milliseconds(),
+		)
 		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, errBody)
 	}
 
-	upstreamRequestID := resp.Header.Get("x-request-id")
 	if !stream {
-		return c.handleNonStreaming(ctx, resp.Body, upstreamRequestID)
+		return c.handleNonStreaming(ctx, resp.Body, upstreamRequestID, log, started)
 	}
-	return c.handleStreaming(ctx, resp.Body, callback, upstreamRequestID)
+	return c.handleStreaming(ctx, resp.Body, callback, upstreamRequestID, log, started)
 }
 
 // logRateLimitSnapshot emits a structured Debug line on every response
@@ -440,6 +453,25 @@ func logRateLimitSnapshot(logger *slog.Logger, snap *RateLimitSnapshot) {
 		args = append(args, "retry_after", snap.RetryAfter.String())
 	}
 	logger.Debug("anthropic rate limits", args...)
+}
+
+// callLogger returns the logger for one request, preferring the
+// request-scoped logger the caller attached so provider lines carry
+// request_id, conversation_id, and session_id and can be read as one
+// cycle. The provider identity is re-applied on top.
+//
+// It also decides where these lines land: the dataset classifier routes
+// subsystem=agent with a request_id into the requests dataset, so this
+// is what puts Anthropic's call telemetry beside the OpenAI-compatible
+// client's. Before, one provider's completion lines lived in events and
+// the other's in requests, which meant any query for "how are model
+// calls behaving" silently answered for half the fleet.
+func (c *AnthropicClient) callLogger(ctx context.Context) *slog.Logger {
+	log, ok := logging.LoggerFrom(ctx)
+	if !ok {
+		log = c.logger
+	}
+	return log.With("provider", "anthropic")
 }
 
 // Ping checks if the Anthropic API is reachable.
@@ -485,7 +517,7 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader, upstreamRequestID string) (*llm.ChatResponse, error) {
+func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader, upstreamRequestID string, log *slog.Logger, started time.Time) (*llm.ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
@@ -493,7 +525,7 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 	result := convertFromAnthropic(&resp)
 	result.UpstreamRequestID = upstreamRequestID
 
-	c.logger.Debug("response received",
+	log.Debug("response received",
 		"model", result.Model,
 		"input_tokens", result.InputTokens,
 		"output_tokens", result.OutputTokens,
@@ -503,13 +535,15 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"tool_calls", len(result.Message.ToolCalls),
 		"upstream_request_id", upstreamRequestID,
 		"stop_reason", result.StopReason,
+		"total_ms", time.Since(started).Milliseconds(),
 	)
-	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
+	log.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 
 	return result, nil
 }
 
-func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback llm.StreamCallback, upstreamRequestID string) (*llm.ChatResponse, error) {
+func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback llm.StreamCallback, upstreamRequestID string, log *slog.Logger, started time.Time) (*llm.ChatResponse, error) {
+	var firstToken time.Time
 	scanner := bufio.NewScanner(body)
 	// Increase scanner buffer for large responses
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -562,6 +596,17 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			if event.Delta != nil {
 				switch event.Delta.Type {
 				case "text_delta":
+					// First content, not first event: the message_start
+					// and content_block_start frames say the request was
+					// accepted, this says the model began answering. The
+					// gap before it is prefill plus queueing, which is
+					// what separates a slow model from a busy one. An
+					// empty delta is not content — marking it would put
+					// first_token_ms on a turn that never produced text,
+					// the same guard the OpenAI-compatible stream applies.
+					if event.Delta.Text != "" && firstToken.IsZero() {
+						firstToken = time.Now()
+					}
 					contentBuilder.WriteString(event.Delta.Text)
 					if callback != nil {
 						callback(llm.StreamEvent{Kind: llm.KindToken, Token: event.Delta.Text})
@@ -629,7 +674,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 	}
 	resp.StopReason = stopReason
 
-	c.logger.Debug("stream complete",
+	attrs := []any{
 		"model", resp.Model,
 		"input_tokens", resp.InputTokens,
 		"output_tokens", resp.OutputTokens,
@@ -640,8 +685,18 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"tool_calls", len(resp.Message.ToolCalls),
 		"upstream_request_id", upstreamRequestID,
 		"stop_reason", stopReason,
-	)
-	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", resp.Message.Content)
+		"total_ms", time.Since(started).Milliseconds(),
+	}
+	// Only when content arrived: a tool-only turn has no first token, and
+	// a zero would read as an instant one.
+	if !firstToken.IsZero() {
+		attrs = append(attrs,
+			"first_token_ms", firstToken.Sub(started).Milliseconds(),
+			"generation_ms", time.Since(firstToken).Milliseconds(),
+		)
+	}
+	log.Debug("stream complete", attrs...)
+	log.Log(ctx, llm.LevelTrace, "stream final content", "content", resp.Message.Content)
 
 	return resp, nil
 }

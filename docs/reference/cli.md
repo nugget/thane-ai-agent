@@ -42,21 +42,27 @@ Starts these listeners:
 
 ### `thane init [dir]`
 
-Initialize a Thane working directory with bundled defaults. Creates the
-directory structure (`db/`, `talents/`, `archive/`), writes a default
-`config.yaml` (0600 permissions, contains placeholders for secrets) and a
-default `persona.md`, deploys the embedded talent corpus, bootstraps the
-core identity (signing key, channel CA) and the archive skeleton
-(orientation READMEs + the `interactions/` schema stub). Existing files
-are never overwritten — re-runs report `(exists, skipping)` per file, so
-it's safe to run against an established workspace to fill in anything
-missing.
+Initialize a Thane workspace with bundled defaults. Creates the directory
+structure, the archive skeleton, and `db/contacts.db` with an initial
+`admin`-zone operator contact. Its stable UUID is generated into
+`identity.operator_contact_id` in `core/config.yaml` first, then used to seed
+the contact database. The new config
+starts with an explicit empty `person.contact_bindings` map. The same signed
+core birth commit carries the generated identity material (signing key and
+channel CA), default policy, and bundled talents. Reference copies of the
+example config and persona are written at the workspace root. Existing files
+are never overwritten — re-runs report `(exists, skipping)` per file.
 
 `dir` defaults to the current directory.
 
 ```bash
 thane init ~/Thane
+thane init -operator-name "Alice Example" ~/Thane
 ```
+
+`-operator-name` controls the initial contact's display name and defaults to
+`Operator`. It does not affect the cryptographic operator principal selected
+by `-operator-key` / `-operator-principal`.
 
 ### `thane validate`
 
@@ -250,6 +256,10 @@ to act on the world as though someone had:
 - **Service loops do not start automatically.** Unattended work needs a
   verified instance; an operator can still launch a specific loop
   deliberately.
+- **Contact identity configuration is ignored.** Unsigned
+  `person.contact_bindings`, `identity.operator_contact_id`, and legacy
+  `identity.owner_contact_name` values cannot rewrite persisted bindings or
+  select who receives operator authority.
 - **`/health` reports `status: degraded` with `trust: unverified`**, so a
   supervisor cannot mistake a recovery session for a healthy instance
   left running indefinitely.
@@ -265,4 +275,3 @@ it is diagnosed.
 
 `-config` was the previous name and is now rejected with a message
 pointing at `-workspace` for the ordinary case.
-

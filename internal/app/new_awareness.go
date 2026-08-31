@@ -14,6 +14,7 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -33,6 +34,7 @@ func (a *App) initAwareness(s *newState) error {
 	// loops can opt out of always-on providers by setting
 	// Launch.SuppressAlwaysContext = true.
 	contactLookup := &contactNameLookup{store: a.contactStore, logger: logger}
+	s.contactLookup = contactLookup
 	if a.cfg.Unverified() {
 		a.loop.RegisterAlwaysContextProvider(agent.NewUnverifiedTrustProvider(a.cfg.LoadedFrom()))
 	}
@@ -84,7 +86,11 @@ func (a *App) initAwareness(s *newState) error {
 	messageChannelProvider := memory.NewMessageChannelProvider(
 		a.archiveStore,
 		tools.ConversationIDFromContext,
-		memory.MessageChannelProviderConfig{},
+		memory.MessageChannelProviderConfig{
+			Timezone:          cfg.Timezone,
+			OriginFromContext: tools.MessageOriginFromContext,
+			HintsFromContext:  tools.HintsFromContext,
+		},
 		logger,
 	)
 	a.loop.RegisterTagContextProvider("message_channel", messageChannelProvider)
@@ -109,25 +115,30 @@ func (a *App) initAwareness(s *newState) error {
 	// into prompts.
 	watchlistStore := a.watchlistStore
 
-	// Person-entity ingestion floor: the tracked person entities are
-	// system-owned ingest subscriptions, re-seeded from person.track on
-	// every boot so config edits win. Expressing the floor as registry
-	// rows (instead of a hardcoded append onto the ingestion filter)
-	// makes list_entity_subscriptions tell the whole truth about what
-	// is being watched and ingested (#1209).
-	if watchlistStore != nil {
-		floor := make([]looppkg.EntitySubscription, 0, len(cfg.Person.Track))
-		for _, entityID := range cfg.Person.Track {
+	// Presence ingestion floor: tracked person entities and the device trackers
+	// they link in HA are system-owned ingest subscriptions. The callback is
+	// reused when a person attribute-only update changes that linked set, so the
+	// registry and client-side WebSocket filter move together.
+	seedPresenceIngestFloor := func(entityIDs []string) {
+		if watchlistStore == nil {
+			return
+		}
+		floor := make([]looppkg.EntitySubscription, 0, len(entityIDs))
+		for _, entityID := range entityIDs {
 			floor = append(floor, looppkg.EntitySubscription{
 				EntityID: entityID,
 				Mode:     looppkg.SubscriptionModeIngest,
 			})
 		}
 		if err := watchlistStore.ReplaceOwner(awareness.OwnerSystem, floor); err != nil {
-			// The degraded ingest-filter fallback below still feeds the
-			// person tracker directly, so a failed seed loses registry
-			// visibility, not presence tracking.
-			logger.Warn("failed to seed the person-entity ingestion floor", "error", err)
+			// The degraded ingest-filter fallback below still feeds these
+			// entities directly, so a failed seed loses registry visibility,
+			// not presence tracking.
+			logger.Warn("failed to seed the presence ingestion floor", "error", err)
+			return
+		}
+		if a.ingestFilterRebuild != nil {
+			a.ingestFilterRebuild()
 		}
 	}
 
@@ -218,6 +229,57 @@ func (a *App) initAwareness(s *newState) error {
 	// Live State, so a busy eager state window cannot starve the verdict.
 	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
 
+	// The corpus advertiser: any document root whose context policy opts
+	// in (advertise: always|tagged) offers its faceted documents to the
+	// discriminator. Index-only at offer time; a file is read only for a
+	// selected projection, under the rail's own detached budget. Sleep
+	// bounds come from the live definition registry — never frontmatter,
+	// which carries no updated stamp and rots after retunes (#1431).
+	if a.documentStore != nil {
+		advertisePolicies := make(map[string]documents.DocumentRootAdvertisePolicy, len(cfg.DocRoots))
+		for name, rootCfg := range cfg.DocRoots {
+			// Canonicalize exactly as the store's own root wiring does
+			// (document_roots.go): legacy doc_roots keys tolerate
+			// whitespace and a trailing colon, and index rows carry the
+			// canonical name — a noncanonical key here would make the
+			// policy lookup miss and advertise: always silently behave
+			// as never.
+			name = strings.TrimSuffix(strings.TrimSpace(name), ":")
+			if name == "" {
+				continue
+			}
+			advertisePolicies[name] = documents.DocumentRootAdvertisePolicy{
+				Mode:        rootCfg.Context.EffectiveAdvertise(),
+				RequiresTag: rootCfg.Context.RequiresTag,
+			}
+		}
+		homeZone := time.Local
+		if cfg.Timezone != "" {
+			if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+				homeZone = loc
+			}
+		}
+		registry := a.loopDefinitionRegistry
+		a.loop.RegisterAlwaysContextProvider(documents.NewDocumentAdvertiser(documents.DocumentAdvertiserConfig{
+			Store: a.documentStore,
+			RootPolicy: func(root string) documents.DocumentRootAdvertisePolicy {
+				return advertisePolicies[root]
+			},
+			SleepMax: func(loopName string) (time.Duration, bool) {
+				if registry == nil {
+					return 0, false
+				}
+				spec, ok := registry.Get(loopName)
+				if !ok {
+					return 0, false
+				}
+				return spec.SleepMax, spec.SleepMax > 0
+			},
+			HomeZone: homeZone,
+			Logger:   logger,
+		}))
+	}
+
 	stateWindowProvider := homeassistant.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
 		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
@@ -250,6 +312,20 @@ func (a *App) initAwareness(s *newState) error {
 	// so a redundant call from OnReady is harmless.
 	if len(cfg.Person.Track) > 0 {
 		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
+		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
+		s.personTracker.OnLinkedTrackersChange(func(entityIDs []string) {
+			if a.ha == nil || len(entityIDs) == 0 {
+				return
+			}
+			linked := append([]string(nil), entityIDs...)
+			go func() {
+				refreshCtx, refreshCancel := context.WithTimeout(s.ctx, 10*time.Second)
+				defer refreshCancel()
+				if err := s.personTracker.RefreshLinkedTrackers(refreshCtx, a.ha, linked); err != nil {
+					logger.Warn("newly linked HA presence tracker refresh incomplete", "error", err)
+				}
+			}()
+		})
 		a.loop.RegisterAlwaysContextProvider(s.personTracker)
 
 		// Configure device MAC addresses from config.
@@ -270,6 +346,10 @@ func (a *App) initAwareness(s *newState) error {
 			}
 			initCancel()
 		}
+	} else {
+		// Config is the source of truth; clear system rows left by a prior
+		// configuration that tracked people.
+		seedPresenceIngestFloor(nil)
 	}
 
 	// --- UniFi room presence ---
@@ -385,7 +465,7 @@ func (a *App) initAwareness(s *newState) error {
 	// from every owner, rebuilt on every registry mutation — no HA
 	// re-subscription needed, the WS feed is a firehose gated
 	// client-side. The person floor arrives through the registry too
-	// (system-owned rows seeded above), not a hardcoded append.
+	// (system-owned rows maintained above), not a hardcoded append.
 	if a.haWS != nil {
 		buildIngestFilter := func() (*homeassistant.EntityFilter, error) {
 			globs, err := watchlistStore.IngestGlobs(time.Now())
@@ -403,10 +483,10 @@ func (a *App) initAwareness(s *newState) error {
 		if err != nil {
 			// A failed registry read at boot degrades to the person
 			// floor — the tracker must not go deaf — and says so.
-			logger.Warn("ingest registry read failed at startup; ingesting the person-entity floor only", "error", err)
+			logger.Warn("ingest registry read failed at startup; ingesting the presence floor only", "error", err)
 			var personGlobs []string
 			if s.personTracker != nil {
-				personGlobs = s.personTracker.EntityIDs()
+				personGlobs = s.personTracker.IngestEntityIDs()
 			}
 			if len(personGlobs) == 0 {
 				filter = homeassistant.NewEntityFilterMatchNone(logger)
@@ -416,13 +496,10 @@ func (a *App) initAwareness(s *newState) error {
 		}
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.IngestRateLimitPerMinute)
 
-		// Compose handler: the state window, person tracker, and
-		// subscription wake feeder all see every state change that
-		// passes the filter and rate limiter.
+		// Compose the compact transition taps. The person tracker registers a
+		// complete-state tap below because Bermuda and linked-tracker updates
+		// depend on attributes and HA timestamps that this compact surface omits.
 		taps := []homeassistant.StateWatchHandler{stateWindowProvider.HandleStateChange}
-		if s.personTracker != nil {
-			taps = append(taps, s.personTracker.HandleStateChange)
-		}
 		if a.subWakeFeeder != nil {
 			taps = append(taps, a.subWakeFeeder.HandleStateChange)
 		}
@@ -437,6 +514,9 @@ func (a *App) initAwareness(s *newState) error {
 		}
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
+		if s.personTracker != nil {
+			watcher.AddStateChangeHandler(s.personTracker.HandleHAStateChange)
+		}
 		a.haStateWatcher = watcher
 		a.ingestFilterRebuild = func() {
 			rebuilt, err := buildIngestFilter()

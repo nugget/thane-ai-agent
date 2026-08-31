@@ -184,7 +184,7 @@ func evidenceCore(t *testing.T, operatorAnchored bool) (string, []provenance.Tru
 			PrivateKeyPath: keyPath,
 		}
 	}
-	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", operator, nil, nil); err != nil {
+	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", operator, "", nil, nil); err != nil {
 		t.Fatalf("BootstrapCore: %v", err)
 	}
 	if operator != nil {

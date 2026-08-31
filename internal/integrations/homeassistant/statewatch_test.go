@@ -282,6 +282,49 @@ func TestHandleEvent_ReturnValue(t *testing.T) {
 	}
 }
 
+func TestStateWatcherCompleteHandlerReceivesAttributeOnlyChange(t *testing.T) {
+	updatedAt := time.Date(2026, 8, 30, 23, 38, 29, 0, time.UTC)
+	var (
+		compactCalls int
+		got          StateChangedData
+	)
+	watcher := NewStateWatcher(nil, NewEntityFilter([]string{"device_tracker.watch"}, nil), nil,
+		func(_, oldState, newState, _ string) {
+			compactCalls++
+			if oldState != "home" || newState != "home" {
+				t.Errorf("compact states = %q -> %q", oldState, newState)
+			}
+		}, nil)
+	watcher.AddStateChangeHandler(func(change StateChangedData) { got = change })
+
+	data := StateChangedData{
+		EntityID: "device_tracker.watch",
+		OldState: &State{EntityID: "device_tracker.watch", State: "home"},
+		NewState: &State{
+			EntityID:    "device_tracker.watch",
+			State:       "home",
+			LastUpdated: updatedAt,
+			Attributes: map[string]any{
+				"area":    "Office",
+				"scanner": "Desk Presence",
+			},
+		},
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !watcher.HandleEvent(Event{Type: "state_changed", Data: raw}) {
+		t.Fatal("attribute-only event was not dispatched")
+	}
+	if compactCalls != 1 {
+		t.Fatalf("compact handler calls = %d, want 1", compactCalls)
+	}
+	if got.NewState == nil || got.NewState.Attributes["area"] != "Office" || !got.NewState.LastUpdated.Equal(updatedAt) {
+		t.Fatalf("complete change = %+v", got)
+	}
+}
+
 // makeStateEvent creates a state_changed Event for testing.
 func makeStateEvent(t *testing.T, entityID, oldState, newState string) Event {
 	t.Helper()

@@ -34,6 +34,11 @@ var coreProperties = map[string]bool{
 	vcard.FieldRevision:      true,
 	"X-THANE-TRUST-ZONE":     true,
 	"X-THANE-AI-SUMMARY":     true,
+	// X-THANE-HA-PERSON is parsed and emitted only by the CardDAV
+	// backend (the operator-authenticated surface); the shared codec
+	// deliberately ignores it so model-facing vCard import cannot
+	// touch the counterparty binding (#1450).
+	"X-THANE-HA-PERSON": true,
 }
 
 // skipProperties lists vCard properties that should never be stored as

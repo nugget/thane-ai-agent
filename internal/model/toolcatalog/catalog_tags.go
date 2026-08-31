@@ -64,7 +64,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"home"},
 	},
 	"companion": {
-		Description: "Live tools from a paired macOS companion app (a connected Mac): calendar, contacts, reminders, and whatever else that host currently advertises. Tools are present only while the Mac is online.",
+		Description: "Paired companion devices — the macOS and iOS apps. Live tools (calendar, contacts, reminders, whatever the connected device currently advertises) are callable only while that device is online; server-native tools like companion_last_known_location answer from stored observations even when every device is offline. The companion-device context view lists online and offline devices with freshness and observation kinds.",
 		Parents:     []string{"operations", "people", "home"},
 	},
 	"contacts": {
@@ -149,7 +149,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Protected:   true,
 	},
 	"owner": {
-		Description: "Trusted owner/operator context set by runtime identity. When present, treat it as true; it can unlock owner-specific guidance and tools.",
+		Description: "Trusted operator context set by runtime identity. When present, treat it as true; it can unlock operator-specific guidance and tools.",
 		Protected:   true,
 		Parents:     []string{"interactive", "people"},
 	},
