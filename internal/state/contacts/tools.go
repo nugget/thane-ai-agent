@@ -47,6 +47,7 @@ type Tools struct {
 	ownerContactName  string
 	ownerActivity     func() []OwnerChannelActivity
 	dossiersEnabled   bool
+	dossiersWritable  bool
 }
 
 // NewTools creates contact tools using the given store.
@@ -72,9 +73,11 @@ func (t *Tools) ConfigureOperatorContactID(id uuid.UUID) {
 }
 
 // ConfigureDossierRoot controls whether rich contact results expose the
-// deterministic managed-document trailhead for the contact.
-func (t *Tools) ConfigureDossierRoot(enabled bool) {
+// deterministic dossier trailhead and whether that trailhead may suggest
+// creating an absent dossier.
+func (t *Tools) ConfigureDossierRoot(enabled, writable bool) {
 	t.dossiersEnabled = enabled
+	t.dossiersWritable = enabled && writable
 }
 
 // SetOwnerContactName sets the contact name used to resolve the
@@ -1051,7 +1054,11 @@ func (t *Tools) formatContact(c *Contact) string {
 	if t == nil || !t.dossiersEnabled || c == nil || c.ID == uuid.Nil {
 		return formatted
 	}
-	return fmt.Sprintf("%s\nContact ID: %s\nDossier: %s (doc_read; if absent, create with tag %s and the standard Status Line/Teaser/Digest/Details sections)", formatted, c.ID, DossierRef(c.ID), DossierSubject(c.ID))
+	trailhead := "doc_read"
+	if t.dossiersWritable {
+		trailhead += fmt.Sprintf("; if absent, create with tag %s and the standard Status Line/Teaser/Digest/Details sections", DossierSubject(c.ID))
+	}
+	return fmt.Sprintf("%s\nContact ID: %s\nDossier: %s (%s)", formatted, c.ID, DossierRef(c.ID), trailhead)
 }
 
 func (t *Tools) formatOwnerActivitySummary() string {

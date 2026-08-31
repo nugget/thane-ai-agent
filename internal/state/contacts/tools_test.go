@@ -724,7 +724,7 @@ func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
 		t.Fatalf("unconfigured dossier root leaked a dead trailhead: %s", without)
 	}
 
-	tools.ConfigureDossierRoot(true)
+	tools.ConfigureDossierRoot(true, false)
 	with, err := tools.LookupContact(`{"name":"Dossier Person"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -733,6 +733,18 @@ func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
 		if !strings.Contains(with, want) {
 			t.Fatalf("configured result = %q, want %q", with, want)
 		}
+	}
+	if strings.Contains(with, "if absent, create") {
+		t.Fatalf("read-only dossier trailhead suggested creation: %s", with)
+	}
+
+	tools.ConfigureDossierRoot(true, true)
+	writable, err := tools.LookupContact(`{"name":"Dossier Person"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(writable, "if absent, create") {
+		t.Fatalf("managed dossier trailhead omitted creation: %s", writable)
 	}
 }
 

@@ -107,12 +107,17 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 }
 
 func declaresDocumentRoot(roots map[string]config.DocumentRootConfig, want string) bool {
-	for name := range roots {
+	_, ok := declaredDocumentRoot(roots, want)
+	return ok
+}
+
+func declaredDocumentRoot(roots map[string]config.DocumentRootConfig, want string) (config.DocumentRootConfig, bool) {
+	for name, root := range roots {
 		if strings.TrimSuffix(strings.TrimSpace(name), ":") == want {
-			return true
+			return root, true
 		}
 	}
-	return false
+	return config.DocumentRootConfig{}, false
 }
 
 // missingDerivedRoot reports a derived root that does not exist on disk.

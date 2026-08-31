@@ -18,7 +18,7 @@ func validDossierCandidate(id uuid.UUID) documents.DocumentWriteCandidate {
 	}
 	return documents.DocumentWriteCandidate{
 		Path: id.String() + ".md",
-		Tags: []string{DossierSubject(id), "household"},
+		Tags: []string{DossierSubject(id)},
 		Body: dossierOutputContract.RenderFacetDocument(payload),
 	}
 }
@@ -50,14 +50,21 @@ func TestValidateDossierWrite(t *testing.T) {
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Tags = []string{"household"}
 			},
-			wantErr: "must carry frontmatter tag",
+			wantErr: "must carry exactly one frontmatter tag",
 		},
 		{
 			name: "mismatched subject",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Tags = []string{"contact:019c76e4-2ff1-7918-8d6f-6c2488f5098e"}
 			},
-			wantErr: "mismatched contact tag",
+			wantErr: "must carry exactly one frontmatter tag",
+		},
+		{
+			name: "additional broad subject",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Tags = append(candidate.Tags, "household")
+			},
+			wantErr: "no broader subject",
 		},
 		{
 			name: "missing facet",

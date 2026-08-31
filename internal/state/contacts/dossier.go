@@ -43,19 +43,8 @@ func ValidateDossierWrite(candidate documents.DocumentWriteCandidate) error {
 	}
 
 	wantSubject := DossierSubject(id)
-	foundSubject := false
-	for _, tag := range candidate.Tags {
-		tag = strings.TrimSpace(tag)
-		if tag == wantSubject {
-			foundSubject = true
-			continue
-		}
-		if strings.HasPrefix(tag, "contact:") {
-			return fmt.Errorf("dossier %s carries mismatched contact tag %q; use exactly %q for its structured contact", candidate.Path, tag, wantSubject)
-		}
-	}
-	if !foundSubject {
-		return fmt.Errorf("dossier %s must carry frontmatter tag %q so request context can resolve it without guessing from prose", candidate.Path, wantSubject)
+	if len(candidate.Tags) != 1 || strings.TrimSpace(candidate.Tags[0]) != wantSubject {
+		return fmt.Errorf("dossier %s must carry exactly one frontmatter tag, %q, so no broader subject can advertise this private dossier", candidate.Path, wantSubject)
 	}
 
 	payload, faceted := looppkg.ParseFacetSections(candidate.Body)

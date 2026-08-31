@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -239,6 +242,43 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 		if info.Size() == 0 {
 			t.Errorf("archive skeleton: %s is empty", rel)
 		}
+	}
+}
+
+func TestBootstrapContactDossierRootHonorsRepoPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := runInit(io.Discard, dir, initOptions{SelfSigned: true, OperatorName: "Test Operator"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	contactsDir := filepath.Join(dir, platformconfig.ContactsRootName)
+	if err := os.RemoveAll(contactsDir); err != nil {
+		t.Fatalf("remove standalone contacts root: %v", err)
+	}
+
+	configPath := filepath.Join(dir, platformconfig.CoreRootName, "config.yaml")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	old := "            signing_key: core:identity/signing_ed25519"
+	replacement := "            repo_path: " + dir + "\n" + old
+	configData = []byte(strings.Replace(string(configData), old, replacement, 1))
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatalf("write config with repo_path: %v", err)
+	}
+
+	configured, created, err := bootstrapContactDossierRoot(context.Background(), configPath, dir, slog.Default())
+	if err != nil {
+		t.Fatalf("bootstrapContactDossierRoot: %v", err)
+	}
+	if !configured || !created {
+		t.Fatalf("configured=%v created=%v, want both true", configured, created)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		t.Fatalf("configured backing repository was not initialized: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(contactsDir, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("contacts worktree unexpectedly became a separate repository: %v", err)
 	}
 }
 

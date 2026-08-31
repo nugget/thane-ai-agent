@@ -500,9 +500,10 @@ fresh install with nowhere for those documents to land.
 contact directory. Its canonical document is
 `contacts:<canonical-contact-uuid>.md`; using the UUID rather than a name keeps
 the dossier stable across renames. Every dossier must carry the matching
-`contact:<uuid>` frontmatter tag and the complete status-line / teaser / digest
-/ full facet ladder. Go enforces that shape before any managed write reaches
-the worktree or Git history.
+`contact:<uuid>` as its only frontmatter tag and the complete status-line /
+teaser / digest / full facet ladder. The single-tag rule prevents a broader
+subject such as `household` from advertising a private dossier. Go enforces
+that shape before any managed write reaches the worktree or Git history.
 
 The boundary is strict: SQLite contacts remain authoritative for UUIDs,
 structured identity, communication properties, trust zones, Home Assistant
