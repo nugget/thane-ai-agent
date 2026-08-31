@@ -848,7 +848,7 @@ func TestQuery_TimestampRange(t *testing.T) {
 func TestQuery_ExtendedLogEntry(t *testing.T) {
 	db := openTestDB(t)
 
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	ts := FormatTimestamp(time.Now())
 	_, err := db.Exec(
 		`INSERT INTO log_entries (timestamp, level, msg, request_id, session_id, conversation_id, subsystem)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -902,7 +902,7 @@ func TestLevelsAtOrAbove(t *testing.T) {
 func TestQueryBySession(t *testing.T) {
 	db := openTestDB(t)
 
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	ts := FormatTimestamp(time.Now())
 	for _, e := range []struct {
 		session, level, subsystem, msg string
 	}{

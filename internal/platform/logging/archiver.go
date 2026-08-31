@@ -66,7 +66,7 @@ func (a *Archiver) Archive(ctx context.Context, before time.Time) (int, error) {
 		}
 	}()
 
-	cutoff := before.UTC().Format(time.RFC3339Nano)
+	cutoff := FormatTimestamp(before)
 	total := 0
 
 	for {

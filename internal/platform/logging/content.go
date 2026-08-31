@@ -111,7 +111,7 @@ type RequestContent struct {
 // history. Errors are logged but not returned — content retention is
 // best-effort and must never block request processing.
 func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := FormatTimestamp(time.Now())
 
 	// Store system prompt (deduplicated by hash).
 	promptHash := hashPrompt(rc.SystemPrompt)
