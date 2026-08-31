@@ -442,6 +442,12 @@ func (s *ArchiveStore) migrateSessionTables() error {
 			ON sessions(conversation_id, started_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started
 			ON sessions(started_at DESC);
+		-- Open sessions are the rare rows in a table that only grows;
+		-- the partial index keeps every "still open?" query (active
+		-- count, orphan recovery, shutdown enumeration) off the full
+		-- table scan that once cost ~0.8s per ops-panel render.
+		CREATE INDEX IF NOT EXISTS idx_sessions_open
+			ON sessions(ended_at) WHERE ended_at IS NULL;
 
 		CREATE TABLE IF NOT EXISTS archive_iterations (
 			session_id TEXT NOT NULL,
@@ -666,10 +672,14 @@ func (s *ArchiveStore) migrate() error {
 			metadata TEXT
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_sessions_conversation 
+		CREATE INDEX IF NOT EXISTS idx_sessions_conversation
 			ON sessions(conversation_id, started_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_sessions_started 
+		CREATE INDEX IF NOT EXISTS idx_sessions_started
 			ON sessions(started_at DESC);
+		-- Mirrors migrateSessionTables: open sessions are the rare rows,
+		-- and every "still open?" query should hit the partial index.
+		CREATE INDEX IF NOT EXISTS idx_sessions_open
+			ON sessions(ended_at) WHERE ended_at IS NULL;
 
 		-- Import tracking for idempotent re-imports and purge support.
 		-- Maps external source IDs to archive session IDs so we can

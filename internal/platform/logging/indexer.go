@@ -396,6 +396,11 @@ func Migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_log_model ON log_entries(model);
 	CREATE INDEX IF NOT EXISTS idx_log_loop_id ON log_entries(loop_id);
 	CREATE INDEX IF NOT EXISTS idx_log_loop_name ON log_entries(loop_name);
+
+	-- Level-within-window queries ("errors in the last 24h") must not
+	-- choose idx_log_level and walk every row of that level ever
+	-- written; the composite makes them a bounded range scan.
+	CREATE INDEX IF NOT EXISTS idx_log_level_ts ON log_entries(level, timestamp);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate log index: %w", err)

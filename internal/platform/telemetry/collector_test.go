@@ -295,3 +295,68 @@ func openTestLogsDB(t *testing.T) *sql.DB {
 	}
 	return db
 }
+
+// TestCollect_ServesCacheAndRefreshesInBackground pins the assembly-path
+// contract: once a snapshot exists, Collect never pays collection cost
+// inline — a fresh cache is returned as-is and a stale one is served
+// immediately while one background refresh replaces it.
+func TestCollect_ServesCacheAndRefreshesInBackground(t *testing.T) {
+	current := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	c := NewCollector(Sources{})
+	c.now = func() time.Time { return current }
+
+	first := c.Collect(context.Background())
+	if second := c.Collect(context.Background()); second != first {
+		t.Fatal("fresh cache should return the same snapshot")
+	}
+
+	// All writes to current happen before the Collect that spawns the
+	// refresh goroutine, so the fake clock needs no lock.
+	current = current.Add(collectorCacheTTL + time.Minute)
+	if stale := c.Collect(context.Background()); stale != first {
+		t.Fatal("stale read should serve the existing snapshot, not collect inline")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c.mu.Lock()
+		refreshed := c.cached != first
+		c.mu.Unlock()
+		if refreshed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh never replaced the snapshot")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestCollectFresh_BypassesAndReplacesCache covers the publisher path.
+func TestCollectFresh_BypassesAndReplacesCache(t *testing.T) {
+	c := NewCollector(Sources{})
+	first := c.Collect(context.Background())
+	fresh := c.CollectFresh(context.Background())
+	if fresh == first {
+		t.Fatal("CollectFresh must produce a new snapshot")
+	}
+	if got := c.Collect(context.Background()); got != fresh {
+		t.Fatal("CollectFresh must replace the cache")
+	}
+}
+
+// TestCollect_TruncatedColdSnapshotNotCached: a cold collection cut off
+// by the caller's deadline must not become the cache — it would serve
+// zeros as facts for a full TTL.
+func TestCollect_TruncatedColdSnapshotNotCached(t *testing.T) {
+	c := NewCollector(Sources{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	truncated := c.Collect(ctx)
+	if truncated == nil {
+		t.Fatal("Collect must still return a snapshot under a dead ctx")
+	}
+	if replay := c.Collect(context.Background()); replay == truncated {
+		t.Fatal("a snapshot collected under a dead ctx must not be cached")
+	}
+}
