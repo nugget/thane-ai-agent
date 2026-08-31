@@ -16,9 +16,11 @@ import (
 )
 
 // ArchiveSource provides active session counts for telemetry without
-// coupling this package to the full memory package.
+// coupling this package to the full memory package. The context matters:
+// this runs on the collector's bounded refresh path, and a query that
+// ignores cancellation can wedge the refresh slot.
 type ArchiveSource interface {
-	ActiveSessionCount() (int, error)
+	ActiveSessionCount(ctx context.Context) (int, error)
 }
 
 // AttachmentSource provides aggregate attachment statistics without
@@ -85,10 +87,12 @@ func (c *Collector) clock() time.Time {
 // returned as-is, a stale one is returned immediately while a single
 // background refresh (on its own detached budget) rebuilds it. Only a
 // cold start — no snapshot yet — collects synchronously under the
-// caller's ctx. This is the assembly-path contract: the ops panel
-// renders whatever is current, at most collectorCacheTTL old, and the
-// shared context budget never funds a day-of-logs scan. CollectedAt
-// tells readers how old the snapshot is.
+// caller's ctx. This is the assembly-path contract: the shared context
+// budget never funds a day-of-logs scan. The TTL is the refresh
+// trigger, not an age bound — a stale snapshot keeps serving while a
+// refresh runs (or fails and is retried on later calls), so readers
+// that care about age must consult CollectedAt, which carries it
+// honestly.
 func (c *Collector) Collect(ctx context.Context) *Metrics {
 	c.mu.Lock()
 	cached := c.cached
@@ -104,42 +108,47 @@ func (c *Collector) Collect(ctx context.Context) *Metrics {
 
 	m := c.collect(ctx)
 	// A snapshot truncated by the caller's deadline must not become the
-	// cache: it would serve zeros as facts for a full TTL.
+	// cache: it would serve zeros as facts until a refresh replaced it.
 	if ctx.Err() == nil {
-		c.mu.Lock()
-		if c.cached == nil {
-			c.cached = m
-		}
-		c.mu.Unlock()
+		c.storeSnapshot(m)
 	}
 	return m
 }
 
 // CollectFresh always performs a full collection under the caller's ctx
-// and replaces the cache. The MQTT publisher uses this: its cadence is
-// long, so serving it the cache would compound both delays into sensor
-// readings a TTL-plus-interval old.
+// and offers it to the cache. The MQTT publisher uses this: its cadence
+// is long, so serving it the cache would compound both delays into
+// sensor readings a TTL-plus-interval old.
 func (c *Collector) CollectFresh(ctx context.Context) *Metrics {
 	m := c.collect(ctx)
 	if ctx.Err() == nil {
-		c.mu.Lock()
-		c.cached = m
-		c.mu.Unlock()
+		c.storeSnapshot(m)
 	}
 	return m
+}
+
+// storeSnapshot installs m unless a newer snapshot is already cached.
+// Collections run outside the lock, so a slow one finishing late must
+// not roll the cache back over a fresher rival's result.
+func (c *Collector) storeSnapshot(m *Metrics) {
+	c.mu.Lock()
+	if c.cached == nil || m.CollectedAt.After(c.cached.CollectedAt) {
+		c.cached = m
+	}
+	c.mu.Unlock()
 }
 
 func (c *Collector) refresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), collectorRefreshTimeout)
 	defer cancel()
 	m := c.collect(ctx)
-	c.mu.Lock()
 	// A refresh its own budget truncated keeps the old snapshot: stale
 	// real numbers beat fresh partial zeros, the next Collect retries,
 	// and the per-collector warns already name what timed out.
 	if ctx.Err() == nil {
-		c.cached = m
+		c.storeSnapshot(m)
 	}
+	c.mu.Lock()
 	c.refreshing = false
 	c.mu.Unlock()
 }
@@ -155,7 +164,7 @@ func (c *Collector) collect(ctx context.Context) *Metrics {
 
 	c.collectDBSizes(m)
 	c.collectTokens(ctx, m)
-	c.collectSessions(m)
+	c.collectSessions(ctx, m)
 	c.collectLoops(m)
 	c.collectRequests(ctx, m)
 	c.collectAttachments(ctx, m)
@@ -186,12 +195,11 @@ func (c *Collector) collectTokens(ctx context.Context, m *Metrics) {
 	if c.src.UsageStore == nil {
 		return
 	}
-	_ = ctx // usage.Store methods don't take ctx yet
 
 	now := time.Now().UTC()
 	start := now.Add(-24 * time.Hour)
 
-	summary, err := c.src.UsageStore.Summary(start, now)
+	summary, err := c.src.UsageStore.SummaryContext(ctx, start, now)
 	if err != nil {
 		c.src.Logger.Warn("telemetry: token summary failed", "error", err)
 		return
@@ -200,7 +208,7 @@ func (c *Collector) collectTokens(ctx context.Context, m *Metrics) {
 	m.TokensOutput = summary.TotalOutputTokens
 	m.TokensCost = summary.TotalCostUSD
 
-	byModel, err := c.src.UsageStore.SummaryByModel(start, now)
+	byModel, err := c.src.UsageStore.SummaryByModelContext(ctx, start, now)
 	if err != nil {
 		c.src.Logger.Warn("telemetry: token by-model failed", "error", err)
 		return
@@ -218,9 +226,9 @@ func (c *Collector) collectTokens(ctx context.Context, m *Metrics) {
 }
 
 // collectSessions counts active sessions and estimates context utilization.
-func (c *Collector) collectSessions(m *Metrics) {
+func (c *Collector) collectSessions(ctx context.Context, m *Metrics) {
 	if c.src.ArchiveStore != nil {
-		count, err := c.src.ArchiveStore.ActiveSessionCount()
+		count, err := c.src.ArchiveStore.ActiveSessionCount(ctx)
 		if err != nil {
 			c.src.Logger.Warn("telemetry: active session count failed", "error", err)
 		} else {

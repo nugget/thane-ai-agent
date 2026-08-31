@@ -396,14 +396,28 @@ func Migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_log_model ON log_entries(model);
 	CREATE INDEX IF NOT EXISTS idx_log_loop_id ON log_entries(loop_id);
 	CREATE INDEX IF NOT EXISTS idx_log_loop_name ON log_entries(loop_name);
-
-	-- Level-within-window queries ("errors in the last 24h") must not
-	-- choose idx_log_level and walk every row of that level ever
-	-- written; the composite makes them a bounded range scan.
-	CREATE INDEX IF NOT EXISTS idx_log_level_ts ON log_entries(level, timestamp);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate log index: %w", err)
+	}
+
+	// idx_log_level_ts makes level-within-window queries ("errors in the
+	// last 24h") a bounded range scan instead of a walk of every row of
+	// that level ever written. It is created as its own checked step, not
+	// folded into the multi-statement Exec above: the #1385 post-mortem
+	// found databases where that path reported success while declared
+	// indexes were absent, and this is the index the hot error-count
+	// query depends on — verify against sqlite_master so a boot that
+	// could not secure it fails loudly instead of running the expensive
+	// plan silently.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_log_level_ts ON log_entries(level, timestamp)`); err != nil {
+		return fmt.Errorf("create idx_log_level_ts: %w", err)
+	}
+	var levelTSIndex string
+	if err := db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_log_level_ts'`,
+	).Scan(&levelTSIndex); err != nil {
+		return fmt.Errorf("verify idx_log_level_ts exists: %w", err)
 	}
 
 	// Content retention tables — created unconditionally (the schema

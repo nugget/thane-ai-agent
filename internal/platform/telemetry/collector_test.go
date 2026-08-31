@@ -20,7 +20,7 @@ type mockArchiveSource struct {
 	err   error
 }
 
-func (m *mockArchiveSource) ActiveSessionCount() (int, error) {
+func (m *mockArchiveSource) ActiveSessionCount(context.Context) (int, error) {
 	return m.count, m.err
 }
 

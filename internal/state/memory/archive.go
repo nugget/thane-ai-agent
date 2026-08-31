@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -2124,10 +2125,11 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 // ActiveSessionCount returns the number of unclosed (active) sessions.
 // This is a lightweight query for telemetry dashboards — use
 // [ArchiveStore.ActiveSessionsWithLastActivity] when per-session
-// details are needed.
-func (s *ArchiveStore) ActiveSessionCount() (int, error) {
+// details are needed. It honors ctx because it runs on the telemetry
+// collector's bounded refresh path.
+func (s *ArchiveStore) ActiveSessionCount(ctx context.Context) (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL`).Scan(&count)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL`).Scan(&count)
 	return count, err
 }
 
