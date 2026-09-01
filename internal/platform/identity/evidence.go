@@ -343,13 +343,17 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 
 func x509CertificateEvidence(certificate *x509.Certificate) *X509CertificateEvidence {
 	return &X509CertificateEvidence{
-		Subject:            certificate.Subject.String(),
-		Issuer:             certificate.Issuer.String(),
-		SerialNumber:       strings.ToUpper(certificate.SerialNumber.Text(16)),
-		NotBefore:          certificate.NotBefore.UTC(),
-		NotAfter:           certificate.NotAfter.UTC(),
-		IsCA:               certificate.IsCA,
-		SelfSigned:         certificate.CheckSignatureFrom(certificate) == nil,
+		Subject:      certificate.Subject.String(),
+		Issuer:       certificate.Issuer.String(),
+		SerialNumber: strings.ToUpper(certificate.SerialNumber.Text(16)),
+		NotBefore:    certificate.NotBefore.UTC(),
+		NotAfter:     certificate.NotAfter.UTC(),
+		IsCA:         certificate.IsCA,
+		SelfSigned: certificate.CheckSignature(
+			certificate.SignatureAlgorithm,
+			certificate.RawTBSCertificate,
+			certificate.Signature,
+		) == nil,
 		PublicKeyAlgorithm: certificate.PublicKeyAlgorithm.String(),
 		SignatureAlgorithm: certificate.SignatureAlgorithm.String(),
 	}

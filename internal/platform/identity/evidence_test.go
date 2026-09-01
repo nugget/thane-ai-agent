@@ -1,13 +1,51 @@
 package identity
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
+
+func TestX509CertificateEvidenceSelfSignedUsesRawSignature(t *testing.T) {
+	t.Parallel()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	if err := certificate.CheckSignatureFrom(certificate); err == nil {
+		t.Fatal("CheckSignatureFrom accepted a non-CA certificate; test does not exercise the intended distinction")
+	}
+
+	got := x509CertificateEvidence(certificate)
+	if !got.SelfSigned {
+		t.Fatal("SelfSigned = false for a certificate signed by its own public key")
+	}
+}
 
 func TestObserveCoreIdentityEvidence(t *testing.T) {
 	t.Parallel()
