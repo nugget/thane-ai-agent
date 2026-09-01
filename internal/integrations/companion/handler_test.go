@@ -90,6 +90,9 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	if ok.ServerVersion != buildinfo.Version {
 		t.Errorf("expected server version %q, got %q", buildinfo.Version, ok.ServerVersion)
 	}
+	if ok.ServerUptimeSeconds < 0 || ok.ServerUptimeSeconds > 300 {
+		t.Errorf("expected recent non-negative server uptime, got %d seconds", ok.ServerUptimeSeconds)
+	}
 }
 
 func TestAuthHandshakeBadToken(t *testing.T) {

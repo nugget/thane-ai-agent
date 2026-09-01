@@ -145,11 +145,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if err := writeJSONWithDeadline(conn, writeWait, authOK{
-		Type:          typeAuthOK,
-		ProviderID:    provider.ID,
-		Account:       provider.Account,
-		ServerVersion: buildinfo.Version,
-		Deprecation:   deprecation,
+		Type:                typeAuthOK,
+		ProviderID:          provider.ID,
+		Account:             provider.Account,
+		ServerVersion:       buildinfo.Version,
+		ServerUptimeSeconds: int64(buildinfo.Uptime() / time.Second),
+		Deprecation:         deprecation,
 	}); err != nil {
 		return
 	}
