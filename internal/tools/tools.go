@@ -444,6 +444,8 @@ func (r *Registry) registerFactTools() {
 	})
 }
 
+const fileToolDocumentBoundary = " Indexed managed document roots are intentionally unavailable here; use doc_browse, doc_search, doc_read, and the returned write_tool so Thane can preserve the logical document abstraction."
+
 func (r *Registry) registerFileTools() {
 	if r.fileTools == nil || !r.fileTools.Enabled() {
 		return
@@ -452,7 +454,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_read",
 		SkipContentResolve: true,
-		Description:        "Read the contents of a file from the workspace. Use for accessing configuration, memory files, documentation, or any text file.",
+		Description:        "Read the contents of an ordinary workspace or non-indexed repository file." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -488,7 +490,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_write",
 		SkipContentResolve: true,
-		Description:        "Write content to a file in the workspace. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+		Description:        "Write content to an ordinary workspace file. Creates the file if it doesn't exist, overwrites if it does, and creates parent directories." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -516,7 +518,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_edit",
 		SkipContentResolve: true,
-		Description:        "Edit a file by replacing exact text. The old text must match exactly (including whitespace). Use this for precise, surgical edits.",
+		Description:        "Edit an ordinary workspace file by replacing exact text. The old text must match exactly, including whitespace." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -549,7 +551,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_list",
 		SkipContentResolve: true,
-		Description:        "List files and directories in a workspace path.",
+		Description:        "List files and directories in an ordinary workspace or non-indexed repository path." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -579,7 +581,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_search",
 		SkipContentResolve: true,
-		Description:        "Search for files by name using glob patterns. Recursively searches a directory tree and returns matching file paths. Useful for finding configuration files, specific file types, or files with certain naming patterns.",
+		Description:        "Search ordinary workspace and non-indexed repository files by name using glob patterns. Recursively searches a directory tree and returns matching file paths." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -615,7 +617,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_grep",
 		SkipContentResolve: true,
-		Description:        "Search file contents for a regular expression pattern. Recursively searches files and returns matching lines with file paths and line numbers. Use file_pattern to keep source searches inside a filename glob such as '*.go'. Skips binary files and files larger than 1MB.",
+		Description:        "Search ordinary workspace and non-indexed repository file contents for a regular expression. Returns matching lines with file paths and line numbers; skips binary files and files larger than 1MB." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -664,7 +666,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_stat",
 		SkipContentResolve: true,
-		Description:        "Get detailed information about one or more files or directories. Returns type, size, permissions, and modification time. Supports batch queries with comma-separated paths.",
+		Description:        "Get type, size, permissions, and modification time for ordinary workspace or non-indexed repository paths. Supports comma-separated paths." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -684,7 +686,7 @@ func (r *Registry) registerFileTools() {
 	r.Register(&Tool{
 		Name:               "file_tree",
 		SkipContentResolve: true,
-		Description:        "Display a directory tree structure with indentation. Shows the hierarchy of files and directories with a summary count. Useful for understanding project layout.",
+		Description:        "Display an ordinary workspace or non-indexed repository directory tree with a summary count." + fileToolDocumentBoundary,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

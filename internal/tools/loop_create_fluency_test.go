@@ -284,10 +284,10 @@ func TestGuidedCreateScaffoldsFacetSkeleton(t *testing.T) {
 		t.Fatalf("read scaffold: %v", err)
 	}
 	for _, want := range []string{
-		"## Status Line", "## Digest", "## Details",
+		`"status_line"`, `"digest"`, `"full"`,
 		"awaiting first cycle",
 		`"audience"`, `"published"`,
-		`"managed_by"`, `"publish_output_closet_guardian"`,
+		`"write_tool"`, `"publish_output_closet_guardian"`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("faceted scaffold missing %q:\n%s", want, doc)
@@ -330,7 +330,7 @@ func TestGuidedCreateScaffoldsWorkingNotes(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"audience"`, `"internal"`,
-		`"managed_by"`, `"replace_output_closet_guardian_notes"`,
+		`"write_tool"`, `"replace_output_closet_guardian_notes"`,
 		"loop_definition_name",
 		"awaiting first cycle",
 	} {
@@ -356,12 +356,15 @@ func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
 	// The loop has "run": both documents now hold real state.
 	docBody := "## Status Line\n\nCloset nominal.\n\n## Details\n\nAccumulated belief."
 	notesBody := "Current theory: the UPS fan is the noise."
-	for ref, body := range map[string]string{
-		"kb:dashboards/closet.md":       docBody,
-		"kb:dashboards/closet-notes.md": notesBody,
+	for ref, state := range map[string]struct {
+		body string
+		tool string
+	}{
+		"kb:dashboards/closet.md":       {body: docBody, tool: "publish_output_closet_guardian"},
+		"kb:dashboards/closet-notes.md": {body: notesBody, tool: "replace_output_closet_guardian_notes"},
 	} {
-		body := body
-		if _, err := rig.docTools.Write(ctx, documents.WriteArgs{Ref: ref, Body: &body}); err != nil {
+		body := state.body
+		if _, err := rig.docTools.Write(ctx, documents.WriteArgs{Ref: ref, Body: &body, StructuredTool: state.tool}); err != nil {
 			t.Fatalf("simulate loop write to %s: %v", ref, err)
 		}
 	}
@@ -468,9 +471,9 @@ func TestGuidedCreateSeedsFirstPublish(t *testing.T) {
 		t.Fatalf("read seeded doc: %v", err)
 	}
 	for _, want := range []string{
-		"## Status Line", "Closet 21.4°C, UPS on mains.",
-		"## Digest", "dehumidifier idle",
-		"## Details", "full charge",
+		`"status_line"`, "Closet 21.4°C, UPS on mains.",
+		`"digest"`, "dehumidifier idle",
+		`"full"`, "full charge",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("seeded document missing %q:\n%s", want, doc)

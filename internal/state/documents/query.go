@@ -342,16 +342,20 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 	}
 	meta, body := splitFrontmatter(string(raw))
 	doc := parseMarkdownDocumentParts(relPath, meta, body)
+	logicalBody := body
+	if contract := parsedFacetContract(meta, body); len(contract.Facets) > 0 {
+		logicalBody = contract.Parse(body).Full
+	}
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
-		lineCount := len(strings.Split(body, "\n"))
+		lineCount := len(strings.Split(logicalBody, "\n"))
 		return &Section{
 			Heading:   doc.Title,
 			Slug:      slugify(doc.Title),
 			Level:     0,
 			StartLine: 1,
 			EndLine:   lineCount,
-			Content:   strings.TrimSpace(body),
+			Content:   strings.TrimSpace(logicalBody),
 		}, nil
 	}
 	targetSlug := slugify(selector)

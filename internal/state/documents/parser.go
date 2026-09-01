@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 var (
@@ -60,7 +60,14 @@ func parseMarkdownDocument(name, raw string) parsedDocument {
 }
 
 func parseMarkdownDocumentParts(name string, meta map[string][]string, body string) parsedDocument {
-	sections := parseSections(body)
+	contract := parsedFacetContract(meta, body)
+	payload := documentfacets.Payload{Full: strings.TrimSpace(body)}
+	faceted := len(contract.Facets) > 0
+	if faceted {
+		payload = contract.Parse(body)
+	}
+	logicalFull := payload.Full
+	sections := parseSections(logicalFull)
 	title := firstValue(meta, "title")
 	if title == "" {
 		for _, sec := range sections {
@@ -84,24 +91,23 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 	// pull (#1250).
 	summary := ""
 	var facets []string
-	facetBytes := make(map[string]int, len(looppkg.FacetKeys()))
-	payload, faceted := looppkg.ParseFacetSections(body)
+	facetBytes := make(map[string]int, len(documentfacets.Keys()))
 	if faceted {
-		for _, key := range looppkg.FacetKeys() {
+		for _, key := range documentfacets.Keys() {
 			// full is every document's baseline and advertises nothing;
 			// the facet list exists to say which condensed projections
 			// doc_read can pull.
 			if key == "full" {
 				continue
 			}
-			if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
+			if value, ok := payload.ByKey(key); ok && strings.TrimSpace(value) != "" {
 				facets = append(facets, key)
 				facetBytes[key] = len(value)
 			}
 		}
-		if teaser, ok := payload.FacetByKey(string(looppkg.OutputFacetTeaser)); ok && strings.TrimSpace(teaser) != "" {
+		if teaser, ok := payload.ByKey(string(documentfacets.Teaser)); ok && strings.TrimSpace(teaser) != "" {
 			summary = strings.TrimSpace(teaser)
-		} else if verdict, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine)); ok && strings.TrimSpace(verdict) != "" {
+		} else if verdict, ok := payload.ByKey(string(documentfacets.StatusLine)); ok && strings.TrimSpace(verdict) != "" {
 			summary = strings.TrimSpace(verdict)
 		} else {
 			summary = firstParagraph(payload.Full)
@@ -113,7 +119,7 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 	// is always a readable projection level, and an unfaceted body parses
 	// entirely into payload.Full, so both branches share one source of
 	// truth for what a full-level read yields.
-	facetBytes["full"] = len(payload.Full)
+	facetBytes["full"] = len(logicalFull)
 
 	return parsedDocument{
 		Title:       title,
@@ -121,12 +127,31 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 		Audience:    firstValue(meta, audienceFrontmatterKey),
 		Facets:      facets,
 		FacetBytes:  facetBytes,
-		WordCount:   len(strings.Fields(body)),
+		WordCount:   len(strings.Fields(logicalFull)),
 		Tags:        append([]string(nil), meta["tags"]...),
 		Frontmatter: meta,
 		Sections:    sections,
-		Links:       parseLinks(body),
+		Links:       parseLinks(logicalFull),
 	}
+}
+
+// parsedFacetContract resolves a canonical durable manifest first and falls
+// back to the historical reserved-heading envelope for compatibility reads.
+// A malformed canonical manifest does not become an invented contract here;
+// mutation validation reports that error before any write, while indexing
+// keeps the document discoverable as a body-only record for repair.
+func parsedFacetContract(meta map[string][]string, body string) documentfacets.Contract {
+	manifest, canonical, err := documentfacets.FromFrontmatter(meta)
+	if canonical && err == nil {
+		return manifest.Contract
+	}
+	if !canonical {
+		manifest, _, found := documentfacets.InferLegacy(body, firstValue(meta, documentfacets.ManagedByKey))
+		if found {
+			return manifest.Contract
+		}
+	}
+	return documentfacets.Contract{}
 }
 
 func splitFrontmatter(raw string) (map[string][]string, string) {

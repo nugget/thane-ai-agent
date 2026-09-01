@@ -21,7 +21,7 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	spec := looppkg.Spec{
 		Name:       "metacognitive",
 		Enabled:    true,
@@ -379,7 +379,7 @@ func TestReExposeNativeTools(t *testing.T) {
 // a launch dependency.
 func TestHydrateLoopOutputsWithoutAgentLoop(t *testing.T) {
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	spec := looppkg.Spec{
 		Name:      "reader",
 		Enabled:   true,
@@ -495,7 +495,7 @@ func TestWrapOwnOutputDocRead(t *testing.T) {
 // be able to write in the first place.
 func TestReplaceOutputRejectsOversizedBody(t *testing.T) {
 	store, _ := newLoopOutputDocumentStore(t)
-	runtimeTools := buildLoopOutputTools(store, []looppkg.OutputSpec{{
+	runtimeTools := buildLoopOutputTools(documents.NewTools(store), []looppkg.OutputSpec{{
 		Name: "state",
 		Type: looppkg.OutputTypeMaintainedDocument,
 		Ref:  "core:state.md",

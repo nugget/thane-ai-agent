@@ -54,6 +54,7 @@ func renderDocumentFromParts(frontmatterRaw, body string) string {
 }
 
 func renderFrontmatter(meta map[string][]string) string {
+	meta = canonicalFrontmatter(meta)
 	if len(meta) == 0 {
 		return ""
 	}
@@ -110,6 +111,31 @@ func renderFrontmatter(meta map[string][]string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// canonicalFrontmatter makes the persistence representation a fixed point.
+// Frontmatter is a set-valued metadata map, so key casing, insertion order,
+// duplicate values, and caller-provided value order must not create unrelated
+// Git churn. Values whose order is meaningful belong in the document's logical
+// content rather than this map.
+func canonicalFrontmatter(meta map[string][]string) map[string][]string {
+	canonical := make(map[string][]string, len(meta))
+	for key, values := range meta {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			continue
+		}
+		canonical[key] = append(canonical[key], values...)
+	}
+	for key, values := range canonical {
+		values = normalizeFrontmatterValues(values)
+		if len(values) == 0 {
+			delete(canonical, key)
+			continue
+		}
+		canonical[key] = values
+	}
+	return canonical
 }
 
 func appendBlockListFrontmatter(lines []string, key string, values []string) []string {

@@ -72,6 +72,15 @@ func (s *Store) transferSection(ctx context.Context, action string, args Section
 		}
 		return nil, err
 	}
+	if removeSource {
+		if tool := structuredWriteTool(sourceRecord); tool != "" {
+			return nil, &StructuredDocumentMutationError{
+				Ref:       args.Ref,
+				Attempted: action,
+				WriteTool: tool,
+			}
+		}
+	}
 	sourceSection, err := extractDocumentSection(srcBody, args.Section)
 	if err != nil {
 		return nil, err
@@ -90,6 +99,13 @@ func (s *Store) transferSection(ctx context.Context, action string, args Section
 		destinationRecord, dstFrontmatterRaw, dstBody, err = s.readDocumentFile(dstAbsPath, dstRoot, dstRelPath)
 		if err != nil {
 			return nil, err
+		}
+		if tool := structuredWriteTool(destinationRecord); tool != "" {
+			return nil, &StructuredDocumentMutationError{
+				Ref:       args.DestinationRef,
+				Attempted: action,
+				WriteTool: tool,
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("check destination document: %w", err)

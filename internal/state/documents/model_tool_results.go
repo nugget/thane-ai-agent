@@ -7,6 +7,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 type modelRootSummary struct {
@@ -50,6 +51,7 @@ type modelDocumentSummary struct {
 	// deliberate doc_read with level (#1250) — dropping the field here
 	// would break that promise at the model boundary.
 	Facets        []string            `json:"facets,omitempty"`
+	WriteTool     string              `json:"write_tool"`
 	Tags          []string            `json:"tags,omitempty"`
 	Frontmatter   map[string][]string `json:"frontmatter,omitempty"`
 	ModifiedDelta string              `json:"modified_delta,omitempty"`
@@ -81,18 +83,30 @@ type modelBrowseResult struct {
 }
 
 type modelDocumentRecord struct {
-	Root          string              `json:"root"`
-	Ref           string              `json:"ref"`
-	Path          string              `json:"path"`
-	Title         string              `json:"title"`
-	Description   string              `json:"description,omitempty"`
-	Tags          []string            `json:"tags,omitempty"`
-	Frontmatter   map[string][]string `json:"frontmatter,omitempty"`
-	Body          string              `json:"body"`
-	Outline       []Section           `json:"outline,omitempty"`
-	ModifiedDelta string              `json:"modified_delta,omitempty"`
-	WordCount     int                 `json:"word_count"`
-	SizeBytes     int64               `json:"size_bytes"`
+	Root          string                    `json:"root"`
+	Ref           string                    `json:"ref"`
+	Path          string                    `json:"path"`
+	Title         string                    `json:"title"`
+	Description   string                    `json:"description,omitempty"`
+	Tags          []string                  `json:"tags,omitempty"`
+	Frontmatter   map[string][]string       `json:"frontmatter,omitempty"`
+	Faceted       bool                      `json:"faceted"`
+	Facets        []string                  `json:"facets,omitempty"`
+	Levels        []string                  `json:"levels_available,omitempty"`
+	WriteTool     string                    `json:"write_tool"`
+	Projections   *modelDocumentProjections `json:"projections,omitempty"`
+	Body          string                    `json:"body,omitempty"`
+	Outline       []Section                 `json:"outline,omitempty"`
+	ModifiedDelta string                    `json:"modified_delta,omitempty"`
+	WordCount     int                       `json:"word_count"`
+	SizeBytes     int64                     `json:"size_bytes"`
+}
+
+type modelDocumentProjections struct {
+	StatusLine string `json:"status_line"`
+	Teaser     string `json:"teaser,omitempty"`
+	Digest     string `json:"digest,omitempty"`
+	Full       string `json:"full"`
 }
 
 type modelBacklink struct {
@@ -183,11 +197,30 @@ func toModelDocumentSummary(doc DocumentSummary, now time.Time) modelDocumentSum
 		Title:         doc.Title,
 		Summary:       doc.Summary,
 		Facets:        append([]string(nil), doc.Facets...),
+		WriteTool:     documentWriteTool(firstValue(doc.Frontmatter, documentfacets.ManagedByKey), doc.Facets),
 		Tags:          append([]string(nil), doc.Tags...),
 		Frontmatter:   modelFrontmatter(doc.Frontmatter, now),
 		ModifiedDelta: modelDelta(doc.ModifiedAt, now),
 		WordCount:     doc.WordCount,
 	}
+}
+
+func documentLevels(facets []string) []string {
+	if len(facets) == 0 {
+		return nil
+	}
+	levels := append([]string(nil), facets...)
+	return append(levels, "full")
+}
+
+func documentWriteTool(managedBy string, facets []string) string {
+	if managedBy = strings.TrimSpace(managedBy); managedBy != "" {
+		return managedBy
+	}
+	if len(facets) > 0 {
+		return DocumentWriteToolName
+	}
+	return DocumentBodyWriteToolName
 }
 
 func toModelSearchResult(args SearchArgs, query SearchQuery, results []DocumentSummary, now time.Time) modelSearchResult {
@@ -223,7 +256,7 @@ func toModelDocumentRecord(record *DocumentRecord, now time.Time) *modelDocument
 	if record == nil {
 		return nil
 	}
-	return &modelDocumentRecord{
+	result := &modelDocumentRecord{
 		Root:          record.Root,
 		Ref:           record.Ref,
 		Path:          record.Path,
@@ -231,12 +264,27 @@ func toModelDocumentRecord(record *DocumentRecord, now time.Time) *modelDocument
 		Description:   record.Description,
 		Tags:          append([]string(nil), record.Tags...),
 		Frontmatter:   modelFrontmatter(record.Frontmatter, now),
-		Body:          record.Body,
+		Faceted:       len(record.Facets) > 0,
+		Facets:        append([]string(nil), record.Facets...),
+		Levels:        documentLevels(record.Facets),
+		WriteTool:     documentWriteTool(record.ManagedBy, record.Facets),
 		Outline:       append([]Section(nil), record.Outline...),
 		ModifiedDelta: modelDelta(record.ModifiedAt, now),
 		WordCount:     record.WordCount,
 		SizeBytes:     record.SizeBytes,
 	}
+	if len(record.FacetContract.Facets) > 0 {
+		payload := record.FacetContract.Parse(record.Body)
+		result.Projections = &modelDocumentProjections{
+			StatusLine: payload.StatusLine,
+			Teaser:     payload.Teaser,
+			Digest:     payload.Digest,
+			Full:       payload.Full,
+		}
+	} else {
+		result.Body = record.Body
+	}
+	return result
 }
 
 func toModelLinksResult(result *LinksResult, now time.Time) *modelLinksResult {
@@ -303,6 +351,9 @@ func modelFrontmatter(frontmatter map[string][]string, now time.Time) map[string
 	sort.Strings(keys)
 
 	for _, key := range keys {
+		if documentfacets.ReservedFrontmatterKey(key) {
+			continue
+		}
 		values := frontmatter[key]
 		if deltaKey, ok := frontmatterDeltaFieldName(key); ok {
 			if _, exists := out[deltaKey]; exists {

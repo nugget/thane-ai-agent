@@ -108,11 +108,11 @@ Use `doc_outline` when you need the heading tree before deciding what
 to read; use `doc_read` when the whole document is worth loading in
 one payload.
 
-## A curated document, at the size you need
+## A faceted document, at the size you need
 
-Some documents are maintained by a loop that curates them for readers,
-and those publish the same understanding at several fidelities. Pass
-`level` to `doc_read` to take the one you can afford:
+Some documents publish the same understanding at several fidelities,
+regardless of which managed root holds them or which owner maintains them.
+Pass `level` to `doc_read` to take the one you can afford:
 
 ```json
 {
@@ -128,12 +128,12 @@ different shapes of the same outward-facing signal role; `digest` is the
 context payload after that signal earns attention.
 
 This is not truncation — each level was written to stand alone at that
-size by the loop that owns the subject, so a status line is a sentence
-someone composed, not the first hundred characters of a paragraph.
+size, so a status line is a sentence someone composed, not the first
+hundred characters of a paragraph.
 
-The result reports `levels_available`, so one read tells you both the
-answer and what else you could have asked for. A document nobody curates
-answers `faceted: false` and sends you back to an ordinary read.
+The result reports `levels_available` and `write_tool`, so one read tells you
+both what else you could have asked for and which mutation surface owns the
+document. An ordinary document answers `faceted: false`.
 
 Read at the level your decision needs. Pulling `full` to answer a
 question a status line settles spends context you will want later in the
@@ -261,11 +261,12 @@ against the whole corpus are usually too broad to be useful:
 ```
 
 `modified_after` and `modified_before` take RFC3339 timestamps or signed
-deltas (`-7d` = past week). Search returns compact summaries with
-refs, not bodies — pipe a ref to `documents_read` to actually read the
-hit. A hit from a loop-curated document shows its authored teaser and
-lists its available facets — follow up with one deliberate `doc_read`
-at the `level` your decision needs rather than pulling the whole body.
+deltas (`-7d` = past week). Search returns compact summaries with refs,
+not bodies — pipe a ref to `doc_read` to actually read the hit. Every
+hit names its `write_tool`. A faceted hit also shows its authored teaser
+and lists its available facets — follow up with one deliberate
+`doc_read` at the `level` your decision needs rather than pulling the
+whole body.
 
 If `tags` filtering returns nothing unexpected, run `doc_values` for
 `tags` against that root to see the actual vocabulary.
@@ -280,9 +281,18 @@ next_tags: [documents_mutate_content, documents_mutate_structure, documents_muta
 
 # Mutate a managed document
 
-Two questions decide which sub-shape fits:
+Three questions decide which sub-shape fits:
 
-1. **Are you changing what's inside one document, or moving content
+1. **What does the document say owns its writes?** `doc_read`,
+   `doc_search`, and `doc_browse` return `write_tool`; trust that field
+   rather than inferring ownership from a root, path, or heading.
+   - `doc_write` means it is a normal logical document: write every
+     projection together.
+   - `doc_body_write` means it is the unusual body-only shape.
+   - Any narrower name, such as `contact_dossier_write` or
+     `publish_output_*`, is the exact tool to use.
+
+2. **Are you changing what's inside one document, or moving content
    between documents, or operating on the document as a whole?**
    - Inside one document (body, sections, metadata, journal entries)
      → activate `documents_mutate_content`
@@ -291,7 +301,7 @@ Two questions decide which sub-shape fits:
    - Acting on the document as a unit (copy, rename, delete) → activate
      `documents_mutate_lifecycle`
 
-2. **Is this brand-new knowledge being introduced to the corpus?** If
+3. **Is this brand-new knowledge being introduced to the corpus?** If
    yes, none of the mutate leaves are quite right — back out and
    activate `documents_curate` instead. The intake step decides the
    title/path/tags before writing, which is the whole point.
@@ -311,17 +321,18 @@ teaser: "Body, section, or metadata changes inside one existing document."
 
 # Mutate content inside one document
 
-Three tools, each owning a different mutation shape.
+Four tools, each owning a different mutation shape.
 
-## Create a new ordinary document — `doc_create`
+## Create a new logical document — `doc_create`
 
-The default way to make an ordinary document exist. A contract-owned document
-uses the structured tool that names it: `contact_dossier_write` for a contact
-dossier, or a generated `publish_output_*` / `replace_output_*` tool for a loop
-output. Probe a contact dossier with `contact_dossier_read` first and branch on
-its stable `dossier.exists` field; an absent
+The default way to make a normal faceted document exist. A document with a
+narrower contract-owned writer uses that structured tool instead:
+`contact_dossier_write` for a contact dossier, or a generated
+`publish_output_*` / `replace_output_*` tool for a loop output. Probe
+a contact dossier with `contact_dossier_read` first and branch on its stable
+`dossier.exists` field; an absent
 result is successful and names the exact create action, so never guess its ref
-for `doc_read`. For ordinary corpus knowledge, one `doc_create` call
+for `doc_read`. For normal corpus knowledge, one `doc_create` call
 collision-checks related documents, title/tags/path normalization, and root
 policy, then writes when placement is clean:
 
@@ -330,7 +341,8 @@ policy, then writes when placement is clean:
   "root": "kb",
   "title": "VLAN renumbering decision",
   "tags": ["network"],
-  "body": "# VLAN renumbering decision\n\nGuest VLAN moved from 50 to 40...\n"
+  "status_line": "Guest VLAN now uses VLAN 40.",
+  "full": "# VLAN renumbering decision\n\nGuest VLAN moved from 50 to 40...\n"
 }
 ```
 
@@ -341,13 +353,39 @@ review `related_documents`, then `doc_commit` with the intake_id
 adjust and re-call. Creating safely is the default, not something to
 remember.
 
-## Replace — `doc_write`
+## Write a logical document — `doc_write`
 
-Use when an existing ordinary document should hold *exactly* this body. It can
-also create at a fresh ref, but that skips the collision check — reach for
-`doc_create` unless the destination is already deliberate. For a contract-owned
-document, use its dedicated structured tool instead. `doc_write` owns
-`title`, `description`, `tags`, `created`, `updated`:
+Use when a document needs multiple views of one current state in any managed
+root: a one-line status, optional teaser and digest, and the full detail. Pass
+content as projections; Go validates their shared budgets and renders the
+canonical headings. Never put `## Status Line`, `## Teaser`, `## Digest`, or
+`## Details` inside a projection.
+
+```json
+{
+  "ref": "dossiers:entity-binary_sensor-game_room_door.md",
+  "title": "Game room door",
+  "status_line": "Stable behavior; the remaining uncertainty is the intermittent open event.",
+  "teaser": "Open this when diagnosing game-room access or the unexplained open event.",
+  "digest": "The sensor is reliable in routine use, with one unresolved intermittent-open pattern tied to late-night activity.",
+  "full": "### Aliases\n\n- game room door\n\n### Claims\n\n- Routine state is reliable."
+}
+```
+
+On the first write, teaser and digest are optional. Once a document carries
+either projection, every later call must supply it along with `status_line` and
+`full`; omission is rejected before the document changes. Read an existing
+document first. `doc_write` self-migrates a legacy or body-only document at a
+deliberate ref, but if placement is undecided run `doc_intake` before writing.
+
+## Replace an exceptional body-only document — `doc_body_write`
+
+Use only when a document intentionally has one undifferentiated Markdown body
+instead of a projection ladder. It can also create at a fresh ref, but that
+skips the collision check — reach for `doc_create` unless the destination is
+already deliberate. For a faceted or contract-owned document, use the returned
+`write_tool` instead. `doc_body_write` still owns metadata, root policy,
+revision protection, and Git; it is not raw filesystem access:
 
 ```json
 {
@@ -371,12 +409,12 @@ under a managed `Journal` section in one call:
 
 ## Surgical edit — `doc_edit`
 
-Use when only part of an ordinary document should change. Contract-owned
-documents use their dedicated structured tool instead: a section edit to a
-contact dossier's `Details` can leave its status line, teaser, and digest
-describing the previous state, while `contact_dossier_write` republishes all
-four together. The `mode` parameter picks the ordinary-document shape:
-metadata-only, whole-body replace/append/prepend, or section-level
+Use when only part of an ordinary document should change. Faceted and
+contract-owned documents use their returned `write_tool` instead: a section
+edit to `Details` can leave status line, teaser, and digest describing the
+previous state, while `doc_write` or a narrower owner republishes every view
+together. The `mode` parameter picks the body-only document shape:
+metadata-only, whole-body replacement/append/prepend, or section-level
 upsert/delete.
 
 ```json
@@ -395,14 +433,15 @@ the named section entirely. In section modes, `body` carries only that
 one section's text — never the whole document, and never the section's
 heading line: the heading is rendered automatically from `section` and
 `heading`, so repeating it in `body` would double it. The rest of the
-document is untouched. (For whole-document rewrites, `body` is the full
-new document body, same as `doc_write`.)
+document is untouched. (For whole-document body-only rewrites, `body` is the
+full document body, same as `doc_body_write`.)
 
 ## Rolling journal — `doc_journal_update`
 
-Use for recurring loop notes or any document where each entry gets its
-own dated window. The tool owns window grouping and pruning so the
-model doesn't have to:
+Use for recurring loop notes or any ordinary document where each entry gets
+its own dated window. Faceted and contract-owned documents use their returned
+`write_tool` instead. For an ordinary journal, this tool owns window grouping
+and pruning so the model doesn't have to:
 
 ```json
 {
@@ -417,8 +456,8 @@ Right for any append-only chronology — including a service loop
 (`thane_loop_create`, `operation: service`) that wants a dated record
 beside its maintained output; loop outputs no longer have a journal
 type, so the loop calls `doc_journal_update` directly.
-Wrong when the goal is to replace what's there — that's `doc_write` or
-`doc_edit` with `replace_body`.
+Wrong when the goal is to replace what's there — that's `doc_body_write` or
+`doc_edit` in whole-body replacement mode.
 
 ---
 name: documents_mutate_structure
@@ -431,7 +470,10 @@ teaser: "Move or copy a section from one managed document into another."
 
 When a section belongs in a different document than the one currently
 holding it. Both tools upsert the destination section, so the
-destination document is created if needed.
+destination document is created if needed. These are ordinary-document
+operations: copying into a faceted or contract-owned destination, or moving
+out of one, is rejected with its `write_tool` because a partial section
+mutation can leave projections stale. Republish the complete state instead.
 
 ## Copy — leave the source intact
 

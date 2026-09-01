@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // Frontmatter keys stamped on loop-managed documents. The contract
@@ -27,7 +30,7 @@ const (
 // notes is the loop's declared working-notes output when it has one.
 // Its presence adds the optional notes argument, so the argument exists
 // only when there is somewhere for the notes to land.
-func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, notes *looppkg.OutputSpec) looppkg.RuntimeTool {
+func buildFacetPublishTool(docTools *documents.Tools, output looppkg.OutputSpec, notes *looppkg.OutputSpec) looppkg.RuntimeTool {
 	fields := output.FacetFields()
 	properties := make(map[string]any, len(fields)+1)
 	required := make([]string, 0, len(fields))
@@ -63,22 +66,22 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 			if err != nil {
 				return "", err
 			}
-			if err := output.ValidateFacetPayload(payload); err != nil {
-				return "", err
-			}
-			body := output.RenderFacetDocument(payload)
-			result, err := store.Write(ctx, documents.WriteArgs{
-				Ref:         output.Ref,
-				Body:        &body,
-				Frontmatter: loopOutputFrontmatter(output),
+			publishedResult, err := docTools.WriteFaceted(ctx, documents.FacetedWriteArgs{
+				Ref:          output.Ref,
+				Frontmatter:  loopOutputFrontmatter(output),
+				Contract:     documentfacets.Contract{Facets: append([]documentfacets.Spec(nil), output.Facets...)},
+				Payload:      documentfacets.Payload(payload),
+				WriteTool:    output.ToolName(),
+				ReceiptScope: tools.DocumentRevisionScope(ctx),
 			})
 			if err != nil {
 				return "", err
 			}
 
-			published := map[string]any{"published": result}
+			publishedJSON := json.RawMessage(publishedResult)
+			published := map[string]any{"published": publishedJSON}
 			if note, _ := args["notes"].(string); strings.TrimSpace(note) != "" && notes != nil {
-				noteResult, noteErr := writeLoopWorkingNotes(ctx, store, *notes, note)
+				noteResult, noteErr := writeLoopWorkingNotes(ctx, docTools, *notes, note)
 				switch {
 				case noteErr != nil:
 					// The document publish already succeeded, so this is
@@ -87,7 +90,7 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 					// duplicate publish.
 					published["notes_error"] = fmt.Sprintf("%s was published, but the working notes were not updated: %v", output.Ref, noteErr)
 				default:
-					published["notes_written"] = noteResult
+					published["notes_written"] = json.RawMessage(noteResult)
 				}
 			}
 			return marshalLoopOutputToolResult(published)
@@ -116,14 +119,16 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 // writeLoopWorkingNotes replaces a working-notes body, stamping the
 // audience that keeps it out of consumer surfaces on every write —
 // notes hold a current view, so each one supersedes the last.
-func writeLoopWorkingNotes(ctx context.Context, store *documents.Store, notes looppkg.OutputSpec, body string) (*documents.MutationResult, error) {
+func writeLoopWorkingNotes(ctx context.Context, docTools *documents.Tools, notes looppkg.OutputSpec, body string) (string, error) {
 	if err := looppkg.ValidateOutputBodySize(body); err != nil {
-		return nil, fmt.Errorf("notes: %w", err)
+		return "", fmt.Errorf("notes: %w", err)
 	}
-	return store.Write(ctx, documents.WriteArgs{
-		Ref:         notes.Ref,
-		Body:        &body,
-		Frontmatter: loopOutputFrontmatter(notes),
+	return docTools.Write(ctx, documents.WriteArgs{
+		Ref:            notes.Ref,
+		Body:           &body,
+		Frontmatter:    loopOutputFrontmatter(notes),
+		ReceiptScope:   tools.DocumentRevisionScope(ctx),
+		StructuredTool: notes.ToolName(),
 	})
 }
 

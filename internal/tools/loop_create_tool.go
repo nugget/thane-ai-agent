@@ -10,6 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
@@ -564,29 +565,56 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		// authored while the creating model still holds the survey that
 		// justified the loop — and the placeholder skeleton otherwise.
 		documentState, notesState = "scaffolded", "scaffolded"
-		writeArgs := documents.WriteArgs{
-			Ref:         documentRef,
-			Title:       title,
-			Frontmatter: frontmatter,
-		}
+		var payload looppkg.FacetPayload
+		var body string
 		switch {
 		case docExists:
 			documentState = "preserved_existing"
+			if outputSpec.HasFacets() {
+				record, readErr := deps.DocTools.RecordWithReceipt(ctx, documents.RefArgs{Ref: documentRef, ReceiptScope: DocumentRevisionScope(ctx)})
+				if readErr != nil {
+					return "", fmt.Errorf("read existing output document for adoption: %w", readErr)
+				}
+				payload = outputSpec.ParseFacetDocument(record.Body)
+			}
 		case plan.seedDocument:
 			frontmatter["created"] = []string{now.Format(time.RFC3339)}
-			body := plan.seedPayload.Full
-			if outputSpec.HasFacets() {
-				body = outputSpec.RenderFacetDocument(plan.seedPayload)
-			}
-			writeArgs.Body = &body
+			payload = plan.seedPayload
+			body = plan.seedPayload.Full
 			documentState = "seeded"
 		default:
 			frontmatter["created"] = []string{now.Format(time.RFC3339)}
-			body := renderOutputScaffoldBody(outputSpec, title, intent)
-			writeArgs.Body = &body
+			body = renderOutputScaffoldBody(outputSpec, title, intent)
+			if outputSpec.HasFacets() {
+				payload = outputSpec.ParseFacetDocument(body)
+			}
 		}
-		if _, err := deps.DocTools.Write(ctx, writeArgs); err != nil {
-			return "", fmt.Errorf("scaffold output document: %w", err)
+		if outputSpec.HasFacets() {
+			if _, err := deps.DocTools.WriteFaceted(ctx, documents.FacetedWriteArgs{
+				Ref:          documentRef,
+				Title:        title,
+				Frontmatter:  frontmatter,
+				Contract:     documentfacets.Contract{Facets: append([]documentfacets.Spec(nil), outputSpec.Facets...)},
+				Payload:      documentfacets.Payload(payload),
+				WriteTool:    outputSpec.ToolName(),
+				ReceiptScope: DocumentRevisionScope(ctx),
+			}); err != nil {
+				return "", fmt.Errorf("scaffold faceted output document: %w", err)
+			}
+		} else {
+			writeArgs := documents.WriteArgs{
+				Ref:            documentRef,
+				Title:          title,
+				Frontmatter:    frontmatter,
+				StructuredTool: outputSpec.ToolName(),
+				ReceiptScope:   DocumentRevisionScope(ctx),
+			}
+			if !docExists {
+				writeArgs.Body = &body
+			}
+			if _, err := deps.DocTools.Write(ctx, writeArgs); err != nil {
+				return "", fmt.Errorf("scaffold output document: %w", err)
+			}
 		}
 
 		if notesSpec != nil {
@@ -596,9 +624,10 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 				looppkg.OutputManagedByFrontmatterKey: {notesSpec.ToolName()},
 			}
 			notesArgs := documents.WriteArgs{
-				Ref:         notesSpec.Ref,
-				Title:       title + " — Working Notes",
-				Frontmatter: notesFrontmatter,
+				Ref:            notesSpec.Ref,
+				Title:          title + " — Working Notes",
+				Frontmatter:    notesFrontmatter,
+				StructuredTool: notesSpec.ToolName(),
 			}
 			switch {
 			case notesExists:

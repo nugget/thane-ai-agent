@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 const (
@@ -298,9 +299,35 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
 	}
+	current, err := t.store.Read(ctx, args.Ref)
+	if err != nil && !IsNotFound(err) {
+		return "", fmt.Errorf("inspect %s before write: %w", args.Ref, err)
+	}
+	if args.StructuredTool == "" {
+		if tool := structuredWriteTool(current); tool != "" {
+			return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: DocumentBodyWriteToolName, WriteTool: tool}
+		}
+		if args.Body != nil {
+			if _, faceted := documentfacets.ParseLegacy(*args.Body); faceted {
+				if current == nil {
+					return "", fmt.Errorf("%s cannot create a faceted section envelope; no change was made. Call %s with ref %s and each projection as its own field", DocumentBodyWriteToolName, DocumentWriteToolName, args.Ref)
+				}
+				return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: DocumentBodyWriteToolName, WriteTool: DocumentWriteToolName}
+			}
+		}
+	} else if current != nil && current.ManagedBy != "" && current.ManagedBy != args.StructuredTool {
+		return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: args.StructuredTool, WriteTool: current.ManagedBy}
+	}
 	t.prepareWriteReceipt(&args)
 	result, err := t.store.Write(ctx, args)
-	return t.marshalMutationResult(ctx, "doc_write", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	if result != nil && args.StructuredTool == "" {
+		result.Action = DocumentBodyWriteToolName
+	}
+	action := args.StructuredTool
+	if action == "" {
+		action = DocumentBodyWriteToolName
+	}
+	return t.marshalMutationResult(ctx, action, args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
 }
 
 // Edit applies one structured edit to a managed document.
@@ -310,6 +337,13 @@ func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	}
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
+	}
+	current, err := t.store.Read(ctx, args.Ref)
+	if err != nil {
+		return "", err
+	}
+	if tool := structuredWriteTool(current); tool != "" {
+		return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: "doc_edit", WriteTool: tool}
 	}
 	t.prepareEditReceipt(&args)
 	result, err := t.store.Edit(ctx, args)
@@ -323,6 +357,13 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	}
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
+	}
+	current, err := t.store.Read(ctx, args.Ref)
+	if err != nil && !IsNotFound(err) {
+		return "", err
+	}
+	if tool := structuredWriteTool(current); tool != "" {
+		return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: "doc_journal_update", WriteTool: tool}
 	}
 	t.prepareJournalReceipt(&args)
 	result, err := t.store.JournalUpdate(ctx, args)

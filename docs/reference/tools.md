@@ -217,45 +217,50 @@ absolute timestamps. Timestamp filter inputs still accept RFC3339 values
 or signed deltas like `-604800s`.
 
 On writable git-backed roots, Thane retains a hidden read receipt for each
-loop/conversation and document ref. `doc_write`, `doc_edit`, and
-`doc_journal_update` use that receipt automatically; revision hashes are not
-part of their model-facing contract. If the document changed after the read,
-the mutation returns `applied: false` without replacing newer content and
-includes a bounded `changed_since_read` patch. The receipt then advances to the
-current document so a reconciled retry has the right comparison base. When a
-patch is unavailable or truncated, the result includes a bounded current
-excerpt instead. Replacing an existing whole body requires reading it first;
-structured edits can safely derive a fresh base as part of the operation.
+loop/conversation and document ref. `doc_write`, `doc_body_write`, `doc_edit`,
+and `doc_journal_update` use that receipt automatically;
+revision hashes are not part of their model-facing contract. If the document
+changed after the read, the mutation returns `applied: false` without replacing
+newer content and includes a bounded `changed_since_read` patch. The receipt
+then advances to the current document so a reconciled retry has the right
+comparison base. When a patch is unavailable or truncated, the result includes
+a bounded current excerpt instead. Replacing an existing whole body requires
+reading it first; structured edits can safely derive a fresh base as part of
+the operation.
 
 | Tool | Description |
 |------|-------------|
 | `doc_roots` | List configured document roots with policy, health, and counts. |
-| `doc_browse` | Walk a document root by folder. |
+| `doc_browse` | Walk a document root by folder; document rows include their exact `write_tool`. |
 | `doc_outline` | Emit the heading/section outline for a document. |
-| `doc_read` | Read a document by prefixed path; on writable git-backed roots, also retain a hidden comparison base for this loop/conversation. |
+| `doc_read` | Read a document by prefixed path, including faceting, available levels, and exact `write_tool`; on writable git-backed roots, also retain a hidden comparison base for this loop/conversation. |
 | `doc_section` | Retrieve a named section from a document. |
-| `doc_search` | Full-text and tagged search across roots. |
+| `doc_search` | Full-text and tagged search across roots; hits advertise facets and exact `write_tool`. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
-| `doc_create` | Create a new ordinary document safely: corpus collision check + normalized placement + write in one call; contract-owned documents use their dedicated structured tool. |
+| `doc_create` | Create a normal faceted document safely: corpus collision check + normalized placement + logical write in one call. |
 | `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
-| `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
-| `doc_write` | Replace an ordinary document's content with automatic stale-write protection (contract-owned documents use their dedicated structured tool). |
-| `doc_edit` | Targeted edit within an ordinary document, with automatic stale-write protection; contract-owned documents use their dedicated structured tool. |
+| `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through the normal logical document mutation. |
+| `doc_write` | Create, self-migrate, or update a normal managed document from status-line, optional teaser/digest, and full projections; Go validates and renders its private storage codec atomically. |
+| `doc_body_write` | Write one undifferentiated Markdown body for the unusual document that intentionally has no projection ladder. |
+| `doc_edit` | Targeted edit within an ordinary document, with automatic stale-write protection; faceted and contract-owned documents use their returned `write_tool`. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |
 | `doc_delete` | Delete a document. |
-| `doc_copy_section` | Copy one named section into another document. |
-| `doc_move_section` | Move one named section into another document. |
-| `doc_journal_update` | Append or update a journal-style entry, with automatic stale-write protection. |
+| `doc_copy_section` | Copy one named section into an ordinary destination; faceted destinations reject partial mutation. |
+| `doc_move_section` | Move one named section between ordinary documents; faceted sources or destinations reject partial mutation. |
+| `doc_journal_update` | Append or update an ordinary journal-style entry, with automatic stale-write protection. |
 
-Loop-declared document output tools are request-scoped and do not appear
-in the global catalog above. When a loop declares an output, Thane
+`doc_write` is the normal logical writer for documents without a narrower
+domain owner. Loop-declared document output tools remain request-scoped and do
+not appear in the global catalog above. When a loop declares an output, Thane
 generates a tool such as `replace_output_metacognitive_state` or — for a
 maintained document that declares `facets` — `publish_output_office_status`,
-only for that loop run. These tools route through managed document roots, so
-root policy, indexing, and provenance remain centralized instead of
-being reimplemented in each loop prompt.
+only for that loop run. Those generated names are stamped as `managed_by`, and
+document reads return them as `write_tool`; `doc_write` will not bypass that
+narrower owner. Every structured publisher routes through managed document
+roots, so root policy, indexing, validation, and provenance remain centralized
+instead of being reimplemented in each loop prompt.
 
 ## `email` — inbox traffic
 
@@ -315,8 +320,11 @@ Operator channel activity recency is reported with delta fields such as
 | `repo_git_show` | Show one commit and its bounded patch from one named repository root. |
 | `repo_git_blame` | Read structured line attribution for one file in one named repository root. |
 
-File tools resolve configured roots such as `kb:` and dynamically registered
-repository roots such as `thanecode:` before applying workspace policy. A
+File tools resolve configured non-indexed roots and dynamically registered
+repository roots such as `thanecode:` before applying workspace policy.
+Indexed managed roots are deliberately unavailable through every `file_*`
+surface; use `doc_browse`, `doc_search`, `doc_read`, and the returned
+`write_tool` so the Markdown codec remains private. A
 forge subscription registers a repository root from its `repo_root` handle;
 the host checkout path is not model-facing. Repository roots are read-only.
 When a loop carries a `repo_root` binding, an unprefixed relative file path

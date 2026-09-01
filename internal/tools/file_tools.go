@@ -51,12 +51,11 @@ var skipDirs = map[string]bool{
 	".cache":       true,
 }
 
-// PathVerifier reports whether a path inside a managed document root
-// satisfies that root's signature policy. Implementations must treat
-// paths outside any configured root as a no-op (nil error). The
-// concrete implementation is [documents.Store.VerifyPath]; this
-// interface is used to keep file_tools free of an upward dependency
-// on the documents package.
+// PathVerifier reports whether a path may be exposed through model-facing file
+// tools. Implementations must treat paths outside any configured root as a
+// no-op (nil error). The concrete implementation is
+// [documents.Store.VerifyPath]; this interface keeps file_tools free of an
+// upward dependency on the documents package.
 //
 // Verifier is consulted in [FileTools.Read], [FileTools.Write], and
 // [FileTools.Edit] so a managed root with `verify_signatures: required`
@@ -65,13 +64,10 @@ var skipDirs = map[string]bool{
 // raw filesystem mutations cannot dirty signed or read-only document
 // roots after a pre-write trust check passes.
 //
-// The directory-walk tools (List, Tree, Stat, Search, Grep) are
-// intentionally not gated: List/Tree/Stat/Search return only
-// path/metadata, while Grep can surface short content excerpts that
-// remain unverified. Operators relying on signature gating should
-// route trust-sensitive content through `read_file` (which goes
-// through VerifyPath) rather than grep results. See
-// docs/understanding/document-roots.md for the full boundary.
+// Every file surface is gated. Indexed managed documents are a logical model
+// surface, so file tools must not expose their private Markdown codec, sibling
+// files, or physical section layout. Direct access returns an actionable
+// doc-tool redirect; workspace-wide walks skip managed subtrees.
 type PathVerifier interface {
 	VerifyPath(ctx context.Context, path string, consumer string) error
 	VerifyMutationPath(ctx context.Context, path string, consumer string) error
@@ -390,6 +386,9 @@ func (ft *FileTools) List(ctx context.Context, path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := ft.verifyPath(ctx, absPath, "file_tools_list"); err != nil {
+		return nil, err
+	}
 
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
@@ -419,6 +418,9 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 	if err != nil {
 		return "", err
 	}
+	if err := ft.verifyPath(ctx, absDir, "file_tools_search"); err != nil {
+		return "", err
+	}
 
 	if _, err := filepath.Match(pattern, "test"); err != nil {
 		return "", fmt.Errorf("invalid glob pattern: %w", err)
@@ -446,6 +448,14 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 		}
 		if searchCtx.Err() != nil {
 			return searchCtx.Err()
+		}
+		if path != absDir {
+			if err := ft.verifyPath(searchCtx, path, "file_tools_search"); err != nil {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 		}
 
 		visited++
@@ -514,6 +524,9 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string,
 	if err != nil {
 		return "", err
 	}
+	if err := ft.verifyPath(ctx, absDir, "file_tools_grep"); err != nil {
+		return "", err
+	}
 
 	regexPattern := pattern
 	if caseInsensitive {
@@ -556,6 +569,14 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern, filePattern string,
 		}
 		if grepCtx.Err() != nil {
 			return grepCtx.Err()
+		}
+		if path != absDir {
+			if err := ft.verifyPath(grepCtx, path, "file_tools_grep"); err != nil {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 		}
 
 		visited++
@@ -744,6 +765,10 @@ func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
 			results = append(results, fmt.Sprintf("%s: %s", p, err))
 			continue
 		}
+		if err := ft.verifyPath(ctx, absPath, "file_tools_stat"); err != nil {
+			results = append(results, fmt.Sprintf("%s: %s", p, err))
+			continue
+		}
 
 		info, err := os.Lstat(absPath)
 		if err != nil {
@@ -776,6 +801,9 @@ func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
 func (ft *FileTools) Tree(ctx context.Context, dir string, maxDepth int) (string, error) {
 	absDir, _, err := ft.resolvePath(ctx, dir)
 	if err != nil {
+		return "", err
+	}
+	if err := ft.verifyPath(ctx, absDir, "file_tools_tree"); err != nil {
 		return "", err
 	}
 
@@ -832,6 +860,11 @@ func (ft *FileTools) renderTree(buf *strings.Builder, dir, prefix string, maxDep
 			return ctx.Err()
 		}
 
+		entryPath := filepath.Join(dir, entry.Name())
+		if err := ft.verifyPath(ctx, entryPath, "file_tools_tree"); err != nil {
+			continue
+		}
+
 		isLast := i == len(entries)-1
 		connector := "├── "
 		childPrefix := "│   "
@@ -845,7 +878,7 @@ func (ft *FileTools) renderTree(buf *strings.Builder, dir, prefix string, maxDep
 			name += "/"
 			*dirCount++
 			buf.WriteString(prefix + connector + name + "\n")
-			err := ft.renderTree(buf, filepath.Join(dir, entry.Name()), prefix+childPrefix, maxDepth, currentDepth+1, dirCount, fileCount, ctx)
+			err := ft.renderTree(buf, entryPath, prefix+childPrefix, maxDepth, currentDepth+1, dirCount, fileCount, ctx)
 			if err != nil {
 				return err
 			}

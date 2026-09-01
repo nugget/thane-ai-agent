@@ -42,8 +42,9 @@ func TestDocumentIntakeProposesCreateAndCommit(t *testing.T) {
 	}
 
 	commitOut, err := tools.Commit(ctx, CommitArgs{
-		IntakeID: intake.IntakeID,
-		Body:     "# Driveway Gate Notes\n\nThe reset process lives here.",
+		IntakeID:   intake.IntakeID,
+		StatusLine: "Driveway gate reset procedure is documented.",
+		Full:       "# Driveway Gate Notes\n\nThe reset process lives here.",
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -303,7 +304,8 @@ func TestDocumentCreateCleanPathWritesInOneCall(t *testing.T) {
 		Root:         "kb",
 		DesiredTitle: "Water Softener Service Log",
 		Tags:         []string{"home"},
-		Body:         "# Water Softener Service Log\n\nSalt refilled; next check due in six weeks.",
+		StatusLine:   "Water softener salt was refilled; recheck in six weeks.",
+		Full:         "# Water Softener Service Log\n\nSalt refilled; next check due in six weeks.",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -349,7 +351,8 @@ func TestDocumentCreateDeclinesOnSimilarCorpus(t *testing.T) {
 		Root:         "kb",
 		DesiredTitle: "VLAN Guide",
 		Tags:         []string{"network", "vlans"},
-		Body:         body,
+		StatusLine:   "Home VLAN layout is documented.",
+		Full:         body,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -397,7 +400,7 @@ func TestDocumentCreateRequiresBody(t *testing.T) {
 	t.Parallel()
 
 	tools, _ := newIntakeTools(t, nil)
-	if _, err := tools.Create(context.Background(), CreateArgs{Root: "kb", DesiredTitle: "Empty"}); err == nil || !strings.Contains(err.Error(), "body is required") {
-		t.Fatalf("Create without body error = %v, want body-required", err)
+	if _, err := tools.Create(context.Background(), CreateArgs{Root: "kb", DesiredTitle: "Empty"}); err == nil || !strings.Contains(err.Error(), "full is required") {
+		t.Fatalf("Create without full error = %v, want full-required", err)
 	}
 }

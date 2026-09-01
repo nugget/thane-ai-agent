@@ -182,6 +182,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"doc_section":                   {CanonicalID: "native:doc_section", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_values":                    {CanonicalID: "native:doc_values", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_write":                     {CanonicalID: "native:doc_write", Source: NativeToolSource, Tags: []string{"documents"}},
+	"doc_body_write":                {CanonicalID: "native:doc_body_write", Source: NativeToolSource, Tags: []string{"documents"}},
 	"email_folders":                 {CanonicalID: "native:email_folders", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_list":                    {CanonicalID: "native:email_list", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_mark":                    {CanonicalID: "native:email_mark", Source: NativeToolSource, Tags: []string{"email"}},

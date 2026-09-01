@@ -313,8 +313,9 @@ target content is not cleanly covered by trusted signed git history:
 - Document store reads (`Read`, indexed browse and search surfaces)
 - Loop-declared output context
 - Tagged context articles
-- The model's `file_read` tool when the resolved path lies inside a
-  managed root
+- Internal non-document readers when the resolved path lies inside a managed
+  root. Model-facing file tools do not enter indexed roots at all; they route
+  the model to the logical document surface instead.
 - Inject-files each time they are read into the prompt, with startup
   fail-fast verification for initially configured files
 - Startup-time talents, loaded only after their source markdown files
@@ -323,11 +324,12 @@ target content is not cleanly covered by trusted signed git history:
 When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
 
-The raw `file_write` and `file_edit` tools are stricter than read
-verification. They cannot mutate read-only/restricted roots, and they
-cannot mutate roots with signed git provenance; those changes must go
-through managed document tools so root writers can preserve authoring
-policy, git history, and signatures.
+Model-facing `file_*` tools cannot read, search, enumerate, or mutate indexed
+managed roots. Direct access returns a document-tool redirect; a broader
+workspace walk skips those subtrees. Non-indexed repository roots remain file
+tool territory. Internal readers still apply signature verification, while all
+managed mutations go through document tools so root writers preserve logical
+projections, authoring policy, git history, and signatures.
 
 ### Concurrent writers
 
@@ -335,8 +337,9 @@ Git history makes a mistaken overwrite recoverable, but history alone does
 not stop a stale loop from replacing another writer's current work. On writable
 git-backed roots, a managed read therefore records the current file revision as
 a hidden receipt keyed by loop/conversation and document ref. The model never
-passes hashes between tools. A later `doc_write`, `doc_edit`, or
-`doc_journal_update` supplies that receipt to the root writer internally.
+passes hashes between tools. A later `doc_write`, `doc_body_write`, `doc_edit`,
+or `doc_journal_update` supplies that receipt to the root writer
+internally.
 Read-only history roots do not create mutation receipts.
 
 The root writer compares and commits managed mutations under the same lock, and
@@ -354,16 +357,10 @@ an editor that ignores this coordination can still save in the narrow window
 between the final worktree check and replacement. Git history remains the
 recovery boundary for that external race.
 
-Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`,
-`file_search`, `file_grep`) intentionally do not consult the verifier.
-`file_list`, `file_tree`, `file_stat`, and `file_search` return only
-paths and metadata. **`file_grep` is different**: it returns short
-content excerpts that are
-*not* verified, so under `verify_signatures: required` it can surface
-snippets from files that would be blocked by `file_read`. If a result
-matters to you, re-read it through `file_read` — that path is gated
-and will fail if the underlying content is not covered by trusted
-signed history.
+Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`, `file_search`,
+`file_grep`) share the same boundary. In particular, `file_grep` cannot leak
+the private frontmatter and section codec that logical `doc_read` deliberately
+hides.
 
 ## A Few Practical Guidelines
 
@@ -431,6 +428,44 @@ conversation IDs, Home Assistant entity IDs, attachment hashes, or feed
 IDs. Use `refresh_strategy` to distinguish one-shot immutable artifacts
 from generated files that are replaced, appended to, or maintained as a
 rolling window.
+
+## Faceted Documents and Write Ownership
+
+A faceted document publishes several views of one current state: a required
+one-line `status_line`, optional `teaser` and `digest`, and the always-present
+full detail. The reserved H2 headings are a private on-disk codec; the parser
+can discover this shape in any managed root without root-specific code, but
+model tools do not expose or accept that envelope. Reads and search/browse rows
+expose logical projections, available read levels, and a `write_tool` for the
+next mutation.
+
+Managed writes also canonicalize frontmatter: keys use normalized casing and a
+stable semantic/alphabetic order, set-valued fields are trimmed, deduplicated,
+and sorted, and scalars share one quoting form. Repeating an equivalent logical
+write therefore does not create ordering-only Git noise.
+
+`doc_write` is the normal logical mutation surface for a document with no
+narrower owner. It can create one at a deliberate ref, self-migrate a legacy or
+body-only document, or update an existing faceted document. The model supplies
+projections, not headings; Go applies the shared single-line and rune budgets,
+requires every already-present projection, renders the canonical section
+order, and stamps `managed_by: doc_write`. The document store independently
+rejects malformed or over-budget facet envelopes before any filesystem or Git
+mutation, regardless of which internal caller reached it.
+
+`doc_body_write` is the narrow exception for a document intentionally kept as
+one undifferentiated Markdown body. It still uses managed-root policy,
+provenance, indexing, and stale-write protection; it does not expose a raw file
+or bypass the document abstraction.
+
+Some domains own a narrower contract. A contact dossier stamps
+`managed_by: contact_dossier_write`; a declared loop output stamps its generated
+`publish_output_<name>` tool. Reads return that value as `write_tool`, and
+`doc_write`, `doc_body_write`, `doc_edit`, journal mutation, and partial section
+transfers reject the target with an actionable redirect. This prevents two
+write doors from disagreeing about structure or leaving compact projections
+describing an older state. Lifecycle and history operations remain
+root-agnostic; content-bearing reads project the logical document.
 
 ## Loop-Declared Outputs
 
@@ -533,8 +568,10 @@ root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
 layout in Go. Projection budgets are advertised in the schema, and one failed
 call reports every independently correctable projection violation together.
-The generic document tools remain available for operator recovery, but models
-should not author dossier structure through them.
+Generic document mutators reject the dossier and name
+`contact_dossier_write`; operator recovery remains available through Git
+history and direct repository administration rather than a second model-facing
+write door.
 
 The archivist uses the same contract-owned door. Contact-shaped queue subjects
 and contact evidence discovered in closed sessions are resolved through the

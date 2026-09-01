@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // Frontmatter keys the loop-creation tooling stamps on curator task
@@ -42,8 +42,11 @@ type AdvertisableDocument struct {
 	// them without reading the file.
 	Facets     []string       `json:"facets,omitempty"`
 	FacetBytes map[string]int `json:"facet_bytes,omitempty"`
-	Tags       []string       `json:"tags,omitempty"`
-	ModifiedAt time.Time      `json:"modified_at"`
+	// FacetContract supplies durable formats to the advertiser. Legacy rows
+	// receive a default-format compatibility contract until their first write.
+	FacetContract documentfacets.Contract `json:"-"`
+	Tags          []string                `json:"tags,omitempty"`
+	ModifiedAt    time.Time               `json:"modified_at"`
 	// AbsPath and SizeBytes let a materializer read the file directly,
 	// off the store's locks — the same reason enumeration skips Refresh
 	// — and prove before rendering that the bytes on disk are still the
@@ -128,8 +131,15 @@ func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocume
 			return nil, fmt.Errorf("parse modified_at for %s: %w", doc.Ref, err)
 		}
 		doc.LoopDefinitionName = firstValue(frontmatter, loopDefinitionNameFrontmatterKey)
-		doc.ManagedBy = firstValue(frontmatter, looppkg.OutputManagedByFrontmatterKey)
+		doc.ManagedBy = firstValue(frontmatter, documentfacets.ManagedByKey)
 		doc.LoopIntent = firstValue(frontmatter, loopIntentFrontmatterKey)
+		if manifest, canonical, manifestErr := documentfacets.FromFrontmatter(frontmatter); canonical && manifestErr == nil {
+			doc.FacetContract = manifest.Contract
+		} else {
+			for _, name := range doc.Facets {
+				doc.FacetContract.Facets = append(doc.FacetContract.Facets, documentfacets.Spec{Name: documentfacets.Name(name)})
+			}
+		}
 		docs = append(docs, doc)
 	}
 	if err := rows.Err(); err != nil {

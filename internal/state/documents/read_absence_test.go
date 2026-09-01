@@ -88,11 +88,9 @@ func TestReadStillVerifiesDocumentsThatExist(t *testing.T) {
 }
 
 // TestVerifyPathStillBlocksMissingFilesInRequiredRoots pins the
-// property I nearly broke while fixing the read path. VerifyPath also
-// guards new-file writes: a path that does not exist yet must still be
-// checked, or writing to an unwritten path would skip policy entirely.
-// The read-side reordering is deliberately scoped to reads for exactly
-// this reason.
+// property I nearly broke while fixing the read path. VerifyPath also guards
+// new-file writes: a path that does not exist yet must still be classified as
+// an indexed managed document rather than bypassing the logical tool surface.
 func TestVerifyPathStillBlocksMissingFilesInRequiredRoots(t *testing.T) {
 	t.Parallel()
 
@@ -102,7 +100,7 @@ func TestVerifyPathStillBlocksMissingFilesInRequiredRoots(t *testing.T) {
 	if err == nil {
 		t.Fatal("VerifyPath() waved through a missing file in a required root — that is a write bypass")
 	}
-	if !strings.Contains(err.Error(), "blocked by signature policy") {
-		t.Errorf("error = %q, want the policy block preserved for the write path", err)
+	if !strings.Contains(err.Error(), "indexed managed document path") {
+		t.Errorf("error = %q, want the logical document boundary preserved for the write path", err)
 	}
 }

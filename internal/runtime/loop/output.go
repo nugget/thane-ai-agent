@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 const maxOutputToolNameLength = 64
@@ -40,21 +42,20 @@ const (
 	OutputModeReplace OutputMode = "replace"
 )
 
-// OutputFacet names one face a maintained document publishes. The full
-// body is not a facet: it is the document itself, and the facets are
-// views of it.
-type OutputFacet string
+// OutputFacet names one projection a maintained document publishes. The
+// document package owns the vocabulary; this alias keeps loop specs stable.
+type OutputFacet = documentfacets.Name
 
 const (
 	// OutputFacetStatusLine is the ambient projection: current state in
 	// one standalone line, no markdown structure.
-	OutputFacetStatusLine OutputFacet = "status_line"
+	OutputFacetStatusLine = documentfacets.StatusLine
 	// OutputFacetTeaser is the interest hook: one short paragraph on why
 	// a reader would open the full document right now.
-	OutputFacetTeaser OutputFacet = "teaser"
+	OutputFacetTeaser = documentfacets.Teaser
 	// OutputFacetDigest is the standalone summary: enough detail to act
 	// on without opening the full document.
-	OutputFacetDigest OutputFacet = "digest"
+	OutputFacetDigest = documentfacets.Digest
 )
 
 // Frontmatter keys stamped on loop-managed documents wherever one is

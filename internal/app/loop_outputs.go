@@ -96,11 +96,11 @@ func (p orderedProjections) MarshalJSON() ([]byte, error) {
 // every spec the registry produces.
 func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 	if len(spec.Outputs) > 0 {
-		if a == nil || a.documentStore == nil {
+		if a == nil || a.documentStore == nil || a.documentTools == nil {
 			return looppkg.Spec{}, fmt.Errorf("loop %q declares outputs but managed document roots are not configured", spec.Name)
 		}
 		outputs := cloneLoopOutputs(spec.Outputs)
-		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentStore, outputs)...)
+		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentTools, outputs)...)
 		spec.RuntimeTools = append(spec.RuntimeTools, a.ownOutputReadTools(outputs)...)
 		spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
 			return renderLoopOutputContextWithNow(ctx, a.documentStore, outputs, time.Now())
@@ -215,8 +215,8 @@ func reExposeNativeTools(registry *tools.Registry, names []string) []looppkg.Run
 	return out
 }
 
-func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) []looppkg.RuntimeTool {
-	if store == nil || len(outputs) == 0 {
+func buildLoopOutputTools(docTools *documents.Tools, outputs []looppkg.OutputSpec) []looppkg.RuntimeTool {
+	if docTools == nil || len(outputs) == 0 {
 		return nil
 	}
 	out := make([]looppkg.RuntimeTool, 0, len(outputs))
@@ -226,7 +226,7 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 		if output.HasFacets() {
 			// A faceted output's interface is a set of typed projections,
 			// so it gets the publish tool instead of a body-blob replace.
-			out = append(out, buildFacetPublishTool(store, output, notes))
+			out = append(out, buildFacetPublishTool(docTools, output, notes))
 			continue
 		}
 		switch output.EffectiveMode() {
@@ -259,9 +259,11 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 					if err := looppkg.ValidateOutputBodySize(content); err != nil {
 						return "", err
 					}
-					result, err := store.Write(ctx, documents.WriteArgs{
-						Ref:  output.Ref,
-						Body: &content,
+					return docTools.Write(ctx, documents.WriteArgs{
+						Ref:            output.Ref,
+						Body:           &content,
+						ReceiptScope:   tools.DocumentRevisionScope(ctx),
+						StructuredTool: output.ToolName(),
 						// Stamped on every write, not only the first: the
 						// exclusion in search and tagged-guidance injection
 						// reads this key off the document, so a rewrite that
@@ -269,10 +271,6 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 						// thinking.
 						Frontmatter: loopOutputFrontmatter(output),
 					})
-					if err != nil {
-						return "", err
-					}
-					return marshalLoopOutputToolResult(result)
 				},
 			})
 		}
@@ -325,12 +323,12 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		entry.UpdatedDelta = loopOutputUpdatedDelta(doc, now)
 		switch output.Type {
 		case looppkg.OutputTypeMaintainedDocument:
-			if _, faceted := looppkg.ParseFacetSections(doc.Body); faceted && output.HasFacets() {
+			if len(doc.FacetContract.Facets) > 0 && output.HasFacets() {
 				// The loop's own context mirrors its publish tool's
 				// argument shape: each authored projection whole, the
 				// Details body under the byte budget. Same shape out
 				// as goes in, so a republish is mechanical.
-				payload := output.ParseFacetDocument(doc.Body)
+				payload := doc.FacetContract.Parse(doc.Body)
 				var projections orderedProjections
 				// Declared facets only — FacetFields() appends the
 				// always-published full field, and full is exactly what
@@ -340,7 +338,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 				// this split exists to end.
 				for _, facet := range output.Facets {
 					key := string(facet.Name)
-					if value, ok := payload.FacetByKey(key); ok && strings.TrimSpace(value) != "" {
+					if value, ok := payload.ByKey(key); ok && strings.TrimSpace(value) != "" {
 						projections = append(projections, facetProjection{Key: key, Value: value})
 					}
 				}

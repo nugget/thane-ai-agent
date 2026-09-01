@@ -6,34 +6,40 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 type recordingDossierWriter struct {
-	args  documents.WriteArgs
+	args  documents.FacetedWriteArgs
 	calls int
 }
 
-func (w *recordingDossierWriter) Write(_ context.Context, args documents.WriteArgs) (string, error) {
+func (w *recordingDossierWriter) Write(_ context.Context, args documents.FacetedWriteArgs) (string, error) {
 	w.args = args
 	w.calls++
 	return `{"action":"doc_write","applied":true}`, nil
 }
 
 func validDossierCandidate(id uuid.UUID) documents.DocumentWriteCandidate {
-	payload := looppkg.FacetPayload{
+	payload := documentfacets.Payload{
 		StatusLine: "Relationship is current and steady.",
 		Teaser:     "Recent conversations clarified the operator's preferred collaboration style.",
 		Digest:     "The contact prefers direct technical collaboration and explicit source-of-truth boundaries.",
 		Full:       "# Relationship context\n\nCurrent synthesis — evidence: archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777.",
 	}
-	return documents.DocumentWriteCandidate{
-		Path:        id.String() + ".md",
-		Tags:        []string{DossierSubject(id)},
-		Frontmatter: map[string][]string{"title": {"Dossier Person"}},
-		Body:        dossierOutputContract.RenderFacetDocument(payload),
+	candidate := documents.DocumentWriteCandidate{
+		Path: id.String() + ".md",
+		Tags: []string{DossierSubject(id)},
+		Frontmatter: map[string][]string{
+			"title": {"Dossier Person"},
+		},
+		Body: dossierOutputContract.Render(payload),
 	}
+	for key, values := range (documentfacets.Manifest{Contract: dossierOutputContract, ManagedBy: DossierWriteToolName}).Frontmatter() {
+		candidate.Frontmatter[key] = values
+	}
+	return candidate
 }
 
 func dossierValidatorForName(name string) documents.RootWriteValidator {
@@ -383,7 +389,7 @@ func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
 func TestValidateDossierWriteReportsFacetAndEvidenceViolationsTogether(t *testing.T) {
 	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
 	candidate := validDossierCandidate(id)
-	candidate.Body = dossierOutputContract.RenderFacetDocument(looppkg.FacetPayload{
+	candidate.Body = dossierOutputContract.Render(documentfacets.Payload{
 		StatusLine: strings.Repeat("s", 121),
 		Teaser:     "Useful hook.",
 		Digest:     "Enough context to act.",
@@ -454,17 +460,24 @@ func TestWriteDossierOwnsDocumentIdentityAndStructure(t *testing.T) {
 	if len(writer.args.Tags) != 1 || writer.args.Tags[0] != DossierSubject(contact.ID) {
 		t.Errorf("write tags = %#v, want canonical private subject", writer.args.Tags)
 	}
-	if writer.args.Body == nil {
-		t.Fatal("write body is nil")
-	}
 	if got, want := writer.args.ReceiptScope, args.ReceiptScope; got != want {
 		t.Errorf("receipt scope = %q, want %q", got, want)
+	}
+	if got, want := writer.args.WriteTool, DossierWriteToolName; got != want {
+		t.Errorf("write tool = %q, want %q", got, want)
+	}
+	frontmatter := map[string][]string{"title": {writer.args.Title}}
+	for key, values := range writer.args.Frontmatter {
+		frontmatter[key] = append([]string(nil), values...)
+	}
+	for key, values := range (documentfacets.Manifest{Contract: writer.args.Contract, ManagedBy: writer.args.WriteTool}).Frontmatter() {
+		frontmatter[key] = values
 	}
 	if err := dossierValidatorForName(contact.FormattedName)(documents.DocumentWriteCandidate{
 		Path:        strings.TrimPrefix(writer.args.Ref, DossierRootName+":"),
 		Tags:        writer.args.Tags,
-		Frontmatter: map[string][]string{"title": {writer.args.Title}},
-		Body:        *writer.args.Body,
+		Frontmatter: frontmatter,
+		Body:        writer.args.Contract.Render(writer.args.Payload),
 	}); err != nil {
 		t.Fatalf("Go-authored dossier failed root validator: %v", err)
 	}

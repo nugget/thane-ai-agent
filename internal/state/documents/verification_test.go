@@ -46,7 +46,7 @@ func TestStoreVerifyPath_MissingFileInsideRequiredRootBlocked(t *testing.T) {
 	}
 
 	missing := filepath.Join(kbDir, "subdir", "new-file.md")
-	err = store.VerifyPath(context.Background(), missing, "file_tools_write")
+	err = store.VerifyPath(context.Background(), missing, "inject_files")
 	if err == nil {
 		t.Fatal("VerifyPath should block a missing file inside a required-mode root")
 	}
@@ -153,11 +153,11 @@ func TestStoreVerifyMutationPath_BlocksSignedRootEvenWhenContentTrusted(t *testi
 	target := filepath.Join(kbDir, "trusted.md")
 	writeFile(t, target, "# Trusted\n")
 
-	if err := store.VerifyPath(context.Background(), target, "file_tools_read"); err != nil {
+	if err := store.VerifyPath(context.Background(), target, "document_read_test"); err != nil {
 		t.Fatalf("trusted read verification should pass: %v", err)
 	}
 
-	err := store.VerifyMutationPath(context.Background(), target, "file_tools_write")
+	err := store.VerifyMutationPath(context.Background(), target, "internal_mutation_test")
 	if err == nil {
 		t.Fatal("VerifyMutationPath should block raw writes inside signed roots")
 	}
@@ -177,7 +177,7 @@ func TestStoreVerifyMutationPath_BlocksReadOnlyRoot(t *testing.T) {
 	}, nil)
 	target := filepath.Join(kbDir, "blocked.md")
 
-	err := store.VerifyMutationPath(context.Background(), target, "file_tools_write")
+	err := store.VerifyMutationPath(context.Background(), target, "internal_mutation_test")
 	if err == nil {
 		t.Fatal("VerifyMutationPath should block raw writes inside read-only roots")
 	}
@@ -186,7 +186,7 @@ func TestStoreVerifyMutationPath_BlocksReadOnlyRoot(t *testing.T) {
 	}
 }
 
-func TestStoreVerifyMutationPath_AllowsUnprotectedManagedRoot(t *testing.T) {
+func TestStoreVerifyMutationPath_BlocksIndexedManagedRoot(t *testing.T) {
 	t.Parallel()
 
 	store, kbDir := newPolicyStore(t, map[string]RootPolicy{
@@ -197,8 +197,35 @@ func TestStoreVerifyMutationPath_AllowsUnprotectedManagedRoot(t *testing.T) {
 	}, nil)
 	target := filepath.Join(kbDir, "plain.md")
 
-	if err := store.VerifyMutationPath(context.Background(), target, "file_tools_write"); err != nil {
-		t.Fatalf("unprotected managed root should allow raw file mutation: %v", err)
+	err := store.VerifyMutationPath(context.Background(), target, "file_tools_write")
+	if err == nil {
+		t.Fatal("indexed managed root allowed a raw file mutation")
+	}
+	for _, want := range []string{"indexed managed document", "doc_read", "write_tool"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want logical document redirect containing %q", err, want)
+		}
+	}
+	if err := store.VerifyMutationPath(context.Background(), target, "internal_maintenance"); err != nil {
+		t.Fatalf("non-model internal caller should retain the root's configured policy: %v", err)
+	}
+}
+
+func TestStoreVerifyPath_BlocksFileToolsButNotInternalReaders(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStore(t, map[string]RootPolicy{
+		"kb": {Indexing: true, Authoring: AuthoringManaged},
+	}, nil)
+	target := filepath.Join(kbDir, "faceted.md")
+	writeFile(t, target, "private storage codec")
+
+	err := store.VerifyPath(context.Background(), target, "file_tools_read")
+	if err == nil || !strings.Contains(err.Error(), "use doc_browse") {
+		t.Fatalf("file-tool read error = %v, want logical document redirect", err)
+	}
+	if err := store.VerifyPath(context.Background(), target, "core_prompt_files"); err != nil {
+		t.Fatalf("internal reader should still follow signature policy: %v", err)
 	}
 }
 

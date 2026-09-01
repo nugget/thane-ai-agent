@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // SetContactTools adds contact management tools to the registry.
@@ -385,7 +385,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 	}
 	required := []string{"contact_id"}
 	for _, field := range fields {
-		description := field.Guidance + looppkg.FormatGuidance(field.Format)
+		description := field.Guidance + documentfacets.FormatGuidance(field.Format)
 		if field.Key == "status_line" || field.Key == "teaser" {
 			description += " Omit the contact's canonical name: the structured record and dossier title already identify the subject."
 		}

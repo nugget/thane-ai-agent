@@ -200,6 +200,28 @@ When writing back to upstream systems:
 This keeps the model-friendly layer separate from the machine-authority
 layer.
 
+### Structured document owners stay explicit
+
+Faceted documents are a content shape, not a root-specific feature. A document
+read or search result must name both the projections it offers and the exact
+`write_tool` that owns its next mutation. Models should not infer ownership
+from a root, path, or familiar heading.
+
+`doc_write` is the normal logical writer for a managed document without a
+narrower domain owner. It takes status-line, optional teaser/digest, and full
+content as separate fields, validates the complete projection set, and renders
+the private Markdown codec in Go. Once a projection exists, later writes require
+it so a compact view cannot silently remain stale. A narrower tool such as
+`contact_dossier_write` or `publish_output_<name>` stamps its own ownership;
+generic writers and body-only mutators must reject that target and name the
+owning tool without changing content. `doc_body_write` is the explicit exception
+for a genuinely undifferentiated Markdown body; it is not a storage bypass.
+
+Keep the validation at the document-store boundary as well as the tool
+boundary. Tool routing makes the model experience smooth; the store backstop
+ensures another internal caller cannot write an over-budget or malformed facet
+envelope into any root.
+
 ### Runtime-scoped tools stay runtime-scoped
 
 Some tools exist only because a specific loop run declared a narrow
@@ -296,7 +318,8 @@ Bad:
 Better:
 
 - `file_read(path="/home/thane/config.yaml")`
-- `file_read(path="kb:reference/architecture.md")`
+- `doc_read(ref="kb:reference/architecture.md")` for an indexed managed root
+- `file_read(path="thanecode:README.md")` for a non-indexed repository root
 - `ha_automation_get(entity_id="automation.low_battery_warning")`
 
 ## Delegate-Specific Guidance

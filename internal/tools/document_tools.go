@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 const (
@@ -24,7 +24,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_read",
-		Description:          "Read one managed markdown document by semantic ref like `kb:article.md`. Returns frontmatter, body, outline, and derived metadata in one payload. Large documents may be truncated by tool output limits, so use `doc_outline` plus `doc_section` when you need to navigate or read larger documents in full. When a document is maintained by a loop that publishes facets, pass `level` to read one projection instead of the whole thing — a glance costs a line rather than a document.",
+		Description:          "Read one logical managed document by semantic ref like `kb:article.md`. Faceted documents return projections rather than their mechanical Markdown storage envelope; body-only documents return body. The result names available levels and the exact write_tool. Pass level for one projection when that is enough; use doc_outline and doc_section to navigate the logical full projection of a large document.",
 		ContentResolveExempt: []string{"ref"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -35,7 +35,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 				},
 				"level": map[string]any{
 					"type":        "string",
-					"enum":        looppkg.FacetKeys(),
+					"enum":        documentfacets.Keys(),
 					"description": "How much of a faceted document to read. status_line is a tight ambient signal; teaser is a roomier search or cross-reference signal; digest carries enough context to act; full is the whole body. Omit for the standard whole-document payload. Read at the level your decision actually needs — pulling full when a signal or digest would answer the question spends context you will want later.",
 				},
 			},
@@ -183,7 +183,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies. A faceted document’s summary is its authored outward-facing signal: teaser when present, otherwise status_line, rather than a derived excerpt. The hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md`, modified-time delta fields like `-3600s`, available facets, and the exact write_tool for mutation—not full bodies. A faceted document’s summary is its authored outward-facing signal: teaser when present, otherwise status_line, rather than a derived excerpt. The hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -400,84 +400,4 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	})
 	registerDocumentIntakeTools(r, dt)
 	registerDocumentMutationTools(r, dt)
-}
-
-// readDocumentFacet returns one projection of a faceted document.
-//
-// This is the read half of the loop-output facet contract, and the
-// reason a curating loop's work is worth publishing at several
-// fidelities: a consumer states the cost it can afford and gets a
-// value cut for exactly that, rather than a whole document it has to
-// summarize itself or a blind truncation of one.
-//
-// It deliberately reads the contract rather than the document's
-// structure. The facet sections are rendered by Go and parsed back by
-// Go; asking for "status_line" is asking the contract a question, and a
-// caller never needs to know — or be able to depend on — that the answer
-// is a section titled "Status Line".
-func readDocumentFacet(ctx context.Context, dt *documents.Tools, ref, level string) (string, error) {
-	if !looppkg.IsFacetKey(level) {
-		return "", fmt.Errorf("unknown level %q; valid levels are %s", level, strings.Join(looppkg.FacetKeys(), ", "))
-	}
-	doc, err := dt.RecordWithReceipt(ctx, documents.RefArgs{Ref: ref, ReceiptScope: documentRevisionScope(ctx)})
-	if err != nil {
-		return "", err
-	}
-
-	payload, faceted := looppkg.ParseFacetSections(doc.Body)
-	available := make([]string, 0, len(looppkg.FacetKeys()))
-	for _, key := range looppkg.FacetKeys() {
-		if _, ok := payload.FacetByKey(key); ok {
-			available = append(available, key)
-		}
-	}
-
-	result := map[string]any{
-		"ref":              ref,
-		"level":            level,
-		"faceted":          faceted,
-		"levels_available": available,
-	}
-	if title := strings.TrimSpace(doc.Title); title != "" {
-		result["title"] = title
-	}
-
-	content, ok := payload.FacetByKey(level)
-	if !ok {
-		// Not an error: the document exists and the level does not. Say
-		// which levels it does have, so the next call is a choice rather
-		// than a retry.
-		result["content"] = ""
-		if faceted {
-			result["note"] = fmt.Sprintf("This document publishes no %s. Read one of: %s.", level, strings.Join(available, ", "))
-		} else {
-			result["note"] = "This document is not maintained as a faceted loop output, so it has no projections to choose between. Read it without a level to get the whole document."
-		}
-		return marshalDocumentToolResult(result)
-	}
-	result["content"] = content
-
-	// full is the one facet with no budget, so it is the one that can
-	// outgrow the tool-result ceiling. When it does and the document
-	// publishes something cheaper, saying so beats handing back a
-	// byte-truncated document: choosing a level is the remedy this tool
-	// exists to offer, and the generic envelope would instead advise
-	// picking a section — the structure a level read deliberately hides.
-	if len(content) > documents.MaxToolResultBytes && len(available) > 1 {
-		cheaper := available[:len(available)-1]
-		result["content"] = ""
-		result["truncated"] = true
-		result["bytes_total"] = len(content)
-		result["note"] = fmt.Sprintf(
-			"full is %d bytes, past the %d-byte tool-result ceiling. Read it at %s instead, or use doc_outline and doc_section to take the part you need.",
-			len(content), documents.MaxToolResultBytes, strings.Join(cheaper, ", "),
-		)
-	}
-	return marshalDocumentToolResult(result)
-}
-
-// marshalDocumentToolResult renders a facet read under the same ceiling
-// every other document tool result is held to.
-func marshalDocumentToolResult(result map[string]any) (string, error) {
-	return documents.MarshalToolResult(result)
 }
