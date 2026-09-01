@@ -41,6 +41,25 @@ func TestObserveCoreIdentityEvidence(t *testing.T) {
 			if got.Instance.IdentityKey.Fingerprint == "" || got.Instance.ChannelCA.Fingerprint == "" {
 				t.Errorf("public fingerprints are incomplete: %+v", got.Instance)
 			}
+			certificate := got.Instance.ChannelCA.Certificate
+			if certificate == nil {
+				t.Fatal("channel CA certificate metadata is missing")
+			}
+			if certificate.Subject != "CN=pocket Thane Channel CA" || certificate.Issuer != certificate.Subject {
+				t.Errorf("channel CA names = subject %q, issuer %q", certificate.Subject, certificate.Issuer)
+			}
+			if certificate.SerialNumber == "" {
+				t.Error("channel CA serial number is empty")
+			}
+			if !certificate.IsCA || !certificate.SelfSigned {
+				t.Errorf("channel CA posture = is_ca %t, self_signed %t", certificate.IsCA, certificate.SelfSigned)
+			}
+			if certificate.PublicKeyAlgorithm != "Ed25519" || certificate.SignatureAlgorithm != "Ed25519" {
+				t.Errorf("channel CA algorithms = public %q, signature %q", certificate.PublicKeyAlgorithm, certificate.SignatureAlgorithm)
+			}
+			if !certificate.NotAfter.After(certificate.NotBefore) {
+				t.Errorf("channel CA validity = %s through %s", certificate.NotBefore, certificate.NotAfter)
+			}
 			if got.Core.Birth.Anchor != tc.wantAnchor {
 				t.Errorf("anchor = %q, want %q", got.Core.Birth.Anchor, tc.wantAnchor)
 			}
