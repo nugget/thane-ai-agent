@@ -2689,7 +2689,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
 
 		iterLog := logging.Logger(iterCtx)
-		if cancelErr := canceledContextError(err, ctx, iterCtx); cancelErr != nil {
+		if cancelErr := canceledContextError(ctx, iterCtx); cancelErr != nil {
 			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
 			return nil, "", cancelErr
 		}
@@ -2988,7 +2988,7 @@ func isTimeout(err error) bool {
 		strings.Contains(msg, "529")
 }
 
-func canceledContextError(err error, contexts ...context.Context) error {
+func canceledContextError(contexts ...context.Context) error {
 	for _, ctx := range contexts {
 		if ctx == nil {
 			continue
@@ -2997,9 +2997,11 @@ func canceledContextError(err error, contexts ...context.Context) error {
 			return context.Canceled
 		}
 	}
-	if errors.Is(err, context.Canceled) {
-		return context.Canceled
-	}
+	// A provider may cancel a private child context to unblock its own
+	// transport guard. That is a provider failure, not evidence that the
+	// caller abandoned the turn. Only the caller contexts above are
+	// authoritative for cancellation; the underlying error is classified by
+	// timeout/failover handling when those contexts remain live.
 	return nil
 }
 

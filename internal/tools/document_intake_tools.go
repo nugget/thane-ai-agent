@@ -13,7 +13,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 		Name: "doc_create",
 		Description: "Create a normal faceted managed document safely. It runs corpus-aware placement analysis (related-document search, title/tags/path normalization, and root policy) and, when placement is clean, writes status_line, optional teaser/digest, and full through the same logical document contract as doc_write. " +
 			"When a similar document already exists or policy wants review, nothing is written: the result comes back created=false with the analysis and an intake_id for doc_commit. " +
-			"Prefer this when placement is not settled; doc_write creates directly when the ref is already deliberate.",
+			"Prefer this when placement is not settled; doc_write creates directly when the ref is already deliberate. The reserved dossiers root is a flat subject catalog: inspect sibling refs and use a direct-child ref, never path_prefix.",
 		ContentResolveExempt: []string{"root", "title", "ref", "tags", "path_prefix"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -32,7 +32,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"ref": map[string]any{
 					"type":        "string",
-					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional.",
+					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional; required as a direct-child ref for the `dossiers` root.",
 				},
 				"tags": map[string]any{
 					"type":        "array",
@@ -41,7 +41,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"path_prefix": map[string]any{
 					"type":        "string",
-					"description": "Optional directory hint inside the root, such as `network/unifi`.",
+					"description": "Optional directory hint inside the root, such as `network/unifi`. Never use for the flat `dossiers` root.",
 				},
 				"intent": map[string]any{
 					"type":        "string",
@@ -63,6 +63,9 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 			title, _ := args["title"].(string)
 			ref, _ := args["ref"].(string)
 			pathPrefix, _ := args["path_prefix"].(string)
+			if err := documents.ValidateIntakePlacement(root, ref, pathPrefix); err != nil {
+				return "", err
+			}
 			intent, _ := args["intent"].(string)
 			return dt.Create(ctx, documents.CreateArgs{
 				Root:         root,
@@ -82,7 +85,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_intake",
-		Description:          "Analyze where proposed new knowledge belongs in a managed markdown corpus before writing it — the deliberate two-step flow. It searches related documents, normalizes title/tags/path, checks root policy, and returns an intake_id plus a commit_plan for doc_commit. For the common create case, doc_create runs this analysis and commits in one call; reach for doc_intake when you want to inspect the plan first or when the knowledge may belong in an existing document (update/append).",
+		Description:          "Analyze where proposed new knowledge belongs in a managed markdown corpus before writing it — the deliberate two-step flow. It searches related documents, normalizes title/tags/path, checks root policy, and returns an intake_id plus a commit_plan for doc_commit. For the common create case, doc_create runs this analysis and commits in one call; reach for doc_intake when you want to inspect the plan first or when the knowledge may belong in an existing document (update/append). The reserved dossiers root accepts only direct-child refs and no path_prefix.",
 		ContentResolveExempt: []string{"root", "desired_title", "desired_ref", "tags", "path_prefix"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -113,7 +116,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"desired_ref": map[string]any{
 					"type":        "string",
-					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional.",
+					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional; required as a direct-child ref for the `dossiers` root.",
 				},
 				"tags": map[string]any{
 					"type":        "array",
@@ -122,7 +125,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"path_prefix": map[string]any{
 					"type":        "string",
-					"description": "Optional directory hint inside the root, such as `network/unifi`.",
+					"description": "Optional directory hint inside the root, such as `network/unifi`. Never use for the flat `dossiers` root.",
 				},
 			},
 		},
@@ -135,6 +138,9 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 			desiredTitle, _ := args["desired_title"].(string)
 			desiredRef, _ := args["desired_ref"].(string)
 			pathPrefix, _ := args["path_prefix"].(string)
+			if err := documents.ValidateIntakePlacement(root, desiredRef, pathPrefix); err != nil {
+				return "", err
+			}
 			return dt.Intake(ctx, documents.IntakeArgs{
 				Root:          root,
 				Intent:        intent,

@@ -70,6 +70,9 @@ func slugifyIntakeValue(raw string) string {
 }
 
 func (s *Store) proposeIntakeRef(ctx context.Context, root string, args IntakeArgs, title string, tags []string, related []IntakeRelatedDocument) (string, string, error) {
+	if err := ValidateIntakePlacement(root, args.DesiredRef, args.PathPrefix); err != nil {
+		return "", "", err
+	}
 	if strings.TrimSpace(args.DesiredRef) != "" {
 		desiredRoot, relPath, err := parseRef(args.DesiredRef)
 		if err != nil {
@@ -102,6 +105,45 @@ func (s *Store) proposeIntakeRef(ctx context.Context, root string, args IntakeAr
 		return "", "", err
 	}
 	return makeRef(root, relPath), relPath, nil
+}
+
+// ValidateIntakePlacement enforces root-owned placement invariants before
+// corpus-aware intake proposes or commits a destination. The dossiers root is
+// a flat subject catalog whose names must be chosen deliberately after sibling
+// inspection, so it requires an explicit direct-child ref and never accepts a
+// path prefix.
+func ValidateIntakePlacement(root, desiredRef, pathPrefix string) error {
+	root = normalizeRootName(root)
+	desiredRef = strings.TrimSpace(desiredRef)
+
+	var (
+		refRoot string
+		relPath string
+		refErr  error
+	)
+	if desiredRef != "" {
+		refRoot, relPath, refErr = parseRef(desiredRef)
+	}
+	isDossiers := root == "dossiers" || (refErr == nil && normalizeRootName(refRoot) == "dossiers")
+	if !isDossiers {
+		return nil
+	}
+	if trimPathPrefix(pathPrefix) != "" {
+		return fmt.Errorf("dossiers is a flat subject catalog; omit path_prefix, inspect sibling refs, and use an explicit direct-child ref such as dossiers:entity-cat-goro-goro.md")
+	}
+	if desiredRef == "" {
+		return fmt.Errorf("dossiers requires an explicit direct-child desired_ref chosen after inspecting sibling refs, such as dossiers:entity-cat-goro-goro.md")
+	}
+	if refErr != nil {
+		return fmt.Errorf("dossiers desired_ref: %w", refErr)
+	}
+	if normalizeRootName(refRoot) != "dossiers" {
+		return fmt.Errorf("desired_ref root %q does not match intake root %q", refRoot, root)
+	}
+	if strings.Contains(relPath, "/") {
+		return fmt.Errorf("dossiers accepts direct-child refs only; inspect sibling naming and retry with a flat ref such as dossiers:entity-cat-goro-goro.md")
+	}
+	return nil
 }
 
 func (s *Store) uniqueIntakePath(ctx context.Context, root, dir, slug string) (string, error) {

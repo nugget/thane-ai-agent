@@ -7,8 +7,85 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
+
+func TestQueuePullAllowsOneBatchPerModelRequest(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, subject := range []string{"session:one", "session:two"} {
+		if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tools := buildLoopQueueTools(store, "archivist")
+	var pull func(context.Context, map[string]any) (string, error)
+	for _, tool := range tools {
+		if tool.Name == "queue_pull" {
+			pull = tool.Handler
+		}
+	}
+	if pull == nil {
+		t.Fatal("queue_pull not generated")
+	}
+
+	firstCtx := logging.WithRequestID(t.Context(), "r_first")
+	if _, err := pull(firstCtx, map[string]any{"limit": 1}); err != nil {
+		t.Fatalf("first pull: %v", err)
+	}
+	if _, err := pull(firstCtx, map[string]any{"limit": 1}); err == nil || !strings.Contains(err.Error(), "next iteration") {
+		t.Fatalf("second same-request pull error = %v, want iteration boundary", err)
+	}
+	secondCtx := logging.WithRequestID(t.Context(), "r_second")
+	if _, err := pull(secondCtx, map[string]any{"limit": 1}); err != nil {
+		t.Fatalf("next-request pull: %v", err)
+	}
+}
+
+func TestQueueEnqueueRejectsPulledSubject(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const subject = "theme:not-yet"
+	if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := buildLoopQueueTools(store, "archivist")
+	var pull, enqueue func(context.Context, map[string]any) (string, error)
+	for _, tool := range tools {
+		switch tool.Name {
+		case "queue_pull":
+			pull = tool.Handler
+		case "queue_enqueue":
+			enqueue = tool.Handler
+		}
+	}
+	if pull == nil || enqueue == nil {
+		t.Fatal("queue pull/enqueue tools not generated")
+	}
+	if _, err := pull(t.Context(), map[string]any{"limit": 1}); err != nil {
+		t.Fatalf("queue_pull: %v", err)
+	}
+	if _, err := enqueue(t.Context(), map[string]any{"subject": subject}); err == nil || !strings.Contains(err.Error(), "queue_ack or queue_defer") {
+		t.Fatalf("queue_enqueue pulled subject error = %v, want completion guidance", err)
+	}
+}
 
 func TestQueueDeferToolRetainsWorkAndMovesItBehindThePartition(t *testing.T) {
 	db, err := database.OpenMemory()

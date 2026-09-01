@@ -677,4 +677,27 @@ func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "full") {
 		t.Errorf("doc_create with content should teach full, got: %v", err)
 	}
+
+	for _, args := range []map[string]any{
+		{
+			"root":        "dossiers",
+			"path_prefix": "entity",
+			"status_line": "Goro-goro is a resident cat.",
+			"full":        "### Claims\n\n- Resident cat.",
+		},
+		{
+			"ref":         "dossiers:entity/goro-goro-the-cat.md",
+			"status_line": "Goro-goro is a resident cat.",
+			"full":        "### Claims\n\n- Resident cat.",
+		},
+		{
+			"root":        "dossiers",
+			"status_line": "Goro-goro is a resident cat.",
+			"full":        "### Claims\n\n- Resident cat.",
+		},
+	} {
+		if _, err := createTool.Handler(context.Background(), args); err == nil || (!strings.Contains(err.Error(), "flat") && !strings.Contains(err.Error(), "direct-child")) {
+			t.Errorf("unsafe dossiers placement error = %v, want direct-child guidance", err)
+		}
+	}
 }

@@ -238,8 +238,8 @@ the operation.
 | `doc_search` | Full-text and tagged search across roots; hits advertise facets and exact `write_tool`. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
-| `doc_create` | Create a normal faceted document safely: corpus collision check + normalized placement + logical write in one call. |
-| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
+| `doc_create` | Create a normal faceted document safely: corpus collision check + normalized placement + logical write in one call. New `dossiers:` documents must be direct children. |
+| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`); the `dossiers:` root rejects nested placement. |
 | `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through the normal logical document mutation. |
 | `doc_write` | Create, self-migrate, or update a normal managed document from status-line, optional teaser/digest, and full projections; Go validates and renders its private storage codec atomically. |
 | `doc_body_write` | Write one undifferentiated Markdown body for the unusual document that intentionally has no projection ladder. |
