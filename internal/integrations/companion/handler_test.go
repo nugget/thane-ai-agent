@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 )
 
@@ -85,6 +86,9 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 	if ok.Account != "nugget" {
 		t.Errorf("expected account %q, got %q", "nugget", ok.Account)
+	}
+	if ok.ServerVersion != buildinfo.Version {
+		t.Errorf("expected server version %q, got %q", buildinfo.Version, ok.ServerVersion)
 	}
 }
 
