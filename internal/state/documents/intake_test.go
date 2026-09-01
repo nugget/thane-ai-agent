@@ -65,6 +65,39 @@ func TestDocumentIntakeProposesCreateAndCommit(t *testing.T) {
 	}
 }
 
+func TestValidateIntakePlacementRequiresDeliberateFlatDossierRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		root       string
+		ref        string
+		pathPrefix string
+		wantError  string
+	}{
+		{name: "ordinary root remains hierarchical", root: "kb", pathPrefix: "network/unifi"},
+		{name: "flat dossier ref", root: "dossiers", ref: "dossiers:entity-cat-goro-goro.md"},
+		{name: "missing deliberate ref", root: "dossiers", wantError: "explicit direct-child"},
+		{name: "path prefix", root: "dossiers", ref: "dossiers:entity-cat-goro-goro.md", pathPrefix: "entity", wantError: "flat subject catalog"},
+		{name: "nested ref", ref: "dossiers:entity/goro-goro-the-cat.md", wantError: "direct-child refs only"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateIntakePlacement(tc.root, tc.ref, tc.pathPrefix)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("ValidateIntakePlacement: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("ValidateIntakePlacement error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestDocumentIntakeRequiresConfirmationForSimilarCorpus(t *testing.T) {
 	t.Parallel()
 

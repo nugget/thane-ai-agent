@@ -687,11 +687,15 @@ func TestStoreMoveSectionRemovesSourceSection(t *testing.T) {
 }
 
 func newMutationStore(t *testing.T) (*Store, string) {
+	return newMutationStoreForRoot(t, "kb")
+}
+
+func newMutationStoreForRoot(t *testing.T, root string) (*Store, string) {
 	t.Helper()
 
 	rootDir := t.TempDir()
-	kbDir := filepath.Join(rootDir, "kb")
-	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+	docDir := filepath.Join(rootDir, root)
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
@@ -701,11 +705,11 @@ func newMutationStore(t *testing.T) (*Store, string) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := NewStore(db, map[string]string{"kb": kbDir}, nil)
+	store, err := NewStore(db, map[string]string{root: docDir}, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	return store, kbDir
+	return store, docDir
 }
 
 func TestStoreWritePreservesOrClearsBodyByIntent(t *testing.T) {

@@ -60,7 +60,7 @@ teaser: "Extract content, structure, links, or vocabulary from a document whose 
 
 # Read a known document
 
-You have a canonical ref (`kb:network/vlans.md`, `dossiers:people/alice.md`,
+You have a canonical ref (`kb:network/vlans.md`, `dossiers:entity-cat-yuki.md`,
 etc.) and need something out of it. Pick the most specific extractor.
 
 ## The whole document
@@ -353,6 +353,13 @@ review `related_documents`, then `doc_commit` with the intake_id
 adjust and re-call. Creating safely is the default, not something to
 remember.
 
+The reserved `dossiers` root is a flat subject catalog. Inspect related and
+sibling refs before naming a new dossier, pass an explicit direct-child ref
+such as `dossiers:entity-cat-goro-goro.md`, and never pass `path_prefix`.
+Existing nested legacy refs remain readable and writable at their current
+location; direct writers also reject a missing nested `dossiers:` target, so do
+not fork one merely to normalize its name.
+
 ## Write a logical document — `doc_write`
 
 Use when a document needs multiple views of one current state in any managed
@@ -586,6 +593,9 @@ document (update/append) rather than a new one.
 `doc_intake` searches related documents, normalizes the proposed
 title/tags/path against the corpus, checks the target root's policy,
 and returns an `intake_id` plus a `commit_plan`:
+
+For the reserved `dossiers` root, propose only a direct-child ref and omit
+`path_prefix`; its subject catalog is intentionally flat.
 
 ```json
 {

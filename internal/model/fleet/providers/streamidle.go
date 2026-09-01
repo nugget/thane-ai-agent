@@ -2,11 +2,34 @@ package providers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// ErrStreamIdleTimeout marks a model response that stopped delivering bytes
+// long enough for the endpoint's stream-idle guard to abandon it.
+var ErrStreamIdleTimeout = errors.New("model stream idle timeout")
+
+// StreamIdleTimeoutError reports the silence window that expired. It also
+// classifies as [context.DeadlineExceeded], so the agent's ordinary timeout
+// retry and recovery path handles a stalled provider response.
+type StreamIdleTimeoutError struct {
+	Idle time.Duration
+}
+
+// Error implements error.
+func (e *StreamIdleTimeoutError) Error() string {
+	return fmt.Sprintf("model stream idle timeout after %s with no bytes", e.Idle)
+}
+
+// Is supports both provider-specific and generic timeout classification.
+func (e *StreamIdleTimeoutError) Is(target error) bool {
+	return target == ErrStreamIdleTimeout || target == context.DeadlineExceeded
+}
 
 // DefaultStreamIdleTimeout bounds how long a model server may deliver
 // nothing at all before the request is abandoned.
@@ -57,9 +80,10 @@ func newStreamIdleGuard(body io.ReadCloser, cancel context.CancelFunc, idle time
 // contend over the same timer state.
 type streamIdleGuard struct {
 	io.ReadCloser
-	cancel context.CancelFunc
-	idle   time.Duration
-	last   atomic.Int64
+	cancel   context.CancelFunc
+	idle     time.Duration
+	last     atomic.Int64
+	timedOut atomic.Bool
 
 	once sync.Once
 	done chan struct{}
@@ -84,6 +108,7 @@ func (g *streamIdleGuard) watch() {
 			return
 		case now := <-tick.C:
 			if now.UnixNano()-g.last.Load() >= int64(g.idle) {
+				g.timedOut.Store(true)
 				g.cancel()
 				return
 			}
@@ -95,6 +120,9 @@ func (g *streamIdleGuard) Read(p []byte) (int, error) {
 	n, err := g.ReadCloser.Read(p)
 	if n > 0 {
 		g.touch()
+	}
+	if err != nil && g.timedOut.Load() {
+		return n, &StreamIdleTimeoutError{Idle: g.idle}
 	}
 	return n, err
 }

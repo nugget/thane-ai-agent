@@ -17,14 +17,14 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 documents.DocumentBodyWriteToolName,
-		Description:          "Write one undifferentiated Markdown body for the unusual managed document that intentionally has no projection ladder. This is not a filesystem bypass: Thane still owns metadata, root policy, revision protection, and Git. Most documents belong on doc_write instead. This tool cannot write or mutate a faceted document; doc_read and doc_search return the exact write_tool for an existing target.",
+		Description:          "Write one undifferentiated Markdown body for the unusual managed document that intentionally has no projection ladder. This is not a filesystem bypass: Thane still owns metadata, root policy, revision protection, and Git. Most documents belong on doc_write instead. This tool cannot write or mutate a faceted document; doc_read and doc_search return the exact write_tool for an existing target. New documents in the reserved dossiers root must be direct children; existing nested legacy refs remain writable.",
 		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"ref": map[string]any{
 					"type":        "string",
-					"description": "Canonical document ref like `kb:network/vlans.md`.",
+					"description": "Canonical document ref like `kb:network/vlans.md`. A new `dossiers:` document must be a direct child; an existing nested legacy ref remains writable.",
 				},
 				"title": map[string]any{
 					"type":        "string",
@@ -267,7 +267,7 @@ func registerDocumentWriteTool(r *Registry, dt *documents.Tools) {
 	properties := map[string]any{
 		"ref": map[string]any{
 			"type":        "string",
-			"description": "Canonical document ref like `kb:network/vlans.md`. The same tool works across every managed root.",
+			"description": "Canonical document ref like `kb:network/vlans.md`. The same tool works across every managed root; a new `dossiers:` document must be a direct child, while an existing nested legacy ref remains writable.",
 		},
 		"title": map[string]any{
 			"type":        "string",
@@ -307,7 +307,7 @@ func registerDocumentWriteTool(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:               documents.DocumentWriteToolName,
-		Description:        "Create, adopt, or update the normal managed document as logical projections in any document root. Pass status_line, optional teaser/digest, and full as separate fields; Thane validates them together, stores its own durable manifest and Markdown codec, and protects revision-backed writes automatically. A legacy or body-only document self-migrates on this first structured write. Read an existing document first and preserve every projection it already publishes. If doc_read names a narrower owner such as contact_dossier_write or publish_output_*, use that tool instead.",
+		Description:        "Create, adopt, or update the normal managed document as logical projections in any document root. Pass status_line, optional teaser/digest, and full as separate fields; Thane validates them together, stores its own durable manifest and Markdown codec, and protects revision-backed writes automatically. A legacy or body-only document self-migrates on this first structured write. New documents in the reserved dossiers root must be direct children; existing nested legacy refs remain writable. Read an existing document first and preserve every projection it already publishes. If doc_read names a narrower owner such as contact_dossier_write or publish_output_*, use that tool instead.",
 		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type":       "object",

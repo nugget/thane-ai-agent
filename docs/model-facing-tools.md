@@ -229,6 +229,14 @@ interface. Loop-declared document outputs are the current example:
 `replace_output_<name>` replaces one maintained document, and
 `publish_output_<name>` writes every projection of a faceted one.
 
+Loop queue tools are another runtime-only interface. One successful
+`queue_pull` defines the iteration's bounded work batch; a second pull in the
+same model request returns recovery guidance instead of extending the turn.
+Subjects from that batch must be completed with `queue_ack` or retained with
+`queue_defer`, never refreshed through `queue_enqueue` by the consumer itself.
+This keeps a self-paced loop from turning one wake into an unbounded queue
+drain or manufacturing work that no new evidence requested.
+
 Do not register these tools globally or ask the model to discover the
 underlying file path. Generate them from the loop spec, advertise them
 only for that request, and make errors name the output and document

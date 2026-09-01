@@ -10,6 +10,8 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
@@ -17,6 +19,7 @@ import (
 const (
 	queuePullDefaultLimit = 5
 	queuePullMaxLimit     = 25
+	archivistPullLimit    = 3
 )
 
 // buildLoopQueueTools returns the loop-private work-queue tools for one
@@ -34,35 +37,43 @@ const (
 // rate (this loop's sleep cadence).
 func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.RuntimeTool {
 	receipts := newQueueReceipts()
+	defaultPullLimit, maxPullLimit := queuePullLimits(loopName)
 	return []looppkg.RuntimeTool{
 		{
 			Name: "queue_pull",
 			Description: "Pull a batch of pending work items from your queue, highest priority first then oldest. " +
 				"Each item gives a subject (the key you pass to queue_ack), its source, a short summary, priority, and age — not the full payload. " +
-				"Items stay queued until you queue_ack them, so an interrupted iteration just re-serves them next time. This is your inbox: drain it; you are never paged.",
+				"Exactly one batch may be pulled per loop iteration. Items stay queued until you queue_ack them, so an interrupted iteration just re-serves them next time. " +
+				"Finish this batch, persist your state, and sleep; remaining work belongs to the next iteration.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"limit": map[string]any{
 						"type":        "integer",
-						"description": "Maximum items to pull this turn (default 5, capped at 25). Pull a batch you can actually process before sleeping.",
+						"description": fmt.Sprintf("Maximum items to pull this turn (default %d, capped at %d). Pull a batch you can actually process before sleeping.", defaultPullLimit, maxPullLimit),
 					},
 				},
 			},
 			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				requestID := logging.RequestIDFromContext(ctx)
+				if err := receipts.beginPull(requestID); err != nil {
+					return "", err
+				}
 				limit, err := intFromMap(args, "limit")
 				if err != nil {
+					receipts.releasePull(requestID)
 					return "", fmt.Errorf("limit: %w", err)
 				}
 				if limit <= 0 {
-					limit = queuePullDefaultLimit
+					limit = defaultPullLimit
 				}
-				if limit > queuePullMaxLimit {
-					limit = queuePullMaxLimit
+				if limit > maxPullLimit {
+					limit = maxPullLimit
 				}
 				items, err := store.Peek(ctx, loopName, limit)
 				if err != nil {
+					receipts.releasePull(requestID)
 					return "", err
 				}
 				now := time.Now().UTC()
@@ -152,7 +163,8 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 		{
 			Name: "queue_enqueue",
 			Description: "Add a subject to your own queue for a future iteration — this is how you expand the frontier (a related entity, a sibling dossier worth refreshing) without spawning anything. " +
-				"Coalesces: enqueuing a subject already pending just refreshes it, so the same discovery from two angles can't pile up. You are a single self-paced consumer, so enqueue is the only way you make more work for yourself, and it can never run away.",
+				"Coalesces: enqueuing a subject already pending just refreshes it, so the same discovery from two angles can't pile up. " +
+				"A subject in the current pulled batch must be finished with queue_ack or queue_defer, not re-enqueued. You are a single self-paced consumer, so enqueue is the only way you make more work for yourself, and it can never run away.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -176,6 +188,9 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				subject := strings.TrimSpace(stringMapValue(args, "subject"))
 				if subject == "" {
 					return "", fmt.Errorf("subject is required")
+				}
+				if _, pulled := receipts.receipt(subject); pulled {
+					return "", fmt.Errorf("subject %q is already in this turn's pulled batch; finish it with queue_ack or queue_defer instead of re-enqueueing it", subject)
 				}
 				reason := strings.TrimSpace(stringMapValue(args, "reason"))
 				priority, err := intFromMap(args, "priority")
@@ -204,9 +219,45 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 	}
 }
 
+func queuePullLimits(loopName string) (defaultLimit, maxLimit int) {
+	if strings.TrimSpace(loopName) == archivist.DefinitionName {
+		return archivistPullLimit, archivistPullLimit
+	}
+	return queuePullDefaultLimit, queuePullMaxLimit
+}
+
 type queueReceipts struct {
-	mu        sync.Mutex
-	bySubject map[string]string
+	mu                sync.Mutex
+	bySubject         map[string]string
+	lastPullRequestID string
+}
+
+func (r *queueReceipts) beginPull(requestID string) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		// Internal callers without a model request scope retain the historical
+		// behavior. Every model-driven loop iteration carries a request ID.
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastPullRequestID == requestID {
+		return fmt.Errorf("queue_pull already returned this turn's batch; finish those items, persist durable state, and call set_next_sleep — remaining work stays queued for the next iteration")
+	}
+	r.lastPullRequestID = requestID
+	return nil
+}
+
+func (r *queueReceipts) releasePull(requestID string) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastPullRequestID == requestID {
+		r.lastPullRequestID = ""
+	}
 }
 
 func newQueueReceipts() *queueReceipts {

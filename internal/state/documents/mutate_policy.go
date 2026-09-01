@@ -25,6 +25,13 @@ func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, 
 	if err != nil {
 		return "", err
 	}
+	if _, statErr := os.Stat(absPath); os.IsNotExist(statErr) {
+		if err := validateNewDocumentPlacement(root, relPath); err != nil {
+			return "", fmt.Errorf("validate %s creation: %w", makeRef(root, relPath), err)
+		}
+	} else if statErr != nil {
+		return "", fmt.Errorf("inspect %s before write: %w", makeRef(root, relPath), statErr)
+	}
 	if err := s.ensureRootAuthoringAllowed(root); err != nil {
 		return "", err
 	}

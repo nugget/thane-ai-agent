@@ -677,4 +677,41 @@ func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "full") {
 		t.Errorf("doc_create with content should teach full, got: %v", err)
 	}
+
+	for _, args := range []map[string]any{
+		{
+			"root":        "dossiers",
+			"path_prefix": "entity",
+			"status_line": "Goro-goro is a resident cat.",
+			"full":        "### Claims\n\n- Resident cat.",
+		},
+		{
+			"ref":         "dossiers:entity/goro-goro-the-cat.md",
+			"status_line": "Goro-goro is a resident cat.",
+			"full":        "### Claims\n\n- Resident cat.",
+		},
+		{
+			"root":        "dossiers",
+			"status_line": "Goro-goro is a resident cat.",
+			"full":        "### Claims\n\n- Resident cat.",
+		},
+	} {
+		if _, err := createTool.Handler(context.Background(), args); err == nil || (!strings.Contains(err.Error(), "flat") && !strings.Contains(err.Error(), "direct-child")) {
+			t.Errorf("unsafe dossiers placement error = %v, want direct-child guidance", err)
+		}
+	}
+
+	for _, name := range []string{"doc_create", "doc_intake"} {
+		tool := reg.Get(name)
+		if tool == nil {
+			t.Fatalf("%s not registered", name)
+		}
+		_, err := tool.Handler(context.Background(), map[string]any{"root": "dossiers"})
+		if err == nil || !strings.Contains(err.Error(), "document ref") {
+			t.Errorf("%s missing-ref error = %v, want parameter-neutral document ref guidance", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "desired_ref") {
+			t.Errorf("%s missing-ref error names another tool's parameter: %v", name, err)
+		}
+	}
 }
