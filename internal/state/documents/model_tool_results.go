@@ -190,6 +190,14 @@ func modelDocumentSummaries(docs []DocumentSummary, now time.Time) []modelDocume
 }
 
 func toModelDocumentSummary(doc DocumentSummary, now time.Time) modelDocumentSummary {
+	writeTool := documentWriteTool(firstValue(doc.Frontmatter, documentfacets.ManagedByKey), doc.Facets)
+	if _, canonical, manifestErr := documentfacets.FromFrontmatter(doc.Frontmatter); canonical && manifestErr != nil {
+		doc.Summary = ""
+		doc.Facets = nil
+		if strings.TrimSpace(writeTool) == DocumentBodyWriteToolName {
+			writeTool = DocumentWriteToolName
+		}
+	}
 	return modelDocumentSummary{
 		Root:          doc.Root,
 		Ref:           doc.Ref,
@@ -197,7 +205,7 @@ func toModelDocumentSummary(doc DocumentSummary, now time.Time) modelDocumentSum
 		Title:         doc.Title,
 		Summary:       doc.Summary,
 		Facets:        append([]string(nil), doc.Facets...),
-		WriteTool:     documentWriteTool(firstValue(doc.Frontmatter, documentfacets.ManagedByKey), doc.Facets),
+		WriteTool:     writeTool,
 		Tags:          append([]string(nil), doc.Tags...),
 		Frontmatter:   modelFrontmatter(doc.Frontmatter, now),
 		ModifiedDelta: modelDelta(doc.ModifiedAt, now),
@@ -256,6 +264,10 @@ func toModelDocumentRecord(record *DocumentRecord, now time.Time) *modelDocument
 	if record == nil {
 		return nil
 	}
+	writeTool := documentWriteTool(record.ManagedBy, record.Facets)
+	if record.InvalidFacetManifest != "" && writeTool == DocumentBodyWriteToolName {
+		writeTool = DocumentWriteToolName
+	}
 	result := &modelDocumentRecord{
 		Root:          record.Root,
 		Ref:           record.Ref,
@@ -264,14 +276,17 @@ func toModelDocumentRecord(record *DocumentRecord, now time.Time) *modelDocument
 		Description:   record.Description,
 		Tags:          append([]string(nil), record.Tags...),
 		Frontmatter:   modelFrontmatter(record.Frontmatter, now),
-		Faceted:       len(record.Facets) > 0,
+		Faceted:       len(record.Facets) > 0 || record.InvalidFacetManifest != "",
 		Facets:        append([]string(nil), record.Facets...),
 		Levels:        documentLevels(record.Facets),
-		WriteTool:     documentWriteTool(record.ManagedBy, record.Facets),
+		WriteTool:     writeTool,
 		Outline:       append([]Section(nil), record.Outline...),
 		ModifiedDelta: modelDelta(record.ModifiedAt, now),
 		WordCount:     record.WordCount,
 		SizeBytes:     record.SizeBytes,
+	}
+	if record.InvalidFacetManifest != "" {
+		return result
 	}
 	if len(record.FacetContract.Facets) > 0 {
 		payload := record.FacetContract.Parse(record.Body)

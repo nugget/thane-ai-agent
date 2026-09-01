@@ -33,7 +33,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
 			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — give it an entity subscription with wake: true (wakes on that entity's changes), point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; without at least one trigger it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
-			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. Better than the placeholder skeleton: output.initial authors the first publish at create time from the survey you just did (same arguments as the publish tool; see the parameter). A document that already exists is preserved rather than re-scaffolded or seeded (document_state / working_notes_state in the result report which happened). Document-owning loops carry the read-side doc tools regardless of tags (doc_read — which returns this loop's own outputs whole, even when large — plus doc_outline/doc_section for paging other large documents, and doc_history/doc_diff/doc_at for revision history). Omit output for a loop that acts without maintaining a document. " +
+			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. Better than the placeholder skeleton: output.initial authors the first publish at create time from the survey you just did (same arguments as the publish tool; see the parameter). A document that already exists is preserved rather than re-scaffolded or seeded; if replace=true also changes its facet contract, output.migration explicitly supplies only newly required projections while Go preserves the full body and retained projections (document_state / working_notes_state in the result report which happened). Document-owning loops carry the read-side doc tools regardless of tags (doc_read — which returns this loop's own outputs whole, even when large — plus doc_outline/doc_section for paging other large documents, and doc_history/doc_diff/doc_at for revision history). Omit output for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"bindings restricts which named shared resources the loop may reach (forge_account and repo_root); a caller already inside a binding carries it into the new loop and cannot override it or place the loop under an incompatible container. " +
 			"prompt_mode picks the system-prompt shape: set \"task\" for a mechanical maintainer/watcher/poller (fetch a source, check a state, update a document) — the compact worker prompt drops the reflective identity stack, the largest single prompt cost in a background loop; leave it unset for a loop that reflects on the agent or composes messages in its voice. " +
@@ -204,6 +204,12 @@ type executingLoopPlan struct {
 	seedDocument bool
 	seedPayload  looppkg.FacetPayload
 	seedNotes    string
+	// migrateDocument records an explicit output.migration request. Its
+	// values contain only compact projections newly required by the proposed
+	// contract; the existing document supplies every retained projection and
+	// the full logical body.
+	migrateDocument bool
+	migrationValues map[string]string
 }
 
 // planExecutingLoop derives the plan without writing anything. It reads
@@ -264,16 +270,18 @@ func (r *Registry) planExecutingLoop(ctx context.Context, args map[string]any, n
 	// managed OutputSpec + a curate-style task; otherwise the loop's per-iteration
 	// task is its intent.
 	var (
-		outputs      []looppkg.OutputSpec
-		outputSpec   looppkg.OutputSpec
-		documentRef  string
-		title        string
-		hasOutput    bool
-		facets       []looppkg.FacetSpec
-		notesRef     string
-		seedDocument bool
-		seedPayload  looppkg.FacetPayload
-		seedNotes    string
+		outputs         []looppkg.OutputSpec
+		outputSpec      looppkg.OutputSpec
+		documentRef     string
+		title           string
+		hasOutput       bool
+		facets          []looppkg.FacetSpec
+		notesRef        string
+		seedDocument    bool
+		seedPayload     looppkg.FacetPayload
+		seedNotes       string
+		migrateDocument bool
+		migrationValues map[string]string
 	)
 	if raw, ok := args["output"].(map[string]any); ok && raw != nil {
 		hasOutput = true
@@ -308,6 +316,13 @@ func (r *Registry) planExecutingLoop(ctx context.Context, args map[string]any, n
 		seedPayload, seedNotes, seedDocument, err = parseOutputInitial(raw["initial"], outputSpec)
 		if err != nil {
 			return nil, err
+		}
+		migrationValues, migrateDocument, err = parseOutputMigration(raw["migration"], outputSpec)
+		if err != nil {
+			return nil, err
+		}
+		if migrateDocument && !replace {
+			return nil, fmt.Errorf("output.migration requires replace=true because it changes an existing loop output contract")
 		}
 	}
 
@@ -363,20 +378,22 @@ func (r *Registry) planExecutingLoop(ctx context.Context, args map[string]any, n
 	warnings := looppkg.BuildDefinitionWarnings(spec)
 
 	return &executingLoopPlan{
-		spec:         spec,
-		warnings:     warnings,
-		replace:      replace,
-		hasOutput:    hasOutput,
-		documentRef:  documentRef,
-		title:        title,
-		outputTool:   outputSpec.ToolName(),
-		notesRef:     notesRef,
-		entityCount:  len(entities),
-		envelope:     envelope,
-		createdAt:    now,
-		seedDocument: seedDocument,
-		seedPayload:  seedPayload,
-		seedNotes:    seedNotes,
+		spec:            spec,
+		warnings:        warnings,
+		replace:         replace,
+		hasOutput:       hasOutput,
+		documentRef:     documentRef,
+		title:           title,
+		outputTool:      outputSpec.ToolName(),
+		notesRef:        notesRef,
+		entityCount:     len(entities),
+		envelope:        envelope,
+		createdAt:       now,
+		seedDocument:    seedDocument,
+		seedPayload:     seedPayload,
+		seedNotes:       seedNotes,
+		migrateDocument: migrateDocument,
+		migrationValues: migrationValues,
 	}, nil
 }
 
@@ -473,6 +490,41 @@ func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.Fac
 	return payload, notes, true, nil
 }
 
+// parseOutputMigration accepts only compact projections declared by the new
+// contract. The existing document contributes its full body and every retained
+// projection, so accepting full or already-existing projection replacements
+// here would turn a schema migration into an unobvious content rewrite.
+func parseOutputMigration(raw any, output looppkg.OutputSpec) (map[string]string, bool, error) {
+	if raw == nil {
+		return nil, false, nil
+	}
+	migration, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false, fmt.Errorf("output.migration must be an object containing newly declared projections, got %T", raw)
+	}
+	allowed := make(map[string]bool, len(output.Facets))
+	for _, field := range output.FacetFields() {
+		if field.Key != "full" {
+			allowed[field.Key] = true
+		}
+	}
+	values := make(map[string]string, len(migration))
+	for key, rawValue := range migration {
+		if !allowed[key] {
+			return nil, false, fmt.Errorf("output.migration.%s is not a compact projection declared by the new output contract", key)
+		}
+		value, ok := rawValue.(string)
+		if !ok {
+			return nil, false, fmt.Errorf("output.migration.%s must be a string, got %T", key, rawValue)
+		}
+		if strings.TrimSpace(value) == "" {
+			return nil, false, fmt.Errorf("output.migration.%s is empty; supply the new projection's current value", key)
+		}
+		values[key] = value
+	}
+	return values, true, nil
+}
+
 func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any, name, intent string, op looppkg.Operation) (string, error) {
 	deps := r.loopIntentDeps
 	plan, err := r.planExecutingLoop(ctx, args, name, intent, op)
@@ -504,6 +556,15 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		}
 		return ldMarshalToolJSON(result)
 	}
+	if plan.migrateDocument {
+		live := r.resolveLiveRegistry()
+		if live == nil {
+			return "", fmt.Errorf("output.migration cannot verify that loop %q is stopped because the live loop registry is unavailable; no document was changed", name)
+		}
+		if running := live.GetByName(name); running != nil {
+			return "", fmt.Errorf("output.migration cannot change %q while loop %q is running under its old output contract; no document was changed. Call stop_loop for this loop, confirm loop_status no longer reports it, then retry this exact thane_loop_create call", plan.documentRef, name)
+		}
+	}
 
 	hasOutput, documentRef, title := plan.hasOutput, plan.documentRef, plan.title
 	replace, warnings, envelope, now := plan.replace, plan.warnings, plan.envelope, plan.createdAt
@@ -520,6 +581,9 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		}
 		if docExists && !replace {
 			return "", fmt.Errorf("output document %q already exists; pass replace=true to replace the loop definition and adopt the document — its body is preserved, only its ownership frontmatter refreshes", documentRef)
+		}
+		if plan.migrateDocument && !docExists {
+			return "", fmt.Errorf("output.migration requires an existing output document; omit migration and use output.initial to author a new document")
 		}
 		// A seed against an existing document is a conflict to surface, not
 		// resolve: the document's accumulated state wins over create-time
@@ -567,15 +631,34 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		documentState, notesState = "scaffolded", "scaffolded"
 		var payload looppkg.FacetPayload
 		var body string
+		var previousWriteTools []string
 		switch {
 		case docExists:
-			documentState = "preserved_existing"
-			if outputSpec.HasFacets() {
-				record, readErr := deps.DocTools.RecordWithReceipt(ctx, documents.RefArgs{Ref: documentRef, ReceiptScope: DocumentRevisionScope(ctx)})
-				if readErr != nil {
-					return "", fmt.Errorf("read existing output document for adoption: %w", readErr)
+			record, readErr := deps.DocTools.RecordWithReceipt(ctx, documents.RefArgs{Ref: documentRef, ReceiptScope: DocumentRevisionScope(ctx)})
+			if readErr != nil {
+				return "", fmt.Errorf("read existing output document for adoption: %w", readErr)
+			}
+			newContract := documentfacets.Contract{Facets: append([]documentfacets.Spec(nil), outputSpec.Facets...)}
+			contractChanged := !facetContractsEqual(record.FacetContract, newContract)
+			switch {
+			case contractChanged:
+				if !plan.migrateDocument {
+					return "", fmt.Errorf("output document %q uses a different projection contract; pass output.migration with values for every newly declared projection (or an empty object when only removing projections) so its full body and retained projections can be migrated explicitly", documentRef)
 				}
-				payload = outputSpec.ParseFacetDocument(record.Body)
+				payload, err = migrateOutputPayload(record, newContract, plan.migrationValues)
+				if err != nil {
+					return "", fmt.Errorf("output.migration: %w", err)
+				}
+				body = payload.Full
+				documentState = "migrated_contract"
+				previousWriteTools = outputWriteToolAliases(outputSpec)
+			case plan.migrateDocument:
+				return "", fmt.Errorf("output.migration was supplied, but output document %q already uses the declared projection contract; omit migration to preserve it", documentRef)
+			default:
+				documentState = "preserved_existing"
+				if outputSpec.HasFacets() {
+					payload = looppkg.FacetPayload(record.FacetContract.Parse(record.Body))
+				}
 			}
 		case plan.seedDocument:
 			frontmatter["created"] = []string{now.Format(time.RFC3339)}
@@ -591,26 +674,33 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		}
 		if outputSpec.HasFacets() {
 			if _, err := deps.DocTools.WriteFaceted(ctx, documents.FacetedWriteArgs{
-				Ref:          documentRef,
-				Title:        title,
-				Frontmatter:  frontmatter,
-				Contract:     documentfacets.Contract{Facets: append([]documentfacets.Spec(nil), outputSpec.Facets...)},
-				Payload:      documentfacets.Payload(payload),
-				WriteTool:    outputSpec.ToolName(),
-				ReceiptScope: DocumentRevisionScope(ctx),
+				Ref:                documentRef,
+				Title:              title,
+				Frontmatter:        frontmatter,
+				Contract:           documentfacets.Contract{Facets: append([]documentfacets.Spec(nil), outputSpec.Facets...)},
+				Payload:            documentfacets.Payload(payload),
+				WriteTool:          outputSpec.ToolName(),
+				ReceiptScope:       DocumentRevisionScope(ctx),
+				PreviousWriteTools: previousWriteTools,
 			}); err != nil {
 				return "", fmt.Errorf("scaffold faceted output document: %w", err)
 			}
 		} else {
 			writeArgs := documents.WriteArgs{
-				Ref:            documentRef,
-				Title:          title,
-				Frontmatter:    frontmatter,
-				StructuredTool: outputSpec.ToolName(),
-				ReceiptScope:   DocumentRevisionScope(ctx),
+				Ref:                documentRef,
+				Title:              title,
+				Frontmatter:        frontmatter,
+				StructuredTool:     outputSpec.ToolName(),
+				ReceiptScope:       DocumentRevisionScope(ctx),
+				PreviousWriteTools: previousWriteTools,
 			}
-			if !docExists {
+			if !docExists || documentState == "migrated_contract" {
 				writeArgs.Body = &body
+			}
+			if documentState == "migrated_contract" {
+				writeArgs.Frontmatter[documentfacets.SchemaKey] = nil
+				writeArgs.Frontmatter[documentfacets.FacetsKey] = nil
+				writeArgs.Frontmatter[documentfacets.FacetFormatsKey] = nil
 			}
 			if _, err := deps.DocTools.Write(ctx, writeArgs); err != nil {
 				return "", fmt.Errorf("scaffold output document: %w", err)
@@ -829,6 +919,78 @@ func declaredDocumentExists(ctx context.Context, docTools *documents.Tools, ref 
 	}
 }
 
+func facetContractsEqual(left, right documentfacets.Contract) bool {
+	if len(left.Facets) != len(right.Facets) {
+		return false
+	}
+	leftFacets := make(map[documentfacets.Name]documentfacets.Format, len(left.Facets))
+	for _, facet := range left.Facets {
+		leftFacets[facet.Name] = facet.EffectiveFormat()
+	}
+	for _, facet := range right.Facets {
+		if leftFacets[facet.Name] != facet.EffectiveFormat() {
+			return false
+		}
+	}
+	return true
+}
+
+func migrateOutputPayload(record *documents.DocumentRecord, contract documentfacets.Contract, supplied map[string]string) (looppkg.FacetPayload, error) {
+	current := documentfacets.Payload{Full: record.Body}
+	if len(record.FacetContract.Facets) > 0 {
+		current = record.FacetContract.Parse(record.Body)
+	}
+	previous := make(map[documentfacets.Name]bool, len(record.FacetContract.Facets))
+	for _, facet := range record.FacetContract.Facets {
+		previous[facet.Name] = true
+	}
+	for key := range supplied {
+		if previous[documentfacets.Name(key)] {
+			return looppkg.FacetPayload{}, fmt.Errorf("%s already exists and is preserved from the current document; migration accepts only newly declared projections", key)
+		}
+	}
+
+	next := documentfacets.Payload{Full: current.Full}
+	for _, facet := range contract.Facets {
+		key := string(facet.Name)
+		value := ""
+		if previous[facet.Name] {
+			value, _ = current.ByKey(key)
+		} else {
+			value = supplied[key]
+			if strings.TrimSpace(value) == "" {
+				return looppkg.FacetPayload{}, fmt.Errorf("%s is newly declared and requires a current value", key)
+			}
+		}
+		switch facet.Name {
+		case documentfacets.StatusLine:
+			next.StatusLine = value
+		case documentfacets.Teaser:
+			next.Teaser = value
+		case documentfacets.Digest:
+			next.Digest = value
+		}
+	}
+	if len(contract.Facets) > 0 {
+		if err := contract.Validate(next); err != nil {
+			return looppkg.FacetPayload{}, err
+		}
+	}
+	return looppkg.FacetPayload(next), nil
+}
+
+// outputWriteToolAliases returns only the two tool names the same guided loop
+// output can own. Supplying these through an internal-only field lets a
+// contract migration cross replace_output_* / publish_output_* without
+// weakening document ownership for arbitrary structured writers.
+func outputWriteToolAliases(output looppkg.OutputSpec) []string {
+	bodyOutput := output
+	bodyOutput.Facets = nil
+	facetedOutput := output
+	facetedOutput.Facets = []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}}
+	return []string{bodyOutput.ToolName(), facetedOutput.ToolName()}
+}
+
 // declaredOutputSpecs splits a created loop's outputs into the
 // maintained document and its derived working notes, by type rather
 // than by position so the scaffold cannot silently bind to the wrong
@@ -910,6 +1072,15 @@ func thaneLoopCreateSchema() map[string]any {
 							"digest":      map[string]any{"type": "string"},
 							"full":        map[string]any{"type": "string"},
 							"notes":       map[string]any{"type": "string"},
+						},
+					},
+					"migration": map[string]any{
+						"type":        "object",
+						"description": "Explicitly migrate an existing output when replace=true changes its facet contract and the old loop is stopped. Supply only each newly declared compact projection; Go preserves the current full body and retained projections. Use an empty object when only removing facets or moving from faceted to body-only. Omit when the contract is unchanged or the document is new.",
+						"properties": map[string]any{
+							"status_line": map[string]any{"type": "string"},
+							"teaser":      map[string]any{"type": "string"},
+							"digest":      map[string]any{"type": "string"},
 						},
 					},
 				},

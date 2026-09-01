@@ -450,7 +450,7 @@ structured envelopes over the message bus directly, and
 |------|-----------|-------------|
 | `thane_now` | sync | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
-| `thane_loop_create` (`operation: service`) | recurring | Scaffold a declared output document in the exact shape its generated `publish_output_*` tool writes (optional `output.initial` seeds the first publish; working notes ride alongside) and launch a self-paced recurring loop that maintains it; `entities` surface HA subscriptions into the loop's context. |
+| `thane_loop_create` (`operation: service`) | recurring | Scaffold a declared output document in the exact shape its generated `publish_output_*` tool writes (optional `output.initial` seeds the first publish; after the old loop is stopped, `output.migration` explicitly supplies newly required projections when a replacement changes the contract; working notes ride alongside) and launch a self-paced recurring loop that maintains it; `entities` surface HA subscriptions into the loop's context. |
 | `thane_loop_create` (`operation: container`) | durable container | Create a non-executing loop container that groups descendant loops and provides inheritable tags. |
 
 `thane_now` and `thane_assign` accept `context_mode`. The default,

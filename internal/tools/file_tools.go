@@ -855,17 +855,21 @@ func (ft *FileTools) renderTree(buf *strings.Builder, dir, prefix string, maxDep
 		return nil // skip unreadable directories
 	}
 
-	for i, entry := range entries {
+	visible := make([]os.DirEntry, 0, len(entries))
+	for _, entry := range entries {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-
 		entryPath := filepath.Join(dir, entry.Name())
 		if err := ft.verifyPath(ctx, entryPath, "file_tools_tree"); err != nil {
 			continue
 		}
+		visible = append(visible, entry)
+	}
 
-		isLast := i == len(entries)-1
+	for i, entry := range visible {
+		entryPath := filepath.Join(dir, entry.Name())
+		isLast := i == len(visible)-1
 		connector := "├── "
 		childPrefix := "│   "
 		if isLast {

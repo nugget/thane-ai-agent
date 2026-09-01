@@ -209,13 +209,18 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 				section = heading
 			}
 		}
-		out, err = t.store.Edit(ctx, EditArgs{
-			Ref:     ref,
-			Mode:    mode,
-			Body:    body,
-			Section: section,
-			Heading: heading,
+		var edited string
+		edited, err = t.Edit(ctx, EditArgs{
+			Ref:          ref,
+			Mode:         mode,
+			Body:         body,
+			Section:      section,
+			Heading:      heading,
+			ReceiptScope: args.ReceiptScope,
 		})
+		if err == nil {
+			out = json.RawMessage(edited)
+		}
 	case IntakeActionAppendExisting:
 		ref = result.TargetRef
 		if ref == "" {
@@ -227,11 +232,16 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		if err := t.rejectStructuredIntakeTarget(ctx, ref, "doc_commit"); err != nil {
 			return "", err
 		}
-		out, err = t.store.JournalUpdate(ctx, JournalUpdateArgs{
-			Ref:    ref,
-			Entry:  body,
-			Window: args.Window,
+		var appended string
+		appended, err = t.JournalUpdate(ctx, JournalUpdateArgs{
+			Ref:          ref,
+			Entry:        body,
+			Window:       args.Window,
+			ReceiptScope: args.ReceiptScope,
 		})
+		if err == nil {
+			out = json.RawMessage(appended)
+		}
 	case IntakeActionDraftForReview:
 		status = "draft_for_review"
 		ref = result.ProposedRef
@@ -249,7 +259,14 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t.forgetIntake(args.IntakeID)
+	if applied, known := nestedMutationApplied(out); known && !applied {
+		// Receipt conflicts are successful tool responses, not Go errors. Keep
+		// the intake plan so the model can reconcile the returned diff and retry
+		// the same doc_commit after the wrapper advances its hidden receipt.
+		status = "conflict"
+	} else {
+		t.forgetIntake(args.IntakeID)
+	}
 	return marshalToolResult(toModelCommitResult(CommitResult{
 		IntakeID: args.IntakeID,
 		Action:   action,
@@ -257,6 +274,20 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		Status:   status,
 		Result:   out,
 	}, nowUTC()))
+}
+
+func nestedMutationApplied(result any) (bool, bool) {
+	raw, ok := result.(json.RawMessage)
+	if !ok {
+		return false, false
+	}
+	var outcome struct {
+		Applied *bool `json:"applied"`
+	}
+	if err := json.Unmarshal(raw, &outcome); err != nil || outcome.Applied == nil {
+		return false, false
+	}
+	return *outcome.Applied, true
 }
 
 func (t *Tools) rejectStructuredIntakeTarget(ctx context.Context, ref, attempted string) error {

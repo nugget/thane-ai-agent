@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 const (
@@ -171,6 +172,9 @@ func (t *Tools) At(ctx context.Context, args AtArgs) (string, error) {
 	}
 	_, relPath, _ := parseRef(args.Ref)
 	meta, body := splitFrontmatter(content.Content)
+	if _, canonical, manifestErr := documentfacets.FromFrontmatter(meta); canonical && manifestErr != nil {
+		return "", fmt.Errorf("document %s at %s has an invalid faceted manifest; no private storage envelope was returned: %s", args.Ref, content.Revision.Short, boundedFacetManifestError(manifestErr))
+	}
 	parsed := parseMarkdownDocumentParts(relPath, meta, body)
 	now := nowUTC()
 	rev := content.Revision

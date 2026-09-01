@@ -276,6 +276,20 @@ func (s *Store) Outline(ctx context.Context, ref string) ([]Section, error) {
 	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_outline"); err != nil {
 		return nil, err
 	}
+	absPath, err := s.resolveDocumentPath(root, relPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("document not found: %s", ref)
+		}
+		return nil, err
+	}
+	record, err := s.readCurrentDocument(ctx, absPath, root, relPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := invalidFacetManifestReadError(record); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT level, heading, slug, start_line, end_line
 		 FROM indexed_document_sections
@@ -341,6 +355,13 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 		return nil, fmt.Errorf("read document: %w", err)
 	}
 	meta, body := splitFrontmatter(string(raw))
+	record, _, _, err := readDocumentRecordBytes(absPath, root, relPath, raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := invalidFacetManifestReadError(record); err != nil {
+		return nil, err
+	}
 	doc := parseMarkdownDocumentParts(relPath, meta, body)
 	logicalBody := body
 	if contract := parsedFacetContract(meta, body); len(contract.Facets) > 0 {

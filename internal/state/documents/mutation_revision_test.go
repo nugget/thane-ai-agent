@@ -272,6 +272,100 @@ func TestHiddenRevisionReceiptAdvancesFromConflictWhenSnapshotFails(t *testing.T
 	}
 }
 
+func TestDocumentCommitUpdateAndAppendHonorHiddenRevisionReceipts(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []IntakeAction{IntakeActionUpdateExisting, IntakeActionAppendExisting} {
+		action := action
+		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			backend := &revisionMutationBackend{root: root, contents: make(map[string]string)}
+			db, err := database.OpenMemory()
+			if err != nil {
+				t.Fatalf("OpenMemory: %v", err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			store, err := NewStoreWithOptions(db, map[string]string{"kb": root}, nil, StoreOptions{
+				RootWriters:  map[string]RootWriter{"kb": backend},
+				RootRevisers: map[string]RootReviser{"kb": backend},
+			})
+			if err != nil {
+				t.Fatalf("NewStoreWithOptions: %v", err)
+			}
+			tools := NewTools(store)
+			ctx := t.Context()
+			const (
+				ref   = "kb:person.md"
+				scope = "loop:archivist"
+			)
+			if _, err := tools.Write(ctx, WriteArgs{Ref: ref, Body: stringPtr("Initial fact."), ReceiptScope: scope}); err != nil {
+				t.Fatalf("seed document: %v", err)
+			}
+			if _, err := tools.Read(ctx, RefArgs{Ref: ref, ReceiptScope: scope}); err != nil {
+				t.Fatalf("read document: %v", err)
+			}
+			intake := &IntakeResult{
+				Status:            IntakeReady,
+				RecommendedAction: action,
+				TargetRef:         ref,
+				CommitPlan: IntakeCommitPlan{
+					RecommendedAction: action,
+					TargetRef:         ref,
+				},
+			}
+			tools.rememberIntake(intake)
+			if err := backend.Write(ctx, "person.md", "Operator's newer fact.", "operator update"); err != nil {
+				t.Fatalf("external update: %v", err)
+			}
+
+			commitArgs := CommitArgs{
+				IntakeID:     intake.IntakeID,
+				Action:       action,
+				Body:         "Archivist fact.",
+				ReceiptScope: scope,
+			}
+			conflictJSON, err := tools.Commit(ctx, commitArgs)
+			if err != nil {
+				t.Fatalf("stale Commit: %v", err)
+			}
+			var conflict struct {
+				Status string                `json:"status"`
+				Result modelMutationConflict `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(conflictJSON), &conflict); err != nil {
+				t.Fatalf("unmarshal conflict: %v\n%s", err, conflictJSON)
+			}
+			if conflict.Status != "conflict" || conflict.Result.Applied || !strings.Contains(conflict.Result.ChangedSinceRead, "Operator's newer fact.") {
+				t.Fatalf("conflict = %#v, want unapplied diff and conflict status", conflict)
+			}
+			record, err := store.Read(ctx, ref)
+			if err != nil {
+				t.Fatalf("read after conflict: %v", err)
+			}
+			if strings.Contains(record.Body, "Archivist fact.") {
+				t.Fatalf("stale commit changed document: %q", record.Body)
+			}
+
+			retryJSON, err := tools.Commit(ctx, commitArgs)
+			if err != nil {
+				t.Fatalf("retry Commit: %v", err)
+			}
+			var retry struct {
+				Status string              `json:"status"`
+				Result modelMutationResult `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(retryJSON), &retry); err != nil {
+				t.Fatalf("unmarshal retry: %v\n%s", err, retryJSON)
+			}
+			if retry.Status != "committed" || !retry.Result.Applied {
+				t.Fatalf("retry = %#v, want applied committed result", retry)
+			}
+		})
+	}
+}
+
 func TestTruncateRevisionConflictTextPreservesUTF8(t *testing.T) {
 	t.Parallel()
 	got, truncated := truncateRevisionConflictText("one 🧭 two", 6)

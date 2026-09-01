@@ -247,3 +247,38 @@ func TestFileTools_MetadataAndWalkSurfacesRespectManagedDocumentBoundary(t *test
 		t.Fatalf("stat boundary result = %s", stat)
 	}
 }
+
+func TestFileToolsTreeUsesVisibleEntriesForConnectors(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "a-visible.txt"), []byte("visible"), 0o600); err != nil {
+		t.Fatalf("seed visible file: %v", err)
+	}
+	hidden := filepath.Join(workspace, "z-managed")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatalf("seed hidden directory: %v", err)
+	}
+	hiddenResolved, err := filepath.EvalSymlinks(hidden)
+	if err != nil {
+		t.Fatalf("EvalSymlinks hidden directory: %v", err)
+	}
+	ft := NewFileTools(workspace, nil)
+	ft.SetPathVerifier(&fakePathVerifier{verify: func(path, _ string) error {
+		if path == hiddenResolved {
+			return errors.New("managed root")
+		}
+		return nil
+	}})
+
+	tree, err := ft.Tree(t.Context(), ".", 2)
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if !strings.Contains(tree, "└── a-visible.txt") {
+		t.Fatalf("tree did not render the final visible entry as last:\n%s", tree)
+	}
+	if strings.Contains(tree, "├── a-visible.txt") || strings.Contains(tree, "z-managed") {
+		t.Fatalf("tree used denied entries when choosing connectors:\n%s", tree)
+	}
+}

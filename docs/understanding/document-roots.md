@@ -491,6 +491,16 @@ of truth. The generated tools still write through document roots. That
 keeps path resolution, indexing, provenance, and root-level integrity
 policy in one subsystem.
 
+Replacing a loop definition preserves its output when the contract is
+unchanged. A contract change requires the old loop to be stopped and is
+explicit: `thane_loop_create` requires
+`output.migration`, preserves the existing full body and retained projections,
+and accepts values only for newly declared projections. An empty migration
+object authorizes a removal-only change, including a faceted output becoming
+body-only. The ownership transition between the same loop's
+`replace_output_*` and `publish_output_*` tools happens inside the document
+layer; it is not a general ownership override.
+
 ## Special Case: the Derived Roots
 
 Four root names are reserved: `core`, `self`, `contacts`, and `dossiers`. Their

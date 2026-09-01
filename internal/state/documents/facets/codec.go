@@ -61,12 +61,12 @@ func ParseLegacy(body string) (Payload, bool) {
 	var payload Payload
 	var preamble []string
 	current := ""
-	found := false
+	found := make(map[string]bool, len(sections))
 	collected := make(map[string][]string, len(sections))
 	for _, line := range strings.Split(body, "\n") {
 		if heading, ok := reservedHeadingOf(line); ok {
 			current = heading
-			found = true
+			found[heading] = true
 			continue
 		}
 		if current == "" {
@@ -89,7 +89,13 @@ func ParseLegacy(body string) (Payload, bool) {
 			payload.Full = leading + "\n\n" + payload.Full
 		}
 	}
-	return payload, found
+	// Status Line and Details were mandatory in every historical envelope.
+	// Requiring both keeps an ordinary document's legitimate "## Details" or
+	// "## Digest" section from being mistaken for private facet storage.
+	if !found["Status Line"] || !found["Details"] {
+		return Payload{Full: strings.TrimSpace(body)}, false
+	}
+	return payload, true
 }
 
 // RenderScaffold produces the canonical pre-first-write placeholder.

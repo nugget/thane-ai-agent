@@ -52,6 +52,9 @@ type FacetedWriteArgs struct {
 	Validate         func(documentfacets.Payload) error `json:"-"`
 	ExpectedRevision string                             `json:"-"`
 	ReceiptScope     string                             `json:"-"`
+	// PreviousWriteTools permits a trusted adapter to rename its own write
+	// surface while atomically migrating the document contract.
+	PreviousWriteTools []string `json:"-"`
 }
 
 // StructuredDocumentMutationError redirects a mutation to the tool that owns
@@ -139,7 +142,7 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		return "", fmt.Errorf("inspect %s before %s: %w", args.Ref, args.WriteTool, err)
 	}
 	if current != nil {
-		if owner := strings.TrimSpace(current.ManagedBy); owner != "" && owner != args.WriteTool {
+		if owner := strings.TrimSpace(current.ManagedBy); owner != "" && owner != args.WriteTool && !containsWriteTool(args.PreviousWriteTools, owner) {
 			return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: args.WriteTool, WriteTool: owner}
 		}
 	}
@@ -163,15 +166,16 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		frontmatter[key] = values
 	}
 	writeArgs := WriteArgs{
-		Ref:              args.Ref,
-		Title:            args.Title,
-		Description:      args.Description,
-		Tags:             append([]string(nil), args.Tags...),
-		Frontmatter:      frontmatter,
-		Body:             &body,
-		ExpectedRevision: args.ExpectedRevision,
-		ReceiptScope:     args.ReceiptScope,
-		StructuredTool:   args.WriteTool,
+		Ref:                args.Ref,
+		Title:              args.Title,
+		Description:        args.Description,
+		Tags:               append([]string(nil), args.Tags...),
+		Frontmatter:        frontmatter,
+		Body:               &body,
+		ExpectedRevision:   args.ExpectedRevision,
+		ReceiptScope:       args.ReceiptScope,
+		StructuredTool:     args.WriteTool,
+		PreviousWriteTools: append([]string(nil), args.PreviousWriteTools...),
 	}
 	t.prepareWriteReceipt(&writeArgs)
 	result, err := t.store.Write(ctx, writeArgs)
@@ -179,6 +183,16 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		result.Action = args.WriteTool
 	}
 	return t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
+}
+
+func containsWriteTool(tools []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, tool := range tools {
+		if strings.TrimSpace(tool) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func genericWriteContract(current *DocumentRecord, teaser, digest bool) documentfacets.Contract {
@@ -237,5 +251,19 @@ func structuredWriteTool(record *DocumentRecord) string {
 	if len(record.Facets) > 0 {
 		return DocumentWriteToolName
 	}
+	if record.InvalidFacetManifest != "" {
+		return DocumentWriteToolName
+	}
 	return ""
+}
+
+func invalidFacetManifestReadError(record *DocumentRecord) error {
+	if record == nil || strings.TrimSpace(record.InvalidFacetManifest) == "" {
+		return nil
+	}
+	owner := strings.TrimSpace(record.ManagedBy)
+	if owner == "" {
+		owner = DocumentWriteToolName
+	}
+	return fmt.Errorf("document %s has an invalid faceted manifest; no private storage envelope was returned. Repair it by calling %s with the complete logical projections, or correct the reserved frontmatter through repository administration: %s", record.Ref, owner, record.InvalidFacetManifest)
 }

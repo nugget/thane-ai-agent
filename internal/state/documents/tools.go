@@ -119,6 +119,12 @@ func (t *Tools) ReadWithResultBudget(ctx context.Context, args RefArgs, resultBu
 	if err != nil {
 		return "", err
 	}
+	if err := invalidFacetManifestReadError(doc); err != nil {
+		// The read withholds codec content but still establishes the exact
+		// revision the directed structured repair is allowed to replace.
+		t.rememberDocumentReceipt(args.ReceiptScope, doc)
+		return "", err
+	}
 	t.rememberDocumentReceipt(args.ReceiptScope, doc)
 	return marshalToolResultBudget(toModelDocumentRecord(doc, nowUTC()), resultBudget)
 }
@@ -146,6 +152,10 @@ func (t *Tools) RecordWithReceipt(ctx context.Context, args RefArgs) (*DocumentR
 	}
 	doc, err := t.store.Read(ctx, args.Ref)
 	if err != nil {
+		return nil, err
+	}
+	if err := invalidFacetManifestReadError(doc); err != nil {
+		t.rememberDocumentReceipt(args.ReceiptScope, doc)
 		return nil, err
 	}
 	t.rememberDocumentReceipt(args.ReceiptScope, doc)
@@ -315,7 +325,7 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 				return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: DocumentBodyWriteToolName, WriteTool: DocumentWriteToolName}
 			}
 		}
-	} else if current != nil && current.ManagedBy != "" && current.ManagedBy != args.StructuredTool {
+	} else if current != nil && current.ManagedBy != "" && current.ManagedBy != args.StructuredTool && !containsWriteTool(args.PreviousWriteTools, current.ManagedBy) {
 		return "", &StructuredDocumentMutationError{Ref: args.Ref, Attempted: args.StructuredTool, WriteTool: current.ManagedBy}
 	}
 	t.prepareWriteReceipt(&args)

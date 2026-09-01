@@ -398,3 +398,77 @@ func TestToolsPublishHonorsNarrowerOwner(t *testing.T) {
 		t.Fatalf("Publish error = %v, want owning-tool redirect", err)
 	}
 }
+
+func TestMalformedCanonicalManifestNeverExposesStorageEnvelope(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newMutationStore(t)
+	path := filepath.Join(kbDir, "malformed.md")
+	raw := `---
+facets: ["digest"]
+managed_by: "doc_write"
+thane_document: "faceted/v1"
+---
+
+## Digest
+
+PRIVATE_DIGEST_MARKER
+
+## Details
+
+PRIVATE_FULL_MARKER
+`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	tools := NewTools(store)
+
+	_, err := tools.Read(context.Background(), RefArgs{Ref: "kb:malformed.md"})
+	if err == nil {
+		t.Fatal("Read returned malformed private storage envelope")
+	}
+	for _, want := range []string{"invalid faceted manifest", DocumentWriteToolName, "no private storage envelope"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Read error = %q, want %q", err, want)
+		}
+	}
+	for _, secret := range []string{"PRIVATE_DIGEST_MARKER", "PRIVATE_FULL_MARKER", "## Digest", "## Details"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("Read error exposed %q: %v", secret, err)
+		}
+	}
+	results, err := store.Search(context.Background(), SearchQuery{Query: "PRIVATE_FULL_MARKER", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search malformed document: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("search indexed malformed private storage content: %#v", results)
+	}
+
+	if _, err := tools.Write(context.Background(), WriteArgs{
+		Ref:  "kb:malformed.md",
+		Body: stringPtr("body-only overwrite"),
+	}); err == nil || !strings.Contains(err.Error(), DocumentWriteToolName) {
+		t.Fatalf("body write error = %v, want structured repair redirect", err)
+	}
+
+	digest := "Repaired digest."
+	if _, err := tools.Publish(context.Background(), PublishArgs{
+		Ref:        "kb:malformed.md",
+		StatusLine: "Manifest repaired.",
+		Digest:     &digest,
+		Full:       "Repaired complete state.",
+	}); err != nil {
+		t.Fatalf("Publish repair: %v", err)
+	}
+	read, err := tools.Read(context.Background(), RefArgs{Ref: "kb:malformed.md"})
+	if err != nil {
+		t.Fatalf("Read repaired document: %v", err)
+	}
+	if !strings.Contains(read, "Repaired complete state.") || strings.Contains(read, "PRIVATE_FULL_MARKER") {
+		t.Fatalf("repaired read = %s", read)
+	}
+}

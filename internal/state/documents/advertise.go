@@ -133,7 +133,12 @@ func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocume
 		doc.LoopDefinitionName = firstValue(frontmatter, loopDefinitionNameFrontmatterKey)
 		doc.ManagedBy = firstValue(frontmatter, documentfacets.ManagedByKey)
 		doc.LoopIntent = firstValue(frontmatter, loopIntentFrontmatterKey)
-		if manifest, canonical, manifestErr := documentfacets.FromFrontmatter(frontmatter); canonical && manifestErr == nil {
+		if manifest, canonical, manifestErr := documentfacets.FromFrontmatter(frontmatter); canonical {
+			if manifestErr != nil {
+				// A malformed codec has no safe projection to offer. Direct reads
+				// return the bounded owner-directed repair error.
+				continue
+			}
 			doc.FacetContract = manifest.Contract
 		} else {
 			for _, name := range doc.Facets {

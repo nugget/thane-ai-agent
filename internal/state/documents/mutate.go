@@ -31,12 +31,16 @@ type DocumentRecord struct {
 	FacetContract documentfacets.Contract `json:"-"`
 	// ManagedBy names the structured mutation tool that owns this document,
 	// when one is stamped in frontmatter.
-	ManagedBy  string    `json:"managed_by,omitempty"`
-	Body       string    `json:"body"`
-	Outline    []Section `json:"outline,omitempty"`
-	ModifiedAt string    `json:"modified_at"`
-	WordCount  int       `json:"word_count"`
-	SizeBytes  int64     `json:"size_bytes"`
+	ManagedBy string `json:"managed_by,omitempty"`
+	// InvalidFacetManifest retains a bounded parse failure without causing the
+	// document to fall back to a body-only model view. Structured owners may
+	// repair the manifest; content-bearing reads refuse to expose its codec.
+	InvalidFacetManifest string    `json:"-"`
+	Body                 string    `json:"body"`
+	Outline              []Section `json:"outline,omitempty"`
+	ModifiedAt           string    `json:"modified_at"`
+	WordCount            int       `json:"word_count"`
+	SizeBytes            int64     `json:"size_bytes"`
 	// Revision is internal coordination state for a revision-backed root.
 	// Model-facing adapters retain it as a hidden read receipt.
 	Revision string `json:"-"`
@@ -57,6 +61,10 @@ type WriteArgs struct {
 	// StructuredTool names the contract-aware caller that is publishing a
 	// complete faceted document. Empty identifies the body-only surface.
 	StructuredTool string `json:"-"`
+	// PreviousWriteTools lists the exact former owners a trusted contract
+	// migration may replace. It is internal-only: models cannot use it to
+	// claim another writer's document.
+	PreviousWriteTools []string `json:"-"`
 }
 
 // EditArgs updates part of a managed document without leaving the
@@ -511,24 +519,41 @@ func documentRecordFromBytes(root, relPath string, rawBytes []byte, modifiedAt t
 	if !hasFrontmatter {
 		strippedBody = raw
 	}
+	manifestError := ""
+	if _, canonical, err := documentfacets.FromFrontmatter(meta); canonical && err != nil {
+		manifestError = boundedFacetManifestError(err)
+	}
 	doc := parseMarkdownDocumentParts(relPath, meta, strippedBody)
 	return &DocumentRecord{
-		Root:          root,
-		Ref:           makeRef(root, relPath),
-		Path:          relPath,
-		Title:         doc.Title,
-		Description:   firstValue(doc.Frontmatter, "description"),
-		Tags:          append([]string(nil), doc.Tags...),
-		Frontmatter:   cloneFrontmatter(doc.Frontmatter),
-		Facets:        append([]string(nil), doc.Facets...),
-		FacetContract: parsedFacetContract(doc.Frontmatter, strippedBody),
-		ManagedBy:     firstValue(doc.Frontmatter, documentfacets.ManagedByKey),
-		Body:          strippedBody,
-		Outline:       append([]Section(nil), doc.Sections...),
-		ModifiedAt:    modifiedAt.UTC().Format(time.RFC3339Nano),
-		WordCount:     doc.WordCount,
-		SizeBytes:     int64(len(rawBytes)),
+		Root:                 root,
+		Ref:                  makeRef(root, relPath),
+		Path:                 relPath,
+		Title:                doc.Title,
+		Description:          firstValue(doc.Frontmatter, "description"),
+		Tags:                 append([]string(nil), doc.Tags...),
+		Frontmatter:          cloneFrontmatter(doc.Frontmatter),
+		Facets:               append([]string(nil), doc.Facets...),
+		FacetContract:        parsedFacetContract(doc.Frontmatter, strippedBody),
+		ManagedBy:            firstValue(doc.Frontmatter, documentfacets.ManagedByKey),
+		InvalidFacetManifest: manifestError,
+		Body:                 strippedBody,
+		Outline:              append([]Section(nil), doc.Sections...),
+		ModifiedAt:           modifiedAt.UTC().Format(time.RFC3339Nano),
+		WordCount:            doc.WordCount,
+		SizeBytes:            int64(len(rawBytes)),
 	}, rawFrontmatter, body, nil
+}
+
+func boundedFacetManifestError(err error) string {
+	if err == nil {
+		return ""
+	}
+	const maxBytes = 512
+	message := err.Error()
+	if len(message) <= maxBytes {
+		return message
+	}
+	return truncateUTF8Bytes([]byte(message), maxBytes) + "…"
 }
 
 func (s *Store) resolveDocumentWritePath(root, relPath string) (string, error) {

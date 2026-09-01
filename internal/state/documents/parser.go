@@ -60,13 +60,21 @@ func parseMarkdownDocument(name, raw string) parsedDocument {
 }
 
 func parseMarkdownDocumentParts(name string, meta map[string][]string, body string) parsedDocument {
+	_, canonicalManifest, manifestErr := documentfacets.FromFrontmatter(meta)
+	invalidManifest := canonicalManifest && manifestErr != nil
 	contract := parsedFacetContract(meta, body)
 	payload := documentfacets.Payload{Full: strings.TrimSpace(body)}
-	faceted := len(contract.Facets) > 0
+	faceted := !invalidManifest && len(contract.Facets) > 0
 	if faceted {
 		payload = contract.Parse(body)
 	}
 	logicalFull := payload.Full
+	if invalidManifest {
+		// Keep the document discoverable by path/title/tags without indexing
+		// any private codec content. Direct reads carry the bounded repair
+		// error; an empty projection-size map also prevents context offers.
+		logicalFull = ""
+	}
 	sections := parseSections(logicalFull)
 	title := firstValue(meta, "title")
 	if title == "" {
@@ -112,14 +120,16 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 		} else {
 			summary = firstParagraph(payload.Full)
 		}
-	} else {
+	} else if !invalidManifest {
 		summary = firstParagraph(body)
 	}
 	// full is measured for every document, faceted or not: the full body
 	// is always a readable projection level, and an unfaceted body parses
 	// entirely into payload.Full, so both branches share one source of
 	// truth for what a full-level read yields.
-	facetBytes["full"] = len(logicalFull)
+	if !invalidManifest {
+		facetBytes["full"] = len(logicalFull)
+	}
 
 	return parsedDocument{
 		Title:       title,
@@ -138,8 +148,8 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 // parsedFacetContract resolves a canonical durable manifest first and falls
 // back to the historical reserved-heading envelope for compatibility reads.
 // A malformed canonical manifest does not become an invented contract here;
-// mutation validation reports that error before any write, while indexing
-// keeps the document discoverable as a body-only record for repair.
+// the record retains that invalid state so content-bearing reads fail closed
+// and direct repair to the owning structured writer.
 func parsedFacetContract(meta map[string][]string, body string) documentfacets.Contract {
 	manifest, canonical, err := documentfacets.FromFrontmatter(meta)
 	if canonical && err == nil {
