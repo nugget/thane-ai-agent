@@ -82,6 +82,62 @@ func TestToolsPublishCreatesCanonicalFacetedDocument(t *testing.T) {
 	}
 }
 
+func TestDirectWritersRequireFlatNewDossierRefs(t *testing.T) {
+	t.Parallel()
+
+	store, dossiersDir := newMutationStoreForRoot(t, "dossiers")
+	tools := NewTools(store)
+	ctx := context.Background()
+	const nestedRef = "dossiers:entity/new-cat.md"
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "doc_body_write",
+			run: func() error {
+				_, err := tools.Write(ctx, WriteArgs{Ref: nestedRef, Body: stringPtr("New cat dossier.")})
+				return err
+			},
+		},
+		{
+			name: "doc_write",
+			run: func() error {
+				_, err := tools.Publish(ctx, PublishArgs{Ref: nestedRef, StatusLine: "Resident cat.", Full: "### Claims\n\n- Resident cat."})
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.run(); err == nil || !strings.Contains(err.Error(), "direct-child refs only") {
+				t.Fatalf("nested dossier creation error = %v, want direct-child guidance", err)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(dossiersDir, "entity", "new-cat.md")); !os.IsNotExist(err) {
+		t.Fatalf("rejected nested creation changed filesystem: %v", err)
+	}
+
+	legacyPath := filepath.Join(dossiersDir, "entity", "legacy-cat.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("Legacy cat dossier.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("refresh legacy dossier: %v", err)
+	}
+	const legacyRef = "dossiers:entity/legacy-cat.md"
+	if _, err := tools.Write(ctx, WriteArgs{Ref: legacyRef, Body: stringPtr("Updated legacy cat dossier.")}); err != nil {
+		t.Fatalf("doc_body_write existing nested dossier: %v", err)
+	}
+	if _, err := tools.Publish(ctx, PublishArgs{Ref: legacyRef, StatusLine: "Legacy resident cat.", Full: "### Claims\n\n- Existing nested dossier remains writable."}); err != nil {
+		t.Fatalf("doc_write existing nested dossier: %v", err)
+	}
+}
+
 func TestToolsPublishEquivalentLogicalStateIsByteStable(t *testing.T) {
 	t.Parallel()
 

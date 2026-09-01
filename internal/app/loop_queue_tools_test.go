@@ -51,6 +51,57 @@ func TestQueuePullAllowsOneBatchPerModelRequest(t *testing.T) {
 	}
 }
 
+func TestArchivistQueuePullEnforcesWakeBatchLimit(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, subject := range []string{"session:one", "session:two", "session:three", "session:four", "session:five"} {
+		if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tools := buildLoopQueueTools(store, "archivist")
+	var pull func(context.Context, map[string]any) (string, error)
+	for _, tool := range tools {
+		if tool.Name == "queue_pull" {
+			pull = tool.Handler
+		}
+	}
+	if pull == nil {
+		t.Fatal("queue_pull not generated")
+	}
+
+	for _, tc := range []struct {
+		name      string
+		requestID string
+		args      map[string]any
+	}{
+		{name: "omitted limit", requestID: "r_default", args: map[string]any{}},
+		{name: "oversized limit", requestID: "r_oversized", args: map[string]any{"limit": 25}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := pull(logging.WithRequestID(t.Context(), tc.requestID), tc.args)
+			if err != nil {
+				t.Fatalf("queue_pull: %v", err)
+			}
+			var result queuePullResult
+			if err := json.Unmarshal([]byte(out), &result); err != nil {
+				t.Fatalf("decode queue_pull: %v", err)
+			}
+			if result.Count != archivistPullLimit || len(result.Items) != archivistPullLimit {
+				t.Fatalf("queue_pull result = %#v, want %d items", result, archivistPullLimit)
+			}
+		})
+	}
+}
+
 func TestQueueEnqueueRejectsPulledSubject(t *testing.T) {
 	db, err := database.OpenMemory()
 	if err != nil {

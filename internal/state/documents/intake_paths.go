@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -137,10 +138,18 @@ func ValidateIntakePlacement(root, desiredRef, pathPrefix string) error {
 	if refErr != nil {
 		return fmt.Errorf("dossiers desired_ref: %w", refErr)
 	}
-	if normalizeRootName(refRoot) != "dossiers" {
+	refRoot = normalizeRootName(refRoot)
+	if root == "" {
+		root = refRoot
+	}
+	if refRoot != root {
 		return fmt.Errorf("desired_ref root %q does not match intake root %q", refRoot, root)
 	}
-	if strings.Contains(relPath, "/") {
+	return validateNewDocumentPlacement(root, relPath)
+}
+
+func validateNewDocumentPlacement(root, relPath string) error {
+	if normalizeRootName(root) == "dossiers" && strings.Contains(filepath.ToSlash(relPath), "/") {
 		return fmt.Errorf("dossiers accepts direct-child refs only; inspect sibling naming and retry with a flat ref such as dossiers:entity-cat-goro-goro.md")
 	}
 	return nil

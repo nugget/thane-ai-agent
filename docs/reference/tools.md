@@ -241,8 +241,8 @@ the operation.
 | `doc_create` | Create a normal faceted document safely: corpus collision check + normalized placement + logical write in one call. New `dossiers:` documents must be direct children. |
 | `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`); the `dossiers:` root rejects nested placement. |
 | `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through the normal logical document mutation. |
-| `doc_write` | Create, self-migrate, or update a normal managed document from status-line, optional teaser/digest, and full projections; Go validates and renders its private storage codec atomically. |
-| `doc_body_write` | Write one undifferentiated Markdown body for the unusual document that intentionally has no projection ladder. |
+| `doc_write` | Create, self-migrate, or update a normal managed document from status-line, optional teaser/digest, and full projections; Go validates and renders its private storage codec atomically. New `dossiers:` targets must be direct children. |
+| `doc_body_write` | Write one undifferentiated Markdown body for the unusual document that intentionally has no projection ladder. It cannot create a nested `dossiers:` target. |
 | `doc_edit` | Targeted edit within an ordinary document, with automatic stale-write protection; faceted and contract-owned documents use their returned `write_tool`. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |

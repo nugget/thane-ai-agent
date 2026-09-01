@@ -357,7 +357,8 @@ The reserved `dossiers` root is a flat subject catalog. Inspect related and
 sibling refs before naming a new dossier, pass an explicit direct-child ref
 such as `dossiers:entity-cat-goro-goro.md`, and never pass `path_prefix`.
 Existing nested legacy refs remain readable and writable at their current
-location; do not fork one merely to normalize its name.
+location; direct writers also reject a missing nested `dossiers:` target, so do
+not fork one merely to normalize its name.
 
 ## Write a logical document — `doc_write`
 

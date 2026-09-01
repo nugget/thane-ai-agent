@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
@@ -18,6 +19,7 @@ import (
 const (
 	queuePullDefaultLimit = 5
 	queuePullMaxLimit     = 25
+	archivistPullLimit    = 3
 )
 
 // buildLoopQueueTools returns the loop-private work-queue tools for one
@@ -35,6 +37,7 @@ const (
 // rate (this loop's sleep cadence).
 func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.RuntimeTool {
 	receipts := newQueueReceipts()
+	defaultPullLimit, maxPullLimit := queuePullLimits(loopName)
 	return []looppkg.RuntimeTool{
 		{
 			Name: "queue_pull",
@@ -48,7 +51,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				"properties": map[string]any{
 					"limit": map[string]any{
 						"type":        "integer",
-						"description": "Maximum items to pull this turn (default 5, capped at 25). Pull a batch you can actually process before sleeping.",
+						"description": fmt.Sprintf("Maximum items to pull this turn (default %d, capped at %d). Pull a batch you can actually process before sleeping.", defaultPullLimit, maxPullLimit),
 					},
 				},
 			},
@@ -63,10 +66,10 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 					return "", fmt.Errorf("limit: %w", err)
 				}
 				if limit <= 0 {
-					limit = queuePullDefaultLimit
+					limit = defaultPullLimit
 				}
-				if limit > queuePullMaxLimit {
-					limit = queuePullMaxLimit
+				if limit > maxPullLimit {
+					limit = maxPullLimit
 				}
 				items, err := store.Peek(ctx, loopName, limit)
 				if err != nil {
@@ -214,6 +217,13 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 			},
 		},
 	}
+}
+
+func queuePullLimits(loopName string) (defaultLimit, maxLimit int) {
+	if strings.TrimSpace(loopName) == archivist.DefinitionName {
+		return archivistPullLimit, archivistPullLimit
+	}
+	return queuePullDefaultLimit, queuePullMaxLimit
 }
 
 type queueReceipts struct {

@@ -561,10 +561,12 @@ external subjects. Confabulation patterns, prompting behavior, loop health,
 model routing and failures, queues, and spend belong to the metacognitive
 documents under `self:` instead of a generic dossier.
 
-The root is intentionally a flat subject catalog. New intake requires an
-explicit direct-child ref selected after inspecting related and sibling names;
-`path_prefix` and nested proposed refs are rejected. Kind-prefixed siblings
-therefore stay visibly related, such as `dossiers:entity-cat-yuki.md` and
+The root is intentionally a flat subject catalog. Every new document must be a
+direct child, including creation through the direct logical and body-only
+writers. Corpus-aware intake additionally requires an explicit ref selected
+after inspecting related and sibling names; `path_prefix` and nested proposed
+refs are rejected. Kind-prefixed siblings therefore stay visibly related, such
+as `dossiers:entity-cat-yuki.md` and
 `dossiers:entity-cat-goro-goro.md`. Existing nested legacy documents remain
 readable and writable at their current refs so the guardrail does not strand
 history; normal authoring does not fork one into a second flat document merely
