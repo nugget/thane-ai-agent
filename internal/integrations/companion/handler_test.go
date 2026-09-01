@@ -62,6 +62,7 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 
 	// Step 2: Send auth.
+	uptimeBeforeAuth := int64(buildinfo.Uptime() / time.Second)
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := conn.WriteJSON(authMessage{
 		Type:       typeAuth,
@@ -73,7 +74,13 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 
 	// Step 3: Expect auth_ok with account.
-	var ok authOK
+	var ok struct {
+		Type                string `json:"type"`
+		ProviderID          string `json:"provider_id"`
+		Account             string `json:"account"`
+		ServerVersion       string `json:"server_version"`
+		ServerUptimeSeconds int64  `json:"server_uptime_seconds"`
+	}
 	readJSON(t, conn, &ok)
 	if ok.Type != typeAuthOK {
 		t.Fatalf("expected type %q, got %q", typeAuthOK, ok.Type)
@@ -90,8 +97,14 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	if ok.ServerVersion != buildinfo.Version {
 		t.Errorf("expected server version %q, got %q", buildinfo.Version, ok.ServerVersion)
 	}
-	if ok.ServerUptimeSeconds < 0 || ok.ServerUptimeSeconds > 300 {
-		t.Errorf("expected recent non-negative server uptime, got %d seconds", ok.ServerUptimeSeconds)
+	uptimeAfterAuth := int64(buildinfo.Uptime()/time.Second) + 1
+	if ok.ServerUptimeSeconds < uptimeBeforeAuth || ok.ServerUptimeSeconds > uptimeAfterAuth {
+		t.Errorf(
+			"server uptime = %d seconds, want between %d and %d",
+			ok.ServerUptimeSeconds,
+			uptimeBeforeAuth,
+			uptimeAfterAuth,
+		)
 	}
 }
 
