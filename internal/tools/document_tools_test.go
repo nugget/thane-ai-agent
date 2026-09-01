@@ -700,4 +700,18 @@ func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
 			t.Errorf("unsafe dossiers placement error = %v, want direct-child guidance", err)
 		}
 	}
+
+	for _, name := range []string{"doc_create", "doc_intake"} {
+		tool := reg.Get(name)
+		if tool == nil {
+			t.Fatalf("%s not registered", name)
+		}
+		_, err := tool.Handler(context.Background(), map[string]any{"root": "dossiers"})
+		if err == nil || !strings.Contains(err.Error(), "document ref") {
+			t.Errorf("%s missing-ref error = %v, want parameter-neutral document ref guidance", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "desired_ref") {
+			t.Errorf("%s missing-ref error names another tool's parameter: %v", name, err)
+		}
+	}
 }

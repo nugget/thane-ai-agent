@@ -77,10 +77,10 @@ func (s *Store) proposeIntakeRef(ctx context.Context, root string, args IntakeAr
 	if strings.TrimSpace(args.DesiredRef) != "" {
 		desiredRoot, relPath, err := parseRef(args.DesiredRef)
 		if err != nil {
-			return "", "", fmt.Errorf("desired_ref: %w", err)
+			return "", "", fmt.Errorf("invalid document ref: %w", err)
 		}
 		if normalizeRootName(desiredRoot) != root {
-			return "", "", fmt.Errorf("desired_ref root %q does not match intake root %q", desiredRoot, root)
+			return "", "", fmt.Errorf("document ref root %q does not match requested root %q", desiredRoot, root)
 		}
 		return makeRef(root, relPath), relPath, nil
 	}
@@ -133,17 +133,17 @@ func ValidateIntakePlacement(root, desiredRef, pathPrefix string) error {
 		return fmt.Errorf("dossiers is a flat subject catalog; omit path_prefix, inspect sibling refs, and use an explicit direct-child ref such as dossiers:entity-cat-goro-goro.md")
 	}
 	if desiredRef == "" {
-		return fmt.Errorf("dossiers requires an explicit direct-child desired_ref chosen after inspecting sibling refs, such as dossiers:entity-cat-goro-goro.md")
+		return fmt.Errorf("dossiers requires an explicit direct-child document ref chosen after inspecting sibling refs, such as dossiers:entity-cat-goro-goro.md")
 	}
 	if refErr != nil {
-		return fmt.Errorf("dossiers desired_ref: %w", refErr)
+		return fmt.Errorf("invalid dossiers document ref: %w", refErr)
 	}
 	refRoot = normalizeRootName(refRoot)
 	if root == "" {
 		root = refRoot
 	}
 	if refRoot != root {
-		return fmt.Errorf("desired_ref root %q does not match intake root %q", refRoot, root)
+		return fmt.Errorf("document ref root %q does not match requested root %q", refRoot, root)
 	}
 	return validateNewDocumentPlacement(root, relPath)
 }
