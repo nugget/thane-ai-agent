@@ -20,6 +20,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // writeTestSigningKey generates a fresh ed25519 SSH signing key,
@@ -159,10 +160,16 @@ func TestBuildDocumentStoreOptionsWiresContactDossierValidator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByName: %v", err)
 	}
+	frontmatter := (documentfacets.Manifest{
+		Schema:    documentfacets.SchemaV1,
+		Contract:  documentfacets.DefaultContract(),
+		ManagedBy: contacts.DossierWriteToolName,
+	}).Frontmatter()
+	frontmatter["title"] = []string{"Dossier Person"}
 	candidate := documents.DocumentWriteCandidate{
 		Path:        contact.ID.String() + ".md",
 		Tags:        []string{contacts.DossierSubject(contact.ID)},
-		Frontmatter: map[string][]string{"title": {"Dossier Person"}},
+		Frontmatter: frontmatter,
 		Body: "## Status Line\n\nDossier Person is current.\n\n" +
 			"## Teaser\n\nOpen for current collaboration context.\n\n" +
 			"## Digest\n\nEnough standalone context to act.\n\n" +

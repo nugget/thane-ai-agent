@@ -479,8 +479,8 @@ func TestContentResolver_Execute_Integration(t *testing.T) {
 		reg.SetContentResolver(cr)
 		RegisterDocumentTools(reg, documents.NewTools(store))
 
-		if _, err := reg.Execute(ctx, "doc_write", `{"ref":"kb:new.md","title":"New","body":"temp:draft"}`); err != nil {
-			t.Fatalf("Execute doc_write: %v", err)
+		if _, err := reg.Execute(ctx, "doc_body_write", `{"ref":"kb:new.md","title":"New","body":"temp:draft"}`); err != nil {
+			t.Fatalf("Execute doc_body_write: %v", err)
 		}
 
 		record, err := store.Read(ctx, "kb:new.md")

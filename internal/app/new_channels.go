@@ -428,7 +428,7 @@ func (a *App) initChannels(s *newState) error {
 		}
 	}
 	if a.documentTools != nil {
-		contactTools.ConfigureDossierDocuments(a.documentTools.Read, a.documentTools.Write)
+		contactTools.ConfigureDossierDocuments(a.documentTools.Read, a.documentTools.WriteFaceted)
 	}
 	a.loop.Tools().SetContactTools(contactTools)
 

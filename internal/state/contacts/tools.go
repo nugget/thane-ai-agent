@@ -50,7 +50,7 @@ type Tools struct {
 	dossiersEnabled   bool
 	dossiersWritable  bool
 	dossierRead       func(context.Context, documents.RefArgs) (string, error)
-	dossierWrite      func(context.Context, documents.WriteArgs) (string, error)
+	dossierWrite      func(context.Context, documents.FacetedWriteArgs) (string, error)
 	mutationSink      func(context.Context, ContactMutation) error
 }
 

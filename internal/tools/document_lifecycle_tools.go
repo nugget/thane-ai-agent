@@ -113,7 +113,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_copy_section",
-		Description:          "Copy one named section from a source managed document into a destination managed document. The destination section is upserted, so this is a good fit for reorganizing or curating knowledge without losing the source.",
+		Description:          "Copy one named section from a source managed document into an ordinary destination document. The destination section is upserted, so this is a good fit for reorganizing or curating ordinary knowledge without losing the source. A faceted or contract-owned destination rejects the mutation and names its write_tool because its projections must be republished together.",
 		ContentResolveExempt: []string{"ref", "section", "destination_ref", "destination_section", "destination_level"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -167,7 +167,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_move_section",
-		Description:          "Move one named section from a source managed document into a destination managed document. This copies the section into the destination and then removes it from the source, so it is ideal for refactoring a corpus without falling back to raw file edits.",
+		Description:          "Move one named section between ordinary managed documents. This copies the section into the destination and then removes it from the source, so it is useful for refactoring an ordinary corpus without falling back to raw file edits. A faceted or contract-owned source or destination rejects the mutation and names its write_tool because its projections must be republished together.",
 		ContentResolveExempt: []string{"ref", "section", "destination_ref", "destination_section", "destination_level"},
 		Parameters: map[string]any{
 			"type": "object",

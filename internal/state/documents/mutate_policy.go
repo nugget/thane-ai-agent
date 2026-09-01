@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string) error {
-	_, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, "")
+	_, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, "doc_write", "")
 	return err
 }
 
@@ -20,7 +20,7 @@ func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string
 // precondition. Empty preserves the unconditional mutation contract used by
 // existing callers; a non-empty revision requires a writer that can compare
 // and commit atomically.
-func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, raw, expectedRevision string) (string, error) {
+func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, raw, action, expectedRevision string) (string, error) {
 	absPath, err := s.resolveDocumentWritePath(root, relPath)
 	if err != nil {
 		return "", err
@@ -28,8 +28,11 @@ func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, 
 	if err := s.ensureRootAuthoringAllowed(root); err != nil {
 		return "", err
 	}
+	frontmatter, body := splitFrontmatter(raw)
+	if err := validateFacetedDocumentBody(body, frontmatter); err != nil {
+		return "", fmt.Errorf("validate faceted document %s: %w", makeRef(root, relPath), err)
+	}
 	if validator := s.rootValidator(root); validator != nil {
-		frontmatter, body := splitFrontmatter(raw)
 		candidate := DocumentWriteCandidate{
 			Path:        filepath.ToSlash(relPath),
 			Tags:        append([]string(nil), frontmatter["tags"]...),
@@ -41,7 +44,7 @@ func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, 
 		}
 	}
 	if writer := s.rootWriter(root); writer != nil {
-		message := documentWriteMessage("doc_write", root, relPath, raw)
+		message := documentWriteMessage(action, root, relPath, raw)
 		expectedRevision = strings.TrimSpace(expectedRevision)
 		if expectedRevision != "" {
 			revision, err := writer.WriteIfRevision(ctx, relPath, raw, message, expectedRevision)
@@ -146,7 +149,7 @@ func documentMutationMessage(action, root, relPath string) string {
 // facetSubjectMaxRunes clamps a status_line borrowed into a commit
 // subject. Published projections are already budgeted below this, so
 // the clamp only fires on content that arrived through a non-publish
-// write (doc_write can put anything under a reserved heading) — and a
+// write (for example, a historical or externally authored envelope) — and a
 // commit subject is annotation, not the content itself, so clipping
 // here is honest where clipping a projection would not be.
 const facetSubjectMaxRunes = 120
@@ -157,18 +160,18 @@ const facetSubjectMaxRunes = 120
 // sections, the message borrows them: the status_line joins the
 // subject — so the root's git log reads as a timeline of the
 // document's own one-line verdicts — and the digest becomes the commit
-// body, the actionable summary at the moment of the write. No writer
-// cooperation is needed: the facet headings are the contract, so every
-// write of a faceted document gets this regardless of which tool or
-// author produced it.
+// body, the actionable summary at the moment of the write. The durable
+// manifest identifies the codec; legacy headings remain readable until the
+// document's first structured write migrates them.
 func documentWriteMessage(action, root, relPath, raw string) string {
 	subject := documentMutationMessage(action, root, relPath)
-	_, body := splitFrontmatter(raw)
-	payload, ok := looppkg.ParseFacetSections(body)
-	if !ok {
+	frontmatter, body := splitFrontmatter(raw)
+	contract := parsedFacetContract(frontmatter, body)
+	if len(contract.Facets) == 0 {
 		return subject
 	}
-	if verdict, ok := payload.FacetByKey("status_line"); ok {
+	payload := contract.Parse(body)
+	if verdict, ok := payload.ByKey(string(documentfacets.StatusLine)); ok {
 		if line := strings.TrimSpace(verdict); line != "" {
 			line = strings.Join(strings.Fields(line), " ")
 			if runes := []rune(line); len(runes) > facetSubjectMaxRunes {
@@ -177,7 +180,7 @@ func documentWriteMessage(action, root, relPath, raw string) string {
 			subject += " — " + line
 		}
 	}
-	if digest, ok := payload.FacetByKey("digest"); ok {
+	if digest, ok := payload.ByKey(string(documentfacets.Digest)); ok {
 		if summary := strings.TrimSpace(digest); summary != "" {
 			subject += "\n\n" + summary
 		}

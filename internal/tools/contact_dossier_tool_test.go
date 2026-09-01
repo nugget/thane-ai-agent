@@ -14,7 +14,7 @@ import (
 )
 
 type contactDossierWriterRecorder struct {
-	args documents.WriteArgs
+	args documents.FacetedWriteArgs
 }
 
 type contactDossierReaderRecorder struct {
@@ -28,7 +28,7 @@ func (r *contactDossierReaderRecorder) Read(_ context.Context, args documents.Re
 	return r.result, r.err
 }
 
-func (w *contactDossierWriterRecorder) Write(_ context.Context, args documents.WriteArgs) (string, error) {
+func (w *contactDossierWriterRecorder) Write(_ context.Context, args documents.FacetedWriteArgs) (string, error) {
 	w.args = args
 	return `{"action":"doc_write","applied":true}`, nil
 }

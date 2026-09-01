@@ -768,6 +768,7 @@ type curateTestRig struct {
 	tool        *Tool
 	defRegistry *looppkg.DefinitionRegistry
 	docTools    *documents.Tools
+	live        *looppkg.Registry
 }
 
 func newCurateTestRig(t *testing.T) *curateTestRig {
@@ -794,6 +795,7 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 	rig := &curateTestRig{
 		defRegistry: defRegistry,
 		docTools:    docTools,
+		live:        looppkg.NewRegistry(),
 	}
 	rig.reg = NewEmptyRegistry()
 	rig.reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
@@ -804,6 +806,7 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 		LaunchDefinition: func(_ context.Context, name string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "loop-test-" + name}, nil
 		},
+		LiveRegistry: rig.live,
 	})
 	rig.tool = rig.reg.Get("thane_loop_create")
 	if rig.tool == nil {

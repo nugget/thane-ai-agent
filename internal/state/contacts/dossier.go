@@ -12,23 +12,19 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // DossierRootName is the canonical managed document root for longitudinal
 // contact synthesis.
 const DossierRootName = "contacts"
 
-var dossierOutputContract = looppkg.OutputSpec{
-	Name: "contact_dossier",
-	Type: looppkg.OutputTypeMaintainedDocument,
-	Facets: []looppkg.FacetSpec{
-		{Name: looppkg.OutputFacetStatusLine},
-		{Name: looppkg.OutputFacetTeaser},
-		{Name: looppkg.OutputFacetDigest},
-	},
-}
+// DossierWriteToolName is the single structured mutation surface for
+// canonical contact dossiers.
+const DossierWriteToolName = "contact_dossier_write"
+
+var dossierOutputContract = documentfacets.DefaultContract()
 
 var archiveSessionCitationPattern = regexp.MustCompile(`archive:session([:-])([[:alnum:]-]*)`)
 
@@ -60,7 +56,7 @@ type DossierReadArgs struct {
 // document store has been initialized so every advertised tool is callable.
 func (t *Tools) ConfigureDossierDocuments(
 	read func(context.Context, documents.RefArgs) (string, error),
-	write func(context.Context, documents.WriteArgs) (string, error),
+	write func(context.Context, documents.FacetedWriteArgs) (string, error),
 ) {
 	if t == nil {
 		return
@@ -83,8 +79,8 @@ func (t *Tools) DossierWritesEnabled() bool {
 
 // DossierFacetFields returns the canonical model-facing projection fields in
 // document order. Callers receive a copy and may safely enrich descriptions.
-func DossierFacetFields() []looppkg.FacetField {
-	return dossierOutputContract.FacetFields()
+func DossierFacetFields() []documentfacets.Field {
+	return dossierOutputContract.Fields()
 }
 
 // ReadDossier reads the canonical dossier for one active structured contact.
@@ -139,14 +135,14 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		return "", err
 	}
 
-	payload := looppkg.FacetPayload{
+	payload := documentfacets.Payload{
 		StatusLine: args.StatusLine,
 		Teaser:     args.Teaser,
 		Digest:     args.Digest,
 		Full:       args.Full,
 	}
 	var validationErrs []error
-	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
+	if err := dossierOutputContract.Validate(payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
 	if err := validateDossierSubjectIdentity(id, payload); err != nil {
@@ -161,12 +157,13 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if len(validationErrs) > 0 {
 		return "", fmt.Errorf("contact dossier projections are invalid; correct every listed field and retry once: %w", errors.Join(validationErrs...))
 	}
-	body := dossierOutputContract.RenderFacetDocument(payload)
-	return t.dossierWrite(ctx, documents.WriteArgs{
+	return t.dossierWrite(ctx, documents.FacetedWriteArgs{
 		Ref:          DossierRef(id),
 		Title:        contact.FormattedName,
 		Tags:         []string{DossierSubject(id)},
-		Body:         &body,
+		Contract:     dossierOutputContract,
+		Payload:      payload,
+		WriteTool:    DossierWriteToolName,
 		ReceiptScope: args.ReceiptScope,
 	})
 }
@@ -233,7 +230,7 @@ func marshalDossierAbsence(contact *Contact, ref string, writable bool) (string,
 	}
 	if writable {
 		result.NextAction = &dossierNextAction{
-			Tool:      "contact_dossier_write",
+			Tool:      DossierWriteToolName,
 			ContactID: contact.ID.String(),
 			Instruction: "Create the dossier with all four projections; do not retry " +
 				"contact_dossier_read until a write succeeds.",
@@ -285,6 +282,9 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 	if len(candidate.Tags) != 1 || strings.TrimSpace(candidate.Tags[0]) != wantSubject {
 		return fmt.Errorf("dossier %s must carry exactly one frontmatter tag, %q, so no broader subject can advertise this private dossier; use contact_dossier_write to let Go derive dossier identity and structure", candidate.Path, wantSubject)
 	}
+	if managers := candidate.Frontmatter[documentfacets.ManagedByKey]; len(managers) != 1 || strings.TrimSpace(managers[0]) != DossierWriteToolName {
+		return fmt.Errorf("dossier %s must declare managed_by: %s so generic document tools can redirect mutations to its owning interface", candidate.Path, DossierWriteToolName)
+	}
 	if resolveContactName == nil {
 		return fmt.Errorf("dossier %s cannot validate identity because the structured contact resolver is not configured", candidate.Path)
 	}
@@ -297,12 +297,16 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 		return fmt.Errorf("dossier %s cannot validate identity because structured contact %s has no formatted name", candidate.Path, id)
 	}
 
-	payload, faceted := looppkg.ParseFacetSections(candidate.Body)
+	manifest, faceted, manifestErr := documentfacets.FromFrontmatter(candidate.Frontmatter)
+	if manifestErr != nil {
+		return fmt.Errorf("dossier %s has invalid facet manifest: %w", candidate.Path, manifestErr)
+	}
 	if !faceted {
 		return fmt.Errorf("dossier %s must use the status_line, teaser, digest, and full facet ladder", candidate.Path)
 	}
+	payload := manifest.Contract.Parse(candidate.Body)
 	var validationErrs []error
-	if err := dossierOutputContract.ValidateFacetPayload(payload); err != nil {
+	if err := dossierOutputContract.Validate(payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("facet contract: %w", err))
 	}
 	if err := validateDossierSubjectIdentity(id, payload); err != nil {
@@ -320,7 +324,7 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 	if len(validationErrs) > 0 {
 		return fmt.Errorf("dossier %s projections are invalid; correct every listed field and retry once: %w", candidate.Path, errors.Join(validationErrs...))
 	}
-	if got, want := strings.TrimSpace(candidate.Body), dossierOutputContract.RenderFacetDocument(payload); got != want {
+	if got, want := strings.TrimSpace(candidate.Body), dossierOutputContract.Render(payload); got != want {
 		return fmt.Errorf("dossier %s must use the canonical facet section order with no text outside those sections", candidate.Path)
 	}
 	return nil
@@ -331,7 +335,7 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 // dossier's contact UUID; repeating it spends model attention and can drift
 // into a second, less reliable statement of the same identity. Other contact
 // UUIDs remain valid cross-references in relationship content.
-func validateDossierSubjectIdentity(id uuid.UUID, payload looppkg.FacetPayload) error {
+func validateDossierSubjectIdentity(id uuid.UUID, payload documentfacets.Payload) error {
 	fields := []struct {
 		name  string
 		value string
@@ -358,7 +362,7 @@ func validateDossierSubjectIdentity(id uuid.UUID, payload looppkg.FacetPayload) 
 // relationship signal. The structured contact and dossier title already name
 // the subject, while digest and full remain standalone prose where using the
 // name can improve clarity.
-func validateDossierSubjectName(name string, payload looppkg.FacetPayload) error {
+func validateDossierSubjectName(name string, payload documentfacets.Payload) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil
@@ -414,7 +418,7 @@ func isDossierNameRune(r rune) bool {
 // checkable. Archive tools accept short session prefixes for interactive
 // convenience, but imported sessions can share those prefixes; durable
 // citations therefore need the full canonical UUID.
-func validateDossierEvidenceCitations(payload looppkg.FacetPayload) error {
+func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 	fields := []struct {
 		name  string
 		value string

@@ -9,6 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // dryRunSpec runs thane_loop_create in dry-run and returns the decoded
@@ -284,10 +285,10 @@ func TestGuidedCreateScaffoldsFacetSkeleton(t *testing.T) {
 		t.Fatalf("read scaffold: %v", err)
 	}
 	for _, want := range []string{
-		"## Status Line", "## Digest", "## Details",
+		`"status_line"`, `"digest"`, `"full"`,
 		"awaiting first cycle",
 		`"audience"`, `"published"`,
-		`"managed_by"`, `"publish_output_closet_guardian"`,
+		`"write_tool"`, `"publish_output_closet_guardian"`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("faceted scaffold missing %q:\n%s", want, doc)
@@ -330,7 +331,7 @@ func TestGuidedCreateScaffoldsWorkingNotes(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"audience"`, `"internal"`,
-		`"managed_by"`, `"replace_output_closet_guardian_notes"`,
+		`"write_tool"`, `"replace_output_closet_guardian_notes"`,
 		"loop_definition_name",
 		"awaiting first cycle",
 	} {
@@ -356,12 +357,15 @@ func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
 	// The loop has "run": both documents now hold real state.
 	docBody := "## Status Line\n\nCloset nominal.\n\n## Details\n\nAccumulated belief."
 	notesBody := "Current theory: the UPS fan is the noise."
-	for ref, body := range map[string]string{
-		"kb:dashboards/closet.md":       docBody,
-		"kb:dashboards/closet-notes.md": notesBody,
+	for ref, state := range map[string]struct {
+		body string
+		tool string
+	}{
+		"kb:dashboards/closet.md":       {body: docBody, tool: "publish_output_closet_guardian"},
+		"kb:dashboards/closet-notes.md": {body: notesBody, tool: "replace_output_closet_guardian_notes"},
 	} {
-		body := body
-		if _, err := rig.docTools.Write(ctx, documents.WriteArgs{Ref: ref, Body: &body}); err != nil {
+		body := state.body
+		if _, err := rig.docTools.Write(ctx, documents.WriteArgs{Ref: ref, Body: &body, StructuredTool: state.tool}); err != nil {
 			t.Fatalf("simulate loop write to %s: %v", ref, err)
 		}
 	}
@@ -399,6 +403,157 @@ func TestGuidedCreateReplacePreservesDocuments(t *testing.T) {
 	}
 	if !strings.Contains(notes, "UPS fan") {
 		t.Errorf("replace clobbered the working notes:\n%s", notes)
+	}
+}
+
+func TestGuidedCreateMigratesBodyOutputToFacets(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.tool.Handler(ctx, curateArgs(nil)); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	body := "Accumulated closet belief with no projection envelope."
+	if _, err := rig.docTools.Write(ctx, documents.WriteArgs{
+		Ref:            "kb:dashboards/closet.md",
+		Body:           &body,
+		StructuredTool: "replace_output_closet_guardian",
+	}); err != nil {
+		t.Fatalf("simulate loop write: %v", err)
+	}
+
+	args := curateArgs(map[string]any{
+		"facets": []any{"status_line"},
+		"migration": map[string]any{
+			"status_line": "Closet nominal.",
+		},
+	})
+	args["replace"] = true
+	out, err := rig.tool.Handler(ctx, args)
+	if err != nil {
+		t.Fatalf("migrate create: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result["document_state"] != "migrated_contract" {
+		t.Fatalf("document_state = %v, want migrated_contract", result["document_state"])
+	}
+	read, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read migrated output: %v", err)
+	}
+	for _, want := range []string{"Closet nominal.", body, `"write_tool": "publish_output_closet_guardian"`} {
+		if !strings.Contains(read, want) {
+			t.Errorf("migrated output missing %q:\n%s", want, read)
+		}
+	}
+}
+
+func TestGuidedCreateMigrationAddsProjectionWithoutRewritingState(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.tool.Handler(ctx, curateArgs(map[string]any{"facets": []any{"status_line"}})); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	contract := documentfacets.Contract{Facets: []documentfacets.Spec{{Name: documentfacets.StatusLine}}}
+	if _, err := rig.docTools.WriteFaceted(ctx, documents.FacetedWriteArgs{
+		Ref:       "kb:dashboards/closet.md",
+		Contract:  contract,
+		Payload:   documentfacets.Payload{StatusLine: "Existing status.", Full: "Existing complete state."},
+		WriteTool: "publish_output_closet_guardian",
+	}); err != nil {
+		t.Fatalf("simulate faceted loop write: %v", err)
+	}
+
+	args := curateArgs(map[string]any{
+		"facets": []any{"status_line", "digest"},
+		"migration": map[string]any{
+			"digest": "New standalone summary.",
+		},
+	})
+	args["replace"] = true
+	if _, err := rig.tool.Handler(ctx, args); err != nil {
+		t.Fatalf("add digest migration: %v", err)
+	}
+	read, err := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read migrated output: %v", err)
+	}
+	for _, want := range []string{"Existing status.", "Existing complete state.", "New standalone summary."} {
+		if !strings.Contains(read, want) {
+			t.Errorf("migrated output missing %q:\n%s", want, read)
+		}
+	}
+
+	dropArgs := curateArgs(map[string]any{"migration": map[string]any{}})
+	dropArgs["replace"] = true
+	if _, err := rig.tool.Handler(ctx, dropArgs); err != nil {
+		t.Fatalf("remove facet contract: %v", err)
+	}
+	read, err = rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if err != nil {
+		t.Fatalf("read body-only migration: %v", err)
+	}
+	if !strings.Contains(read, "Existing complete state.") || !strings.Contains(read, `"write_tool": "replace_output_closet_guardian"`) {
+		t.Fatalf("body-only migration did not preserve full state and change owner:\n%s", read)
+	}
+	if strings.Contains(read, "Existing status.") || strings.Contains(read, "New standalone summary.") || strings.Contains(read, `"faceted": true`) {
+		t.Fatalf("body-only migration retained private facet envelope:\n%s", read)
+	}
+}
+
+func TestGuidedCreateContractChangeRequiresExplicitMigration(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.tool.Handler(ctx, curateArgs(nil)); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	body := "State that must survive a rejected contract change."
+	if _, err := rig.docTools.Write(ctx, documents.WriteArgs{
+		Ref:            "kb:dashboards/closet.md",
+		Body:           &body,
+		StructuredTool: "replace_output_closet_guardian",
+	}); err != nil {
+		t.Fatalf("simulate loop write: %v", err)
+	}
+
+	args := curateArgs(map[string]any{"facets": []any{"status_line"}})
+	args["replace"] = true
+	_, err := rig.tool.Handler(ctx, args)
+	if err == nil || !strings.Contains(err.Error(), "output.migration") {
+		t.Fatalf("contract change error = %v, want migration instruction", err)
+	}
+	read, readErr := rig.docTools.Read(ctx, documents.RefArgs{Ref: "kb:dashboards/closet.md"})
+	if readErr != nil {
+		t.Fatalf("read unchanged output: %v", readErr)
+	}
+	if !strings.Contains(read, body) || strings.Contains(read, "awaiting first cycle") {
+		t.Fatalf("rejected migration changed output:\n%s", read)
+	}
+}
+
+func TestGuidedCreateMigrationRefusesRunningOldContract(t *testing.T) {
+	rig := newCurateTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.tool.Handler(ctx, curateArgs(nil)); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	registerRunningLoop(t, rig.live, "closet_guardian")
+
+	args := curateArgs(map[string]any{
+		"facets":    []any{"status_line"},
+		"migration": map[string]any{"status_line": "Closet nominal."},
+	})
+	args["replace"] = true
+	_, err := rig.tool.Handler(ctx, args)
+	if err == nil {
+		t.Fatal("migration should refuse while the old loop contract is live")
+	}
+	for _, want := range []string{"stop_loop", "loop_status", "no document was changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("migration error = %q, want %q", err, want)
+		}
 	}
 }
 
@@ -468,9 +623,9 @@ func TestGuidedCreateSeedsFirstPublish(t *testing.T) {
 		t.Fatalf("read seeded doc: %v", err)
 	}
 	for _, want := range []string{
-		"## Status Line", "Closet 21.4°C, UPS on mains.",
-		"## Digest", "dehumidifier idle",
-		"## Details", "full charge",
+		`"status_line"`, "Closet 21.4°C, UPS on mains.",
+		`"digest"`, "dehumidifier idle",
+		`"full"`, "full charge",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("seeded document missing %q:\n%s", want, doc)

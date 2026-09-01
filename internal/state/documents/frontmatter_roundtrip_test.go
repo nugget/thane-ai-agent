@@ -84,6 +84,27 @@ func TestFrontmatterInlineListRoundTripIsStable(t *testing.T) {
 	assertListRoundTripStable(t, meta, "tags", rendered)
 }
 
+func TestRenderFrontmatterCanonicalizesKeysAndSetValues(t *testing.T) {
+	t.Parallel()
+
+	rendered := renderFrontmatter(map[string][]string{
+		" Zeta ": {"two", "one", "two"},
+		"TITLE":  {"Document"},
+		"tags":   {"beta", "alpha", "beta"},
+		"alpha":  {"last"},
+	})
+	want := "title: \"Document\"\n" +
+		"tags: [\"alpha\", \"beta\"]\n" +
+		"alpha: \"last\"\n" +
+		"zeta: [\"one\", \"two\"]"
+	if rendered != want {
+		t.Fatalf("canonical frontmatter =\n%s\nwant\n%s", rendered, want)
+	}
+	if rerendered := renderFrontmatter(parseFrontmatterMap(rendered)); rerendered != rendered {
+		t.Fatalf("canonical frontmatter is not a fixed point:\n%s\nthen\n%s", rendered, rerendered)
+	}
+}
+
 // TestFrontmatterBlockListRoundTripIsStable covers the block-list path —
 //
 //	source_refs:

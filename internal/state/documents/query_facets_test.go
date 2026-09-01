@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem pins the
@@ -18,11 +20,11 @@ func TestSearchUsesAuthoredFacetsForSnippetAndAdvertisesThem(t *testing.T) {
 	ctx := context.Background()
 
 	teasered := "## Status Line\n\nverdict line here\n\n## Teaser\n\nThe authored orangutan teaser, written for search snippets.\n\n## Details\n\nlong working memory body\n"
-	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/teasered.md", Title: "Teasered", Body: stringPtr(teasered)}); err != nil {
+	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/teasered.md", Title: "Teasered", Frontmatter: facetTestManifest(teasered), Body: stringPtr(teasered)}); err != nil {
 		t.Fatalf("write teasered: %v", err)
 	}
 	verdictOnly := "## Status Line\n\norangutan verdict, no teaser declared\n\n## Details\n\nbody\n"
-	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/verdict.md", Title: "VerdictOnly", Body: stringPtr(verdictOnly)}); err != nil {
+	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/verdict.md", Title: "VerdictOnly", Frontmatter: facetTestManifest(verdictOnly), Body: stringPtr(verdictOnly)}); err != nil {
 		t.Fatalf("write verdict: %v", err)
 	}
 	plain := "# Plain\n\nA plain orangutan document with a first paragraph.\n"
@@ -82,7 +84,7 @@ func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
 	ctx := context.Background()
 
 	body := "## Status Line\n\nverdict line here\n\n## Teaser\n\nThe authored capybara teaser.\n\n## Details\n\nlong body\n"
-	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/faceted.md", Title: "Faceted", Body: stringPtr(body)}); err != nil {
+	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:zoo/faceted.md", Title: "Faceted", Frontmatter: facetTestManifest(body), Body: stringPtr(body)}); err != nil {
 		t.Fatalf("write faceted: %v", err)
 	}
 	plain := "# Plain\n\nA plain capybara document.\n"
@@ -96,8 +98,9 @@ func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
 	}
 	var payload struct {
 		Results []struct {
-			Ref    string   `json:"ref"`
-			Facets []string `json:"facets"`
+			Ref       string   `json:"ref"`
+			Facets    []string `json:"facets"`
+			WriteTool string   `json:"write_tool"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
@@ -119,4 +122,24 @@ func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
 	} else if plainFacets != nil {
 		t.Errorf("plain document's tool result advertises facets: %v", plainFacets)
 	}
+	for _, hit := range payload.Results {
+		switch hit.Ref {
+		case "kb:zoo/faceted.md":
+			if hit.WriteTool != DocumentWriteToolName {
+				t.Errorf("faceted write_tool = %q, want %q", hit.WriteTool, DocumentWriteToolName)
+			}
+		case "kb:zoo/plain.md":
+			if hit.WriteTool != DocumentBodyWriteToolName {
+				t.Errorf("plain write_tool = %q, want %s", hit.WriteTool, DocumentBodyWriteToolName)
+			}
+		}
+	}
+}
+
+func facetTestManifest(body string) map[string][]string {
+	manifest, _, ok := documentfacets.InferLegacy(body, DocumentWriteToolName)
+	if !ok {
+		return nil
+	}
+	return manifest.Frontmatter()
 }

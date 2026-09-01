@@ -43,16 +43,92 @@ func TestNumericArgSupportsCommonTypesAndBounds(t *testing.T) {
 
 func TestGenericDocumentMutationDescriptionsDeferToContractOwnedTools(t *testing.T) {
 	registry, _ := newTestDocumentRegistry(t)
-	for _, name := range []string{"doc_create", "doc_write", "doc_edit"} {
+	for _, name := range []string{"doc_create", "doc_body_write", "doc_edit"} {
 		tool := registry.Get(name)
 		if tool == nil {
 			t.Fatalf("%s not registered", name)
 		}
-		for _, want := range []string{"Contract-owned", "contact_dossier_write"} {
-			if !strings.Contains(tool.Description, want) {
+		for _, want := range []string{"faceted", "doc_write"} {
+			if !strings.Contains(strings.ToLower(tool.Description), want) {
 				t.Errorf("%s description = %q, want it to mention %q", name, tool.Description, want)
 			}
 		}
+	}
+}
+
+func TestDocWriteSchemaSharesFacetContract(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newTestDocumentRegistry(t)
+	tool := registry.Get("doc_write")
+	if tool == nil {
+		t.Fatal("doc_write not registered")
+	}
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("doc_write properties have unexpected shape: %#v", tool.Parameters["properties"])
+	}
+	for _, key := range []string{"ref", "title", "description", "tags", "status_line", "teaser", "digest", "full"} {
+		if _, ok := properties[key]; !ok {
+			t.Errorf("doc_write schema missing %q", key)
+		}
+	}
+	required, ok := tool.Parameters["required"].([]string)
+	if !ok {
+		t.Fatalf("doc_write required has unexpected shape: %#v", tool.Parameters["required"])
+	}
+	if want := []string{"ref", "status_line", "full"}; !reflect.DeepEqual(required, want) {
+		t.Fatalf("doc_write required = %v, want %v", required, want)
+	}
+	status, _ := properties["status_line"].(map[string]any)
+	if description, _ := status["description"].(string); !strings.Contains(description, "Maximum 120 characters") || !strings.Contains(description, "no line breaks") {
+		t.Fatalf("status_line description = %q, want shared budget and shape", description)
+	}
+}
+
+func TestDocWriteHandlerWritesStructuredDocumentAndRejectsUnknownInput(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newTestDocumentRegistry(t)
+	tool := registry.Get("doc_write")
+	if tool == nil {
+		t.Fatal("doc_write not registered")
+	}
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"ref":           "kb:faceted.md",
+		"status_line":   "Current state.",
+		"full":          "Complete detail.",
+		"journal_entry": "must not disappear",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported parameter(s) [journal_entry]") {
+		t.Fatalf("unknown parameter error = %v, want strict rejection", err)
+	}
+	if _, readErr := store.Read(context.Background(), "kb:faceted.md"); !documents.IsNotFound(readErr) {
+		t.Fatalf("rejected write changed the document: %v", readErr)
+	}
+
+	out, err := tool.Handler(context.Background(), map[string]any{
+		"ref":         "kb:faceted.md",
+		"title":       "Faceted",
+		"status_line": "Current state.",
+		"teaser":      "Open this for the current detail.",
+		"full":        "Complete detail.",
+	})
+	if err != nil {
+		t.Fatalf("doc_write: %v", err)
+	}
+	if !strings.Contains(out, `"action": "doc_write"`) {
+		t.Fatalf("doc_write result = %s, want action", out)
+	}
+	record, err := store.Read(context.Background(), "kb:faceted.md")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if record.ManagedBy != documents.DocumentWriteToolName {
+		t.Fatalf("managed_by = %q, want %q", record.ManagedBy, documents.DocumentWriteToolName)
+	}
+	if want := []string{"status_line", "teaser"}; !reflect.DeepEqual(record.Facets, want) {
+		t.Fatalf("facets = %v, want %v", record.Facets, want)
 	}
 }
 
@@ -75,13 +151,13 @@ func TestDocumentFrontmatterArgSupportsStringsAndArrays(t *testing.T) {
 	}
 }
 
-func TestDocWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
+func TestDocBodyWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
 	t.Parallel()
 
 	reg, store := newTestDocumentRegistry(t)
-	writeTool := reg.Get("doc_write")
+	writeTool := reg.Get("doc_body_write")
 	if writeTool == nil {
-		t.Fatal("doc_write not registered")
+		t.Fatal("doc_body_write not registered")
 	}
 
 	_, err := writeTool.Handler(context.Background(), map[string]any{
@@ -90,11 +166,11 @@ func TestDocWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
 		"body":  "Original body.",
 	})
 	if err != nil {
-		t.Fatalf("initial doc_write: %v", err)
+		t.Fatalf("initial doc_body_write: %v", err)
 	}
 	before, err := store.Read(context.Background(), "kb:notes/handler.md")
 	if err != nil {
-		t.Fatalf("Read after initial doc_write: %v", err)
+		t.Fatalf("Read after initial doc_body_write: %v", err)
 	}
 
 	_, err = writeTool.Handler(context.Background(), map[string]any{
@@ -102,14 +178,14 @@ func TestDocWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
 		"title": "Handler Renamed",
 	})
 	if err != nil {
-		t.Fatalf("metadata-only doc_write: %v", err)
+		t.Fatalf("metadata-only doc_body_write: %v", err)
 	}
 	record, err := store.Read(context.Background(), "kb:notes/handler.md")
 	if err != nil {
-		t.Fatalf("Read after metadata-only doc_write: %v", err)
+		t.Fatalf("Read after metadata-only doc_body_write: %v", err)
 	}
 	if record.Body != before.Body {
-		t.Fatalf("body after omitted-body doc_write = %q, want %q preserved", record.Body, before.Body)
+		t.Fatalf("body after omitted-body doc_body_write = %q, want %q preserved", record.Body, before.Body)
 	}
 
 	_, err = writeTool.Handler(context.Background(), map[string]any{
@@ -117,24 +193,24 @@ func TestDocWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
 		"body": "",
 	})
 	if err != nil {
-		t.Fatalf("empty-body doc_write: %v", err)
+		t.Fatalf("empty-body doc_body_write: %v", err)
 	}
 	record, err = store.Read(context.Background(), "kb:notes/handler.md")
 	if err != nil {
-		t.Fatalf("Read after empty-body doc_write: %v", err)
+		t.Fatalf("Read after empty-body doc_body_write: %v", err)
 	}
 	if record.Body != "" {
-		t.Fatalf("body after explicit empty-body doc_write = %q, want empty body", record.Body)
+		t.Fatalf("body after explicit empty-body doc_body_write = %q, want empty body", record.Body)
 	}
 }
 
-func TestDocWriteHandlerAppendsJournalEntry(t *testing.T) {
+func TestDocBodyWriteHandlerAppendsJournalEntry(t *testing.T) {
 	t.Parallel()
 
 	reg, store := newTestDocumentRegistry(t)
-	writeTool := reg.Get("doc_write")
+	writeTool := reg.Get("doc_body_write")
 	if writeTool == nil {
-		t.Fatal("doc_write not registered")
+		t.Fatal("doc_body_write not registered")
 	}
 
 	_, err := writeTool.Handler(context.Background(), map[string]any{
@@ -143,12 +219,12 @@ func TestDocWriteHandlerAppendsJournalEntry(t *testing.T) {
 		"journal_entry": "Captured the first checkpoint.",
 	})
 	if err != nil {
-		t.Fatalf("doc_write with journal_entry: %v", err)
+		t.Fatalf("doc_body_write with journal_entry: %v", err)
 	}
 
 	record, err := store.Read(context.Background(), "kb:notes/journaled.md")
 	if err != nil {
-		t.Fatalf("Read after journaled doc_write: %v", err)
+		t.Fatalf("Read after journaled doc_body_write: %v", err)
 	}
 	if !strings.Contains(record.Body, "## Journal") {
 		t.Fatalf("body = %q, want Journal section", record.Body)
@@ -168,7 +244,7 @@ func TestDocumentMutationToolsHideRevisionPreconditions(t *testing.T) {
 		args map[string]any
 	}{
 		{
-			name: "doc_write",
+			name: "doc_body_write",
 			args: map[string]any{
 				"ref":               "kb:new.md",
 				"body":              "New body.",
@@ -393,8 +469,9 @@ func TestDocumentIntakeAndCommitHandlersCreateManagedDocument(t *testing.T) {
 	}
 
 	if _, err := commitTool.Handler(context.Background(), map[string]any{
-		"intake_id": intake.IntakeID,
-		"body":      "# Garage Door Reset\n\nHold the wall button until the opener resets.",
+		"intake_id":   intake.IntakeID,
+		"status_line": "Garage door reset procedure is documented.",
+		"full":        "# Garage Door Reset\n\nHold the wall button until the opener resets.",
 	}); err != nil {
 		t.Fatalf("doc_commit: %v", err)
 	}
@@ -436,17 +513,17 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// The prod incident (2026-07-02): the archivist model called doc_write
+// The prod incident (2026-07-02): the archivist model called the body writer
 // with doc_edit's vocabulary — {"content": <full dossier>, "mode":
 // "replace_body", "ref": ...}. The unknown keys were silently ignored,
 // an empty document was created, and success was returned; three
 // dossiers' content survived only in the tool-call log. These guards
 // turn that silent data loss into a self-correcting error.
-func TestDocWriteRejectsDocEditVocabulary(t *testing.T) {
+func TestDocBodyWriteRejectsDocEditVocabulary(t *testing.T) {
 	t.Parallel()
 
 	reg, store := newTestDocumentRegistry(t)
-	writeTool := reg.Get("doc_write")
+	writeTool := reg.Get("doc_body_write")
 
 	// The exact prod argument shape.
 	_, err := writeTool.Handler(context.Background(), map[string]any{
@@ -455,14 +532,14 @@ func TestDocWriteRejectsDocEditVocabulary(t *testing.T) {
 		"mode":    "replace_body",
 	})
 	if err == nil {
-		t.Fatal("doc_write with content+mode succeeded; want a redirect error")
+		t.Fatal("doc_body_write with content+mode succeeded; want a redirect error")
 	}
 	if !strings.Contains(err.Error(), "body") {
 		t.Errorf("error should teach the body parameter: %v", err)
 	}
 	// Nothing may be created by the failed call.
 	if _, readErr := store.Read(context.Background(), "kb:dossiers/entity-binary_sensor-zone25_garage_bay_3.md"); readErr == nil {
-		t.Error("failed doc_write still created a document")
+		t.Error("failed doc_body_write still created a document")
 	}
 
 	// mode alone (even with a valid body) is doc_edit vocabulary.
@@ -472,7 +549,7 @@ func TestDocWriteRejectsDocEditVocabulary(t *testing.T) {
 		"mode": "append_body",
 	})
 	if err == nil || !strings.Contains(err.Error(), "doc_edit") {
-		t.Errorf("doc_write with mode should redirect to doc_edit, got: %v", err)
+		t.Errorf("doc_body_write with mode should redirect to doc_edit, got: %v", err)
 	}
 }
 
@@ -484,14 +561,14 @@ func TestDocEditTakesBodyAndTeachesContentRename(t *testing.T) {
 	t.Parallel()
 
 	reg, store := newTestDocumentRegistry(t)
-	writeTool := reg.Get("doc_write")
+	writeTool := reg.Get("doc_body_write")
 	editTool := reg.Get("doc_edit")
 
 	if _, err := writeTool.Handler(context.Background(), map[string]any{
 		"ref":  "kb:notes/unified.md",
 		"body": "original",
 	}); err != nil {
-		t.Fatalf("seed doc_write: %v", err)
+		t.Fatalf("seed doc_body_write: %v", err)
 	}
 
 	// The unified vocabulary: body works on doc_edit.
@@ -532,11 +609,11 @@ func TestDocEditTakesBodyAndTeachesContentRename(t *testing.T) {
 // "preserve", which is meaningless on a create and is the signature of
 // arguments that missed the schema. An explicit empty string stays the
 // documented way to create a blank document.
-func TestDocWriteCreateRequiresBody(t *testing.T) {
+func TestDocBodyWriteCreateRequiresBody(t *testing.T) {
 	t.Parallel()
 
 	reg, store := newTestDocumentRegistry(t)
-	writeTool := reg.Get("doc_write")
+	writeTool := reg.Get("doc_body_write")
 
 	_, err := writeTool.Handler(context.Background(), map[string]any{
 		"ref":   "kb:notes/bodiless-create.md",
@@ -558,8 +635,8 @@ func TestDocWriteCreateRequiresBody(t *testing.T) {
 	}
 }
 
-// doc_create is the default create verb (#1038): one call collision-
-// checks and writes. It carries the unified body vocabulary (#1201).
+// doc_create is the default create verb (#1038): one call collision-checks
+// and writes the logical projection contract.
 func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -570,9 +647,10 @@ func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
 	}
 
 	out, err := createTool.Handler(context.Background(), map[string]any{
-		"root":  "kb",
-		"title": "Fence Charger Notes",
-		"body":  "# Fence Charger Notes\n\nSouth paddock charger reads 7.2kV after the storm.",
+		"root":        "kb",
+		"title":       "Fence Charger Notes",
+		"status_line": "South paddock fence charger is operating normally.",
+		"full":        "# Fence Charger Notes\n\nSouth paddock charger reads 7.2kV after the storm.",
 	})
 	if err != nil {
 		t.Fatalf("doc_create: %v", err)
@@ -591,12 +669,12 @@ func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
 		t.Fatalf("created doc unreadable: %v", err)
 	}
 
-	// The unified vocabulary holds here too.
+	// Body-only vocabulary is rejected with a projection redirect.
 	_, err = createTool.Handler(context.Background(), map[string]any{
 		"root":    "kb",
 		"content": "markdown in the wrong parameter",
 	})
-	if err == nil || !strings.Contains(err.Error(), "body") {
-		t.Errorf("doc_create with content should teach body, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "full") {
+		t.Errorf("doc_create with content should teach full, got: %v", err)
 	}
 }

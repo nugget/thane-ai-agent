@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -13,12 +14,16 @@ import (
 // plus an immediate managed write when the placement is clean.
 type CreateArgs struct {
 	Root         string   `json:"root,omitempty"`
-	Body         string   `json:"body"`
+	StatusLine   string   `json:"status_line"`
+	Teaser       *string  `json:"teaser,omitempty"`
+	Digest       *string  `json:"digest,omitempty"`
+	Full         string   `json:"full"`
 	DesiredTitle string   `json:"desired_title,omitempty"`
 	DesiredRef   string   `json:"desired_ref,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	PathPrefix   string   `json:"path_prefix,omitempty"`
 	Intent       string   `json:"intent,omitempty"`
+	ReceiptScope string   `json:"-"`
 }
 
 // createDeclinedResult wraps the intake analysis when doc_create stops
@@ -43,9 +48,9 @@ func (t *Tools) Create(ctx context.Context, args CreateArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
 	}
-	body := strings.TrimSpace(args.Body)
-	if body == "" {
-		return "", fmt.Errorf("body is required — doc_create writes the full document when placement is clean")
+	full := strings.TrimSpace(args.Full)
+	if full == "" {
+		return "", fmt.Errorf("full is required; doc_create writes the complete logical document when placement is clean")
 	}
 	intent := strings.TrimSpace(args.Intent)
 	if intent == "" {
@@ -54,7 +59,7 @@ func (t *Tools) Create(ctx context.Context, args CreateArgs) (string, error) {
 	result, err := t.store.Intake(ctx, IntakeArgs{
 		Root:         args.Root,
 		Intent:       intent,
-		BodySnippet:  body,
+		BodySnippet:  full,
 		DesiredTitle: args.DesiredTitle,
 		DesiredRef:   args.DesiredRef,
 		Tags:         args.Tags,
@@ -85,9 +90,13 @@ func (t *Tools) Create(ctx context.Context, args CreateArgs) (string, error) {
 		})
 	}
 	return t.Commit(ctx, CommitArgs{
-		IntakeID: result.IntakeID,
-		Action:   IntakeActionCreateNew,
-		Body:     body,
+		IntakeID:     result.IntakeID,
+		Action:       IntakeActionCreateNew,
+		StatusLine:   args.StatusLine,
+		Teaser:       args.Teaser,
+		Digest:       args.Digest,
+		Full:         full,
+		ReceiptScope: args.ReceiptScope,
 	})
 }
 
@@ -141,6 +150,7 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 	}
 
 	body := strings.TrimSpace(args.Body)
+	full := strings.TrimSpace(args.Full)
 	status := "committed"
 	var (
 		ref string
@@ -153,8 +163,8 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		if ref == "" {
 			return "", fmt.Errorf("intake_id %q has no proposed_ref for create_new", args.IntakeID)
 		}
-		if body == "" {
-			return "", fmt.Errorf("body is required for create_new")
+		if full == "" {
+			return "", fmt.Errorf("full is required for create_new; status_line is also required")
 		}
 		root, relPath, parseErr := parseRef(ref)
 		if parseErr != nil {
@@ -163,14 +173,22 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		if t.store.refExists(ctx, root, relPath) {
 			return "", fmt.Errorf("proposed_ref %q already exists; rerun doc_intake or choose update_existing", ref)
 		}
-		out, err = t.store.Write(ctx, WriteArgs{
-			Ref:         ref,
-			Title:       result.NormalizedTitle,
-			Description: firstValue(result.NormalizedFrontmatter, "description"),
-			Tags:        result.NormalizedTags,
-			Frontmatter: result.NormalizedFrontmatter,
-			Body:        &body,
+		var published string
+		published, err = t.Publish(ctx, PublishArgs{
+			Ref:          ref,
+			Title:        result.NormalizedTitle,
+			Description:  firstValue(result.NormalizedFrontmatter, "description"),
+			Tags:         result.NormalizedTags,
+			Frontmatter:  result.NormalizedFrontmatter,
+			StatusLine:   args.StatusLine,
+			Teaser:       args.Teaser,
+			Digest:       args.Digest,
+			Full:         full,
+			ReceiptScope: args.ReceiptScope,
 		})
+		if err == nil {
+			out = json.RawMessage(published)
+		}
 	case IntakeActionUpdateExisting:
 		ref = result.TargetRef
 		if ref == "" {
@@ -178,6 +196,9 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		}
 		if body == "" {
 			return "", fmt.Errorf("body is required for update_existing")
+		}
+		if err := t.rejectStructuredIntakeTarget(ctx, ref, "doc_commit"); err != nil {
+			return "", err
 		}
 		mode := "append_body"
 		section := strings.TrimSpace(args.Section)
@@ -188,13 +209,18 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 				section = heading
 			}
 		}
-		out, err = t.store.Edit(ctx, EditArgs{
-			Ref:     ref,
-			Mode:    mode,
-			Body:    body,
-			Section: section,
-			Heading: heading,
+		var edited string
+		edited, err = t.Edit(ctx, EditArgs{
+			Ref:          ref,
+			Mode:         mode,
+			Body:         body,
+			Section:      section,
+			Heading:      heading,
+			ReceiptScope: args.ReceiptScope,
 		})
+		if err == nil {
+			out = json.RawMessage(edited)
+		}
 	case IntakeActionAppendExisting:
 		ref = result.TargetRef
 		if ref == "" {
@@ -203,11 +229,19 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		if body == "" {
 			return "", fmt.Errorf("body is required for append_existing")
 		}
-		out, err = t.store.JournalUpdate(ctx, JournalUpdateArgs{
-			Ref:    ref,
-			Entry:  body,
-			Window: args.Window,
+		if err := t.rejectStructuredIntakeTarget(ctx, ref, "doc_commit"); err != nil {
+			return "", err
+		}
+		var appended string
+		appended, err = t.JournalUpdate(ctx, JournalUpdateArgs{
+			Ref:          ref,
+			Entry:        body,
+			Window:       args.Window,
+			ReceiptScope: args.ReceiptScope,
 		})
+		if err == nil {
+			out = json.RawMessage(appended)
+		}
 	case IntakeActionDraftForReview:
 		status = "draft_for_review"
 		ref = result.ProposedRef
@@ -225,7 +259,14 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t.forgetIntake(args.IntakeID)
+	if applied, known := nestedMutationApplied(out); known && !applied {
+		// Receipt conflicts are successful tool responses, not Go errors. Keep
+		// the intake plan so the model can reconcile the returned diff and retry
+		// the same doc_commit after the wrapper advances its hidden receipt.
+		status = "conflict"
+	} else {
+		t.forgetIntake(args.IntakeID)
+	}
 	return marshalToolResult(toModelCommitResult(CommitResult{
 		IntakeID: args.IntakeID,
 		Action:   action,
@@ -233,6 +274,31 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		Status:   status,
 		Result:   out,
 	}, nowUTC()))
+}
+
+func nestedMutationApplied(result any) (bool, bool) {
+	raw, ok := result.(json.RawMessage)
+	if !ok {
+		return false, false
+	}
+	var outcome struct {
+		Applied *bool `json:"applied"`
+	}
+	if err := json.Unmarshal(raw, &outcome); err != nil || outcome.Applied == nil {
+		return false, false
+	}
+	return *outcome.Applied, true
+}
+
+func (t *Tools) rejectStructuredIntakeTarget(ctx context.Context, ref, attempted string) error {
+	record, err := t.store.Read(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if tool := structuredWriteTool(record); tool != "" {
+		return &StructuredDocumentMutationError{Ref: ref, Attempted: attempted, WriteTool: tool}
+	}
+	return nil
 }
 
 func (t *Tools) rememberIntake(result *IntakeResult) {

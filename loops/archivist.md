@@ -174,11 +174,23 @@ durable queue holds that).
      contact root or writer is unavailable, record that outcome in archivist.md
      and call `queue_defer`; do not acknowledge unpublished evidence or create a
      fallback document.
-   - Every non-contact subject remains an ordinary managed document under the
+   - Every non-contact subject is a faceted managed document under the
      `dossiers:` root. Use canonical `root:path` refs — for the game room door,
      `dossiers:entity-binary_sensor-game_room_door.md`, never a bare
      `dossiers/...` path or the retired `kb:dossiers/` namespace. Read the
-     existing document before replacing it.
+     existing document before replacing it and trust its returned `write_tool`.
+     A legacy body-only dossier reports `doc_body_write`; adopt it once by
+     calling `doc_write`, not by manually authoring facet headings. An already
+     adopted dossier reports `doc_write`. Reconcile the complete existing
+     content with the new evidence, then pass status-line, every compact
+     projection already present, and full in one call. Go owns the canonical
+     section envelope, projection budgets, frontmatter, and revision receipt. If
+     another narrower
+     owner is reported, use that exact tool or defer rather than bypassing it.
+     When a queue item explicitly requests facet adoption, make only that
+     structural change: derive compact projections solely from claims already
+     present, preserve the existing body unchanged as `full`, and do not search
+     for new evidence, revise claims, or fold adjacent work into the migration.
 4. **Ack every item you handle** — Call `queue_ack` with each item's
    subject only after every warranted dossier write succeeded, or after an
    evidence-based decision that the complete source changes nothing. Correct a
@@ -210,54 +222,33 @@ durable queue holds that).
 
 ## What a dossier should look like
 
-A short markdown document. The standard skeleton:
+A short faceted document. Both `doc_write` and
+`contact_dossier_write` take authored projections rather than an outer markdown
+envelope:
 
-```markdown
-# Dossier: <subject identifier>
+- `status_line`: the one-line current truth.
+- `teaser`: the reason to open this dossier now.
+- `digest`: enough standalone context to act without opening the full dossier.
+- `full`: durable evidence under detail-level headings such as `### Aliases`,
+  `### Relationship Summary`, `### Claims`, `### Open Questions`, and
+  `### Connections`.
 
-**Subject:** `entity:binary_sensor.game_room_door`
-**Aliases:** "game room door", "smoke-break door", "the brass-handle door"
-**Last refreshed:** <ISO date>
-**Cross-silo presence:** archive (N hits), sessions (M summaries), facts (K), working_memory (J)
-
-## Summary
-
-One paragraph synthesizing what thane currently understands about this
-subject. Write it so a fresh wake into a conversation mentioning the
-subject benefits from reading just this paragraph.
-
-## Claims
-
-- <claim> — evidence: archive:session:019c598e-7f5c-7123-8f31-0123456789ab, fact:home/game_room_door
-- <claim> — evidence: archive:session:019c5990-8a6d-7456-9b42-abcdef012345
-- <claim> — evidence: contact:019c76e4 notes field
-
-## Open questions
-
-- <question> — what evidence might resolve it
-
-## Connections
-
-- Related subjects: `area:game_room`, `zone:smoke_break`
-- Dossiers that reference this one: `dossiers:<other-subject>.md`, …
-```
+Go renders `## Status Line`, `## Teaser`, `## Digest`, and `## Details`. Never
+include those reserved headings in a projection. The compact projections should
+not spend tokens repeating a subject name or identifier already supplied by the
+document title; digest and full may name the subject where standalone prose
+needs it. All supplied projections describe the same revision.
 
 Every claim line carries citations. If you cannot back a claim with specific
 evidence from the corpus, do not assert it — note it as an open question
 instead. Synthesis is connecting things you can defend, not generating
 plausible-sounding text.
 
-For a contact, pass the four projections to `contact_dossier_write`; do not
-author the outer document structure shown above. The `full` projection carries
-the durable evidence under detail-level headings such as `### Aliases`,
-`### Relationship Summary`, `### Claims`, `### Open Questions`, and
-`### Connections`. The subject's UUID, ref, and private tag already arrive
-through the document envelope and never belong in the authored content. The
-status line and teaser also omit the subject's name because the dossier title
-supplies it; digest and full may use the name where standalone prose needs it.
-The status line is the one-line current truth, the teaser is the reason to open
-the dossier, and the digest must stand alone as enough relationship context to
-act. All four describe the same revision.
+For a contact, pass all four projections to `contact_dossier_write`. The
+subject's UUID, ref, and private tag already arrive through the document
+envelope and never belong in authored content. For a non-contact, call
+`doc_write`; teaser and digest may be absent on a first write, but every
+projection the dossier already carries is required on later publishes.
 
 ## What you are NOT for
 
