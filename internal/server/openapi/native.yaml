@@ -1727,7 +1727,19 @@ components:
           id: "thane:ed25519:SHA256:8N6XQdQfeJrVxZ5xI3a2S9Ozb5Nss4J2t7zJ1lKfJNo"
           name: pocket
           identity_key: { algorithm: ed25519, fingerprint: "SHA256:8N6XQdQfeJrVxZ5xI3a2S9Ozb5Nss4J2t7zJ1lKfJNo" }
-          channel_ca: { algorithm: x509-ed25519, fingerprint: "SHA256:q2QHfRjP9xjV8nL4Dzg0zz1IxF5XHFM9TPrWHhsLqXQ" }
+          channel_ca:
+            algorithm: x509-ed25519
+            fingerprint: "SHA256:q2QHfRjP9xjV8nL4Dzg0zz1IxF5XHFM9TPrWHhsLqXQ"
+            certificate:
+              subject: "CN=pocket Thane Channel CA"
+              issuer: "CN=pocket Thane Channel CA"
+              serial_number: "4F3A19D270EBC1"
+              not_before: "2026-07-01T12:00:00Z"
+              not_after: "2036-07-01T12:00:00Z"
+              is_ca: true
+              self_signed: true
+              public_key_algorithm: Ed25519
+              signature_algorithm: Ed25519
         core:
           birth:
             commit: { algorithm: sha1, oid: "0123456789abcdef0123456789abcdef01234567" }
@@ -1780,6 +1792,54 @@ components:
           type: string
           description: SHA-256 fingerprint recomputed from committed birth material.
           pattern: "^SHA256:"
+        certificate:
+          description: Parsed public metadata when the material is an X.509 certificate.
+          allOf:
+            - $ref: "#/components/schemas/X509CertificateEvidence"
+
+    X509CertificateEvidence:
+      type: object
+      description: Operator-readable metadata parsed from a committed public X.509 certificate.
+      required:
+        - subject
+        - issuer
+        - serial_number
+        - not_before
+        - not_after
+        - is_ca
+        - self_signed
+        - public_key_algorithm
+        - signature_algorithm
+      properties:
+        subject:
+          type: string
+          description: RFC 2253-style distinguished name of the certificate subject.
+        issuer:
+          type: string
+          description: RFC 2253-style distinguished name of the certificate issuer.
+        serial_number:
+          type: string
+          description: Uppercase hexadecimal certificate serial number.
+        not_before:
+          type: string
+          format: date-time
+          description: Beginning of the certificate validity interval.
+        not_after:
+          type: string
+          format: date-time
+          description: End of the certificate validity interval.
+        is_ca:
+          type: boolean
+          description: Whether the certificate asserts certificate-authority basic constraints.
+        self_signed:
+          type: boolean
+          description: Whether the certificate signature verifies using its own public key.
+        public_key_algorithm:
+          type: string
+          description: Public-key algorithm reported by the parsed certificate.
+        signature_algorithm:
+          type: string
+          description: Signature algorithm reported by the parsed certificate.
 
     CoreIdentityEvidence:
       type: object
