@@ -70,15 +70,24 @@ type PublicKeyEvidence struct {
 // X509CertificateEvidence is operator-readable metadata parsed from committed
 // public certificate material. It contains no private key material.
 type X509CertificateEvidence struct {
-	Subject            string    `json:"subject"`
-	Issuer             string    `json:"issuer"`
-	SerialNumber       string    `json:"serial_number"`
-	NotBefore          time.Time `json:"not_before"`
-	NotAfter           time.Time `json:"not_after"`
-	IsCA               bool      `json:"is_ca"`
-	SelfSigned         bool      `json:"self_signed"`
-	PublicKeyAlgorithm string    `json:"public_key_algorithm"`
-	SignatureAlgorithm string    `json:"signature_algorithm"`
+	// Subject is the certificate subject's distinguished name.
+	Subject string `json:"subject"`
+	// Issuer is the certificate issuer's distinguished name.
+	Issuer string `json:"issuer"`
+	// SerialNumber is the uppercase hexadecimal certificate serial number.
+	SerialNumber string `json:"serial_number"`
+	// NotBefore begins the certificate validity interval.
+	NotBefore time.Time `json:"not_before"`
+	// NotAfter ends the certificate validity interval.
+	NotAfter time.Time `json:"not_after"`
+	// IsCA reports whether the certificate asserts CA basic constraints.
+	IsCA bool `json:"is_ca"`
+	// SelfSigned reports whether the certificate verifies with its own public key.
+	SelfSigned bool `json:"self_signed"`
+	// PublicKeyAlgorithm names the parsed certificate's public-key algorithm.
+	PublicKeyAlgorithm string `json:"public_key_algorithm"`
+	// SignatureAlgorithm names the parsed certificate's signature algorithm.
+	SignatureAlgorithm string `json:"signature_algorithm"`
 }
 
 // CoreEvidence describes the birth, active revision, and verification posture
