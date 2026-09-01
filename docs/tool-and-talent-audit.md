@@ -266,7 +266,34 @@ A running history of what each audit cycle taught the methodology.
 Newest first. Each entry is "what we did + what it changed about
 how we work."
 
-### 2026-Q2 — methodology refinements after several leaf cycles
+### 2026-Q3 — context burn audit (economy, tone, caching)
+
+First cycle of a sibling audit type: instead of routing correctness,
+it audited what the corpus and the generated context *cost* — token
+economy, tone consistency, and Anthropic cache behavior. Full report:
+[`audits/2026-09-context-burn-audit.md`](audits/2026-09-context-burn-audit.md).
+What it taught the methodology:
+
+- **Duplication across co-loading files is the dominant economy
+  anti-pattern**, not verbose writing. Files that share a tag (or sit
+  on the same trail) restate each other's mechanics near-verbatim,
+  and every activation pays twice. The remedy mirrors border
+  doctrine: pick one canonical home per mechanic; everywhere else
+  gets a one-line cross-reference with a trigger. An economy pass
+  should diff *co-loading sets*, not single files.
+- **Frontmatter can look declarative while being inert.** `kind:
+  doctrine` parses but is undeclared (works only by failing
+  `isTrailheadKind`); `teaser:` on non-trailhead talents is never
+  rendered anywhere. The loader refuses missing `tags:` loudly — 
+  unknown kinds and unrenderable teasers deserve the same treatment,
+  since silent acceptance reads as support.
+- **Cache behavior is part of the context audit.** A single volatile
+  interpolation inside a stable-marked section (the EGO freshness
+  delta) defeats the entire cached prefix after it; prose-side
+  savings are noise next to that class of defect. Auditing the
+  corpus without auditing the cache path measures the wrong bill.
+
+
 
 After eight leaf cycles (HA / archive / email / contacts / session /
 shell / notifications / memory), two cross-cutting concerns surfaced
