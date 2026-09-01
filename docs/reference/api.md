@@ -124,6 +124,13 @@ cadence.
 | `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `POST` | `/v1/companion/observations` | Submit a bounded latest-value observation batch from an authenticated companion. |
 
+During the realtime handshake, the pre-authentication `auth_required.version`
+field identifies the companion protocol version. After successful
+authentication, `auth_ok.server_version` identifies the running Thane build
+using the same stamped version reported by `GET /v1/version`, while
+`auth_ok.server_uptime_seconds` reports whole seconds since that process
+started. Both runtime diagnostics are disclosed only after authentication.
+
 `POST /v1/companion/observations` uses a configured companion bearer token,
 which determines the account, and a stable opaque `client_id` claim supplied by
 the app. The ingestion authenticator resolves that account and claim through
