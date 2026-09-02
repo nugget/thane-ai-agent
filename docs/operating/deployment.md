@@ -123,16 +123,25 @@ ordinary users and offers no capability to grant, so keep Thane on high
 ports and let the packet filter carry the public ones: bind
 `tls.https.port: 8443` and `tls.http.port: 8880`, set
 `tls.https.public_port: 443` so the HTTP redirect names the port clients
-use, and install a `pf` redirect once as root, for example an anchor
-containing
+use, and install a `pf` redirect once as root. Put the rules in an anchor
+file, `/etc/pf.anchors/thane`:
 
 ```
 rdr pass on en0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443
 rdr pass on en0 inet proto tcp from any to any port 80  -> 127.0.0.1 port 8880
 ```
 
-loaded from `/etc/pf.conf` so it survives a reboot. Adjust the interface
-name to the one carrying LAN traffic and verify with `pfctl -s nat`.
+and reference it from `/etc/pf.conf` so it survives a reboot:
+
+```
+rdr-anchor "thane"
+load anchor "thane" from "/etc/pf.anchors/thane"
+```
+
+Adjust the interface name to the one carrying LAN traffic, load with
+`pfctl -f /etc/pf.conf` and enable with `pfctl -e`, and verify by naming
+the anchor, since `pfctl -s nat` alone does not descend into anchors:
+`pfctl -a thane -s nat`.
 
 ### Replacing a reverse proxy with the front door
 
@@ -142,10 +151,15 @@ directory and `https.port` on an alternate port such as 8443, then start
 Thane and watch `subsystem=tls` log lines for `tls certificate obtained`
 against every hostname. Staging certificates are not browser-trusted, so
 verify with `curl --insecure` or by inspecting the issuer. Once every
-hostname issues, remove `certmagic.ca`, set `https.port` to 443, stop the
-proxy, and restart Thane; the hostnames already point at the host, so no
-DNS change is involved. Thane's own access log now records real client
-addresses where the proxy reported its own.
+hostname issues, remove `certmagic.ca`, move the front door onto the public
+ports, stop the proxy, and restart Thane; the hostnames already point at
+the host, so no DNS change is involved. Moving onto the public ports means
+`https.port: 443` and `http.port: 80` only where Thane has been granted
+the privilege to bind them (the Linux capability above); on macOS, and on
+any host where Thane stays unprivileged, keep the high binds and set
+`https.public_port: 443` with the packet-filter redirect above carrying
+443 and 80. Thane's own access log now records real client addresses where
+the proxy reported its own.
 
 Thane also needs outbound access to:
 - Your Home Assistant instance (REST + WebSocket)
