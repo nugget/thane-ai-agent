@@ -4,6 +4,12 @@ Thane can serve up to four network listeners from a single binary. The native
 API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 (11434), and CardDAV (8843) listeners are each optional, enabled via config.
 
+Every HTTP listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
+`PATCH`) that a browser marks as cross-origin, via the `Sec-Fetch-Site` and
+`Origin` request headers, with a `403` and an `{"error": ...}` body. Requests
+without those headers, which is every non-browser client, are unaffected. See
+[Listen Addresses](../operating/configuration.md#listen-addresses).
+
 ## Port 8080 — Native API
 
 Port 8080 serves the Thane-native API and the embedded Cognition Engine

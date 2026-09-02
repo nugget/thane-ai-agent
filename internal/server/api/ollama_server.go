@@ -79,11 +79,11 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 	mux.HandleFunc("HEAD /{$}", s.handleHead)
 	mux.HandleFunc("GET /{$}", s.handleHealth)
 
-	// Auth sits inside logging so rejected requests still produce
-	// access-log lines with their 401 status.
+	// Auth and the cross-origin guard sit inside logging so rejected
+	// requests still produce access-log lines with their 401/403 status.
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(ollamaAuth(s.apiKey, mux)),
+		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second, // Long for slow models
 	}

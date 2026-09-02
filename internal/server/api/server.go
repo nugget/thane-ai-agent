@@ -584,7 +584,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(mux),
+		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, mux)),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 120 * time.Second, // Long for streaming responses
 	}

@@ -529,5 +529,15 @@ openai_api:
 Network binding for the API servers. `listen:` binds the native Thane
 /v1 API and web dashboard (default port 8080). The optional
 Ollama-compatible (port 11434) and OpenAI-compatible (port 8081) shims
-bind separately under their own blocks. Default is localhost-only; set
-`address` to `0.0.0.0` to accept connections from other hosts.
+bind separately under their own blocks. An empty or omitted `address`
+binds **all interfaces**, so every host that can reach the machine can
+reach the listener; set `address` to `127.0.0.1` to keep a listener
+local to the host, for example behind a reverse proxy that terminates
+TLS and enforces its own access policy.
+
+Every listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
+`PATCH`) that a browser marks as cross-origin, using the `Sec-Fetch-Site`
+and `Origin` headers browsers attach and non-browser clients do not. This
+closes the blind cross-site request forgery path from a page the operator
+happens to have open; it does not restrict `curl`, Home Assistant,
+companion apps, or reverse proxies, none of which send those headers.
