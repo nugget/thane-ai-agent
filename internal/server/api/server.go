@@ -582,12 +582,12 @@ func (s *Server) Start(ctx context.Context) error {
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
 	// only if you need single-port operation.
 
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, mux)),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 120 * time.Second, // Long for streaming responses
-	}
+	s.server = newHTTPServer(
+		fmt.Sprintf("%s:%d", s.address, s.port),
+		s.withLogging(rejectCrossOriginWrites(s.logger, limitRequestBody(nativeMaxBodyBytes, mux))),
+		30*time.Second,
+		120*time.Second, // Long for streaming responses
+	)
 
 	addr := s.address
 	if addr == "" {

@@ -55,12 +55,12 @@ func (s *OpenAIServer) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	s.api.RegisterOpenAIRoutes(mux)
 
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, mux))),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // Long for slow models
-	}
+	s.server = newHTTPServer(
+		fmt.Sprintf("%s:%d", s.address, s.port),
+		s.withLogging(rejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, limitRequestBody(compatMaxBodyBytes, mux)))),
+		30*time.Second,
+		300*time.Second, // Long for slow models
+	)
 
 	addr := s.address
 	if addr == "" {

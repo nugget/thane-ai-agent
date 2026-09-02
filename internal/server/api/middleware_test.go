@@ -1,9 +1,13 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRejectCrossOriginWrites(t *testing.T) {
@@ -60,4 +64,45 @@ func TestRejectCrossOriginWrites(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewHTTPServerAppliesSharedBounds(t *testing.T) {
+	t.Parallel()
+
+	srv := newHTTPServer(":0", http.NotFoundHandler(), 30*time.Second, 120*time.Second)
+	if srv.ReadTimeout != 30*time.Second || srv.WriteTimeout != 120*time.Second {
+		t.Fatalf("per-surface timeouts not preserved: read=%s write=%s", srv.ReadTimeout, srv.WriteTimeout)
+	}
+	if srv.ReadHeaderTimeout == 0 || srv.IdleTimeout == 0 || srv.MaxHeaderBytes == 0 {
+		t.Fatalf("shared bounds missing: header=%s idle=%s maxHeader=%d", srv.ReadHeaderTimeout, srv.IdleTimeout, srv.MaxHeaderBytes)
+	}
+}
+
+func TestLimitRequestBody(t *testing.T) {
+	t.Parallel()
+
+	var readErr error
+	var readLen int
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		readLen, readErr = len(b), err
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("body within cap reads fully", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(strings.Repeat("a", 16)))
+		limitRequestBody(32, next).ServeHTTP(httptest.NewRecorder(), req)
+		if readErr != nil || readLen != 16 {
+			t.Fatalf("read = (%d, %v), want (16, nil)", readLen, readErr)
+		}
+	})
+
+	t.Run("body past cap fails with MaxBytesError", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(strings.Repeat("a", 64)))
+		limitRequestBody(32, next).ServeHTTP(httptest.NewRecorder(), req)
+		var maxErr *http.MaxBytesError
+		if !errors.As(readErr, &maxErr) {
+			t.Fatalf("read error = %v, want *http.MaxBytesError", readErr)
+		}
+	})
 }

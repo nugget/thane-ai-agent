@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // rejectCrossOriginWrites refuses state-changing requests that a browser
@@ -97,4 +98,54 @@ func writeJSONError(w http.ResponseWriter, code int, message string) {
 		body = []byte(`{"error":"internal error"}`)
 	}
 	_, _ = w.Write(body)
+}
+
+// Listener-wide bounds shared by every HTTP server Thane runs. Read and
+// write timeouts stay per-surface because streaming budgets differ; these
+// are the limits that have no reason to differ.
+const (
+	// serverReadHeaderTimeout bounds how long a client may take to finish
+	// sending request headers, closing the slow-header connection hold
+	// that a bare ReadTimeout does not start counting until the body.
+	serverReadHeaderTimeout = 10 * time.Second
+	// serverIdleTimeout reclaims keep-alive connections nobody is using.
+	serverIdleTimeout = 120 * time.Second
+	// serverMaxHeaderBytes is generous for real clients and a fraction of
+	// the 1 MiB net/http default.
+	serverMaxHeaderBytes = 64 << 10
+
+	// nativeMaxBodyBytes caps native /v1 request bodies. The largest
+	// legitimate payloads are loop definitions and contact records; 8 MiB
+	// is far above either while bounding what an unauthenticated caller
+	// can make the decoder hold.
+	nativeMaxBodyBytes = 8 << 20
+	// compatMaxBodyBytes caps compat-shim bodies, which may carry chat
+	// history plus base64 images. Matches the Ollama handler's own cap.
+	compatMaxBodyBytes = 32 << 20
+)
+
+// newHTTPServer builds an http.Server with the shared listener bounds
+// applied, so no listener can be added without them.
+func newHTTPServer(addr string, handler http.Handler, readTimeout, writeTimeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       readTimeout,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       serverIdleTimeout,
+		MaxHeaderBytes:    serverMaxHeaderBytes,
+	}
+}
+
+// limitRequestBody caps every request body at maxBytes before handlers
+// decode it. Reads past the cap fail with *http.MaxBytesError, and
+// net/http closes the connection rather than draining the excess.
+func limitRequestBody(maxBytes int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }

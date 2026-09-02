@@ -10,6 +10,11 @@ Every HTTP listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
 without those headers, which is every non-browser client, are unaffected. See
 [Listen Addresses](../operating/configuration.md#listen-addresses).
 
+Request bodies are capped at 8 MiB on the native API and 32 MiB on the
+compatibility shims (room for chat history with base64 images); a body past
+the cap fails the request and closes the connection. All listeners bound
+header read time, idle keep-alive time, and header size.
+
 ## Port 8080 — Native API
 
 Port 8080 serves the Thane-native API and the embedded Cognition Engine

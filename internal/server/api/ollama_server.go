@@ -81,12 +81,12 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 
 	// Auth and the cross-origin guard sit inside logging so rejected
 	// requests still produce access-log lines with their 401/403 status.
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // Long for slow models
-	}
+	s.server = newHTTPServer(
+		fmt.Sprintf("%s:%d", s.address, s.port),
+		s.withLogging(rejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))),
+		30*time.Second,
+		300*time.Second, // Long for slow models
+	)
 
 	addr := s.address
 	if addr == "" {
