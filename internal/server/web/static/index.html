@@ -5,21 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Thane - Cognition Engine</title>
   <link rel="stylesheet" href="/static/style.css">
-  <script>
-    // Apply persisted theme before first paint to avoid a flash of the
-    // default look. Mirrors static/theme.js; kept tiny and dependency-free.
-    (function () {
-      try {
-        var root = document.documentElement;
-        var m = localStorage.getItem('thane.theme.mode');
-        if (m === 'light' || m === 'dark') root.dataset.theme = m;
-        var a = localStorage.getItem('thane.theme.accent');
-        if (a && /^#[0-9a-f]{6}$/i.test(a)) {
-          root.style.setProperty('--accent', a);
-        }
-      } catch (e) { /* storage blocked — fall back to defaults */ }
-    })();
-  </script>
+  <!-- Blocking on purpose: runs before first paint, so the persisted
+       theme is applied without a flash of the default look. -->
+  <script src="/static/theme-boot.js"></script>
 </head>
 <body>
   <header class="header">
@@ -71,7 +59,7 @@
       <div id="request-detail" class="detail-content" hidden>
         <div class="detail-header">
           <h2 class="detail-name">Request Detail</h2>
-          <div style="display:flex;gap:4px;align-items:center">
+          <div class="inline-row">
             <button id="request-detail-copy" class="copy-btn" title="Copy full request as JSON">JSON</button>
             <button id="request-detail-close" class="btn btn--sm" title="Close request detail">&times;</button>
           </div>

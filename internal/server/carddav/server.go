@@ -188,7 +188,8 @@ func (s *Server) buildHandler() http.Handler {
 		Backend: s.backend,
 		Prefix:  "/carddav",
 	}
-	return s.withAuth(s.withLogging(listen.RejectCrossOriginWrites(s.logger, davHandler)))
+	return s.withAuth(s.withLogging(listen.SecurityHeaders(listen.PostureAPI,
+		listen.RejectCrossOriginWrites(s.logger, davHandler))))
 }
 
 // withAuth wraps a handler with HTTP Basic Auth.  The .well-known

@@ -23,6 +23,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // harnessLoopReg is a static LoopStatusReader seeded with synthetic loops.
@@ -193,11 +194,18 @@ func RunUIHarness(addr, staticDir, authToken string) error {
 	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
 	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
 
-	// Console static assets, served live from staticDir.
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+	// Console static assets, served live from staticDir. The console
+	// posture is applied here, and the API posture to the whole handler
+	// below, exactly as production composes them — so a change to the
+	// console that its content policy would refuse fails here, while
+	// the asset is still being iterated on, rather than in prod.
+	console := func(h http.Handler) http.Handler {
+		return listen.SecurityHeaders(listen.PostureConsole, h)
+	}
+	mux.Handle("GET /static/", console(http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir)))))
+	mux.Handle("GET /{$}", console(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
-	})
+	})))
 
 	logger.Warn("ui harness listening", "addr", addr, "static", staticDir)
 	var handler http.Handler = mux
@@ -211,7 +219,7 @@ func RunUIHarness(addr, staticDir, authToken string) error {
 		mux.HandleFunc("GET /v1/auth/session", s.handleAuthSession)
 		handler = gate.wrap(mux)
 	}
-	return http.ListenAndServe(addr, handler)
+	return http.ListenAndServe(addr, listen.SecurityHeaders(listen.PostureAPI, handler))
 }
 
 // emitSyntheticActivity drives the "signal/aimee" loop through repeating turns

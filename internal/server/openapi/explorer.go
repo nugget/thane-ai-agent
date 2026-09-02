@@ -17,12 +17,15 @@ import (
 // Scalar standalone bundle. Vendored (not CDN-loaded) so /docs renders
 // offline.
 //
-//go:embed native.yaml compat.yaml assets/scalar.standalone.js
+//go:embed native.yaml compat.yaml assets/scalar.standalone.js assets/explorer-boot.js
 var files embed.FS
 
 // indexHTML bootstraps the Scalar API reference against the embedded specs.
-// Scalar is loaded from /docs/scalar.js (vendored) and renders both the
-// native and compatibility documents with a built-in switcher.
+// Scalar is loaded from /docs/scalar.js (vendored) and configured by
+// /docs/boot.js; both are files rather than inline blocks so the
+// explorer's content policy can keep script-src 'self'. The reference
+// renders both the native and compatibility documents with a built-in
+// switcher.
 const indexHTML = `<!doctype html>
 <html lang="en">
   <head>
@@ -33,21 +36,7 @@ const indexHTML = `<!doctype html>
   <body>
     <div id="app"></div>
     <script src="/docs/scalar.js"></script>
-    <script>
-      Scalar.createApiReference('#app', {
-        sources: [
-          { url: '/docs/openapi/native.yaml', title: 'Thane Native API', slug: 'native' },
-          { url: '/docs/openapi/compat.yaml', title: 'Compatibility API', slug: 'compat' },
-        ],
-        // Default the "Try it" code samples to curl — the operator's lingua
-        // franca for a self-hosted API.
-        defaultHttpClient: { targetKey: 'shell', clientKey: 'curl' },
-        // Label the auto-rendered components/schemas section "Schemas" so it no
-        // longer reads as a bare "Models" — that title collided with the
-        // "Model Routing" tag and the "Routing & Telemetry" group.
-        modelsSectionLabel: 'Schemas',
-      })
-    </script>
+    <script src="/docs/boot.js"></script>
   </body>
 </html>
 `
@@ -56,11 +45,18 @@ const indexHTML = `<!doctype html>
 // The surface is read-only and unauthenticated (documentation only); restrict
 // it at the reverse proxy if it should not be public.
 func RegisterRoutes(mux listen.RouteRegistrar) {
-	mux.HandleFunc("GET /docs", handleIndex)
-	mux.HandleFunc("GET /docs/", handleIndex)
-	mux.HandleFunc("GET /docs/scalar.js", serveEmbedded("assets/scalar.standalone.js", "application/javascript; charset=utf-8"))
-	mux.HandleFunc("GET /docs/openapi/native.yaml", serveEmbedded("native.yaml", "application/yaml; charset=utf-8"))
-	mux.HandleFunc("GET /docs/openapi/compat.yaml", serveEmbedded("compat.yaml", "application/yaml; charset=utf-8"))
+	// The explorer replaces the API posture with the one that suits the
+	// vendored Scalar bundle, whose data: images and runtime-built
+	// stylesheets are the only reason any directive anywhere is loosened.
+	docs := func(h http.HandlerFunc) http.Handler {
+		return listen.SecurityHeaders(listen.PostureDocuments, h)
+	}
+	mux.Handle("GET /docs", docs(handleIndex))
+	mux.Handle("GET /docs/", docs(handleIndex))
+	mux.Handle("GET /docs/scalar.js", docs(serveEmbedded("assets/scalar.standalone.js", "application/javascript; charset=utf-8")))
+	mux.Handle("GET /docs/boot.js", docs(serveEmbedded("assets/explorer-boot.js", "application/javascript; charset=utf-8")))
+	mux.Handle("GET /docs/openapi/native.yaml", docs(serveEmbedded("native.yaml", "application/yaml; charset=utf-8")))
+	mux.Handle("GET /docs/openapi/compat.yaml", docs(serveEmbedded("compat.yaml", "application/yaml; charset=utf-8")))
 }
 
 func handleIndex(w http.ResponseWriter, _ *http.Request) {

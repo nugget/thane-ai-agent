@@ -96,8 +96,9 @@ func (s *OpenAIServer) Handler() http.Handler {
 		s.api.RegisterOpenAIRoutes(mux)
 		// The source allowlist runs ahead of the bearer gate, so a key is
 		// only ever compared for a caller the operator admitted.
-		s.handler = s.withLogging(listen.RestrictSources(s.logger, "openai", s.allowedSources,
-			listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux)))))
+		s.handler = s.withLogging(listen.SecurityHeaders(listen.PostureAPI,
+			listen.RestrictSources(s.logger, "openai", s.allowedSources,
+				listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux))))))
 	})
 	return s.handler
 }
