@@ -525,12 +525,14 @@ ollama_api:
   address: ""
   port: 11434
   api_key: ""        # optional bearer token; HA's Ollama integration cannot send one
+  allowed_sources: []   # e.g. [192.168.1.0/24, 192.168.1.44]
 
 openai_api:
   enabled: true
   address: ""
   port: 8081
   api_key: ""        # optional bearer token; OpenAI clients send it natively
+  allowed_sources: []
 ```
 
 Network binding for the API servers. `listen:` binds the native Thane
@@ -560,6 +562,35 @@ no tokens configured the API is open, as it was before this block existed.
 Each token is compared as a SHA-256 digest in constant time and the
 plaintext is not retained after load; `label` is what logs and the session
 endpoint report.
+
+`allowed_sources` says which hosts may speak to a compat shim. With the
+list empty or omitted, as it ships, the surface is open to anything that
+can reach the port; with entries, a request from any other address is
+refused with `403` and a JSON error body before it reaches the routes,
+and the refusal is logged at WARN with the surface and the peer. Entries
+are CIDR prefixes (`192.168.1.0/24`, `2001:db8::/32`); a bare address
+(`192.168.1.44`) is shorthand for the single host. An entry that does not
+parse fails `thane validate` and the boot gate, naming the block and the
+offending entry, so a typo cannot quietly admit or refuse everyone.
+
+A source is the address on the socket — the peer of the TCP connection,
+or of the TLS connection under the front door — and never a forwarded
+header, which any client can write and none can be trusted to write
+honestly. That address only became visible to Thane when the front door
+replaced the reverse proxy; before the cutover every request appeared to
+come from the proxy. On a dual-stack listener an IPv4 client may arrive
+as an IPv4-mapped IPv6 address, which is unmapped before matching, so
+`192.168.1.0/24` covers it and there is no need to write the mapped form.
+
+The list matters most on `ollama_api`, the one surface that cannot ask
+for a credential: Home Assistant's Ollama integration sends no bearer
+token, so `api_key` is unusable exactly where the surface drives the full
+agent loop — tools, memory, delegation — for whoever reaches the port. On
+`openai_api`, whose clients do send keys, the list is a second lock; it is
+checked before `api_key`, so a key from an address outside the list is
+never compared. The native API under `listen:` has no such field: it has
+bearer authentication with a pinned public-route set, and `listen.address`
+already confines it to a network when a deployment wants that.
 
 Every listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
 `PATCH`) that a browser marks as cross-origin, using the `Sec-Fetch-Site`

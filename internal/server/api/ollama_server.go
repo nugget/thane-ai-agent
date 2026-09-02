@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -21,9 +22,11 @@ import (
 // port (e.g., for Home Assistant integration). For single-port setups, use
 // Server.RegisterOllamaRoutes instead.
 type OllamaServer struct {
-	address     string
-	port        int
-	apiKey      string
+	address        string
+	port           int
+	apiKey         string
+	allowedSources []netip.Prefix
+
 	loop        *agent.Loop
 	owuTracker  *OWUTracker
 	logger      *slog.Logger
@@ -44,17 +47,20 @@ func (s *OllamaServer) SetOWUTracker(t *OWUTracker) {
 //   - port: Port to listen on (typically 11434 for Ollama compatibility)
 //   - apiKey: When non-empty, every request must present this value as a
 //     bearer token; empty leaves the surface unauthenticated
+//   - allowedSources: When non-empty, only callers inside one of these
+//     prefixes are served; empty leaves the surface open to the network
 //   - loop: The agent loop that processes requests
 //   - logger: Logger for request and error logging
 //
 // The server is created but not started. Call Start to begin serving requests.
-func NewOllamaServer(address string, port int, apiKey string, loop *agent.Loop, logger *slog.Logger) *OllamaServer {
+func NewOllamaServer(address string, port int, apiKey string, allowedSources []netip.Prefix, loop *agent.Loop, logger *slog.Logger) *OllamaServer {
 	return &OllamaServer{
-		address: address,
-		port:    port,
-		apiKey:  apiKey,
-		loop:    loop,
-		logger:  logger,
+		address:        address,
+		port:           port,
+		apiKey:         apiKey,
+		allowedSources: allowedSources,
+		loop:           loop,
+		logger:         logger,
 	}
 }
 
@@ -114,9 +120,12 @@ func (s *OllamaServer) buildHandler() http.Handler {
 	mux.HandleFunc("HEAD /{$}", s.handleHead)
 	mux.HandleFunc("GET /{$}", s.handleHealth)
 
-	// Auth and the cross-origin guard sit inside logging so rejected
-	// requests still produce access-log lines with their 401/403 status.
-	return s.withLogging(listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux)))
+	// The guards sit inside logging so rejected requests still produce
+	// access-log lines with their 401/403 status. The source allowlist
+	// goes first: a caller the operator has not admitted costs one log
+	// line and nothing else.
+	return s.withLogging(listen.RestrictSources(s.logger, "ollama", s.allowedSources,
+		listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))))
 }
 
 // Shutdown gracefully stops the server.

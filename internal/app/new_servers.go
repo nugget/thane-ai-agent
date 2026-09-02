@@ -237,7 +237,11 @@ func (a *App) initServers(s *newState) error {
 	// Home Assistant's Ollama integration connects here, allowing Thane
 	// to serve as a drop-in replacement for a standalone Ollama instance.
 	if cfg.OllamaAPI.Enabled {
-		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, cfg.OllamaAPI.APIKey, a.loop, logger)
+		allowedSources, err := cfg.OllamaAPI.AllowedPrefixes()
+		if err != nil {
+			return fmt.Errorf("ollama api: %w", err)
+		}
+		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, cfg.OllamaAPI.APIKey, allowedSources, a.loop, logger)
 		a.ollamaServer.SetOWUTracker(owuTracker)
 	}
 
@@ -246,7 +250,11 @@ func (a *App) initServers(s *newState) error {
 	// (/v1/chat/completions, /v1/models) on its own port, keeping the
 	// Thane-native /v1 API on the primary port free of foreign shapes.
 	if cfg.OpenAIAPI.Enabled {
-		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, a.server, logger)
+		allowedSources, err := cfg.OpenAIAPI.AllowedPrefixes()
+		if err != nil {
+			return fmt.Errorf("openai api: %w", err)
+		}
+		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, allowedSources, a.server, logger)
 	}
 
 	// --- Companion app endpoint ---
