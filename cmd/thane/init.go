@@ -358,6 +358,9 @@ func runInit(w io.Writer, dir string, opts initOptions) error {
 	}
 
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The native API and console are closed from the first boot: the operator")
+	fmt.Fprintln(w, "token is core/config.yaml under listen.auth.tokens. Present it as a bearer")
+	fmt.Fprintln(w, "header from clients, or paste it once into the console's sign-in.")
 	fmt.Fprintln(w, "Runtime config is core/config.yaml — add your settings there and commit;")
 	fmt.Fprintln(w, "thane serve refuses an uncommitted config. Author core/persona.md the same")
 	fmt.Fprintln(w, "way. config.example.yaml and persona.example.md at the workspace root are")

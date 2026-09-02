@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -157,7 +158,7 @@ func harnessHealth() map[string]DependencyStatus {
 // RunUIHarness serves the web console at addr, backed by synthetic /v1 data.
 // staticDir is the directory of console assets to serve live (so JS/CSS/HTML
 // edits show on reload without rebuilding the harness).
-func RunUIHarness(addr, staticDir string) error {
+func RunUIHarness(addr, staticDir, authToken string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	loops := harnessLoops()
@@ -199,7 +200,18 @@ func RunUIHarness(addr, staticDir string) error {
 	})
 
 	logger.Warn("ui harness listening", "addr", addr, "static", staticDir)
-	return http.ListenAndServe(addr, mux)
+	var handler http.Handler = mux
+	if authToken != "" {
+		// Exercise the console's sign-in flow against the same gate
+		// production runs, with one operator token.
+		gate := newAuthGate(config.ListenAuthConfig{Tokens: []config.APIToken{{Label: "harness", Token: authToken}}, SessionTTL: time.Hour}, nil, nil)
+		s.auth = gate
+		mux.HandleFunc("POST /v1/auth/login", s.handleAuthLogin)
+		mux.HandleFunc("POST /v1/auth/logout", s.handleAuthLogout)
+		mux.HandleFunc("GET /v1/auth/session", s.handleAuthSession)
+		handler = gate.wrap(mux)
+	}
+	return http.ListenAndServe(addr, handler)
 }
 
 // emitSyntheticActivity drives the "signal/aimee" loop through repeating turns

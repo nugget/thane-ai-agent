@@ -27,6 +27,33 @@ dashboard's static assets (no build step). The dashboard consumes its JSON and
 SSE entirely from the native `/v1` API (graph, process table, and forensics
 views). The OpenAI-compatible shim runs on its own port (see below).
 
+### Authentication
+
+The native API is gated whenever `listen.auth.tokens` holds at least one
+token. Clients send `Authorization: Bearer <token>`; an operator token
+authenticates as its label, a companion account token
+(`companion.providers.<account>.tokens`) as that account, and a client
+certificate the HTTPS front door verified as its subject. A missing or wrong
+credential gets `401` with `WWW-Authenticate: Bearer realm="thane"`. The
+routes that serve without a credential are exactly: `GET /health`,
+`GET /v1/version`, `GET /v1/identity`, the console shell and `/static/*`,
+`/docs*`, the three `/v1/auth/*` endpoints, and the companion endpoints
+(`/v1/realtime/ws` and its aliases, `POST /v1/companion/observations`),
+which authenticate in-band. A CI test walks the route table and fails if a
+route is neither gated nor listed as public on purpose.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/auth/session` | Whether a credential is required and whether the caller has one; names the principal. |
+| `POST` | `/v1/auth/login` | Exchange a token for an HttpOnly, SameSite=Strict `thane_session` cookie (the console's sign-in). |
+| `POST` | `/v1/auth/logout` | Revoke the session and clear the cookie. |
+
+The console never stores a token: it exchanges one at sign-in for the
+session cookie, which the browser sends on every fetch and on the SSE
+stream. The cookie is marked Secure when the request arrived over TLS,
+directly or through a proxy reporting `X-Forwarded-Proto: https`. See
+[Listen Addresses](../operating/configuration.md#listen-addresses).
+
 ### Chat
 
 | Method | Path | Purpose |

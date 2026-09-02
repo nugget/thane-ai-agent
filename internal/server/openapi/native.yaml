@@ -16,15 +16,22 @@ info:
     different host/port. Keeping the two apart lets their security models
     diverge — see below.
 
-    ## Security model (declared now, enforced in stages)
+    ## Security model
 
-    Each operation below carries an `x-thane-scope` extension naming the
-    permission it will require once authorization is enforced. Today the API is
-    open behind the network boundary; the contract is declared first so the
-    explorer, the UIs, and the eventual middleware all agree on the shape.
+    Authentication is enforced: whenever `listen.auth.tokens` holds at least
+    one operator token, every operation requires a credential except those
+    marked `security: []` (health, version, identity evidence, the console's
+    sign-in endpoints, and the companion endpoints that authenticate
+    in-band). With no operator token configured the API is open, and
+    `thane init` mints one for new workspaces. Authorization is not yet
+    scoped: each operation carries an `x-thane-scope` extension naming the
+    scope a credential will need once scoped authorization lands, and every
+    credential is unscoped today.
 
-    - **AuthN:** bearer token (`Authorization: Bearer <token>`). The scheme is
-      written OIDC-ready; tokens are minted directly for now.
+    - **AuthN:** bearer token (`Authorization: Bearer <token>`): an operator
+      token, or a companion account token, which authenticates as that
+      account. The console exchanges a token once at `POST /v1/auth/login`
+      for a session cookie and sends that instead.
     - **AuthZ scopes** are `resource:action`:
       `loops:read`, `definitions:read`, `definitions:write`, `requests:read`,
       `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
@@ -125,6 +132,7 @@ paths:
         `birth.asserted_at` is a claim covered by the signed birth commit. It
         is not an independently witnessed timestamp.
       x-thane-scope: identity:read
+      security: []
       responses:
         "200":
           description: Identity evidence snapshot.
@@ -199,12 +207,92 @@ paths:
                         ready: { type: boolean }
                         last_check: { type: string }
                         last_error: { type: string }
+  /v1/auth/login:
+    post:
+      tags: [System]
+      operationId: authLogin
+      summary: Exchange a token for a console session cookie
+      description: >-
+        The console's sign-in. Posts an operator or companion token once and
+        receives an HttpOnly, SameSite=Strict `thane_session` cookie (marked
+        Secure when the request arrived over TLS, directly or via a proxy
+        reporting `X-Forwarded-Proto: https`). The token is never stored by
+        the console. Sessions live in memory, expire after
+        `listen.auth.session_ttl` without use, and end on restart. Returns 404
+        when no operator token is configured, since there is nothing to sign
+        in to.
+      security: []
+      requestBody:
+        description: The credential to exchange.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: An operator token or a companion account token.
+                  example: 0GxlTt1n5uP5R9M9Ck4vYkq1vHsZ6l2ZB7Q4Yw4GJ7A
+      responses:
+        "200":
+          description: Signed in; the session cookie is set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+              example:
+                auth_required: true
+                authenticated: true
+                principal: { kind: api_token, name: operator }
+        "400":
+          description: Missing token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: The token was not accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/auth/logout:
+    post:
+      tags: [System]
+      operationId: authLogout
+      summary: Revoke the console session
+      description: Revokes the session named by the cookie, if any, and clears the cookie.
+      security: []
+      responses:
+        "204":
+          description: Session revoked and cookie cleared.
+  /v1/auth/session:
+    get:
+      tags: [System]
+      operationId: authSession
+      summary: Whether a credential is required, and whether the caller has one
+      description: >-
+        Public, so the console can decide to show the sign-in without first
+        collecting a 401. With a valid bearer token or session cookie it
+        names the principal.
+      security: []
+      responses:
+        "200":
+          description: Gate posture and the caller's principal, if any.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+              example:
+                auth_required: true
+                authenticated: false
   /v1/version:
     get:
       tags: [System]
       operationId: getVersion
       summary: Build and runtime metadata
-      x-thane-scope: system:read
+      description: >-
+        Unauthenticated: supervisors and deploy verification read it before
+        any credential is at hand.
+      security: []
       responses:
         "200":
           description: Version info.
@@ -1381,11 +1469,17 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: opaque
       description: |
-        Bearer token. Written OIDC-ready; minted directly for now. The
-        per-operation `x-thane-scope` extension names the scope the token must
-        carry once authorization is enforced.
+        Operator token from `listen.auth.tokens`, or a companion account token
+        (`companion.providers.<account>.tokens`), which authenticates as that
+        account. Enforced on every operation except those marked `security: []`
+        whenever at least one operator token is configured; with none configured
+        the API is open. The console holds no token: it exchanges one at
+        `POST /v1/auth/login` for an HttpOnly, SameSite=Strict session cookie
+        that the browser sends instead. The per-operation `x-thane-scope`
+        extension names the scope a token will need once scoped authorization
+        lands; today every credential is unscoped.
     companionBearerAuth:
       type: http
       scheme: bearer
@@ -1444,6 +1538,32 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    AuthSession:
+      type: object
+      description: The native API gate's posture and the caller's identity.
+      required: [auth_required, authenticated]
+      properties:
+        auth_required:
+          type: boolean
+          description: Whether the API requires a credential (an operator token is configured).
+          example: true
+        authenticated:
+          type: boolean
+          description: Whether this request carried a valid credential.
+          example: true
+        principal:
+          type: object
+          description: Who the credential names; absent when unauthenticated.
+          properties:
+            kind:
+              type: string
+              description: How the identity was established.
+              enum: [api_token, companion, session, device_cert]
+              example: session
+            name:
+              type: string
+              description: The token label, companion account, or certificate subject; never a secret.
+              example: operator
     Error:
       type: object
       description: Standard error envelope returned for any 4xx/5xx response.

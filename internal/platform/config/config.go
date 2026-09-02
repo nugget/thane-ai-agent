@@ -737,6 +737,61 @@ type ListenConfig struct {
 
 	// Port is the TCP port to listen on. Default: 8080.
 	Port int `yaml:"port"`
+
+	// Auth gates the native /v1 API and the console. See ListenAuthConfig.
+	Auth ListenAuthConfig `yaml:"auth"`
+}
+
+// ListenAuthConfig configures authentication for the native API and the
+// web console. When at least one token is configured the API requires a
+// credential on every route except the enumerated public ones (health,
+// version, identity evidence, console assets, and the endpoints that
+// authenticate themselves); with no tokens the API is open, as it was
+// before this block existed, and thane init closes that door on new
+// workspaces by minting a token. API clients present a token as
+// Authorization: Bearer. The console exchanges one once at
+// POST /v1/auth/login for an HttpOnly, SameSite=Strict session cookie.
+// Companion account tokens (companion.providers.<account>.tokens) are
+// accepted as bearer credentials on the same routes, so companion apps
+// that already send them keep working; they authenticate as the account.
+type ListenAuthConfig struct {
+	// Tokens are the operator's API credentials. The gate keeps only
+	// SHA-256 digests and compares in constant time; the loaded config
+	// itself still holds the plaintext for the process lifetime, as it
+	// does every other credential, until the secret store lands. Label
+	// names the holder in logs and in the session endpoint, never the
+	// token itself.
+	Tokens []APIToken `yaml:"tokens"`
+
+	// SessionTTL is how long a console session cookie stays valid
+	// without use; each authenticated request extends it. Default: 168h
+	// (7 days). Sessions live in memory and end on restart.
+	SessionTTL time.Duration `yaml:"session_ttl"`
+}
+
+// APIToken is one operator credential for the native API.
+type APIToken struct {
+	// Label identifies the holder (a person, a script, a device); it is
+	// what logs and the session endpoint report.
+	Label string `yaml:"label"`
+	// Token is the secret the holder presents. Treat this file
+	// accordingly.
+	Token string `yaml:"token"`
+}
+
+// Configured reports whether the native API gate is on, which is exactly
+// when at least one token is present.
+func (a ListenAuthConfig) Configured() bool {
+	return len(a.Tokens) > 0
+}
+
+// TokenIndex builds a token → label map for the constant-time token set.
+func (a ListenAuthConfig) TokenIndex() map[string]string {
+	idx := make(map[string]string, len(a.Tokens))
+	for _, t := range a.Tokens {
+		idx[t.Token] = t.Label
+	}
+	return idx
 }
 
 // OllamaAPIConfig configures the optional Ollama-compatible API server.
@@ -3116,6 +3171,9 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
+	if c.Listen.Auth.SessionTTL == 0 {
+		c.Listen.Auth.SessionTTL = 168 * time.Hour
+	}
 	c.DataDir = ResolveDataDir(c.Workspace.Path, c.DataDir)
 	c.applyTLSDefaults()
 	if c.TalentsDir == "" {
@@ -3377,6 +3435,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("openai_api.port %d out of range (1-65535)", c.OpenAIAPI.Port)
 	}
 	if err := c.validateTLS(); err != nil {
+		return err
+	}
+	if err := c.validateListenAuth(); err != nil {
 		return err
 	}
 	if c.CardDAV.Enabled {
