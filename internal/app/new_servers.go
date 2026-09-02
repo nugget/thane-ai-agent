@@ -24,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
+	"github.com/nugget/thane-ai-agent/internal/server/edge"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/state/companions"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -238,6 +239,31 @@ func (a *App) initServers(s *newState) error {
 	// Thane-native /v1 API on the primary port free of foreign shapes.
 	if cfg.OpenAIAPI.Enabled {
 		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, a.server, logger)
+	}
+
+	// --- HTTPS front door ---
+	// Optional TLS listener that holds a certificate per configured
+	// hostname and routes each to one of the surfaces above by name, so
+	// a hostname reaches exactly the routes, guards, and logging its
+	// plaintext twin has. Built after every surface it can route to.
+	if cfg.TLS.Enabled {
+		surfaces := edge.Surfaces{"native": a.server.Handler()}
+		if a.ollamaServer != nil {
+			surfaces["ollama"] = a.ollamaServer.Handler()
+		}
+		if a.openaiServer != nil {
+			surfaces["openai"] = a.openaiServer.Handler()
+		}
+		edgeServer, err := edge.New(edge.Options{
+			Config:   cfg.TLS,
+			Surfaces: surfaces,
+			CoreRoot: cfg.CoreRoot(),
+			Logger:   logger,
+		})
+		if err != nil {
+			return fmt.Errorf("https front door: %w", err)
+		}
+		a.edgeServer = edgeServer
 	}
 
 	// --- Companion app endpoint ---

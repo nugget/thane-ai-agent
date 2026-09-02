@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/app"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/coreintegrity"
+	"github.com/nugget/thane-ai-agent/internal/server/edge"
 )
 
 // runValidate parses and validates the config that would be loaded by
@@ -70,6 +71,11 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 	}
 	fmt.Fprintf(w, "✓ Config valid: %s\n\n", cfgPath)
 	writeValidateText(w, cfg)
+	tlsErr := tlsPreflight(cfg)
+	if cfg.TLS.Enabled {
+		fmt.Fprintln(w)
+		writeTLSText(w, cfg, tlsErr)
+	}
 	if integrity != nil {
 		fmt.Fprintln(w)
 		writeIntegrityText(w, *integrity)
@@ -82,7 +88,32 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		fmt.Fprintln(w)
 		writeCoreLoopText(w, coreLoops)
 	}
-	return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops))
+	return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops), tlsErr)
+}
+
+// tlsPreflight runs the HTTPS front door's boot-time checks without
+// touching the network: the DNS provider resolves and its settings
+// decode, certificate storage is writable, and every client CA parses.
+// Nothing is printed by this function; the caller reports it.
+func tlsPreflight(cfg *config.Config) error {
+	if cfg == nil || !cfg.TLS.Enabled {
+		return nil
+	}
+	if err := edge.Preflight(cfg.TLS, cfg.CoreRoot()); err != nil {
+		return terminal(fmt.Errorf("https front door: %w (thane serve will refuse to start)", err))
+	}
+	return nil
+}
+
+// writeTLSText prints the front door's hostnames and the preflight
+// verdict. A token is never printed, only whether it decoded.
+func writeTLSText(w io.Writer, cfg *config.Config, err error) {
+	if err != nil {
+		fmt.Fprintf(w, "✗ HTTPS front door: %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "✓ HTTPS front door: %d hostname(s) via %s DNS-01, storage %s\n",
+		len(cfg.TLS.Hostnames), cfg.TLS.CertMagic.DNS.Provider, cfg.TLS.CertMagic.Storage)
 }
 
 // coreLoopError converts a definition document that will not parse into

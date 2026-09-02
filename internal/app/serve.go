@@ -95,6 +95,14 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}
 
+	if a.edgeServer != nil {
+		go func() {
+			if err := a.edgeServer.Start(ctx); err != nil {
+				a.logger.Error("https front door failed", "error", err)
+			}
+		}()
+	}
+
 	// Serve synchronizes with these tasks before returning: everything
 	// after the server drain below — archiving conversations, ending
 	// sessions, the shutdown checkpoint — reads the stores that the
@@ -128,6 +136,11 @@ func (a *App) Serve(ctx context.Context) error {
 		if a.carddavServer != nil {
 			if err := a.carddavServer.Shutdown(shutdownCtx); err != nil {
 				a.logger.Error("carddav server shutdown failed", "error", err)
+			}
+		}
+		if a.edgeServer != nil {
+			if err := a.edgeServer.Shutdown(shutdownCtx); err != nil {
+				a.logger.Error("https front door shutdown failed", "error", err)
 			}
 		}
 		if shutdownCtx.Err() == context.DeadlineExceeded {

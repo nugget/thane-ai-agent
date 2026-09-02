@@ -99,13 +99,37 @@ from the workspace's structured log index.
 
 ## Network Requirements
 
-Thane listens on three ports (configurable):
+Thane listens on these ports (all configurable):
 
 | Port | Service | Required |
 |------|---------|----------|
 | 8080 | Native API + web dashboard | Yes |
 | 11434 | Ollama-compatible API (for HA) | Yes |
+| 8081 | OpenAI-compatible API | Optional |
 | 8843 | CardDAV server | Optional (contact sync) |
+| 443 | HTTPS front door | Optional (`tls.enabled`) |
+| 80 | HTTP to HTTPS redirect | Optional (with the front door) |
+
+The HTTPS front door terminates TLS in-process and routes each configured
+hostname to one of the plaintext surfaces above, so no reverse proxy is
+needed; see [HTTPS Front Door](configuration.md#https-front-door). On macOS
+an unprivileged process may bind ports 80 and 443. On Linux, grant the
+binary `CAP_NET_BIND_SERVICE` (`setcap 'cap_net_bind_service=+ep'
+/path/to/thane`, or `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the
+systemd unit) or lower `net.ipv4.ip_unprivileged_port_start`.
+
+### Replacing a reverse proxy with the front door
+
+Bring the front door up beside the proxy rather than in place of it.
+Configure `tls:` with `certmagic.ca` set to the Let's Encrypt staging
+directory and `https.port` on an alternate port such as 8443, then start
+Thane and watch `subsystem=tls` log lines for `tls certificate obtained`
+against every hostname. Staging certificates are not browser-trusted, so
+verify with `curl --insecure` or by inspecting the issuer. Once every
+hostname issues, remove `certmagic.ca`, set `https.port` to 443, stop the
+proxy, and restart Thane; the hostnames already point at the host, so no
+DNS change is involved. Thane's own access log now records real client
+addresses where the proxy reported its own.
 
 Thane also needs outbound access to:
 - Your Home Assistant instance (REST + WebSocket)

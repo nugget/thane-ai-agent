@@ -58,6 +58,29 @@ func ExampleConfig() *Config {
 			Port:    8081,
 		},
 
+		TLS: TLSConfig{
+			Enabled:    false,
+			HTTPS:      TLSListenConfig{Port: 443},
+			HTTP:       TLSRedirectConfig{Port: 80},
+			HSTSMaxAge: 4320 * time.Hour,
+			Hostnames: map[string]string{
+				"thane.example.net":  "native",
+				"ollama.example.net": "ollama",
+			},
+			CertMagic: CertMagicConfig{
+				CA:     "https://acme-staging-v02.api.letsencrypt.org/directory",
+				Email:  "acme@example.net",
+				Agreed: true,
+				DNS: CertMagicDNSConfig{
+					Provider:           "linode",
+					PropagationDelay:   10 * time.Minute,
+					PropagationTimeout: 15 * time.Minute,
+					Resolvers:          []string{"ns1.linode.com", "ns2.linode.com"},
+					Settings:           map[string]any{"api_token": "your-linode-api-token"},
+				},
+			},
+		},
+
 		HomeAssistant: HomeAssistantConfig{
 			URL:   "https://your-homeassistant.local:8123",
 			Token: "your-long-lived-access-token",
