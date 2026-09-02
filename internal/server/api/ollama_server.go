@@ -10,6 +10,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // OllamaServer is a dedicated server for Ollama-compatible API endpoints.
@@ -79,14 +80,14 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 	mux.HandleFunc("HEAD /{$}", s.handleHead)
 	mux.HandleFunc("GET /{$}", s.handleHealth)
 
-	// Auth sits inside logging so rejected requests still produce
-	// access-log lines with their 401 status.
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(ollamaAuth(s.apiKey, mux)),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // Long for slow models
-	}
+	// Auth and the cross-origin guard sit inside logging so rejected
+	// requests still produce access-log lines with their 401/403 status.
+	s.server = listen.NewServer(
+		fmt.Sprintf("%s:%d", s.address, s.port),
+		s.withLogging(listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))),
+		30*time.Second,
+		300*time.Second, // Long for slow models
+	)
 
 	addr := s.address
 	if addr == "" {

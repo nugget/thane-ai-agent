@@ -95,6 +95,9 @@ func (s *Store) VerifyPath(ctx context.Context, path string, consumer string) er
 	if !ok {
 		return nil
 	}
+	if s.rootPolicy(root).Indexing && strings.HasPrefix(consumer, "file_tools_") {
+		return managedDocumentFileToolError(root, relPath, consumer)
+	}
 	return s.verifyDocumentForConsumer(ctx, root, relPath, consumer)
 }
 
@@ -118,6 +121,9 @@ func (s *Store) VerifyMutationPath(_ context.Context, path string, consumer stri
 		return nil
 	}
 	policy := s.rootPolicy(root)
+	if policy.Indexing && strings.HasPrefix(consumer, "file_tools_") {
+		return managedDocumentFileToolError(root, relPath, consumer)
+	}
 	switch policy.Authoring {
 	case "", AuthoringManaged:
 	case AuthoringReadOnly, AuthoringRestricted:
@@ -129,6 +135,14 @@ func (s *Store) VerifyMutationPath(_ context.Context, path string, consumer stri
 		return fmt.Errorf("document %s:%s blocked by mutation policy for %s: raw file mutation would bypass signed document-root provenance; use managed document tools", root, relPath, consumer)
 	}
 	return nil
+}
+
+func managedDocumentFileToolError(root, relPath, consumer string) error {
+	ref := root + ":"
+	if relPath != "." {
+		ref += relPath
+	}
+	return fmt.Errorf("%s is an indexed managed document path and is not available through %s; use doc_browse, doc_search, doc_read, and the returned write_tool so Thane can expose the logical document instead of its private Markdown storage codec", ref, consumer)
 }
 
 func (s *Store) rootRefForPath(path string) (root string, relPath string, ok bool, err error) {

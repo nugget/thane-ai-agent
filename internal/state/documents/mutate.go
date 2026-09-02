@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // DocumentRecord is the full model-facing view of one managed document.
@@ -20,11 +22,25 @@ type DocumentRecord struct {
 	Description string              `json:"description,omitempty"`
 	Tags        []string            `json:"tags,omitempty"`
 	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
-	Body        string              `json:"body"`
-	Outline     []Section           `json:"outline,omitempty"`
-	ModifiedAt  string              `json:"modified_at"`
-	WordCount   int                 `json:"word_count"`
-	SizeBytes   int64               `json:"size_bytes"`
+	// Facets lists the compact projections present in Body, in canonical
+	// contract order. Full is implicit and is not included.
+	Facets []string `json:"facets,omitempty"`
+	// FacetContract is the durable or legacy-inferred logical projection
+	// contract. Model-facing adapters expose its projections rather than this
+	// storage coordination shape.
+	FacetContract documentfacets.Contract `json:"-"`
+	// ManagedBy names the structured mutation tool that owns this document,
+	// when one is stamped in frontmatter.
+	ManagedBy string `json:"managed_by,omitempty"`
+	// InvalidFacetManifest retains a bounded parse failure without causing the
+	// document to fall back to a body-only model view. Structured owners may
+	// repair the manifest; content-bearing reads refuse to expose its codec.
+	InvalidFacetManifest string    `json:"-"`
+	Body                 string    `json:"body"`
+	Outline              []Section `json:"outline,omitempty"`
+	ModifiedAt           string    `json:"modified_at"`
+	WordCount            int       `json:"word_count"`
+	SizeBytes            int64     `json:"size_bytes"`
 	// Revision is internal coordination state for a revision-backed root.
 	// Model-facing adapters retain it as a hidden read receipt.
 	Revision string `json:"-"`
@@ -42,6 +58,13 @@ type WriteArgs struct {
 	ExpectedRevision string              `json:"-"`
 	ReceiptScope     string              `json:"-"`
 	RequirePriorRead bool                `json:"-"`
+	// StructuredTool names the contract-aware caller that is publishing a
+	// complete faceted document. Empty identifies the body-only surface.
+	StructuredTool string `json:"-"`
+	// PreviousWriteTools lists the exact former owners a trusted contract
+	// migration may replace. It is internal-only: models cannot use it to
+	// claim another writer's document.
+	PreviousWriteTools []string `json:"-"`
 }
 
 // EditArgs updates part of a managed document without leaving the
@@ -210,13 +233,15 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 
 	existed := false
 	var existingRecord *DocumentRecord
+	var existingRaw string
 	if _, err := os.Stat(absPath); err == nil {
 		existed = true
-		record, _, _, readErr := s.readCurrentDocumentParts(ctx, absPath, root, relPath)
+		record, rawFrontmatter, currentBody, readErr := s.readCurrentDocumentParts(ctx, absPath, root, relPath)
 		if readErr != nil {
 			return nil, readErr
 		}
 		existingRecord = record
+		existingRaw = renderDocumentFromParts(rawFrontmatter, currentBody)
 	}
 	if existed && args.RequirePriorRead && args.ExpectedRevision == "" && args.Body != nil && s.rootWriter(root) != nil && s.rootReviser(root) != nil {
 		return nil, &PriorReadRequiredError{Ref: args.Ref}
@@ -249,9 +274,28 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	}
 	meta := mergeDocumentFrontmatter(existingRecord, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 	raw := renderDocument(meta, body)
+	if existingRecord != nil {
+		// An identical logical write must not manufacture a new revision solely
+		// by touching its mechanical timestamp. Compare the canonical candidate
+		// with the current bytes while preserving the old updated value. A
+		// non-canonical existing envelope still differs and is normalized once.
+		stableMeta := cloneFrontmatter(meta)
+		if updated, ok := existingRecord.Frontmatter["updated"]; ok {
+			stableMeta["updated"] = append([]string(nil), updated...)
+		} else {
+			delete(stableMeta, "updated")
+		}
+		if stableRaw := renderDocument(stableMeta, body); stableRaw == existingRaw {
+			raw = stableRaw
+		}
+	}
 
+	action := strings.TrimSpace(args.StructuredTool)
+	if action == "" {
+		action = DocumentBodyWriteToolName
+	}
 	expectedRevision := s.automaticExpectedRevision(root, existed, existingRecord, args.ExpectedRevision)
-	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, expectedRevision)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, action, expectedRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +304,7 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 		return nil, err
 	}
 	s.attachMutationRevision(ctx, record, revision)
-	return mutationResultFromRecord("doc_write", record, existed, sectionName, ""), nil
+	return mutationResultFromRecord(action, record, existed, sectionName, ""), nil
 }
 
 func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error) {
@@ -323,7 +367,7 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 	}
 	rendered := renderDocumentFromParts(raw, editedBody)
 	expectedRevision := s.automaticExpectedRevision(root, true, record, args.ExpectedRevision)
-	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, expectedRevision)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, "doc_edit", expectedRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +443,7 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 		rendered = renderDocument(meta, updatedBody)
 	}
 	expectedRevision := s.automaticExpectedRevision(root, existed, record, args.ExpectedRevision)
-	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, expectedRevision)
+	revision, err := s.writeDocumentFileAtRevision(ctx, root, relPath, rendered, "doc_journal_update", expectedRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -475,21 +519,41 @@ func documentRecordFromBytes(root, relPath string, rawBytes []byte, modifiedAt t
 	if !hasFrontmatter {
 		strippedBody = raw
 	}
+	manifestError := ""
+	if _, canonical, err := documentfacets.FromFrontmatter(meta); canonical && err != nil {
+		manifestError = boundedFacetManifestError(err)
+	}
 	doc := parseMarkdownDocumentParts(relPath, meta, strippedBody)
 	return &DocumentRecord{
-		Root:        root,
-		Ref:         makeRef(root, relPath),
-		Path:        relPath,
-		Title:       doc.Title,
-		Description: firstValue(doc.Frontmatter, "description"),
-		Tags:        append([]string(nil), doc.Tags...),
-		Frontmatter: cloneFrontmatter(doc.Frontmatter),
-		Body:        strippedBody,
-		Outline:     append([]Section(nil), doc.Sections...),
-		ModifiedAt:  modifiedAt.UTC().Format(time.RFC3339Nano),
-		WordCount:   doc.WordCount,
-		SizeBytes:   int64(len(rawBytes)),
+		Root:                 root,
+		Ref:                  makeRef(root, relPath),
+		Path:                 relPath,
+		Title:                doc.Title,
+		Description:          firstValue(doc.Frontmatter, "description"),
+		Tags:                 append([]string(nil), doc.Tags...),
+		Frontmatter:          cloneFrontmatter(doc.Frontmatter),
+		Facets:               append([]string(nil), doc.Facets...),
+		FacetContract:        parsedFacetContract(doc.Frontmatter, strippedBody),
+		ManagedBy:            firstValue(doc.Frontmatter, documentfacets.ManagedByKey),
+		InvalidFacetManifest: manifestError,
+		Body:                 strippedBody,
+		Outline:              append([]Section(nil), doc.Sections...),
+		ModifiedAt:           modifiedAt.UTC().Format(time.RFC3339Nano),
+		WordCount:            doc.WordCount,
+		SizeBytes:            int64(len(rawBytes)),
 	}, rawFrontmatter, body, nil
+}
+
+func boundedFacetManifestError(err error) string {
+	if err == nil {
+		return ""
+	}
+	const maxBytes = 512
+	message := err.Error()
+	if len(message) <= maxBytes {
+		return message
+	}
+	return truncateUTF8Bytes([]byte(message), maxBytes) + "…"
 }
 
 func (s *Store) resolveDocumentWritePath(root, relPath string) (string, error) {

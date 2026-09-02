@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -446,6 +447,9 @@ func TestOpenAICompatStreamIdleTimeout(t *testing.T) {
 	case err := <-done:
 		if err == nil {
 			t.Fatal("a stalled stream returned success")
+		}
+		if !errors.Is(err, ErrStreamIdleTimeout) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("stalled stream error = %v, want typed deadline-exceeded idle timeout", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("stalled stream was never abandoned — the idle guard did not fire")

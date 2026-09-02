@@ -1,13 +1,51 @@
 package identity
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
+
+func TestX509CertificateEvidenceSelfSignedUsesRawSignature(t *testing.T) {
+	t.Parallel()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	if err := certificate.CheckSignatureFrom(certificate); err == nil {
+		t.Fatal("CheckSignatureFrom accepted a non-CA certificate; test does not exercise the intended distinction")
+	}
+
+	got := x509CertificateEvidence(certificate)
+	if !got.SelfSigned {
+		t.Fatal("SelfSigned = false for a certificate signed by its own public key")
+	}
+}
 
 func TestObserveCoreIdentityEvidence(t *testing.T) {
 	t.Parallel()
@@ -40,6 +78,25 @@ func TestObserveCoreIdentityEvidence(t *testing.T) {
 			}
 			if got.Instance.IdentityKey.Fingerprint == "" || got.Instance.ChannelCA.Fingerprint == "" {
 				t.Errorf("public fingerprints are incomplete: %+v", got.Instance)
+			}
+			certificate := got.Instance.ChannelCA.Certificate
+			if certificate == nil {
+				t.Fatal("channel CA certificate metadata is missing")
+			}
+			if certificate.Subject != "CN=pocket Thane Channel CA" || certificate.Issuer != certificate.Subject {
+				t.Errorf("channel CA names = subject %q, issuer %q", certificate.Subject, certificate.Issuer)
+			}
+			if certificate.SerialNumber == "" {
+				t.Error("channel CA serial number is empty")
+			}
+			if !certificate.IsCA || !certificate.SelfSigned {
+				t.Errorf("channel CA posture = is_ca %t, self_signed %t", certificate.IsCA, certificate.SelfSigned)
+			}
+			if certificate.PublicKeyAlgorithm != "Ed25519" || certificate.SignatureAlgorithm != "Ed25519" {
+				t.Errorf("channel CA algorithms = public %q, signature %q", certificate.PublicKeyAlgorithm, certificate.SignatureAlgorithm)
+			}
+			if !certificate.NotAfter.After(certificate.NotBefore) {
+				t.Errorf("channel CA validity = %s through %s", certificate.NotBefore, certificate.NotAfter)
 			}
 			if got.Core.Birth.Anchor != tc.wantAnchor {
 				t.Errorf("anchor = %q, want %q", got.Core.Birth.Anchor, tc.wantAnchor)

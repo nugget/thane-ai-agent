@@ -104,13 +104,18 @@ type IntakeResult struct {
 
 // CommitArgs commits an approved document intake plan.
 type CommitArgs struct {
-	IntakeID string       `json:"intake_id"`
-	Action   IntakeAction `json:"action,omitempty"`
-	Body     string       `json:"body,omitempty"`
-	Section  string       `json:"section,omitempty"`
-	Heading  string       `json:"heading,omitempty"`
-	Window   string       `json:"window,omitempty"`
-	Confirm  bool         `json:"confirm,omitempty"`
+	IntakeID     string       `json:"intake_id"`
+	Action       IntakeAction `json:"action,omitempty"`
+	StatusLine   string       `json:"status_line,omitempty"`
+	Teaser       *string      `json:"teaser,omitempty"`
+	Digest       *string      `json:"digest,omitempty"`
+	Full         string       `json:"full,omitempty"`
+	Body         string       `json:"body,omitempty"`
+	Section      string       `json:"section,omitempty"`
+	Heading      string       `json:"heading,omitempty"`
+	Window       string       `json:"window,omitempty"`
+	Confirm      bool         `json:"confirm,omitempty"`
+	ReceiptScope string       `json:"-"`
 }
 
 // CommitResult describes the mutation, or draft, created from an intake.

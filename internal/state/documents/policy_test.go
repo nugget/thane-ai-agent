@@ -195,8 +195,8 @@ func TestStorePolicyRootWriterHandlesWriteAndDelete(t *testing.T) {
 	if _, err := store.Write(ctx, WriteArgs{Ref: "kb:writer/doc.md", Body: &body}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	if len(writer.writes) != 1 || writer.writes[0] != "writer/doc.md|doc_write kb:writer/doc.md" {
-		t.Fatalf("writer.writes = %#v, want one doc_write call", writer.writes)
+	if len(writer.writes) != 1 || writer.writes[0] != "writer/doc.md|doc_body_write kb:writer/doc.md" {
+		t.Fatalf("writer.writes = %#v, want one doc_body_write call", writer.writes)
 	}
 
 	if _, err := store.Delete(ctx, DeleteArgs{Ref: "kb:writer/doc.md"}); err != nil {

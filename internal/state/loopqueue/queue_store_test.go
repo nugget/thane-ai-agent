@@ -27,6 +27,26 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
+func ackPending(t *testing.T, store *Store, consumer, key string) string {
+	t.Helper()
+	items, err := store.PeekAll(t.Context(), consumer)
+	if err != nil {
+		t.Fatalf("peek before ack: %v", err)
+	}
+	for _, item := range items {
+		if item.DedupKey != key {
+			continue
+		}
+		outcome, err := store.Ack(t.Context(), consumer, key, item.Receipt)
+		if err != nil || outcome != Acked {
+			t.Fatalf("ack %s/%s outcome=%q err=%v", consumer, key, outcome, err)
+		}
+		return item.Receipt
+	}
+	t.Fatalf("pending item %s/%s not found", consumer, key)
+	return ""
+}
+
 func TestStore_EnqueuePeekAck(t *testing.T) {
 	s := newTestStore(t)
 
@@ -50,15 +70,76 @@ func TestStore_EnqueuePeekAck(t *testing.T) {
 		t.Errorf("enqueued_at not parsed")
 	}
 
-	if err := s.Ack(t.Context(), "archivist", "session:abc"); err != nil {
+	outcome, err := s.Ack(t.Context(), "archivist", "session:abc", items[0].Receipt)
+	if err != nil || outcome != Acked {
 		t.Fatalf("ack: %v", err)
 	}
 	if n, _ := s.PendingCount(t.Context(), "archivist"); n != 0 {
 		t.Errorf("pending after ack = %d, want 0", n)
 	}
 	// Ack of a missing key is a no-op, not an error.
-	if err := s.Ack(t.Context(), "archivist", "session:gone"); err != nil {
+	if outcome, err := s.Ack(t.Context(), "archivist", "session:gone", "unused-receipt"); err != nil || outcome != AckMissing {
 		t.Errorf("ack missing: %v", err)
+	}
+}
+
+func TestStore_MigratesPendingRowsWithUniqueReceipts(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE loop_queue (
+			consumer_loop TEXT NOT NULL,
+			dedup_key TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			payload TEXT NOT NULL DEFAULT '{}',
+			enqueued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (consumer_loop, dedup_key)
+		);
+		INSERT INTO loop_queue (consumer_loop, dedup_key, payload)
+		VALUES ('archivist', 'contact:legacy', '{"legacy":true}')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.Peek(t.Context(), "archivist", 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("peek migrated row: items=%#v err=%v", items, err)
+	}
+	if items[0].Receipt == "" {
+		t.Fatal("legacy pending row did not receive a receipt")
+	}
+}
+
+func TestStore_HasRecentWorkIncludesPendingAndCompletions(t *testing.T) {
+	s := newTestStore(t)
+
+	if found, err := s.HasRecentWork(t.Context(), "archivist", "session:missing"); err != nil || found {
+		t.Fatalf("missing found=%v err=%v", found, err)
+	}
+	if err := s.Enqueue(t.Context(), "archivist", "session:abc", 0, nil); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if found, err := s.HasRecentWork(t.Context(), "archivist", "session:abc"); err != nil || !found {
+		t.Fatalf("pending found=%v err=%v", found, err)
+	}
+	items, err := s.Peek(t.Context(), "archivist", 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("peek before ack: items=%#v err=%v", items, err)
+	}
+	if outcome, err := s.Ack(t.Context(), "archivist", "session:abc", items[0].Receipt); err != nil || outcome != Acked {
+		t.Fatalf("ack: %v", err)
+	}
+	if found, err := s.HasRecentWork(t.Context(), "archivist", "session:abc"); err != nil || !found {
+		t.Fatalf("completed found=%v err=%v", found, err)
 	}
 }
 
@@ -170,6 +251,67 @@ func TestStore_CoalesceOnDedupKey(t *testing.T) {
 	}
 	if string(items[0].Payload) != `{"v":3}` {
 		t.Errorf("payload = %q, want latest {\"v\":3}", items[0].Payload)
+	}
+	if items[0].Receipt == "" {
+		t.Error("coalesced item has an empty receipt")
+	}
+}
+
+func TestStore_StaleAckRetainsCoalescedItem(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+	if err := s.Enqueue(ctx, "archivist", "contact:abc", 0, []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Peek(ctx, "archivist", 1)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first peek: items=%#v err=%v", first, err)
+	}
+	if err := s.Enqueue(ctx, "archivist", "contact:abc", 0, []byte(`{"v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := s.Ack(ctx, "archivist", "contact:abc", first[0].Receipt)
+	if err != nil || outcome != AckSuperseded {
+		t.Fatalf("stale ack outcome=%q err=%v, want superseded", outcome, err)
+	}
+	current, err := s.Peek(ctx, "archivist", 1)
+	if err != nil || len(current) != 1 {
+		t.Fatalf("current peek: items=%#v err=%v", current, err)
+	}
+	if got := string(current[0].Payload); got != `{"v":2}` {
+		t.Fatalf("retained payload = %q, want latest", got)
+	}
+	if current[0].Receipt == first[0].Receipt {
+		t.Fatalf("receipt did not advance: %q", current[0].Receipt)
+	}
+}
+
+func TestStore_StaleAckCannotDeleteRecreatedKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := t.Context()
+	const key = "contact:recreated"
+	if err := s.Enqueue(ctx, "archivist", key, 0, []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Peek(ctx, "archivist", 1)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first peek: items=%#v err=%v", first, err)
+	}
+	if outcome, err := s.Ack(ctx, "archivist", key, first[0].Receipt); err != nil || outcome != Acked {
+		t.Fatalf("first ack outcome=%q err=%v", outcome, err)
+	}
+	if err := s.Enqueue(ctx, "archivist", key, 0, []byte(`{"v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := s.Ack(ctx, "archivist", key, first[0].Receipt); err != nil || outcome != AckSuperseded {
+		t.Fatalf("delayed ack outcome=%q err=%v, want superseded", outcome, err)
+	}
+	current, err := s.Peek(ctx, "archivist", 1)
+	if err != nil || len(current) != 1 || string(current[0].Payload) != `{"v":2}` {
+		t.Fatalf("recreated item was not retained: items=%#v err=%v", current, err)
+	}
+	if current[0].Receipt == first[0].Receipt {
+		t.Fatalf("recreated key reused receipt %q", current[0].Receipt)
 	}
 }
 

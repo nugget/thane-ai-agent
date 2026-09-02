@@ -466,6 +466,44 @@ func TestCanceledContext_DoesNotFailOver(t *testing.T) {
 	}
 }
 
+func TestProviderPrivateCancellationCanFailOver(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockTimeoutLLM{
+		responses: []*llm.ChatResponse{{
+			Model:   "fallback-model",
+			Message: llm.Message{Role: "assistant", Content: "Recovered through provider failover."},
+		}},
+	}
+	loop := buildTestLoopWithLLM(mock, nil)
+	loop.model = "fallback-model"
+
+	timeoutRecovered := false
+	handler := loop.buildLLMErrorHandler(context.Background(), nil, loop.model, &Request{}, &timeoutRecovered)
+
+	resp, model, err := handler(
+		context.Background(),
+		fmt.Errorf("provider stream guard: %w", context.Canceled),
+		"stalled-model",
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("handler error = %v, want provider failover", err)
+	}
+	if resp == nil || model != "fallback-model" {
+		t.Fatalf("handler result = resp %#v model %q, want fallback-model response", resp, model)
+	}
+
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("LLM call count = %d, want 1 failover", callCount)
+	}
+}
+
 func TestRoutedUserFixableAPIError_DoesNotFailOver(t *testing.T) {
 	t.Parallel()
 

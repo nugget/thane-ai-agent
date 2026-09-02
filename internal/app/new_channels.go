@@ -154,7 +154,11 @@ func (a *App) initChannels(s *newState) error {
 		return nil
 	})
 
-	contactTools := contacts.NewTools(contactStore)
+	var contactMutationSink func(context.Context, contacts.ContactMutation) error
+	if a.loopQueue != nil && a.archivistDefinitionEnabled() {
+		contactMutationSink = a.enqueueContactDossierRefresh
+	}
+	contactTools := contacts.NewTools(contactStore, contactMutationSink)
 	dossierRoot, dossiersEnabled := declaredDocumentRoot(a.cfg.DocRoots, contacts.DossierRootName)
 	dossiersWritable := dossiersEnabled && documentRootPolicyFromConfig(dossierRoot).Authoring == documents.AuthoringManaged
 	contactTools.ConfigureDossierRoot(dossiersEnabled, dossiersWritable)
@@ -424,7 +428,7 @@ func (a *App) initChannels(s *newState) error {
 		}
 	}
 	if a.documentTools != nil {
-		contactTools.ConfigureDossierDocuments(a.documentTools.Write)
+		contactTools.ConfigureDossierDocuments(a.documentTools.Read, a.documentTools.WriteFaceted)
 	}
 	a.loop.Tools().SetContactTools(contactTools)
 

@@ -92,14 +92,17 @@ type authMessage struct {
 }
 
 // authOK confirms successful authentication, assigns a provider ID, and
-// echoes back the server-resolved account name. Deprecation is populated
-// only when the client connected on a legacy path alias, giving in-band
-// notice to WebSocket clients that do not surface HTTP response headers.
+// echoes back the server-resolved account name and runtime diagnostics.
+// Deprecation is populated only when the client connected on a legacy path
+// alias, giving in-band notice to WebSocket clients that do not surface HTTP
+// response headers.
 type authOK struct {
-	Type        string             `json:"type"`
-	ProviderID  string             `json:"provider_id"`
-	Account     string             `json:"account"`
-	Deprecation *deprecationNotice `json:"deprecation,omitempty"`
+	Type                string             `json:"type"`
+	ProviderID          string             `json:"provider_id"`
+	Account             string             `json:"account"`
+	ServerVersion       string             `json:"server_version"`
+	ServerUptimeSeconds int64              `json:"server_uptime_seconds"`
+	Deprecation         *deprecationNotice `json:"deprecation,omitempty"`
 }
 
 // deprecationNotice is the in-band companion to the RFC 8594 Sunset /

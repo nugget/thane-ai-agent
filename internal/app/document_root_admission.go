@@ -45,12 +45,13 @@ func resolveRootPaths(root, rootPath string, gitCfg config.DocumentRootGitConfig
 
 // documentRootPaths returns the path prefixes for this instance's document
 // roots, with reserved derived roots forced to locations beneath
-// workspace.path. Core and self are always present; contacts is present when
-// its policy is explicitly declared.
+// workspace.path. Core and self are always present; contacts and dossiers are
+// present when their policy is explicitly declared.
 //
 // The derived roots are what make this worth centralizing. They carry
-// policy under roots.core / roots.self / roots.contacts but never a path, so they are
-// simply absent from cfg.Paths as loaded and appear only once derived.
+// policy under roots.core / roots.self / roots.contacts / roots.dossiers but
+// never a path, so they are simply absent from cfg.Paths as loaded and appear
+// only once derived.
 // Any caller that enumerates roots without this step silently omits them
 // — which for a per-root check means reporting on every root except the
 // one holding the config that decides what the instance trusts. Boot
@@ -61,7 +62,7 @@ func resolveRootPaths(root, rootPath string, gitCfg config.DocumentRootGitConfig
 // The returned map is a copy. Creating the directories is left to the
 // caller, so read-only callers stay read-only.
 func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]string {
-	out := make(map[string]string, len(cfg.Paths)+3)
+	out := make(map[string]string, len(cfg.Paths)+4)
 	for name, path := range cfg.Paths {
 		out[name] = path
 	}
@@ -79,14 +80,9 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 		{config.CoreRootName, cfg.CoreRoot()},
 		{config.SelfRootName, cfg.SelfRoot()},
 		{config.ContactsRootName, cfg.ContactsRoot()},
+		{config.DossiersRootName, cfg.DossiersRoot()},
 	} {
-		if derivedRoot.name == config.ContactsRootName && !declaresDocumentRoot(cfg.DocRoots, config.ContactsRootName) {
-			continue
-		}
 		rootName, derived := derivedRoot.name, derivedRoot.path
-		if derived == "" {
-			continue
-		}
 		for name, path := range out {
 			if strings.TrimSuffix(name, ":") != rootName {
 				continue
@@ -100,6 +96,13 @@ func documentRootPaths(cfg *config.Config, logger *slog.Logger) map[string]strin
 				)
 			}
 			delete(out, name)
+		}
+		if (derivedRoot.name == config.ContactsRootName || derivedRoot.name == config.DossiersRootName) &&
+			!declaresDocumentRoot(cfg.DocRoots, derivedRoot.name) {
+			continue
+		}
+		if derived == "" {
+			continue
 		}
 		out[rootName] = derived
 	}
@@ -149,6 +152,8 @@ func missingDerivedRoot(cfg *config.Config, root string, mode documents.Verifica
 		path = cfg.SelfRoot()
 	case config.ContactsRootName:
 		path = cfg.ContactsRoot()
+	case config.DossiersRootName:
+		path = cfg.DossiersRoot()
 	}
 	// RepoPath stays empty: it reports the repository admission judged, and
 	// admission never ran here. Naming a directory that does not exist would

@@ -50,7 +50,7 @@ func TestFacetedOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
@@ -81,7 +81,7 @@ func TestPublishToolWithoutWorkingNotesOmitsNoteArgument(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	spec := facetedSpec()
 	spec.Outputs = spec.Outputs[:1] // drop the working-notes declaration
 
@@ -100,7 +100,7 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -156,7 +156,7 @@ func TestPublishToolRejectsOverBudgetWithoutWriting(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -183,7 +183,7 @@ func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -235,7 +235,7 @@ func TestWorkingNotesToolStampsInternalAudience(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -280,7 +280,7 @@ func TestFacetedOutputContextAdvertisesProjections(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -306,7 +306,7 @@ func TestPublishToolRejectsNonStringProjection(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -327,7 +327,7 @@ func TestFacetedOutputContextReportsPublishMode(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -389,7 +389,7 @@ func TestWorkingNotesRewriteKeepsAudienceStamp(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)

@@ -10,7 +10,8 @@ tell Thane which local collections matter.
 roots:
   kb: ./knowledge
   scratchpad: ./scratchpad
-  dossiers: ~/Vaults/private-dossiers
+  dossiers:
+    authoring: managed
 ```
 
 > The legacy `paths:` / `doc_roots:` split is still parsed with a
@@ -20,7 +21,9 @@ roots:
 Each entry gives a directory a stable identity. Instead of treating your
 files as one anonymous pile, Thane can understand that some notes live
 in a knowledge base, some are scratch work, and some belong to a more
-private long-form collection.
+private long-form collection. Most roots declare their path. The reserved
+`dossiers` root above takes its path from the workspace and is enabled by
+declaring its policy.
 
 ## Why This Helps
 
@@ -75,7 +78,7 @@ Example:
 roots:
   kb: ~/Thane/knowledge
   scratchpad: ~/Thane/scratchpad
-  dossiers: ~/Vaults/private-dossiers
+  private_notes: ~/Vaults/private-notes
   research: ~/Work/research-notes
 ```
 
@@ -310,8 +313,9 @@ target content is not cleanly covered by trusted signed git history:
 - Document store reads (`Read`, indexed browse and search surfaces)
 - Loop-declared output context
 - Tagged context articles
-- The model's `file_read` tool when the resolved path lies inside a
-  managed root
+- Internal non-document readers when the resolved path lies inside a managed
+  root. Model-facing file tools do not enter indexed roots at all; they route
+  the model to the logical document surface instead.
 - Inject-files each time they are read into the prompt, with startup
   fail-fast verification for initially configured files
 - Startup-time talents, loaded only after their source markdown files
@@ -320,11 +324,12 @@ target content is not cleanly covered by trusted signed git history:
 When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
 
-The raw `file_write` and `file_edit` tools are stricter than read
-verification. They cannot mutate read-only/restricted roots, and they
-cannot mutate roots with signed git provenance; those changes must go
-through managed document tools so root writers can preserve authoring
-policy, git history, and signatures.
+Model-facing `file_*` tools cannot read, search, enumerate, or mutate indexed
+managed roots. Direct access returns a document-tool redirect; a broader
+workspace walk skips those subtrees. Non-indexed repository roots remain file
+tool territory. Internal readers still apply signature verification, while all
+managed mutations go through document tools so root writers preserve logical
+projections, authoring policy, git history, and signatures.
 
 ### Concurrent writers
 
@@ -332,8 +337,9 @@ Git history makes a mistaken overwrite recoverable, but history alone does
 not stop a stale loop from replacing another writer's current work. On writable
 git-backed roots, a managed read therefore records the current file revision as
 a hidden receipt keyed by loop/conversation and document ref. The model never
-passes hashes between tools. A later `doc_write`, `doc_edit`, or
-`doc_journal_update` supplies that receipt to the root writer internally.
+passes hashes between tools. A later `doc_write`, `doc_body_write`, `doc_edit`,
+or `doc_journal_update` supplies that receipt to the root writer
+internally.
 Read-only history roots do not create mutation receipts.
 
 The root writer compares and commits managed mutations under the same lock, and
@@ -351,16 +357,10 @@ an editor that ignores this coordination can still save in the narrow window
 between the final worktree check and replacement. Git history remains the
 recovery boundary for that external race.
 
-Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`,
-`file_search`, `file_grep`) intentionally do not consult the verifier.
-`file_list`, `file_tree`, `file_stat`, and `file_search` return only
-paths and metadata. **`file_grep` is different**: it returns short
-content excerpts that are
-*not* verified, so under `verify_signatures: required` it can surface
-snippets from files that would be blocked by `file_read`. If a result
-matters to you, re-read it through `file_read` — that path is gated
-and will fail if the underlying content is not covered by trusted
-signed history.
+Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`, `file_search`,
+`file_grep`) share the same boundary. In particular, `file_grep` cannot leak
+the private frontmatter and section codec that logical `doc_read` deliberately
+hides.
 
 ## A Few Practical Guidelines
 
@@ -429,6 +429,44 @@ IDs. Use `refresh_strategy` to distinguish one-shot immutable artifacts
 from generated files that are replaced, appended to, or maintained as a
 rolling window.
 
+## Faceted Documents and Write Ownership
+
+A faceted document publishes several views of one current state: a required
+one-line `status_line`, optional `teaser` and `digest`, and the always-present
+full detail. The reserved H2 headings are a private on-disk codec; the parser
+can discover this shape in any managed root without root-specific code, but
+model tools do not expose or accept that envelope. Reads and search/browse rows
+expose logical projections, available read levels, and a `write_tool` for the
+next mutation.
+
+Managed writes also canonicalize frontmatter: keys use normalized casing and a
+stable semantic/alphabetic order, set-valued fields are trimmed, deduplicated,
+and sorted, and scalars share one quoting form. Repeating an equivalent logical
+write therefore does not create ordering-only Git noise.
+
+`doc_write` is the normal logical mutation surface for a document with no
+narrower owner. It can create one at a deliberate ref, self-migrate a legacy or
+body-only document, or update an existing faceted document. The model supplies
+projections, not headings; Go applies the shared single-line and rune budgets,
+requires every already-present projection, renders the canonical section
+order, and stamps `managed_by: doc_write`. The document store independently
+rejects malformed or over-budget facet envelopes before any filesystem or Git
+mutation, regardless of which internal caller reached it.
+
+`doc_body_write` is the narrow exception for a document intentionally kept as
+one undifferentiated Markdown body. It still uses managed-root policy,
+provenance, indexing, and stale-write protection; it does not expose a raw file
+or bypass the document abstraction.
+
+Some domains own a narrower contract. A contact dossier stamps
+`managed_by: contact_dossier_write`; a declared loop output stamps its generated
+`publish_output_<name>` tool. Reads return that value as `write_tool`, and
+`doc_write`, `doc_body_write`, `doc_edit`, journal mutation, and partial section
+transfers reject the target with an actionable redirect. This prevents two
+write doors from disagreeing about structure or leaving compact projections
+describing an older state. Lifecycle and history operations remain
+root-agnostic; content-bearing reads project the logical document.
+
 ## Loop-Declared Outputs
 
 Autonomous and background loops can declare the documents they are
@@ -453,13 +491,26 @@ of truth. The generated tools still write through document roots. That
 keeps path resolution, indexing, provenance, and root-level integrity
 policy in one subsystem.
 
+Replacing a loop definition preserves its output when the contract is
+unchanged. A contract change requires the old loop to be stopped and is
+explicit: `thane_loop_create` requires
+`output.migration`, preserves the existing full body and retained projections,
+and accepts values only for newly declared projections. An empty migration
+object authorizes a removal-only change, including a faceted output becoming
+body-only. The ownership transition between the same loop's
+`replace_output_*` and `publish_output_*` tools happens inside the document
+layer; it is not a general ownership override.
+
 ## Special Case: the Derived Roots
 
-Three root names are reserved: `core`, `self`, and `contacts`. Their paths come
-from the workspace, and none takes a path from `roots:`. You may name them
-there to set policy; a path given alongside policy is ignored. `core` and
-`self` are always registered. `contacts` is opt-in and is registered only when
-its policy is declared.
+Four root names are reserved: `core`, `self`, `contacts`, and `dossiers`. Their
+paths come from the workspace, and none takes a path from `roots:`. You may name
+them there to set policy. Paths on `core`, `self`, and `contacts` are ignored
+for compatibility. An explicit `dossiers` path is rejected with instructions
+to move or clone the corpus to `{workspace}/dossiers`, preventing an upgrade
+from silently redirecting an existing custom root. `core` and `self` are always
+registered. `contacts` and `dossiers` are opt-in and are registered only when
+their policy is declared.
 
 `core` and `self` are separate roots because they answer to different
 authorities, and that difference is the whole point of their split.
@@ -494,6 +545,33 @@ Both are always registered because the core service loops write `self` on
 every install. A root an operator had to remember to declare would leave a
 fresh install with nowhere for those documents to land.
 
+`contacts` and `dossiers` are opt-in because not every instance enables the
+archivist's longitudinal documents. When declared, their fixed sibling paths
+are `{workspace}/contacts` and `{workspace}/dossiers`. A fresh `thane init`
+declares and establishes both as managed, signed roots. Existing instances can
+adopt either independently by adding its policy and restoring or initializing
+the repository at that derived path.
+
+### Subject dossiers
+
+`dossiers` holds longitudinal synthesis about durable subjects in the external
+world: animals, places, devices, projects, routines, events, and recurring
+themes in the operator's life. Thane's own cognition and operation are not
+external subjects. Confabulation patterns, prompting behavior, loop health,
+model routing and failures, queues, and spend belong to the metacognitive
+documents under `self:` instead of a generic dossier.
+
+The root is intentionally a flat subject catalog. Every new document must be a
+direct child, including creation through the direct logical and body-only
+writers. Corpus-aware intake additionally requires an explicit ref selected
+after inspecting related and sibling names; `path_prefix` and nested proposed
+refs are rejected. Kind-prefixed siblings therefore stay visibly related, such
+as `dossiers:entity-cat-yuki.md` and
+`dossiers:entity-cat-goro-goro.md`. Existing nested legacy documents remain
+readable and writable at their current refs so the guardrail does not strand
+history; normal authoring does not fork one into a second flat document merely
+to repair topology.
+
 ### Contact dossiers
 
 `contacts` is the optional longitudinal document side of the structured
@@ -509,26 +587,36 @@ The boundary is strict: SQLite contacts remain authoritative for UUIDs,
 structured identity, communication properties, trust zones, Home Assistant
 bindings, and companion attribution. Dossier prose is relationship synthesis,
 not a way to mutate those fields. `contact_lookup` and `contact_owner` expose a
-bounded dossier ref; `doc_read` opens it when the prose is useful.
+bounded `contact_dossier_read` trailhead. That tool accepts the active contact
+UUID, derives the canonical ref in Go, and either returns the dossier with a
+revision receipt or returns a successful structured absence with the exact
+create action. This keeps a missing dossier from becoming a retry loop over
+manually transcribed refs.
+
 `contact_dossier_write` is the canonical mutation door on a managed-writable
 root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
 layout in Go. Projection budgets are advertised in the schema, and one failed
 call reports every independently correctable projection violation together.
-The generic document tools remain available for operator recovery, but models
-should not author dossier structure through them.
+Generic document mutators reject the dossier and name
+`contact_dossier_write`; operator recovery remains available through Git
+history and direct repository administration rather than a second model-facing
+write door.
 
 The archivist uses the same contract-owned door. Contact-shaped queue subjects
 and contact evidence discovered in closed sessions are resolved through the
 structured directory, reconciled with the existing canonical dossier, and
-republished through `contact_dossier_write`. The generic `kb:dossiers/`
-namespace remains the home for entities, areas, routines, and themes; it is
-never a fallback location for a contact, because that would split one person's
-history across two document roots. Before replacement, the archivist checks
-whether `doc_read` truncated the current dossier and walks its outline and
-sections when necessary. An unreadable remainder or unavailable canonical
-writer defers the durable queue item behind ready work rather than losing it or
-letting it block the queue.
+read through `contact_dossier_read` before being republished through
+`contact_dossier_write`. The separate `dossiers:` root is
+the home for entities, areas, routines, and themes; it is never a fallback
+location for a contact, because that would split one person's history across
+two document roots. The legacy `kb:dossiers/` namespace is retired once its
+documents have moved to `dossiers:` and must not remain indexed alongside the
+new root. Before replacement, the archivist checks whether the canonical read
+truncated the current dossier and walks its outline and sections when
+necessary. An absent read proceeds directly to one create attempt; an unreadable
+remainder or unavailable canonical writer defers the durable queue item behind
+ready work rather than losing it or letting it block the queue.
 
 Archive evidence in a contact dossier uses
 `archive:session:<full-session-uuid>`. Archive tools accept short prefixes as
@@ -562,6 +650,36 @@ roots:
 unrelated dossiers get neither ambient nor loose lexical offers. Existing
 workspaces can add the same declaration and re-run `thane init` to establish
 the signed sibling repository before deployment.
+
+Contact lifecycle does not rename or silently erase this history:
+
+- Renaming a structured contact leaves `contacts:<uuid>.md` in place. The next
+  structured dossier write derives the new display title while the UUID path,
+  citations, and Git history remain continuous.
+- Forgetting a contact soft-deletes the structured row. The canonical writer
+  then refuses new writes because the UUID is no longer an active contact, but
+  the dossier file and its signed history remain until an operator explicitly
+  moves or deletes the document.
+- Merging contacts is deliberate rather than inferred. Choose the surviving
+  structured UUID, reconcile any useful claims and citations into that
+  contact's dossier through `contact_dossier_write`, then forget the duplicate.
+  The duplicate dossier is retained unless the operator explicitly archives it
+  with `doc_move` to another suitable managed root or removes it with
+  `doc_delete`.
+- `doc_move` and `doc_delete` are recovery and lifecycle operations, not normal
+  dossier-authoring doors. A deletion removes the live document but remains a
+  signed deletion in the source root's Git history; forgetting or merging a
+  structured contact never performs that step automatically.
+
+An existing installation can seed historical stewardship explicitly through
+`POST /v1/archive/contact-dossier-backfill`. Each call handles at most 200
+source records, with a durable frozen cutoff and keyset cursor. Active contact
+subjects are queued first, followed by closed, non-empty conversational
+sessions; automation traffic is omitted, recent queue work is coalesced, and
+historical entries sit below fresh session-close work. The operator repeats
+bounded calls until `complete` is true. Completion is permanent operational
+state: the endpoint becomes a no-op, while new session evidence continues
+through the normal steady-state enqueue path.
 
 ## The Human-Level Rule
 

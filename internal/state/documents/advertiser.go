@@ -11,7 +11,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
-	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
@@ -289,7 +289,8 @@ func (d *DocumentAdvertiser) MaterializeContextAdvertisement(ctx context.Context
 		return "", fmt.Errorf("document %s is audience-internal; refusing to materialize", ref)
 	}
 
-	payload, _ := looppkg.ParseFacetSections(body)
+	contract := parsedFacetContract(meta, body)
+	payload := contract.Parse(body)
 	content := facetContent(payload, selection.Projection.Name)
 	if strings.TrimSpace(content) == "" {
 		return "", fmt.Errorf("document %s no longer carries facet %s", ref, selection.Projection.Name)
@@ -330,17 +331,18 @@ func (d *DocumentAdvertiser) projectionsFor(row AdvertisableDocument, envelopeBy
 	var out []agentctx.ContextProjection
 	compact := false
 	for facet, size := range row.FacetBytes {
-		field, ok := looppkg.FacetFieldByKey(facet)
+		field, ok := documentfacets.FieldByKey(facet)
 		if !ok || size <= 0 {
 			continue
 		}
 		if field.ContextRole != agentctx.ContextRoleDetail {
 			compact = true
 		}
+		format := projectionMIMEType(row.FacetContract, facet)
 		out = append(out, agentctx.ContextProjection{
 			Name:           facet,
 			Role:           field.ContextRole,
-			Format:         "text/markdown",
+			Format:         format,
 			EstimatedBytes: size + envelopeBytes + advertiseEnvelopeSlackBytes,
 		})
 	}
@@ -460,17 +462,24 @@ func bestMatchKind(matches []agentctx.ContextMatchSignal) agentctx.ContextMatchK
 }
 
 // facetContent selects one projection's text from a parsed facet payload.
-func facetContent(payload looppkg.FacetPayload, name string) string {
-	switch name {
-	case string(looppkg.OutputFacetStatusLine):
-		return payload.StatusLine
-	case string(looppkg.OutputFacetTeaser):
-		return payload.Teaser
-	case string(looppkg.OutputFacetDigest):
-		return payload.Digest
-	case "full":
-		return payload.Full
-	default:
-		return ""
+func facetContent(payload documentfacets.Payload, name string) string {
+	value, _ := payload.ByKey(name)
+	return value
+}
+
+func projectionMIMEType(contract documentfacets.Contract, name string) string {
+	for _, field := range contract.Fields() {
+		if field.Key != name {
+			continue
+		}
+		switch field.Format {
+		case documentfacets.FormatJSON:
+			return "application/json"
+		case documentfacets.FormatPlain:
+			return "text/plain"
+		default:
+			return "text/markdown"
+		}
 	}
+	return "text/markdown"
 }

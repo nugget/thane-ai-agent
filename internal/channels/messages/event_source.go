@@ -24,7 +24,7 @@ type LoopEventPayload struct {
 	Title      string            `json:"title,omitempty"`
 	URL        string            `json:"url,omitempty"`
 	Summary    string            `json:"summary,omitempty"`
-	ObservedAt time.Time         `json:"observed_at,omitempty"`
+	ObservedAt time.Time         `json:"observed_at,omitzero"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 

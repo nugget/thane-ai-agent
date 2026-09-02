@@ -32,10 +32,24 @@ import (
 // migration.
 const StatusPending = "pending"
 
+// AckOutcome reports whether a receipt-guarded acknowledgement removed its
+// exact queue item, found newer work, or found no pending item.
+type AckOutcome string
+
+const (
+	// Acked means the exact receipt was removed and journaled.
+	Acked AckOutcome = "acked"
+	// AckSuperseded means a newer coalesced item remains pending.
+	AckSuperseded AckOutcome = "superseded"
+	// AckMissing means no item with that consumer and key remains pending.
+	AckMissing AckOutcome = "missing"
+)
+
 // Item is one pending unit of work for a consumer loop. Payload is the
 // opaque JSON the producer enqueued; the queue does not interpret it.
 type Item struct {
 	DedupKey   string
+	Receipt    string
 	Priority   int
 	EnqueuedAt time.Time
 	Payload    []byte
@@ -84,15 +98,20 @@ func (s *Store) Enqueue(ctx context.Context, consumerLoop, dedupKey string, prio
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at)
-		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	receipt, err := newReceipt()
+	if err != nil {
+		return fmt.Errorf("loopqueue: enqueue %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at, receipt)
+		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
 		ON CONFLICT(consumer_loop, dedup_key) DO UPDATE SET
 			priority   = MAX(loop_queue.priority, excluded.priority),
 			status     = 'pending',
 			payload    = excluded.payload,
-			updated_at = CURRENT_TIMESTAMP
-	`, consumerLoop, dedupKey, priority, string(payload))
+			updated_at = CURRENT_TIMESTAMP,
+			receipt    = excluded.receipt
+	`, consumerLoop, dedupKey, priority, string(payload), receipt)
 	if err != nil {
 		return fmt.Errorf("loopqueue: enqueue %s/%s: %w", consumerLoop, dedupKey, err)
 	}
@@ -126,9 +145,9 @@ func (s *Store) Append(ctx context.Context, consumerLoop, keyPrefix string, prio
 	}
 	dedupKey := keyPrefix + ":" + id.String()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at)
-		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	`, consumerLoop, dedupKey, priority, string(payload))
+		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at, receipt)
+		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+	`, consumerLoop, dedupKey, priority, string(payload), dedupKey)
 	if err != nil {
 		return "", fmt.Errorf("loopqueue: append %s/%s: %w", consumerLoop, dedupKey, err)
 	}
@@ -197,7 +216,7 @@ func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 		return nil, fmt.Errorf("loopqueue: consumer_loop is required")
 	}
 	query := `
-		SELECT dedup_key, priority, payload, enqueued_at
+		SELECT dedup_key, receipt, priority, payload, enqueued_at
 		FROM loop_queue
 		WHERE consumer_loop = ? AND status = ?
 		ORDER BY priority DESC, enqueued_at ASC, dedup_key ASC`
@@ -219,7 +238,7 @@ func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 			payload     string
 			enqueuedRaw any
 		)
-		if err := rows.Scan(&it.DedupKey, &it.Priority, &payload, &enqueuedRaw); err != nil {
+		if err := rows.Scan(&it.DedupKey, &it.Receipt, &it.Priority, &payload, &enqueuedRaw); err != nil {
 			return nil, err
 		}
 		it.Payload = []byte(payload)
@@ -317,42 +336,49 @@ func (s *Store) MoveConsumer(ctx context.Context, from, to string) error {
 	return nil
 }
 
-// Ack removes a completed item from consumerLoop's partition and
-// journals the completion — consumer, key, and the enqueued→acked
-// span — in the same transaction as the DELETE, so the record is exact
-// and a crash can never leave a phantom completion. A missing
-// (consumerLoop, dedupKey) is a no-op (idempotent) and journals
-// nothing: re-acking an already-acked item must not double-count
-// throughput.
-func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
+// Ack removes a completed item only when expectedReceipt matches the receipt
+// returned by [Store.Peek]. A coalescing Enqueue that lands while
+// the consumer is working therefore survives the stale acknowledgement.
+// Successful removal and completion journaling share one transaction. A
+// missing item is idempotent and journals nothing.
+func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey, expectedReceipt string) (AckOutcome, error) {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	dedupKey = strings.TrimSpace(dedupKey)
 	if consumerLoop == "" || dedupKey == "" {
-		return fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
+		return "", fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
+	}
+	if strings.TrimSpace(expectedReceipt) == "" {
+		return "", fmt.Errorf("loopqueue: expected receipt is required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
-	var enqueuedRaw any
+	var (
+		enqueuedRaw   any
+		actualReceipt string
+	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT enqueued_at FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
+		`SELECT enqueued_at, receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
 		consumerLoop, dedupKey,
-	).Scan(&enqueuedRaw)
+	).Scan(&enqueuedRaw, &actualReceipt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return AckMissing, nil
 	}
 	if err != nil {
-		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	if actualReceipt != expectedReceipt {
+		return AckSuperseded, nil
 	}
 	res, err := tx.ExecContext(ctx,
-		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
-		consumerLoop, dedupKey,
+		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ?`,
+		consumerLoop, dedupKey, expectedReceipt,
 	)
 	if err != nil {
-		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
 	}
 	// Journal only when this transaction actually removed the row. Two
 	// concurrent Acks of the same key can both pass the SELECT before
@@ -360,21 +386,57 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 	// and journaling it anyway would double-count throughput.
 	deleted, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
 	}
 	if deleted == 0 {
-		return nil
+		return AckSuperseded, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, enqueued_at, acked_at)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
 	`, consumerLoop, dedupKey, enqueuedRaw); err != nil {
-		return fmt.Errorf("loopqueue: journal completion %s/%s: %w", consumerLoop, dedupKey, err)
+		return "", fmt.Errorf("loopqueue: journal completion %s/%s: %w", consumerLoop, dedupKey, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
 	}
-	return nil
+	return Acked, nil
+}
+
+func newReceipt() (string, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("generate receipt: %w", err)
+	}
+	return id.String(), nil
+}
+
+// HasRecentWork reports whether a key is pending or appears in the retained
+// completion journal for consumerLoop. Completion rows are intentionally
+// time-bounded by [Store.PruneCompletions], so this is a recent-overlap guard,
+// not permanent domain state. A durable producer cursor should remain the
+// authority for whether an older source has already been traversed.
+func (s *Store) HasRecentWork(ctx context.Context, consumerLoop, dedupKey string) (bool, error) {
+	consumerLoop = strings.TrimSpace(consumerLoop)
+	dedupKey = strings.TrimSpace(dedupKey)
+	if consumerLoop == "" || dedupKey == "" {
+		return false, fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
+	}
+
+	var found bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM loop_queue
+			WHERE consumer_loop = ? AND dedup_key = ?
+			UNION ALL
+			SELECT 1 FROM loop_queue_completions
+			WHERE consumer_loop = ? AND dedup_key = ?
+		)
+	`, consumerLoop, dedupKey, consumerLoop, dedupKey).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("loopqueue: inspect recent work %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	return found, nil
 }
 
 // Consumers returns the distinct consumer partitions that currently

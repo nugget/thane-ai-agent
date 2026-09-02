@@ -28,17 +28,15 @@ func TestAckJournalsExactlyOnce(t *testing.T) {
 	if err := s.Enqueue(ctx, "archivist", "session:a", 3, []byte(`{}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	if err := s.Ack(ctx, "archivist", "session:a"); err != nil {
-		t.Fatalf("ack: %v", err)
-	}
+	receipt := ackPending(t, s, "archivist", "session:a")
 	if got := completionCount(t, s, "archivist"); got != 1 {
 		t.Fatalf("completions after ack = %d, want 1", got)
 	}
 
 	// Re-acking the same key is idempotent for the queue AND for the
 	// journal: no phantom completion rows, no double-counted throughput.
-	if err := s.Ack(ctx, "archivist", "session:a"); err != nil {
-		t.Fatalf("re-ack: %v", err)
+	if outcome, err := s.Ack(ctx, "archivist", "session:a", receipt); err != nil || outcome != AckMissing {
+		t.Fatalf("re-ack outcome=%q err=%v", outcome, err)
 	}
 	if got := completionCount(t, s, "archivist"); got != 1 {
 		t.Errorf("completions after re-ack = %d, want 1", got)
@@ -133,9 +131,7 @@ func TestCompletionStatsAggregatesPerConsumer(t *testing.T) {
 		if err := s.Enqueue(ctx, "archivist", key, 0, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Ack(ctx, "archivist", key); err != nil {
-			t.Fatal(err)
-		}
+		ackPending(t, s, "archivist", key)
 	}
 
 	stats, err := s.CompletionStatsSince(ctx, time.Now().Add(-time.Hour))
@@ -169,9 +165,7 @@ func TestPruneCompletionsIsAgeBased(t *testing.T) {
 	if err := s.Enqueue(ctx, "archivist", "session:old", 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Ack(ctx, "archivist", "session:old"); err != nil {
-		t.Fatal(err)
-	}
+	ackPending(t, s, "archivist", "session:old")
 	// Backdate the journal row two days so a one-day retention removes it.
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE loop_queue_completions SET acked_at = ? WHERE dedup_key = 'session:old'`,

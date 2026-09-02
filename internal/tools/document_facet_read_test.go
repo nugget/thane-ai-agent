@@ -9,6 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // facetedBody renders a document the way a publishing loop would, so
@@ -198,7 +199,11 @@ func newSeededDocumentTools(t *testing.T, body string) *documents.Tools {
 
 func seedDocumentTools(t *testing.T, store *documents.Store, body string) *documents.Tools {
 	t.Helper()
-	if _, err := store.Write(t.Context(), documents.WriteArgs{Ref: "core:office.md", Body: &body}); err != nil {
+	manifest, _, ok := documentfacets.InferLegacy(body, documents.DocumentWriteToolName)
+	if !ok {
+		t.Fatal("seed body is not a faceted document")
+	}
+	if _, err := store.Write(t.Context(), documents.WriteArgs{Ref: "core:office.md", Frontmatter: manifest.Frontmatter(), Body: &body}); err != nil {
 		t.Fatalf("seed document: %v", err)
 	}
 	return documents.NewTools(store)
@@ -217,6 +222,9 @@ func TestDocReadAtALevelReturnsOnlyThatProjection(t *testing.T) {
 	}
 	if result["faceted"] != true {
 		t.Errorf("faceted = %v, want true", result["faceted"])
+	}
+	if result["write_tool"] != documents.DocumentWriteToolName {
+		t.Errorf("write_tool = %v, want %q", result["write_tool"], documents.DocumentWriteToolName)
 	}
 	// The point of reading at a level is not paying for the rest.
 	if strings.Contains(raw, "Two packages") {

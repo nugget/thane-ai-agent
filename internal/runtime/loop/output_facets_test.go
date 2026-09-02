@@ -8,6 +8,17 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
+var (
+	statusLineMaxRunes = facetTestBudget(string(OutputFacetStatusLine))
+	teaserMaxRunes     = facetTestBudget(string(OutputFacetTeaser))
+	digestMaxRunes     = facetTestBudget(string(OutputFacetDigest))
+)
+
+func facetTestBudget(key string) int {
+	field, _ := FacetFieldByKey(key)
+	return field.MaxRunes
+}
+
 func facetedOutput(names ...OutputFacet) OutputSpec {
 	facets := make([]FacetSpec, 0, len(names))
 	for _, name := range names {

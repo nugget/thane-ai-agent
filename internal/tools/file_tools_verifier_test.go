@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,7 @@ import (
 type fakePathVerifier struct {
 	err         error
 	mutationErr error
+	verify      func(path, consumer string) error
 	calls       []verifyCall
 }
 
@@ -24,6 +26,9 @@ type verifyCall struct {
 
 func (f *fakePathVerifier) VerifyPath(_ context.Context, path string, consumer string) error {
 	f.calls = append(f.calls, verifyCall{path: path, consumer: consumer})
+	if f.verify != nil {
+		return f.verify(path, consumer)
+	}
 	return f.err
 }
 
@@ -172,5 +177,108 @@ func TestFileTools_Read_NoVerifierUnchanged(t *testing.T) {
 	}
 	if got != "hello" {
 		t.Errorf("Read = %q, want hello", got)
+	}
+}
+
+func TestFileTools_MetadataAndWalkSurfacesRespectManagedDocumentBoundary(t *testing.T) {
+	workspace := t.TempDir()
+	managed := filepath.Join(workspace, "managed")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatalf("MkdirAll managed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, "private.md"), []byte("PRIVATE_CODEC_MARKER"), 0o600); err != nil {
+		t.Fatalf("seed managed file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "public.txt"), []byte("PUBLIC_MARKER"), 0o600); err != nil {
+		t.Fatalf("seed public file: %v", err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+	managedResolved, err := filepath.EvalSymlinks(managed)
+	if err != nil {
+		t.Fatalf("EvalSymlinks managed: %v", err)
+	}
+	ft.SetPathVerifier(&fakePathVerifier{verify: func(path, _ string) error {
+		if path == managedResolved || strings.HasPrefix(path, managedResolved+string(filepath.Separator)) {
+			return errors.New("indexed managed document path; use doc_read")
+		}
+		return nil
+	}})
+
+	for name, call := range map[string]func() error{
+		"list":   func() error { _, err := ft.List(t.Context(), "managed"); return err },
+		"search": func() error { _, err := ft.Search(t.Context(), "managed", "*.md", 2); return err },
+		"grep":   func() error { _, err := ft.Grep(t.Context(), "managed", "MARKER", "", 2, false); return err },
+		"tree":   func() error { _, err := ft.Tree(t.Context(), "managed", 2); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); err == nil || !strings.Contains(err.Error(), "doc_read") {
+				t.Fatalf("direct managed access error = %v, want document-tool redirect", err)
+			}
+		})
+	}
+
+	search, err := ft.Search(t.Context(), ".", "*", 3)
+	if err != nil {
+		t.Fatalf("Search workspace: %v", err)
+	}
+	if !strings.Contains(search, "public.txt") || strings.Contains(search, "private.md") {
+		t.Fatalf("workspace search crossed managed boundary: %s", search)
+	}
+	grep, err := ft.Grep(t.Context(), ".", "MARKER", "", 3, false)
+	if err != nil {
+		t.Fatalf("Grep workspace: %v", err)
+	}
+	if !strings.Contains(grep, "PUBLIC_MARKER") || strings.Contains(grep, "PRIVATE_CODEC_MARKER") {
+		t.Fatalf("workspace grep crossed managed boundary: %s", grep)
+	}
+	tree, err := ft.Tree(t.Context(), ".", 3)
+	if err != nil {
+		t.Fatalf("Tree workspace: %v", err)
+	}
+	if !strings.Contains(tree, "public.txt") || strings.Contains(tree, "private.md") {
+		t.Fatalf("workspace tree crossed managed boundary: %s", tree)
+	}
+	stat, err := ft.Stat(t.Context(), "managed/private.md,public.txt")
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if !strings.Contains(stat, "use doc_read") || !strings.Contains(stat, "public.txt: type=file") {
+		t.Fatalf("stat boundary result = %s", stat)
+	}
+}
+
+func TestFileToolsTreeUsesVisibleEntriesForConnectors(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "a-visible.txt"), []byte("visible"), 0o600); err != nil {
+		t.Fatalf("seed visible file: %v", err)
+	}
+	hidden := filepath.Join(workspace, "z-managed")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatalf("seed hidden directory: %v", err)
+	}
+	hiddenResolved, err := filepath.EvalSymlinks(hidden)
+	if err != nil {
+		t.Fatalf("EvalSymlinks hidden directory: %v", err)
+	}
+	ft := NewFileTools(workspace, nil)
+	ft.SetPathVerifier(&fakePathVerifier{verify: func(path, _ string) error {
+		if path == hiddenResolved {
+			return errors.New("managed root")
+		}
+		return nil
+	}})
+
+	tree, err := ft.Tree(t.Context(), ".", 2)
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if !strings.Contains(tree, "└── a-visible.txt") {
+		t.Fatalf("tree did not render the final visible entry as last:\n%s", tree)
+	}
+	if strings.Contains(tree, "├── a-visible.txt") || strings.Contains(tree, "z-managed") {
+		t.Fatalf("tree used denied entries when choosing connectors:\n%s", tree)
 	}
 }

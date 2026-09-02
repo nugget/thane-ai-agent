@@ -5,14 +5,15 @@ import (
 	"fmt"
 
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 	r.Register(&Tool{
 		Name: "doc_create",
-		Description: "Create a new ordinary managed markdown document safely. Contract-owned documents use their dedicated structured tool instead—for example, contact_dossier_write owns contact dossiers and publish_output_* owns loop outputs. For ordinary documents, this runs the corpus-aware placement analysis (related-document search, title/tags/path normalization, root policy) and, when placement is clean, writes the document in the same call. " +
+		Description: "Create a normal faceted managed document safely. It runs corpus-aware placement analysis (related-document search, title/tags/path normalization, and root policy) and, when placement is clean, writes status_line, optional teaser/digest, and full through the same logical document contract as doc_write. " +
 			"When a similar document already exists or policy wants review, nothing is written: the result comes back created=false with the analysis and an intake_id for doc_commit. " +
-			"Prefer this over doc_write for any brand-new document; doc_write's create is for destinations that are already deliberate.",
+			"Prefer this when placement is not settled; doc_write creates directly when the ref is already deliberate. The reserved dossiers root is a flat subject catalog: inspect sibling refs and use a direct-child ref, never path_prefix.",
 		ContentResolveExempt: []string{"root", "title", "ref", "tags", "path_prefix"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -21,17 +22,17 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 					"type":        "string",
 					"description": "Target managed root without trailing colon, such as `kb` or `scratchpad`. Required unless only one document root exists.",
 				},
-				"body": map[string]any{
-					"type":        "string",
-					"description": "Complete markdown body for the new document, written when placement is clean (outer whitespace is trimmed; frontmatter is managed by the tool).",
-				},
+				"status_line": projectionProperty(documentfacets.StatusLine, false),
+				"teaser":      projectionProperty(documentfacets.Teaser, true),
+				"digest":      projectionProperty(documentfacets.Digest, true),
+				"full":        projectionProperty("full", false),
 				"title": map[string]any{
 					"type":        "string",
 					"description": "Optional title hint; the tool may normalize it against corpus conventions.",
 				},
 				"ref": map[string]any{
 					"type":        "string",
-					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional.",
+					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional; required as a direct-child ref for the `dossiers` root.",
 				},
 				"tags": map[string]any{
 					"type":        "array",
@@ -40,42 +41,51 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"path_prefix": map[string]any{
 					"type":        "string",
-					"description": "Optional directory hint inside the root, such as `network/unifi`.",
+					"description": "Optional directory hint inside the root, such as `network/unifi`. Never use for the flat `dossiers` root.",
 				},
 				"intent": map[string]any{
 					"type":        "string",
 					"description": "Optional note on what the document is for; improves placement analysis.",
 				},
 			},
-			"required": []string{"body"},
+			"required": []string{"status_line", "full"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			// The vocabulary invariant: every document tool's markdown
-			// parameter is named body (#1201).
+			// Mechanical-envelope arguments are always a mistake on this logical
+			// writer. Teach the projection name instead of silently dropping it.
 			if _, hasContent := args["content"]; hasContent {
-				return "", fmt.Errorf("doc_create has no %q parameter — markdown goes in %q (every document tool takes body)", "content", "body")
+				return "", fmt.Errorf("doc_create has no %q parameter; put complete document content in full and supply status_line", "content")
 			}
-			body, _ := args["body"].(string)
+			if _, hasBody := args["body"]; hasBody {
+				return "", fmt.Errorf("doc_create has no body parameter; put complete document content in full and supply status_line")
+			}
 			root, _ := args["root"].(string)
 			title, _ := args["title"].(string)
 			ref, _ := args["ref"].(string)
 			pathPrefix, _ := args["path_prefix"].(string)
+			if err := documents.ValidateIntakePlacement(root, ref, pathPrefix); err != nil {
+				return "", err
+			}
 			intent, _ := args["intent"].(string)
 			return dt.Create(ctx, documents.CreateArgs{
 				Root:         root,
-				Body:         body,
+				StatusLine:   stringArg(args, "status_line"),
+				Teaser:       optionalStringArg(args, "teaser"),
+				Digest:       optionalStringArg(args, "digest"),
+				Full:         stringArg(args, "full"),
 				DesiredTitle: title,
 				DesiredRef:   ref,
 				Tags:         documentStringSliceArg(args["tags"]),
 				PathPrefix:   pathPrefix,
 				Intent:       intent,
+				ReceiptScope: documentRevisionScope(ctx),
 			})
 		},
 	})
 
 	r.Register(&Tool{
 		Name:                 "doc_intake",
-		Description:          "Analyze where proposed new knowledge belongs in a managed markdown corpus before writing it — the deliberate two-step flow. It searches related documents, normalizes title/tags/path, checks root policy, and returns an intake_id plus a commit_plan for doc_commit. For the common create case, doc_create runs this analysis and commits in one call; reach for doc_intake when you want to inspect the plan first or when the knowledge may belong in an existing document (update/append).",
+		Description:          "Analyze where proposed new knowledge belongs in a managed markdown corpus before writing it — the deliberate two-step flow. It searches related documents, normalizes title/tags/path, checks root policy, and returns an intake_id plus a commit_plan for doc_commit. For the common create case, doc_create runs this analysis and commits in one call; reach for doc_intake when you want to inspect the plan first or when the knowledge may belong in an existing document (update/append). The reserved dossiers root accepts only direct-child refs and no path_prefix.",
 		ContentResolveExempt: []string{"root", "desired_title", "desired_ref", "tags", "path_prefix"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -106,7 +116,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"desired_ref": map[string]any{
 					"type":        "string",
-					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional.",
+					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional; required as a direct-child ref for the `dossiers` root.",
 				},
 				"tags": map[string]any{
 					"type":        "array",
@@ -115,7 +125,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"path_prefix": map[string]any{
 					"type":        "string",
-					"description": "Optional directory hint inside the root, such as `network/unifi`.",
+					"description": "Optional directory hint inside the root, such as `network/unifi`. Never use for the flat `dossiers` root.",
 				},
 			},
 		},
@@ -128,6 +138,9 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 			desiredTitle, _ := args["desired_title"].(string)
 			desiredRef, _ := args["desired_ref"].(string)
 			pathPrefix, _ := args["path_prefix"].(string)
+			if err := documents.ValidateIntakePlacement(root, desiredRef, pathPrefix); err != nil {
+				return "", err
+			}
 			return dt.Intake(ctx, documents.IntakeArgs{
 				Root:          root,
 				Intent:        intent,
@@ -144,7 +157,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_commit",
-		Description:          "Commit a prior doc_intake result through managed document mutations. Pass the intake_id from doc_intake, choose the approved action, and set confirm=true when doc_intake returned a caution or when overriding its recommendation.",
+		Description:          "Commit a prior doc_intake result. create_new writes a normal faceted document and requires status_line plus full; update_existing and append_existing retain their body parameter only for a body-only target. If the selected existing ref is faceted or contract-owned, use the write_tool returned by doc_read instead.",
 		ContentResolveExempt: []string{"intake_id", "action", "section", "heading", "window", "confirm"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -160,8 +173,12 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Full markdown body, section content, or journal entry to commit. Required for create_new, update_existing, and append_existing.",
+					"description": "Body-only section content or journal entry for update_existing/append_existing. Never use for create_new.",
 				},
+				"status_line": projectionProperty(documentfacets.StatusLine, false),
+				"teaser":      projectionProperty(documentfacets.Teaser, true),
+				"digest":      projectionProperty(documentfacets.Digest, true),
+				"full":        projectionProperty("full", false),
 				"section": map[string]any{
 					"type":        "string",
 					"description": "For update_existing, upsert this section instead of appending to the body.",
@@ -194,14 +211,35 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 			window, _ := args["window"].(string)
 			confirm, _ := args["confirm"].(bool)
 			return dt.Commit(ctx, documents.CommitArgs{
-				IntakeID: intakeID,
-				Action:   documents.IntakeAction(action),
-				Body:     body,
-				Section:  section,
-				Heading:  heading,
-				Window:   window,
-				Confirm:  confirm,
+				IntakeID:     intakeID,
+				Action:       documents.IntakeAction(action),
+				StatusLine:   stringArg(args, "status_line"),
+				Teaser:       optionalStringArg(args, "teaser"),
+				Digest:       optionalStringArg(args, "digest"),
+				Full:         stringArg(args, "full"),
+				Body:         body,
+				Section:      section,
+				Heading:      heading,
+				Window:       window,
+				Confirm:      confirm,
+				ReceiptScope: documentRevisionScope(ctx),
 			})
 		},
 	})
+}
+
+func projectionProperty(name documentfacets.Name, optional bool) map[string]any {
+	key := string(name)
+	if key == "" {
+		key = "full"
+	}
+	field, _ := documentfacets.FieldByKey(key)
+	description := field.Guidance + documentfacets.FormatGuidance(field.Format)
+	if field.MaxRunes > 0 {
+		description = fmt.Sprintf("%s Maximum %d characters.", description, field.MaxRunes)
+	}
+	if optional {
+		description += " Optional on first creation."
+	}
+	return map[string]any{"type": "string", "description": description}
 }

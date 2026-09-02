@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 )
 
@@ -61,6 +62,7 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 
 	// Step 2: Send auth.
+	uptimeBeforeAuth := int64(buildinfo.Uptime() / time.Second)
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := conn.WriteJSON(authMessage{
 		Type:       typeAuth,
@@ -72,7 +74,13 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 
 	// Step 3: Expect auth_ok with account.
-	var ok authOK
+	var ok struct {
+		Type                string `json:"type"`
+		ProviderID          string `json:"provider_id"`
+		Account             string `json:"account"`
+		ServerVersion       string `json:"server_version"`
+		ServerUptimeSeconds int64  `json:"server_uptime_seconds"`
+	}
 	readJSON(t, conn, &ok)
 	if ok.Type != typeAuthOK {
 		t.Fatalf("expected type %q, got %q", typeAuthOK, ok.Type)
@@ -85,6 +93,18 @@ func TestAuthHandshakeSuccess(t *testing.T) {
 	}
 	if ok.Account != "nugget" {
 		t.Errorf("expected account %q, got %q", "nugget", ok.Account)
+	}
+	if ok.ServerVersion != buildinfo.Version {
+		t.Errorf("expected server version %q, got %q", buildinfo.Version, ok.ServerVersion)
+	}
+	uptimeAfterAuth := int64(buildinfo.Uptime()/time.Second) + 1
+	if ok.ServerUptimeSeconds < uptimeBeforeAuth || ok.ServerUptimeSeconds > uptimeAfterAuth {
+		t.Errorf(
+			"server uptime = %d seconds, want between %d and %d",
+			ok.ServerUptimeSeconds,
+			uptimeBeforeAuth,
+			uptimeAfterAuth,
+		)
 	}
 }
 

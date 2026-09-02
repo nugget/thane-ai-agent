@@ -56,13 +56,15 @@ const DefaultWorkspace = "~/Thane"
 // ConfigFileName is the fixed name of the runtime config inside core.
 const ConfigFileName = "config.yaml"
 
-// CoreRootName, SelfRootName, and ContactsRootName are document roots whose
-// paths are derived from the workspace rather than declared. They may be
-// named in roots: to set policy, and none takes a path from there.
+// CoreRootName, SelfRootName, ContactsRootName, and DossiersRootName are
+// document roots whose paths are derived from the workspace rather than
+// declared. They may be named in roots: to set policy, and none takes a path
+// from there.
 const (
 	CoreRootName     = "core"
 	SelfRootName     = "self"
 	ContactsRootName = "contacts"
+	DossiersRootName = "dossiers"
 )
 
 // legacyConfigLocations are the paths Thane searched before the config
@@ -247,8 +249,9 @@ type Config struct {
 	// Workspace configures the agent's sandboxed file system access.
 	// The workspace root also anchors Thane's derived document roots.
 	// {workspace.path}/core holds what the operator declares Thane to be;
-	// {workspace.path}/self holds what Thane has made of that; and the
-	// optional {workspace.path}/contacts holds contact dossiers.
+	// {workspace.path}/self holds what Thane has made of that; the optional
+	// {workspace.path}/contacts holds contact dossiers; and the optional
+	// {workspace.path}/dossiers holds dossiers for non-contact subjects.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Roots is the unified document-root config. Each entry names one
@@ -276,8 +279,10 @@ type Config struct {
 	//
 	// Typical names: kb (curated knowledge), generated (model-produced
 	// durable outputs), and scratchpad (low-integrity work area). The core,
-	// self, and contacts names are reserved and derived from workspace.path;
-	// declaring them under roots: sets policy, while any path is ignored.
+	// self, contacts, and dossiers names are reserved and derived from
+	// workspace.path; declaring them under roots: sets policy. Paths on core,
+	// self, and contacts are ignored for compatibility; an explicit dossiers
+	// path is rejected with its migration recipe.
 	Roots map[string]RootEntry `yaml:"roots,omitempty"`
 
 	// Paths is the legacy directory-mapping block. Replaced by roots:.
@@ -756,6 +761,13 @@ type OpenAIAPIConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"` // Bind address; empty = all interfaces
 	Port    int    `yaml:"port"`    // Default: 8081
+	// APIKey, when set, requires every request to the OpenAI-compatible
+	// surface to present it as a bearer token (Authorization: Bearer
+	// <key>), which is the header every OpenAI client library already
+	// sends. This surface drives the full agent loop — tools, memory,
+	// delegation — so leaving it empty (open) is appropriate only when
+	// every host that can reach the port is trusted.
+	APIKey string `yaml:"api_key"`
 }
 
 // CardDAVConfig configures the optional CardDAV server for native
@@ -1005,8 +1017,10 @@ type AllowedSigner struct {
 // mapping with explicit path: and policy fields.
 type RootEntry struct {
 	// Path is the directory the root resolves to. Supports ~ expansion at
-	// resolver construction time. For reserved derived roots (core, self,
-	// and contacts) this is ignored; their paths come from workspace.path.
+	// resolver construction time. Reserved derived roots take their paths from
+	// workspace.path. Paths on core, self, and contacts are ignored for
+	// compatibility; an explicit dossiers path is rejected with its migration
+	// recipe.
 	Path string `yaml:"path"`
 
 	// Indexing controls whether markdown files in this root are
@@ -2795,9 +2809,13 @@ func (c *Config) normalizeRoots() error {
 			}
 			seen[trimmed] = name
 			pathValue := strings.TrimSpace(entry.Path)
-			// Derived roots are reserved — their paths are always
-			// derived from workspace.path. Allow declaring either in
-			// roots: solely to set policy; ignore any path provided.
+			if trimmed == DossiersRootName && pathValue != "" {
+				return dossiersPathMigrationError("roots.dossiers.path", entry.Path)
+			}
+			// Derived roots are reserved — their paths are always derived
+			// from workspace.path. Dossiers rejects an explicit path above so
+			// upgrades cannot silently redirect a prior custom root. The older
+			// derived roots retain their path-ignoring compatibility behavior.
 			if IsDerivedRootName(trimmed) {
 				if pathValue != "" && !entryHasPolicy(entry) {
 					slog.Default().Warn("config: derived root path is ignored (it comes from workspace.path); declare this root only when setting policy",
@@ -2805,7 +2823,7 @@ func (c *Config) normalizeRoots() error {
 				}
 			} else {
 				if pathValue == "" {
-					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName, ContactsRootName)
+					return fmt.Errorf("config: roots.%s.path must be set; only the derived roots (%s, %s, %s, %s) take their path from workspace.path", trimmed, CoreRootName, SelfRootName, ContactsRootName, DossiersRootName)
 				}
 				c.Paths[trimmed] = entry.Path
 			}
@@ -2826,9 +2844,18 @@ func (c *Config) normalizeRoots() error {
 	}
 
 	if len(c.Paths) > 0 || len(c.DocRoots) > 0 {
+		for name, path := range c.Paths {
+			if strings.TrimSuffix(strings.TrimSpace(name), ":") == DossiersRootName && strings.TrimSpace(path) != "" {
+				return dossiersPathMigrationError("paths.dossiers", path)
+			}
+		}
 		slog.Default().Warn("config: paths: and doc_roots: are deprecated in favor of the unified roots: block; see docs/understanding/document-roots.md for the new shape")
 	}
 	return nil
+}
+
+func dossiersPathMigrationError(field, configuredPath string) error {
+	return fmt.Errorf("config: %s %q is no longer accepted because dossiers is now a workspace-derived root: move or clone that corpus to {workspace.path}/dossiers, remove the explicit path, and retain its policy under roots.dossiers", field, configuredPath)
 }
 
 // entryHasPolicy reports whether a root entry has any policy fields
@@ -3755,7 +3782,7 @@ func (c *Config) CoreRoot() string {
 // need to treat "this root is missing" as a problem rather than a preference
 // use this to distinguish them.
 func IsDerivedRootName(name string) bool {
-	return name == CoreRootName || name == SelfRootName || name == ContactsRootName
+	return name == CoreRootName || name == SelfRootName || name == ContactsRootName || name == DossiersRootName
 }
 
 // SelfRoot returns the fixed document root holding what Thane writes
@@ -3791,6 +3818,18 @@ func (c *Config) ContactsRoot() string {
 		return ""
 	}
 	return filepath.Join(c.Workspace.Path, ContactsRootName)
+}
+
+// DossiersRoot returns the fixed document root holding dossiers for
+// non-contact subjects, derived from [Workspace.Path] exactly as [CoreRoot]
+// is. The root is opt-in: callers only register it when dossiers is explicitly
+// declared under roots:. When workspace.path is unset, DossiersRoot returns
+// the empty string.
+func (c *Config) DossiersRoot() string {
+	if strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.Workspace.Path, DossiersRootName)
 }
 
 // CoreFile returns the absolute-or-relative path to a named file in the

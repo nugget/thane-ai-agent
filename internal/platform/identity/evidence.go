@@ -3,6 +3,7 @@ package identity
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -61,6 +62,32 @@ type PublicKeyEvidence struct {
 	Algorithm string `json:"algorithm"`
 	// Fingerprint is the SHA-256 fingerprint recomputed from committed material.
 	Fingerprint string `json:"fingerprint"`
+	// Certificate describes committed X.509 material when this identity is a
+	// certificate rather than a bare public key.
+	Certificate *X509CertificateEvidence `json:"certificate,omitempty"`
+}
+
+// X509CertificateEvidence is operator-readable metadata parsed from committed
+// public certificate material. It contains no private key material.
+type X509CertificateEvidence struct {
+	// Subject is the certificate subject's distinguished name.
+	Subject string `json:"subject"`
+	// Issuer is the certificate issuer's distinguished name.
+	Issuer string `json:"issuer"`
+	// SerialNumber is the uppercase hexadecimal certificate serial number.
+	SerialNumber string `json:"serial_number"`
+	// NotBefore begins the certificate validity interval.
+	NotBefore time.Time `json:"not_before"`
+	// NotAfter ends the certificate validity interval.
+	NotAfter time.Time `json:"not_after"`
+	// IsCA reports whether the certificate asserts CA basic constraints.
+	IsCA bool `json:"is_ca"`
+	// SelfSigned reports whether the certificate verifies with its own public key.
+	SelfSigned bool `json:"self_signed"`
+	// PublicKeyAlgorithm names the parsed certificate's public-key algorithm.
+	PublicKeyAlgorithm string `json:"public_key_algorithm"`
+	// SignatureAlgorithm names the parsed certificate's signature algorithm.
+	SignatureAlgorithm string `json:"signature_algorithm"`
 }
 
 // CoreEvidence describes the birth, active revision, and verification posture
@@ -290,6 +317,7 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 			ChannelCA: PublicKeyEvidence{
 				Algorithm:   "x509-ed25519",
 				Fingerprint: caFingerprint,
+				Certificate: x509CertificateEvidence(certificate),
 			},
 		},
 		Core: CoreEvidence{
@@ -311,6 +339,24 @@ func Observe(ctx context.Context, coreDir string, seeds []provenance.TrustedSign
 		},
 	}
 	return evidence, nil
+}
+
+func x509CertificateEvidence(certificate *x509.Certificate) *X509CertificateEvidence {
+	return &X509CertificateEvidence{
+		Subject:      certificate.Subject.String(),
+		Issuer:       certificate.Issuer.String(),
+		SerialNumber: strings.ToUpper(certificate.SerialNumber.Text(16)),
+		NotBefore:    certificate.NotBefore.UTC(),
+		NotAfter:     certificate.NotAfter.UTC(),
+		IsCA:         certificate.IsCA,
+		SelfSigned: certificate.CheckSignature(
+			certificate.SignatureAlgorithm,
+			certificate.RawTBSCertificate,
+			certificate.Signature,
+		) == nil,
+		PublicKeyAlgorithm: certificate.PublicKeyAlgorithm.String(),
+		SignatureAlgorithm: certificate.SignatureAlgorithm.String(),
+	}
 }
 
 func anchorKind(identityKey ssh.PublicKey, seeds []provenance.TrustedSigner) string {

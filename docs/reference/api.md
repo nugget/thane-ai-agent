@@ -4,6 +4,17 @@ Thane can serve up to four network listeners from a single binary. The native
 API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 (11434), and CardDAV (8843) listeners are each optional, enabled via config.
 
+Every HTTP listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
+`PATCH`) that a browser marks as cross-origin, via the `Sec-Fetch-Site` and
+`Origin` request headers, with a `403` and an `{"error": ...}` body. Requests
+without those headers, which is every non-browser client, are unaffected. See
+[Listen Addresses](../operating/configuration.md#listen-addresses).
+
+Request bodies are capped at 8 MiB on the native API and 32 MiB on the
+compatibility shims (room for chat history with base64 images); a body past
+the cap fails the request and closes the connection. All listeners bound
+header read time, idle keep-alive time, and header size.
+
 ## Port 8080 — Native API
 
 Port 8080 serves the Thane-native API and the embedded Cognition Engine
@@ -54,9 +65,9 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `PUT` | `/v1/models/registry/resource-policy` | Set a resource policy. |
 | `DELETE` | `/v1/models/registry/resource-policy?resource=...` | Clear a resource policy. |
 | `GET` | `/v1/contacts` | List or search contacts. Supports `query`, `kind`, `trust_zone`, `property`, `value`, `exact=true`, and `limit` (default 100, max 500). |
-| `GET` | `/v1/contacts/{id}` | Get one contact with structured properties. |
-| `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`. |
-| `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties. |
+| `GET` | `/v1/contacts/{id}` | Get one contact with structured properties; property objects include model-turn provenance when known and `null` for legacy or non-model authorship. |
+| `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`; API-authored properties retain unknown provenance. |
+| `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties; API-authored properties retain unknown provenance. |
 | `DELETE` | `/v1/contacts/{id}` | Soft-delete a contact. |
 | `GET` | `/v1/loops` | Running loop status snapshots. Optional `?state=` filter (`pending`, `sleeping`, `waiting`, `processing`, `error`, `stopped`). |
 | `GET` | `/v1/loops/{id}` | One running loop's status. |
@@ -90,6 +101,25 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/archive/search` | Full-text archive search. |
 | `GET` | `/v1/archive/messages` | Archived message query. |
 | `GET` | `/v1/archive/stats` | Archive statistics. |
+| `POST` | `/v1/archive/contact-dossier-backfill` | Advance one bounded page of the durable, one-time contact-dossier backfill (`?limit`, default 50, max 200). |
+
+The backfill endpoint is an operator operation (`archive:write` in the native
+API contract), not a model tool or an autonomous-loop behavior. It freezes a
+cutoff on its first call, pages active contact subjects and then historical
+closed sessions with durable keyset cursors, and adds catch-up work below fresh
+session-close work. Repeat the request until `complete` is true:
+
+```sh
+curl -sS -X POST \
+  'http://127.0.0.1:8080/v1/archive/contact-dossier-backfill?limit=50'
+```
+
+Retries and restarts are safe. Pending subjects and subjects in the retained
+queue-completion journal are skipped, while the durable cursor prevents the
+already-traversed archive from being scanned again. Once complete, future calls
+are no-ops rather than recurring full-archive scans. The archivist is not woken
+by the endpoint; it drains the resulting backlog at its normal self-paced
+cadence.
 
 ### Checkpoints and Companion Apps
 
@@ -104,6 +134,13 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `POST` | `/v1/companion/observations` | Submit a bounded latest-value observation batch from an authenticated companion. |
+
+During the realtime handshake, the pre-authentication `auth_required.version`
+field identifies the companion protocol version. After successful
+authentication, `auth_ok.server_version` identifies the running Thane build
+using the same stamped version reported by `GET /v1/version`, while
+`auth_ok.server_uptime_seconds` reports whole seconds since that process
+started. Both runtime diagnostics are disclosed only after authentication.
 
 `POST /v1/companion/observations` uses a configured companion bearer token,
 which determines the account, and a stable opaque `client_id` claim supplied by
@@ -156,6 +193,16 @@ A dedicated listener for the frozen OpenAI-compatible shim, kept off the native
 Enabled via `openai_api` in config. The `model` field selects a
 [virtual model](../operating/routing-profiles.md) such as `thane:latest` or
 `thane:premium`.
+
+**Authentication:** optional bearer token, `openai_api.api_key`. When set,
+every request must carry `Authorization: Bearer <key>`, the header OpenAI
+client libraries send by default; a missing or wrong token gets a `401` in
+the OpenAI error envelope with a `WWW-Authenticate: Bearer realm="openai"`
+challenge. When unset the surface is open to every host that can reach the
+port, and it drives the full agent loop, so set a key unless the network
+boundary already enforces who may connect. The Ollama shim has the same
+option (`ollama_api.api_key`); it is off by default there because Home
+Assistant's Ollama integration cannot send a bearer token.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

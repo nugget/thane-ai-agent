@@ -278,8 +278,16 @@ roots:
       verify_signatures: warn
       signing_key: ~/.ssh/id_ed25519
   dossiers:
-    path: ~/Vaults/private-dossiers
-    authoring: read_only
+    authoring: managed
+    seed_signers:
+      - principal: thane@provenance.local
+        key: "ssh-ed25519 AAAA..." # public half of git.signing_key
+        label: agent
+    git:
+      enabled: true
+      sign_commits: true
+      verify_signatures: required
+      signing_key: core:identity/signing_ed25519
   scratchpad:
     path: ~/Thane/scratchpad
     indexing: false
@@ -296,6 +304,13 @@ string when it needs no policy beyond its path:
 roots:
   kb: ~/Thane/knowledge
 ```
+
+`core`, `self`, `contacts`, and `dossiers` are reserved roots whose paths
+are derived from `workspace.path`. Declare `contacts` or `dossiers` with policy
+to enable it, but do not give either a path. They resolve to
+`{workspace}/contacts` and `{workspace}/dossiers` respectively. An explicit
+`dossiers` path is rejected with a migration recipe instead of being silently
+discarded.
 
 > **Deprecated:** the older `paths:` / `doc_roots:` split — one block to
 > name the path, a second to attach policy — is still parsed but emits a
@@ -354,7 +369,7 @@ Good uses for custom roots:
 - knowledge bases
 - scratch work you want to revisit
 - generated reports
-- dossiers
+- custom private note collections
 - imported research notes
 
 See [Document Roots](../understanding/document-roots.md) for the fuller
@@ -504,15 +519,27 @@ ollama_api:
   enabled: true
   address: ""
   port: 11434
+  api_key: ""        # optional bearer token; HA's Ollama integration cannot send one
 
 openai_api:
   enabled: true
   address: ""
   port: 8081
+  api_key: ""        # optional bearer token; OpenAI clients send it natively
 ```
 
 Network binding for the API servers. `listen:` binds the native Thane
 /v1 API and web dashboard (default port 8080). The optional
 Ollama-compatible (port 11434) and OpenAI-compatible (port 8081) shims
-bind separately under their own blocks. Default is localhost-only; set
-`address` to `0.0.0.0` to accept connections from other hosts.
+bind separately under their own blocks. An empty or omitted `address`
+binds **all interfaces**, so every host that can reach the machine can
+reach the listener; set `address` to `127.0.0.1` to keep a listener
+local to the host, for example behind a reverse proxy that terminates
+TLS and enforces its own access policy.
+
+Every listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
+`PATCH`) that a browser marks as cross-origin, using the `Sec-Fetch-Site`
+and `Origin` headers browsers attach and non-browser clients do not. This
+closes the blind cross-site request forgery path from a page the operator
+happens to have open; it does not restrict `curl`, Home Assistant,
+companion apps, or reverse proxies, none of which send those headers.

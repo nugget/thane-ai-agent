@@ -2,12 +2,17 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 
 	_ "modernc.org/sqlite"
@@ -129,6 +134,103 @@ func TestEnqueueSessionCloseWork_EmptySessionID(t *testing.T) {
 	}
 }
 
+func TestEnqueueContactDossierRefreshCoalescesByContact(t *testing.T) {
+	a, store := newQueueTestApp(t)
+	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
+	iteration := 4
+	mutation := contacts.ContactMutation{
+		ContactID:   id,
+		ContactName: "Contact Person",
+		Created:     false,
+		Fields:      []string{"ai_summary", "property:EMAIL"},
+		Provenance: &contacts.PropertyProvenance{
+			Source:         "contact_save",
+			Model:          "test-model",
+			LoopID:         "loop-1",
+			ConversationID: "conversation-1",
+			SessionID:      "session-1",
+			RequestID:      "request-1",
+			ToolCallID:     "tool-call-1",
+			Iteration:      &iteration,
+		},
+	}
+	if err := a.enqueueContactDossierRefresh(context.Background(), mutation); err != nil {
+		t.Fatalf("enqueueContactDossierRefresh: %v", err)
+	}
+
+	items, err := store.Peek(context.Background(), archivist.DefinitionName, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].DedupKey != "contact:"+id.String() {
+		t.Fatalf("queue items = %#v, want one contact-keyed item", items)
+	}
+	var payload messages.LoopNotifyPayload
+	if err := json.Unmarshal(items[0].Payload, &payload); err != nil {
+		t.Fatalf("decode queue payload: %v", err)
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("events = %#v, want 1", payload.Events)
+	}
+	event := payload.Events[0]
+	if event.Source != "contact_save" || event.Type != "structured_contact_changed" || event.ID != id.String() {
+		t.Errorf("event identity = %#v", event)
+	}
+	for _, want := range []string{`"Contact Person"`, "ai_summary, property:EMAIL", "exact name"} {
+		if !strings.Contains(event.Summary, want) {
+			t.Errorf("event summary = %q, want %q", event.Summary, want)
+		}
+	}
+	if !event.ObservedAt.IsZero() {
+		t.Errorf("contact refresh exposed scan time as observed_at: %v", event.ObservedAt)
+	}
+	for key, want := range map[string]string{
+		"contact_id": id.String(), "contact_name": "Contact Person",
+		"created": "false", "fields": "ai_summary,property:EMAIL",
+		"source": "contact_save", "model": "test-model", "loop_id": "loop-1",
+		"conversation_id": "conversation-1", "session_id": "session-1",
+		"request_id": "request-1", "tool_call_id": "tool-call-1", "iteration": "4",
+	} {
+		if got := event.Metadata[key]; got != want {
+			t.Errorf("metadata[%q] = %q, want %q", key, got, want)
+		}
+	}
+
+	mutation.Fields = []string{"note"}
+	if err := a.enqueueContactDossierRefresh(context.Background(), mutation); err != nil {
+		t.Fatalf("re-enqueue contact refresh: %v", err)
+	}
+	if n, _ := store.PendingCount(context.Background(), archivist.DefinitionName); n != 1 {
+		t.Fatalf("pending contact refreshes = %d, want 1 coalesced item", n)
+	}
+	items, err = store.Peek(context.Background(), archivist.DefinitionName, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, summary := projectQueuePayload(items[0].Payload); summary == "" {
+		t.Error("coalesced contact refresh lost its model-facing summary")
+	}
+}
+
+func TestEnqueueContactDossierRefreshSurvivesRequestCancellation(t *testing.T) {
+	a, store := newQueueTestApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
+	err := a.enqueueContactDossierRefresh(ctx, contacts.ContactMutation{
+		ContactID:   id,
+		ContactName: "Canceled Request Contact",
+		Fields:      []string{"note"},
+	})
+	if err != nil {
+		t.Fatalf("detached contact refresh enqueue: %v", err)
+	}
+	items, err := store.Peek(context.Background(), archivist.DefinitionName, 1)
+	if err != nil || len(items) != 1 || items[0].DedupKey != "contact:"+id.String() {
+		t.Fatalf("durable refresh after cancellation: items=%#v err=%v", items, err)
+	}
+}
+
 // TestEnqueueSessionCloseWork_SkipsAutomationOrigins verifies the archival
 // policy (issue #1024): sessions from autonomous/automation/auxiliary origins
 // are not enqueued for the archivist, so it isn't drowned in service-loop and
@@ -174,8 +276,8 @@ func TestIsArchivableSession(t *testing.T) {
 		{"owu-auxiliary", false}, // only the fixed auxiliary id is skipped
 	}
 	for _, tc := range cases {
-		if got := isArchivableSession(tc.conv); got != tc.want {
-			t.Errorf("isArchivableSession(%q) = %v, want %v", tc.conv, got, tc.want)
+		if got := archivist.IsArchivableSession(tc.conv); got != tc.want {
+			t.Errorf("archivist.IsArchivableSession(%q) = %v, want %v", tc.conv, got, tc.want)
 		}
 	}
 }
