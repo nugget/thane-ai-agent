@@ -5,6 +5,8 @@
 // status so callers can special-case 404/503; tryGet() turns those into null
 // for optional fragments; logs() returns the bare-array log shape.
 
+import { requireSignIn } from './auth.js';
+
 const BASE = '/v1';
 
 // ApiError carries the HTTP status of a non-2xx response so callers can branch
@@ -23,6 +25,11 @@ export class ApiError extends Error {
 // propagates from a passed AbortSignal.
 export async function get(path, { signal } = {}) {
   const resp = await fetch(BASE + path, { signal });
+  if (resp.status === 401) {
+    // The session expired or the server restarted and forgot it. Raise
+    // the sign-in once; it reloads the page on success.
+    requireSignIn();
+  }
   if (!resp.ok) throw new ApiError(resp.status, path);
   return resp.json();
 }

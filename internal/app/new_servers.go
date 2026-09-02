@@ -57,6 +57,7 @@ func (a *App) initServers(s *newState) error {
 		a.deletePersistedModelRegistryResourcePolicy,
 		logger,
 	)
+	server.SetAuth(cfg.Listen.Auth, cfg.Companion.TokenIndex())
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
 	server.UseContactStore(a.contactStore)

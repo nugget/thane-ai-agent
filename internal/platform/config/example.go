@@ -46,6 +46,9 @@ func ExampleConfig() *Config {
 
 		Listen: ListenConfig{
 			Port: 8080,
+			Auth: ListenAuthConfig{
+				Tokens: []APIToken{{Label: "operator", Token: "your-api-token"}},
+			},
 		},
 
 		OllamaAPI: OllamaAPIConfig{

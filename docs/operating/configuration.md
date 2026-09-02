@@ -514,6 +514,11 @@ See [Delegation](../understanding/delegation.md).
 listen:
   address: "0.0.0.0"
   port: 8080
+  auth:
+    tokens:
+      - label: operator
+        token: your-api-token
+    session_ttl: 168h
 
 ollama_api:
   enabled: true
@@ -536,6 +541,25 @@ binds **all interfaces**, so every host that can reach the machine can
 reach the listener; set `address` to `127.0.0.1` to keep a listener
 local to the host, for example behind a reverse proxy that terminates
 TLS and enforces its own access policy.
+
+`listen.auth` gates the native /v1 API and the console. With at least one
+token under `tokens:`, every route requires a credential except the public
+few: `/health`, `/v1/version`, `/v1/identity` (evidence published for
+clients to pin), the console shell and its assets, the OpenAPI explorer,
+the sign-in endpoints, and the companion endpoints that carry their own
+credential in-band. API clients send `Authorization: Bearer <token>`.
+Companion account tokens (`companion.providers.<account>.tokens`) are
+accepted on the same routes and authenticate as the account, so companion
+apps that already send them keep working. The console stores no token: it
+posts one once to `POST /v1/auth/login` and receives an HttpOnly,
+SameSite=Strict session cookie, valid for `session_ttl` (default 168h)
+without use and extended on each request; sessions live in memory and end
+on restart, costing one sign-in. `thane init` mints an operator token into
+`core/config.yaml`, so a new workspace is closed from its first boot. With
+no tokens configured the API is open, as it was before this block existed.
+Each token is compared as a SHA-256 digest in constant time and the
+plaintext is not retained after load; `label` is what logs and the session
+endpoint report.
 
 Every listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
 `PATCH`) that a browser marks as cross-origin, using the `Sec-Fetch-Site`

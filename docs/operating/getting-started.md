@@ -49,6 +49,12 @@ material, `core/config.yaml`, and the bundled talents under
 `core/talents/`. A reference `config.example.yaml` and
 `persona.example.md` are also written at the workspace root.
 
+The generated config also carries a freshly minted operator token under
+`listen.auth.tokens`, so the native API and the web console are closed from
+the first boot. Send it as `Authorization: Bearer <token>` from API clients,
+or paste it once into the console's sign-in, which keeps only a session
+cookie. See [Listen Addresses](configuration.md#listen-addresses).
+
 Initialization first generates a stable UUID into
 `identity.operator_contact_id` in the signed config, then seeds an
 `admin`-zone operator contact stub with that exact UUID in `db/contacts.db`.

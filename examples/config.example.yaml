@@ -22,6 +22,23 @@ listen:
   address: ""
   # Port is the TCP port to listen on. Default: 8080.
   port: 8080
+  # Auth gates the native /v1 API and the console. See ListenAuthConfig.
+  auth:
+    # Tokens are the operator's API credentials. Each is compared as a
+    # SHA-256 digest in constant time; the plaintext is never retained
+    # after load. Label names the holder in logs and in the session
+    # endpoint, never the token itself.
+    tokens:
+      - # Label identifies the holder (a person, a script, a device); it is
+        # what logs and the session endpoint report.
+        label: operator
+        # Token is the secret the holder presents. Treat this file
+        # accordingly.
+        token: your-api-token
+    # SessionTTL is how long a console session cookie stays valid
+    # without use; each authenticated request extends it. Default: 168h
+    # (7 days). Sessions live in memory and end on restart.
+    session_ttl: 0s
 # OllamaAPI configures the optional Ollama-compatible API server,
 # used for Home Assistant integration.
 ollama_api:
