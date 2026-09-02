@@ -284,7 +284,7 @@ What it taught the methodology:
 - **Frontmatter can look declarative while being inert.** `kind:
   doctrine` parses but is undeclared (works only by failing
   `isTrailheadKind`); `teaser:` on non-trailhead talents is never
-  rendered anywhere. The loader refuses missing `tags:` loudly — 
+  rendered anywhere. The loader refuses missing `tags:` loudly —
   unknown kinds and unrenderable teasers deserve the same treatment,
   since silent acceptance reads as support.
 - **Cache behavior is part of the context audit.** A single volatile
