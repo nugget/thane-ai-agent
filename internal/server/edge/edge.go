@@ -97,7 +97,7 @@ func New(opts Options) (*Server, error) {
 		hostnames = append(hostnames, strings.ToLower(host))
 	}
 
-	provider, defaults, err := newProvider(cfg.CertMagic.DNS.Provider, cfg.CertMagic.DNS.Settings)
+	provider, defaults, err := newProvider(cfg.CertMagic.DNS.Provider, cfg.CertMagic.DNS.Settings, logger)
 	if err != nil {
 		return nil, fmt.Errorf("edge: %w", err)
 	}
@@ -321,7 +321,7 @@ func Preflight(cfg config.TLSConfig, coreRoot string) error {
 	if !cfg.Enabled {
 		return nil
 	}
-	if _, _, err := newProvider(cfg.CertMagic.DNS.Provider, cfg.CertMagic.DNS.Settings); err != nil {
+	if _, _, err := newProvider(cfg.CertMagic.DNS.Provider, cfg.CertMagic.DNS.Settings, nil); err != nil {
 		return err
 	}
 	if err := prepareStorage(cfg.CertMagic.Storage); err != nil {

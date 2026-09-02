@@ -322,7 +322,7 @@ func TestProviderRegistry(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p, defaults, err := newProvider(tc.provider, tc.settings)
+			p, defaults, err := newProvider(tc.provider, tc.settings, nil)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)

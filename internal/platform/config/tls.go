@@ -51,8 +51,8 @@ func (c *Config) validateTLS() error {
 	if !t.HTTP.Disabled && (t.HTTP.Port < 1 || t.HTTP.Port > 65535) {
 		return fmt.Errorf("tls.http.port %d out of range (1-65535)", t.HTTP.Port)
 	}
-	if !t.HTTP.Disabled && t.HTTP.Port == t.HTTPS.Port && t.HTTP.Address == t.HTTPS.Address {
-		return fmt.Errorf("tls.http and tls.https cannot share port %d", t.HTTPS.Port)
+	if !t.HTTP.Disabled && t.HTTP.Port == t.HTTPS.Port && bindsOverlap(t.HTTP.Address, t.HTTPS.Address) {
+		return fmt.Errorf("tls.http and tls.https cannot share port %d: binds %q and %q overlap", t.HTTPS.Port, t.HTTP.Address, t.HTTPS.Address)
 	}
 	if t.HSTSMaxAge < 0 {
 		return fmt.Errorf("tls.hsts_max_age must not be negative")
@@ -176,4 +176,28 @@ func validateTLSHostname(host string) error {
 // the LDH alphabet a DNS label may use.
 func isLDHRune(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-'
+}
+
+// bindsOverlap reports whether two bind addresses on the same port would
+// collide: identical addresses do, and a wildcard bind collides with
+// every address because it claims all interfaces.
+func bindsOverlap(a, b string) bool {
+	na, nb := normalizeBind(a), normalizeBind(b)
+	return na == "" || nb == "" || na == nb
+}
+
+// normalizeBind reduces every spelling of "all interfaces" to the empty
+// string and strips IPv6 brackets so equal addresses compare equal.
+func normalizeBind(addr string) string {
+	addr = strings.Trim(strings.TrimSpace(addr), "[]")
+	if addr == "" || addr == "*" {
+		return ""
+	}
+	if ip := net.ParseIP(addr); ip != nil {
+		if ip.IsUnspecified() {
+			return ""
+		}
+		return ip.String()
+	}
+	return strings.ToLower(addr)
 }

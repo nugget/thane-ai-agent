@@ -118,6 +118,30 @@ func TestValidateTLS(t *testing.T) {
 		{"http port out of range", func(c *Config) { c.TLS.HTTP.Port = 0 }, "tls.http.port"},
 		{"http disabled ignores its port", func(c *Config) { c.TLS.HTTP.Disabled = true; c.TLS.HTTP.Port = 0 }, ""},
 		{"http and https collide", func(c *Config) { c.TLS.HTTP.Port = 443 }, "cannot share port"},
+		{"wildcard http overlaps specific https on same port", func(c *Config) {
+			c.TLS.HTTP.Port = 443
+			c.TLS.HTTPS.Address = "127.0.0.1"
+		}, "overlap"},
+		{"0.0.0.0 is a wildcard too", func(c *Config) {
+			c.TLS.HTTP.Port = 443
+			c.TLS.HTTP.Address = "0.0.0.0"
+			c.TLS.HTTPS.Address = "127.0.0.1"
+		}, "overlap"},
+		{":: is a wildcard too", func(c *Config) {
+			c.TLS.HTTP.Port = 443
+			c.TLS.HTTP.Address = "[::]"
+			c.TLS.HTTPS.Address = "127.0.0.1"
+		}, "overlap"},
+		{"distinct specific addresses on same port are fine", func(c *Config) {
+			c.TLS.HTTP.Port = 443
+			c.TLS.HTTP.Address = "127.0.0.1"
+			c.TLS.HTTPS.Address = "127.0.0.2"
+		}, ""},
+		{"same specific address on same port collides despite spacing and brackets", func(c *Config) {
+			c.TLS.HTTP.Port = 443
+			c.TLS.HTTP.Address = " ::1 "
+			c.TLS.HTTPS.Address = "[::1]"
+		}, "overlap"},
 		{"negative hsts", func(c *Config) { c.TLS.HSTSMaxAge = -time.Second }, "hsts_max_age"},
 		{"no hostnames", func(c *Config) { c.TLS.Hostnames = map[string]string{} }, "at least one hostname"},
 		{"unknown surface", func(c *Config) { c.TLS.Hostnames["x.example.net"] = "carddav" }, "unknown surface"},

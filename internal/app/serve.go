@@ -126,29 +126,7 @@ func (a *App) Serve(ctx context.Context) error {
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
-		if err := a.server.Shutdown(shutdownCtx); err != nil {
-			a.logger.Error("server shutdown failed", "error", err)
-		}
-		if a.ollamaServer != nil {
-			if err := a.ollamaServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("ollama server shutdown failed", "error", err)
-			}
-		}
-		if a.openaiServer != nil {
-			if err := a.openaiServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("openai server shutdown failed", "error", err)
-			}
-		}
-		if a.carddavServer != nil {
-			if err := a.carddavServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("carddav server shutdown failed", "error", err)
-			}
-		}
-		if a.edgeServer != nil {
-			if err := a.edgeServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("https front door shutdown failed", "error", err)
-			}
-		}
+		a.drainListeners(shutdownCtx)
 		if shutdownCtx.Err() == context.DeadlineExceeded {
 			a.logger.Warn("server shutdown timed out; some connections may have been forcefully terminated")
 		}
@@ -191,6 +169,12 @@ func (a *App) Serve(ctx context.Context) error {
 		fatal <- nil
 	}()
 	if err := <-fatal; err != nil && ctx.Err() == nil {
+		// The sibling listeners and certificate maintenance are still
+		// running; drain them before the deferred shutdown closes the
+		// stores they serve from.
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		a.drainListeners(drainCtx)
+		drainCancel()
 		tasks.finish(true)
 		return err
 	}
@@ -239,4 +223,35 @@ func (a *App) shutdown() {
 		c.fn()
 	}
 	a.closers = nil // release references
+}
+
+// drainListeners stops every HTTP listener, primary and optional alike,
+// waiting up to ctx for in-flight requests. It is the one place the
+// listener set is enumerated for shutdown, shared by the orderly
+// shutdown task and the fatal-listener path, so a listener added in
+// initServers cannot be left running by one of them.
+func (a *App) drainListeners(ctx context.Context) {
+	if err := a.server.Shutdown(ctx); err != nil {
+		a.logger.Error("server shutdown failed", "error", err)
+	}
+	if a.ollamaServer != nil {
+		if err := a.ollamaServer.Shutdown(ctx); err != nil {
+			a.logger.Error("ollama server shutdown failed", "error", err)
+		}
+	}
+	if a.openaiServer != nil {
+		if err := a.openaiServer.Shutdown(ctx); err != nil {
+			a.logger.Error("openai server shutdown failed", "error", err)
+		}
+	}
+	if a.carddavServer != nil {
+		if err := a.carddavServer.Shutdown(ctx); err != nil {
+			a.logger.Error("carddav server shutdown failed", "error", err)
+		}
+	}
+	if a.edgeServer != nil {
+		if err := a.edgeServer.Shutdown(ctx); err != nil {
+			a.logger.Error("https front door shutdown failed", "error", err)
+		}
+	}
 }
