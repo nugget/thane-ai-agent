@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 //go:embed static/*
@@ -91,7 +93,7 @@ func NewWebServer(cfg Config) *WebServer {
 
 // RegisterRoutes registers the dashboard's static routes on the given mux.
 // This satisfies the [api.WebServerRegistrar] interface.
-func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
+func (s *WebServer) RegisterRoutes(mux listen.RouteRegistrar) {
 	// Exact-root match only ("/{$}"), so retired /api/* URLs and other
 	// unknown paths get a 404 instead of a 200 dashboard shell.
 	mux.HandleFunc("GET /{$}", s.handleIndex)

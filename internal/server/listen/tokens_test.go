@@ -1,11 +1,11 @@
-package companion
+package listen
 
 import "testing"
 
-func TestTokenMatcher(t *testing.T) {
+func TestTokenSet(t *testing.T) {
 	t.Parallel()
 
-	matcher := newTokenMatcher(map[string]string{
+	matcher := NewTokenSet(map[string]string{
 		"alice-token": "alice",
 		"bob-token":   "bob",
 	})
@@ -26,7 +26,7 @@ func TestTokenMatcher(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			account, ok := matcher.match(tc.token)
+			account, ok := matcher.Match(tc.token)
 			if ok != tc.wantOK || account != tc.wantAccount {
 				t.Fatalf("match(%q) = (%q, %v), want (%q, %v)", tc.token, account, ok, tc.wantAccount, tc.wantOK)
 			}
@@ -34,15 +34,15 @@ func TestTokenMatcher(t *testing.T) {
 	}
 }
 
-func TestTokenMatcher_EmptyIndexAndEmptyConfiguredToken(t *testing.T) {
+func TestTokenSet_EmptyIndexAndEmptyConfiguredToken(t *testing.T) {
 	t.Parallel()
 
-	if _, ok := newTokenMatcher(nil).match("anything"); ok {
+	if _, ok := NewTokenSet(nil).Match("anything"); ok {
 		t.Fatal("empty index matched a token")
 	}
 	// A blank configured token must not turn a blank presented token into
 	// an authenticated account.
-	if _, ok := newTokenMatcher(map[string]string{"": "ghost"}).match(""); ok {
+	if _, ok := NewTokenSet(map[string]string{"": "ghost"}).Match(""); ok {
 		t.Fatal("empty configured token authenticated an empty presented token")
 	}
 }

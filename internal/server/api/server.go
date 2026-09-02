@@ -41,7 +41,7 @@ import (
 // web.WebServer type so that the web package can be wired in without a
 // circular import.
 type WebServerRegistrar interface {
-	RegisterRoutes(mux *http.ServeMux)
+	RegisterRoutes(mux listen.RouteRegistrar)
 }
 
 // writeJSON encodes v as JSON to w, logging any errors at debug level.
@@ -77,6 +77,8 @@ type Server struct {
 	port                               int
 	handler                            http.Handler
 	handlerOnce                        sync.Once
+	auth                               *authGate
+	routes                             []string
 	loop                               *agent.Loop
 	router                             *router.Router
 	checkpointer                       *checkpoint.Checkpointer
@@ -490,9 +492,22 @@ func (s *Server) Start(ctx context.Context) error {
 	return s.server.ListenAndServe()
 }
 
+// SetAuth configures the native API gate from listen.auth plus the
+// companion account tokens that are accepted as bearer credentials. Must
+// be called before Handler builds the chain.
+func (s *Server) SetAuth(cfg config.ListenAuthConfig, companionTokens map[string]string) {
+	s.auth = newAuthGate(cfg, companionTokens, s.logger)
+}
+
 // buildHandler assembles the route table and middleware chain.
 func (s *Server) buildHandler() http.Handler {
-	mux := http.NewServeMux()
+	mux := newRouteTable()
+
+	// Authentication endpoints: the console's sign-in exchange and the
+	// session probe it reads first.
+	mux.HandleFunc("POST /v1/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /v1/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("GET /v1/auth/session", s.handleAuthSession)
 
 	// Simplified chat endpoint (easier testing)
 	mux.HandleFunc("POST /v1/chat", s.handleSimpleChat)
@@ -607,13 +622,18 @@ func (s *Server) buildHandler() http.Handler {
 
 	// OpenAPI explorer: interactive reference for the native + compat
 	// surfaces, served at /docs from embedded assets (vendored Scalar, no CDN).
+	// Every registrar receives the recording table, never the bare mux.
 	openapi.RegisterRoutes(mux)
+	s.routes = mux.patterns
 
 	// Note: Ollama-compatible API is served on a separate port via OllamaServer
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
 	// only if you need single-port operation.
 
-	return s.withLogging(listen.RejectCrossOriginWrites(s.logger, listen.LimitRequestBody(nativeMaxBodyBytes, mux)))
+	// The gate sits inside the cross-origin guard, so a forged request is
+	// refused before its cookie is even consulted, and outside the body
+	// cap, so an unauthenticated caller never gets a body read at all.
+	return s.withLogging(listen.RejectCrossOriginWrites(s.logger, s.auth.wrap(listen.LimitRequestBody(nativeMaxBodyBytes, mux))))
 }
 
 // Shutdown gracefully stops the server.
