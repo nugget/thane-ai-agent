@@ -20,7 +20,9 @@ import (
 // client can write is a claim, not a source. An IPv4-mapped IPv6 peer is
 // unmapped before matching, so a dual-stack listener behaves the way an
 // operator expects when they write 192.168.1.0/24, and a zone is dropped
-// so a link-local peer matches the prefix that covers it.
+// so a link-local peer matches the prefix that covers it. A refusal logs
+// that matched form, so the address an operator reads out of the log is
+// the one they can add to the list.
 //
 // An empty prefix list leaves the surface open, which is the shipped
 // default: the field is opt-in and a deployment that never writes it
@@ -42,11 +44,18 @@ func RestrictSources(logger *slog.Logger, surface string, allowed []netip.Prefix
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer, ok := peerAddr(r.RemoteAddr)
 		if !ok || !containsAddr(allowed, peer) {
+			// peer is the address the guard actually matched, so an
+			// operator can paste it straight into allowed_sources;
+			// remote_addr keeps the raw socket string beside it, port and
+			// all, for anyone correlating with the access dataset. An
+			// unparseable peer logs as "invalid IP" and remote_addr shows
+			// what arrived.
 			logger.Warn("refused request from disallowed source",
 				"surface", surface,
 				"method", r.Method,
 				"path", r.URL.Path,
-				"peer", r.RemoteAddr,
+				"peer", peer.String(),
+				"remote_addr", r.RemoteAddr,
 			)
 			writeJSONError(w, http.StatusForbidden, "source address not allowed")
 			return

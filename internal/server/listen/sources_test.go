@@ -1,6 +1,9 @@
 package listen
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -111,4 +114,53 @@ type comparableHandler struct{}
 
 func (comparableHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+// TestRestrictSourcesLogsTheMatchedAddress pins what a refusal writes: an
+// operator reading the log must be able to paste peer into
+// allowed_sources unedited, so it carries the address the guard matched —
+// no port, unmapped, no zone — with the raw socket string beside it.
+func TestRestrictSourcesLogsTheMatchedAddress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		remote         string
+		wantPeer       string
+		wantRemoteAddr string
+	}{
+		{"port stripped", "203.0.113.9:52000", "203.0.113.9", "203.0.113.9:52000"},
+		{"IPv4-mapped peer logged as the IPv4 host", "[::ffff:203.0.113.9]:52000", "203.0.113.9", "[::ffff:203.0.113.9]:52000"},
+		{"zone stripped", "[fe80::1%en0]:52000", "fe80::1", "[fe80::1%en0]:52000"},
+		{"unparseable peer says so and keeps the raw string", "/var/run/thane.sock", "invalid IP", "/var/run/thane.sock"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			req := httptest.NewRequest(http.MethodPost, "/api/chat", nil)
+			req.RemoteAddr = tc.remote
+			RestrictSources(logger, "ollama", mustPrefixes(t, "192.168.1.0/24"), comparableHandler{}).
+				ServeHTTP(httptest.NewRecorder(), req)
+
+			var line struct {
+				Level      string `json:"level"`
+				Surface    string `json:"surface"`
+				Peer       string `json:"peer"`
+				RemoteAddr string `json:"remote_addr"`
+			}
+			if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+				t.Fatalf("log line %q: %v", buf.String(), err)
+			}
+			if line.Level != "WARN" || line.Surface != "ollama" {
+				t.Fatalf("level/surface = %q/%q, want WARN/ollama", line.Level, line.Surface)
+			}
+			if line.Peer != tc.wantPeer || line.RemoteAddr != tc.wantRemoteAddr {
+				t.Fatalf("peer/remote_addr = %q/%q, want %q/%q", line.Peer, line.RemoteAddr, tc.wantPeer, tc.wantRemoteAddr)
+			}
+		})
+	}
 }
