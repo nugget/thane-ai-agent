@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/app"
@@ -115,6 +117,8 @@ func writeTLSText(w io.Writer, cfg *config.Config, err error) {
 	}
 	fmt.Fprintf(w, "✓ HTTPS front door: %d hostname(s) via %s DNS-01, storage %s\n",
 		len(cfg.TLS.Hostnames), cfg.TLS.CertMagic.DNS.Provider, cfg.TLS.CertMagic.Storage)
+	fmt.Fprintf(w, "  binds %s (public port %d); listeners a supervisor hands down (LISTEN_FDS) override the bind at serve time\n",
+		net.JoinHostPort(cfg.TLS.HTTPS.Address, strconv.Itoa(cfg.TLS.HTTPS.Port)), cfg.TLS.HTTPS.EffectivePublicPort())
 }
 
 // coreLoopError converts a definition document that will not parse into

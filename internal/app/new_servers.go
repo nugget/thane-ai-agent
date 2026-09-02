@@ -910,6 +910,20 @@ func (a *App) initServers(s *newState) error {
 	// on first call, so this must run after every route-affecting
 	// setter above (companion handlers, identity evidence, the web
 	// dashboard); it is the last thing initServers does for that reason.
+	// A supervisor may have pre-bound the privileged ports and handed
+	// them down (systemd socket activation, or the macOS companion's port
+	// broker). Adopt them before the front door binds anything, and if the
+	// front door is off, release them rather than hold ports nobody serves.
+	inherited, err := edge.InheritListeners(logger)
+	if err != nil {
+		return fmt.Errorf("inherited listeners: %w", err)
+	}
+	if !cfg.TLS.Enabled && len(inherited) > 0 {
+		for name, l := range inherited {
+			logger.Warn("supervisor handed down a listener but tls is not enabled; releasing it", "name", name, "address", l.Addr().String())
+			_ = l.Close()
+		}
+	}
 	if cfg.TLS.Enabled {
 		surfaces := edge.Surfaces{"native": a.server.Handler()}
 		if a.ollamaServer != nil {
@@ -919,10 +933,11 @@ func (a *App) initServers(s *newState) error {
 			surfaces["openai"] = a.openaiServer.Handler()
 		}
 		edgeServer, err := edge.New(edge.Options{
-			Config:   cfg.TLS,
-			Surfaces: surfaces,
-			CoreRoot: cfg.CoreRoot(),
-			Logger:   logger,
+			Config:    cfg.TLS,
+			Surfaces:  surfaces,
+			CoreRoot:  cfg.CoreRoot(),
+			Logger:    logger,
+			Listeners: inherited,
 		})
 		if err != nil {
 			return fmt.Errorf("https front door: %w", err)

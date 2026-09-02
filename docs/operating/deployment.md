@@ -115,16 +115,63 @@ hostname to one of the plaintext surfaces above, so no reverse proxy is
 needed; see [HTTPS Front Door](configuration.md#https-front-door).
 
 Ports 80 and 443 need privilege on every platform Thane runs on, and
-Thane should not have it. On Linux, grant the binary
-`CAP_NET_BIND_SERVICE` (`setcap 'cap_net_bind_service=+ep' /path/to/thane`,
-or `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the systemd unit) or lower
-`net.ipv4.ip_unprivileged_port_start`. macOS refuses ports below 1024 to
-ordinary users and offers no capability to grant, so keep Thane on high
-ports and let the packet filter carry the public ones: bind
-`tls.https.port: 8443` and `tls.http.port: 8880`, set
-`tls.https.public_port: 443` so the HTTP redirect names the port clients
-use, and install a `pf` redirect once as root. Put the rules in an anchor
-file, `/etc/pf.anchors/thane`:
+Thane should never hold it. The front door therefore accepts listening
+sockets a supervisor bound as root and handed down under the systemd
+socket-activation contract: descriptors from 3 up, `LISTEN_FDS` saying how
+many, `LISTEN_PID` naming the intended child, and `LISTEN_FDNAMES` naming
+each one. A descriptor named `https` replaces the TLS bind and one named
+`http` replaces the redirect bind; an absent name binds the configured
+port as usual, and the redirect names the inherited socket's own port.
+Thane clears the variables after adopting the sockets and marks every
+handed-down descriptor close-on-exec so no tool subprocess inherits one.
+Because the supervisor still owns the listening socket, connection
+attempts that arrive during a restart wait in its backlog for the new
+process instead of being refused; connections already established with
+the old process still close with it.
+
+On Linux that is one socket unit per name, both tied to the service:
+
+```ini
+# thane-https.socket
+[Socket]
+ListenStream=443
+FileDescriptorName=https
+Service=thane.service
+
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
+# thane-http.socket
+[Socket]
+ListenStream=80
+FileDescriptorName=http
+Service=thane.service
+
+[Install]
+WantedBy=sockets.target
+```
+
+with `Requires=thane-https.socket thane-http.socket` in the service;
+systemd binds both ports as root and starts Thane unprivileged with the
+environment above, `LISTEN_PID` included. Granting
+the binary `CAP_NET_BIND_SERVICE` or lowering
+`net.ipv4.ip_unprivileged_port_start` also works, at the cost of privilege
+in the process.
+
+macOS refuses ports below 1024 to ordinary users, admin or not, and offers
+no capability to grant. The supported path is the companion app's port
+broker: a LaunchDaemon the app registers through `SMAppService`, whose
+plist declares `Sockets` for 443 and 80 so launchd binds them at boot and
+hands them to the app, which starts Thane with the same environment
+(`LISTEN_PID` set from inside the child by a shell that execs Thane in
+place, since the app cannot know the pid before the spawn). On a
+Mac without the companion, keep Thane on high ports and let the packet
+filter carry the public ones instead: bind `tls.https.port: 8443` and
+`tls.http.port: 8880`, set `tls.https.public_port: 443` so the redirect
+names the port clients use, and install a `pf` redirect once as root, for
+example an anchor containing
 
 ```
 rdr pass on en0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443
