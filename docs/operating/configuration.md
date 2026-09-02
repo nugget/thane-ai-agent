@@ -582,10 +582,12 @@ permanent redirect and nothing else, and every HTTPS response carries
 `Strict-Transport-Security` (`hsts_max_age` sets its lifetime,
 `hsts_disabled: true` omits it). A request for a hostname that is not listed
 gets `421 Misdirected Request`. Ports 80 and 443 need privilege that Thane
-should not hold; where it runs unprivileged, bind high ports, redirect the public
-ones to them with the OS packet filter, and set `https.public_port` so the
-redirect names the port clients use (see
-[Deployment](deployment.md#network-requirements)). Hostnames are explicit and lowercase;
+should never hold: a supervisor that bound them can hand the sockets down under
+the systemd `LISTEN_FDS` contract, named `https` and `http`, and the front
+door serves on those instead of binding, logging each adoption at boot;
+failing that, bind high ports, redirect the public ones with the OS packet
+filter, and set `https.public_port` so the redirect names the port clients
+use (see [Deployment](deployment.md#network-requirements)). Hostnames are explicit and lowercase;
 wildcards and IP literals are refused, and a hostname routed to a shim
 that is not enabled fails validation. The plaintext listeners under
 `listen:`, `ollama_api:`, and `openai_api:` are unaffected; the front door

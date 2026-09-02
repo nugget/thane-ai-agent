@@ -54,6 +54,11 @@ type Options struct {
 	// Logger receives issuance, renewal, and failure events plus the
 	// bridged certmagic log.
 	Logger *slog.Logger
+	// Listeners are sockets a supervisor pre-bound and handed down (see
+	// InheritListeners), keyed InheritedHTTPS and InheritedHTTP. A present
+	// key replaces the corresponding bind; an absent one binds the
+	// configured address and port as usual.
+	Listeners map[string]net.Listener
 }
 
 // Server is a running or runnable front door.
@@ -66,6 +71,13 @@ type Server struct {
 	handler   http.Handler
 	https     *http.Server
 	http      *http.Server
+	// httpsListener and httpListener are inherited sockets; nil means
+	// the server binds its own.
+	httpsListener net.Listener
+	httpListener  net.Listener
+	// publicPort is the port clients reach the TLS listener on: an
+	// inherited socket's own port, else the configured public port.
+	publicPort int
 }
 
 // New builds the front door without touching the network: it resolves
@@ -157,6 +169,15 @@ func New(opts Options) (*Server, error) {
 		tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven
 	}
 
+	s.httpsListener = opts.Listeners[InheritedHTTPS]
+	s.httpListener = opts.Listeners[InheritedHTTP]
+	s.publicPort = cfg.HTTPS.EffectivePublicPort()
+	if s.httpsListener != nil {
+		if p := listenerPort(s.httpsListener); p != 0 {
+			s.publicPort = p
+		}
+	}
+
 	s.handler = s.hsts(withPrincipal(s.routeByHost(routes)))
 	s.https = listen.NewServer(
 		net.JoinHostPort(cfg.HTTPS.Address, strconv.Itoa(cfg.HTTPS.Port)),
@@ -165,7 +186,7 @@ func New(opts Options) (*Server, error) {
 		300*time.Second, // streaming surfaces sit behind this listener
 	)
 	s.https.TLSConfig = tlsCfg
-	if !cfg.HTTP.Disabled {
+	if !cfg.HTTP.Disabled || s.httpListener != nil {
 		s.http = listen.NewServer(
 			net.JoinHostPort(cfg.HTTP.Address, strconv.Itoa(cfg.HTTP.Port)),
 			s.redirect(),
@@ -175,6 +196,9 @@ func New(opts Options) (*Server, error) {
 	}
 	return s, nil
 }
+
+// PublicPort returns the port clients reach the TLS listener on.
+func (s *Server) PublicPort() int { return s.publicPort }
 
 // Hostnames returns the hostnames the front door holds certificates for.
 func (s *Server) Hostnames() []string { return append([]string(nil), s.hostnames...) }
@@ -195,18 +219,32 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	errc := make(chan error, 2)
 	if s.http != nil {
-		s.logger.Info("starting HTTP redirect listener", "address", s.http.Addr)
 		go func() {
-			if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			var err error
+			if s.httpListener != nil {
+				s.logger.Info("starting HTTP redirect listener on an inherited socket", "address", s.httpListener.Addr().String())
+				err = s.http.Serve(s.httpListener)
+			} else {
+				s.logger.Info("starting HTTP redirect listener", "address", s.http.Addr)
+				err = s.http.ListenAndServe()
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errc <- fmt.Errorf("edge: http listener: %w", err)
 				return
 			}
 			errc <- nil
 		}()
 	}
-	s.logger.Info("starting HTTPS front door", "address", s.https.Addr, "hostnames", s.hostnames)
 	go func() {
-		if err := s.https.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if s.httpsListener != nil {
+			s.logger.Info("starting HTTPS front door on an inherited socket", "address", s.httpsListener.Addr().String(), "hostnames", s.hostnames)
+			err = s.https.ServeTLS(s.httpsListener, "", "")
+		} else {
+			s.logger.Info("starting HTTPS front door", "address", s.https.Addr, "hostnames", s.hostnames)
+			err = s.https.ListenAndServeTLS("", "")
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- fmt.Errorf("edge: https listener: %w", err)
 			return
 		}
@@ -269,9 +307,11 @@ func (s *Server) hsts(next http.Handler) http.Handler {
 
 // redirect answers every plain-HTTP request with a permanent redirect to
 // the same hostname and path over HTTPS, carrying the port clients reach
-// the HTTPS listener on when it is not the default. That is the public
-// port, not necessarily the bound one: an unprivileged Thane behind a
-// packet-filter redirect binds 8443 while clients use 443.
+// the HTTPS listener on when it is not the default. That is an inherited
+// socket's own port when the supervisor handed one down, else the
+// configured public port, which need not be the bound one: an
+// unprivileged Thane behind a packet-filter redirect binds 8443 while
+// clients use 443.
 func (s *Server) redirect() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := hostOnly(r.Host)
@@ -279,8 +319,8 @@ func (s *Server) redirect() http.Handler {
 			writeJSONError(w, http.StatusBadRequest, "missing host")
 			return
 		}
-		if port := s.cfg.HTTPS.EffectivePublicPort(); port != 443 {
-			host = net.JoinHostPort(host, strconv.Itoa(port))
+		if s.publicPort != 443 {
+			host = net.JoinHostPort(host, strconv.Itoa(s.publicPort))
 		}
 		target := "https://" + host + r.URL.RequestURI()
 		http.Redirect(w, r, target, http.StatusPermanentRedirect)
