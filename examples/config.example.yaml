@@ -24,10 +24,12 @@ listen:
   port: 8080
   # Auth gates the native /v1 API and the console. See ListenAuthConfig.
   auth:
-    # Tokens are the operator's API credentials. Each is compared as a
-    # SHA-256 digest in constant time; the plaintext is never retained
-    # after load. Label names the holder in logs and in the session
-    # endpoint, never the token itself.
+    # Tokens are the operator's API credentials. The gate keeps only
+    # SHA-256 digests and compares in constant time; the loaded config
+    # itself still holds the plaintext for the process lifetime, as it
+    # does every other credential, until the secret store lands. Label
+    # names the holder in logs and in the session endpoint, never the
+    # token itself.
     tokens:
       - # Label identifies the holder (a person, a script, a device); it is
         # what logs and the session endpoint report.

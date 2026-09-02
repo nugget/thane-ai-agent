@@ -3980,6 +3980,7 @@ body.resize-col .schema-card__fade {
 }
 .auth-title { margin: 0; font-size: 1.1rem; }
 .auth-help { margin: 0; color: var(--muted); font-size: 0.85rem; line-height: 1.4; }
+.auth-label { font-size: 0.85rem; color: var(--muted); }
 .auth-input {
   font: inherit;
   font-family: var(--font-mono);

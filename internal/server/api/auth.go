@@ -139,8 +139,35 @@ func (g *authGate) wrap(next http.Handler) http.Handler {
 			writeUnauthorized(w)
 			return
 		}
+		if p.Kind == "session" {
+			g.refreshCookie(w, r)
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	})
+}
+
+// refreshCookie re-issues the session cookie with a full lifetime, so the
+// browser's copy slides with the server-side session instead of expiring
+// a fixed TTL after sign-in while the session itself is still live.
+func (g *authGate) refreshCookie(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return
+	}
+	http.SetCookie(w, sessionCookie(c.Value, g.sessions.ttl, requestIsTLS(r)))
+}
+
+// sessionCookie is the one shape the console's cookie ever takes.
+func sessionCookie(id string, ttl time.Duration, secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    id,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
+		MaxAge:   int(ttl / time.Second),
+	}
 }
 
 // authenticate resolves the request's credential in order: a client
@@ -286,18 +313,11 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    id,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   requestIsTLS(r),
-		MaxAge:   int(s.auth.sessions.ttl / time.Second),
-	})
+	http.SetCookie(w, sessionCookie(id, s.auth.sessions.ttl, requestIsTLS(r)))
 	s.auth.logger.Info("console sign-in", "principal", p.Name, "kind", p.Kind, "remote", r.RemoteAddr)
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{"authenticated": true, "principal": p}, s.logger)
+	writeJSON(w, map[string]any{"auth_required": true, "authenticated": true, "principal": p}, s.logger)
 }
 
 // handleAuthLogout revokes the session cookie, if any, and clears it.
@@ -311,6 +331,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true,
 		SameSite: http.SameSiteStrictMode, Secure: requestIsTLS(r), MaxAge: -1,
 	})
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -323,6 +344,9 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp["authenticated"] = true
 		resp["principal"] = p
 	}
+	// The answer varies by credential and names the holder: never let a
+	// shared cache hand one caller's session state to another.
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, resp, s.logger)
 }

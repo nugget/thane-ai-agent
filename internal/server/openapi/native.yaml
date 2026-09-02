@@ -16,15 +16,22 @@ info:
     different host/port. Keeping the two apart lets their security models
     diverge — see below.
 
-    ## Security model (declared now, enforced in stages)
+    ## Security model
 
-    Each operation below carries an `x-thane-scope` extension naming the
-    permission it will require once authorization is enforced. Today the API is
-    open behind the network boundary; the contract is declared first so the
-    explorer, the UIs, and the eventual middleware all agree on the shape.
+    Authentication is enforced: whenever `listen.auth.tokens` holds at least
+    one operator token, every operation requires a credential except those
+    marked `security: []` (health, version, identity evidence, the console's
+    sign-in endpoints, and the companion endpoints that authenticate
+    in-band). With no operator token configured the API is open, and
+    `thane init` mints one for new workspaces. Authorization is not yet
+    scoped: each operation carries an `x-thane-scope` extension naming the
+    scope a credential will need once scoped authorization lands, and every
+    credential is unscoped today.
 
-    - **AuthN:** bearer token (`Authorization: Bearer <token>`). The scheme is
-      written OIDC-ready; tokens are minted directly for now.
+    - **AuthN:** bearer token (`Authorization: Bearer <token>`): an operator
+      token, or a companion account token, which authenticates as that
+      account. The console exchanges a token once at `POST /v1/auth/login`
+      for a session cookie and sends that instead.
     - **AuthZ scopes** are `resource:action`:
       `loops:read`, `definitions:read`, `definitions:write`, `requests:read`,
       `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
@@ -125,6 +132,7 @@ paths:
         `birth.asserted_at` is a claim covered by the signed birth commit. It
         is not an independently witnessed timestamp.
       x-thane-scope: identity:read
+      security: []
       responses:
         "200":
           description: Identity evidence snapshot.

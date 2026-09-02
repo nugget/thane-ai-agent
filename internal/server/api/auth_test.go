@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/server/web"
 )
 
 func testGate(t *testing.T) *authGate {
@@ -25,6 +26,7 @@ func testGate(t *testing.T) *authGate {
 func gatedServer(t *testing.T) *Server {
 	t.Helper()
 	s := &Server{logger: testAPILogger()}
+	s.SetWebServer(web.NewWebServer(web.Config{}))
 	s.SetAuth(config.ListenAuthConfig{
 		Tokens:     []config.APIToken{{Label: "alice", Token: "alice-token"}},
 		SessionTTL: time.Hour,
@@ -177,6 +179,17 @@ func TestAuthHandlersLoginSessionLogout(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != sessionCookieName {
 		t.Fatalf("cookies = %+v", cookies)
 	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("login response must be no-store, got %q", rec.Header().Get("Cache-Control"))
+	}
+	var login struct {
+		AuthRequired  bool `json:"auth_required"`
+		Authenticated bool `json:"authenticated"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	if !login.AuthRequired || !login.Authenticated {
+		t.Fatalf("login payload = %s, want auth_required and authenticated true", rec.Body.String())
+	}
 	c := cookies[0]
 	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || !c.Secure || c.Path != "/" || c.MaxAge <= 0 {
 		t.Fatalf("cookie attributes = httponly:%v samesite:%v secure:%v path:%q maxage:%d", c.HttpOnly, c.SameSite, c.Secure, c.Path, c.MaxAge)
@@ -201,6 +214,12 @@ func TestAuthHandlersLoginSessionLogout(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatal("session cookie did not open a gated route")
+	}
+	if refreshed := rec.Result().Cookies(); len(refreshed) != 1 || refreshed[0].Value != c.Value || refreshed[0].MaxAge <= 0 {
+		t.Fatalf("cookie-authenticated request did not refresh the cookie: %+v", refreshed)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "" && cc != "no-store" {
+		t.Fatalf("unexpected cache-control on gated route: %q", cc)
 	}
 
 	// Plain-HTTP login gets a non-Secure cookie so a LAN console still works.
@@ -257,8 +276,16 @@ func TestEveryRouteIsGatedOrDeliberatelyPublic(t *testing.T) {
 	t.Parallel()
 	s := gatedServer(t)
 	h := s.Handler()
-	if len(s.routes) < 40 {
-		t.Fatalf("only %d routes recorded; the route table is not being captured", len(s.routes))
+	recorded := map[string]bool{}
+	for _, p := range s.routes {
+		recorded[p] = true
+	}
+	// Routes mounted by other packages must go through the recorder too;
+	// the first three come from the dashboard and the explorer.
+	for _, want := range []string{"GET /{$}", "GET /static/{file...}", "GET /docs", "GET /v1/loops", "POST /v1/auth/login"} {
+		if !recorded[want] {
+			t.Fatalf("route %q was not recorded; a registrar bypassed the route table (recorded %d routes)", want, len(s.routes))
+		}
 	}
 	for _, pattern := range s.routes {
 		method, path, ok := strings.Cut(pattern, " ")

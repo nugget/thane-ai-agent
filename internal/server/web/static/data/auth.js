@@ -95,7 +95,8 @@ function buildOverlay() {
     '<h2 id="auth-title" class="auth-title">Sign in to Thane</h2>' +
     '<p class="auth-help">Paste an operator token from <code>listen.auth.tokens</code>. ' +
     'The console keeps only a session cookie, never the token.</p>' +
-    '<input type="password" name="token" class="auth-input" placeholder="API token" ' +
+    '<label for="auth-token" class="auth-label">API token</label>' +
+    '<input id="auth-token" type="password" name="token" class="auth-input" placeholder="Paste the token" ' +
     'autocapitalize="off" autocorrect="off" spellcheck="false" required>' +
     '<div class="auth-row"><button type="submit" class="auth-button">Sign in</button>' +
     '<span class="auth-error" role="alert" aria-live="assertive"></span></div>' +

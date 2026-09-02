@@ -41,7 +41,7 @@ import (
 // web.WebServer type so that the web package can be wired in without a
 // circular import.
 type WebServerRegistrar interface {
-	RegisterRoutes(mux *http.ServeMux)
+	RegisterRoutes(mux listen.RouteRegistrar)
 }
 
 // writeJSON encodes v as JSON to w, logging any errors at debug level.
@@ -615,14 +615,15 @@ func (s *Server) buildHandler() http.Handler {
 	// When a WebServerRegistrar is wired in, it owns "/" and related
 	// UI routes. Otherwise, fall back to the JSON root handler.
 	if s.webServer != nil {
-		s.webServer.RegisterRoutes(mux.ServeMux)
+		s.webServer.RegisterRoutes(mux)
 	} else {
 		mux.HandleFunc("GET /", s.handleRoot)
 	}
 
 	// OpenAPI explorer: interactive reference for the native + compat
 	// surfaces, served at /docs from embedded assets (vendored Scalar, no CDN).
-	openapi.RegisterRoutes(mux.ServeMux)
+	// Every registrar receives the recording table, never the bare mux.
+	openapi.RegisterRoutes(mux)
 	s.routes = mux.patterns
 
 	// Note: Ollama-compatible API is served on a separate port via OllamaServer

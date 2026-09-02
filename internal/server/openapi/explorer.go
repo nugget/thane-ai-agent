@@ -9,6 +9,8 @@ import (
 	"embed"
 	"fmt"
 	"net/http"
+
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // files holds the served assets: the two OpenAPI documents and the vendored
@@ -53,7 +55,7 @@ const indexHTML = `<!doctype html>
 // RegisterRoutes mounts the explorer and the raw specs under /docs on mux.
 // The surface is read-only and unauthenticated (documentation only); restrict
 // it at the reverse proxy if it should not be public.
-func RegisterRoutes(mux *http.ServeMux) {
+func RegisterRoutes(mux listen.RouteRegistrar) {
 	mux.HandleFunc("GET /docs", handleIndex)
 	mux.HandleFunc("GET /docs/", handleIndex)
 	mux.HandleFunc("GET /docs/scalar.js", serveEmbedded("assets/scalar.standalone.js", "application/javascript; charset=utf-8"))

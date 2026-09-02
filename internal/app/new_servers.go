@@ -57,7 +57,14 @@ func (a *App) initServers(s *newState) error {
 		a.deletePersistedModelRegistryResourcePolicy,
 		logger,
 	)
-	server.SetAuth(cfg.Listen.Auth, cfg.Companion.TokenIndex())
+	// Companion account tokens open the native API only while the
+	// companion surface itself is on; a disabled companion block with
+	// stale tokens left in it must not keep granting API access.
+	companionTokens := map[string]string{}
+	if cfg.Companion.Configured() {
+		companionTokens = cfg.Companion.TokenIndex()
+	}
+	server.SetAuth(cfg.Listen.Auth, companionTokens)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
 	server.UseContactStore(a.contactStore)

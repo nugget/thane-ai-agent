@@ -755,10 +755,12 @@ type ListenConfig struct {
 // accepted as bearer credentials on the same routes, so companion apps
 // that already send them keep working; they authenticate as the account.
 type ListenAuthConfig struct {
-	// Tokens are the operator's API credentials. Each is compared as a
-	// SHA-256 digest in constant time; the plaintext is never retained
-	// after load. Label names the holder in logs and in the session
-	// endpoint, never the token itself.
+	// Tokens are the operator's API credentials. The gate keeps only
+	// SHA-256 digests and compares in constant time; the loaded config
+	// itself still holds the plaintext for the process lifetime, as it
+	// does every other credential, until the secret store lands. Label
+	// names the holder in logs and in the session endpoint, never the
+	// token itself.
 	Tokens []APIToken `yaml:"tokens"`
 
 	// SessionTTL is how long a console session cookie stays valid
