@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 )
 
 func envFrom(m map[string]string) func(string) string {
@@ -33,7 +35,8 @@ func TestAdoptListenersEnvironmentContract(t *testing.T) {
 		{"no LISTEN_FDS adopts nothing", map[string]string{}, 100, nil, "", ""},
 		{"LISTEN_FDS zero adopts nothing", map[string]string{"LISTEN_FDS": "0", "LISTEN_PID": "100"}, 100, nil, "", ""},
 		{"malformed LISTEN_FDS is an error", map[string]string{"LISTEN_FDS": "two"}, 100, nil, "not a non-negative integer", ""},
-		{"foreign LISTEN_PID is ignored with a warning", map[string]string{"LISTEN_FDS": "1", "LISTEN_PID": "999", "LISTEN_FDNAMES": "https"}, 100, nil, "", "another process"},
+		{"missing LISTEN_PID is ignored with a warning", map[string]string{"LISTEN_FDS": "1", "LISTEN_FDNAMES": "https"}, 100, nil, "", "not addressed to this process"},
+		{"foreign LISTEN_PID is ignored with a warning", map[string]string{"LISTEN_FDS": "1", "LISTEN_PID": "999", "LISTEN_FDNAMES": "https"}, 100, nil, "", "not addressed to this process"},
 		{"duplicate name is an error", map[string]string{"LISTEN_FDS": "2", "LISTEN_PID": "100", "LISTEN_FDNAMES": "https:https"}, 100, nil, "twice", ""},
 	}
 	for _, tc := range tests {
@@ -63,11 +66,17 @@ func TestAdoptListenersEnvironmentContract(t *testing.T) {
 
 // TestInheritListenersFromSupervisor spawns this test binary as the
 // child, hands it two real listening sockets at descriptors 3 and 4 with
-// the systemd environment, and reads back what it adopted. The duplicate
-// names test above covers the parsing; this covers the descriptors.
+// the systemd environment, and reads back what it adopted. The child is
+// started through the same trampoline the macOS companion uses, a shell
+// that sets LISTEN_PID to its own pid and execs the real program in
+// place, so the pid check is exercised the way it is in production. The
+// duplicate names test above covers the parsing; this covers the
+// descriptors.
 func TestInheritListenersFromSupervisor(t *testing.T) {
 	if os.Getenv("THANE_INHERIT_CHILD") == "1" {
-		inheritChildMain()
+		if err := inheritChildReport(); err != nil {
+			t.Fatalf("child: %v", err)
+		}
 		return
 	}
 	https, err := net.Listen("tcp", "127.0.0.1:0")
@@ -95,22 +104,22 @@ func TestInheritListenersFromSupervisor(t *testing.T) {
 		files = append(files, f)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestInheritListenersFromSupervisor$")
+	cmd := exec.Command("/bin/sh", "-c", `LISTEN_PID=$$ exec "$0" "$@"`, os.Args[0], "-test.run=^TestInheritListenersFromSupervisor$")
 	cmd.ExtraFiles = files // land at fds 3, 4, 5 in the child
 	cmd.Env = append(os.Environ(),
 		"THANE_INHERIT_CHILD=1",
 		"LISTEN_FDS=3",
 		"LISTEN_FDNAMES=https:http:metrics",
 	)
-	// LISTEN_PID must be the child's pid, which we only know after start;
-	// the contract tolerates its absence, and the parent-pid case is
-	// covered by the environment table. Here we assert the descriptor path.
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("child failed: %v\n%s", err, out)
 	}
+	// The child prints its report as the first line; the test harness's
+	// own PASS output follows it.
+	first, _, _ := strings.Cut(string(out), "\n")
 	var report map[string]string
-	if err := json.Unmarshal(out, &report); err != nil {
+	if err := json.Unmarshal([]byte(first), &report); err != nil {
 		t.Fatalf("child output %q: %v", out, err)
 	}
 	if report["https"] != https.Addr().String() || report["http"] != httpL.Addr().String() {
@@ -124,21 +133,26 @@ func TestInheritListenersFromSupervisor(t *testing.T) {
 	}
 }
 
-// inheritChildMain is the child half of the supervisor test: adopt, then
-// report each listener's address as JSON on stdout.
-func inheritChildMain() {
+// inheritChildReport is the child half of the supervisor test: adopt, then
+// report each listener's address as one JSON line on stdout and return so
+// the test process finishes normally.
+func inheritChildReport() error {
 	listeners, err := InheritListeners(slog.New(slog.DiscardHandler))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return err
 	}
 	report := map[string]string{}
 	for name, l := range listeners {
 		report[name] = l.Addr().String()
+		_ = l.Close()
 	}
-	report["env_cleared"] = strconv.FormatBool(os.Getenv("LISTEN_FDS") == "" && os.Getenv("LISTEN_FDNAMES") == "")
-	_ = json.NewEncoder(os.Stdout).Encode(report)
-	os.Exit(0)
+	report["env_cleared"] = strconv.FormatBool(os.Getenv("LISTEN_FDS") == "" && os.Getenv("LISTEN_FDNAMES") == "" && os.Getenv("LISTEN_PID") == "")
+	line, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(os.Stdout, string(line))
+	return err
 }
 
 // TestInheritedListenersServeAndNameThePort starts the front door on
@@ -179,7 +193,8 @@ func TestInheritedListenersServeAndNameThePort(t *testing.T) {
 		_ = s.Shutdown(shutdownCtx)
 	})
 
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := httpkit.NewClient()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	var resp *http.Response
 	for i := 0; i < 50; i++ {
 		resp, err = client.Get("http://" + httpL.Addr().String() + "/v1/version")
