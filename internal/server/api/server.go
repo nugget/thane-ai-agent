@@ -75,6 +75,8 @@ type TokenObserver interface {
 type Server struct {
 	address                            string
 	port                               int
+	handler                            http.Handler
+	handlerOnce                        sync.Once
 	loop                               *agent.Loop
 	router                             *router.Router
 	checkpointer                       *checkpoint.Checkpointer
@@ -460,8 +462,36 @@ func (s *Server) ConfigureContactDossierBackfill(
 	s.runContactDossierBackfill = run
 }
 
+// Handler returns the native surface's complete handler chain: every
+// route plus logging, the cross-origin guard, and the body cap. It is
+// built once and shared by Start and by the HTTPS front door, so the two
+// listeners can never serve different route tables.
+func (s *Server) Handler() http.Handler {
+	s.handlerOnce.Do(func() {
+		s.handler = s.buildHandler()
+	})
+	return s.handler
+}
+
 // Start begins serving HTTP requests.
 func (s *Server) Start(ctx context.Context) error {
+	s.server = listen.NewServer(
+		fmt.Sprintf("%s:%d", s.address, s.port),
+		s.Handler(),
+		30*time.Second,
+		120*time.Second, // Long for streaming responses
+	)
+
+	addr := s.address
+	if addr == "" {
+		addr = "0.0.0.0"
+	}
+	s.logger.Info("starting API server", "address", addr, "port", s.port)
+	return s.server.ListenAndServe()
+}
+
+// buildHandler assembles the route table and middleware chain.
+func (s *Server) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Simplified chat endpoint (easier testing)
@@ -583,19 +613,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
 	// only if you need single-port operation.
 
-	s.server = listen.NewServer(
-		fmt.Sprintf("%s:%d", s.address, s.port),
-		s.withLogging(listen.RejectCrossOriginWrites(s.logger, listen.LimitRequestBody(nativeMaxBodyBytes, mux))),
-		30*time.Second,
-		120*time.Second, // Long for streaming responses
-	)
-
-	addr := s.address
-	if addr == "" {
-		addr = "0.0.0.0"
-	}
-	s.logger.Info("starting API server", "address", addr, "port", s.port)
-	return s.server.ListenAndServe()
+	return s.withLogging(listen.RejectCrossOriginWrites(s.logger, listen.LimitRequestBody(nativeMaxBodyBytes, mux)))
 }
 
 // Shutdown gracefully stops the server.
@@ -619,6 +637,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			"status", rw.StatusCode(),
 			"response_bytes", rw.BytesWritten(),
 			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
 		)
 	})
 }

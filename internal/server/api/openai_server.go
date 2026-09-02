@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -18,12 +19,14 @@ import (
 // mirroring the OllamaServer split. The handlers live on *Server; this type
 // owns only the listener and route registration.
 type OpenAIServer struct {
-	address string
-	apiKey  string // bearer token required when non-empty; see openaiAuth
-	port    int
-	api     *Server
-	logger  *slog.Logger
-	server  *http.Server
+	address     string
+	apiKey      string // bearer token required when non-empty; see openaiAuth
+	port        int
+	api         *Server
+	logger      *slog.Logger
+	server      *http.Server
+	handler     http.Handler
+	handlerOnce sync.Once
 }
 
 // NewOpenAIServer creates an OpenAI-compatible API server backed by the native
@@ -53,12 +56,9 @@ func NewOpenAIServer(address string, port int, apiKey string, apiServer *Server,
 //
 // Use Shutdown to gracefully stop the server.
 func (s *OpenAIServer) Start(ctx context.Context) error {
-	mux := http.NewServeMux()
-	s.api.RegisterOpenAIRoutes(mux)
-
 	s.server = listen.NewServer(
 		fmt.Sprintf("%s:%d", s.address, s.port),
-		s.withLogging(listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux)))),
+		s.Handler(),
 		30*time.Second,
 		300*time.Second, // Long for slow models
 	)
@@ -74,6 +74,17 @@ func (s *OpenAIServer) Start(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// Handler returns the OpenAI surface's complete handler chain, built once
+// and shared by Start and the HTTPS front door.
+func (s *OpenAIServer) Handler() http.Handler {
+	s.handlerOnce.Do(func() {
+		mux := http.NewServeMux()
+		s.api.RegisterOpenAIRoutes(mux)
+		s.handler = s.withLogging(listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux))))
+	})
+	return s.handler
 }
 
 // Shutdown gracefully stops the server. Returns nil if it was never started.
@@ -98,6 +109,7 @@ func (s *OpenAIServer) withLogging(next http.Handler) http.Handler {
 			"status", rw.StatusCode(),
 			"response_bytes", rw.BytesWritten(),
 			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
 		)
 	})
 }

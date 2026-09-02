@@ -233,6 +233,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			"status", rw.StatusCode(),
 			"response_bytes", rw.BytesWritten(),
 			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
 		)
 	})
 }
