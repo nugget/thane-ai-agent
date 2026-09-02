@@ -189,6 +189,16 @@ Enabled via `openai_api` in config. The `model` field selects a
 [virtual model](../operating/routing-profiles.md) such as `thane:latest` or
 `thane:premium`.
 
+**Authentication:** optional bearer token, `openai_api.api_key`. When set,
+every request must carry `Authorization: Bearer <key>`, the header OpenAI
+client libraries send by default; a missing or wrong token gets a `401` in
+the OpenAI error envelope with a `WWW-Authenticate: Bearer realm="openai"`
+challenge. When unset the surface is open to every host that can reach the
+port, and it drives the full agent loop, so set a key unless the network
+boundary already enforces who may connect. The Ollama shim has the same
+option (`ollama_api.api_key`); it is off by default there because Home
+Assistant's Ollama integration cannot send a bearer token.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. |

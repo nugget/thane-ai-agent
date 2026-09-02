@@ -18,6 +18,7 @@ import (
 // owns only the listener and route registration.
 type OpenAIServer struct {
 	address string
+	apiKey  string // bearer token required when non-empty; see openaiAuth
 	port    int
 	api     *Server
 	logger  *slog.Logger
@@ -30,15 +31,17 @@ type OpenAIServer struct {
 // Parameters:
 //   - address: IP address to bind to (empty string binds to all interfaces)
 //   - port: Port to listen on (default 8081)
+//   - apiKey: bearer token every request must present; empty leaves the
+//     surface open (see config.OpenAIAPIConfig.APIKey)
 //   - apiServer: The native Server whose OpenAI-compatible handlers are served
 //   - logger: Logger for request and error logging
 //
 // The server is created but not started. Call Start to begin serving requests.
-func NewOpenAIServer(address string, port int, apiServer *Server, logger *slog.Logger) *OpenAIServer {
+func NewOpenAIServer(address string, port int, apiKey string, apiServer *Server, logger *slog.Logger) *OpenAIServer {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &OpenAIServer{address: address, port: port, api: apiServer, logger: logger}
+	return &OpenAIServer{address: address, port: port, apiKey: apiKey, api: apiServer, logger: logger}
 }
 
 // Start begins serving the OpenAI-compatible surface and blocks until the
@@ -54,7 +57,7 @@ func (s *OpenAIServer) Start(ctx context.Context) error {
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, mux)),
+		Handler:      s.withLogging(rejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, mux))),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second, // Long for slow models
 	}

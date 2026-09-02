@@ -69,6 +69,7 @@ paths:
               schema:
                 type: string
                 description: SSE stream of completion chunks (OpenAI delta format).
+        "401": { $ref: "#/components/responses/OpenAIUnauthorized" }
   /v1/models:
     get:
       tags: [openai]
@@ -86,6 +87,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ModelList" }
+        "401": { $ref: "#/components/responses/OpenAIUnauthorized" }
 
   /api/chat:
     post:
@@ -183,8 +185,23 @@ components:
     apiKey:
       type: http
       scheme: bearer
-      description: Per-client API key. Coarse inference access (no granular scopes).
+      description: >-
+        Per-client API key. Coarse inference access (no granular scopes).
+        Configured per surface (`openai_api.api_key`, `ollama_api.api_key`);
+        a surface with no key configured is open and never returns 401.
   responses:
+    OpenAIUnauthorized:
+      description: >-
+        Missing or invalid bearer token. Returned only when `openai_api.api_key`
+        is configured; with no key configured the surface is open (the
+        trusted-network default) and never returns 401.
+      headers:
+        WWW-Authenticate:
+          description: 'Authentication challenge: `Bearer realm="openai"`.'
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OpenAIError" }
     OllamaUnauthorized:
       description: >-
         Missing or invalid bearer token. Returned only when an API key is
@@ -198,6 +215,28 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/OllamaError" }
   schemas:
+    OpenAIError:
+      type: object
+      description: OpenAI error envelope, as client libraries expect it.
+      required: [error]
+      properties:
+        error:
+          type: object
+          description: The error object; always present on a non-2xx response.
+          required: [message, type]
+          properties:
+            message:
+              type: string
+              description: Human-readable reason for the failure.
+              examples: ["authentication required"]
+            type:
+              type: string
+              description: OpenAI error class; authentication failures use `invalid_request_error`.
+              examples: ["invalid_request_error"]
+            code:
+              type: string
+              description: Machine-readable code; `invalid_api_key` for a missing or wrong bearer token.
+              examples: ["invalid_api_key"]
     ChatMessage:
       type: object
       description: One message in a chat exchange (OpenAI/Ollama shape).

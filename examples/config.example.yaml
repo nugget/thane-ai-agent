@@ -44,6 +44,13 @@ openai_api:
   enabled: true
   address: ""
   port: 8081
+  # APIKey, when set, requires every request to the OpenAI-compatible
+  # surface to present it as a bearer token (Authorization: Bearer
+  # <key>), which is the header every OpenAI client library already
+  # sends. This surface drives the full agent loop — tools, memory,
+  # delegation — so leaving it empty (open) is appropriate only when
+  # every host that can reach the port is trusted.
+  api_key: ""
 #
 # (optional) CardDAV configures the optional CardDAV server for native
 # carddav:

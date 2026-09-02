@@ -519,11 +519,13 @@ ollama_api:
   enabled: true
   address: ""
   port: 11434
+  api_key: ""        # optional bearer token; HA's Ollama integration cannot send one
 
 openai_api:
   enabled: true
   address: ""
   port: 8081
+  api_key: ""        # optional bearer token; OpenAI clients send it natively
 ```
 
 Network binding for the API servers. `listen:` binds the native Thane
