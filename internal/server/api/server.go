@@ -30,6 +30,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 	"github.com/nugget/thane-ai-agent/internal/server/openapi"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -582,12 +583,12 @@ func (s *Server) Start(ctx context.Context) error {
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
 	// only if you need single-port operation.
 
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
-		Handler:      s.withLogging(mux),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 120 * time.Second, // Long for streaming responses
-	}
+	s.server = listen.NewServer(
+		fmt.Sprintf("%s:%d", s.address, s.port),
+		s.withLogging(listen.RejectCrossOriginWrites(s.logger, listen.LimitRequestBody(nativeMaxBodyBytes, mux))),
+		30*time.Second,
+		120*time.Second, // Long for streaming responses
+	)
 
 	addr := s.address
 	if addr == "" {

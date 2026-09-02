@@ -4,6 +4,17 @@ Thane can serve up to four network listeners from a single binary. The native
 API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 (11434), and CardDAV (8843) listeners are each optional, enabled via config.
 
+Every HTTP listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
+`PATCH`) that a browser marks as cross-origin, via the `Sec-Fetch-Site` and
+`Origin` request headers, with a `403` and an `{"error": ...}` body. Requests
+without those headers, which is every non-browser client, are unaffected. See
+[Listen Addresses](../operating/configuration.md#listen-addresses).
+
+Request bodies are capped at 8 MiB on the native API and 32 MiB on the
+compatibility shims (room for chat history with base64 images); a body past
+the cap fails the request and closes the connection. All listeners bound
+header read time, idle keep-alive time, and header size.
+
 ## Port 8080 — Native API
 
 Port 8080 serves the Thane-native API and the embedded Cognition Engine
@@ -182,6 +193,16 @@ A dedicated listener for the frozen OpenAI-compatible shim, kept off the native
 Enabled via `openai_api` in config. The `model` field selects a
 [virtual model](../operating/routing-profiles.md) such as `thane:latest` or
 `thane:premium`.
+
+**Authentication:** optional bearer token, `openai_api.api_key`. When set,
+every request must carry `Authorization: Bearer <key>`, the header OpenAI
+client libraries send by default; a missing or wrong token gets a `401` in
+the OpenAI error envelope with a `WWW-Authenticate: Bearer realm="openai"`
+challenge. When unset the surface is open to every host that can reach the
+port, and it drives the full agent loop, so set a key unless the network
+boundary already enforces who may connect. The Ollama shim has the same
+option (`ollama_api.api_key`); it is off by default there because Home
+Assistant's Ollama integration cannot send a bearer token.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

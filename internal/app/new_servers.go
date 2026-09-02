@@ -237,7 +237,7 @@ func (a *App) initServers(s *newState) error {
 	// (/v1/chat/completions, /v1/models) on its own port, keeping the
 	// Thane-native /v1 API on the primary port free of foreign shapes.
 	if cfg.OpenAIAPI.Enabled {
-		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, a.server, logger)
+		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, a.server, logger)
 	}
 
 	// --- Companion app endpoint ---

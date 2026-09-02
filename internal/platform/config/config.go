@@ -761,6 +761,13 @@ type OpenAIAPIConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"` // Bind address; empty = all interfaces
 	Port    int    `yaml:"port"`    // Default: 8081
+	// APIKey, when set, requires every request to the OpenAI-compatible
+	// surface to present it as a bearer token (Authorization: Bearer
+	// <key>), which is the header every OpenAI client library already
+	// sends. This surface drives the full agent loop — tools, memory,
+	// delegation — so leaving it empty (open) is appropriate only when
+	// every host that can reach the port is trusted.
+	APIKey string `yaml:"api_key"`
 }
 
 // CardDAVConfig configures the optional CardDAV server for native

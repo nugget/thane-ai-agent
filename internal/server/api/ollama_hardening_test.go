@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -147,5 +148,61 @@ func TestHandleOllamaStreamingChatShared_SanitizesErrorDetail(t *testing.T) {
 	}
 	if !strings.Contains(body, "agent error") {
 		t.Fatalf("expected sanitized generic message in body: %s", body)
+	}
+}
+
+func TestOpenAIAuth(t *testing.T) {
+	t.Parallel()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	tests := []struct {
+		name       string
+		apiKey     string
+		authHeader string
+		wantCode   int
+	}{
+		{"no key configured leaves surface open", "", "", http.StatusOK},
+		{"missing header rejected", "sekrit", "", http.StatusUnauthorized},
+		{"wrong scheme rejected", "sekrit", "Basic sekrit", http.StatusUnauthorized},
+		{"wrong token rejected", "sekrit", "Bearer wrong", http.StatusUnauthorized},
+		{"prefix of key rejected", "sekrit", "Bearer sekri", http.StatusUnauthorized},
+		{"correct token accepted", "sekrit", "Bearer sekrit", http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			rec := httptest.NewRecorder()
+			openaiAuth(tc.apiKey, next).ServeHTTP(rec, req)
+			if rec.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantCode, rec.Body.String())
+			}
+			if tc.wantCode != http.StatusUnauthorized {
+				return
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="openai"` {
+				t.Fatalf("WWW-Authenticate = %q, want openai realm challenge", got)
+			}
+			var body struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+					Code    string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode OpenAI error envelope: %v (body: %s)", err, rec.Body.String())
+			}
+			if body.Error.Code != "invalid_api_key" || body.Error.Type != "invalid_request_error" {
+				t.Fatalf("error envelope = %+v, want invalid_api_key/invalid_request_error", body.Error)
+			}
+		})
 	}
 }

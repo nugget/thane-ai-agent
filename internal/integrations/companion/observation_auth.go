@@ -2,8 +2,6 @@ package companion
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,35 +34,23 @@ type ObservationAuthenticator interface {
 	AuthenticateObservation(context.Context, ObservationAuthRequest) (ObservationPrincipal, error)
 }
 
-type bearerObservationCredential struct {
-	digest  [sha256.Size]byte
-	account string
-}
-
 // BearerObservationAuthenticator adapts configured companion bearer tokens to
-// the replaceable observation-authentication seam. Configured and candidate
-// tokens are compared as fixed-size SHA-256 digests in constant time.
+// the replaceable observation-authentication seam. Token comparison is the
+// shared tokenMatcher, so this path and the WebSocket handshake hold the
+// same constant-time, digest-only posture.
 type BearerObservationAuthenticator struct {
-	credentials    []bearerObservationCredential
+	tokens         tokenMatcher
 	identityLookup ObservationIdentityLookup
 }
 
 // NewBearerObservationAuthenticator copies and hashes the configured token
 // index so the authenticator does not retain plaintext bearer credentials.
 func NewBearerObservationAuthenticator(tokenIndex map[string]string, identityLookup ObservationIdentityLookup) *BearerObservationAuthenticator {
-	credentials := make([]bearerObservationCredential, 0, len(tokenIndex))
-	for token, account := range tokenIndex {
-		credentials = append(credentials, bearerObservationCredential{
-			digest: sha256.Sum256([]byte(token)), account: account,
-		})
-	}
-	return &BearerObservationAuthenticator{credentials: credentials, identityLookup: identityLookup}
+	return &BearerObservationAuthenticator{tokens: newTokenMatcher(tokenIndex), identityLookup: identityLookup}
 }
 
 // AuthenticateObservation validates one bearer header, resolves the account,
 // then maps today's claimed client ID to the inventory's immutable device ID.
-// The comparison loop never returns early, so a matching credential's
-// position does not affect the number of constant-time comparisons.
 func (a *BearerObservationAuthenticator) AuthenticateObservation(
 	ctx context.Context,
 	request ObservationAuthRequest,
@@ -78,17 +64,8 @@ func (a *BearerObservationAuthenticator) AuthenticateObservation(
 		return ObservationPrincipal{}, ErrObservationUnauthorized
 	}
 
-	candidate := sha256.Sum256([]byte(token))
-	matched := 0
-	account := ""
-	for _, credential := range a.credentials {
-		isMatch := subtle.ConstantTimeCompare(candidate[:], credential.digest[:])
-		matched |= isMatch
-		if isMatch == 1 {
-			account = credential.account
-		}
-	}
-	if matched != 1 {
+	account, matched := a.tokens.match(token)
+	if !matched {
 		// Deliberately avoid a dummy SQLite lookup for invalid bearer tokens.
 		// This temporary bearer path is restricted to Thane's private-network
 		// boundary; dummy database work would amplify unauthenticated traffic

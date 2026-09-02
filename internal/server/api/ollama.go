@@ -29,16 +29,42 @@ const ollamaMaxBodyBytes = 32 << 20
 // ollamaAuth enforces bearer-token auth on the Ollama-compatible
 // surface when apiKey is non-empty. An empty key passes every request
 // through unchanged, preserving the open-surface default for trusted
-// networks.
+// networks. Rejections use the Ollama error shape.
 func ollamaAuth(apiKey string, next http.Handler) http.Handler {
+	return bearerAuth(apiKey, "ollama", func(w http.ResponseWriter) {
+		ollamaError(w, http.StatusUnauthorized, "authentication required")
+	}, next)
+}
+
+// openaiAuth enforces bearer-token auth on the OpenAI-compatible surface
+// when apiKey is non-empty, with the same open-when-empty default as
+// ollamaAuth. Rejections use the OpenAI error envelope so client
+// libraries surface them as authentication errors rather than parse
+// failures.
+func openaiAuth(apiKey string, next http.Handler) http.Handler {
+	return bearerAuth(apiKey, "openai", func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"authentication required","type":"invalid_request_error","code":"invalid_api_key"}}`))
+	}, next)
+}
+
+// bearerAuth is the shared bearer-token gate behind the compat shims. The
+// configured key and the presented token are compared as fixed-size
+// SHA-256 digests in constant time, so neither the key's length nor its
+// content leaks through timing. reject writes the surface-specific 401
+// body after the WWW-Authenticate challenge for realm has been set.
+func bearerAuth(apiKey, realm string, reject func(http.ResponseWriter), next http.Handler) http.Handler {
 	if apiKey == "" {
 		return next
 	}
+	want := sha256.Sum256([]byte(apiKey))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ollama"`)
-			ollamaError(w, http.StatusUnauthorized, "authentication required")
+		got := sha256.Sum256([]byte(token))
+		if !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`"`)
+			reject(w)
 			return
 		}
 		next.ServeHTTP(w, r)
