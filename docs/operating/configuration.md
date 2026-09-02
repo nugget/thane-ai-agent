@@ -543,3 +543,93 @@ and `Origin` headers browsers attach and non-browser clients do not. This
 closes the blind cross-site request forgery path from a page the operator
 happens to have open; it does not restrict `curl`, Home Assistant,
 companion apps, or reverse proxies, none of which send those headers.
+
+## HTTPS Front Door
+
+```yaml
+tls:
+  enabled: true
+  https:
+    port: 443
+  http:
+    port: 80            # redirect only; disabled: true turns it off
+  hsts_max_age: 4320h
+  hostnames:
+    thane.example.net: native
+    ollama.example.net: ollama
+  client_auth:
+    trusted_peer_cas: []   # PEM files, relative to core/
+  certmagic:
+    ca: https://acme-staging-v02.api.letsencrypt.org/directory   # drop for production
+    email: acme@example.net
+    agreed: true
+    # storage defaults to {workspace}/tls; never inside core/
+    dns:
+      provider: linode
+      propagation_delay: 10m
+      propagation_timeout: 15m
+      resolvers: [ns1.linode.com, ns2.linode.com]
+      settings:
+        api_token: your-linode-api-token
+```
+
+Optional. Thane terminates HTTPS itself: one TLS listener holds a
+publicly trusted certificate for every hostname under `hostnames:` and
+routes each to the surface it names (`native` for the /v1 API and
+dashboard, `ollama`, or `openai`), a plain-HTTP listener answers with a
+permanent redirect and nothing else, and every HTTPS response carries
+`Strict-Transport-Security` (`hsts_max_age` sets its lifetime,
+`hsts_disabled: true` omits it). A request for a hostname that is not listed
+gets `421 Misdirected Request`. Hostnames are explicit and lowercase;
+wildcards and IP literals are refused, and a hostname routed to a shim
+that is not enabled fails validation. The plaintext listeners under
+`listen:`, `ollama_api:`, and `openai_api:` are unaffected; the front door
+is a second way in, not a replacement, until you move them to loopback.
+
+Certificates come from certmagic over the ACME DNS-01 challenge, so
+hostnames that resolve only on a private network still get certificates
+from a public CA. The `certmagic:` block is a pass-through: its fields
+mirror certmagic's own settings in snake_case, so certmagic's and Caddy's
+documentation apply directly. `agreed: true` is required. Leave `ca`
+unset for Let's Encrypt production; point it at the staging directory
+while bringing the front door up beside an existing proxy, since staging
+issues untrusted certificates without counting against rate limits.
+Account keys and certificates are runtime state stored under
+`certmagic.storage`, which is created owner-only and tightened to
+owner-only if it already exists wider. Config expands `${HOME}` but not
+`~`, so spell the path out or leave it to the default. A path inside
+`core/`, including one that reaches it through a symlink, is refused so
+key material never enters signed history.
+
+`dns.provider` selects a compiled-in libdns provider; `linode` is the
+first. `dns.settings` is passed to the provider verbatim with the
+provider's own field names, so for Linode it takes `api_token` and
+optionally `api_url` and `api_version`; a misspelled key is rejected at
+load. Propagation is the knob that matters in practice: Linode's
+authoritative nameservers pick up API-created records on a schedule
+rather than immediately, and the challenge fails if the CA looks before
+they have. `propagation_delay` is how long to wait before checking at
+all, `propagation_timeout` how long to keep checking after that, and
+`resolvers` which servers to ask; pointing them at the zone's
+authoritative nameservers avoids waiting on recursive caches. When both
+durations are zero the provider's registry defaults apply, ten and
+fifteen minutes for Linode; `propagation_timeout: -1` disables the checks
+so issuance proceeds as soon as the delay elapses. `cert_obtain_timeout`,
+if set, must exceed their sum or issuance is cut off mid-wait. Hostnames
+must be fully qualified, lowercase DNS names; `thane validate` refuses
+anything the CA would.
+
+Issuance runs in the background after boot: the listeners come up
+immediately and a handshake for a hostname whose certificate has not
+arrived fails until it does, which with a ten-minute propagation wait is
+the honest behaviour. Issuance, renewal, and failure are logged under
+`subsystem=tls`; `thane validate` checks the provider, its settings, the
+storage directory, and every client CA without touching the network.
+
+`client_auth` is on by default: the listener requests a client
+certificate, verifies any it is given against the instance's channel CA
+(`core/ca/channel_root.crt`) plus any `trusted_peer_cas`, and attaches
+the verified identity to the request as a principal. Nothing is refused
+for lack of a certificate yet; the principal is the seam later
+authentication layers read. `disabled: true` ignores client
+certificates entirely.

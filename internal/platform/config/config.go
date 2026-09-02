@@ -223,6 +223,11 @@ type Config struct {
 	// Thane-native /v1 API on the primary listen port).
 	OpenAIAPI OpenAIAPIConfig `yaml:"openai_api"`
 
+	// TLS configures the optional HTTPS front door: in-process TLS
+	// termination with certificates from certmagic, routing each
+	// configured hostname to one of the surfaces above.
+	TLS TLSConfig `yaml:"tls"`
+
 	// CardDAV configures the optional CardDAV server for native
 	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
 	CardDAV CardDAVConfig `yaml:"carddav"`
@@ -769,6 +774,166 @@ type OpenAIAPIConfig struct {
 	// every host that can reach the port is trusted.
 	APIKey string `yaml:"api_key"`
 }
+
+// TLSConfig configures Thane's HTTPS front door: one TLS listener that
+// holds a certificate for each configured hostname and routes each
+// hostname to one of the plaintext surfaces (the native API, the Ollama
+// shim, or the OpenAI shim), plus a plain-HTTP listener whose only job is
+// to redirect. Certificates are obtained and renewed in-process by
+// certmagic over the ACME DNS-01 challenge, so hostnames that resolve
+// only on a private network still get publicly trusted certificates.
+//
+// The CertMagic block is a pass-through: its fields mirror certmagic's
+// own configuration rather than a curated subset, so an operator who
+// knows certmagic or Caddy already knows this block. Thane adds only what
+// certmagic cannot know: which hostnames to hold and which surface each
+// reaches.
+type TLSConfig struct {
+	// Enabled starts the HTTPS front door. Off by default; the plaintext
+	// listeners are unaffected either way.
+	Enabled bool `yaml:"enabled"`
+
+	// HTTPS is the TLS listener. Port defaults to 443. macOS permits an
+	// unprivileged process to bind it; Linux needs CAP_NET_BIND_SERVICE
+	// or the unprivileged-port sysctl.
+	HTTPS TLSListenConfig `yaml:"https"`
+
+	// HTTP is the plain listener that answers every request with a
+	// permanent redirect to HTTPS and nothing else. Port defaults to 80.
+	HTTP TLSRedirectConfig `yaml:"http"`
+
+	// HSTSMaxAge is the Strict-Transport-Security max-age sent on every
+	// HTTPS response. Zero uses the default of 4320h (180 days); to send
+	// no header at all, set HSTSDisabled.
+	HSTSMaxAge time.Duration `yaml:"hsts_max_age"`
+
+	// HSTSDisabled omits the Strict-Transport-Security header entirely.
+	HSTSDisabled bool `yaml:"hsts_disabled"`
+
+	// Hostnames maps each hostname to the surface it reaches: "native"
+	// (the /v1 API and dashboard), "ollama", or "openai". Every hostname
+	// listed gets its own managed certificate; a request for a hostname
+	// not listed is refused with 421 Misdirected Request. Names are
+	// explicit, never issued on demand.
+	Hostnames map[string]string `yaml:"hostnames"`
+
+	// ClientAuth controls verification of client certificates presented
+	// during the handshake. See TLSClientAuthConfig.
+	ClientAuth TLSClientAuthConfig `yaml:"client_auth"`
+
+	// CertMagic is the certificate-management pass-through. See
+	// CertMagicConfig.
+	CertMagic CertMagicConfig `yaml:"certmagic"`
+}
+
+// TLSListenConfig is a bind address and port for the HTTPS listener.
+type TLSListenConfig struct {
+	// Address is the bind address; empty means all interfaces.
+	Address string `yaml:"address"`
+	// Port is the TCP port. Default: 443.
+	Port int `yaml:"port"`
+}
+
+// TLSRedirectConfig is the bind for the redirect-only HTTP listener.
+type TLSRedirectConfig struct {
+	// Disabled turns the redirect listener off entirely.
+	Disabled bool `yaml:"disabled"`
+	// Address is the bind address; empty means all interfaces.
+	Address string `yaml:"address"`
+	// Port is the TCP port. Default: 80.
+	Port int `yaml:"port"`
+}
+
+// TLSClientAuthConfig governs client certificates on the HTTPS front
+// door. When enabled (the default), the listener requests a client
+// certificate, verifies any it is given against the instance's channel
+// CA (core/ca/channel_root.crt) plus the trusted peer CAs listed here,
+// and attaches the verified identity to the request as a principal that
+// later authentication layers can consume. A connection that presents
+// no certificate is not refused; requiring one is a later policy.
+type TLSClientAuthConfig struct {
+	// Disabled turns client-certificate verification off. Certificates a
+	// client presents are then ignored rather than verified.
+	Disabled bool `yaml:"disabled"`
+	// TrustedPeerCAs lists additional CA certificate files (PEM) whose
+	// issued client certificates are accepted alongside the channel CA.
+	// Relative paths resolve against the core root.
+	TrustedPeerCAs []string `yaml:"trusted_peer_cas"`
+}
+
+// CertMagicConfig mirrors certmagic's certificate-management settings.
+// Field names follow certmagic's, in snake_case, so its documentation
+// applies directly.
+type CertMagicConfig struct {
+	// CA is the ACME directory URL. Empty selects Let's Encrypt
+	// production. Point it at the staging directory
+	// (https://acme-staging-v02.api.letsencrypt.org/directory) while
+	// bringing the front door up beside an existing proxy.
+	CA string `yaml:"ca"`
+	// Email is the ACME account contact. Strongly recommended: the CA
+	// uses it for expiry and revocation notices.
+	Email string `yaml:"email"`
+	// Agreed records acceptance of the CA's subscriber agreement. Must be
+	// true; the CA refuses account creation otherwise.
+	Agreed bool `yaml:"agreed"`
+	// KeyType selects the certificate key: ed25519, p256, p384, rsa2048,
+	// or rsa4096. Empty uses certmagic's default (p256).
+	KeyType string `yaml:"key_type"`
+	// RenewalWindowRatio is the fraction of a certificate's lifetime
+	// after which renewal is attempted. Zero uses certmagic's default
+	// (1/3, so a 90-day certificate renews at 60 days).
+	RenewalWindowRatio float64 `yaml:"renewal_window_ratio"`
+	// Storage is the directory for ACME account keys and issued
+	// certificates. Default: {workspace}/tls. Runtime state, never
+	// inside core; a path under the core root is refused.
+	Storage string `yaml:"storage"`
+	// MustStaple requests certificates with the OCSP must-staple
+	// extension.
+	MustStaple bool `yaml:"must_staple"`
+	// CertObtainTimeout bounds one issuance attempt end to end, including
+	// DNS propagation waits. Zero uses certmagic's default; set it above
+	// dns.propagation_delay plus dns.propagation_timeout or issuance is
+	// cut off while still waiting for DNS.
+	CertObtainTimeout time.Duration `yaml:"cert_obtain_timeout"`
+	// DNS configures the DNS-01 challenge solver, which is the only
+	// challenge the front door uses.
+	DNS CertMagicDNSConfig `yaml:"dns"`
+}
+
+// CertMagicDNSConfig mirrors certmagic's DNS-01 solver settings plus the
+// provider selection Thane adds.
+type CertMagicDNSConfig struct {
+	// Provider names the DNS provider from Thane's registry (currently
+	// "linode"). Required.
+	Provider string `yaml:"provider"`
+	// PropagationDelay is how long to wait after creating the challenge
+	// record before starting propagation checks. Providers whose
+	// authoritative servers lag their API need this; Linode's guidance is
+	// ten minutes, which is the registry default for that provider when
+	// this is zero.
+	PropagationDelay time.Duration `yaml:"propagation_delay"`
+	// PropagationTimeout is the longest to keep checking for the record
+	// after the delay. Zero uses the provider's registry default; -1
+	// (certmagic's sentinel) disables propagation checks so issuance
+	// proceeds as soon as the delay elapses.
+	PropagationTimeout time.Duration `yaml:"propagation_timeout"`
+	// Resolvers lists DNS servers to query during propagation checks,
+	// as host or host:port. Pointing these at the zone's authoritative
+	// nameservers avoids waiting on recursive-resolver caches.
+	Resolvers []string `yaml:"resolvers"`
+	// TTL is the challenge record's TTL. Zero uses the provider default.
+	TTL time.Duration `yaml:"ttl"`
+	// OverrideDomain delegates the challenge record to another domain
+	// (a CNAME'd _acme-challenge target).
+	OverrideDomain string `yaml:"override_domain"`
+	// Settings is passed through to the provider verbatim, with the
+	// provider's own field names (for linode: api_token, and optionally
+	// api_url and api_version). Unknown keys are rejected.
+	Settings map[string]any `yaml:"settings"`
+}
+
+// TLSSurfaceNames are the values Hostnames may route to.
+var TLSSurfaceNames = []string{"native", "ollama", "openai"}
 
 // CardDAVConfig configures the optional CardDAV server for native
 // contact app sync.  When Enabled is true and credentials are set,
@@ -2934,6 +3099,7 @@ func (c *Config) applyDefaults() {
 		c.Listen.Port = 8080
 	}
 	c.DataDir = ResolveDataDir(c.Workspace.Path, c.DataDir)
+	c.applyTLSDefaults()
 	if c.TalentsDir == "" {
 		// Derived, never authored: talents live inside core so they carry the
 		// same signed history and the same cleanliness rule as the prompts
@@ -3191,6 +3357,9 @@ func (c *Config) Validate() error {
 	}
 	if c.OpenAIAPI.Enabled && (c.OpenAIAPI.Port < 1 || c.OpenAIAPI.Port > 65535) {
 		return fmt.Errorf("openai_api.port %d out of range (1-65535)", c.OpenAIAPI.Port)
+	}
+	if err := c.validateTLS(); err != nil {
+		return err
 	}
 	if c.CardDAV.Enabled {
 		if c.CardDAV.Username == "" {

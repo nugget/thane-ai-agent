@@ -95,6 +95,20 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}
 
+	// The front door is the public entry point once a proxy is retired,
+	// so its failure is as fatal as the primary listener's: it feeds the
+	// same channel Serve waits on instead of being logged and forgotten,
+	// which would leave the instance running with its front door dark
+	// and nothing to make a supervisor restart it.
+	fatal := make(chan error, 2)
+	if a.edgeServer != nil {
+		go func() {
+			if err := a.edgeServer.Start(ctx); err != nil {
+				fatal <- fmt.Errorf("https front door: %w", err)
+			}
+		}()
+	}
+
 	// Serve synchronizes with these tasks before returning: everything
 	// after the server drain below — archiving conversations, ending
 	// sessions, the shutdown checkpoint — reads the stores that the
@@ -112,24 +126,7 @@ func (a *App) Serve(ctx context.Context) error {
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
-		if err := a.server.Shutdown(shutdownCtx); err != nil {
-			a.logger.Error("server shutdown failed", "error", err)
-		}
-		if a.ollamaServer != nil {
-			if err := a.ollamaServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("ollama server shutdown failed", "error", err)
-			}
-		}
-		if a.openaiServer != nil {
-			if err := a.openaiServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("openai server shutdown failed", "error", err)
-			}
-		}
-		if a.carddavServer != nil {
-			if err := a.carddavServer.Shutdown(shutdownCtx); err != nil {
-				a.logger.Error("carddav server shutdown failed", "error", err)
-			}
-		}
+		a.drainListeners(shutdownCtx)
 		if shutdownCtx.Err() == context.DeadlineExceeded {
 			a.logger.Warn("server shutdown timed out; some connections may have been forcefully terminated")
 		}
@@ -160,13 +157,26 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	})
 
-	// Start the primary API server. This blocks until the server is shut
-	// down (via context cancellation or fatal error).
-	if err := a.server.Start(ctx); err != nil {
-		if ctx.Err() == nil {
-			tasks.finish(true)
-			return fmt.Errorf("server failed: %w", err)
+	// Start the primary API server and wait for it, or for the front
+	// door, to fail. Under cancellation the shutdown task drains the
+	// listeners and the primary returns ErrServerClosed, which is not a
+	// failure; a listener error while ctx is still alive is.
+	go func() {
+		if err := a.server.Start(ctx); err != nil {
+			fatal <- fmt.Errorf("server failed: %w", err)
+			return
 		}
+		fatal <- nil
+	}()
+	if err := <-fatal; err != nil && ctx.Err() == nil {
+		// The sibling listeners and certificate maintenance are still
+		// running; drain them before the deferred shutdown closes the
+		// stores they serve from.
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		a.drainListeners(drainCtx)
+		drainCancel()
+		tasks.finish(true)
+		return err
 	}
 
 	// finish(fatal) when ctx is somehow still alive: Start returning nil
@@ -213,4 +223,35 @@ func (a *App) shutdown() {
 		c.fn()
 	}
 	a.closers = nil // release references
+}
+
+// drainListeners stops every HTTP listener, primary and optional alike,
+// waiting up to ctx for in-flight requests. It is the one place the
+// listener set is enumerated for shutdown, shared by the orderly
+// shutdown task and the fatal-listener path, so a listener added in
+// initServers cannot be left running by one of them.
+func (a *App) drainListeners(ctx context.Context) {
+	if err := a.server.Shutdown(ctx); err != nil {
+		a.logger.Error("server shutdown failed", "error", err)
+	}
+	if a.ollamaServer != nil {
+		if err := a.ollamaServer.Shutdown(ctx); err != nil {
+			a.logger.Error("ollama server shutdown failed", "error", err)
+		}
+	}
+	if a.openaiServer != nil {
+		if err := a.openaiServer.Shutdown(ctx); err != nil {
+			a.logger.Error("openai server shutdown failed", "error", err)
+		}
+	}
+	if a.carddavServer != nil {
+		if err := a.carddavServer.Shutdown(ctx); err != nil {
+			a.logger.Error("carddav server shutdown failed", "error", err)
+		}
+	}
+	if a.edgeServer != nil {
+		if err := a.edgeServer.Shutdown(ctx); err != nil {
+			a.logger.Error("https front door shutdown failed", "error", err)
+		}
+	}
 }

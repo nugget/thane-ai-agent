@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -20,13 +21,15 @@ import (
 // port (e.g., for Home Assistant integration). For single-port setups, use
 // Server.RegisterOllamaRoutes instead.
 type OllamaServer struct {
-	address    string
-	port       int
-	apiKey     string
-	loop       *agent.Loop
-	owuTracker *OWUTracker
-	logger     *slog.Logger
-	server     *http.Server
+	address     string
+	port        int
+	apiKey      string
+	loop        *agent.Loop
+	owuTracker  *OWUTracker
+	logger      *slog.Logger
+	server      *http.Server
+	handler     http.Handler
+	handlerOnce sync.Once
 }
 
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
@@ -68,23 +71,9 @@ func NewOllamaServer(address string, port int, apiKey string, loop *agent.Loop, 
 //
 // Use Shutdown to gracefully stop the server.
 func (s *OllamaServer) Start(ctx context.Context) error {
-	mux := http.NewServeMux()
-
-	// Ollama-compatible endpoints
-	mux.HandleFunc("POST /api/chat", s.handleChat)
-	mux.HandleFunc("POST /api/generate", s.handleGenerate)
-	mux.HandleFunc("GET /api/tags", s.handleTags)
-	mux.HandleFunc("GET /api/version", s.handleVersion)
-
-	// Health check - matches root path only (not a prefix match)
-	mux.HandleFunc("HEAD /{$}", s.handleHead)
-	mux.HandleFunc("GET /{$}", s.handleHealth)
-
-	// Auth and the cross-origin guard sit inside logging so rejected
-	// requests still produce access-log lines with their 401/403 status.
 	s.server = listen.NewServer(
 		fmt.Sprintf("%s:%d", s.address, s.port),
-		s.withLogging(listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))),
+		s.Handler(),
 		30*time.Second,
 		300*time.Second, // Long for slow models
 	)
@@ -100,6 +89,34 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// Handler returns the Ollama surface's complete handler chain, built once
+// and shared by Start and the HTTPS front door.
+func (s *OllamaServer) Handler() http.Handler {
+	s.handlerOnce.Do(func() {
+		s.handler = s.buildHandler()
+	})
+	return s.handler
+}
+
+// buildHandler assembles the route table and middleware chain.
+func (s *OllamaServer) buildHandler() http.Handler {
+	mux := http.NewServeMux()
+
+	// Ollama-compatible endpoints
+	mux.HandleFunc("POST /api/chat", s.handleChat)
+	mux.HandleFunc("POST /api/generate", s.handleGenerate)
+	mux.HandleFunc("GET /api/tags", s.handleTags)
+	mux.HandleFunc("GET /api/version", s.handleVersion)
+
+	// Health check - matches root path only (not a prefix match)
+	mux.HandleFunc("HEAD /{$}", s.handleHead)
+	mux.HandleFunc("GET /{$}", s.handleHealth)
+
+	// Auth and the cross-origin guard sit inside logging so rejected
+	// requests still produce access-log lines with their 401/403 status.
+	return s.withLogging(listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux)))
 }
 
 // Shutdown gracefully stops the server.
@@ -132,6 +149,7 @@ func (s *OllamaServer) withLogging(next http.Handler) http.Handler {
 			"status", rw.StatusCode(),
 			"response_bytes", rw.BytesWritten(),
 			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
 		)
 	})
 }

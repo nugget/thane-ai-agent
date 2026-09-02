@@ -49,6 +49,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
+	"github.com/nugget/thane-ai-agent/internal/server/edge"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/companions"
@@ -151,6 +152,7 @@ type App struct {
 	ollamaServer  *api.OllamaServer
 	openaiServer  *api.OpenAIServer
 	carddavServer *cdav.Server
+	edgeServer    *edge.Server
 
 	// MQTT
 	mqttPub        *mqtt.Publisher
