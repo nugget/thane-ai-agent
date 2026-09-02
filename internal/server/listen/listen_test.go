@@ -1,4 +1,4 @@
-package api
+package listen
 
 import (
 	"errors"
@@ -53,7 +53,7 @@ func TestRejectCrossOriginWrites(t *testing.T) {
 				req.Header.Set(k, v)
 			}
 			rec := httptest.NewRecorder()
-			rejectCrossOriginWrites(testAPILogger(), next).ServeHTTP(rec, req)
+			RejectCrossOriginWrites(nil, next).ServeHTTP(rec, req)
 			if rec.Code != tc.wantCode {
 				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantCode, rec.Body.String())
 			}
@@ -66,10 +66,10 @@ func TestRejectCrossOriginWrites(t *testing.T) {
 	}
 }
 
-func TestNewHTTPServerAppliesSharedBounds(t *testing.T) {
+func TestNewServerAppliesSharedBounds(t *testing.T) {
 	t.Parallel()
 
-	srv := newHTTPServer(":0", http.NotFoundHandler(), 30*time.Second, 120*time.Second)
+	srv := NewServer(":0", http.NotFoundHandler(), 30*time.Second, 120*time.Second)
 	if srv.ReadTimeout != 30*time.Second || srv.WriteTimeout != 120*time.Second {
 		t.Fatalf("per-surface timeouts not preserved: read=%s write=%s", srv.ReadTimeout, srv.WriteTimeout)
 	}
@@ -91,7 +91,7 @@ func TestLimitRequestBody(t *testing.T) {
 
 	t.Run("body within cap reads fully", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(strings.Repeat("a", 16)))
-		limitRequestBody(32, next).ServeHTTP(httptest.NewRecorder(), req)
+		LimitRequestBody(32, next).ServeHTTP(httptest.NewRecorder(), req)
 		if readErr != nil || readLen != 16 {
 			t.Fatalf("read = (%d, %v), want (16, nil)", readLen, readErr)
 		}
@@ -99,7 +99,7 @@ func TestLimitRequestBody(t *testing.T) {
 
 	t.Run("body past cap fails with MaxBytesError", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(strings.Repeat("a", 64)))
-		limitRequestBody(32, next).ServeHTTP(httptest.NewRecorder(), req)
+		LimitRequestBody(32, next).ServeHTTP(httptest.NewRecorder(), req)
 		var maxErr *http.MaxBytesError
 		if !errors.As(readErr, &maxErr) {
 			t.Fatalf("read error = %v, want *http.MaxBytesError", readErr)

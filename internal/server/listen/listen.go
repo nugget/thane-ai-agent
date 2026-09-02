@@ -1,4 +1,10 @@
-package api
+// Package listen holds the bounds and guards every inbound HTTP listener
+// Thane runs must share: the native API, the Ollama and OpenAI shims, and
+// CardDAV. It exists so that a listener cannot be added, or a new
+// http.Server constructed, without them. Per-surface read and write
+// budgets stay with the surface because streaming needs differ; what
+// lives here is everything that has no reason to differ.
+package listen
 
 import (
 	"encoding/json"
@@ -9,7 +15,49 @@ import (
 	"time"
 )
 
-// rejectCrossOriginWrites refuses state-changing requests that a browser
+const (
+	// ReadHeaderTimeout is a header-specific bound, shorter than any
+	// surface's ReadTimeout. ReadTimeout covers the whole request read,
+	// headers included, but is sized for bodies that may legitimately
+	// take tens of seconds to arrive; a client that trickles headers for
+	// that long is not a legitimate client, so headers get their own,
+	// tighter clock.
+	ReadHeaderTimeout = 10 * time.Second
+	// IdleTimeout reclaims keep-alive connections nobody is using.
+	IdleTimeout = 120 * time.Second
+	// MaxHeaderBytes is generous for real clients and a fraction of the
+	// 1 MiB net/http default.
+	MaxHeaderBytes = 64 << 10
+)
+
+// NewServer builds an http.Server with the shared listener bounds applied
+// around the surface's own read and write timeouts. addr may be empty when
+// the caller serves on a listener it created itself.
+func NewServer(addr string, handler http.Handler, readTimeout, writeTimeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       readTimeout,
+		ReadHeaderTimeout: ReadHeaderTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       IdleTimeout,
+		MaxHeaderBytes:    MaxHeaderBytes,
+	}
+}
+
+// LimitRequestBody caps every request body at maxBytes before handlers
+// decode it. Reads past the cap fail with *http.MaxBytesError, and
+// net/http closes the connection rather than draining the excess.
+func LimitRequestBody(maxBytes int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RejectCrossOriginWrites refuses state-changing requests that a browser
 // reports as coming from another origin. It closes the blind cross-site
 // request forgery path: a POST with a text/plain body is a CORS "simple
 // request", so a page on any origin can fire it at a listener without a
@@ -22,14 +70,14 @@ import (
 // registrable domain are not the same trust boundary. When an Origin
 // header is present, its host must equal the request Host; an opaque
 // "null" origin is refused. A request carrying neither header, which is
-// every curl, Home Assistant, companion, and reverse-proxy client, passes
-// unchanged. Safe methods pass unconditionally because they change no
-// state and because the WebSocket upgrade is a GET.
+// every curl, Home Assistant, companion, CardDAV, and reverse-proxy
+// client, passes unchanged. Safe methods pass unconditionally because
+// they change no state and because the WebSocket upgrade is a GET.
 //
 // When the native API grows a credentialed CORS allowlist for detached
 // UI origins, that allowlist belongs here as the one place an Origin is
 // admitted.
-func rejectCrossOriginWrites(logger *slog.Logger, next http.Handler) http.Handler {
+func RejectCrossOriginWrites(logger *slog.Logger, next http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -89,7 +137,7 @@ func crossOriginWriteReason(r *http.Request) string {
 
 // writeJSONError writes a minimal {"error": message} body. It is the shape
 // every listener's clients can parse, which matters for a guard shared
-// across the native, Ollama, and OpenAI surfaces.
+// across surfaces with different native error envelopes.
 func writeJSONError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -98,54 +146,4 @@ func writeJSONError(w http.ResponseWriter, code int, message string) {
 		body = []byte(`{"error":"internal error"}`)
 	}
 	_, _ = w.Write(body)
-}
-
-// Listener-wide bounds shared by every HTTP server Thane runs. Read and
-// write timeouts stay per-surface because streaming budgets differ; these
-// are the limits that have no reason to differ.
-const (
-	// serverReadHeaderTimeout bounds how long a client may take to finish
-	// sending request headers, closing the slow-header connection hold
-	// that a bare ReadTimeout does not start counting until the body.
-	serverReadHeaderTimeout = 10 * time.Second
-	// serverIdleTimeout reclaims keep-alive connections nobody is using.
-	serverIdleTimeout = 120 * time.Second
-	// serverMaxHeaderBytes is generous for real clients and a fraction of
-	// the 1 MiB net/http default.
-	serverMaxHeaderBytes = 64 << 10
-
-	// nativeMaxBodyBytes caps native /v1 request bodies. The largest
-	// legitimate payloads are loop definitions and contact records; 8 MiB
-	// is far above either while bounding what an unauthenticated caller
-	// can make the decoder hold.
-	nativeMaxBodyBytes = 8 << 20
-	// compatMaxBodyBytes caps compat-shim bodies, which may carry chat
-	// history plus base64 images. Matches the Ollama handler's own cap.
-	compatMaxBodyBytes = 32 << 20
-)
-
-// newHTTPServer builds an http.Server with the shared listener bounds
-// applied, so no listener can be added without them.
-func newHTTPServer(addr string, handler http.Handler, readTimeout, writeTimeout time.Duration) *http.Server {
-	return &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadTimeout:       readTimeout,
-		ReadHeaderTimeout: serverReadHeaderTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       serverIdleTimeout,
-		MaxHeaderBytes:    serverMaxHeaderBytes,
-	}
-}
-
-// limitRequestBody caps every request body at maxBytes before handlers
-// decode it. Reads past the cap fail with *http.MaxBytesError, and
-// net/http closes the connection rather than draining the excess.
-func limitRequestBody(maxBytes int64, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil && r.Body != http.NoBody {
-			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-		}
-		next.ServeHTTP(w, r)
-	})
 }

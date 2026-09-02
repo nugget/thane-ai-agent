@@ -16,9 +16,11 @@ info:
     - **OpenAI-compatible** (`/v1/chat/completions`, `/v1/models`) — default port 8081.
     - **Ollama-compatible** (`/api/*`) — default port 11434.
 
-    AuthN is a per-client bearer API key (`Authorization: Bearer <key>`);
-    authorization is coarse (inference access), intentionally distinct from the
-    native API's granular `resource:action` scopes.
+    AuthN is one bearer API key per surface (`Authorization: Bearer <key>`),
+    configured as `openai_api.api_key` and `ollama_api.api_key`; there are no
+    per-client credentials, so revocation means rotating the surface's key.
+    Authorization is coarse (inference access), intentionally distinct from
+    the native API's granular `resource:action` scopes.
   contact:
     name: Thane — nugget/thane-ai-agent
     url: https://github.com/nugget/thane-ai-agent
@@ -186,9 +188,10 @@ components:
       type: http
       scheme: bearer
       description: >-
-        Per-client API key. Coarse inference access (no granular scopes).
-        Configured per surface (`openai_api.api_key`, `ollama_api.api_key`);
-        a surface with no key configured is open and never returns 401.
+        Per-surface API key, shared by every client of that surface. Coarse
+        inference access (no granular scopes). Configured as
+        `openai_api.api_key` and `ollama_api.api_key`; a surface with no key
+        configured is open and never returns 401.
   responses:
     OpenAIUnauthorized:
       description: >-

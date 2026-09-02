@@ -14,6 +14,7 @@ import (
 
 	libcarddav "github.com/emersion/go-webdav/carddav"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // Server wraps a CardDAV handler with HTTP server lifecycle, Basic
@@ -112,11 +113,7 @@ func (s *Server) bind(addr string) error {
 		return err
 	}
 
-	srv := &http.Server{
-		Handler:      s.handler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-	}
+	srv := listen.NewServer("", s.handler, 30*time.Second, 60*time.Second)
 
 	s.mu.Lock()
 	s.servers[addr] = srv
@@ -182,13 +179,16 @@ func (s *Server) tryRebind() {
 }
 
 // buildHandler creates the HTTP handler chain: auth → logging →
-// carddav.Handler.
+// cross-origin guard → carddav.Handler. The guard sits after auth
+// because the forgery it stops is a browser replaying cached Basic
+// credentials on a cross-site request; the credentials pass, the origin
+// does not.
 func (s *Server) buildHandler() http.Handler {
 	davHandler := &libcarddav.Handler{
 		Backend: s.backend,
 		Prefix:  "/carddav",
 	}
-	return s.withAuth(s.withLogging(davHandler))
+	return s.withAuth(s.withLogging(listen.RejectCrossOriginWrites(s.logger, davHandler)))
 }
 
 // withAuth wraps a handler with HTTP Basic Auth.  The .well-known

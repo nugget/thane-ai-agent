@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // OpenAIServer is a dedicated server for the OpenAI-compatible API surface.
@@ -55,9 +56,9 @@ func (s *OpenAIServer) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	s.api.RegisterOpenAIRoutes(mux)
 
-	s.server = newHTTPServer(
+	s.server = listen.NewServer(
 		fmt.Sprintf("%s:%d", s.address, s.port),
-		s.withLogging(rejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, limitRequestBody(compatMaxBodyBytes, mux)))),
+		s.withLogging(listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux)))),
 		30*time.Second,
 		300*time.Second, // Long for slow models
 	)
