@@ -58,14 +58,23 @@ tls:
   # Enabled starts the HTTPS front door. Off by default; the plaintext
   # listeners are unaffected either way.
   enabled: false
-  # HTTPS is the TLS listener. Port defaults to 443. macOS permits an
-  # unprivileged process to bind it; Linux needs CAP_NET_BIND_SERVICE
-  # or the unprivileged-port sysctl.
+  # HTTPS is the TLS listener. Port defaults to 443. Binding it needs
+  # privilege on every platform Thane runs on: Linux wants
+  # CAP_NET_BIND_SERVICE or the unprivileged-port sysctl, and macOS
+  # refuses ports below 1024 to ordinary users outright. Where Thane
+  # runs unprivileged, bind a high port and redirect 443 to it with the
+  # OS packet filter, then set PublicPort so redirects name the port
+  # clients actually use.
   https:
     # Address is the bind address; empty means all interfaces.
     address: ""
-    # Port is the TCP port. Default: 443.
+    # Port is the TCP port Thane binds. Default: 443.
     port: 443
+    # PublicPort is the port clients reach the listener on when a packet
+    # filter or port map sits in front of it (Thane bound to 8443, the
+    # OS redirecting 443 to it). It is what the plain-HTTP redirect names
+    # in its Location; zero means the same as Port.
+    public_port: 0
   # HTTP is the plain listener that answers every request with a
   # permanent redirect to HTTPS and nothing else. Port defaults to 80.
   http:

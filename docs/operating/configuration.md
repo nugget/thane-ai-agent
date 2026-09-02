@@ -551,6 +551,7 @@ tls:
   enabled: true
   https:
     port: 443
+    # public_port: 443  # when a packet filter maps 443 to a high port Thane binds
   http:
     port: 80            # redirect only; disabled: true turns it off
   hsts_max_age: 4320h
@@ -580,7 +581,11 @@ dashboard, `ollama`, or `openai`), a plain-HTTP listener answers with a
 permanent redirect and nothing else, and every HTTPS response carries
 `Strict-Transport-Security` (`hsts_max_age` sets its lifetime,
 `hsts_disabled: true` omits it). A request for a hostname that is not listed
-gets `421 Misdirected Request`. Hostnames are explicit and lowercase;
+gets `421 Misdirected Request`. Ports 80 and 443 need privilege Thane should
+not hold; where it runs unprivileged, bind high ports, redirect the public
+ones to them with the OS packet filter, and set `https.public_port` so the
+redirect names the port clients use (see
+[Deployment](deployment.md#network-requirements)). Hostnames are explicit and lowercase;
 wildcards and IP literals are refused, and a hostname routed to a shim
 that is not enabled fails validation. The plaintext listeners under
 `listen:`, `ollama_api:`, and `openai_api:` are unaffected; the front door

@@ -115,6 +115,8 @@ func TestValidateTLS(t *testing.T) {
 		{"valid", func(c *Config) {}, ""},
 		{"disabled skips checks", func(c *Config) { c.TLS.Enabled = false; c.TLS.Hostnames = nil }, ""},
 		{"https port out of range", func(c *Config) { c.TLS.HTTPS.Port = 70000 }, "tls.https.port"},
+		{"public port out of range", func(c *Config) { c.TLS.HTTPS.PublicPort = 70000 }, "tls.https.public_port"},
+		{"public port set", func(c *Config) { c.TLS.HTTPS.Port = 8443; c.TLS.HTTPS.PublicPort = 443 }, ""},
 		{"http port out of range", func(c *Config) { c.TLS.HTTP.Port = 0 }, "tls.http.port"},
 		{"http disabled ignores its port", func(c *Config) { c.TLS.HTTP.Disabled = true; c.TLS.HTTP.Port = 0 }, ""},
 		{"http and https collide", func(c *Config) { c.TLS.HTTP.Port = 443 }, "cannot share port"},

@@ -112,11 +112,27 @@ Thane listens on these ports (all configurable):
 
 The HTTPS front door terminates TLS in-process and routes each configured
 hostname to one of the plaintext surfaces above, so no reverse proxy is
-needed; see [HTTPS Front Door](configuration.md#https-front-door). On macOS
-an unprivileged process may bind ports 80 and 443. On Linux, grant the
-binary `CAP_NET_BIND_SERVICE` (`setcap 'cap_net_bind_service=+ep'
-/path/to/thane`, or `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the
-systemd unit) or lower `net.ipv4.ip_unprivileged_port_start`.
+needed; see [HTTPS Front Door](configuration.md#https-front-door).
+
+Ports 80 and 443 need privilege on every platform Thane runs on, and
+Thane should not have it. On Linux, grant the binary
+`CAP_NET_BIND_SERVICE` (`setcap 'cap_net_bind_service=+ep' /path/to/thane`,
+or `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the systemd unit) or lower
+`net.ipv4.ip_unprivileged_port_start`. macOS refuses ports below 1024 to
+ordinary users and offers no capability to grant, so keep Thane on high
+ports and let the packet filter carry the public ones: bind
+`tls.https.port: 8443` and `tls.http.port: 8880`, set
+`tls.https.public_port: 443` so the HTTP redirect names the port clients
+use, and install a `pf` redirect once as root, for example an anchor
+containing
+
+```
+rdr pass on en0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443
+rdr pass on en0 inet proto tcp from any to any port 80  -> 127.0.0.1 port 8880
+```
+
+loaded from `/etc/pf.conf` so it survives a reboot. Adjust the interface
+name to the one carrying LAN traffic and verify with `pfctl -s nat`.
 
 ### Replacing a reverse proxy with the front door
 
