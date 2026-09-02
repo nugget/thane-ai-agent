@@ -241,31 +241,6 @@ func (a *App) initServers(s *newState) error {
 		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, a.server, logger)
 	}
 
-	// --- HTTPS front door ---
-	// Optional TLS listener that holds a certificate per configured
-	// hostname and routes each to one of the surfaces above by name, so
-	// a hostname reaches exactly the routes, guards, and logging its
-	// plaintext twin has. Built after every surface it can route to.
-	if cfg.TLS.Enabled {
-		surfaces := edge.Surfaces{"native": a.server.Handler()}
-		if a.ollamaServer != nil {
-			surfaces["ollama"] = a.ollamaServer.Handler()
-		}
-		if a.openaiServer != nil {
-			surfaces["openai"] = a.openaiServer.Handler()
-		}
-		edgeServer, err := edge.New(edge.Options{
-			Config:   cfg.TLS,
-			Surfaces: surfaces,
-			CoreRoot: cfg.CoreRoot(),
-			Logger:   logger,
-		})
-		if err != nil {
-			return fmt.Errorf("https front door: %w", err)
-		}
-		a.edgeServer = edgeServer
-	}
-
 	// --- Companion app endpoint ---
 	// Optional: WebSocket endpoint for native companion apps (e.g. macOS)
 	// to connect and register capabilities for bidirectional service dispatch.
@@ -917,6 +892,34 @@ func (a *App) initServers(s *newState) error {
 	}
 	if mqttConnectWorker != nil {
 		a.deferWorker("mqtt-connect", mqttConnectWorker)
+	}
+
+	// --- HTTPS front door ---
+	// Optional TLS listener that holds a certificate per configured
+	// hostname and routes each to one of the surfaces by name, so a
+	// hostname reaches exactly the routes, guards, and logging its
+	// plaintext twin has. Handler() freezes each surface's route table
+	// on first call, so this must run after every route-affecting
+	// setter above (companion handlers, identity evidence, the web
+	// dashboard); it is the last thing initServers does for that reason.
+	if cfg.TLS.Enabled {
+		surfaces := edge.Surfaces{"native": a.server.Handler()}
+		if a.ollamaServer != nil {
+			surfaces["ollama"] = a.ollamaServer.Handler()
+		}
+		if a.openaiServer != nil {
+			surfaces["openai"] = a.openaiServer.Handler()
+		}
+		edgeServer, err := edge.New(edge.Options{
+			Config:   cfg.TLS,
+			Surfaces: surfaces,
+			CoreRoot: cfg.CoreRoot(),
+			Logger:   logger,
+		})
+		if err != nil {
+			return fmt.Errorf("https front door: %w", err)
+		}
+		a.edgeServer = edgeServer
 	}
 
 	return nil

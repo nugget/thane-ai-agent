@@ -40,6 +40,20 @@ ollama_api:
 # OpenAIAPI configures the optional OpenAI-compatible API server,
 # serving the frozen OpenAI shim on its own port (separate from the
 # Thane-native /v1 API on the primary listen port).
+openai_api:
+  enabled: true
+  address: ""
+  port: 8081
+  # APIKey, when set, requires every request to the OpenAI-compatible
+  # surface to present it as a bearer token (Authorization: Bearer
+  # <key>), which is the header every OpenAI client library already
+  # sends. This surface drives the full agent loop — tools, memory,
+  # delegation — so leaving it empty (open) is appropriate only when
+  # every host that can reach the port is trusted.
+  api_key: ""
+# TLS configures the optional HTTPS front door: in-process TLS
+# termination with certificates from certmagic, routing each
+# configured hostname to one of the surfaces above.
 tls:
   # Enabled starts the HTTPS front door. Off by default; the plaintext
   # listeners are unaffected either way.
@@ -62,8 +76,11 @@ tls:
     # Port is the TCP port. Default: 80.
     port: 80
   # HSTSMaxAge is the Strict-Transport-Security max-age sent on every
-  # HTTPS response. Default: 4320h (180 days). Zero disables the header.
+  # HTTPS response. Zero uses the default of 4320h (180 days); to send
+  # no header at all, set HSTSDisabled.
   hsts_max_age: 4320h
+  # HSTSDisabled omits the Strict-Transport-Security header entirely.
+  hsts_disabled: false
   # Hostnames maps each hostname to the surface it reaches: "native"
   # (the /v1 API and dashboard), "ollama", or "openai". Every hostname
   # listed gets its own managed certificate; a request for a hostname
@@ -128,7 +145,9 @@ tls:
       # this is zero.
       propagation_delay: 10m
       # PropagationTimeout is the longest to keep checking for the record
-      # after the delay. Zero uses the provider's registry default.
+      # after the delay. Zero uses the provider's registry default; -1
+      # (certmagic's sentinel) disables propagation checks so issuance
+      # proceeds as soon as the delay elapses.
       propagation_timeout: 15m
       # Resolvers lists DNS servers to query during propagation checks,
       # as host or host:port. Pointing these at the zone's authoritative
@@ -146,17 +165,6 @@ tls:
       # api_url and api_version). Unknown keys are rejected.
       settings:
         api_token: your-linode-api-token
-openai_api:
-  enabled: true
-  address: ""
-  port: 8081
-  # APIKey, when set, requires every request to the OpenAI-compatible
-  # surface to present it as a bearer token (Authorization: Bearer
-  # <key>), which is the header every OpenAI client library already
-  # sends. This surface drives the full agent loop — tools, memory,
-  # delegation — so leaving it empty (open) is appropriate only when
-  # every host that can reach the port is trusted.
-  api_key: ""
 #
 # (optional) CardDAV configures the optional CardDAV server for native
 # carddav:

@@ -563,7 +563,7 @@ tls:
     ca: https://acme-staging-v02.api.letsencrypt.org/directory   # drop for production
     email: acme@example.net
     agreed: true
-    storage: ~/Thane/tls   # default {workspace}/tls; never inside core/
+    # storage defaults to {workspace}/tls; never inside core/
     dns:
       provider: linode
       propagation_delay: 10m
@@ -578,7 +578,8 @@ publicly trusted certificate for every hostname under `hostnames:` and
 routes each to the surface it names (`native` for the /v1 API and
 dashboard, `ollama`, or `openai`), a plain-HTTP listener answers with a
 permanent redirect and nothing else, and every HTTPS response carries
-`Strict-Transport-Security`. A request for a hostname that is not listed
+`Strict-Transport-Security` (`hsts_max_age` sets its lifetime,
+`hsts_disabled: true` omits it). A request for a hostname that is not listed
 gets `421 Misdirected Request`. Hostnames are explicit and lowercase;
 wildcards and IP literals are refused, and a hostname routed to a shim
 that is not enabled fails validation. The plaintext listeners under
@@ -594,8 +595,11 @@ unset for Let's Encrypt production; point it at the staging directory
 while bringing the front door up beside an existing proxy, since staging
 issues untrusted certificates without counting against rate limits.
 Account keys and certificates are runtime state stored under
-`certmagic.storage`, owner-only; a path inside `core/` is refused so key
-material never enters signed history.
+`certmagic.storage`, which is created owner-only and tightened to
+owner-only if it already exists wider. Config expands `${HOME}` but not
+`~`, so spell the path out or leave it to the default. A path inside
+`core/`, including one that reaches it through a symlink, is refused so
+key material never enters signed history.
 
 `dns.provider` selects a compiled-in libdns provider; `linode` is the
 first. `dns.settings` is passed to the provider verbatim with the
@@ -609,8 +613,11 @@ all, `propagation_timeout` how long to keep checking after that, and
 `resolvers` which servers to ask; pointing them at the zone's
 authoritative nameservers avoids waiting on recursive caches. When both
 durations are zero the provider's registry defaults apply, ten and
-fifteen minutes for Linode. `cert_obtain_timeout`, if set, must exceed
-their sum or issuance is cut off mid-wait.
+fifteen minutes for Linode; `propagation_timeout: -1` disables the checks
+so issuance proceeds as soon as the delay elapses. `cert_obtain_timeout`,
+if set, must exceed their sum or issuance is cut off mid-wait. Hostnames
+must be fully qualified, lowercase DNS names; `thane validate` refuses
+anything the CA would.
 
 Issuance runs in the background after boot: the listeners come up
 immediately and a handshake for a hostname whose certificate has not

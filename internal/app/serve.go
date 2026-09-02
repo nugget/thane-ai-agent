@@ -95,10 +95,16 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}
 
+	// The front door is the public entry point once a proxy is retired,
+	// so its failure is as fatal as the primary listener's: it feeds the
+	// same channel Serve waits on instead of being logged and forgotten,
+	// which would leave the instance running with its front door dark
+	// and nothing to make a supervisor restart it.
+	fatal := make(chan error, 2)
 	if a.edgeServer != nil {
 		go func() {
 			if err := a.edgeServer.Start(ctx); err != nil {
-				a.logger.Error("https front door failed", "error", err)
+				fatal <- fmt.Errorf("https front door: %w", err)
 			}
 		}()
 	}
@@ -173,13 +179,20 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	})
 
-	// Start the primary API server. This blocks until the server is shut
-	// down (via context cancellation or fatal error).
-	if err := a.server.Start(ctx); err != nil {
-		if ctx.Err() == nil {
-			tasks.finish(true)
-			return fmt.Errorf("server failed: %w", err)
+	// Start the primary API server and wait for it, or for the front
+	// door, to fail. Under cancellation the shutdown task drains the
+	// listeners and the primary returns ErrServerClosed, which is not a
+	// failure; a listener error while ctx is still alive is.
+	go func() {
+		if err := a.server.Start(ctx); err != nil {
+			fatal <- fmt.Errorf("server failed: %w", err)
+			return
 		}
+		fatal <- nil
+	}()
+	if err := <-fatal; err != nil && ctx.Err() == nil {
+		tasks.finish(true)
+		return err
 	}
 
 	// finish(fatal) when ctx is somehow still alive: Start returning nil

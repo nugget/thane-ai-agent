@@ -221,8 +221,12 @@ type Config struct {
 	// OpenAIAPI configures the optional OpenAI-compatible API server,
 	// serving the frozen OpenAI shim on its own port (separate from the
 	// Thane-native /v1 API on the primary listen port).
-	TLS       TLSConfig       `yaml:"tls"`
 	OpenAIAPI OpenAIAPIConfig `yaml:"openai_api"`
+
+	// TLS configures the optional HTTPS front door: in-process TLS
+	// termination with certificates from certmagic, routing each
+	// configured hostname to one of the surfaces above.
+	TLS TLSConfig `yaml:"tls"`
 
 	// CardDAV configures the optional CardDAV server for native
 	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
@@ -799,8 +803,12 @@ type TLSConfig struct {
 	HTTP TLSRedirectConfig `yaml:"http"`
 
 	// HSTSMaxAge is the Strict-Transport-Security max-age sent on every
-	// HTTPS response. Default: 4320h (180 days). Zero disables the header.
+	// HTTPS response. Zero uses the default of 4320h (180 days); to send
+	// no header at all, set HSTSDisabled.
 	HSTSMaxAge time.Duration `yaml:"hsts_max_age"`
+
+	// HSTSDisabled omits the Strict-Transport-Security header entirely.
+	HSTSDisabled bool `yaml:"hsts_disabled"`
 
 	// Hostnames maps each hostname to the surface it reaches: "native"
 	// (the /v1 API and dashboard), "ollama", or "openai". Every hostname
@@ -905,7 +913,9 @@ type CertMagicDNSConfig struct {
 	// this is zero.
 	PropagationDelay time.Duration `yaml:"propagation_delay"`
 	// PropagationTimeout is the longest to keep checking for the record
-	// after the delay. Zero uses the provider's registry default.
+	// after the delay. Zero uses the provider's registry default; -1
+	// (certmagic's sentinel) disables propagation checks so issuance
+	// proceeds as soon as the delay elapses.
 	PropagationTimeout time.Duration `yaml:"propagation_timeout"`
 	// Resolvers lists DNS servers to query during propagation checks,
 	// as host or host:port. Pointing these at the zone's authoritative

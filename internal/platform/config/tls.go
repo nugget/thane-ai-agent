@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // applyTLSDefaults fills the HTTPS front door's defaults. Ports and the
@@ -94,7 +96,7 @@ func (c *Config) validateTLS() error {
 	if strings.TrimSpace(m.Storage) == "" {
 		return fmt.Errorf("tls.certmagic.storage is required when no workspace is set")
 	}
-	if root := c.CoreRoot(); root != "" && pathWithin(m.Storage, root) {
+	if root := c.CoreRoot(); root != "" && paths.ContainsPath(root, m.Storage) {
 		return fmt.Errorf("tls.certmagic.storage %q is inside the core root; certificate material is runtime state and must not enter signed history", m.Storage)
 	}
 	d := m.DNS
@@ -103,6 +105,9 @@ func (c *Config) validateTLS() error {
 	}
 	if d.PropagationDelay < 0 {
 		return fmt.Errorf("tls.certmagic.dns.propagation_delay must not be negative")
+	}
+	if d.PropagationTimeout < -1 {
+		return fmt.Errorf("tls.certmagic.dns.propagation_timeout must be positive, zero for the provider default, or -1 to disable checks")
 	}
 	if d.TTL < 0 {
 		return fmt.Errorf("tls.certmagic.dns.ttl must not be negative")
@@ -120,7 +125,11 @@ func (c *Config) validateTLS() error {
 }
 
 // validateTLSHostname accepts a DNS hostname as a certificate subject:
-// lowercase-insensitive labels, no port, no wildcard, no IP literal.
+// lowercase LDH labels (letters, digits, hyphens, no leading or trailing
+// hyphen, at most 63 octets each, 253 in total), at least two labels, no
+// port, path, wildcard, trailing dot, or IP literal. Anything looser is
+// a name the CA would refuse, and refusing it here means thane validate
+// catches it instead of the first asynchronous issuance.
 func validateTLSHostname(host string) error {
 	if strings.TrimSpace(host) == "" {
 		return fmt.Errorf("tls.hostnames contains an empty hostname")
@@ -137,23 +146,34 @@ func validateTLSHostname(host string) error {
 	if host != strings.ToLower(host) {
 		return fmt.Errorf("tls.hostnames[%q] must be lowercase", host)
 	}
+	if len(host) > 253 {
+		return fmt.Errorf("tls.hostnames[%q] exceeds 253 characters", host)
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return fmt.Errorf("tls.hostnames[%q] must be a fully qualified name with at least two labels", host)
+	}
+	for _, label := range labels {
+		if label == "" {
+			return fmt.Errorf("tls.hostnames[%q] has an empty label (leading, trailing, or doubled dot)", host)
+		}
+		if len(label) > 63 {
+			return fmt.Errorf("tls.hostnames[%q] has a label longer than 63 characters", host)
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("tls.hostnames[%q] has a label starting or ending with a hyphen", host)
+		}
+		for _, r := range label {
+			if !isLDHRune(r) {
+				return fmt.Errorf("tls.hostnames[%q] contains %q; only lowercase letters, digits, and hyphens are valid in a DNS label", host, r)
+			}
+		}
+	}
 	return nil
 }
 
-// pathWithin reports whether path is root or lies beneath it, comparing
-// cleaned absolute forms so "core/../tls" is not mistaken for core.
-func pathWithin(path, root string) bool {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(absRoot, absPath)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+// isLDHRune reports whether r is a lowercase letter, digit, or hyphen,
+// the LDH alphabet a DNS label may use.
+func isLDHRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-'
 }

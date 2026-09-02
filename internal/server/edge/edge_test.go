@@ -364,3 +364,62 @@ func TestZapBridgeForwardsToSlog(t *testing.T) {
 		t.Fatalf("warn line missing: %s", out)
 	}
 }
+
+func TestHSTSDisabledOmitsHeader(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t, t.TempDir())
+	cfg.HSTSDisabled = true
+	s, err := New(Options{Config: cfg, Surfaces: testSurfaces(), Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	req := httptest.NewRequest(http.MethodGet, "https://thane.example.net/", nil)
+	req.Host = "thane.example.net"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("HSTS = %q, want none", got)
+	}
+}
+
+func TestPrepareStorageTightensExistingDirectory(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "tls")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareStorage(dir); err != nil {
+		t.Fatalf("prepareStorage: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %o after prepareStorage, want 700", info.Mode().Perm())
+	}
+}
+
+func TestOnEventLabelsRenewalAndFailure(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	s := &Server{logger: slog.New(slog.NewTextHandler(&buf, nil))}
+	cases := []struct {
+		event   string
+		renewal bool
+		want    string
+	}{
+		{"cert_obtained", false, "tls certificate obtained"},
+		{"cert_obtained", true, "tls certificate renewed"},
+		{"cert_failed", false, "tls certificate issuance failed"},
+		{"cert_failed", true, "tls certificate renewal failed"},
+	}
+	for _, tc := range cases {
+		buf.Reset()
+		_ = s.onEvent(context.Background(), tc.event, map[string]any{"renewal": tc.renewal, "identifier": "thane.example.net"})
+		if !strings.Contains(buf.String(), tc.want) {
+			t.Fatalf("event %s renewal=%v logged %q, want %q", tc.event, tc.renewal, buf.String(), tc.want)
+		}
+	}
+}

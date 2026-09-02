@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,6 +147,17 @@ func TestValidateTLS(t *testing.T) {
 			c.TLS.CertMagic.Storage = "/srv/thane/coretls"
 		}, ""},
 		{"missing provider", func(c *Config) { c.TLS.CertMagic.DNS.Provider = "" }, "dns.provider is required"},
+		{"hostname with space", func(c *Config) { c.TLS.Hostnames["bad host.example.net"] = "native" }, "only lowercase letters"},
+		{"hostname leading dot", func(c *Config) { c.TLS.Hostnames[".example.net"] = "native" }, "empty label"},
+		{"hostname doubled dot", func(c *Config) { c.TLS.Hostnames["foo..example.net"] = "native" }, "empty label"},
+		{"hostname trailing dot", func(c *Config) { c.TLS.Hostnames["thane.example.net."] = "native" }, "empty label"},
+		{"hostname underscore", func(c *Config) { c.TLS.Hostnames["my_host.example.net"] = "native" }, "only lowercase letters"},
+		{"hostname single label", func(c *Config) { c.TLS.Hostnames["localhost"] = "native" }, "at least two labels"},
+		{"hostname label hyphen edge", func(c *Config) { c.TLS.Hostnames["-thane.example.net"] = "native" }, "hyphen"},
+		{"hostname label too long", func(c *Config) { c.TLS.Hostnames[strings.Repeat("a", 64)+".example.net"] = "native" }, "longer than 63"},
+		{"hostname with hyphen and digits ok", func(c *Config) { c.TLS.Hostnames["thane-2.example.net"] = "native" }, ""},
+		{"propagation timeout -1 passes through", func(c *Config) { c.TLS.CertMagic.DNS.PropagationTimeout = -1 }, ""},
+		{"propagation timeout below -1 rejected", func(c *Config) { c.TLS.CertMagic.DNS.PropagationTimeout = -2 }, "propagation_timeout"},
 		{"negative propagation delay", func(c *Config) { c.TLS.CertMagic.DNS.PropagationDelay = -1 }, "propagation_delay"},
 		{"empty resolver", func(c *Config) { c.TLS.CertMagic.DNS.Resolvers = []string{""} }, "resolvers[0]"},
 	}
@@ -179,5 +191,38 @@ func TestValidateRunsTLSChecks(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "tls.certmagic.agreed") {
 		t.Fatalf("Validate = %v, want the tls agreed error", err)
+	}
+}
+
+// TestTLSStorageSymlinkIntoCoreRefused pins that containment resolves
+// symlinks: a storage path that lexically sits beside core but resolves
+// into it is still refused.
+func TestTLSStorageSymlinkIntoCoreRefused(t *testing.T) {
+	t.Parallel()
+	ws := t.TempDir()
+	core := filepath.Join(ws, "core")
+	if err := os.MkdirAll(filepath.Join(core, "tls"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(ws, "certs")
+	if err := os.Symlink(filepath.Join(core, "tls"), link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	cfg := &Config{TLS: validTLS()}
+	cfg.Workspace.Path = ws
+	cfg.TLS.CertMagic.Storage = filepath.Join(link, "store")
+	err := cfg.validateTLS()
+	if err == nil || !strings.Contains(err.Error(), "inside the core root") {
+		t.Fatalf("validateTLS = %v, want core-root refusal through the symlink", err)
+	}
+}
+
+func TestTLSHSTSDisabledSurvivesDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{}
+	cfg.TLS.HSTSDisabled = true
+	cfg.applyDefaults()
+	if !cfg.TLS.HSTSDisabled || cfg.TLS.HSTSMaxAge != 4320*time.Hour {
+		t.Fatalf("hsts after defaults = disabled:%v max_age:%s", cfg.TLS.HSTSDisabled, cfg.TLS.HSTSMaxAge)
 	}
 }

@@ -1,9 +1,9 @@
 # API & Endpoints
 
-Thane can serve up to five network listeners from a single binary. The native
+Thane can serve up to six network listeners from a single binary. The native
 API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 (11434), and CardDAV (8843) listeners are each optional, enabled via config.
-An optional HTTPS front door (443, with an 80 redirect) terminates TLS
+An optional HTTPS front door (443, plus a redirect-only listener on 80) terminates TLS
 in-process and routes each configured hostname to the native, Ollama, or
 OpenAI surface, reaching exactly the routes and guards that surface has on
 its plaintext port; see

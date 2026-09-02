@@ -257,7 +257,7 @@ func (s *Server) routeByHost(routes map[string]http.Handler) http.Handler {
 
 // hsts adds Strict-Transport-Security to every HTTPS response.
 func (s *Server) hsts(next http.Handler) http.Handler {
-	if s.cfg.HSTSMaxAge <= 0 {
+	if s.cfg.HSTSDisabled || s.cfg.HSTSMaxAge <= 0 {
 		return next
 	}
 	value := "max-age=" + strconv.FormatInt(int64(s.cfg.HSTSMaxAge/time.Second), 10)
@@ -286,18 +286,26 @@ func (s *Server) redirect() http.Handler {
 }
 
 // onEvent turns certmagic's lifecycle events into operator-story log
-// lines: issuance and renewal at INFO, failures at WARN, everything
-// else at DEBUG.
+// lines: issuance and renewal at INFO, their failures at WARN,
+// everything else at DEBUG.
 func (s *Server) onEvent(_ context.Context, event string, data map[string]any) error {
 	attrs := make([]any, 0, 2*len(data)+2)
 	attrs = append(attrs, "event", event)
 	for k, v := range data {
 		attrs = append(attrs, k, v)
 	}
-	switch event {
-	case "cert_obtained", "cert_renewed":
-		s.logger.Info("tls certificate "+strings.TrimPrefix(event, "cert_"), attrs...)
-	case "cert_failed":
+	// certmagic emits cert_obtained for both first issuance and renewal
+	// and distinguishes them with the renewal flag; the same flag rides
+	// on cert_failed.
+	renewal, _ := data["renewal"].(bool)
+	switch {
+	case event == "cert_obtained" && renewal:
+		s.logger.Info("tls certificate renewed", attrs...)
+	case event == "cert_obtained":
+		s.logger.Info("tls certificate obtained", attrs...)
+	case event == "cert_failed" && renewal:
+		s.logger.Warn("tls certificate renewal failed", attrs...)
+	case event == "cert_failed":
 		s.logger.Warn("tls certificate issuance failed", attrs...)
 	default:
 		s.logger.Debug("tls certificate event", attrs...)
@@ -325,14 +333,27 @@ func Preflight(cfg config.TLSConfig, coreRoot string) error {
 	return nil
 }
 
-// prepareStorage creates the certificate directory owner-only and
-// confirms it is writable.
+// prepareStorage creates the certificate directory owner-only, tightens
+// a pre-existing one that is wider (MkdirAll applies the mode only when
+// it creates), and confirms it is writable.
 func prepareStorage(dir string) error {
 	if strings.TrimSpace(dir) == "" {
 		return errors.New("tls.certmagic.storage is empty")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("tls.certmagic.storage: %w", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("tls.certmagic.storage: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("tls.certmagic.storage %q is not a directory", dir)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("tls.certmagic.storage %q is group- or world-accessible and could not be tightened: %w", dir, err)
+		}
 	}
 	probe, err := os.CreateTemp(dir, ".write-probe-*")
 	if err != nil {
