@@ -268,8 +268,10 @@ func (s *Server) hsts(next http.Handler) http.Handler {
 }
 
 // redirect answers every plain-HTTP request with a permanent redirect to
-// the same hostname and path over HTTPS, carrying the HTTPS port when it
-// is not the default.
+// the same hostname and path over HTTPS, carrying the port clients reach
+// the HTTPS listener on when it is not the default. That is the public
+// port, not necessarily the bound one: an unprivileged Thane behind a
+// packet-filter redirect binds 8443 while clients use 443.
 func (s *Server) redirect() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := hostOnly(r.Host)
@@ -277,8 +279,8 @@ func (s *Server) redirect() http.Handler {
 			writeJSONError(w, http.StatusBadRequest, "missing host")
 			return
 		}
-		if s.cfg.HTTPS.Port != 443 {
-			host = net.JoinHostPort(host, strconv.Itoa(s.cfg.HTTPS.Port))
+		if port := s.cfg.HTTPS.EffectivePublicPort(); port != 443 {
+			host = net.JoinHostPort(host, strconv.Itoa(port))
 		}
 		target := "https://" + host + r.URL.RequestURI()
 		http.Redirect(w, r, target, http.StatusPermanentRedirect)

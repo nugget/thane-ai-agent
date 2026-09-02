@@ -169,21 +169,25 @@ func TestNewRefusesHostnameToMissingSurface(t *testing.T) {
 func TestRedirectTargetsHTTPS(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		httpsPort int
-		host      string
-		path      string
-		want      string
+		name       string
+		httpsPort  int
+		publicPort int
+		host       string
+		path       string
+		want       string
 	}{
-		{"default port omitted", 443, "thane.example.net", "/v1/version?x=1", "https://thane.example.net/v1/version?x=1"},
-		{"request port dropped", 443, "thane.example.net:80", "/", "https://thane.example.net/"},
-		{"non-default https port carried", 8443, "thane.example.net", "/docs", "https://thane.example.net:8443/docs"},
+		{"default port omitted", 443, 0, "thane.example.net", "/v1/version?x=1", "https://thane.example.net/v1/version?x=1"},
+		{"request port dropped", 443, 0, "thane.example.net:80", "/", "https://thane.example.net/"},
+		{"non-default https port carried", 8443, 0, "thane.example.net", "/docs", "https://thane.example.net:8443/docs"},
+		{"public port wins over bound port", 8443, 443, "thane.example.net", "/docs", "https://thane.example.net/docs"},
+		{"non-default public port carried", 8443, 9443, "thane.example.net", "/", "https://thane.example.net:9443/"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := testConfig(t, t.TempDir())
 			cfg.HTTPS.Port = tc.httpsPort
+			cfg.HTTPS.PublicPort = tc.publicPort
 			s, err := New(Options{Config: cfg, Surfaces: testSurfaces(), Logger: slog.New(slog.DiscardHandler)})
 			if err != nil {
 				t.Fatalf("New: %v", err)

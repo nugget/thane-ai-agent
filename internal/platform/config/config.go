@@ -793,9 +793,13 @@ type TLSConfig struct {
 	// listeners are unaffected either way.
 	Enabled bool `yaml:"enabled"`
 
-	// HTTPS is the TLS listener. Port defaults to 443. macOS permits an
-	// unprivileged process to bind it; Linux needs CAP_NET_BIND_SERVICE
-	// or the unprivileged-port sysctl.
+	// HTTPS is the TLS listener. Port defaults to 443. Binding it needs
+	// privilege on every platform Thane runs on: Linux wants
+	// CAP_NET_BIND_SERVICE or the unprivileged-port sysctl, and macOS
+	// refuses ports below 1024 to ordinary users outright. Where Thane
+	// runs unprivileged, bind a high port and redirect 443 to it with the
+	// OS packet filter, then set PublicPort so redirects name the port
+	// clients actually use.
 	HTTPS TLSListenConfig `yaml:"https"`
 
 	// HTTP is the plain listener that answers every request with a
@@ -830,8 +834,22 @@ type TLSConfig struct {
 type TLSListenConfig struct {
 	// Address is the bind address; empty means all interfaces.
 	Address string `yaml:"address"`
-	// Port is the TCP port. Default: 443.
+	// Port is the TCP port Thane binds. Default: 443.
 	Port int `yaml:"port"`
+	// PublicPort is the port clients reach the listener on when a packet
+	// filter or port map sits in front of it (Thane bound to 8443, the
+	// OS redirecting 443 to it). It is what the plain-HTTP redirect names
+	// in its Location; zero means the same as Port.
+	PublicPort int `yaml:"public_port"`
+}
+
+// EffectivePublicPort is the port clients use: PublicPort when set,
+// otherwise Port.
+func (l TLSListenConfig) EffectivePublicPort() int {
+	if l.PublicPort != 0 {
+		return l.PublicPort
+	}
+	return l.Port
 }
 
 // TLSRedirectConfig is the bind for the redirect-only HTTP listener.

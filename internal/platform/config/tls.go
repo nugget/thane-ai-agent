@@ -48,6 +48,9 @@ func (c *Config) validateTLS() error {
 	if t.HTTPS.Port < 1 || t.HTTPS.Port > 65535 {
 		return fmt.Errorf("tls.https.port %d out of range (1-65535)", t.HTTPS.Port)
 	}
+	if t.HTTPS.PublicPort < 0 || t.HTTPS.PublicPort > 65535 {
+		return fmt.Errorf("tls.https.public_port %d out of range (0-65535)", t.HTTPS.PublicPort)
+	}
 	if !t.HTTP.Disabled && (t.HTTP.Port < 1 || t.HTTP.Port > 65535) {
 		return fmt.Errorf("tls.http.port %d out of range (1-65535)", t.HTTP.Port)
 	}
