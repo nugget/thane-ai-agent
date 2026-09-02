@@ -47,11 +47,11 @@ var upgrader = websocket.Upgrader{
 
 // Handler is the HTTP handler for companion app WebSocket connections.
 type Handler struct {
-	tokenIndex map[string]string // token → account name
-	registry   *Registry
-	devices    DeviceRecorder             // optional durable inventory sink; nil disables
-	deviceOps  chan func(context.Context) // ordered async inventory writes
-	logger     *slog.Logger
+	tokens    tokenMatcher // hashed token → account resolution
+	registry  *Registry
+	devices   DeviceRecorder             // optional durable inventory sink; nil disables
+	deviceOps chan func(context.Context) // ordered async inventory writes
+	logger    *slog.Logger
 
 	deviceOpsMu     sync.Mutex    // guards enqueue vs. close
 	deviceOpsClosed bool          // no new ops accepted once set
@@ -60,8 +60,9 @@ type Handler struct {
 
 // NewHandler creates a new companion WebSocket handler. The tokenIndex
 // maps authentication tokens to account names (built by
-// config.CompanionConfig.TokenIndex). If registry is nil, a default
-// Registry is created.
+// config.CompanionConfig.TokenIndex); it is hashed at construction and the
+// plaintext is not retained. If registry is nil, a default Registry is
+// created.
 func NewHandler(tokenIndex map[string]string, registry *Registry, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
@@ -70,9 +71,9 @@ func NewHandler(tokenIndex map[string]string, registry *Registry, logger *slog.L
 		registry = NewRegistry(logger)
 	}
 	return &Handler{
-		tokenIndex: tokenIndex,
-		registry:   registry,
-		logger:     logger,
+		tokens:   newTokenMatcher(tokenIndex),
+		registry: registry,
+		logger:   logger,
 	}
 }
 
@@ -198,8 +199,10 @@ func (h *Handler) authenticate(conn *websocket.Conn, requestType string) (*Provi
 		return nil, &authError{"expected auth message, got " + msg.Type}
 	}
 
-	// Step 3: Validate token and resolve account.
-	account, ok := h.tokenIndex[msg.Token]
+	// Step 3: Validate token and resolve account. Constant-time over
+	// digests, matching the HTTP observation path; a map lookup keyed by
+	// the plaintext token compared byte-by-byte and stopped early.
+	account, ok := h.tokens.match(msg.Token)
 	if !ok {
 		_ = writeJSONWithDeadline(conn, writeWait, authFailed{
 			Type:    typeAuthFailed,
