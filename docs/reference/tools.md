@@ -225,8 +225,20 @@ newer content and includes a bounded `changed_since_read` patch. The receipt
 then advances to the current document so a reconciled retry has the right
 comparison base. When a patch is unavailable or truncated, the result includes
 a bounded current excerpt instead. Replacing an existing whole body requires
-reading it first; structured edits can safely derive a fresh base as part of
-the operation.
+reading it first, and the refusal names the document to read; structured edits
+can safely derive a fresh base as part of the operation. `doc_delete` and
+`doc_move` advance the caller's own receipt to absent, so recreating a document
+at a ref the same caller just removed is an ordinary create.
+
+A loop's generated `replace_output_*` and `publish_output_*` tools use the same
+receipts, scoped to the wake. The Declared Durable Outputs context that opens a
+wake records a receipt for every output it renders whole, so an output that fit
+the context can be replaced directly; one marked `truncated` must be read with
+`doc_read` first. These tools report a refusal as a tool error rather than an
+`applied: false` result: for the document's owner, a result that reads as
+success while nothing was committed is indistinguishable from a healthy
+publish. The error text carries the same message and reconciliation payload,
+and a refused publish never writes the accompanying working notes.
 
 | Tool | Description |
 |------|-------------|

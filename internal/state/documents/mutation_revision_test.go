@@ -40,7 +40,13 @@ func (b *revisionMutationBackend) WriteIfRevision(_ context.Context, filename, c
 }
 
 func (b *revisionMutationBackend) Delete(_ context.Context, filename, _ string) error {
-	return os.Remove(filepath.Join(b.root, filename))
+	if err := os.Remove(filepath.Join(b.root, filename)); err != nil {
+		return err
+	}
+	// A deleted file has no current revision: the next conditional write
+	// must expect absent, as the real provenance store requires.
+	b.revision = ""
+	return nil
 }
 
 func (b *revisionMutationBackend) Resolve(_ context.Context, _ string, _ string) (RevisionRef, error) {
@@ -160,8 +166,11 @@ func TestHiddenRevisionReceiptReturnsConflictDiffAndAdvances(t *testing.T) {
 	if err := json.Unmarshal([]byte(blindJSON), &blind); err != nil {
 		t.Fatalf("unmarshal blind replacement: %v", err)
 	}
-	if blind.Applied || !strings.Contains(blind.Message, "Read contacts:person.md first") {
-		t.Fatalf("blind replacement = %#v, want read-first refusal", blind)
+	if blind.Applied || !strings.Contains(blind.Message, "no record of this loop reading contacts:person.md") || !strings.Contains(blind.Message, "Read contacts:person.md with doc_read") {
+		t.Fatalf("blind replacement = %#v, want read-first refusal naming the missing read", blind)
+	}
+	if strings.Contains(blind.Message, "revision parameter") {
+		t.Fatalf("refusal advises a parameter no tool has: %q", blind.Message)
 	}
 
 	if err := backend.Write(ctx, "person.md", "Second fact.", "operator update"); err != nil {

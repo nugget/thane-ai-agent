@@ -58,6 +58,13 @@ type WriteArgs struct {
 	ExpectedRevision string              `json:"-"`
 	ReceiptScope     string              `json:"-"`
 	RequirePriorRead bool                `json:"-"`
+	// RejectionIsError makes a refused write — no read receipt on record
+	// for a whole-document replacement, or a receipt the document has moved
+	// past — return a *MutationRejectedError instead of the inline
+	// applied:false payload. The model-facing doc_* tools leave it unset. A
+	// loop's generated output tool sets it: a refusal reported there as a
+	// successful result is indistinguishable from a healthy publish.
+	RejectionIsError bool `json:"-"`
 	// StructuredTool names the contract-aware caller that is publishing a
 	// complete faceted document. Empty identifies the body-only surface.
 	StructuredTool string `json:"-"`

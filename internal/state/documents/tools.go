@@ -337,7 +337,8 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	if action == "" {
 		action = DocumentBodyWriteToolName
 	}
-	return t.marshalMutationResult(ctx, action, args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, action, args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, args.RejectionIsError)
 }
 
 // Edit applies one structured edit to a managed document.
@@ -357,7 +358,8 @@ func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	}
 	t.prepareEditReceipt(&args)
 	result, err := t.store.Edit(ctx, args)
-	return t.marshalMutationResult(ctx, "doc_edit", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, "doc_edit", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, false)
 }
 
 // JournalUpdate appends one journal-window entry to a managed document.
@@ -377,7 +379,8 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	}
 	t.prepareJournalReceipt(&args)
 	result, err := t.store.JournalUpdate(ctx, args)
-	return t.marshalMutationResult(ctx, "doc_journal_update", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, "doc_journal_update", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, false)
 }
 
 // Delete removes one managed document.
@@ -392,6 +395,7 @@ func (t *Tools) Delete(ctx context.Context, args DeleteArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	t.rememberAbsentReceipt(args.ReceiptScope, args.Ref)
 	return marshalToolResult(toModelDeleteResult(result, nowUTC()))
 }
 
@@ -410,6 +414,10 @@ func (t *Tools) Move(ctx context.Context, args MoveArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The source ref is gone by the mover's own hand; the destination's
+	// receipt is left alone — a later write there either reads first or
+	// hits a conflict that advances the receipt to the moved content.
+	t.rememberAbsentReceipt(args.ReceiptScope, args.Ref)
 	return marshalToolResult(toModelMoveResult(result, nowUTC()))
 }
 

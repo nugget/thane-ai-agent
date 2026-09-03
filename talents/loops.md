@@ -14,9 +14,16 @@ service loop can act without maintaining a document — and when an output
 is declared the running loop writes through a generated tool named for
 it: `replace_output_*` for a whole-document rewrite, or
 `publish_output_*` when the output declares facets.
-If a maintained output is marked `truncated` in Declared Durable
-Outputs, read the full document with `doc_read` before replacing it —
-the output tool overwrites the entire body.
+An output shown whole in Declared Durable Outputs counts as read for
+this wake, so the output tool can replace or publish it directly. If it
+is marked `truncated` there, read the full document with `doc_read`
+before replacing it — the output tool overwrites the entire body, tail
+included.
+An output tool that refuses — this wake has not read the whole document,
+or the document changed since it did — returns an error and commits
+nothing. The error names the next move: read the document with
+`doc_read`, then make the same call once more. Do not repeat a refused
+call unchanged; the refusal is the answer, and only the read changes it.
 
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,
