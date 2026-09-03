@@ -105,4 +105,4 @@ jobs:
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Static checks
-        run: just generate && just fmt-check mod-tidy-check config-generate-check architecture-check lint-openapi link-check
+        run: just generate && just fmt-check mod-tidy-check tools-mod-tidy-check config-generate-check architecture-check lint-openapi link-check
