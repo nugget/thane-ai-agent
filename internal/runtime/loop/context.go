@@ -3,8 +3,43 @@ package loop
 import "context"
 
 type loopIDKey struct{}
+type conversationIDKey struct{}
 type fallbackContentKey struct{}
 type bindingsKey struct{}
+
+// withConversationID stamps the wake's conversation ID onto the run
+// context alongside the loop ID. Every wake mints a fresh conversation,
+// so anything keyed by "which model consciousness saw this" — the hidden
+// document read receipts above all — needs the pair, and needs it on the
+// contexts that run BEFORE the agent turn as well as on the tool calls
+// inside it: the output context that renders a loop's own documents into
+// its prompt is built on this context, and the receipt it records has to
+// land under the same scope the generated output tool will look in.
+func withConversationID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, conversationIDKey{}, id)
+}
+
+// ConversationIDFromContext returns the conversation the current wake
+// runs under, or "" from a context that did not originate inside a
+// loop wake. The tools package reads this as its fallback when its own
+// conversation key is absent, so a turn-builder context and a tool-call
+// context resolve to one document revision scope.
+func ConversationIDFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(conversationIDKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// WithConversationIDForTest exposes [withConversationID] for tests in
+// other packages that drive a turn-builder context; see
+// [WithLoopIDForTest].
+func WithConversationIDForTest(ctx context.Context, id string) context.Context {
+	return withConversationID(ctx, id)
+}
 
 // withLoopID injects the loop ID into the run context so downstream
 // code (e.g. handlers, turn builders, the agent runner, tool calls,

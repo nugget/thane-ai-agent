@@ -11,6 +11,9 @@ import (
 // DeleteArgs removes one managed document by semantic ref.
 type DeleteArgs struct {
 	Ref string `json:"ref"`
+	// ReceiptScope identifies the caller whose hidden read receipt for Ref
+	// advances to absent once the deletion lands.
+	ReceiptScope string `json:"-"`
 }
 
 // MoveArgs relocates one managed document to a new semantic ref.
@@ -18,6 +21,9 @@ type MoveArgs struct {
 	Ref            string `json:"ref"`
 	DestinationRef string `json:"destination_ref"`
 	Overwrite      bool   `json:"overwrite,omitempty"`
+	// ReceiptScope identifies the caller whose hidden read receipt for the
+	// source Ref advances to absent once the move lands.
+	ReceiptScope string `json:"-"`
 }
 
 // CopyArgs duplicates one managed document at a new semantic ref.

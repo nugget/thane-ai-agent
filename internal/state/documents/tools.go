@@ -71,6 +71,13 @@ type SearchArgs struct {
 type RefArgs struct {
 	Ref          string `json:"ref"`
 	ReceiptScope string `json:"-"`
+	// ReceiptRequiresWhole withholds the read receipt when the serialized
+	// result had to be cut to a preview to fit its budget. A loop reading
+	// its own output before a whole-body replacement sets it: a receipt
+	// taken from a preview would authorize overwriting the part of the
+	// document the model never saw. The standard doc_read leaves it unset
+	// and keeps its existing contract.
+	ReceiptRequiresWhole bool `json:"-"`
 }
 
 // SectionArgs selects one document section by ref and optional heading.
@@ -125,8 +132,21 @@ func (t *Tools) ReadWithResultBudget(ctx context.Context, args RefArgs, resultBu
 		t.rememberDocumentReceipt(args.ReceiptScope, doc)
 		return "", err
 	}
-	t.rememberDocumentReceipt(args.ReceiptScope, doc)
-	return marshalToolResultBudget(toModelDocumentRecord(doc, nowUTC()), resultBudget)
+	payload, truncated, err := marshalToolResultBudgetReport(toModelDocumentRecord(doc, nowUTC()), resultBudget)
+	if err != nil {
+		return "", err
+	}
+	// A receipt asserts that the caller has seen this revision. Under the
+	// standard budget a truncated read still records one — the
+	// conversational contract since revision preconditions arrived — but a
+	// caller that reads precisely so it may replace the whole body asks for
+	// the stricter rule: a preview of an oversized document is not that
+	// read, and a receipt from it would let the replacement discard the
+	// tail nobody saw.
+	if !truncated || !args.ReceiptRequiresWhole {
+		t.rememberDocumentReceipt(args.ReceiptScope, doc)
+	}
+	return payload, nil
 }
 
 // Record returns one document as stored, for a caller that needs to
@@ -337,7 +357,8 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	if action == "" {
 		action = DocumentBodyWriteToolName
 	}
-	return t.marshalMutationResult(ctx, action, args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, action, args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, args.RejectionIsError)
 }
 
 // Edit applies one structured edit to a managed document.
@@ -357,7 +378,8 @@ func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	}
 	t.prepareEditReceipt(&args)
 	result, err := t.store.Edit(ctx, args)
-	return t.marshalMutationResult(ctx, "doc_edit", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, "doc_edit", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, false)
 }
 
 // JournalUpdate appends one journal-window entry to a managed document.
@@ -377,7 +399,8 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	}
 	t.prepareJournalReceipt(&args)
 	result, err := t.store.JournalUpdate(ctx, args)
-	return t.marshalMutationResult(ctx, "doc_journal_update", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, "doc_journal_update", args.Ref, args.ReceiptScope, args.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, false)
 }
 
 // Delete removes one managed document.
@@ -392,6 +415,7 @@ func (t *Tools) Delete(ctx context.Context, args DeleteArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	t.rememberAbsentReceipt(args.ReceiptScope, args.Ref)
 	return marshalToolResult(toModelDeleteResult(result, nowUTC()))
 }
 
@@ -410,6 +434,10 @@ func (t *Tools) Move(ctx context.Context, args MoveArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The source ref is gone by the mover's own hand; the destination's
+	// receipt is left alone — a later write there either reads first or
+	// hits a conflict that advances the receipt to the moved content.
+	t.rememberAbsentReceipt(args.ReceiptScope, args.Ref)
 	return marshalToolResult(toModelMoveResult(result, nowUTC()))
 }
 
@@ -478,14 +506,23 @@ func marshalToolResult(v any) (string, error) {
 }
 
 func marshalToolResultBudget(v any, maxBytes int) (string, error) {
+	payload, _, err := marshalToolResultBudgetReport(v, maxBytes)
+	return payload, err
+}
+
+// marshalToolResultBudgetReport is marshalToolResultBudget that also
+// reports whether the result was cut to a preview, for a caller whose side
+// effects depend on the model having seen the whole payload.
+func marshalToolResultBudgetReport(v any, maxBytes int) (string, bool, error) {
 	if maxBytes <= 0 {
 		maxBytes = maxToolResultBytes
 	}
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("marshal document tool result: %w", err)
+		return "", false, fmt.Errorf("marshal document tool result: %w", err)
 	}
-	if len(data) > maxBytes {
+	truncated := len(data) > maxBytes
+	if truncated {
 		// The envelope's own JSON costs ~512 bytes; a budget at or below
 		// that overhead yields an empty preview rather than a negative
 		// slice bound — the helper must not panic on a small budget a
@@ -499,10 +536,10 @@ func marshalToolResultBudget(v any, maxBytes int) (string, error) {
 			"preview":     preview,
 		}, "", "  ")
 		if err != nil {
-			return "", fmt.Errorf("marshal truncated document tool result: %w", err)
+			return "", true, fmt.Errorf("marshal truncated document tool result: %w", err)
 		}
 	}
-	return string(data), nil
+	return string(data), truncated, nil
 }
 
 func truncateUTF8Bytes(data []byte, maxBytes int) string {

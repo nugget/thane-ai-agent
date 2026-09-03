@@ -1655,6 +1655,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
+			handlerCtx = withConversationID(handlerCtx, convID)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
 			handlerCtx = withMailboxItems(handlerCtx, mailboxItems)
@@ -1744,6 +1745,10 @@ func (l *Loop) run(ctx context.Context) {
 		} else {
 			iterStart := time.Now()
 			turnCtx := withLoopID(iterCtx, l.id)
+			// The wake's conversation rides with the loop ID so the
+			// output-context render that follows records its document
+			// receipts under the scope the agent's tool calls will use.
+			turnCtx = withConversationID(turnCtx, convID)
 			turnCtx = withFallbackContent(turnCtx, l.config.FallbackContent)
 			turnCtx = withNotifyEnvelopes(turnCtx, signals)
 			turnCtx = withMailboxItems(turnCtx, mailboxItems)
