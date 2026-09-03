@@ -654,8 +654,17 @@ routes each to the surface it names (`native` for the /v1 API and
 dashboard, `ollama`, or `openai`), a plain-HTTP listener answers with a
 permanent redirect and nothing else, and every HTTPS response carries
 `Strict-Transport-Security` (`hsts_max_age` sets its lifetime,
-`hsts_disabled: true` omits it). A request for a hostname that is not listed
-gets `421 Misdirected Request`. Ports 80 and 443 need privilege that Thane
+`hsts_disabled: true` omits it). A hostname that is not listed is refused
+twice over: the handshake ends with the TLS `unrecognized_name` alert,
+because the door holds no certificate for that name and says so rather
+than presenting one it was never asked about, and a request that arrives
+under a listed name but carries an unlisted `Host` header gets `421
+Misdirected Request`. Both are logged under `subsystem=tls` with the name
+asked for and the peer that asked; a burst of refusals coalesces into one
+summary so a client stuck in a retry loop cannot write the log, and a
+name too long to be a DNS name is shortened in the record so it cannot
+set the record's size either. Ports 80
+and 443 need privilege that Thane
 should never hold: a supervisor that bound them can hand the sockets down under
 the systemd `LISTEN_FDS` contract, named `https` and `http`, and the front
 door serves on those instead of binding, logging each adoption at boot;
@@ -703,7 +712,11 @@ anything the CA would.
 Issuance runs in the background after boot: the listeners come up
 immediately and a handshake for a hostname whose certificate has not
 arrived fails until it does, which with a ten-minute propagation wait is
-the honest behaviour. Issuance, renewal, and failure are logged under
+the honest behaviour. That failure is deliberately not the one an
+unlisted hostname gets: a listed name without a certificate yet is an
+internal condition and ends the handshake as `internal_error`, so the two
+are told apart from the client side rather than sharing one alert that
+makes a misdirected client look like a broken server. Issuance, renewal, and failure are logged under
 `subsystem=tls`; `thane validate` checks the provider, its settings, the
 storage directory, and every client CA without touching the network.
 

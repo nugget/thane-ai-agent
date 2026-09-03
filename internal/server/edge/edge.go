@@ -25,8 +25,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/caddyserver/certmagic"
@@ -78,6 +80,20 @@ type Server struct {
 	// publicPort is the port clients reach the TLS listener on: an
 	// inherited socket's own port, else the configured public port.
 	publicPort int
+	// held is the set of hostnames this door has certificates for — the
+	// same set routeByHost serves — consulted during the handshake so a
+	// ClientHello for any other name is refused there by name rather
+	// than deep in the certificate cache by accident. See sni.go.
+	held map[string]struct{}
+
+	// sniMu guards the coalesced warning for those refusals.
+	sniMu      sync.Mutex
+	sniRefused uint64
+	sniLogged  uint64
+	sniLastLog time.Time
+	sniNames   map[string]struct{}
+	sniFlush   *time.Timer
+	sniStopped bool
 }
 
 // New builds the front door without touching the network: it resolves
@@ -99,6 +115,7 @@ func New(opts Options) (*Server, error) {
 	}
 	routes := make(map[string]http.Handler, len(cfg.Hostnames))
 	hostnames := make([]string, 0, len(cfg.Hostnames))
+	held := make(map[string]struct{}, len(cfg.Hostnames))
 	for host, surface := range cfg.Hostnames {
 		h, ok := opts.Surfaces[surface]
 		if !ok || h == nil {
@@ -107,7 +124,9 @@ func New(opts Options) (*Server, error) {
 		}
 		routes[strings.ToLower(host)] = h
 		hostnames = append(hostnames, strings.ToLower(host))
+		held[strings.ToLower(host)] = struct{}{}
 	}
+	slices.Sort(hostnames)
 
 	provider, defaults, err := newProvider(cfg.CertMagic.DNS.Provider, cfg.CertMagic.DNS.Settings, logger)
 	if err != nil {
@@ -122,7 +141,7 @@ func New(opts Options) (*Server, error) {
 	}
 
 	zlog := newZapBridge(logger)
-	s := &Server{cfg: cfg, logger: logger, hostnames: hostnames}
+	s := &Server{cfg: cfg, logger: logger, hostnames: hostnames, held: held}
 
 	s.cache = certmagic.NewCache(certmagic.CacheOptions{
 		GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return s.magic, nil },
@@ -162,6 +181,7 @@ func New(opts Options) (*Server, error) {
 	s.magic.Issuers = []certmagic.Issuer{issuer}
 
 	tlsCfg := s.magic.TLSConfig()
+	tlsCfg.GetCertificate = s.certificateFor(tlsCfg.GetCertificate)
 	tlsCfg.MinVersion = tls.VersionTLS12
 	tlsCfg.NextProtos = append([]string{"h2", "http/1.1"}, tlsCfg.NextProtos...)
 	if clientCAs != nil {
@@ -273,6 +293,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.cache != nil {
 		s.cache.Stop()
 	}
+	s.stopUnheldNameFlush()
 	return first
 }
 
