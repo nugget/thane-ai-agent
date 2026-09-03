@@ -633,7 +633,12 @@ func (s *Server) buildHandler() http.Handler {
 	// The gate sits inside the cross-origin guard, so a forged request is
 	// refused before its cookie is even consulted, and outside the body
 	// cap, so an unauthenticated caller never gets a body read at all.
-	return s.withLogging(listen.RejectCrossOriginWrites(s.logger, s.auth.wrap(listen.LimitRequestBody(nativeMaxBodyBytes, mux))))
+	// The API posture goes on the whole chain, so a route added to this
+	// mux without a thought still answers with the strictest policy
+	// rather than none; the console and explorer registrars replace it
+	// for their own sub-trees on the way out.
+	return s.withLogging(listen.SecurityHeaders(listen.PostureAPI,
+		listen.RejectCrossOriginWrites(s.logger, s.auth.wrap(listen.LimitRequestBody(nativeMaxBodyBytes, mux)))))
 }
 
 // Shutdown gracefully stops the server.

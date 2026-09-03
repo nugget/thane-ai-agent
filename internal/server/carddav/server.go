@@ -178,17 +178,24 @@ func (s *Server) tryRebind() {
 	}
 }
 
-// buildHandler creates the HTTP handler chain: auth → logging →
-// cross-origin guard → carddav.Handler. The guard sits after auth
-// because the forgery it stops is a browser replaying cached Basic
+// buildHandler creates the HTTP handler chain: security headers → auth
+// → logging → cross-origin guard → carddav.Handler. The guard sits after
+// auth because the forgery it stops is a browser replaying cached Basic
 // credentials on a cross-site request; the credentials pass, the origin
 // does not.
+//
+// The headers sit outermost, ahead of auth, because two responses leave
+// this server without reaching it: the 401 challenge and the unauthed
+// .well-known discovery redirect. A response a browser reads before it
+// has credentials is exactly the one that must already say what may be
+// done with it.
 func (s *Server) buildHandler() http.Handler {
 	davHandler := &libcarddav.Handler{
 		Backend: s.backend,
 		Prefix:  "/carddav",
 	}
-	return s.withAuth(s.withLogging(listen.RejectCrossOriginWrites(s.logger, davHandler)))
+	return listen.SecurityHeaders(listen.PostureAPI,
+		s.withAuth(s.withLogging(listen.RejectCrossOriginWrites(s.logger, davHandler))))
 }
 
 // withAuth wraps a handler with HTTP Basic Auth.  The .well-known

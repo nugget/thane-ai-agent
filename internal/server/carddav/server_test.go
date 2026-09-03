@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 func TestServer_AuthRequired(t *testing.T) {
@@ -84,6 +86,66 @@ func TestServer_WellKnownNoAuth(t *testing.T) {
 
 	if rr.Code == http.StatusUnauthorized {
 		t.Error("well-known redirect should not require auth")
+	}
+}
+
+// TestServer_SecurityHeadersOnEveryResponse covers the two responses
+// CardDAV returns before authentication: the 401 challenge and the
+// unauthenticated .well-known discovery redirect. Both leave the server
+// without touching the CardDAV handler, so they are the responses a
+// chain that put the headers behind auth would silently omit them from.
+//
+// The expected headers are taken from the API posture itself rather than
+// written out, so this test asserts CardDAV carries that posture and
+// cannot drift from what listen defines it to be.
+func TestServer_SecurityHeadersOnEveryResponse(t *testing.T) {
+	b := newTestBackend(t)
+	s := NewServer(nil, "user", "pass", b, b.logger)
+	s.handler = s.buildHandler()
+
+	posture := httptest.NewRecorder()
+	listen.SecurityHeaders(listen.PostureAPI, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+		ServeHTTP(posture, httptest.NewRequest("GET", "/", nil))
+
+	tests := []struct {
+		name  string
+		build func() *http.Request
+		want  int
+	}{
+		{
+			name:  "unauthenticated challenge",
+			build: func() *http.Request { return httptest.NewRequest("PROPFIND", "/carddav/", nil) },
+			want:  http.StatusUnauthorized,
+		},
+		{
+			name:  "discovery redirect",
+			build: func() *http.Request { return httptest.NewRequest("GET", "/.well-known/carddav", nil) },
+			want:  http.StatusMovedPermanently,
+		},
+		{
+			name: "authenticated request",
+			build: func() *http.Request {
+				req := httptest.NewRequest("PROPFIND", "/carddav/", nil)
+				req.SetBasicAuth("user", "pass")
+				return req
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			s.handler.ServeHTTP(rr, tt.build())
+
+			if tt.want != 0 && rr.Code != tt.want {
+				t.Errorf("status = %d, want %d", rr.Code, tt.want)
+			}
+			for name, want := range posture.Header() {
+				if got := rr.Header().Get(name); got != want[0] {
+					t.Errorf("%s = %q, want %q", name, got, want[0])
+				}
+			}
+		})
 	}
 }
 

@@ -124,8 +124,9 @@ func (s *OllamaServer) buildHandler() http.Handler {
 	// access-log lines with their 401/403 status. The source allowlist
 	// goes first: a caller the operator has not admitted costs one log
 	// line and nothing else.
-	return s.withLogging(listen.RestrictSources(s.logger, "ollama", s.allowedSources,
-		listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux))))
+	return s.withLogging(listen.SecurityHeaders(listen.PostureAPI,
+		listen.RestrictSources(s.logger, "ollama", s.allowedSources,
+			listen.RejectCrossOriginWrites(s.logger, ollamaAuth(s.apiKey, mux)))))
 }
 
 // Shutdown gracefully stops the server.

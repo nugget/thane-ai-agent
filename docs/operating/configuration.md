@@ -592,6 +592,25 @@ never compared. The native API under `listen:` has no such field: it has
 bearer authentication with a pinned public-route set, and `listen.address`
 already confines it to a network when a deployment wants that.
 
+Every response carries security headers, and which ones depends on what
+the surface serves. All of them send `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and a
+`Permissions-Policy` denying geolocation, camera, and microphone; none of
+this is configurable, because there is no deployment that wants less.
+Beyond that there are three postures. Data surfaces — the native `/v1`
+routes, both compat shims, CardDAV — send `default-src 'none'`, which
+says an API response is not a page; with `nosniff` that is what keeps a
+stored payload the server never parsed from being read back as script.
+The web console sends a policy naming only `'self'` and `'none'`, with no
+`'unsafe-inline'` and no `'unsafe-eval'` anywhere in it, which it can
+afford because it loads no external origin, evaluates no strings, and
+embeds no images. The `/docs` explorer sends the one loosened policy:
+its vendored Scalar bundle applies styles at runtime and carries its
+icons as `data:` URIs, so `style-src` and `img-src` are relaxed for that
+surface alone. Scripts are not relaxed even there. `Strict-Transport-Security`
+is not in this set; it is a claim about transport and only the HTTPS
+front door sends it.
+
 Every listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
 `PATCH`) that a browser marks as cross-origin, using the `Sec-Fetch-Site`
 and `Origin` headers browsers attach and non-browser clients do not. This
