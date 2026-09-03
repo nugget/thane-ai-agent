@@ -3191,6 +3191,84 @@ components:
           link_source: exact
           is_owner: false
 
+    ConversationModelPin:
+      type: object
+      description: >-
+        A model override requested from inside one conversation. While it
+        stands, every turn of that conversation bypasses the router and runs
+        on the named deployment; a turn the deployment cannot serve routes
+        normally and is recorded in last_fallback. Pins live in process
+        memory only and clear when Thane restarts.
+      required: [conversation_id, model, pinned_at]
+      properties:
+        conversation_id:
+          type: string
+          readOnly: true
+          description: The conversation the pin applies to.
+          example: signal-alice
+        model:
+          type: string
+          readOnly: true
+          description: Resolved deployment ID the conversation is held to.
+          example: claude-opus-4-8
+        provider:
+          type: string
+          readOnly: true
+          description: Provider serving the pinned deployment.
+          example: anthropic
+        resource:
+          type: string
+          readOnly: true
+          description: Model resource the pinned deployment runs on.
+          example: cloud
+        supports_tools:
+          type: boolean
+          readOnly: true
+          description: Whether the pinned deployment can call tools.
+        supports_images:
+          type: boolean
+          readOnly: true
+          description: Whether the pinned deployment accepts image input. A turn carrying images falls back to the router when false.
+        supports_streaming:
+          type: boolean
+          readOnly: true
+          description: Whether the pinned deployment can stream responses.
+        context_window:
+          type: integer
+          readOnly: true
+          description: Configured context window of the pinned deployment, in tokens.
+          example: 200000
+        reason:
+          type: string
+          readOnly: true
+          description: Free-text justification recorded when the pin was set.
+          example: "user asked to compare opus on this thread"
+        pinned_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the pin was set.
+          example: "2026-09-03T15:04:05Z"
+        last_fallback:
+          type: object
+          readOnly: true
+          description: The most recent turn the pin could not serve; omitted until that happens.
+          required: [at, model, reason]
+          properties:
+            at:
+              type: string
+              format: date-time
+              description: RFC3339 timestamp of the turn that routed around the pin.
+              example: "2026-09-03T15:10:00Z"
+            model:
+              type: string
+              description: Deployment the router chose for that turn instead.
+              example: qwen3:8b
+            reason:
+              type: string
+              description: The preflight verdict that ruled the pinned deployment out for that turn.
+              example: it does not support image inputs
+
     ConversationSummary:
       type: object
       description: >-
@@ -3389,6 +3467,12 @@ components:
         metadata:
           $ref: "#/components/schemas/ConversationMetadata"
           description: Typed conversation metadata; omitted when none is set.
+        model_pin:
+          $ref: "#/components/schemas/ConversationModelPin"
+          description: >-
+            The live model pin holding this conversation to one deployment;
+            omitted when the conversation routes normally. Runtime state, not
+            part of the stored record: it clears when Thane restarts.
         created_at:
           type: string
           format: date-time

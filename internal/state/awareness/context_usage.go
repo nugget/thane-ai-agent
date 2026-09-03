@@ -19,6 +19,19 @@ type ContextUsageInfo struct {
 	Model string
 	// Routed indicates whether a router is configured (actual model may differ).
 	Routed bool
+	// ModelPinned marks Model as a conversation pin that was honored
+	// this turn. ModelPinAge is how long the pin has stood; it renders
+	// as an exact-second delta so the model never divides a duration.
+	ModelPinned bool
+	ModelPinAge time.Duration
+	// ModelPinSkipped names a conversation pin the runtime could not
+	// honor this turn, with ModelPinSkipReason saying why. Model then
+	// holds the routed replacement. The next turn is the reader: it has
+	// to know the pin still stands and why this answer came from
+	// elsewhere, or it will re-pin or apologize for a switch it never
+	// made.
+	ModelPinSkipped    string
+	ModelPinSkipReason string
 	// TokenCount is the estimated token count of the active conversation.
 	TokenCount int
 	// ContextWindow is the context window size of the default model.
@@ -47,7 +60,16 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	// Model segment.
 	if info.Model != "" {
 		m := info.Model
-		if info.Routed {
+		switch {
+		case info.ModelPinned:
+			m += " (pinned " + formatPinAge(info.ModelPinAge) + ")"
+		case info.ModelPinSkipped != "":
+			qualifier := "routed; pinned " + info.ModelPinSkipped + " skipped this turn"
+			if info.ModelPinSkipReason != "" {
+				qualifier += ": " + info.ModelPinSkipReason
+			}
+			m += " (" + qualifier + ")"
+		case info.Routed:
 			m += " (routed)"
 		}
 		parts = append(parts, m)
@@ -107,4 +129,15 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	}
 
 	return result
+}
+
+// formatPinAge renders how long a pin has stood as the signed delta the
+// rest of the prompt uses for time ("-120s", "-3h15m"), so the model
+// reads it the same way it reads every other timestamp it is shown.
+func formatPinAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	var epoch time.Time
+	return promptfmt.FormatDeltaOnly(epoch, epoch.Add(age))
 }

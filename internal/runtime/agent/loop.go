@@ -313,6 +313,12 @@ type Loop struct {
 	modelRegistry       *fleet.Registry
 	modelRuntime        *fleet.Runtime
 
+	// conversationPins holds the live conversation model pins. One Loop
+	// serves every conversation, so this is the one place a pin set by a
+	// tool in turn N is guaranteed to be seen by turn N+1 whichever
+	// bridge or API surface builds it. See [Loop.PinConversationModel].
+	conversationPins conversationModelPins
+
 	// Capability tags — per-Run tool/talent filtering.
 	//
 	// Each Run() creates its own capabilityScope (stored in context)
@@ -2032,7 +2038,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	model := req.Model
 	var routerDecision *router.Decision
 
-	log.Debug("model selection start", "req_model", req.Model, "default_model", l.model)
+	// A conversation pin is the most specific model intent there is:
+	// set from inside this conversation, later than any channel config
+	// or client model field. It outranks the request model. It is read
+	// here, after tool gating and before routing, so preflight judges it
+	// on the tool surface this turn will actually expose.
+	var pinned tools.ConversationModelPin
+	pinnedModel := ""
+	pinSkipReason := ""
+	if pin, ok := l.conversationPins.get(convID); ok {
+		pinned = pin
+		pinnedModel = pin.Model
+		model = pin.Model
+		usageInfo.ModelPinAge = l.now().Sub(pin.PinnedAt)
+	}
+
+	log.Debug("model selection start", "req_model", req.Model, "pinned_model", pinnedModel, "default_model", l.model)
 
 	if model == "" || model == "thane" {
 		if l.router != nil {
@@ -2056,15 +2077,36 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// so that wanting room to answer never makes a servable request look
 		// incompatible here.
 		contextSize = estimateRequestContextTokens(llmMessages, visibleTools.List())
-		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
-			return nil, prepErr
+		resolvedModel, explicitErr := l.selectExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize)
+		switch {
+		case explicitErr == nil:
+			model = resolvedModel
+			log.Debug("model specified in request, skipping router", "model", model, "pinned", pinnedModel != "")
+		case pinnedModel == "" || l.router == nil:
+			return nil, explicitErr
+		default:
+			// The pin cannot serve this turn. A conversation's needs change
+			// from turn to turn (an image arrives, the prompt grows) and a
+			// pin that turned every such turn into an error would be a trap
+			// rather than a preference. Route this one turn, keep the pin,
+			// and tell the next turn what happened through the context line.
+			pinSkipReason = explicitModelSkipReason(explicitErr)
+			log.Warn("conversation model pin skipped for this turn; routing instead",
+				"conversation_id", convID,
+				"pinned_model", pinnedModel,
+				"reason", pinSkipReason,
+			)
+			// Route on the same full request size (messages plus tool
+			// schemas) the pin was just judged on. A messages-only figure
+			// could hand the router the very deployment the window check
+			// rejected, and the routed re-check below measures messages
+			// alone, so nothing later would catch it.
+			var routeErr error
+			model, routerDecision, routeErr = routeWithContextSize(contextSize)
+			if routeErr != nil {
+				return nil, routeErr
+			}
 		}
-		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
-		if err != nil {
-			return nil, err
-		}
-		model = resolvedModel
-		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
 	for routedPromptChecks := 0; routerDecision != nil; routedPromptChecks++ {
@@ -2099,6 +2141,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	usageInfo.Model = model
 	usageInfo.Routed = routerDecision != nil
+	switch {
+	case pinnedModel != "" && pinSkipReason != "":
+		usageInfo.ModelPinSkipped = pinnedModel
+		usageInfo.ModelPinSkipReason = pinSkipReason
+		l.conversationPins.recordFallback(pinned, model, pinSkipReason, l.now())
+	case pinnedModel != "":
+		usageInfo.ModelPinned = true
+	}
 	if cat := l.currentModelCatalog(); cat != nil {
 		if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
 			usageInfo.ContextWindow = dep.ContextWindow

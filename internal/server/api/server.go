@@ -34,6 +34,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/server/openapi"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // WebServerRegistrar is implemented by types that can register HTTP
@@ -104,6 +105,7 @@ type Server struct {
 	schedulerReader                    SchedulerReader
 	capSurface                         func() []toolcatalog.CapabilitySurface
 	usageStore                         *usage.Store
+	conversationPins                   ConversationModelPinReader
 	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
 	persistModelRegistryResourcePolicy func(string, fleet.ResourcePolicy) error
@@ -444,6 +446,27 @@ func NewServer(
 // SetCheckpointer configures the checkpointer for checkpoint API endpoints.
 func (s *Server) SetCheckpointer(cp *checkpoint.Checkpointer) {
 	s.checkpointer = cp
+}
+
+// ConversationModelPinReader exposes the live conversation model pins so
+// the conversation view can show which deployment a conversation is
+// held to. Implemented by agent.Loop.
+type ConversationModelPinReader interface {
+	ConversationModelPin(conversationID string) (tools.ConversationModelPin, bool)
+}
+
+// SetConversationModelPins configures where GET /v1/conversations/{id}
+// reads a conversation's model pin from. Nil leaves the field off.
+func (s *Server) SetConversationModelPins(r ConversationModelPinReader) {
+	s.conversationPins = r
+}
+
+// conversationDetail is the GET /v1/conversations/{id} body: the stored
+// conversation plus the runtime-only model pin, which lives in process
+// memory rather than in the store and so cannot ride the record itself.
+type conversationDetail struct {
+	*memory.Conversation
+	ModelPin *tools.ConversationModelPin `json:"model_pin,omitempty"`
 }
 
 // SetMemoryStore configures the memory store for history API endpoints.
@@ -1592,8 +1615,15 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	detail := conversationDetail{Conversation: conv}
+	if s.conversationPins != nil {
+		if pin, ok := s.conversationPins.ConversationModelPin(id); ok {
+			detail.ModelPin = &pin
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, conv, s.logger)
+	writeJSON(w, detail, s.logger)
 }
 
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {

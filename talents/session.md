@@ -1,15 +1,17 @@
 ---
 name: session
 tags: [session]
-teaser: "Open for conversation-lifecycle decisions — reset, close, checkpoint, or split."
+teaser: "Open for conversation-lifecycle decisions — reset, close, checkpoint, split, or pin this conversation to one model."
 ---
 
 # Session
 
-Four tools, each genuinely distinct. The names sound similar enough
-that the model demonstrably mis-routes between them; the differences
-matter because some are destructive and some aren't, some preserve
-continuity and some sever it.
+Five tools, each genuinely distinct. Four shape the conversation's
+lifecycle; the names sound similar enough that the model demonstrably
+mis-routes between them, and the differences matter because some are
+destructive and some aren't, some preserve continuity and some sever
+it. The fifth, `conversation_model_pin`, shapes *which mind answers*
+this conversation and touches no history at all.
 
 ## The single most important disambiguation
 
@@ -41,6 +43,7 @@ current session; two do not.
 | `session_close` | Closes current session, opens a fresh one with a carry-forward handoff injected. | **Yes** (but with continuity) |
 | `session_checkpoint` | Snapshots state. Current session continues uninterrupted. | No |
 | `session_split` | Archives early messages, keeps recent ones in the current session. | No (the current session keeps going) |
+| `conversation_model_pin` | Holds this conversation to one model deployment, or clears the hold. Touches no messages. | No |
 
 When in doubt about destructiveness, look at this table first.
 
@@ -161,6 +164,57 @@ Use this when:
 Distinguish from `session_close`: split keeps you *in* the current
 session (no carry-forward needed, no handoff). It's "compact this
 session" rather than "transition to a new session."
+
+## conversation_model_pin — steer which mind answers
+
+**Hold this conversation to one model deployment, from the next turn
+on, until cleared or until Thane restarts.** The user asks for it in
+model terms: "switch this chat to opus," "use the local model for
+now," "go back to automatic."
+
+```json
+{
+  "model": "claude-opus-4-8",
+  "reason": "user wants to compare opus on this thread"
+}
+```
+
+To clear:
+
+```json
+{
+  "clear": true
+}
+```
+
+`model` is a deployment id or a unique model name; the `models` tag's
+`model_registry_list` is where those come from, and an unknown or
+ambiguous name errors with the next move rather than guessing. The
+pin outranks the channel's configured model and any model a client
+picked in a dropdown, and it holds across turns, sessions, splits, and
+checkpoints of this conversation. Nothing about it is durable: it is
+process memory, so a restart drops it. That is the recovery path for a
+bad choice, by design.
+
+Three things to hold in mind while a pin stands:
+
+- **It applies from the next turn.** The turn that sets the pin has
+  already chosen its model. Say so when you confirm.
+- **The Context line tells you the state.** `(pinned -Ns)` after the
+  model name means the pin was honored this turn. `pinned X skipped
+  this turn: <reason>` means the deployment could not serve this one
+  turn (an image arrived and it lacks vision, the prompt outgrew its
+  window) and the router answered instead. The pin still stands; do
+  not re-pin, and do not apologize for a switch you did not make.
+- **It is not policy.** To take a deployment away from *everyone*, or
+  promote a discovered one, that is `model_deployment_set_policy`
+  under `models`. To pin a persistent loop definition, that is
+  `loop_definition_update` under `loops`. This tool is for this
+  conversation and this conversation only.
+
+Pin on the user's request or for a deliberate comparison. Do not pin
+on your own initiative because a turn felt weak; the router's choice is
+explainable (`model_route_explain`) and usually right for a reason.
 
 ## Choosing the right one
 
