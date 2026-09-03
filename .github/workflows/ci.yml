@@ -10,9 +10,10 @@ permissions:
   contents: read
 
 # Split the gate into independent jobs so wall-clock is the slowest job, not
-# the sum. golangci-lint and vacuum are hermetic (tools/go.mod, run via
-# `go run` inside the just recipes) — no install steps. lychee is the one
-# non-Go tool and is installed only where link-check runs.
+# the sum. golangci-lint, go-check-sumtype, and vacuum are hermetic (pinned in
+# tool modules and run via `go run` inside the just recipes) — no install
+# steps. lychee is the one non-Go tool and is installed only where link-check
+# runs.
 #
 # Caching: the downloaded module cache is shared (identical across jobs), but
 # the build cache (~/.cache/go-build) is keyed PER JOB. Each job compiles a
@@ -36,12 +37,12 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum', 'tools/gochecksumtype/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
-          key: go-build-test-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          key: go-build-test-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum', 'tools/gochecksumtype/go.sum') }}
           restore-keys: go-build-test-${{ runner.os }}-
       - uses: extractions/setup-just@v4
       - name: Test (race) + coverage
@@ -64,17 +65,17 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum', 'tools/gochecksumtype/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
-          key: go-build-lint-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          key: go-build-lint-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum', 'tools/gochecksumtype/go.sum') }}
           restore-keys: go-build-lint-${{ runner.os }}-
       - uses: actions/cache@v6
         with:
           path: ~/.cache/golangci-lint
-          key: golangci-lint-${{ runner.os }}-${{ hashFiles('tools/go.sum', '.golangci.yml') }}
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('tools/go.sum', 'tools/gochecksumtype/go.sum', '.golangci.yml') }}
           restore-keys: golangci-lint-${{ runner.os }}-
       - uses: extractions/setup-just@v4
       - name: Lint
@@ -91,12 +92,12 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum', 'tools/gochecksumtype/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
-          key: go-build-checks-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          key: go-build-checks-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum', 'tools/gochecksumtype/go.sum') }}
           restore-keys: go-build-checks-${{ runner.os }}-
       - uses: extractions/setup-just@v4
       - name: Install lychee

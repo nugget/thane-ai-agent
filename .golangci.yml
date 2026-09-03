@@ -2,6 +2,10 @@ version: "2"
 linters:
   enable:
     - godoclint
+  disable:
+    # v0.5 runs separately from just lint so its fact-based analyzer can span
+    # packages without inheriting golangci-lint's pre-0.5 adapter.
+    - gochecksumtype
   settings:
     godoclint:
       require-pkg-doc: true
