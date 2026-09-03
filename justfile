@@ -37,13 +37,14 @@ codesign-options := env("THANE_CODESIGN_OPTIONS", "runtime")
 codesign-timestamp := env("THANE_CODESIGN_TIMESTAMP", "true")
 notary-profile := env("THANE_NOTARY_PROFILE", "")
 
-# Hermetic dev tools. golangci-lint and vacuum are pinned in tools/go.mod
-# and run via `go run`, so no host install is needed (the toolchain builds
-# and caches them) and Dependabot tracks their versions through the gomod
-# ecosystem (.github/dependabot.yml, directory: /tools). Their large
-# dependency trees live in tools/go.mod and never touch the main module.
+# Hermetic dev tools. golangci-lint and vacuum are pinned in tools/go.mod;
+# go-check-sumtype is isolated in tools/gochecksumtype/go.mod because its 0.5
+# analysis API is incompatible with golangci-lint's embedded adapter. They run
+# via `go run`, so no host install is needed, and their dependency trees never
+# touch the main module.
 golangci := "go run -modfile=tools/go.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint"
 vacuum := "go run -modfile=tools/go.mod github.com/daveshanley/vacuum"
+gochecksumtype := "go run -modfile=tools/gochecksumtype/go.mod github.com/alecthomas/go-check-sumtype/cmd/go-check-sumtype"
 
 # List available recipes
 default:
@@ -129,6 +130,7 @@ fmt-check:
 [group('test')]
 lint: generate
     {{golangci}} run ./...
+    {{gochecksumtype}} -default-signifies-exhaustive=true -include-shared-interfaces=false ./...
 
 # Lint the OpenAPI specs against the Thane ruleset (.vacuum.yaml). Structural
 # errors fail the build; content gaps (missing descriptions/examples) ride at
@@ -148,6 +150,18 @@ lint-openapi:
 mod-tidy-check:
     go mod tidy
     @test -z "$(git diff --name-only go.mod go.sum)" || (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && git diff go.mod go.sum && exit 1)
+
+# Keep each hermetic tool module internally coherent. These are separate from
+# the application module so their dependency graphs cannot affect the binary.
+[doc("Tidy the hermetic Go tool modules")]
+[group('test')]
+tools-mod-tidy:
+    go -C tools mod tidy
+    go -C tools/gochecksumtype mod tidy
+
+[group('test')]
+tools-mod-tidy-check: tools-mod-tidy
+    @test -z "$(git diff --name-only -- tools/go.mod tools/go.sum tools/gochecksumtype/go.mod tools/gochecksumtype/go.sum)" || (echo "Tool modules are not tidy — run 'just tools-mod-tidy'" && git diff -- tools/go.mod tools/go.sum tools/gochecksumtype/go.mod tools/gochecksumtype/go.sum && exit 1)
 
 # Check examples/config.example.yaml is up to date with the config package.
 # Runs go generate and fails if the file changed (i.e., was stale).
@@ -183,9 +197,9 @@ link-check:
     fi
     lychee --offline --no-progress '**/*.md'
 
-# CI: format check, lint, and tests
+# CI: format check, module checks, lint, and tests
 [group('test')]
-ci: fmt-check mod-tidy-check config-generate-check architecture-check link-check lint lint-openapi test
+ci: fmt-check mod-tidy-check tools-mod-tidy-check config-generate-check architecture-check link-check lint lint-openapi test
 
 # --- Install ---
 
