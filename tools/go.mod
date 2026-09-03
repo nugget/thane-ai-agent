@@ -176,7 +176,7 @@ require (
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
-	github.com/pb33f/doctor v0.0.79 // indirect
+	github.com/pb33f/doctor v0.0.80 // indirect
 	github.com/pb33f/jsonpath v0.8.3 // indirect
 	github.com/pb33f/libasyncapi v0.0.2 // indirect
 	github.com/pb33f/libopenapi v0.38.7 // indirect
