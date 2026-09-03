@@ -111,6 +111,14 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	}
 
 	var reasons []string
+	// Operator policy is judged here, per turn, and not only where a
+	// reference is first accepted: a deployment or resource switched off
+	// after a conversation pinned it must stop receiving that
+	// conversation's traffic, the same as it stops receiving routed
+	// traffic (see fleet routingEligible).
+	if dep.PolicyState == fleet.DeploymentPolicyStateInactive {
+		reasons = append(reasons, "this deployment is currently inactive by operator policy")
+	}
 	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		reasons = append(reasons, "its resource is currently inactive by operator policy")
 	}
@@ -153,7 +161,7 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	if err != nil {
 		return false, nil
 	}
-	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
+	if dep.PolicyState == fleet.DeploymentPolicyStateInactive || dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		return false, nil
 	}
 	// contextSize is what the request requires; the window worth loading for

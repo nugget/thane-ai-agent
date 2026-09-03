@@ -2043,9 +2043,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// or client model field. It outranks the request model. It is read
 	// here, after tool gating and before routing, so preflight judges it
 	// on the tool surface this turn will actually expose.
+	var pinned tools.ConversationModelPin
 	pinnedModel := ""
 	pinSkipReason := ""
 	if pin, ok := l.conversationPins.get(convID); ok {
+		pinned = pin
 		pinnedModel = pin.Model
 		model = pin.Model
 		usageInfo.ModelPinAge = l.now().Sub(pin.PinnedAt)
@@ -2094,8 +2096,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"pinned_model", pinnedModel,
 				"reason", pinSkipReason,
 			)
+			// Route on the same full request size (messages plus tool
+			// schemas) the pin was just judged on. A messages-only figure
+			// could hand the router the very deployment the window check
+			// rejected, and the routed re-check below measures messages
+			// alone, so nothing later would catch it.
 			var routeErr error
-			model, routerDecision, routeErr = routeWithContextSize(estimateLLMMessagesContextTokens(llmMessages))
+			model, routerDecision, routeErr = routeWithContextSize(contextSize)
 			if routeErr != nil {
 				return nil, routeErr
 			}
@@ -2138,7 +2145,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	case pinnedModel != "" && pinSkipReason != "":
 		usageInfo.ModelPinSkipped = pinnedModel
 		usageInfo.ModelPinSkipReason = pinSkipReason
-		l.conversationPins.recordFallback(convID, model, pinSkipReason, l.now())
+		l.conversationPins.recordFallback(pinned, model, pinSkipReason, l.now())
 	case pinnedModel != "":
 		usageInfo.ModelPinned = true
 	}

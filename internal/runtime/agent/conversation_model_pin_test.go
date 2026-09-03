@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 	"gopkg.in/yaml.v3"
 )
 
@@ -301,5 +302,76 @@ func TestRun_ConversationPinWithoutRouterFailsLikeExplicitModel(t *testing.T) {
 	}
 	if len(mock.calls) != 0 {
 		t.Fatalf("llm calls = %d, want 0", len(mock.calls))
+	}
+}
+
+func TestRun_ConversationPinRoutesAroundDeploymentDeactivatedAfterPinning(t *testing.T) {
+	mock := &mockLLM{responses: okResponses(2)}
+	loop, registry := newPinTestLoop(t, mock)
+	const conv = "signal-alice"
+
+	if _, err := loop.PinConversationModel(conv, "qwen3:8b", "local please"); err != nil {
+		t.Fatalf("PinConversationModel: %v", err)
+	}
+	runTextTurn(t, loop, conv, "", "still local?")
+	if got := mock.calls[0].Model; got != "qwen3:8b" {
+		t.Fatalf("pinned turn model = %q, want qwen3:8b", got)
+	}
+
+	// Operator policy switches the pinned deployment off after the pin was
+	// accepted. The router sees it through a config sync; the pin must see
+	// it through preflight on its next turn.
+	if err := registry.ApplyDeploymentPolicy("qwen3:8b", fleet.DeploymentPolicy{State: fleet.DeploymentPolicyStateInactive, Reason: "maintenance"}, time.Now()); err != nil {
+		t.Fatalf("ApplyDeploymentPolicy: %v", err)
+	}
+	loop.router.UpdateConfig(registry.Catalog().RouterConfig(32))
+
+	runTextTurn(t, loop, conv, "", "and now?")
+	if got := mock.calls[1].Model; got != "claude-sonnet-4-20250514" {
+		t.Fatalf("turn after deactivation model = %q, want the router's replacement", got)
+	}
+	if prompt := systemPromptOf(t, mock.calls[1]); !strings.Contains(prompt, "pinned qwen3:8b skipped this turn: this deployment is currently inactive by operator policy") {
+		t.Fatalf("context line does not explain the deactivated pin:\n%s", prompt)
+	}
+	pin, ok := loop.ConversationModelPin(conv)
+	if !ok || pin.LastFallback == nil || !strings.Contains(pin.LastFallback.Reason, "inactive") {
+		t.Fatalf("pin after deactivation = %+v, %v; want it kept with the inactive fallback recorded", pin, ok)
+	}
+}
+
+func TestConversationModelPins_FallbackOnlyLandsOnTheObservedPin(t *testing.T) {
+	var pins conversationModelPins
+	t0 := time.Date(2026, 9, 3, 15, 0, 0, 0, time.UTC)
+	first := tools.ConversationModelPin{ConversationID: "signal-alice", Model: "qwen3:8b", PinnedAt: t0}
+	pins.set(first)
+
+	// A turn observed `first`; meanwhile the conversation was re-pinned.
+	replacement := tools.ConversationModelPin{ConversationID: "signal-alice", Model: "claude-sonnet-4-20250514", PinnedAt: t0.Add(time.Minute)}
+	pins.set(replacement)
+	pins.recordFallback(first, "claude-sonnet-4-20250514", "it does not support image inputs", t0.Add(2*time.Minute))
+	if got, _ := pins.get("signal-alice"); got.LastFallback != nil {
+		t.Fatalf("replacement pin inherited a fallback from its predecessor: %+v", got.LastFallback)
+	}
+
+	// The same deployment re-pinned later is a different pin too.
+	repinned := tools.ConversationModelPin{ConversationID: "signal-alice", Model: "qwen3:8b", PinnedAt: t0.Add(3 * time.Minute)}
+	pins.set(repinned)
+	pins.recordFallback(first, "claude-sonnet-4-20250514", "stale", t0.Add(4*time.Minute))
+	if got, _ := pins.get("signal-alice"); got.LastFallback != nil {
+		t.Fatalf("re-pinned deployment inherited a stale fallback: %+v", got.LastFallback)
+	}
+
+	// The live pin's own verdict lands.
+	pins.recordFallback(repinned, "claude-sonnet-4-20250514", "it does not support image inputs", t0.Add(5*time.Minute))
+	got, _ := pins.get("signal-alice")
+	if got.LastFallback == nil || got.LastFallback.Model != "claude-sonnet-4-20250514" {
+		t.Fatalf("live pin fallback = %+v, want it recorded", got.LastFallback)
+	}
+
+	// A cleared pin records nothing.
+	pins.clear("signal-alice")
+	pins.recordFallback(repinned, "x", "y", t0.Add(6*time.Minute))
+	if _, ok := pins.get("signal-alice"); ok {
+		t.Fatal("recordFallback resurrected a cleared pin")
 	}
 }

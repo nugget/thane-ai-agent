@@ -46,18 +46,22 @@ func (p *conversationModelPins) clear(conversationID string) (tools.Conversation
 	return pin, ok
 }
 
-// recordFallback notes that the pin on conversationID could not serve a
-// turn and model answered instead. A pin that was cleared meanwhile is
-// left alone.
-func (p *conversationModelPins) recordFallback(conversationID, model, reason string, at time.Time) {
+// recordFallback notes that observed, the pin a turn read at its start,
+// could not serve that turn and model answered instead. The turn ran
+// outside the lock, so the conversation may have been re-pinned or
+// cleared meanwhile; the record is written only while the live entry is
+// still the pin the turn actually judged (same deployment, same
+// PinnedAt), so a replacement pin never inherits a verdict about its
+// predecessor.
+func (p *conversationModelPins) recordFallback(observed tools.ConversationModelPin, model, reason string, at time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	pin, ok := p.pins[conversationID]
-	if !ok {
+	pin, ok := p.pins[observed.ConversationID]
+	if !ok || pin.Model != observed.Model || !pin.PinnedAt.Equal(observed.PinnedAt) {
 		return
 	}
 	pin.LastFallback = &tools.ConversationModelPinFallback{At: at, Model: model, Reason: reason}
-	p.pins[conversationID] = pin
+	p.pins[observed.ConversationID] = pin
 }
 
 // PinConversationModel resolves ref against the live model catalog and
