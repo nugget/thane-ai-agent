@@ -28,8 +28,8 @@ func TestSecurityHeadersCommonSet(t *testing.T) {
 				t.Errorf("posture %d: %s = %q, want %q", posture, name, got, want)
 			}
 		}
-		if rec.Header().Get("Content-Security-Policy") == "" {
-			t.Errorf("posture %d sent no content policy", posture)
+		if got := rec.Header().Get("Content-Security-Policy"); got != contentPolicy[posture] {
+			t.Errorf("posture %d sent %q, want its own policy %q", posture, got, contentPolicy[posture])
 		}
 		// HSTS is the front door's to send; a surface asserting it would
 		// be promising a transport it does not terminate.
@@ -111,6 +111,43 @@ func TestDocumentsPolicyLoosensOnlyWhatTheBundleNeeds(t *testing.T) {
 			if strings.Contains(value, "data:") || strings.Contains(value, "'unsafe-inline'") {
 				t.Errorf("%s is loosened but is not a bundle requirement: %s", name, directive)
 			}
+		}
+	}
+}
+
+// TestUnknownPostureFailsClosed pins the fallback. Posture is exported
+// and meant to grow, so the interesting case is not a posture Thane has
+// today but the one added tomorrow with the constant written and the map
+// entry forgotten. An empty policy is the loosest thing this middleware
+// could send, on the surface most likely to be new and unexamined, so an
+// unrecognised posture answers with the API policy instead.
+func TestUnknownPostureFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	SecurityHeaders(Posture(999), comparableHandler{}).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := rec.Header().Get("Content-Security-Policy"); got != contentPolicy[PostureAPI] {
+		t.Errorf("unknown posture sent %q, want the API policy %q", got, contentPolicy[PostureAPI])
+	}
+	for name, want := range commonHeaders {
+		if got := rec.Header().Get(name); got != want {
+			t.Errorf("unknown posture: %s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestEveryPostureHasItsOwnPolicy keeps the fallback from being a place
+// postures quietly live. Falling back is the safe behaviour for a
+// mistake, not a way to declare a posture without deciding what it
+// serves, so every named posture carries its own entry.
+func TestEveryPostureHasItsOwnPolicy(t *testing.T) {
+	t.Parallel()
+
+	for _, posture := range []Posture{PostureAPI, PostureConsole, PostureDocuments} {
+		if _, ok := contentPolicy[posture]; !ok {
+			t.Errorf("posture %d has no policy of its own", posture)
 		}
 	}
 }

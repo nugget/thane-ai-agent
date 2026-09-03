@@ -94,8 +94,16 @@ var contentPolicy = map[Posture]string{
 // transport and belongs to the surface that terminates TLS; the front
 // door sets it, and a plaintext listener asserting it would be making a
 // promise it cannot keep.
+//
+// A posture with no policy of its own falls back to the API policy
+// rather than to no policy. Posture is an enumeration meant to grow, and
+// the failure mode of adding a constant without a map entry has to be
+// the strictest surface Thane serves, not the loosest.
 func SecurityHeaders(posture Posture, next http.Handler) http.Handler {
-	policy := contentPolicy[posture]
+	policy, ok := contentPolicy[posture]
+	if !ok {
+		policy = contentPolicy[PostureAPI]
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", policy)
