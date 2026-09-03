@@ -71,6 +71,29 @@ func (l *Loop) currentModelCatalog() *fleet.Catalog {
 	return l.usageCatalog
 }
 
+// selectExplicitModel prepares and preflights an explicit deployment
+// reference for one request and returns the resolved deployment ID. Both
+// a request model and a conversation pin come through here, so the two
+// are judged by exactly the same rules.
+func (l *Loop) selectExplicitModel(ctx context.Context, ref string, needsTools, needsStreaming, needsImages bool, contextSize int) (string, error) {
+	if _, err := l.maybePrepareExplicitModel(ctx, ref, needsTools, needsStreaming, needsImages, contextSize); err != nil {
+		return "", err
+	}
+	return l.preflightExplicitModel(ref, needsTools, needsStreaming, needsImages, contextSize)
+}
+
+// explicitModelSkipReason renders why an explicit deployment could not
+// serve a turn in the shortest form that still teaches: the preflight
+// reasons alone when the verdict was a capability mismatch, the whole
+// error otherwise.
+func explicitModelSkipReason(err error) string {
+	var incompatible *IncompatibleModelError
+	if errors.As(err, &incompatible) && len(incompatible.Reasons) > 0 {
+		return strings.Join(incompatible.Reasons, "; ")
+	}
+	return err.Error()
+}
+
 func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, needsImages bool, contextSize int) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || ref == "thane" {

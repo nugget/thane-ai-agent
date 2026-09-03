@@ -709,6 +709,7 @@ func (a *App) initChannels(s *newState) error {
 	a.loop.Tools().SetArchiveStore(a.archiveStore)
 	a.loop.Tools().SetConversationResetter(a.loop)
 	a.loop.Tools().SetSessionManager(a.loop)
+	a.loop.Tools().SetConversationModelPinner(a.loop)
 
 	// --- Embeddings ---
 	// Optional semantic search over fact and contact stores. When enabled,

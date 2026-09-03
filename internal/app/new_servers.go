@@ -66,6 +66,7 @@ func (a *App) initServers(s *newState) error {
 	}
 	server.SetAuth(cfg.Listen.Auth, companionTokens)
 	server.SetMemoryStore(a.mem)
+	server.SetConversationModelPins(a.loop)
 	server.SetArchiveStore(a.archiveStore)
 	server.UseContactStore(a.contactStore)
 	if a.archivistDefinitionEnabled() {

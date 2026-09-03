@@ -154,6 +154,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"ha_call_service":               {CanonicalID: "native:ha_call_service", Source: NativeToolSource, Tags: []string{"ha"}},
 	"task_cancel":                   {CanonicalID: "native:task_cancel", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"ha_control_device":             {CanonicalID: "native:ha_control_device", Source: NativeToolSource, Tags: []string{"ha"}},
+	"conversation_model_pin":        {CanonicalID: "native:conversation_model_pin", Source: NativeToolSource, Tags: []string{"session"}},
 	"conversation_reset":            {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                  {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"doc_activity":                  {CanonicalID: "native:doc_activity", Source: NativeToolSource, Tags: []string{"diagnostics"}},

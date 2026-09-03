@@ -73,6 +73,7 @@ These tools load on every turn regardless of active tags.
 | Tool | Description |
 |------|-------------|
 | `conversation_reset` | Reset the current conversation's message history. |
+| `conversation_model_pin` | Hold the current conversation to one model deployment, or clear the hold. Outranks channel and client model selection; memory-only, cleared by restart. |
 | `session_checkpoint` | Save current session state as a checkpoint. |
 | `session_close` | Close the current session with carry-forward context. |
 | `session_split` | Fork the current session. |
@@ -580,6 +581,10 @@ tools for Signal-specific workflows.
 | `model_route_explain` | Dry-run a routing decision with the router's rationale. |
 | `model_deployment_set_policy` | Update deployment-level routing policy. |
 | `model_resource_set_policy` | Update resource-level routing policy. |
+
+Policy here is fleet-wide and survives restart. Holding one conversation
+to one model is a `session` decision (`conversation_model_pin`, above),
+and pinning a loop definition is `loop_definition_update` under `loops`.
 
 ## `diagnostics` — operational visibility
 
