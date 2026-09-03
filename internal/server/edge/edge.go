@@ -93,6 +93,7 @@ type Server struct {
 	sniLastLog time.Time
 	sniNames   map[string]struct{}
 	sniFlush   *time.Timer
+	sniStopped bool
 }
 
 // New builds the front door without touching the network: it resolves

@@ -661,7 +661,9 @@ than presenting one it was never asked about, and a request that arrives
 under a listed name but carries an unlisted `Host` header gets `421
 Misdirected Request`. Both are logged under `subsystem=tls` with the name
 asked for and the peer that asked; a burst of refusals coalesces into one
-summary so a client stuck in a retry loop cannot write the log. Ports 80
+summary so a client stuck in a retry loop cannot write the log, and a
+name too long to be a DNS name is shortened in the record so it cannot
+set the record's size either. Ports 80
 and 443 need privilege that Thane
 should never hold: a supervisor that bound them can hand the sockets down under
 the systemd `LISTEN_FDS` contract, named `https` and `http`, and the front

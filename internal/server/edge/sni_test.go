@@ -8,14 +8,39 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
-// refusals returns only the door's refusal records from a log buffer
-// certmagic's own maintenance lines also land in.
-func refusals(buf *bytes.Buffer) []string {
+// syncBuffer is a log sink safe to read while certmagic's background
+// maintenance goroutine is writing to it. A bare bytes.Buffer is not:
+// the cache starts maintaining assets the moment a door is built, and
+// its first line races the test's own reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+// refusals returns only the door's refusal records; certmagic's own
+// maintenance lines land in the same sink.
+func (b *syncBuffer) refusals() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	var out []string
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(b.buf.String()), "\n") {
 		if strings.Contains(line, "door does not hold") {
 			out = append(out, line)
 		}
@@ -73,11 +98,6 @@ func TestUnheldNameIsRefusedAsUnrecognized(t *testing.T) {
 			want:       "unrecognized name",
 		},
 		{
-			name:       "a name it holds, spelled with the trailing dot of a fully qualified name",
-			serverName: "thane.example.net.",
-			want:       "internal error",
-		},
-		{
 			name:       "a name it holds, whose certificate has not been issued",
 			serverName: "thane.example.net",
 			want:       "internal error",
@@ -123,7 +143,11 @@ func TestCertificateForDelegatesOnlyHeldNames(t *testing.T) {
 		t.Errorf("delegated %v, want all three held names", delegated)
 	}
 
-	for _, name := range []string{"pocket.example.org", "", "thane.example.net.evil.example.org"} {
+	// A trailing dot never reaches this callback in a real handshake —
+	// the client's stdlib strips it before sending SNI, and a
+	// ClientHello carrying one anyway is refused while it is parsed — so
+	// the dotted spelling is simply not a name this door holds.
+	for _, name := range []string{"pocket.example.org", "", "thane.example.net.", "thane.example.net.evil.example.org"} {
 		cert, err := get(&tls.ClientHelloInfo{ServerName: name})
 		if cert != nil || err != nil {
 			t.Errorf("unheld name %q returned (%v, %v), want (nil, nil) so the stdlib sends unrecognized_name", name, cert, err)
@@ -136,7 +160,7 @@ func TestCertificateForDelegatesOnlyHeldNames(t *testing.T) {
 // burst behind it is one summary, not one line per handshake, because a
 // client in a retry loop must not be able to write the log.
 func TestRefusalWarnsOnceThenCoalesces(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	s := testDoor(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	hello := func(name string) *tls.ClientHelloInfo {
@@ -144,7 +168,7 @@ func TestRefusalWarnsOnceThenCoalesces(t *testing.T) {
 	}
 
 	s.recordUnheldName(hello("pocket.example.org"))
-	got := refusals(&buf)
+	got := buf.refusals()
 	if len(got) != 1 {
 		t.Fatalf("first refusal wrote %d records, want 1: %v", len(got), got)
 	}
@@ -160,12 +184,12 @@ func TestRefusalWarnsOnceThenCoalesces(t *testing.T) {
 	for i := range 50 {
 		s.recordUnheldName(hello(fmt.Sprintf("scan-%d.example.org", i)))
 	}
-	if got := refusals(&buf); len(got) != 0 {
+	if got := buf.refusals(); len(got) != 0 {
 		t.Fatalf("a burst inside the window logged %d records: %v", len(got), got)
 	}
 
 	s.flushUnheldNames()
-	got = refusals(&buf)
+	got = buf.refusals()
 	if len(got) != 1 {
 		t.Fatalf("the burst summary is not one record: %v", got)
 	}
@@ -184,7 +208,7 @@ func TestRefusalWarnsOnceThenCoalesces(t *testing.T) {
 	// quiet door stays quiet.
 	buf.Reset()
 	s.flushUnheldNames()
-	if got := refusals(&buf); len(got) != 0 {
+	if got := buf.refusals(); len(got) != 0 {
 		t.Errorf("flush with nothing pending logged: %v", got)
 	}
 }
@@ -192,7 +216,7 @@ func TestRefusalWarnsOnceThenCoalesces(t *testing.T) {
 // TestShutdownStopsTheTailFlush keeps a door that has stopped serving
 // from logging afterwards.
 func TestShutdownStopsTheTailFlush(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	s := testDoor(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
 	s.recordUnheldName(&tls.ClientHelloInfo{ServerName: "pocket.example.org", Conn: fakeConn{}})
@@ -221,4 +245,100 @@ type fakeConn struct{ net.Conn }
 
 func (fakeConn) RemoteAddr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 52000}
+}
+
+// TestOversizeNameIsCappedInTheLog covers the one field of the refusal
+// record a stranger writes. The stdlib checks that a ClientHello's
+// server name is a well-formed extension, not that it is a plausible
+// hostname, so the name arriving here can be far longer than any DNS
+// name — and it must not be able to set the size of a log record.
+func TestOversizeNameIsCappedInTheLog(t *testing.T) {
+	var buf syncBuffer
+	s := testDoor(t, slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	huge := strings.Repeat("a", 40_000) + ".example.org"
+	s.recordUnheldName(&tls.ClientHelloInfo{ServerName: huge, Conn: fakeConn{}})
+
+	got := buf.refusals()
+	if len(got) != 1 {
+		t.Fatalf("wrote %d records, want 1: %v", len(got), got)
+	}
+	if len(got[0]) > 1000 {
+		t.Errorf("a %d-byte server name produced a %d-byte record", len(huge), len(got[0]))
+	}
+	if !strings.Contains(got[0], "truncated") {
+		t.Errorf("the record does not say the name was shortened: %s", got[0])
+	}
+
+	// Truncation is for the log only: the held-set lookup sees the name
+	// as sent, so no shortened name can ever match a held one.
+	if normalizeServerName(huge) != strings.ToLower(huge) {
+		t.Error("normalizeServerName shortened a name the certificate decision is made on")
+	}
+}
+
+// TestClosingWindowReportsWhatFoldedIntoIt covers the seam between the
+// two paths. A window can close while refusals are still folded into it
+// — the tail timer fires but its callback has not reached the lock — and
+// the refusal that closes it must carry their summary out rather than
+// marking them logged and stranding their names in the next window.
+func TestClosingWindowReportsWhatFoldedIntoIt(t *testing.T) {
+	var buf syncBuffer
+	s := testDoor(t, slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	hello := func(name string) *tls.ClientHelloInfo {
+		return &tls.ClientHelloInfo{ServerName: name, Conn: fakeConn{}}
+	}
+
+	s.recordUnheldName(hello("first.example.org"))
+	s.recordUnheldName(hello("folded.example.org"))
+	buf.Reset()
+
+	// Close the window without letting the tail flush run, which is what
+	// a fired-but-not-yet-scheduled callback looks like from here.
+	s.sniMu.Lock()
+	s.sniLastLog = time.Now().Add(-2 * unheldNameLogInterval)
+	s.sniMu.Unlock()
+	s.recordUnheldName(hello("next.example.org"))
+
+	got := buf.refusals()
+	if len(got) != 2 {
+		t.Fatalf("wrote %d records, want the folded summary and the new refusal: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "folded.example.org") {
+		t.Errorf("the folded refusal was never reported: %s", got[0])
+	}
+	if !strings.Contains(got[1], "next.example.org") {
+		t.Errorf("the refusal that closed the window was not logged: %s", got[1])
+	}
+
+	// Nothing is left over to reappear in a later window.
+	buf.Reset()
+	s.flushUnheldNames()
+	if got := buf.refusals(); len(got) != 0 {
+		t.Errorf("stale samples survived into the next window: %v", got)
+	}
+}
+
+// TestShutdownSilencesALateFlush is the other half of cancellation.
+// Timer.Stop cannot recall a callback that has already started, so a
+// callback that was waiting on the lock while Shutdown ran has to find
+// the door stopped and write nothing.
+func TestShutdownSilencesALateFlush(t *testing.T) {
+	var buf syncBuffer
+	s := testDoor(t, slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	s.recordUnheldName(&tls.ClientHelloInfo{ServerName: "pocket.example.org", Conn: fakeConn{}})
+	s.recordUnheldName(&tls.ClientHelloInfo{ServerName: "folded.example.org", Conn: fakeConn{}})
+	if err := s.Shutdown(t.Context()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	buf.Reset()
+
+	// The callback runs anyway: this is the goroutine that was already
+	// past Stop when Shutdown took the lock.
+	s.flushUnheldNames()
+	if got := buf.refusals(); len(got) != 0 {
+		t.Errorf("a shut-down door logged from a late flush: %v", got)
+	}
 }

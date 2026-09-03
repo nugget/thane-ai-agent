@@ -22,6 +22,14 @@ const unheldNameLogInterval = 30 * time.Second
 // allowed to grow with them.
 const unheldNameSampleLimit = 8
 
+// unheldNameLogLimit bounds the length of one logged name. A ClientHello
+// may carry a server name of tens of kilobytes: the stdlib checks that
+// it is well formed as an extension, not that it is plausible as a
+// hostname. 253 octets is the longest a DNS name can be, so anything
+// past it is not a name anybody could have meant, and letting it through
+// would hand a stranger the size of Thane's log records.
+const unheldNameLogLimit = 253
+
 // certificateFor wraps the certificate callback so a ClientHello naming
 // a hostname this door does not hold is refused as exactly that.
 //
@@ -54,14 +62,37 @@ func (s *Server) certificateFor(base func(*tls.ClientHelloInfo) (*tls.Certificat
 	}
 }
 
-// normalizeServerName lowercases a ClientHello's server name and drops
-// the trailing dot a fully qualified name may carry, matching how
-// certmagic normalizes the names it manages and how routeByHost
-// normalizes the Host header. Configured hostnames are already lowercase
-// and dotless — [config.validateTLSHostname] refuses anything else — so
-// this normalization only ever moves a client's spelling toward theirs.
+// normalizeServerName lowercases a ClientHello's server name, which is
+// the whole normalization needed here. Case is the only spelling
+// difference that can reach this point: a client's own stdlib strips the
+// trailing dot of a fully qualified name before sending SNI, and a
+// ClientHello that carries one anyway is refused while it is being
+// parsed, before any certificate callback runs. Configured hostnames are
+// already lowercase — [config.validateTLSHostname] refuses anything else
+// — so this only ever moves a client's spelling toward theirs.
+//
+// It deliberately does not shorten anything. The result is what the held
+// set is searched for, and truncating a name before that search could
+// make an unheld name match a held one.
 func normalizeServerName(name string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	return strings.ToLower(name)
+}
+
+// loggableName bounds a server name on its way into a log record.
+// Truncation happens here and nowhere near [normalizeServerName],
+// because a shortened name must never be what a certificate decision is
+// made on.
+func loggableName(name string) string {
+	if name == "" {
+		// A client that sent no SNI at all cannot be told which name it
+		// should have asked for, but it is the same refusal and belongs
+		// in the same count.
+		return "(none)"
+	}
+	if len(name) > unheldNameLogLimit {
+		return name[:unheldNameLogLimit] + "...(truncated)"
+	}
+	return name
 }
 
 // recordUnheldName warns that a handshake asked for a name this door
@@ -69,17 +100,11 @@ func normalizeServerName(name string) string {
 // stretch logs immediately and names both the hostname asked for and the
 // client that asked, which is the whole diagnostic. Refusals inside the
 // window fold into one summary carrying the count and a bounded sample
-// of the names, and a tail flush guarantees that summary lands within
-// one interval of a burst's last refusal rather than waiting for a
-// caller who may never come back.
+// of the names, and a tail flush lands that summary within one interval
+// of a burst's last refusal rather than waiting for a caller who may
+// never come back.
 func (s *Server) recordUnheldName(hello *tls.ClientHelloInfo) {
-	name := normalizeServerName(hello.ServerName)
-	if name == "" {
-		// A client that sent no SNI at all cannot be told which name it
-		// should have asked for, but it is the same refusal and belongs
-		// in the same count.
-		name = "(none)"
-	}
+	name := loggableName(normalizeServerName(hello.ServerName))
 	var remote string
 	if hello.Conn != nil {
 		remote = hello.Conn.RemoteAddr().String()
@@ -88,56 +113,85 @@ func (s *Server) recordUnheldName(hello *tls.ClientHelloInfo) {
 	s.sniMu.Lock()
 	defer s.sniMu.Unlock()
 
-	s.sniRefused++
 	now := time.Now()
-	if now.Sub(s.sniLastLog) >= unheldNameLogInterval {
-		s.logger.Warn("refused a TLS handshake for a hostname this door does not hold",
-			"server_name", name,
-			"remote", remote,
-			"hostnames", s.hostnames,
-			"refused_total", s.sniRefused)
-		s.sniLogged = s.sniRefused
-		s.sniLastLog = now
+	if now.Sub(s.sniLastLog) < unheldNameLogInterval {
+		s.sniRefused++
+		if s.sniNames == nil {
+			s.sniNames = make(map[string]struct{}, unheldNameSampleLimit)
+		}
+		if len(s.sniNames) < unheldNameSampleLimit {
+			s.sniNames[name] = struct{}{}
+		}
+		if s.sniFlush == nil {
+			s.sniFlush = time.AfterFunc(unheldNameLogInterval-now.Sub(s.sniLastLog), s.flushUnheldNames)
+		}
 		return
 	}
 
-	if s.sniNames == nil {
-		s.sniNames = make(map[string]struct{}, unheldNameSampleLimit)
-	}
-	if len(s.sniNames) < unheldNameSampleLimit {
-		s.sniNames[name] = struct{}{}
-	}
-	if s.sniFlush == nil {
-		s.sniFlush = time.AfterFunc(unheldNameLogInterval-now.Sub(s.sniLastLog), s.flushUnheldNames)
-	}
+	// The window has closed. It may still owe a summary for refusals
+	// that folded into it — the tail timer can have fired without its
+	// callback reaching the lock yet — so settle that first. Reporting
+	// this refusal without it would mark those as logged and strand
+	// their names to reappear in some later window.
+	s.reportFoldedLocked(now)
+
+	s.sniRefused++
+	s.logger.Warn("refused a TLS handshake for a hostname this door does not hold",
+		"server_name", name,
+		"remote", remote,
+		"hostnames", s.hostnames,
+		"refused_total", s.sniRefused)
+	s.sniLogged = s.sniRefused
+	s.sniLastLog = now
 }
 
-// flushUnheldNames emits the coalesced summary for refusals that folded
-// into a quiet window with no later refusal to surface them: the tail of
-// a finite burst.
+// reportFoldedLocked emits the summary for refusals that folded into the
+// window now ending, clears the sample, and disarms the tail flush that
+// would otherwise report an empty window. It writes nothing when nothing
+// folded. The caller holds sniMu.
+func (s *Server) reportFoldedLocked(now time.Time) {
+	if s.sniFlush != nil {
+		s.sniFlush.Stop()
+		s.sniFlush = nil
+	}
+	if s.sniRefused == s.sniLogged {
+		s.sniNames = nil
+		return
+	}
+	s.logger.Warn("refused TLS handshakes for hostnames this door does not hold",
+		"server_names", slices.Sorted(maps.Keys(s.sniNames)),
+		"refused_since_last", s.sniRefused-s.sniLogged,
+		"refused_total", s.sniRefused)
+	s.sniNames = nil
+	s.sniLogged = s.sniRefused
+	s.sniLastLog = now
+}
+
+// flushUnheldNames reports refusals that folded into a quiet window with
+// no later refusal to surface them: the tail of a finite burst.
 func (s *Server) flushUnheldNames() {
 	s.sniMu.Lock()
 	defer s.sniMu.Unlock()
 
 	s.sniFlush = nil
-	if s.sniRefused == s.sniLogged {
+	if s.sniStopped {
+		// Shutdown ran while this callback was waiting for the lock.
+		// Timer.Stop cannot recall a callback that has already started,
+		// so the callback is what has to notice.
 		return
 	}
-	names := slices.Sorted(maps.Keys(s.sniNames))
-	s.logger.Warn("refused TLS handshakes for hostnames this door does not hold",
-		"server_names", names,
-		"refused_since_last", s.sniRefused-s.sniLogged,
-		"refused_total", s.sniRefused)
-	s.sniNames = nil
-	s.sniLogged = s.sniRefused
-	s.sniLastLog = time.Now()
+	s.reportFoldedLocked(time.Now())
 }
 
 // stopUnheldNameFlush cancels a pending tail flush so a shutting-down
-// door does not log after its listeners are gone.
+// door does not log after its listeners are gone. Stopping the timer is
+// not enough on its own — a callback already past its own Stop is only
+// waiting for the lock — so the door is marked stopped for that callback
+// to find.
 func (s *Server) stopUnheldNameFlush() {
 	s.sniMu.Lock()
 	defer s.sniMu.Unlock()
+	s.sniStopped = true
 	if s.sniFlush != nil {
 		s.sniFlush.Stop()
 		s.sniFlush = nil
