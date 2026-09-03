@@ -188,8 +188,15 @@ func wrapOwnOutputDocRead(runtimeTools []looppkg.RuntimeTool, docTools *document
 				// path once dropped it, so an owning loop told to "read
 				// first, then retry" could read all day and never satisfy
 				// the check — four document-owning loops sat refused for
-				// ten hours doing exactly that.
-				return docTools.ReadWithResultBudget(ctx, documents.RefArgs{Ref: ref, ReceiptScope: tools.DocumentRevisionScope(ctx)}, ownOutputReadResultBytes)
+				// ten hours doing exactly that. The receipt is withheld
+				// when even this budget truncates: a preview of an
+				// oversized document is not the read a whole-body
+				// replacement is protected by.
+				return docTools.ReadWithResultBudget(ctx, documents.RefArgs{
+					Ref:                  ref,
+					ReceiptScope:         tools.DocumentRevisionScope(ctx),
+					ReceiptRequiresWhole: true,
+				}, ownOutputReadResultBytes)
 			}
 			return native(ctx, args)
 		}
@@ -467,7 +474,7 @@ func replaceOutputDescription(output looppkg.OutputSpec) string {
 	if output.Type == looppkg.OutputTypeWorkingNotes {
 		return workingNotesDescription(output)
 	}
-	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane. The body has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call. The Declared Durable Outputs context counts as this wake's read when it shows the document whole; one marked truncated must be read with doc_read first. A refused replacement returns an error and commits nothing: read the document with doc_read, then make the same call once more rather than repeating it unchanged.", output.Name, output.Ref)
+	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane. The body has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call. The Declared Durable Outputs context counts as this wake's read when it shows the document whole; one marked truncated must be read whole with doc_read first. A refused replacement returns an error, commits nothing, and says which of two things happened: no read of the whole document on record for this wake (read it with doc_read, then call again), or the document changed since that read (the error carries the intervening change — fold it into a revised body before calling again). Never repeat a refused call unchanged.", output.Name, output.Ref)
 }
 
 // workingNotesDescription frames the loop's private thinking. What

@@ -19,11 +19,14 @@ this wake, so the output tool can replace or publish it directly. If it
 is marked `truncated` there, read the full document with `doc_read`
 before replacing it — the output tool overwrites the entire body, tail
 included.
-An output tool that refuses — this wake has not read the whole document,
-or the document changed since it did — returns an error and commits
-nothing. The error names the next move: read the document with
-`doc_read`, then make the same call once more. Do not repeat a refused
-call unchanged; the refusal is the answer, and only the read changes it.
+An output tool that refuses returns an error, commits nothing, and says
+which of two things happened. If this wake has no read of the whole
+document on record, read it with `doc_read` and make the call again. If
+the document changed since that read, the error carries the intervening
+change and Thane has already moved the comparison base to the current
+document: fold that change into revised content before calling again —
+repeating the same call now would overwrite it. Never repeat a refused
+call unchanged; the refusal is the answer.
 
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,

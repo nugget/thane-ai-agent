@@ -359,7 +359,10 @@ Two reads record one. The Declared Durable Outputs context that opens each wake
 renders the loop's own documents, and a document rendered whole is recorded as
 that wake's read — the loop can replace or publish it directly. A document too
 large to render whole records nothing; the loop's own-output `doc_read`, which
-returns the whole body, records the receipt instead. Either way the receipt
+returns the whole body under a raised budget, records the receipt instead — and
+only when it returns the body whole. A read that itself truncates records
+nothing, so a document past the read budget cannot be replaced from a preview
+of it. Either way the receipt
 lands under the same loop/conversation scope the generated output tool
 computes, because the loop runtime stamps both identifiers on the wake before
 the turn is built.
