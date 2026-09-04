@@ -125,10 +125,10 @@ type LoopView struct {
 	WakeReasons24h map[string]int `json:"wake_reasons_24h,omitempty"`
 
 	// ---- economics (%CPU / %MEM / TIME) ----
-	// MailboxPending is the loop's durable mailbox depth: work-queue
+	// QueuePending is the loop's durable work-queue depth: work-queue
 	// items enqueued for it and not yet acked. 0 is a real "nothing
 	// pending"; null means depth was not measured for this projection.
-	MailboxPending    *int `json:"mailbox_pending"`
+	QueuePending      *int `json:"queue_pending"`
 	Iterations        *int `json:"iterations"`
 	Attempts          *int `json:"attempts"`
 	TotalInputTokens  *int `json:"total_input_tokens"`
@@ -274,24 +274,24 @@ type LoopPolicyInfo struct {
 // not per row. Construct one with NewLoopViewResolver, then call FromStatus
 // for each loop.
 type LoopViewResolver struct {
-	nameByID       map[string]string
-	parentByID     map[string]string
-	childCount     map[string]int
-	policyByName   map[string]LoopPolicyInfo
-	mailboxPending map[string]int
-	now            time.Time
+	nameByID     map[string]string
+	parentByID   map[string]string
+	childCount   map[string]int
+	policyByName map[string]LoopPolicyInfo
+	queuePending map[string]int
+	now          time.Time
 }
 
-// WithMailboxPending joins durable mailbox depth (pending work-queue
+// WithQueuePending joins durable work-queue depth (pending work-queue
 // items keyed by loop name) onto every projected row. When the join is
 // wired, a loop absent from the map reports an explicit 0 — a real
 // "nothing pending" datum; when it is not wired, rows report null,
 // meaning depth was not measured for this projection.
-func (r LoopViewResolver) WithMailboxPending(byName map[string]int) LoopViewResolver {
+func (r LoopViewResolver) WithQueuePending(byName map[string]int) LoopViewResolver {
 	if byName == nil {
 		byName = map[string]int{}
 	}
-	r.mailboxPending = byName
+	r.queuePending = byName
 	return r
 }
 
@@ -432,9 +432,9 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	}
 
 	applyLiveTelemetry(&v, s, r.now)
-	if r.mailboxPending != nil {
-		pending := r.mailboxPending[s.Name]
-		v.MailboxPending = &pending
+	if r.queuePending != nil {
+		pending := r.queuePending[s.Name]
+		v.QueuePending = &pending
 	}
 	return v
 }
