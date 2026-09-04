@@ -272,11 +272,16 @@ func TestSelectContextAdvertisementsCountsWithheldOffers(t *testing.T) {
 	t.Parallel()
 
 	provider := &testContextAdvertiser{}
-	// Twelve genuinely selectable offers against a cap of eight: four are
-	// withheld and the count must say so. A thirteenth offers only detail —
-	// never selectable, so it is a non-offer, not a withheld one.
+	// Four genuinely selectable offers beyond the cap: each is withheld
+	// and the count must say so. One more offers only detail — never
+	// selectable, so it is a non-offer, not a withheld one.
+	//
+	// Sized from the cap rather than written as a literal, so tuning the
+	// rail's capacity does not silently turn this into a test of
+	// different arithmetic.
+	const beyondCap = 4
 	var candidates []contextAdvertisementCandidate
-	for i := 0; i < 12; i++ {
+	for i := 0; i < maxSelectedContextAdvertisements+beyondCap; i++ {
 		ad := testAdvertisement("memory", fmt.Sprintf("doc-%02d", i), agentctx.ContextMatchSemantic, 1,
 			testProjection("digest", agentctx.ContextRoleContext, 64))
 		candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
@@ -290,8 +295,8 @@ func TestSelectContextAdvertisementsCountsWithheldOffers(t *testing.T) {
 	if len(selected) != maxSelectedContextAdvertisements {
 		t.Fatalf("selected %d, want the cap %d", len(selected), maxSelectedContextAdvertisements)
 	}
-	if withheld != 4 {
-		t.Fatalf("withheld = %d, want 4 (selectable losers only, never the detail-only non-offer)", withheld)
+	if withheld != beyondCap {
+		t.Fatalf("withheld = %d, want %d (selectable losers only, never the detail-only non-offer)", withheld, beyondCap)
 	}
 }
 
@@ -300,8 +305,13 @@ func TestMaterializeRendersTheWithheldLine(t *testing.T) {
 
 	provider := &testContextAdvertiser{}
 	provider.content = map[string]string{}
+	// Two more than the rail can take, sized from the cap so that tuning
+	// the rail's capacity does not quietly turn this into a test of a
+	// full rail with nothing withheld — which is what it became the last
+	// time the cap moved.
+	const beyondCap = 2
 	var candidates []contextAdvertisementCandidate
-	for i := 0; i < 10; i++ {
+	for i := 0; i < maxSelectedContextAdvertisements+beyondCap; i++ {
 		id := fmt.Sprintf("doc-%02d", i)
 		ad := testAdvertisement("memory", id, agentctx.ContextMatchSemantic, 1,
 			testProjection("digest", agentctx.ContextRoleContext, 64))
@@ -313,8 +323,8 @@ func TestMaterializeRendersTheWithheldLine(t *testing.T) {
 	buckets := assembler.materializeContextAdvertisements(context.Background(), agentctx.ContextRequest{}, candidates)
 
 	related := buckets[agentctx.ContextBucketRelated]
-	if !strings.Contains(related, "2 context offer(s) withheld") {
-		t.Fatalf("expected a withheld line naming 2 offers, got: %q", related)
+	if want := fmt.Sprintf("%d context offer(s) withheld", beyondCap); !strings.Contains(related, want) {
+		t.Fatalf("expected a withheld line naming %d offers, got: %q", beyondCap, related)
 	}
 	if !strings.Contains(related, "doc_search") {
 		t.Fatalf("the withheld line must name the pull door, got: %q", related)
@@ -355,5 +365,29 @@ func TestMaterializeDetachesFromADepletedWalkBudget(t *testing.T) {
 
 	if !strings.Contains(buckets[agentctx.ContextBucketRelated], "made it") {
 		t.Fatalf("materialization must survive a dead walk context, got: %#v", buckets)
+	}
+}
+
+// TestAdvertisementCountCapIsReachableAtObservedSizes guards a change
+// that would silently do nothing.
+//
+// Two budgets bound the rail: how many offers it takes and how many
+// bytes they may total. Raising the count while the byte budget binds
+// first buys nothing at all, and nothing would say so — the withheld
+// count would stay exactly where it was and the tuning would look
+// applied.
+//
+// The size is measured, not assumed: across two days of production
+// materializations a selected advertisement averaged 626 bytes.
+func TestAdvertisementCountCapIsReachableAtObservedSizes(t *testing.T) {
+	t.Parallel()
+
+	const observedAverageAdvertisementBytes = 626
+
+	atCap := maxSelectedContextAdvertisements * observedAverageAdvertisementBytes
+	separators := (maxSelectedContextAdvertisements - 1) * contextContentSeparatorBytes
+	if atCap+separators > maxAdvertisedContextBytes {
+		t.Errorf("a full rail of %d averages %d bytes against a %d byte budget; the count cap cannot be reached, so raising it has no effect",
+			maxSelectedContextAdvertisements, atCap+separators, maxAdvertisedContextBytes)
 	}
 }

@@ -15,7 +15,21 @@ import (
 // another path to fill every bucket. Legacy eager providers remain under the
 // existing per-bucket limit while they migrate onto this contract.
 const (
-	maxSelectedContextAdvertisements = 8
+	// Eleven rather than eight, measured rather than chosen. Production
+	// prompts carry their own withheld count, so how often the rail
+	// actually refused an offer was already recorded: 4.5% of archivist
+	// turns and 1.3% of metacognitive ones, never more than three offers
+	// at a time (161 prompts withheld two, 99 withheld three, 85 withheld
+	// one). Eleven clears the observed ceiling with room, and interactive
+	// turns never hit the cap at all — 1,457 of them withheld nothing —
+	// so this buys background loops their full subject material and
+	// changes nothing for chat.
+	//
+	// The count is the binding constraint, not the byte budget: a
+	// materialized advertisement averages 626 bytes, so eleven is about
+	// 6.9 KB against the 16 KB below. Raising the count without checking
+	// that would have been a change with no effect.
+	maxSelectedContextAdvertisements = 11
 	maxAdvertisedContextBytes        = 16 * 1024
 	contextContentSeparatorBytes     = len("\n\n---\n\n")
 
