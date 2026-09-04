@@ -403,6 +403,101 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 // upstream and the failure surfaced downstream under the wrong name.
 const slowContextSourceThreshold = 250 * time.Millisecond
 
+const (
+	// perProviderContextBudget bounds any single context provider, so
+	// that one slow source cannot consume the whole shared assembly
+	// deadline and starve everything sequenced behind it.
+	//
+	// Comfortably above slowContextSourceThreshold: a provider that is
+	// merely slow should finish and be warned about, not be killed. What
+	// this stops is the unbounded case.
+	perProviderContextBudget = 500 * time.Millisecond
+
+	// gatedProviderReserve is the slice of the shared budget withheld
+	// from the tagged tier so the gated tier always gets to run.
+	//
+	// A per-provider cap alone does not save it. Enough well-behaved
+	// tagged providers exhaust the budget by simple arithmetic with no
+	// provider misbehaving at all, and the gated tier carries document
+	// advertising — losing it means a loop wakes with no dossier offers
+	// and nothing saying why.
+	gatedProviderReserve = 500 * time.Millisecond
+)
+
+// reserveForGatedProviders returns a context for the tagged tier that
+// expires early enough to leave the gated tier its reserve.
+//
+// Returns the parent unchanged when there is no deadline to divide, or
+// when the remaining budget is too small to split usefully — halving an
+// already-tight budget would starve the tagged tier to protect the gated
+// one, which is the same failure wearing the other hat.
+func reserveForGatedProviders(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 2*gatedProviderReserve {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, deadline.Add(-gatedProviderReserve))
+}
+
+// withProviderBudget bounds one provider's run. The cap never extends a
+// deadline: an inherited one that is already tighter wins.
+func withProviderBudget(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, perProviderContextBudget)
+}
+
+// assemblyBudget tracks who spent the shared context-assembly deadline,
+// so a provider that never got to run can say why instead of reporting a
+// failure of its own.
+//
+// This is the other half of the fix the 2026-08-12 incident prompted.
+// That one added the slow-source WARN above, which names the culprit on
+// its own line; the victim still logged "context deadline exceeded"
+// under its own name on another, with nothing connecting the two. A
+// reader — human or loop — saw a document provider time out and went
+// looking at the document corpus. Twice, in one hour, on 2026-09-04.
+type assemblyBudget struct {
+	// spentBy identifies the provider that was running when the shared
+	// deadline expired. Empty while budget remains.
+	spentBy string
+}
+
+// note records a provider that has just finished, marking it as the
+// spender if the shared deadline died on its watch.
+func (b *assemblyBudget) note(ctx context.Context, source, detail string) {
+	if b.spentBy != "" || ctx.Err() == nil {
+		return
+	}
+	b.spentBy = source
+	if detail != "" {
+		b.spentBy += " (" + detail + ")"
+	}
+}
+
+// skipped reports a provider that was never run because the budget was
+// already gone, and returns whether it should be skipped.
+//
+// Deliberately a WARN rather than a DEBUG: a context section silently
+// missing is how a loop ends up auditing the system with one sense
+// switched off and no signal that it is off.
+func (b *assemblyBudget) skipped(ctx context.Context, logger *slog.Logger, source, detail string) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	args := []any{"source", source, "reason", "assembly budget already spent upstream"}
+	if detail != "" {
+		args = append(args, "detail", detail)
+	}
+	if b.spentBy != "" {
+		args = append(args, "spent_by", b.spentBy)
+	}
+	logger.Warn("context provider skipped, not attempted", args...)
+	return true
+}
+
 // warnSlowContextSource emits the budget-accounting WARN for a context
 // source that ran long. detail is a tag name or provider type; empty
 // is fine for block-level sources.
@@ -434,6 +529,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	seen := make(map[string]bool)
 	acc := newContextAccumulator()
 	var advertisements []contextAdvertisementCandidate
+	var budget assemblyBudget
 
 	// Source 1: Tagged KB articles. Re-scanned and re-read each turn
 	// so frontmatter edits, additions, and deletions propagate
@@ -489,14 +585,25 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	warnSlowContextSource(a.logger, "tagged_kb_articles", "", kbStart)
 
 	// Source 2: Tagged live providers, filtered by ActiveTags.
+	//
+	// Run against a deadline that expires before the assembler's, so the
+	// gated tier below is reached even when every tagged provider runs
+	// to its cap.
+	taggedCtx, releaseTagged := reserveForGatedProviders(ctx)
 	for _, tag := range sortedActiveTags(req.ActiveTags) {
 		p, ok := tagProviders[tag]
 		if !ok {
 			continue
 		}
+		if budget.skipped(taggedCtx, a.logger, "tagged_provider", tag) {
+			continue
+		}
 		pStart := time.Now()
-		content, advertised, err := a.contextFromProvider(ctx, req, p, &advertisements)
+		providerCtx, releaseProvider := withProviderBudget(taggedCtx)
+		content, advertised, err := a.contextFromProvider(providerCtx, req, p, &advertisements)
+		releaseProvider()
 		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart)
+		budget.note(taggedCtx, "tagged_provider", tag)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
 				"tag", tag, "error", err)
@@ -515,6 +622,8 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 				"tag", tag, "source", "tagged_provider", "limit_bytes", maxTagContextBytes)
 		}
 	}
+
+	releaseTagged()
 
 	// Source 3: Gated providers — always-on and loop-scoped — walked
 	// as one list in registration order, each entry admitted by its
@@ -541,9 +650,16 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		if gp.loopScoped {
 			defaultBucket, source = agentctx.ContextBucketLiveState, "loop_scoped_provider"
 		}
+		detail := fmt.Sprintf("%T", gp.provider)
+		if budget.skipped(ctx, a.logger, source, detail) {
+			continue
+		}
 		pStart := time.Now()
-		content, advertised, err := a.contextFromProvider(ctx, req, gp.provider, &advertisements)
-		warnSlowContextSource(a.logger, source, fmt.Sprintf("%T", gp.provider), pStart)
+		providerCtx, releaseProvider := withProviderBudget(ctx)
+		content, advertised, err := a.contextFromProvider(providerCtx, req, gp.provider, &advertisements)
+		releaseProvider()
+		warnSlowContextSource(a.logger, source, detail, pStart)
+		budget.note(ctx, source, detail)
 		if err != nil {
 			a.logger.Warn("gated context provider failed", "source", source, "error", err)
 			continue

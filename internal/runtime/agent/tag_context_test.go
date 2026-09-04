@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1374,5 +1377,196 @@ func TestTagContextAssemblerSamplesOneClockPerAssembly(t *testing.T) {
 	}
 	if strings.Contains(rendered, "Day: today.") {
 		t.Fatalf("identical templates rendered differently within one assembly: %q", rendered)
+	}
+}
+
+// slowTestProvider blocks until its context dies or its work is done,
+// recording whether it ever actually ran.
+type slowTestProvider struct {
+	work time.Duration
+	name string
+	mu   sync.Mutex
+	ran  bool
+}
+
+func (p *slowTestProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+	p.mu.Lock()
+	p.ran = true
+	p.mu.Unlock()
+	select {
+	case <-time.After(p.work):
+		return p.name + " content", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (p *slowTestProvider) didRun() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ran
+}
+
+// TestGatedProvidersSurviveASlowTaggedProvider pins the defect a
+// production loop hit on nearly every wake for days.
+//
+// The tagged and gated tiers walk sequentially against one shared
+// deadline. A tagged provider that consumed all of it left the gated
+// tier — which carries document advertising — inheriting an already-dead
+// context, so the loop woke with no document offers at all. Its own logs
+// blamed the document corpus, because the victim reported under its own
+// name and nothing connected it to the source.
+func TestGatedProvidersSurviveASlowTaggedProvider(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	// Far longer than the whole assembly budget: the unbounded case.
+	hog := &slowTestProvider{work: 10 * time.Second, name: "hog"}
+	gated := &slowTestProvider{work: time.Millisecond, name: "gated"}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	a.RegisterTaggedProvider("metacognitive", hog)
+	a.RegisterAlwaysProvider(gated)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	a.BuildSections(ctx, agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"metacognitive": true},
+		IncludeAlways: true,
+	})
+	elapsed := time.Since(start)
+
+	if !gated.didRun() {
+		t.Error("the gated provider never ran; a tagged provider starved the tier that carries document advertising")
+	}
+	// The hog is capped rather than allowed to run to the deadline, so
+	// assembly finishes well inside its budget.
+	if elapsed > 1500*time.Millisecond {
+		t.Errorf("assembly took %s; a single provider was not bounded", elapsed.Round(time.Millisecond))
+	}
+	if logs := logBuf.String(); !strings.Contains(logs, "ran long against the shared assembly budget") {
+		t.Errorf("no slow-source warning for the hog:\n%s", logs)
+	}
+}
+
+// TestSkippedProviderNamesWhoSpentTheBudget pins the attribution half.
+//
+// A provider that never ran must say so and name the spender, rather than
+// reporting "context deadline exceeded" under its own name — which is
+// indistinguishable from having tried and timed out, and is what sent a
+// production loop hunting corpus performance twice in one hour.
+func TestSkippedProviderNamesWhoSpentTheBudget(t *testing.T) {
+	var budget assemblyBudget
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	live, cancelLive := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelLive()
+	if budget.skipped(live, logger, "always_provider", "docs") {
+		t.Fatal("skipped a provider while budget remained")
+	}
+
+	dead, cancelDead := context.WithCancel(context.Background())
+	cancelDead()
+	budget.note(dead, "tagged_provider", "metacognitive")
+	if !budget.skipped(dead, logger, "always_provider", "*docs.Advertiser") {
+		t.Fatal("did not skip a provider handed a dead context")
+	}
+
+	logs := logBuf.String()
+	for _, want := range []string{
+		"context provider skipped, not attempted",
+		"assembly budget already spent upstream",
+		// slog quotes values containing spaces.
+		`spent_by="tagged_provider (metacognitive)"`,
+		"source=always_provider",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("skip log missing %q:\n%s", want, logs)
+		}
+	}
+	// The victim must not be the one reporting a deadline error.
+	if strings.Contains(logs, "gated context provider failed") {
+		t.Errorf("skipped provider reported its own failure:\n%s", logs)
+	}
+}
+
+// TestReserveForGatedProvidersLeavesTheTaggedTierUsable pins that the
+// reservation does not become the same starvation wearing the other hat.
+func TestReserveForGatedProvidersLeavesTheTaggedTierUsable(t *testing.T) {
+	tests := []struct {
+		name        string
+		budget      time.Duration
+		wantEarlier bool
+	}{
+		{name: "a full budget reserves for the gated tier", budget: 2 * time.Second, wantEarlier: true},
+		{
+			// Halving an already-tight budget would starve the tagged
+			// tier to protect the gated one.
+			name: "a budget too small to split is left alone", budget: 300 * time.Millisecond,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), tt.budget)
+			defer cancel()
+			parentDeadline, _ := parent.Deadline()
+
+			tagged, release := reserveForGatedProviders(parent)
+			defer release()
+			taggedDeadline, ok := tagged.Deadline()
+			if !ok {
+				t.Fatal("tagged context lost its deadline")
+			}
+			if tt.wantEarlier && !taggedDeadline.Before(parentDeadline) {
+				t.Error("tagged deadline is not earlier; the gated tier has no reserve")
+			}
+			if !tt.wantEarlier && !taggedDeadline.Equal(parentDeadline) {
+				t.Error("a tight budget was split anyway")
+			}
+		})
+	}
+
+	t.Run("no deadline to divide", func(t *testing.T) {
+		tagged, release := reserveForGatedProviders(context.Background())
+		defer release()
+		if _, ok := tagged.Deadline(); ok {
+			t.Error("invented a deadline where the parent had none")
+		}
+	})
+}
+
+// TestGatedTierSurvivesWellBehavedTaggedProviders pins the reservation
+// specifically, and it needs several providers to do so.
+//
+// A per-provider cap alone does not save the gated tier: enough tagged
+// providers each running to their cap exhaust the shared budget by simple
+// arithmetic, with nothing misbehaving. Four at 500ms is the whole 2s.
+// Only holding a slice back for the gated tier keeps document advertising
+// alive in that case — which is why the fix is both bounds, not either.
+func TestGatedTierSurvivesWellBehavedTaggedProviders(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	tags := map[string]bool{}
+	for _, tag := range []string{"alpha", "bravo", "charlie", "delta"} {
+		// Each runs past its own cap, so each consumes exactly its slice.
+		a.RegisterTaggedProvider(tag, &slowTestProvider{work: 10 * time.Second, name: tag})
+		tags[tag] = true
+	}
+	gated := &slowTestProvider{work: time.Millisecond, name: "gated"}
+	a.RegisterAlwaysProvider(gated)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	a.BuildSections(ctx, agentctx.ContextRequest{ActiveTags: tags, IncludeAlways: true})
+
+	if !gated.didRun() {
+		t.Error("the gated provider never ran: four capped tagged providers consumed the whole budget, " +
+			"which is the case a per-provider cap cannot fix")
 	}
 }
