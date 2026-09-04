@@ -244,13 +244,21 @@ func TestOllamaHandlerClaimsNoOwnership(t *testing.T) {
 	// The handler reads the router's quality ceiling off the loop and
 	// otherwise routes through the tracker, so a zero-value loop (nil
 	// router, quality floor default) is all this path needs.
-	go handleOllamaChatShared(rec, req, &agent.Loop{}, tracker, slog.Default())
+	//
+	// Called on the test's own goroutine: the recording runner's channel
+	// is buffered, so nothing here deadlocks, and the handler is finished
+	// before the assertions and before cleanup cancels the tracker.
+	handleOllamaChatShared(rec, req, &agent.Loop{}, tracker, slog.Default())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want the request to complete", rec.Code, rec.Body.String())
+	}
 
 	var got loop.Request
 	select {
 	case got = <-runner.requests:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the request to reach the loop")
+	default:
+		t.Fatal("the handler returned without the request reaching the loop")
 	}
 
 	if got.ChannelBinding == nil {
