@@ -110,13 +110,16 @@ func TestOWUTrackerDispatchRoutesThroughTurnBuilder(t *testing.T) {
 	if len(gotReq.InitialTags) != 1 || gotReq.InitialTags[0] != "owu" {
 		t.Fatalf("InitialTags = %#v, want [owu]", gotReq.InitialTags)
 	}
-	if gotReq.ChannelBinding == nil || gotReq.ChannelBinding.Channel != "owu" || !gotReq.ChannelBinding.IsOwner {
+	// The binding names the surface and claims nothing about the caller.
+	// It carried IsOwner until #1503, asserted from the port the request
+	// arrived on rather than from any identity.
+	if gotReq.ChannelBinding == nil || gotReq.ChannelBinding.Channel != "owu" || gotReq.ChannelBinding.IsOwner {
 		t.Fatalf("ChannelBinding = %#v", gotReq.ChannelBinding)
 	}
-	if req.ChannelBinding == nil || req.ChannelBinding.Channel != "owu" || !req.ChannelBinding.IsOwner {
+	if req.ChannelBinding == nil || req.ChannelBinding.Channel != "owu" || req.ChannelBinding.IsOwner {
 		t.Fatalf("original request ChannelBinding = %#v", req.ChannelBinding)
 	}
-	if boundConvID != "owu-chat-1" || bound == nil || bound.Channel != "owu" || !bound.IsOwner {
+	if boundConvID != "owu-chat-1" || bound == nil || bound.Channel != "owu" || bound.IsOwner {
 		t.Fatalf("bound conversation = %q %#v", boundConvID, bound)
 	}
 	if len(gotReq.Messages) != 1 || len(gotReq.Messages[0].Images) != 1 || gotReq.Messages[0].Images[0].MediaType != "image/png" {
