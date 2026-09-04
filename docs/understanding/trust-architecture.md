@@ -87,6 +87,27 @@ Trust zones determine:
 - Notification priority and rate limits
 - Response depth and effort
 
+### Owner Assertion
+
+**Status: Implemented**
+
+The `owner` tag is protected: it carries the operator's own tools, and the
+model cannot activate it. It is pinned by the runtime for a conversation
+whose channel binding says the caller is the operator — and that flag is
+set in exactly one place, where a contact lookup resolves the caller to the
+operator's contact record.
+
+A surface does not confer it. Reaching a port is not an identity, so a
+listener that cannot identify its callers produces a binding that names the
+channel and claims nothing else. The Ollama-compatible surface is the case
+that made this explicit: it set the owner flag for every conversation until
+#1503, which meant Home Assistant, Open WebUI, and any host on the network
+segment all spoke as the operator. It now runs at the trust its caller has
+established, which for an unauthenticated caller is none.
+
+The general form of this rule — one resolver that reads attestation state,
+sender trust zone, and loop tier at the execution chokepoint — is #1268.
+
 ### Orchestrator Tool Gating
 
 **Status: Implemented**
