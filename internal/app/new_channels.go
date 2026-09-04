@@ -534,9 +534,9 @@ func (a *App) initChannels(s *newState) error {
 		LiveRegistry:     a.loopRegistry,
 	})
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
-		Registry:       a.loopRegistry,
-		LaunchLoop:     a.launchLoop,
-		MailboxPending: a.loopQueue.PendingCounts,
+		Registry:     a.loopRegistry,
+		LaunchLoop:   a.launchLoop,
+		QueuePending: a.loopQueue.PendingCounts,
 	})
 	a.initMessageBus()
 	a.loop.Tools().ConfigureMessageTools(tools.MessageToolDeps{

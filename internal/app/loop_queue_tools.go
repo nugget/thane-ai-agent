@@ -19,7 +19,22 @@ import (
 const (
 	queuePullDefaultLimit = 5
 	queuePullMaxLimit     = 25
-	archivistPullLimit    = 3
+	// The archivist's steady-state batch. Deliberately smaller than the
+	// general default: each item is a subject whose dossier synthesis
+	// wants care rather than throughput.
+	archivistPullDefaultLimit = 3
+	// Its ceiling, which the default no longer equals. The two were the
+	// same number, so the batch size could not be raised by any prompt
+	// and a backlog could only ever drain three subjects per wake. A
+	// ceiling above the default lets a loop that can see its own depth
+	// take a bigger bite when it is behind, and change nothing when it
+	// is not.
+	//
+	// Twelve rather than the general 25: each subject pulls a session
+	// transcript into context, and a batch large enough to push one call
+	// past a local model's window would route that turn to a cloud
+	// provider — fixing the backlog by quietly paying more for it.
+	archivistPullMaxLimit = 12
 )
 
 // buildLoopQueueTools returns the loop-private work-queue tools for one
@@ -44,7 +59,8 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 			Description: "Pull a batch of pending work items from your queue, highest priority first then oldest. " +
 				"Each item gives a subject (the key you pass to queue_ack), its source, a short summary, priority, and age — not the full payload. " +
 				"Exactly one batch may be pulled per loop iteration. Items stay queued until you queue_ack them, so an interrupted iteration just re-serves them next time. " +
-				"Finish this batch, persist your state, and sleep; remaining work belongs to the next iteration.",
+				"Finish this batch, persist your state, and sleep; remaining work belongs to the next iteration. " +
+				"The result reports `remaining` — the depth still queued behind this batch — and `oldest_wait`. Use them: pull nearer the cap and sleep short when the queue is deep or its oldest item has been waiting a long time, and take the default batch with a long sleep when it is shallow.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -89,7 +105,25 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 						Age:      promptfmt.FormatDeltaOnly(it.EnqueuedAt, now),
 					})
 				}
-				return toQueueJSON(queuePullResult{Count: len(views), Items: views})
+				result := queuePullResult{Count: len(views), Items: views}
+				// Measured after the peek, and reported as depth beyond
+				// this batch: peeked items stay pending until acked, so
+				// the raw count still includes the ones just handed over.
+				// A failed probe leaves remaining at zero rather than
+				// failing the pull, which would trade the whole
+				// iteration for a number.
+				if pending, oldest, err := store.PendingFor(ctx, loopName); err == nil {
+					if beyond := pending - len(views); beyond > 0 {
+						result.Remaining = beyond
+						if !oldest.IsZero() {
+							result.OldestWait = promptfmt.FormatDeltaOnly(oldest, now)
+						}
+					}
+				} else {
+					logging.Logger(ctx).Warn("queue_pull: could not measure remaining depth",
+						"loop", loopName, "error", err)
+				}
+				return toQueueJSON(result)
 			},
 		},
 		{
@@ -221,7 +255,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 
 func queuePullLimits(loopName string) (defaultLimit, maxLimit int) {
 	if strings.TrimSpace(loopName) == archivist.DefinitionName {
-		return archivistPullLimit, archivistPullLimit
+		return archivistPullDefaultLimit, archivistPullMaxLimit
 	}
 	return queuePullDefaultLimit, queuePullMaxLimit
 }
@@ -303,8 +337,20 @@ type queueItemView struct {
 }
 
 type queuePullResult struct {
-	Count int             `json:"count"`
-	Items []queueItemView `json:"items"`
+	Count int `json:"count"`
+	// Remaining is how much work is still queued beyond this batch.
+	//
+	// It exists because a pull that hands back three items looked
+	// identical whether the queue held three or three hundred, so a loop
+	// choosing how long to sleep was doing it blind and a backlog could
+	// grow indefinitely behind a cadence that looked reasonable.
+	Remaining int `json:"remaining"`
+	// OldestWait is how long the oldest still-queued item has waited,
+	// omitted when nothing remains. Depth alone does not distinguish a
+	// burst that just arrived from a backlog that has been losing ground
+	// for days, and those call for different sleeps.
+	OldestWait string          `json:"oldest_wait,omitempty"`
+	Items      []queueItemView `json:"items"`
 }
 
 // projectQueuePayload extracts the model-facing source + summary from a

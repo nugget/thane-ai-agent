@@ -52,8 +52,28 @@ func (s *Store) PendingStats(ctx context.Context) ([]ConsumerPending, error) {
 	return stats, rows.Err()
 }
 
+// PendingFor returns one consumer's live backlog: how many items are
+// pending and when the oldest was enqueued. A partition with no pending
+// work reports zero and a zero time.
+//
+// Separate from [Store.PendingStats] because the hot caller is a single
+// loop asking about itself on every pull, and scanning every partition
+// to answer that would make the common case pay for the census.
+func (s *Store) PendingFor(ctx context.Context, consumer string) (pending int, oldest time.Time, err error) {
+	var oldestRaw any
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), MIN(enqueued_at)
+		FROM loop_queue
+		WHERE status = ? AND consumer_loop = ?
+	`, StatusPending, strings.TrimSpace(consumer))
+	if err := row.Scan(&pending, &oldestRaw); err != nil {
+		return 0, time.Time{}, fmt.Errorf("loopqueue: pending for %q: %w", consumer, err)
+	}
+	return pending, parseQueueTimestamp(oldestRaw), nil
+}
+
 // PendingCounts returns pending depth keyed by consumer partition —
-// the join shape loop views use to attach mailbox depth to a loop row.
+// the join shape loop views use to attach queue depth to a loop row.
 // Partitions with no pending work are absent from the map.
 func (s *Store) PendingCounts(ctx context.Context) (map[string]int, error) {
 	stats, err := s.PendingStats(ctx)

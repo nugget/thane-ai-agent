@@ -25,10 +25,10 @@ const (
 type LoopRuntimeToolDeps struct {
 	Registry   *looppkg.Registry
 	LaunchLoop func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
-	// MailboxPending reports durable mailbox depth by loop name, joined
-	// onto loop_status rows as mailbox_pending. Optional: unwired, rows
+	// QueuePending reports durable work-queue depth by loop name, joined
+	// onto loop_status rows as queue_pending. Optional: unwired, rows
 	// report null (depth not measured) rather than a fake zero.
-	MailboxPending func(context.Context) (map[string]int, error)
+	QueuePending func(context.Context) (map[string]int, error)
 }
 
 // ConfigureLoopRuntimeTools stores the runtime dependencies needed by the
@@ -36,7 +36,7 @@ type LoopRuntimeToolDeps struct {
 func (r *Registry) ConfigureLoopRuntimeTools(deps LoopRuntimeToolDeps) {
 	r.liveLoopRegistry = deps.Registry
 	r.launchLoop = deps.LaunchLoop
-	r.mailboxPendingCounts = deps.MailboxPending
+	r.queuePendingCounts = deps.QueuePending
 	r.registerLoopRuntimeTools()
 	r.registerLoopContainers()
 }
@@ -165,11 +165,11 @@ func (r *Registry) handleLoopStatus(ctx context.Context, args map[string]any) (s
 	// per row) plus the definition-policy join, so every row is the canonical
 	// LoopView — the same rich shape every loop-data tool emits.
 	resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
-	// Join durable mailbox depth when the queue is wired. A failed probe
+	// Join durable work-queue depth when the queue is wired. A failed probe
 	// leaves depth null (not measured) rather than failing the census.
-	if r.mailboxPendingCounts != nil {
-		if counts, err := r.mailboxPendingCounts(ctx); err == nil {
-			resolver = resolver.WithMailboxPending(counts)
+	if r.queuePendingCounts != nil {
+		if counts, err := r.queuePendingCounts(ctx); err == nil {
+			resolver = resolver.WithQueuePending(counts)
 		}
 	}
 	filtered := make([]looppkg.LoopView, 0, len(statuses))
