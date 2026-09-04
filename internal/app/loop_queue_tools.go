@@ -60,7 +60,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				"Each item gives a subject (the key you pass to queue_ack), its source, a short summary, priority, and age — not the full payload. " +
 				"Exactly one batch may be pulled per loop iteration. Items stay queued until you queue_ack them, so an interrupted iteration just re-serves them next time. " +
 				"Finish this batch, persist your state, and sleep; remaining work belongs to the next iteration. " +
-				"The result reports `remaining` — the depth still queued behind this batch — and `oldest_wait`. Use them: pull nearer the cap and sleep short when the queue is deep or its oldest item has been waiting a long time, and take the default batch with a long sleep when it is shallow.",
+				"The result reports `remaining`, the number of items still queued behind this batch, and `oldest_wait`, how long the oldest of those has waited — neither counts what this batch handed you. A null `remaining` means the depth could not be measured, which is not the same as an empty queue. Together they say whether you are keeping up; your loop definition says what to do about it.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -106,18 +106,17 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 					})
 				}
 				result := queuePullResult{Count: len(views), Items: views}
-				// Measured after the peek, and reported as depth beyond
-				// this batch: peeked items stay pending until acked, so
-				// the raw count still includes the ones just handed over.
-				// A failed probe leaves remaining at zero rather than
-				// failing the pull, which would trade the whole
-				// iteration for a number.
-				if pending, oldest, err := store.PendingFor(ctx, loopName); err == nil {
-					if beyond := pending - len(views); beyond > 0 {
-						result.Remaining = beyond
-						if !oldest.IsZero() {
-							result.OldestWait = promptfmt.FormatDeltaOnly(oldest, now)
-						}
+				// Measured over the rows after this batch in drain order,
+				// so neither the count nor the age describes work already
+				// in hand. A failed probe leaves remaining null rather
+				// than zero: the pull still succeeds, because trading a
+				// whole iteration for a number would be the worse
+				// bargain, but the loop is told the depth is unknown
+				// instead of being told the queue is empty.
+				if pending, oldest, err := store.PendingBeyond(ctx, loopName, len(views)); err == nil {
+					result.Remaining = &pending
+					if pending > 0 && !oldest.IsZero() {
+						result.OldestWait = promptfmt.FormatDeltaOnly(oldest, now)
 					}
 				} else {
 					logging.Logger(ctx).Warn("queue_pull: could not measure remaining depth",
@@ -338,13 +337,19 @@ type queueItemView struct {
 
 type queuePullResult struct {
 	Count int `json:"count"`
-	// Remaining is how much work is still queued beyond this batch.
+	// Remaining is how much work is still queued beyond this batch, and
+	// is null when the depth could not be measured.
 	//
 	// It exists because a pull that hands back three items looked
 	// identical whether the queue held three or three hundred, so a loop
 	// choosing how long to sleep was doing it blind and a backlog could
 	// grow indefinitely behind a cadence that looked reasonable.
-	Remaining int `json:"remaining"`
+	//
+	// Nullable for that same reason one layer down: a failed probe
+	// reporting 0 would be indistinguishable from a drained queue, which
+	// is the exact confusion this field was added to end. Null means not
+	// measured; 0 means measured and empty.
+	Remaining *int `json:"remaining"`
 	// OldestWait is how long the oldest still-queued item has waited,
 	// omitted when nothing remains. Depth alone does not distinguish a
 	// burst that just arrived from a backlog that has been losing ground

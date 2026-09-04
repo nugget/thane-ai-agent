@@ -373,8 +373,11 @@ func TestQueuePullReportsRemainingDepth(t *testing.T) {
 			if got.Count != tt.wantCount {
 				t.Errorf("count = %d, want %d", got.Count, tt.wantCount)
 			}
-			if got.Remaining != tt.wantRemaining {
-				t.Errorf("remaining = %d, want %d", got.Remaining, tt.wantRemaining)
+			if got.Remaining == nil {
+				t.Fatalf("remaining = null, want it measured as %d", tt.wantRemaining)
+			}
+			if *got.Remaining != tt.wantRemaining {
+				t.Errorf("remaining = %d, want %d", *got.Remaining, tt.wantRemaining)
 			}
 			// Depth alone cannot tell a burst that just arrived from a
 			// backlog losing ground for days, and those want different
@@ -409,5 +412,82 @@ func TestArchivistPullCeilingExceedsItsDefault(t *testing.T) {
 	// quietly paying more for it.
 	if max > queuePullMaxLimit {
 		t.Errorf("max = %d exceeds the general ceiling %d", max, queuePullMaxLimit)
+	}
+}
+
+// TestQueuePullOldestWaitDescribesWhatIsLeft pins that the reported age
+// belongs to the backlog, not to the batch in hand.
+//
+// Drain order is oldest-first within a priority, so an aggregate over the
+// whole partition necessarily returns an item this pull just handed over.
+// A loop reading that would size its sleep against the age of work it had
+// already picked up — precisely backwards.
+func TestQueuePullOldestWaitDescribesWhatIsLeft(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Four items, of which the three that a batch would take are made
+	// genuinely older. Enqueueing in a loop is not enough: the rows land
+	// inside the same second and their timestamps tie, which hides the
+	// very difference this test exists to detect.
+	for i := range 4 {
+		if err := store.Enqueue(t.Context(), "archivist", fmt.Sprintf("session:%d", i), 0, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE loop_queue SET enqueued_at = datetime(enqueued_at, '-1 hour')
+		 WHERE dedup_key IN ('session:0','session:1','session:2')`); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	pending, oldest, err := store.PendingBeyond(t.Context(), "archivist", 3)
+	if err != nil {
+		t.Fatalf("PendingBeyond: %v", err)
+	}
+	if pending != 1 {
+		t.Fatalf("pending beyond 3 = %d, want 1", pending)
+	}
+
+	all, wholePartitionOldest, err := store.PendingBeyond(t.Context(), "archivist", 0)
+	if err != nil {
+		t.Fatalf("PendingBeyond(0): %v", err)
+	}
+	if all != 4 {
+		t.Fatalf("pending beyond 0 = %d, want 4", all)
+	}
+	if !oldest.After(wholePartitionOldest) {
+		t.Errorf("oldest beyond the batch (%s) is not newer than the partition's oldest (%s); the batch in hand is being described",
+			oldest, wholePartitionOldest)
+	}
+}
+
+// TestQueuePullUnmeasuredDepthIsNullNotZero pins the result shape for a
+// failed probe. Reporting 0 would be indistinguishable from a drained
+// queue — the same absent-signal-reads-as-healthy failure this whole
+// change exists to remove, one layer down.
+func TestQueuePullUnmeasuredDepthIsNullNotZero(t *testing.T) {
+	unmeasured, err := json.Marshal(queuePullResult{Count: 1, Items: []queueItemView{{Subject: "session:x"}}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(unmeasured), `"remaining":null`) {
+		t.Errorf("unmeasured depth serialized as %s, want an explicit null", unmeasured)
+	}
+
+	zero := 0
+	measured, err := json.Marshal(queuePullResult{Count: 1, Remaining: &zero, Items: []queueItemView{{Subject: "session:x"}}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(measured), `"remaining":0`) {
+		t.Errorf("a measured empty queue serialized as %s, want remaining 0", measured)
 	}
 }
