@@ -864,17 +864,34 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	caller := map[string]any{"enable_thinking": false}
+	// Nested values as well as top-level ones: a kwarg may itself be an
+	// object or a list, and a shallow copy would leave those aliased to
+	// config however carefully the outer map was copied.
+	nested := map[string]any{"depth": "original"}
+	list := []any{"first"}
+	caller := map[string]any{
+		"enable_thinking": false,
+		"options":         nested,
+		"stops":           list,
+	}
 	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
 	c.SetChatTemplateKwargs(caller)
+
 	caller["enable_thinking"] = true
+	nested["depth"] = "mutated"
+	list[0] = "mutated"
 
 	if _, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
 
 	got, _ := body["chat_template_kwargs"].(map[string]any)
-	if want := (map[string]any{"enable_thinking": false}); !reflect.DeepEqual(got, want) {
+	want := map[string]any{
+		"enable_thinking": false,
+		"options":         map[string]any{"depth": "original"},
+		"stops":           []any{"first"},
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("chat_template_kwargs = %#v, want %#v — a caller mutation leaked in", got, want)
 	}
 }

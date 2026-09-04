@@ -133,13 +133,37 @@ func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
 		c.chatTemplateKwargs = nil
 		return
 	}
-	// Copied so a later mutation of the caller's map cannot change what
-	// an in-flight or subsequent request sends.
-	out := make(map[string]any, len(kwargs))
-	for k, v := range kwargs {
-		out[k] = v
+	// Deep-copied, not aliased. A template kwarg may itself be an
+	// object or a list, and a shallow copy would leave those nested
+	// values shared with config: a later write through the original
+	// would change what subsequent requests ask the model to do, and
+	// could race a json.Marshal already reading the tree.
+	copied, _ := deepCopyJSONValue(kwargs).(map[string]any)
+	c.chatTemplateKwargs = copied
+}
+
+// deepCopyJSONValue copies a JSON-compatible value tree so that nothing
+// reachable from the result is shared with the original. Scalars are
+// returned as they are, being immutable; anything that is neither an
+// object nor an array is a scalar for this purpose, including the
+// map[any]any that json.Marshal would reject outright anyway.
+func deepCopyJSONValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, val := range typed {
+			out[k] = deepCopyJSONValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, val := range typed {
+			out[i] = deepCopyJSONValue(val)
+		}
+		return out
+	default:
+		return v
 	}
-	c.chatTemplateKwargs = out
 }
 
 // AttachWatcher sets the connection watcher for health status queries.
