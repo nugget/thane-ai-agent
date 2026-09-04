@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1374,5 +1377,391 @@ func TestTagContextAssemblerSamplesOneClockPerAssembly(t *testing.T) {
 	}
 	if strings.Contains(rendered, "Day: today.") {
 		t.Fatalf("identical templates rendered differently within one assembly: %q", rendered)
+	}
+}
+
+// slowTestProvider blocks until its context dies or its work is done,
+// recording whether it ever actually ran.
+type slowTestProvider struct {
+	work time.Duration
+	name string
+	mu   sync.Mutex
+	ran  bool
+}
+
+func (p *slowTestProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+	p.mu.Lock()
+	p.ran = true
+	p.mu.Unlock()
+	select {
+	case <-time.After(p.work):
+		return p.name + " content", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (p *slowTestProvider) didRun() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ran
+}
+
+// TestGatedProvidersSurviveASlowTaggedProvider pins the defect a
+// production loop hit on nearly every wake for days.
+//
+// The tagged and gated tiers walk sequentially against one shared
+// deadline. A tagged provider that consumed all of it left the gated
+// tier — which carries document advertising — inheriting an already-dead
+// context, so the loop woke with no document offers at all. Its own logs
+// blamed the document corpus, because the victim reported under its own
+// name and nothing connected it to the source.
+func TestGatedProvidersSurviveASlowTaggedProvider(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	// Far longer than the whole assembly budget: the unbounded case.
+	hog := &slowTestProvider{work: 10 * time.Second, name: "hog"}
+	gated := &slowTestProvider{work: time.Millisecond, name: "gated"}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	a.RegisterTaggedProvider("metacognitive", hog)
+	a.RegisterAlwaysProvider(gated)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	a.BuildSections(ctx, agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"metacognitive": true},
+		IncludeAlways: true,
+	})
+	elapsed := time.Since(start)
+
+	if !gated.didRun() {
+		t.Error("the gated provider never ran; a tagged provider starved the tier that carries document advertising")
+	}
+	// The hog is capped rather than allowed to run to the deadline, so
+	// assembly finishes well inside its budget.
+	if elapsed > 1500*time.Millisecond {
+		t.Errorf("assembly took %s; a single provider was not bounded", elapsed.Round(time.Millisecond))
+	}
+	if logs := logBuf.String(); !strings.Contains(logs, "ran long against the shared assembly budget") {
+		t.Errorf("no slow-source warning for the hog:\n%s", logs)
+	}
+}
+
+// TestSkippedProviderNamesWhoSpentTheBudget pins the attribution half.
+//
+// A provider that never ran must say so and name the spender, rather than
+// reporting "context deadline exceeded" under its own name — which is
+// indistinguishable from having tried and timed out, and is what sent a
+// production loop hunting corpus performance twice in one hour.
+func TestSkippedProviderNamesWhoSpentTheBudget(t *testing.T) {
+	var budget assemblyBudget
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	live, cancelLive := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelLive()
+	if budget.skipped(live, live, logger, "always_provider", "docs") {
+		t.Fatal("skipped a provider while budget remained")
+	}
+
+	dead, cancelDead := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelDead()
+	<-dead.Done()
+	budget.note(dead, "tagged_provider", "metacognitive")
+	if !budget.skipped(dead, dead, logger, "always_provider", "*docs.Advertiser") {
+		t.Fatal("did not skip a provider handed a dead context")
+	}
+
+	logs := logBuf.String()
+	for _, want := range []string{
+		"context provider skipped, not attempted",
+		"assembly budget already spent upstream",
+		// slog quotes values containing spaces.
+		`spent_by="tagged_provider (metacognitive)"`,
+		"source=always_provider",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("skip log missing %q:\n%s", want, logs)
+		}
+	}
+	// The victim must not be the one reporting a deadline error.
+	if strings.Contains(logs, "gated context provider failed") {
+		t.Errorf("skipped provider reported its own failure:\n%s", logs)
+	}
+}
+
+// TestReserveForGatedProvidersLeavesTheTaggedTierUsable pins that the
+// reservation does not become the same starvation wearing the other hat.
+func TestReserveForGatedProvidersLeavesTheTaggedTierUsable(t *testing.T) {
+	tests := []struct {
+		name        string
+		budget      time.Duration
+		gatedCount  int
+		wantReserve time.Duration
+	}{
+		{
+			// Scaled by provider count, because a flat reserve equal to
+			// one provider's cap guarantees the last provider nothing.
+			name:   "the reserve scales with the gated tier",
+			budget: 2 * time.Second, gatedCount: 11,
+			wantReserve: 1000 * time.Millisecond, // 11x100ms, bounded at half
+		},
+		{
+			name:   "a small tier reserves only what it needs",
+			budget: 2 * time.Second, gatedCount: 3,
+			wantReserve: 300 * time.Millisecond,
+		},
+		{
+			// Bounded at half however many providers there are, so
+			// protecting the gated tier never starves the tagged one.
+			name:   "a tight budget still leaves the tagged tier half",
+			budget: 300 * time.Millisecond, gatedCount: 11,
+			wantReserve: 150 * time.Millisecond,
+		},
+		{
+			// A task-mode turn opens neither gate.
+			name:   "no admitted gated providers needs no reserve",
+			budget: 2 * time.Second, gatedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), tt.budget)
+			defer cancel()
+			parentDeadline, _ := parent.Deadline()
+
+			tagged, release := reserveForGatedProviders(parent, tt.gatedCount)
+			defer release()
+			taggedDeadline, ok := tagged.Deadline()
+			if !ok {
+				t.Fatal("tagged context lost its deadline")
+			}
+
+			got := parentDeadline.Sub(taggedDeadline)
+			// Generous tolerance: the reserve is computed from time
+			// remaining, which has elapsed a little by now.
+			if diff := got - tt.wantReserve; diff > 20*time.Millisecond || diff < -20*time.Millisecond {
+				t.Errorf("reserve = %s, want about %s", got.Round(time.Millisecond), tt.wantReserve)
+			}
+			if remaining := time.Until(taggedDeadline); remaining <= 0 {
+				t.Error("the tagged tier was left no time at all")
+			}
+		})
+	}
+
+	t.Run("no deadline to divide", func(t *testing.T) {
+		tagged, release := reserveForGatedProviders(context.Background(), 5)
+		defer release()
+		if _, ok := tagged.Deadline(); ok {
+			t.Error("invented a deadline where the parent had none")
+		}
+	})
+}
+
+// TestGatedTierSurvivesWellBehavedTaggedProviders pins the reservation
+// specifically, and it needs several providers to do so.
+//
+// A per-provider cap alone does not save the gated tier: enough tagged
+// providers each running to their cap exhaust the shared budget by simple
+// arithmetic, with nothing misbehaving. Four at 500ms is the whole 2s.
+// Only holding a slice back for the gated tier keeps document advertising
+// alive in that case — which is why the fix is both bounds, not either.
+func TestGatedTierSurvivesWellBehavedTaggedProviders(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	tags := map[string]bool{}
+	for _, tag := range []string{"alpha", "bravo", "charlie", "delta"} {
+		// Each runs past its own cap, so each consumes exactly its slice.
+		a.RegisterTaggedProvider(tag, &slowTestProvider{work: 10 * time.Second, name: tag})
+		tags[tag] = true
+	}
+	gated := &slowTestProvider{work: time.Millisecond, name: "gated"}
+	a.RegisterAlwaysProvider(gated)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	a.BuildSections(ctx, agentctx.ContextRequest{ActiveTags: tags, IncludeAlways: true})
+
+	if !gated.didRun() {
+		t.Error("the gated provider never ran: four capped tagged providers consumed the whole budget, " +
+			"which is the case a per-provider cap cannot fix")
+	}
+}
+
+// TestCancellationNamesNoSpender pins that a cancelled request is not
+// reported as a spent budget with a culprit.
+//
+// ctx.Err() is non-nil for cancellation as well as expiry, so attributing
+// on that alone would blame whichever provider happened to be running
+// when a request was cancelled or the process shut down — an invented
+// fact of exactly the kind this attribution exists to prevent.
+func TestCancellationNamesNoSpender(t *testing.T) {
+	var budget assemblyBudget
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	budget.note(cancelled, "tagged_provider", "metacognitive")
+	if budget.spentBy != "" {
+		t.Errorf("spentBy = %q for a cancelled context; nothing was spent", budget.spentBy)
+	}
+
+	if !budget.skipped(cancelled, cancelled, logger, "always_provider", "docs") {
+		t.Fatal("did not skip on a cancelled context")
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "assembly cancelled") {
+		t.Errorf("cancellation not reported as such:\n%s", logs)
+	}
+	if strings.Contains(logs, "spent_by") || strings.Contains(logs, "already spent upstream") {
+		t.Errorf("cancellation blamed a provider:\n%s", logs)
+	}
+}
+
+// TestTierExpiryIsNotAssemblyExhaustion pins the distinction between the
+// reserve working and the budget being gone.
+//
+// The tagged tier expires early by design. Reporting that as "assembly
+// budget already spent upstream" would be false, and recording a spender
+// for it would mean a gated provider that later exhausts the real
+// deadline gets a stale culprit attached to every skip behind it.
+func TestTierExpiryIsNotAssemblyExhaustion(t *testing.T) {
+	var budget assemblyBudget
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	parent, cancelParent := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelParent()
+	tier, cancelTier := context.WithTimeout(parent, time.Nanosecond)
+	defer cancelTier()
+	<-tier.Done()
+
+	budget.note(parent, "tagged_provider", "metacognitive")
+	if budget.spentBy != "" {
+		t.Errorf("spentBy = %q; the assembly budget is intact and only the tier expired", budget.spentBy)
+	}
+
+	if !budget.skipped(tier, parent, logger, "tagged_provider", "late") {
+		t.Fatal("did not skip a provider whose tier had expired")
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "reserved slice") {
+		t.Errorf("tier expiry not distinguished from assembly exhaustion:\n%s", logs)
+	}
+	if strings.Contains(logs, "already spent upstream") {
+		t.Errorf("tier expiry reported as a spent assembly budget:\n%s", logs)
+	}
+}
+
+// TestLateGatedProviderStillRuns pins the finding that a flat reserve
+// missed. The document advertiser registers near the end of a dozen gated
+// providers, so a reserve equal to one provider's cap left it skipped
+// whenever any earlier gated provider was slow.
+func TestLateGatedProviderStillRuns(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	a.RegisterTaggedProvider("metacognitive", &slowTestProvider{work: 10 * time.Second, name: "hog"})
+	// Ten eager gated providers ahead of the advertiser, each of which
+	// would run to a flat cap given the chance.
+	for i := range 10 {
+		a.RegisterAlwaysProvider(&slowTestProvider{work: 10 * time.Second, name: fmt.Sprintf("eager%d", i)})
+	}
+	advertiser := &slowTestProvider{work: time.Millisecond, name: "advertiser"}
+	a.RegisterAlwaysProvider(advertiser)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	a.BuildSections(ctx, agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"metacognitive": true},
+		IncludeAlways: true,
+	})
+
+	if !advertiser.didRun() {
+		t.Error("the last gated provider never ran; ten eager providers ahead of it consumed the reserve")
+	}
+}
+
+// measuringProvider records the budget it was handed.
+type measuringProvider struct {
+	mu    sync.Mutex
+	slice time.Duration
+	work  time.Duration
+}
+
+func (p *measuringProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		p.mu.Lock()
+		p.slice = time.Until(deadline)
+		p.mu.Unlock()
+	}
+	select {
+	case <-time.After(p.work):
+		return "content", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (p *measuringProvider) sliceGiven() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.slice
+}
+
+// TestLateGatedProviderGetsAUsableSlice pins what the scaled reserve buys
+// over a flat one, which is not whether the last provider runs — fair
+// share alone secures that — but whether its slice is big enough to do
+// anything with.
+//
+// A flat reserve of one provider's cap, divided across a dozen gated
+// providers, leaves the advertiser tens of milliseconds. Sizing the
+// reserve by provider count doubles that. Neither guarantees a full
+// corpus walk, which no budget of two seconds can across this many
+// providers; what the tier relies on is that most providers are fast and
+// donate their unused share to the ones behind them.
+func TestLateGatedProviderGetsAUsableSlice(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	// Enough tagged hogs to consume the tagged tier is required for the
+	// reserve to bind at all. One is not enough — it is capped at its own
+	// share and leaves slack, so the gated tier inherits more than its
+	// reserve and the difference under test disappears.
+	tags := map[string]bool{}
+	for _, tag := range []string{"alpha", "bravo", "charlie", "delta"} {
+		a.RegisterTaggedProvider(tag, &slowTestProvider{work: 10 * time.Second, name: tag})
+		tags[tag] = true
+	}
+	for range 10 {
+		a.RegisterAlwaysProvider(&slowTestProvider{work: 10 * time.Second, name: "eager"})
+	}
+	advertiser := &measuringProvider{work: time.Millisecond}
+	a.RegisterAlwaysProvider(advertiser)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	a.BuildSections(ctx, agentctx.ContextRequest{ActiveTags: tags, IncludeAlways: true})
+
+	got := advertiser.sliceGiven()
+	if got <= 0 {
+		t.Fatal("the last gated provider was never given a slice")
+	}
+	// Eleven providers sharing a reserve sized at 11x100ms, bounded at
+	// half the budget, is ~90ms each. A flat reserve of one cap would
+	// give roughly half that.
+	if got < 70*time.Millisecond {
+		t.Errorf("last provider got %s; too small to do useful work, which is what sizing the reserve by provider count is for",
+			got.Round(time.Millisecond))
 	}
 }
