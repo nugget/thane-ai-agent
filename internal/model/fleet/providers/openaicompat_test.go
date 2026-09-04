@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -754,5 +755,126 @@ func TestOpenAICompatReasoningOnlyCompletionIsDiagnosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `finish_reason="length"`) {
 		t.Errorf("error %q missing finish_reason", err.Error())
+	}
+}
+
+// TestOpenAICompatSendsChatTemplateKwargs pins the reasoning toggle onto
+// the wire. A model whose chat template enables thinking by default
+// spends the output budget on a think block first, so a turn with a
+// modest ceiling returns finish_reason "length" with empty content and
+// no answer at all — the guard converts that to an error, which is
+// correct and still a lost turn. chat_template_kwargs is the only lever
+// that turns it off, and before this the field could not be sent.
+func TestOpenAICompatSendsChatTemplateKwargs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		kwargs map[string]any
+		stream bool
+		want   map[string]any
+	}{
+		{
+			name:   "configured kwargs reach the wire",
+			kwargs: map[string]any{"enable_thinking": false},
+			want:   map[string]any{"enable_thinking": false},
+		},
+		{
+			name:   "the streaming path sends them too",
+			kwargs: map[string]any{"enable_thinking": false},
+			stream: true,
+			want:   map[string]any{"enable_thinking": false},
+		},
+		{
+			// Families disagree on the key, so a resource is allowed to
+			// send several and let the template read the one it knows.
+			name:   "several keys pass through untouched",
+			kwargs: map[string]any{"enable_thinking": false, "thinking": false, "reasoning_effort": "low"},
+			want:   map[string]any{"enable_thinking": false, "thinking": false, "reasoning_effort": "low"},
+		},
+		{
+			name: "unconfigured leaves the field off",
+		},
+		{
+			// Not the same as sending {}: a server entitled to validate
+			// the field should never see an empty object from us.
+			name:   "an empty map leaves the field off",
+			kwargs: map[string]any{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if tt.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+			c.SetChatTemplateKwargs(tt.kwargs)
+
+			var cb llm.StreamCallback
+			if tt.stream {
+				cb = func(llm.StreamEvent) {}
+			}
+			if _, err := c.ChatStream(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil, cb); err != nil {
+				t.Fatalf("ChatStream: %v", err)
+			}
+
+			got, present := body["chat_template_kwargs"]
+			if tt.want == nil {
+				if present {
+					t.Errorf("chat_template_kwargs sent unconfigured: %#v", got)
+				}
+				return
+			}
+			gotMap, ok := got.(map[string]any)
+			if !ok {
+				t.Fatalf("chat_template_kwargs = %#v, want an object", got)
+			}
+			if !reflect.DeepEqual(gotMap, tt.want) {
+				t.Errorf("chat_template_kwargs = %#v, want %#v", gotMap, tt.want)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatChatTemplateKwargsCopiesCaller pins that the client
+// holds its own copy. The map reaches it from config, which other
+// readers share; a client that aliased it would let an unrelated write
+// change what every later turn asks the model to do.
+func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
+	t.Parallel()
+
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	caller := map[string]any{"enable_thinking": false}
+	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+	c.SetChatTemplateKwargs(caller)
+	caller["enable_thinking"] = true
+
+	if _, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	got, _ := body["chat_template_kwargs"].(map[string]any)
+	if want := (map[string]any{"enable_thinking": false}); !reflect.DeepEqual(got, want) {
+		t.Errorf("chat_template_kwargs = %#v, want %#v — a caller mutation leaked in", got, want)
 	}
 }

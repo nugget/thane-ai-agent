@@ -52,10 +52,15 @@ type OpenAICompatClient struct {
 	// resource names the configured endpoint this client serves. Kept
 	// as a value, not only baked into c.logger, so it can be re-applied
 	// onto the request-scoped logger from context.
-	resource   string
-	httpClient *http.Client
-	logger     *slog.Logger
-	watcher    llm.ReadyWatcher
+	resource string
+	// chatTemplateKwargs is sent verbatim as chat_template_kwargs on
+	// every request this client makes. It is resource policy, not
+	// per-call state: the endpoint serves one template dialect, and the
+	// keys mean nothing to Thane.
+	chatTemplateKwargs map[string]any
+	httpClient         *http.Client
+	logger             *slog.Logger
+	watcher            llm.ReadyWatcher
 }
 
 // NewOpenAICompatClient creates a client for an OpenAI-compatible
@@ -121,6 +126,22 @@ func (c *OpenAICompatClient) Logger() *slog.Logger {
 	return c.logger
 }
 
+// SetChatTemplateKwargs sets the chat_template_kwargs sent with every
+// request. An empty map clears the field rather than sending {}.
+func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
+	if len(kwargs) == 0 {
+		c.chatTemplateKwargs = nil
+		return
+	}
+	// Copied so a later mutation of the caller's map cannot change what
+	// an in-flight or subsequent request sends.
+	out := make(map[string]any, len(kwargs))
+	for k, v := range kwargs {
+		out[k] = v
+	}
+	c.chatTemplateKwargs = out
+}
+
 // AttachWatcher sets the connection watcher for health status queries.
 func (c *OpenAICompatClient) AttachWatcher(w llm.ReadyWatcher) {
 	c.watcher = w
@@ -159,6 +180,10 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		// their launch configured, so the only limit worth sending is
 		// the caller's remaining budget, and 0 leaves the field off.
 		MaxTokens: llm.MaxOutputTokensFromContext(ctx),
+		// Sent as configured or not at all. An empty map would still
+		// marshal as {} on some encoders, and a server that validates
+		// the field is entitled to reject that.
+		ChatTemplateKwargs: c.chatTemplateKwargs,
 	}
 	if stream {
 		req.StreamOptions = &openAICompatStreamOptions{IncludeUsage: true}
@@ -182,6 +207,10 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		"tools", len(tools),
 		"idle_ttl_seconds", c.idleTTLSeconds,
 		"max_tokens", req.MaxTokens,
+		// Logged because it changes what the model does with the
+		// budget, so a turn that came back short is readable after the
+		// fact without re-deriving the config.
+		"chat_template_kwargs", req.ChatTemplateKwargs,
 	)
 	log.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
