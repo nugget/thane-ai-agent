@@ -368,26 +368,72 @@ func TestMaterializeDetachesFromADepletedWalkBudget(t *testing.T) {
 	}
 }
 
-// TestAdvertisementCountCapIsReachableAtObservedSizes guards a change
-// that would silently do nothing.
+// TestAdvertisementCountCapIsReachableAtRealisticEstimates guards a
+// change that would silently do nothing.
 //
-// Two budgets bound the rail: how many offers it takes and how many
-// bytes they may total. Raising the count while the byte budget binds
-// first buys nothing at all, and nothing would say so — the withheld
-// count would stay exactly where it was and the tuning would look
-// applied.
+// Two budgets bound the rail: how many offers it takes and how many bytes
+// they may total. Raising the count while the byte budget binds first
+// buys nothing at all, and nothing would say so — the withheld count
+// would stay exactly where it was and the tuning would look applied.
 //
-// The size is measured, not assumed: across two days of production
-// materializations a selected advertisement averaged 626 bytes.
-func TestAdvertisementCountCapIsReachableAtObservedSizes(t *testing.T) {
+// Driven through selectContextAdvertisements rather than by arithmetic,
+// because admission spends ContextProjection.EstimatedBytes and not the
+// bytes that later materialize. Those differ: an estimate is a
+// reservation, and some providers reserve generously — the
+// self-assessment projection reserves MaxRunes*utf8.UTFMax+256. A guard
+// built on observed materialized sizes would pass while the real budget
+// still refused the rail, which is the failure it exists to catch.
+func TestAdvertisementCountCapIsReachableAtRealisticEstimates(t *testing.T) {
 	t.Parallel()
 
-	const observedAverageAdvertisementBytes = 626
+	// The largest average estimate at which a full rail still fits. Above
+	// this the byte budget binds first and the count is decorative.
+	perOfferHeadroom := (maxAdvertisedContextBytes -
+		(maxSelectedContextAdvertisements-1)*contextContentSeparatorBytes) /
+		maxSelectedContextAdvertisements
 
-	atCap := maxSelectedContextAdvertisements * observedAverageAdvertisementBytes
-	separators := (maxSelectedContextAdvertisements - 1) * contextContentSeparatorBytes
-	if atCap+separators > maxAdvertisedContextBytes {
-		t.Errorf("a full rail of %d averages %d bytes against a %d byte budget; the count cap cannot be reached, so raising it has no effect",
-			maxSelectedContextAdvertisements, atCap+separators, maxAdvertisedContextBytes)
+	tests := []struct {
+		name          string
+		estimateBytes int
+		wantFullRail  bool
+	}{
+		{
+			// Comfortably inside the headroom: production materializations
+			// average 626 bytes, and an estimate is that or larger.
+			name:          "a realistic estimate fills the rail",
+			estimateBytes: 1024, wantFullRail: true,
+		},
+		{
+			name:          "right at the headroom the rail still fills",
+			estimateBytes: perOfferHeadroom, wantFullRail: true,
+		},
+		{
+			// Past it the byte budget decides and the count never binds.
+			name:          "past the headroom the byte budget binds first",
+			estimateBytes: perOfferHeadroom * 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &testContextAdvertiser{}
+			var candidates []contextAdvertisementCandidate
+			for i := 0; i < maxSelectedContextAdvertisements+4; i++ {
+				ad := testAdvertisement("memory", fmt.Sprintf("doc-%02d", i),
+					agentctx.ContextMatchSemantic, 1,
+					testProjection("digest", agentctx.ContextRoleContext, tt.estimateBytes))
+				candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
+			}
+
+			selected, _ := selectContextAdvertisements(candidates)
+			switch {
+			case tt.wantFullRail && len(selected) != maxSelectedContextAdvertisements:
+				t.Errorf("selected %d of a %d rail at %d-byte estimates; the count cap is unreachable, so raising it has no effect (per-offer headroom is %d bytes)",
+					len(selected), maxSelectedContextAdvertisements, tt.estimateBytes, perOfferHeadroom)
+			case !tt.wantFullRail && len(selected) >= maxSelectedContextAdvertisements:
+				t.Errorf("selected %d at %d-byte estimates, which is past the %d-byte headroom; the byte budget should have bound first",
+					len(selected), tt.estimateBytes, perOfferHeadroom)
+			}
+		})
 	}
 }
