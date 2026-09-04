@@ -1835,6 +1835,21 @@ type ModelServerConfig struct {
 	// this via the native `ttl` request field on inference endpoints.
 	// Zero lets the runner use its default behavior.
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
+	// ChatTemplateKwargs is passed through to the server as
+	// chat_template_kwargs, which OpenAI-compatible runners hand to the
+	// model's Jinja chat template. Its main use is the reasoning
+	// toggle: a model with thinking on by default spends the output
+	// budget on a think block, and a turn with a modest ceiling returns
+	// empty content rather than an answer.
+	//
+	// The accepted keys belong to the model's template, not to the
+	// server, and they differ by family — Qwen reads enable_thinking,
+	// DeepSeek reads thinking, gpt-oss reads reasoning_effort. This is
+	// nonetheless resource-scoped because it is wire dialect, like the
+	// max_tokens spelling; an operator who changes which family a
+	// resource serves must revisit it. Unknown keys are inert: the
+	// template simply never reads them.
+	ChatTemplateKwargs map[string]any `yaml:"chat_template_kwargs,omitempty"`
 	// StreamIdleTimeout bounds how long this endpoint may send nothing
 	// at all before a request is abandoned. It measures silence, not
 	// duration: a slow generation is still allowed to be slow, and the

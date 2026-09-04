@@ -87,6 +87,11 @@ type openAICompatChatRequest struct {
 	// spelling a resource wants is a dialect question, and dialect
 	// belongs in per-resource policy rather than hardcoded here.
 	MaxTokens int `json:"max_tokens,omitempty"`
+	// ChatTemplateKwargs is handed to the model's Jinja chat template by
+	// the server. Thane does not interpret it: the keys are the
+	// template's vocabulary, they differ by model family, and the field
+	// is omitted entirely unless the resource configured one.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 type openAICompatStreamOptions struct {
