@@ -213,14 +213,15 @@ paths:
       operationId: authLogin
       summary: Exchange a token for a console session cookie
       description: >-
-        The console's sign-in. Posts an operator or companion token once and
+        The console's sign-in. Posts an operator token once and
         receives an HttpOnly, SameSite=Strict `thane_session` cookie (marked
         Secure when the request arrived over TLS, directly or via a proxy
         reporting `X-Forwarded-Proto: https`). The token is never stored by
         the console. Sessions live in memory, expire after
         `listen.auth.session_ttl` without use, and end on restart. Returns 404
         when no operator token is configured, since there is nothing to sign
-        in to.
+        in to, and 403 for a companion account token: a device credential
+        cannot become an operator's browser session.
       security: []
       requestBody:
         description: The credential to exchange.
@@ -233,7 +234,9 @@ paths:
               properties:
                 token:
                   type: string
-                  description: An operator token or a companion account token.
+                  description: >-
+                    An operator token. A companion account token is refused
+                    with 403.
                   example: 0GxlTt1n5uP5R9M9Ck4vYkq1vHsZ6l2ZB7Q4Yw4GJ7A
       responses:
         "200":
@@ -252,6 +255,13 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "401":
           description: The token was not accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >-
+            A companion account token was presented. It authenticates a device,
+            not an operator, and cannot be exchanged for a console session.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1473,7 +1483,16 @@ components:
       description: |
         Operator token from `listen.auth.tokens`, or a companion account token
         (`companion.providers.<account>.tokens`), which authenticates as that
-        account. Enforced on every operation except those marked `security: []`
+        account.
+
+        A companion token is not an operator credential. It authenticates a
+        device offering data and reaches only the companion surface —
+        `/v1/realtime/ws` and its aliases, `POST /v1/companion/observations`.
+        Every other gated operation answers `403` with an error of type
+        `forbidden`, and `POST /v1/auth/login` refuses it rather than minting a
+        session. Operations marked `security: []` are public and unaffected.
+
+        Enforced on every operation except those marked `security: []`
         whenever at least one operator token is configured; with none configured
         the API is open. The console holds no token: it exchanges one at
         `POST /v1/auth/login` for an HttpOnly, SameSite=Strict session cookie
