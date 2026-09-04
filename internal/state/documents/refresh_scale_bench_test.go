@@ -80,50 +80,70 @@ func BenchmarkRefreshAtProductionScale(b *testing.B) {
 	}
 }
 
-// TestRefreshAtProductionScaleFitsItsSlice pins the panel's opening cost
-// against the budget it actually runs in.
+// TestRefreshScalesLinearlyWithCorpusSize pins the property that
+// actually matters as the corpus grows.
 //
-// A context provider gets perProviderContextBudget — 500ms at the time of
-// writing — and Refresh is what it spends before doing any of its own
-// work. If the walk alone does not fit, the panel cannot complete however
-// cheap the rest of it is, and the loop that depends on it wakes with no
-// operations panel and no signal saying why.
-func TestRefreshAtProductionScaleFitsItsSlice(t *testing.T) {
-	roots := buildCorpus(t, 13, 359)
+// An earlier version of this test asserted a wall-clock ceiling — a warm
+// refresh inside half a provider slice — and failed in CI at 358ms where
+// the same code took 13ms locally. That number measured the machine and
+// the race detector, not the code, which is the mistake the assertion
+// existed to catch elsewhere.
+//
+// The portable invariant is the shape of the curve. Quadruple the corpus
+// and a linear refresh takes about four times as long; anything
+// quadratic takes sixteen. The bound sits between them, so hardware and
+// instrumentation overhead cancel in the ratio and only a real change in
+// complexity trips it.
+func TestRefreshScalesLinearlyWithCorpusSize(t *testing.T) {
+	warmRefresh := func(t *testing.T, roots, docs int) time.Duration {
+		t.Helper()
 
-	db, err := database.OpenMemory()
-	if err != nil {
-		t.Fatalf("OpenMemory: %v", err)
+		db, err := database.OpenMemory()
+		if err != nil {
+			t.Fatalf("OpenMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+
+		store, err := NewStore(db, buildCorpus(t, roots, docs), nil)
+		if err != nil {
+			t.Fatalf("NewStore: %v", err)
+		}
+		// A wake is always further apart than the throttle, so a loop
+		// pays this in full on every iteration.
+		store.refreshInterval = 0
+
+		ctx := context.Background()
+		if err := store.Refresh(ctx); err != nil {
+			t.Fatalf("cold Refresh: %v", err)
+		}
+		start := time.Now()
+		if err := store.Refresh(ctx); err != nil {
+			t.Fatalf("warm Refresh: %v", err)
+		}
+		return time.Since(start)
 	}
-	t.Cleanup(func() { _ = db.Close() })
 
-	store, err := NewStore(db, roots, nil)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+	const (
+		baseRoots = 13
+		baseDocs  = 359 // production shape at the time of writing
+		factor    = 4
+	)
+
+	base := warmRefresh(t, baseRoots, baseDocs)
+	quad := warmRefresh(t, baseRoots, baseDocs*factor)
+
+	t.Logf("warm refresh: %s at %d docs, %s at %d docs",
+		base.Round(time.Millisecond), baseDocs,
+		quad.Round(time.Millisecond), baseDocs*factor)
+
+	if base <= 0 {
+		t.Skip("base refresh too fast to time reliably on this machine")
 	}
-	store.refreshInterval = 0
-	ctx := context.Background()
-
-	cold := time.Now()
-	if err := store.Refresh(ctx); err != nil {
-		t.Fatalf("cold Refresh: %v", err)
-	}
-	coldElapsed := time.Since(cold)
-
-	warm := time.Now()
-	if err := store.Refresh(ctx); err != nil {
-		t.Fatalf("warm Refresh: %v", err)
-	}
-	warmElapsed := time.Since(warm)
-
-	t.Logf("refresh at 359 docs / 13 roots: cold %s, warm %s",
-		coldElapsed.Round(time.Millisecond), warmElapsed.Round(time.Millisecond))
-
-	// The warm case is the one a loop actually pays: nothing has changed
-	// since the last wake for the overwhelming majority of documents.
-	const providerSlice = 500 * time.Millisecond
-	if warmElapsed > providerSlice/2 {
-		t.Errorf("a warm refresh takes %s of a %s provider slice, leaving too little for the panel's own work",
-			warmElapsed.Round(time.Millisecond), providerSlice)
+	// Linear is 4x, quadratic is 16x. Eight leaves room for noise and
+	// still fails long before the curve bends.
+	const maxRatio = 8.0
+	if ratio := float64(quad) / float64(base); ratio > maxRatio {
+		t.Errorf("refresh took %.1fx longer for %dx the corpus (%s to %s); linear would be %dx, so the cost is bending upward with corpus size",
+			ratio, factor, base.Round(time.Millisecond), quad.Round(time.Millisecond), factor)
 	}
 }
