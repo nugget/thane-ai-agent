@@ -1766,11 +1766,22 @@ type ModelConfig struct {
 	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
 	SupportsTools     bool   `yaml:"supports_tools"`     // Optional per-deployment tool-use override. When omitted, runtime/provider capability is used.
 	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits observed runtime/provider capability.
-	ContextWindow     int    `yaml:"context_window"`     // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
-	Speed             int    `yaml:"speed"`              // Relative speed rating, 1 (slow) to 10 (fast)
-	Quality           int    `yaml:"quality"`            // Relative quality rating, 1 (low) to 10 (high)
-	CostTier          int    `yaml:"cost_tier"`          // 0=local/free, 1=cheap, 2=moderate, 3=expensive
-	MinComplexity     string `yaml:"min_complexity"`     // Minimum task complexity: simple, moderate, complex
+	// SupportsImages is an optional per-deployment vision override. Nil
+	// inherits what the resource reported or what the model name
+	// implies. It exists because that inference is the only one with no
+	// authoritative source on a plain OpenAI-compatible endpoint: the
+	// /v1/models schema carries an id and nothing about modality, so
+	// vision is inferred from the model name alone. A multimodal model
+	// whose name matches none of the vision-name patterns that
+	// inference knows is invisible to Thane however capable the server
+	// is. LM Studio escapes this only because its native inventory
+	// returns a vision flag.
+	SupportsImages *bool  `yaml:"supports_images"`
+	ContextWindow  int    `yaml:"context_window"` // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
+	Speed          int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
+	Quality        int    `yaml:"quality"`        // Relative quality rating, 1 (low) to 10 (high)
+	CostTier       int    `yaml:"cost_tier"`      // 0=local/free, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity  string `yaml:"min_complexity"` // Minimum task complexity: simple, moderate, complex
 
 	supportsToolsSet bool `yaml:"-"`
 }

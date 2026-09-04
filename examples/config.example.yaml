@@ -366,6 +366,17 @@ models:
       resource: edge
       supports_tools: true
       supports_streaming: false
+      # SupportsImages is an optional per-deployment vision override. Nil
+      # inherits what the resource reported or what the model name
+      # implies. It exists because that inference is the only one with no
+      # authoritative source on a plain OpenAI-compatible endpoint: the
+      # /v1/models schema carries an id and nothing about modality, so
+      # vision is inferred from the model name alone. A multimodal model
+      # whose name matches none of the vision-name patterns that
+      # inference knows is invisible to Thane however capable the server
+      # is. LM Studio escapes this only because its native inventory
+      # returns a vision flag.
+      supports_images: false
       context_window: 32768
       speed: 9
       quality: 5
@@ -376,6 +387,17 @@ models:
       resource: default
       supports_tools: true
       supports_streaming: false
+      # SupportsImages is an optional per-deployment vision override. Nil
+      # inherits what the resource reported or what the model name
+      # implies. It exists because that inference is the only one with no
+      # authoritative source on a plain OpenAI-compatible endpoint: the
+      # /v1/models schema carries an id and nothing about modality, so
+      # vision is inferred from the model name alone. A multimodal model
+      # whose name matches none of the vision-name patterns that
+      # inference knows is invisible to Thane however capable the server
+      # is. LM Studio escapes this only because its native inventory
+      # returns a vision flag.
+      supports_images: false
       context_window: 131072
       speed: 3
       quality: 9
