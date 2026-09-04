@@ -34,8 +34,19 @@ token. Clients send `Authorization: Bearer <token>`; an operator token
 authenticates as its label, a companion account token
 (`companion.providers.<account>.tokens`) as that account, and a client
 certificate the HTTPS front door verified as its subject. A missing or wrong
-credential gets `401` with `WWW-Authenticate: Bearer realm="thane"`. The
-routes that serve without a credential are exactly: `GET /health`,
+credential gets `401` with `WWW-Authenticate: Bearer realm="thane"`.
+
+A companion account token is not an operator credential. It authenticates a
+device offering data, and it reaches the companion surface — `/v1/realtime/ws`
+and its aliases, `POST /v1/companion/observations` — and nothing else gated:
+every other gated route answers `403` with an error of type `forbidden`.
+The allowlist is deny-by-default, so a route added later is closed to
+companions until it is named on purpose, and a test derives the companion
+surface from the route table to keep the two in step. Public routes are
+unaffected, being public to everyone. This matters because that credential
+lives in a phone's Keychain and travels further than an operator token.
+
+The routes that serve without a credential are exactly: `GET /health`,
 `GET /v1/version`, `GET /v1/identity`, the console shell and `/static/*`,
 `/docs*`, the three `/v1/auth/*` endpoints, and the companion endpoints
 (`/v1/realtime/ws` and its aliases, `POST /v1/companion/observations`),
@@ -45,7 +56,7 @@ route is neither gated nor listed as public on purpose.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/auth/session` | Whether a credential is required and whether the caller has one; names the principal. |
-| `POST` | `/v1/auth/login` | Exchange a token for an HttpOnly, SameSite=Strict `thane_session` cookie (the console's sign-in). |
+| `POST` | `/v1/auth/login` | Exchange an **operator** token for an HttpOnly, SameSite=Strict `thane_session` cookie (the console's sign-in). A companion token is refused with `403`: a device credential cannot become an operator's browser session. |
 | `POST` | `/v1/auth/logout` | Revoke the session and clear the cookie. |
 
 The console never stores a token: it exchanges one at sign-in for the
