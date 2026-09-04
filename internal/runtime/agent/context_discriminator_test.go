@@ -272,11 +272,16 @@ func TestSelectContextAdvertisementsCountsWithheldOffers(t *testing.T) {
 	t.Parallel()
 
 	provider := &testContextAdvertiser{}
-	// Twelve genuinely selectable offers against a cap of eight: four are
-	// withheld and the count must say so. A thirteenth offers only detail —
-	// never selectable, so it is a non-offer, not a withheld one.
+	// Four genuinely selectable offers beyond the cap: each is withheld
+	// and the count must say so. One more offers only detail — never
+	// selectable, so it is a non-offer, not a withheld one.
+	//
+	// Sized from the cap rather than written as a literal, so tuning the
+	// rail's capacity does not silently turn this into a test of
+	// different arithmetic.
+	const beyondCap = 4
 	var candidates []contextAdvertisementCandidate
-	for i := 0; i < 12; i++ {
+	for i := 0; i < maxSelectedContextAdvertisements+beyondCap; i++ {
 		ad := testAdvertisement("memory", fmt.Sprintf("doc-%02d", i), agentctx.ContextMatchSemantic, 1,
 			testProjection("digest", agentctx.ContextRoleContext, 64))
 		candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
@@ -290,8 +295,8 @@ func TestSelectContextAdvertisementsCountsWithheldOffers(t *testing.T) {
 	if len(selected) != maxSelectedContextAdvertisements {
 		t.Fatalf("selected %d, want the cap %d", len(selected), maxSelectedContextAdvertisements)
 	}
-	if withheld != 4 {
-		t.Fatalf("withheld = %d, want 4 (selectable losers only, never the detail-only non-offer)", withheld)
+	if withheld != beyondCap {
+		t.Fatalf("withheld = %d, want %d (selectable losers only, never the detail-only non-offer)", withheld, beyondCap)
 	}
 }
 
@@ -300,8 +305,13 @@ func TestMaterializeRendersTheWithheldLine(t *testing.T) {
 
 	provider := &testContextAdvertiser{}
 	provider.content = map[string]string{}
+	// Two more than the rail can take, sized from the cap so that tuning
+	// the rail's capacity does not quietly turn this into a test of a
+	// full rail with nothing withheld — which is what it became the last
+	// time the cap moved.
+	const beyondCap = 2
 	var candidates []contextAdvertisementCandidate
-	for i := 0; i < 10; i++ {
+	for i := 0; i < maxSelectedContextAdvertisements+beyondCap; i++ {
 		id := fmt.Sprintf("doc-%02d", i)
 		ad := testAdvertisement("memory", id, agentctx.ContextMatchSemantic, 1,
 			testProjection("digest", agentctx.ContextRoleContext, 64))
@@ -313,8 +323,8 @@ func TestMaterializeRendersTheWithheldLine(t *testing.T) {
 	buckets := assembler.materializeContextAdvertisements(context.Background(), agentctx.ContextRequest{}, candidates)
 
 	related := buckets[agentctx.ContextBucketRelated]
-	if !strings.Contains(related, "2 context offer(s) withheld") {
-		t.Fatalf("expected a withheld line naming 2 offers, got: %q", related)
+	if want := fmt.Sprintf("%d context offer(s) withheld", beyondCap); !strings.Contains(related, want) {
+		t.Fatalf("expected a withheld line naming %d offers, got: %q", beyondCap, related)
 	}
 	if !strings.Contains(related, "doc_search") {
 		t.Fatalf("the withheld line must name the pull door, got: %q", related)
@@ -355,5 +365,75 @@ func TestMaterializeDetachesFromADepletedWalkBudget(t *testing.T) {
 
 	if !strings.Contains(buckets[agentctx.ContextBucketRelated], "made it") {
 		t.Fatalf("materialization must survive a dead walk context, got: %#v", buckets)
+	}
+}
+
+// TestAdvertisementCountCapIsReachableAtRealisticEstimates guards a
+// change that would silently do nothing.
+//
+// Two budgets bound the rail: how many offers it takes and how many bytes
+// they may total. Raising the count while the byte budget binds first
+// buys nothing at all, and nothing would say so — the withheld count
+// would stay exactly where it was and the tuning would look applied.
+//
+// Driven through selectContextAdvertisements rather than by arithmetic,
+// because admission spends ContextProjection.EstimatedBytes and not the
+// bytes that later materialize. Those differ: an estimate is a
+// reservation, and some providers reserve generously — the
+// self-assessment projection reserves MaxRunes*utf8.UTFMax+256. A guard
+// built on observed materialized sizes would pass while the real budget
+// still refused the rail, which is the failure it exists to catch.
+func TestAdvertisementCountCapIsReachableAtRealisticEstimates(t *testing.T) {
+	t.Parallel()
+
+	// The largest average estimate at which a full rail still fits. Above
+	// this the byte budget binds first and the count is decorative.
+	perOfferHeadroom := (maxAdvertisedContextBytes -
+		(maxSelectedContextAdvertisements-1)*contextContentSeparatorBytes) /
+		maxSelectedContextAdvertisements
+
+	tests := []struct {
+		name          string
+		estimateBytes int
+		wantFullRail  bool
+	}{
+		{
+			// Comfortably inside the headroom: production materializations
+			// average 626 bytes, and an estimate is that or larger.
+			name:          "a realistic estimate fills the rail",
+			estimateBytes: 1024, wantFullRail: true,
+		},
+		{
+			name:          "right at the headroom the rail still fills",
+			estimateBytes: perOfferHeadroom, wantFullRail: true,
+		},
+		{
+			// Past it the byte budget decides and the count never binds.
+			name:          "past the headroom the byte budget binds first",
+			estimateBytes: perOfferHeadroom * 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &testContextAdvertiser{}
+			var candidates []contextAdvertisementCandidate
+			for i := 0; i < maxSelectedContextAdvertisements+4; i++ {
+				ad := testAdvertisement("memory", fmt.Sprintf("doc-%02d", i),
+					agentctx.ContextMatchSemantic, 1,
+					testProjection("digest", agentctx.ContextRoleContext, tt.estimateBytes))
+				candidates = append(candidates, contextAdvertisementCandidate{advertiser: provider, advertisement: ad})
+			}
+
+			selected, _ := selectContextAdvertisements(candidates)
+			switch {
+			case tt.wantFullRail && len(selected) != maxSelectedContextAdvertisements:
+				t.Errorf("selected %d of a %d rail at %d-byte estimates; the count cap is unreachable, so raising it has no effect (per-offer headroom is %d bytes)",
+					len(selected), maxSelectedContextAdvertisements, tt.estimateBytes, perOfferHeadroom)
+			case !tt.wantFullRail && len(selected) >= maxSelectedContextAdvertisements:
+				t.Errorf("selected %d at %d-byte estimates, which is past the %d-byte headroom; the byte budget should have bound first",
+					len(selected), tt.estimateBytes, perOfferHeadroom)
+			}
+		})
 	}
 }

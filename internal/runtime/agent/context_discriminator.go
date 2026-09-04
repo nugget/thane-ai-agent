@@ -15,7 +15,35 @@ import (
 // another path to fill every bucket. Legacy eager providers remain under the
 // existing per-bucket limit while they migrate onto this contract.
 const (
-	maxSelectedContextAdvertisements = 8
+	// Eleven rather than eight, measured rather than chosen. Production
+	// prompts carry their own withheld count, so how often the rail
+	// actually refused an offer was already recorded: over the retained
+	// window, 4.5% of archivist turns and 1.3% of metacognitive ones, and
+	// never more than three offers at a time (161 prompts withheld two,
+	// 99 withheld three, 85 withheld one).
+	//
+	// Eleven meets that observed peak exactly rather than with headroom:
+	// eight selected plus three withheld is demand for eleven, so a turn
+	// wanting a twelfth is withheld again. Chosen to cover what was seen
+	// rather than to leave slack, because the slack has a cost — every
+	// admitted offer is attention spent on something the turn did not ask
+	// for.
+	//
+	// The cap is global, so this is not a background-loop-only change. No
+	// interactive turn in the retained sample hit the old cap — 1,457 of
+	// them withheld nothing — which says chat was not being constrained
+	// over that window, not that chat behaviour cannot change: an
+	// interactive turn with more than eight eligible offers will now
+	// render more of them.
+	//
+	// The count is the binding constraint rather than the byte budget,
+	// which had to be checked and not assumed. Admission spends
+	// ContextProjection.EstimatedBytes, so the rail is reachable only
+	// while the average estimate stays under
+	// maxAdvertisedContextBytes/maxSelectedContextAdvertisements, about
+	// 1.4 KB per offer. Raising the count past that point is a change
+	// with no effect and nothing to say so.
+	maxSelectedContextAdvertisements = 11
 	maxAdvertisedContextBytes        = 16 * 1024
 	contextContentSeparatorBytes     = len("\n\n---\n\n")
 
@@ -48,7 +76,7 @@ type contextAdvertisementSelection struct {
 // counts identities that made a genuinely selectable offer — a projection
 // automatic selection could have taken on an empty rail — but lost to the
 // offer cap or the byte budget. Losing must be observable: a turn that
-// silently renders eight offers out of twenty reads as "this is
+// silently renders a capped rail out of twenty offers reads as "this is
 // everything", and the one thing an attention budget must never buy is a
 // false sense of completeness.
 func selectContextAdvertisements(candidates []contextAdvertisementCandidate) ([]contextAdvertisementSelection, int) {
