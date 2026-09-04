@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -152,8 +154,14 @@ func TestSessionStoreRefusesCompanionPrincipal(t *testing.T) {
 // It is deliberately not a source scrape. A regex over server.go keys on
 // a closed set of handler names, so a third companion handler registered
 // later is invisible to it and the two sides drift silently while the
-// test stays green. The delta cannot drift: a companion route that is
-// registered appears in it by construction.
+// test stays green.
+//
+// The delta has one residual dependency of the same kind, and it is
+// covered rather than ignored: companionGatedServer has to wire the
+// companion handlers, so a third handler it does not know about would be
+// absent from both route tables and fall out of the delta unnoticed.
+// TestCompanionFixtureWiresEveryCompanionHandler fails in that case, so
+// the gap closes at the fixture instead of hiding here.
 func TestCompanionAllowlistMatchesRegisteredRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -217,4 +225,70 @@ func TestCompanionPrincipalResolvesOnItsOwnSurface(t *testing.T) {
 	if seen.Kind != principalCompanion || seen.Name != "phone" {
 		t.Fatalf("principal = %+v, want %s/phone", seen, principalCompanion)
 	}
+}
+
+// TestCompanionFixtureWiresEveryCompanionHandler closes the one way the
+// route-table delta can still drift.
+//
+// The delta is only as complete as the fixture that produces it: a
+// companion handler companionGatedServer does not wire registers no
+// routes, so its surface is missing from both sides of the comparison and
+// TestCompanionAllowlistMatchesRegisteredRoutes stays green while a real
+// companion route sits outside the allowlist and 403s in production.
+//
+// Reflection rather than a hand-kept list, for the same reason the delta
+// beats a regex: a companion handler field added to Server is found here
+// whether or not anyone remembered this test existed.
+func TestCompanionFixtureWiresEveryCompanionHandler(t *testing.T) {
+	t.Parallel()
+
+	v := reflect.ValueOf(companionGatedServer(t)).Elem()
+	typ := v.Type()
+
+	found := 0
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		if !strings.HasPrefix(name, "companion") || !strings.HasSuffix(name, "Handler") {
+			continue
+		}
+		found++
+		if v.Field(i).IsNil() {
+			t.Errorf("Server.%s is not wired by companionGatedServer, so its routes "+
+				"are absent from the delta and the allowlist test cannot see them. "+
+				"Wire it in the fixture and add its routes to companionSurfaceRoutes.", name)
+		}
+	}
+	if found == 0 {
+		t.Fatal("no companion handler fields found; the naming convention this test " +
+			"keys on has changed and the guard is now inert")
+	}
+}
+
+// failingWriter is a ResponseWriter whose body writes fail, standing in
+// for a client that disconnected mid-response.
+type failingWriter struct{ header http.Header }
+
+func (f *failingWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = http.Header{}
+	}
+	return f.header
+}
+func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("client gone") }
+func (f *failingWriter) WriteHeader(int)           {}
+
+// TestWriteForbiddenSurvivesAClientDisconnect pins the refusal path
+// against a nil-logger panic. writeJSON logs encode failures through a
+// logger it does not nil-check, and the gate has none to give it, so the
+// 403 path writes its own bytes.
+//
+// Mutation check: restore `writeJSON(w, …, nil)` and this panics.
+func TestWriteForbiddenSurvivesAClientDisconnect(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("writeForbidden panicked on a failed write: %v", r)
+		}
+	}()
+	writeForbidden(&failingWriter{}, "a companion credential may not reach this route")
 }

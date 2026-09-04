@@ -258,11 +258,19 @@ func writeUnauthorized(w http.ResponseWriter) {
 // writeForbidden refuses a caller whose credential is valid but whose
 // principal is not permitted here.
 func writeForbidden(w http.ResponseWriter, message string) {
+	// Marshal before writing anything, and carry no logger: writeJSON
+	// dereferences its logger when encoding fails (server.go:51-54), and
+	// the gate has no logger to hand it on every path. A client that
+	// disconnects mid-response must not panic the middleware.
+	body, err := json.Marshal(map[string]any{
+		"error": map[string]any{"message": message, "type": "forbidden"},
+	})
+	if err != nil {
+		body = []byte(`{"error":{"message":"forbidden","type":"forbidden"}}`)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	writeJSON(w, map[string]any{
-		"error": map[string]any{"message": message, "type": "forbidden"},
-	}, nil)
+	_, _ = w.Write(body)
 }
 
 // --- sessions ---------------------------------------------------------

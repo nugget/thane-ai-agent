@@ -116,7 +116,10 @@ A companion account token authenticates a device offering data, not an
 operator driving the API. The native gate enforces that: a request whose
 principal is `companion` may reach the companion surface — the realtime
 WebSocket, its legacy aliases, and observation ingestion — and is refused
-with 403 everywhere else. The allowlist is deny-by-default, so a route
+with 403 on every *gated* route outside it. Public routes are unchanged:
+`/health`, `/v1/identity` and `/v1/auth/session` serve without a
+credential for anyone, so presenting a companion token there is neither
+better nor worse than presenting none. The allowlist is deny-by-default, so a route
 added to the server is closed to companions until it is named on purpose,
 and a test derives the companion surface from the route table at runtime
 so the two cannot drift.
