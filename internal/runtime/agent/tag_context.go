@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -407,7 +408,7 @@ const slowContextSourceThreshold = 250 * time.Millisecond
 // warnSlowContextSource emits the budget-accounting WARN for a context
 // source that ran long. detail is a tag name or provider type; empty
 // is fine for block-level sources.
-func warnSlowContextSource(logger *slog.Logger, source, detail string, start time.Time) {
+func warnSlowContextSource(logger *slog.Logger, source, detail string, start time.Time, trace *phasetrace.Trace) {
 	elapsed := time.Since(start)
 	if elapsed <= slowContextSourceThreshold {
 		return
@@ -415,6 +416,13 @@ func warnSlowContextSource(logger *slog.Logger, source, detail string, start tim
 	args := []any{"source", source, "elapsed", elapsed.Round(time.Millisecond).String()}
 	if detail != "" {
 		args = append(args, "detail", detail)
+	}
+	// The breakdown, when the provider recorded one. Without it this line
+	// says a provider took two seconds and nothing about which half of it
+	// did — which is answerable only by reading source and querying
+	// production by hand, and was, for a day.
+	if phases := trace.Summary(); phases != "" {
+		args = append(args, "phases", phases)
 	}
 	logger.Warn("context source ran long against the shared assembly budget", args...)
 }
@@ -652,7 +660,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		}
 	}
 
-	warnSlowContextSource(a.logger, "tagged_kb_articles", "", kbStart)
+	warnSlowContextSource(a.logger, "tagged_kb_articles", "", kbStart, nil)
 	// Source 1 runs outside the per-provider cap — it is a filesystem
 	// scan, not a registered provider — so it can overrun the shared
 	// deadline on its own. Recorded here, or every provider behind it
@@ -679,9 +687,10 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		pStart := time.Now()
 		providerCtx, releaseProvider := providerSlice(taggedCtx, taggedRemaining)
 		taggedRemaining--
-		content, advertised, err := a.contextFromProvider(providerCtx, req, p, &advertisements)
+		tracedCtx, trace := phasetrace.New(providerCtx)
+		content, advertised, err := a.contextFromProvider(tracedCtx, req, p, &advertisements)
 		releaseProvider()
-		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart)
+		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart, trace)
 		budget.note(ctx, "tagged_provider", tag)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
@@ -736,9 +745,10 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		pStart := time.Now()
 		providerCtx, releaseProvider := providerSlice(ctx, gatedRemaining)
 		gatedRemaining--
-		content, advertised, err := a.contextFromProvider(providerCtx, req, gp.provider, &advertisements)
+		tracedCtx, trace := phasetrace.New(providerCtx)
+		content, advertised, err := a.contextFromProvider(tracedCtx, req, gp.provider, &advertisements)
 		releaseProvider()
-		warnSlowContextSource(a.logger, source, detail, pStart)
+		warnSlowContextSource(a.logger, source, detail, pStart, trace)
 		budget.note(ctx, source, detail)
 		if err != nil {
 			a.logger.Warn("gated context provider failed", "source", source, "error", err)
