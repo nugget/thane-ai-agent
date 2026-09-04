@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -19,9 +20,11 @@ import (
 // mirroring the OllamaServer split. The handlers live on *Server; this type
 // owns only the listener and route registration.
 type OpenAIServer struct {
-	address     string
-	apiKey      string // bearer token required when non-empty; see openaiAuth
-	port        int
+	address        string
+	apiKey         string // bearer token required when non-empty; see openaiAuth
+	allowedSources []netip.Prefix
+	port           int
+
 	api         *Server
 	logger      *slog.Logger
 	server      *http.Server
@@ -37,15 +40,24 @@ type OpenAIServer struct {
 //   - port: Port to listen on (default 8081)
 //   - apiKey: bearer token every request must present; empty leaves the
 //     surface open (see config.OpenAIAPIConfig.APIKey)
+//   - allowedSources: When non-empty, only callers inside one of these
+//     prefixes are served; empty leaves the surface open to the network
 //   - apiServer: The native Server whose OpenAI-compatible handlers are served
 //   - logger: Logger for request and error logging
 //
 // The server is created but not started. Call Start to begin serving requests.
-func NewOpenAIServer(address string, port int, apiKey string, apiServer *Server, logger *slog.Logger) *OpenAIServer {
+func NewOpenAIServer(address string, port int, apiKey string, allowedSources []netip.Prefix, apiServer *Server, logger *slog.Logger) *OpenAIServer {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &OpenAIServer{address: address, port: port, apiKey: apiKey, api: apiServer, logger: logger}
+	return &OpenAIServer{
+		address:        address,
+		port:           port,
+		apiKey:         apiKey,
+		allowedSources: allowedSources,
+		api:            apiServer,
+		logger:         logger,
+	}
 }
 
 // Start begins serving the OpenAI-compatible surface and blocks until the
@@ -82,7 +94,11 @@ func (s *OpenAIServer) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
 		mux := http.NewServeMux()
 		s.api.RegisterOpenAIRoutes(mux)
-		s.handler = s.withLogging(listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux))))
+		// The source allowlist runs ahead of the bearer gate, so a key is
+		// only ever compared for a caller the operator admitted.
+		s.handler = s.withLogging(listen.SecurityHeaders(listen.PostureAPI,
+			listen.RestrictSources(s.logger, "openai", s.allowedSources,
+				listen.RejectCrossOriginWrites(s.logger, openaiAuth(s.apiKey, listen.LimitRequestBody(compatMaxBodyBytes, mux))))))
 	})
 	return s.handler
 }

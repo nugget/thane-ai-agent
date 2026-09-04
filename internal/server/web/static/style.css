@@ -4003,3 +4003,11 @@ body.resize-col .schema-card__fade {
 }
 .auth-button:disabled { opacity: 0.6; cursor: default; }
 .auth-error { color: var(--error); font-size: 0.85rem; }
+
+/* Replaces an inline style attribute on the graph toolbar's button row,
+   so the console's content policy needs no 'unsafe-inline' for styles. */
+.inline-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}

@@ -525,12 +525,14 @@ ollama_api:
   address: ""
   port: 11434
   api_key: ""        # optional bearer token; HA's Ollama integration cannot send one
+  allowed_sources: []   # e.g. [192.168.1.0/24, 192.168.1.44]
 
 openai_api:
   enabled: true
   address: ""
   port: 8081
   api_key: ""        # optional bearer token; OpenAI clients send it natively
+  allowed_sources: []
 ```
 
 Network binding for the API servers. `listen:` binds the native Thane
@@ -560,6 +562,54 @@ no tokens configured the API is open, as it was before this block existed.
 Each token is compared as a SHA-256 digest in constant time and the
 plaintext is not retained after load; `label` is what logs and the session
 endpoint report.
+
+`allowed_sources` says which hosts may speak to a compat shim. With the
+list empty or omitted, as it ships, the surface is open to anything that
+can reach the port; with entries, a request from any other address is
+refused with `403` and a JSON error body before it reaches the routes,
+and the refusal is logged at WARN with the surface and the peer. Entries
+are CIDR prefixes (`192.168.1.0/24`, `2001:db8::/32`); a bare address
+(`192.168.1.44`) is shorthand for the single host. An entry that does not
+parse fails `thane validate` and the boot gate, naming the block and the
+offending entry, so a typo cannot quietly admit or refuse everyone.
+
+A source is the address on the socket — the peer of the TCP connection,
+or of the TLS connection under the front door — and never a forwarded
+header, which any client can write and none can be trusted to write
+honestly. That address only became visible to Thane when the front door
+replaced the reverse proxy; before the cutover every request appeared to
+come from the proxy. On a dual-stack listener an IPv4 client may arrive
+as an IPv4-mapped IPv6 address, which is unmapped before matching, so
+`192.168.1.0/24` covers it and there is no need to write the mapped form.
+
+The list matters most on `ollama_api`, the one surface that cannot ask
+for a credential: Home Assistant's Ollama integration sends no bearer
+token, so `api_key` is unusable exactly where the surface drives the full
+agent loop — tools, memory, delegation — for whoever reaches the port. On
+`openai_api`, whose clients do send keys, the list is a second lock; it is
+checked before `api_key`, so a key from an address outside the list is
+never compared. The native API under `listen:` has no such field: it has
+bearer authentication with a pinned public-route set, and `listen.address`
+already confines it to a network when a deployment wants that.
+
+Every response carries security headers, and which ones depends on what
+the surface serves. All of them send `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and a
+`Permissions-Policy` denying geolocation, camera, and microphone; none of
+this is configurable, because there is no deployment that wants less.
+Beyond that there are three postures. Data surfaces — the native `/v1`
+routes, both compat shims, CardDAV — send `default-src 'none'`, which
+says an API response is not a page; with `nosniff` that is what keeps a
+stored payload the server never parsed from being read back as script.
+The web console sends a policy naming only `'self'` and `'none'`, with no
+`'unsafe-inline'` and no `'unsafe-eval'` anywhere in it, which it can
+afford because it loads no external origin, evaluates no strings, and
+embeds no images. The `/docs` explorer sends the one loosened policy:
+its vendored Scalar bundle applies styles at runtime and carries its
+icons as `data:` URIs, so `style-src` and `img-src` are relaxed for that
+surface alone. Scripts are not relaxed even there. `Strict-Transport-Security`
+is not in this set; it is a claim about transport and only the HTTPS
+front door sends it.
 
 Every listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
 `PATCH`) that a browser marks as cross-origin, using the `Sec-Fetch-Site`
@@ -604,8 +654,17 @@ routes each to the surface it names (`native` for the /v1 API and
 dashboard, `ollama`, or `openai`), a plain-HTTP listener answers with a
 permanent redirect and nothing else, and every HTTPS response carries
 `Strict-Transport-Security` (`hsts_max_age` sets its lifetime,
-`hsts_disabled: true` omits it). A request for a hostname that is not listed
-gets `421 Misdirected Request`. Ports 80 and 443 need privilege that Thane
+`hsts_disabled: true` omits it). A hostname that is not listed is refused
+twice over: the handshake ends with the TLS `unrecognized_name` alert,
+because the door holds no certificate for that name and says so rather
+than presenting one it was never asked about, and a request that arrives
+under a listed name but carries an unlisted `Host` header gets `421
+Misdirected Request`. Both are logged under `subsystem=tls` with the name
+asked for and the peer that asked; a burst of refusals coalesces into one
+summary so a client stuck in a retry loop cannot write the log, and a
+name too long to be a DNS name is shortened in the record so it cannot
+set the record's size either. Ports 80
+and 443 need privilege that Thane
 should never hold: a supervisor that bound them can hand the sockets down under
 the systemd `LISTEN_FDS` contract, named `https` and `http`, and the front
 door serves on those instead of binding, logging each adoption at boot;
@@ -653,7 +712,11 @@ anything the CA would.
 Issuance runs in the background after boot: the listeners come up
 immediately and a handshake for a hostname whose certificate has not
 arrived fails until it does, which with a ten-minute propagation wait is
-the honest behaviour. Issuance, renewal, and failure are logged under
+the honest behaviour. That failure is deliberately not the one an
+unlisted hostname gets: a listed name without a certificate yet is an
+internal condition and ends the handshake as `internal_error`, so the two
+are told apart from the client side rather than sharing one alert that
+makes a misdirected client look like a broken server. Issuance, renewal, and failure are logged under
 `subsystem=tls`; `thane validate` checks the provider, its settings, the
 storage directory, and every client CA without touching the network.
 

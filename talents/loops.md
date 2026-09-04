@@ -14,9 +14,19 @@ service loop can act without maintaining a document — and when an output
 is declared the running loop writes through a generated tool named for
 it: `replace_output_*` for a whole-document rewrite, or
 `publish_output_*` when the output declares facets.
-If a maintained output is marked `truncated` in Declared Durable
-Outputs, read the full document with `doc_read` before replacing it —
-the output tool overwrites the entire body.
+An output shown whole in Declared Durable Outputs counts as read for
+this wake, so the output tool can replace or publish it directly. If it
+is marked `truncated` there, read the full document with `doc_read`
+before replacing it — the output tool overwrites the entire body, tail
+included.
+An output tool that refuses returns an error, commits nothing, and says
+which of two things happened. If this wake has no read of the whole
+document on record, read it with `doc_read` and make the call again. If
+the document changed since that read, the error carries the intervening
+change and Thane has already moved the comparison base to the current
+document: fold that change into revised content before calling again —
+repeating the same call now would overwrite it. Never repeat a refused
+call unchanged; the refusal is the answer.
 
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,

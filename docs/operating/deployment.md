@@ -206,7 +206,13 @@ the privilege to bind them (the Linux capability above); on macOS, and on
 any host where Thane stays unprivileged, keep the high binds and set
 `https.public_port: 443` with the packet-filter redirect above carrying
 443 and 80. Thane's own access log now records real client addresses where
-the proxy reported its own.
+the proxy reported its own, and `allowed_sources` on the compat shims is
+what makes those addresses actionable: the proxy's access policy, if it
+had one, moves into `ollama_api.allowed_sources` and
+`openai_api.allowed_sources` (see
+[Configuration](configuration.md#listen-addresses)). Read the access log
+first and let it tell you which hosts actually call each shim, then write
+the list from what you find.
 
 Thane also needs outbound access to:
 - Your Home Assistant instance (REST + WebSocket)

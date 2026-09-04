@@ -52,6 +52,10 @@ type FacetedWriteArgs struct {
 	Validate         func(documentfacets.Payload) error `json:"-"`
 	ExpectedRevision string                             `json:"-"`
 	ReceiptScope     string                             `json:"-"`
+	// RejectionIsError surfaces a refused publish as a
+	// *MutationRejectedError rather than an inline applied:false payload;
+	// see [WriteArgs.RejectionIsError] for who sets it and why.
+	RejectionIsError bool `json:"-"`
 	// PreviousWriteTools permits a trusted adapter to rename its own write
 	// surface while atomically migrating the document contract.
 	PreviousWriteTools []string `json:"-"`
@@ -174,6 +178,7 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		Body:               &body,
 		ExpectedRevision:   args.ExpectedRevision,
 		ReceiptScope:       args.ReceiptScope,
+		RejectionIsError:   args.RejectionIsError,
 		StructuredTool:     args.WriteTool,
 		PreviousWriteTools: append([]string(nil), args.PreviousWriteTools...),
 	}
@@ -182,7 +187,8 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 	if result != nil {
 		result.Action = args.WriteTool
 	}
-	return t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, args.RejectionIsError)
 }
 
 func containsWriteTool(tools []string, target string) bool {

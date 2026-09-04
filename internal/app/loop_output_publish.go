@@ -73,6 +73,11 @@ func buildFacetPublishTool(docTools *documents.Tools, output looppkg.OutputSpec,
 				Payload:      documentfacets.Payload(payload),
 				WriteTool:    output.ToolName(),
 				ReceiptScope: tools.DocumentRevisionScope(ctx),
+				// A refused publish is a failed call, not a result — see
+				// the replace tool for why — and it must also stop the
+				// notes write below: notes describing a publish that never
+				// landed would be the one half of the pair that moved.
+				RejectionIsError: true,
 			})
 			if err != nil {
 				return "", err
@@ -107,7 +112,7 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 		keys = append(keys, field.Key)
 	}
 	description := fmt.Sprintf(
-		"Publish the loop-declared output %q at %s. Pass every projection in one call (%s): they are written together so no reader sees one projection describing a state another has moved past. Section structure and headings are rendered automatically — pass only the content of each projection, never its heading. Each projection has its own size budget and an over-budget value is rejected rather than trimmed; full has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call.",
+		"Publish the loop-declared output %q at %s. Pass every projection in one call (%s): they are written together so no reader sees one projection describing a state another has moved past. Section structure and headings are rendered automatically — pass only the content of each projection, never its heading. Each projection has its own size budget and an over-budget value is rejected rather than trimmed; full has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call. The Declared Durable Outputs context counts as this wake's read when it shows the document whole; one marked truncated must be read whole with doc_read first. A refused publish returns an error, commits nothing, and says which of two things happened: no read of the whole document on record for this wake (read it with doc_read, then call again), or the document changed since that read (the error carries the intervening change — fold it into revised projections before calling again). Never repeat a refused call unchanged.",
 		output.Name, output.Ref, strings.Join(keys, ", "),
 	)
 	if notes != nil {
@@ -124,11 +129,12 @@ func writeLoopWorkingNotes(ctx context.Context, docTools *documents.Tools, notes
 		return "", fmt.Errorf("notes: %w", err)
 	}
 	return docTools.Write(ctx, documents.WriteArgs{
-		Ref:            notes.Ref,
-		Body:           &body,
-		Frontmatter:    loopOutputFrontmatter(notes),
-		ReceiptScope:   tools.DocumentRevisionScope(ctx),
-		StructuredTool: notes.ToolName(),
+		Ref:              notes.Ref,
+		Body:             &body,
+		Frontmatter:      loopOutputFrontmatter(notes),
+		ReceiptScope:     tools.DocumentRevisionScope(ctx),
+		StructuredTool:   notes.ToolName(),
+		RejectionIsError: true,
 	})
 }
 

@@ -172,6 +172,17 @@ func TestInheritedListenersServeAndNameThePort(t *testing.T) {
 	cfg.HTTPS.Port = 8443
 	cfg.HTTPS.PublicPort = 9999 // must lose to the inherited socket's port
 	cfg.HTTP.Disabled = true    // an inherited http socket still serves
+	// This is the only edge test that calls Start, which is the only path
+	// that reaches ManageAsync. With hostnames to manage, that goroutine
+	// goes off to an ACME directory and writes account keys and lock files
+	// into storage on its own schedule — past cancel, past Shutdown, which
+	// stops the cache's maintenance loop but has no handle on an obtain
+	// already in flight. A write landing after the test returns races
+	// t.TempDir()'s RemoveAll and fails the test with "directory not
+	// empty". Nothing here needs a certificate: the subject is which port
+	// an inherited socket makes the redirect name, and redirect() never
+	// consults the routing table. Manage nothing, and there is no writer.
+	cfg.Hostnames = nil
 	s, err := New(Options{
 		Config:    cfg,
 		Surfaces:  testSurfaces(),

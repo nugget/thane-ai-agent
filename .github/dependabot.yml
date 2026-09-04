@@ -7,17 +7,27 @@ updates:
     commit-message:
       prefix: "chore"
   # Hermetic dev tools (golangci-lint, vacuum) are pinned in tools/go.mod via
-  # the Go tool directive. Tracking that module is what turns their version
-  # bumps into Dependabot PRs — but the tool directive records every pin as
-  # an `// indirect` require, and Dependabot's gomod version updates only
-  # consider direct dependencies by default, so without the explicit allow
-  # below this entry has an empty update set and never opens a PR.
+  # the Go tool directive. The directive records their module requirements as
+  # indirect, so allow the tools by name without independently upgrading their
+  # transitive dependencies, whose internal APIs must stay compatible.
   - package-ecosystem: gomod
     directory: /tools
     schedule:
       interval: weekly
     allow:
-      - dependency-type: all
+      - dependency-name: github.com/daveshanley/vacuum
+      - dependency-name: github.com/golangci/golangci-lint/v2
+    commit-message:
+      prefix: "chore"
+  # go-check-sumtype 0.5+ exposes a native go/analysis analyzer that is not
+  # source-compatible with golangci-lint's embedded pre-0.5 adapter. Track and
+  # run it from an isolated module so each tool keeps a coherent module graph.
+  - package-ecosystem: gomod
+    directory: /tools/gochecksumtype
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: github.com/alecthomas/go-check-sumtype
     commit-message:
       prefix: "chore"
   - package-ecosystem: github-actions

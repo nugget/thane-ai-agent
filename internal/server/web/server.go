@@ -96,8 +96,12 @@ func NewWebServer(cfg Config) *WebServer {
 func (s *WebServer) RegisterRoutes(mux listen.RouteRegistrar) {
 	// Exact-root match only ("/{$}"), so retired /api/* URLs and other
 	// unknown paths get a 404 instead of a 200 dashboard shell.
-	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /static/{file...}", s.handleStatic)
+	// The console is a document, not data, so it replaces the API
+	// posture the native chain applied on the way in. Its policy names
+	// only 'self' and 'none': the console loads no external origin,
+	// evaluates no strings, and embeds no images.
+	mux.Handle("GET /{$}", listen.SecurityHeaders(listen.PostureConsole, http.HandlerFunc(s.handleIndex)))
+	mux.Handle("GET /static/{file...}", listen.SecurityHeaders(listen.PostureConsole, http.HandlerFunc(s.handleStatic)))
 }
 
 // handleIndex serves the single-page visualizer.

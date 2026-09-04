@@ -73,6 +73,7 @@ These tools load on every turn regardless of active tags.
 | Tool | Description |
 |------|-------------|
 | `conversation_reset` | Reset the current conversation's message history. |
+| `conversation_model_pin` | Hold the current conversation to one model deployment, or clear the hold. Outranks channel and client model selection; memory-only, cleared by restart. |
 | `session_checkpoint` | Save current session state as a checkpoint. |
 | `session_close` | Close the current session with carry-forward context. |
 | `session_split` | Fork the current session. |
@@ -225,8 +226,25 @@ newer content and includes a bounded `changed_since_read` patch. The receipt
 then advances to the current document so a reconciled retry has the right
 comparison base. When a patch is unavailable or truncated, the result includes
 a bounded current excerpt instead. Replacing an existing whole body requires
-reading it first; structured edits can safely derive a fresh base as part of
-the operation.
+reading it first, and the refusal names the document to read; structured edits
+can safely derive a fresh base as part of the operation. `doc_delete` and
+`doc_move` advance the caller's own receipt to absent, so recreating a document
+at a ref the same caller just removed is an ordinary create.
+
+A loop's generated `replace_output_*` and `publish_output_*` tools use the same
+receipts, scoped to the wake. The Declared Durable Outputs context that opens a
+wake records a receipt for every output it renders whole, so an output that fit
+the context can be replaced directly; one marked `truncated` must be read whole
+with `doc_read` first, and an own-output read that itself truncates records no
+receipt. These tools report a refusal as a tool error rather than an
+`applied: false` result: for the document's owner, a result that reads as
+success while nothing was committed is indistinguishable from a healthy
+publish. The error text carries the same message and reconciliation payload,
+and a refused publish never writes the accompanying working notes. The two
+refusals recover differently: a missing read is answered by reading and calling
+again, while a stale receipt has already advanced to the current document and
+the error carries the intervening change, so the caller reconciles before
+calling again rather than replaying the same content over it.
 
 | Tool | Description |
 |------|-------------|
@@ -563,6 +581,10 @@ tools for Signal-specific workflows.
 | `model_route_explain` | Dry-run a routing decision with the router's rationale. |
 | `model_deployment_set_policy` | Update deployment-level routing policy. |
 | `model_resource_set_policy` | Update resource-level routing policy. |
+
+Policy here is fleet-wide and survives restart. Holding one conversation
+to one model is a `session` decision (`conversation_model_pin`, above),
+and pinning a loop definition is `loop_definition_update` under `loops`.
 
 ## `diagnostics` — operational visibility
 

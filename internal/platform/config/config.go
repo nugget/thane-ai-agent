@@ -811,6 +811,14 @@ type OllamaAPIConfig struct {
 	// this only for token-capable clients (e.g. Open WebUI) or when HA
 	// connects through a proxy that injects the header.
 	APIKey string `yaml:"api_key"`
+	// AllowedSources, when non-empty, admits only callers whose address
+	// falls inside one of the listed CIDR prefixes; a bare address is a
+	// single host. A caller's address is the peer on the socket, never a
+	// forwarded header. This is the admission control for the one
+	// surface that cannot ask for a credential, so it is where an
+	// operator says which hosts may drive the agent loop through it.
+	// Empty leaves the surface open to anything that can reach the port.
+	AllowedSources []string `yaml:"allowed_sources"`
 }
 
 // OpenAIAPIConfig configures the optional OpenAI-compatible API server.
@@ -828,6 +836,14 @@ type OpenAIAPIConfig struct {
 	// delegation — so leaving it empty (open) is appropriate only when
 	// every host that can reach the port is trusted.
 	APIKey string `yaml:"api_key"`
+	// AllowedSources, when non-empty, admits only callers whose address
+	// falls inside one of the listed CIDR prefixes; a bare address is a
+	// single host. A caller's address is the peer on the socket, never a
+	// forwarded header. Clients of this shim can send a bearer key, so
+	// here the list is a second lock rather than the only one, and it is
+	// checked first: a refused caller never reaches the key comparison.
+	// Empty leaves the surface open.
+	AllowedSources []string `yaml:"allowed_sources"`
 }
 
 // TLSConfig configures Thane's HTTPS front door: one TLS listener that
@@ -3453,6 +3469,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateListenAuth(); err != nil {
+		return err
+	}
+	if err := c.validateListenSources(); err != nil {
 		return err
 	}
 	if c.CardDAV.Enabled {

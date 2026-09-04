@@ -27,7 +27,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 			if ref == "" {
 				return "", fmt.Errorf("ref is required")
 			}
-			return dt.Delete(ctx, documents.DeleteArgs{Ref: ref})
+			return dt.Delete(ctx, documents.DeleteArgs{Ref: ref, ReceiptScope: documentRevisionScope(ctx)})
 		},
 	})
 
@@ -67,6 +67,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 				Ref:            ref,
 				DestinationRef: destinationRef,
 				Overwrite:      overwrite,
+				ReceiptScope:   documentRevisionScope(ctx),
 			})
 		},
 	})

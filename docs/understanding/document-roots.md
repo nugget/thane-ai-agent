@@ -350,6 +350,31 @@ reconcile and retry without another hash-bearing parameter. A missing or
 oversized patch falls back to a bounded current excerpt. A scoped whole-body
 replacement of an existing document requires a prior managed read; structured
 edits and creates derive a safe current/absent base within the operation.
+`doc_delete` / `doc_move` advance the caller's receipt for the removed ref to
+absent so the caller's next write there is a conditional create.
+
+For a service loop the scope is the wake: every wake runs as its own
+conversation, so a receipt must be recorded inside the wake that consumes it.
+Two reads record one. The Declared Durable Outputs context that opens each wake
+renders the loop's own documents, and a document rendered whole is recorded as
+that wake's read — the loop can replace or publish it directly. A document too
+large to render whole records nothing; the loop's own-output `doc_read`, which
+returns the whole body under a raised budget, records the receipt instead — and
+only when it returns the body whole. A read that itself truncates records
+nothing, so a document past the read budget cannot be replaced from a preview
+of it. Either way the receipt
+lands under the same loop/conversation scope the generated output tool
+computes, because the loop runtime stamps both identifiers on the wake before
+the turn is built.
+
+Receipts are an in-memory cache with a bounded size and a one-day lifetime,
+not durable state. A caller whose receipt has lapsed is asked to read again,
+which is one round trip; the write-side contract never depends on a receipt
+surviving. Model-facing `doc_*` tools deliver a refusal as an `applied: false`
+result. A loop's generated `replace_output_*` / `publish_output_*` tools
+deliver the same refusal as a tool error, because for the owner of a maintained
+document a successful-looking result with nothing committed is the worst
+failure shape: the loop reports healthy while the document goes stale.
 
 This coordinates Thane's managed writers and rejects operator edits that are
 already dirty when the mutation begins. It is not a general filesystem lock:
