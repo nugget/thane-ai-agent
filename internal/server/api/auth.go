@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -94,10 +95,53 @@ var publicRoutes = map[string]bool{
 // contract that is already public in the repository.
 var publicPrefixes = []string{"/static/", "/docs"}
 
+// principalCompanion is the Kind authenticate assigns to a companion
+// account token. It is the one principal kind the gate restricts by
+// route: a companion credential lives in a phone's Keychain and on a
+// laptop, and it authenticates a device offering data, not an operator
+// driving the API.
+const principalCompanion = "companion"
+
+// companionSurfaceRoutes is the companion's whole reachable surface —
+// the same literals server.go binds to the companion handlers. The
+// legacy aliases join in init from legacyroute.Aliases rather than as a
+// second hand-copied list (#1084).
+//
+// Every entry is also in publicRoutes today, so a companion token grants
+// no gated access at all. They are enumerated anyway so that gating one
+// later — moving the realtime handshake onto the Authorization header,
+// say — cannot silently lock a companion out of its own surface.
+// companion_scope_test.go proves this set and the routes server.go
+// actually registers agree, derived from the route table rather than
+// from parsing source.
+var companionSurfaceRoutes = []string{
+	"GET /v1/realtime/ws",
+	"POST /v1/companion/observations",
+}
+
+// companionRoutes is companionSurfaceRoutes plus the legacy aliases,
+// indexed for lookup.
+var companionRoutes = map[string]bool{}
+
 func init() {
 	for _, alias := range legacyroute.Aliases {
 		publicRoutes[alias.Route()] = true
 	}
+	for _, route := range companionSurfaceRoutes {
+		companionRoutes[route] = true
+	}
+	// The aliases are companion surface for the same reason they are
+	// public: they are the companion WebSocket under an older name.
+	for _, alias := range legacyroute.Aliases {
+		companionRoutes[alias.Route()] = true
+	}
+}
+
+// companionMayReach reports whether a companion credential is permitted
+// on a route. Deny by default: a route added to the server is closed to
+// companions until it is named here on purpose.
+func companionMayReach(method, path string) bool {
+	return companionRoutes[method+" "+path]
 }
 
 // isPublic reports whether the request's route is one that serves without
@@ -137,6 +181,13 @@ func (g *authGate) wrap(next http.Handler) http.Handler {
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="thane"`)
 			writeUnauthorized(w)
+			return
+		}
+		if p.Kind == principalCompanion && !companionMayReach(r.Method, r.URL.Path) {
+			// The credential is valid; it is simply not an operator's.
+			// 403 rather than 401 so a companion does not retry, and so
+			// the refusal is distinguishable from a bad token.
+			writeForbidden(w, "a companion credential may not reach this route")
 			return
 		}
 		if p.Kind == "session" {
@@ -182,7 +233,7 @@ func (g *authGate) authenticate(r *http.Request) (Principal, bool) {
 			return Principal{Kind: "api_token", Name: label}, true
 		}
 		if account, ok := g.companions.Match(token); ok {
-			return Principal{Kind: "companion", Name: account}, true
+			return Principal{Kind: principalCompanion, Name: account}, true
 		}
 		return Principal{}, false
 	}
@@ -204,12 +255,26 @@ func writeUnauthorized(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"error":{"message":"authentication required","type":"unauthorized"}}`))
 }
 
+// writeForbidden refuses a caller whose credential is valid but whose
+// principal is not permitted here.
+func writeForbidden(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	writeJSON(w, map[string]any{
+		"error": map[string]any{"message": message, "type": "forbidden"},
+	}, nil)
+}
+
 // --- sessions ---------------------------------------------------------
 
 type session struct {
 	principal Principal
 	expires   time.Time
 }
+
+// errCompanionSession refuses a console session for a companion
+// credential.
+var errCompanionSession = errors.New("a companion credential cannot open a console session")
 
 // sessionStore holds console sessions in memory. Losing them on restart
 // costs one sign-in and buys a store with no persistence, no secret key,
@@ -229,7 +294,15 @@ func newSessionStore(ttl time.Duration) *sessionStore {
 }
 
 // create mints a session for the principal and returns its id.
+//
+// A companion principal is refused at the store, not only at the one
+// handler that mints sessions today. A console session is an operator's
+// browser; a companion credential must never become one, whatever
+// future path reaches this store.
 func (s *sessionStore) create(p Principal) (string, error) {
+	if p.Kind == principalCompanion {
+		return "", errCompanionSession
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -302,7 +375,13 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if label, ok := s.auth.api.Match(req.Token); ok {
 		p = Principal{Kind: "api_token", Name: label}
 	} else if account, ok := s.auth.companions.Match(req.Token); ok {
-		p = Principal{Kind: "companion", Name: account}
+		// A companion token authenticates a device offering data, not an
+		// operator. Refuse before minting rather than relying on the
+		// store's backstop, so the caller gets a reason.
+		s.auth.logger.Warn("console sign-in refused for companion credential",
+			"account", account, "remote", r.RemoteAddr)
+		s.errorResponse(w, http.StatusForbidden, errCompanionSession.Error())
+		return
 	} else {
 		s.auth.logger.Warn("console sign-in refused", "remote", r.RemoteAddr)
 		writeUnauthorized(w)

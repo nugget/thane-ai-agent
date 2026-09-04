@@ -108,6 +108,34 @@ established, which for an unauthenticated caller is none.
 The general form of this rule — one resolver that reads attestation state,
 sender trust zone, and loop tier at the execution chokepoint — is #1268.
 
+### Companion Credential Scope
+
+**Status: Implemented**
+
+A companion account token authenticates a device offering data, not an
+operator driving the API. The native gate enforces that: a request whose
+principal is `companion` may reach the companion surface — the realtime
+WebSocket, its legacy aliases, and observation ingestion — and is refused
+with 403 everywhere else. The allowlist is deny-by-default, so a route
+added to the server is closed to companions until it is named on purpose,
+and a test derives the companion surface from the route table at runtime
+so the two cannot drift.
+
+A companion credential also cannot become a console session. `/v1/auth/login`
+refuses it, and the session store refuses it again beneath the handler, so a
+future caller cannot reopen the exchange.
+
+This matters because of where the credential lives. It sits in a phone's
+Keychain and on a laptop, travels further than an operator token, and is
+held by software the operator does not read. Before this, it authorized
+every gated native route — contact deletion, checkpoint restore, session
+reset — and could be traded for a browser session.
+
+Note the precondition: the gate exists only when operator API tokens are
+configured. With none configured it is nil and every route serves without a
+credential, so this scope is a restriction on an authenticated deployment,
+not a floor under an unauthenticated one.
+
 ### Orchestrator Tool Gating
 
 **Status: Implemented**

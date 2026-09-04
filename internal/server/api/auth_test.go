@@ -69,7 +69,7 @@ func TestAuthGateCredentials(t *testing.T) {
 		{"no credential refused", "", http.StatusUnauthorized, "", ""},
 		{"operator token accepted", "Bearer alice-token", http.StatusOK, "api_token", "alice"},
 		{"second operator token accepted", "Bearer bob-token", http.StatusOK, "api_token", "bob-cli"},
-		{"companion token accepted as account", "Bearer companion-token", http.StatusOK, "companion", "phone"},
+		{"companion token refused on an operator route", "Bearer companion-token", http.StatusForbidden, "", ""},
 		{"wrong token refused", "Bearer nope", http.StatusUnauthorized, "", ""},
 		{"prefix of token refused", "Bearer alice-tok", http.StatusUnauthorized, "", ""},
 		{"basic scheme refused", "Basic alice-token", http.StatusUnauthorized, "", ""},
@@ -89,6 +89,15 @@ func TestAuthGateCredentials(t *testing.T) {
 			if tc.wantCode == http.StatusUnauthorized {
 				if got := rec.Header().Get("WWW-Authenticate"); !strings.HasPrefix(got, "Bearer") {
 					t.Fatalf("WWW-Authenticate = %q", got)
+				}
+				return
+			}
+			if tc.wantCode == http.StatusForbidden {
+				// The gate refuses before the handler, so no principal
+				// reaches the context. Resolution is asserted separately
+				// in TestCompanionPrincipalResolvesOnItsOwnSurface.
+				if present {
+					t.Fatalf("a refused request still reached the handler as %+v", seen)
 				}
 				return
 			}
