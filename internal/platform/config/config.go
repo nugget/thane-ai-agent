@@ -1770,11 +1770,12 @@ type ModelConfig struct {
 	// inherits what the resource reported or what the model name
 	// implies. It exists because that inference is the only one with no
 	// authoritative source on a plain OpenAI-compatible endpoint: the
-	// /v1/models schema carries an id and nothing about modality, so a
-	// multimodal model whose name does not advertise itself — anything
-	// without a "vl" or "vision" in it — is invisible to Thane no matter
-	// what the server can actually do. LM Studio escapes this only
-	// because its native inventory returns a vision flag.
+	// /v1/models schema carries an id and nothing about modality, so
+	// vision is inferred from the model name alone. A multimodal model
+	// whose name matches none of the vision-name patterns that
+	// inference knows is invisible to Thane however capable the server
+	// is. LM Studio escapes this only because its native inventory
+	// returns a vision flag.
 	SupportsImages *bool  `yaml:"supports_images"`
 	ContextWindow  int    `yaml:"context_window"` // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
 	Speed          int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
