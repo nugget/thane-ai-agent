@@ -72,7 +72,9 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsConfiguredBuiltIns(t *testing.T) {
 			PollIntervalSec: 30,
 		},
 		Person: config.PersonConfig{
-			Track: []string{"person.dan"},
+			Devices: map[string][]config.DeviceMapping{
+				"person.dan": {{MAC: "aa:bb:cc:dd:ee:ff"}},
+			},
 		},
 		Email: emailcfg.Config{
 			PollIntervalSec: 300,
@@ -287,7 +289,11 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 	}
 	// Enable the pollers members so the pollers container and its members appear.
 	cfg.Unifi = config.UnifiConfig{URL: "https://unifi.local", APIKey: "key", PollIntervalSec: 30}
-	cfg.Person = config.PersonConfig{Track: []string{"person.dan"}}
+	cfg.Person = config.PersonConfig{
+		Devices: map[string][]config.DeviceMapping{
+			"person.dan": {{MAC: "aa:bb:cc:dd:ee:ff"}},
+		},
+	}
 	cfg.Email = emailcfg.Config{
 		PollIntervalSec: 300,
 		Accounts: []emailcfg.AccountConfig{{

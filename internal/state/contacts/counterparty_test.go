@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -210,5 +211,54 @@ func TestReplaceHAPersonBindingsRollback(t *testing.T) {
 	got, _, _ = store.HAPersonEntity(alice.ID)
 	if got != "person.alice" {
 		t.Fatalf("binding after duplicate rollback = %q, want person.alice", got)
+	}
+}
+
+// TestHAPersonBoundEntitiesIsThePresenceRoster pins the membership query.
+// A contact renders in the presence block because it carries a binding,
+// so this result IS the roster: an unbound contact must not appear, and a
+// soft-deleted one must not either — a deleted person who kept rendering
+// would leak from an always-on block.
+func TestHAPersonBoundEntitiesIsThePresenceRoster(t *testing.T) {
+	store := newCounterpartyTestStore(t)
+
+	// Names sort opposite to entities on purpose: ordering by contact
+	// name would give [person.zoe, person.alice] and fail below.
+	bound := map[string]string{"Alice Operator": "person.zoe", "Zoe Resident": "person.alice"}
+	ids := make(map[string]uuid.UUID, len(bound))
+	for name, entity := range bound {
+		c, err := store.Upsert(&Contact{FormattedName: name})
+		if err != nil {
+			t.Fatalf("upsert %s: %v", name, err)
+		}
+		if err := store.SetHAPersonEntity(c.ID, entity); err != nil {
+			t.Fatalf("bind %s: %v", name, err)
+		}
+		ids[name] = c.ID
+	}
+	if _, err := store.Upsert(&Contact{FormattedName: "Unbound Acquaintance"}); err != nil {
+		t.Fatalf("upsert unbound: %v", err)
+	}
+
+	got, err := store.HAPersonBoundEntities()
+	if err != nil {
+		t.Fatalf("HAPersonBoundEntities: %v", err)
+	}
+	// Ordered by entity, not by contact name: the roster fixes row order
+	// in an always-on block, so a rename must not reshuffle every row.
+	want := []string{"person.alice", "person.zoe"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("roster = %v, want %v", got, want)
+	}
+
+	if err := store.Delete(ids["Alice Operator"]); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, err = store.HAPersonBoundEntities()
+	if err != nil {
+		t.Fatalf("HAPersonBoundEntities after delete: %v", err)
+	}
+	if !slices.Equal(got, []string{"person.alice"}) {
+		t.Fatalf("roster after delete = %v, want [person.alice]", got)
 	}
 }

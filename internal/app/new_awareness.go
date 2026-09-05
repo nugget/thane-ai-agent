@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
@@ -320,12 +322,16 @@ func (a *App) initAwareness(s *newState) error {
 	// initialization (personTracker was nil). Catch up immediately
 	// after construction when HA is available. Initialize is idempotent,
 	// so a redundant call from OnReady is harmless.
-	if len(cfg.Person.Track) > 0 {
+	presenceRoster, rosterErr := a.presenceRoster(cfg)
+	if rosterErr != nil {
+		return rosterErr
+	}
+	if len(presenceRoster) > 0 {
 		// Contact-rooted presence: the model reasons about people, and
 		// without a contact id here it cannot chain into
 		// contact_whereabouts on a turn with no counterparty binding.
-		// Resolved per render, so a contact bound to a person entity
-		// after startup is picked up without a restart.
+		// Resolved per render, so a contact renamed or re-zoned after
+		// startup is picked up without a restart.
 		var presenceOpts []contacts.PresenceOption
 		if a.contactStore != nil {
 			store := a.contactStore
@@ -354,7 +360,7 @@ func (a *App) initAwareness(s *newState) error {
 					}, true
 				}))
 		}
-		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger, presenceOpts...)
+		s.personTracker = contacts.NewPresenceTracker(presenceRoster, cfg.Timezone, logger, presenceOpts...)
 		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
 		s.personTracker.OnLinkedTrackersChange(func(entityIDs []string) {
 			if a.ha == nil || len(entityIDs) == 0 {
@@ -380,7 +386,7 @@ func (a *App) initAwareness(s *newState) error {
 			s.personTracker.SetDeviceMACs(entityID, macs)
 		}
 
-		logger.Info("person tracking enabled", "entities", cfg.Person.Track)
+		logger.Info("person tracking enabled", "entities", presenceRoster)
 
 		if a.ha != nil {
 			initCtx, initCancel := context.WithTimeout(s.ctx, 10*time.Second)
@@ -397,9 +403,11 @@ func (a *App) initAwareness(s *newState) error {
 
 	// --- UniFi room presence ---
 	// Optional: polls UniFi controller for wireless client associations
-	// and pushes room-level presence into the person tracker. Requires
-	// both person.track and unifi config to be set.
-	if cfg.Unifi.Configured() && s.personTracker != nil {
+	// and pushes room-level presence into the person tracker. Needs a
+	// roster to place and MAC mappings to place them by; the predicate
+	// must stay identical to unifiPollerEnabled, or the loop definition
+	// and the poller it describes drift apart.
+	if cfg.Unifi.Configured() && s.personTracker != nil && personDeviceMappings(cfg) > 0 {
 		unifiClient := unifi.NewClient(cfg.Unifi.URL, cfg.Unifi.APIKey, logger)
 
 		// Build MAC -> entity_id mapping from config.
@@ -436,7 +444,9 @@ func (a *App) initAwareness(s *newState) error {
 			"ap_rooms", len(cfg.Person.APRooms),
 		)
 	} else if cfg.Unifi.Configured() && s.personTracker == nil {
-		logger.Warn("unifi configured but person tracking disabled (no person.track entries)")
+		logger.Warn("unifi configured but no contact carries an ha_person_entity binding, so there is nobody to place in a room")
+	} else if cfg.Unifi.Configured() && personDeviceMappings(cfg) == 0 {
+		logger.Warn("unifi configured but person.devices maps no MAC addresses, so room presence cannot attribute a client to anyone")
 	}
 
 	// Forge account context is now injected via tag context provider
@@ -589,4 +599,53 @@ func (a *App) initAwareness(s *newState) error {
 	}
 
 	return nil
+}
+
+// presenceRoster derives the tracked person entities from the contact
+// store, where a contact's ha_person_entity binding is its declaration
+// of interest, and reconciles that roster against person.track.
+//
+// person.track is an assertion here, not a source: every entity it names
+// must be claimed by a contact. Twelve consumers hang off the tracker —
+// the prompt block, the ingest floor, Snapshot for channel enrichment
+// and contact_whereabouts, UniFi room updates, the MQTT AP sensor — and
+// an entity that quietly leaves the roster takes all of them with it at
+// once. An unclaimed entry refuses the boot and names itself rather than
+// shrinking the roster where nobody would notice.
+func (a *App) presenceRoster(cfg *config.Config) ([]string, error) {
+	if a.contactStore == nil {
+		// Only reachable in tests; initChannels fails the boot when the
+		// contact store cannot be opened. Without the identity root
+		// there is no roster to derive.
+		return nil, nil
+	}
+
+	roster, err := a.contactStore.HAPersonBoundEntities()
+	if err != nil {
+		return nil, fmt.Errorf("derive presence roster from contact bindings: %w", err)
+	}
+
+	bound := make(map[string]bool, len(roster))
+	for _, entity := range roster {
+		bound[entity] = true
+	}
+	var unclaimed []string
+	for _, entity := range cfg.Person.Track {
+		if trimmed := strings.TrimSpace(entity); trimmed != "" && !bound[trimmed] {
+			unclaimed = append(unclaimed, trimmed)
+		}
+	}
+	if len(unclaimed) > 0 {
+		return nil, fmt.Errorf(
+			"person.track names %d Home Assistant person %s that no contact claims (%s): presence membership now comes from contact ha_person_entity bindings, so bind each under person.contact_bindings or drop it from person.track",
+			len(unclaimed), pluralEntity(len(unclaimed)), strings.Join(unclaimed, ", "))
+	}
+	return roster, nil
+}
+
+func pluralEntity(n int) string {
+	if n == 1 {
+		return "entity"
+	}
+	return "entities"
 }
