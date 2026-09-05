@@ -637,7 +637,7 @@ func (a *App) presenceRoster(cfg *config.Config) ([]string, error) {
 	}
 	if len(unclaimed) > 0 {
 		return nil, fmt.Errorf(
-			"person.track names %d Home Assistant person %s no contact claims (%s): presence membership now comes from contact ha_person_entity bindings, so bind them under person.contact_bindings or drop them from person.track",
+			"person.track names %d Home Assistant person %s that no contact claims (%s): presence membership now comes from contact ha_person_entity bindings, so bind each under person.contact_bindings or drop it from person.track",
 			len(unclaimed), pluralEntity(len(unclaimed)), strings.Join(unclaimed, ", "))
 	}
 	return roster, nil
