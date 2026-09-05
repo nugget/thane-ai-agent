@@ -598,7 +598,12 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	if i.src.BootHistory == nil {
 		return info
 	}
+	// The boot journal is a query against production state, not an
+	// in-memory read like the other collectors — so it gets its own
+	// phases rather than disappearing into the health aggregate.
+	historyDone := phasetrace.Phase(ctx, "health:boot_history")
 	boots, err := i.src.BootHistory(ctx)
+	historyDone()
 	if err != nil || len(boots) == 0 {
 		return info
 	}
@@ -638,7 +643,10 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	}
 	info.BootsLast24h = pageCount
 	if i.src.BootCountSince != nil {
-		if count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour)); err == nil {
+		countDone := phasetrace.Phase(ctx, "health:boot_count")
+		count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour))
+		countDone()
+		if err == nil {
 			info.BootsLast24h = count
 		}
 	}

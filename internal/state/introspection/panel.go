@@ -28,8 +28,24 @@ func NewDocFlags(store *documents.Store) DocFlagsFunc {
 	}
 	return func(ctx context.Context) ([]documents.DocumentActivity, error) {
 		defer phasetrace.Phase(ctx, "doc_flags")()
+		roots := store.RevisionBackedRoots()
+		if len(roots) == 0 {
+			return nil, nil
+		}
+		// Activity opens with Refresh, and Refresh walks every indexed
+		// root rather than the one being asked about. Left implicit,
+		// that whole-corpus cost is charged to whichever root sorts
+		// first, and the per-root phases below name the wrong root.
+		// Pay it here under its own name; the store's throttle then
+		// holds the Activity calls to the work their labels claim.
+		refreshDone := phasetrace.Phase(ctx, "doc_flags:refresh")
+		err := store.Refresh(ctx)
+		refreshDone()
+		if err != nil {
+			return nil, fmt.Errorf("refresh document index: %w", err)
+		}
 		var flagged []documents.DocumentActivity
-		for _, root := range store.RevisionBackedRoots() {
+		for _, root := range roots {
 			// Per root as well as in total: one expensive root among a
 			// dozen is invisible in an aggregate.
 			rootDone := phasetrace.Phase(ctx, "doc_flags:"+root)

@@ -13,30 +13,58 @@ import (
 
 // buildCorpus writes a document corpus shaped like the production one:
 // thirteen roots holding 359 documents between them.
+//
+// An uneven split spreads its remainder over the leading roots rather
+// than discarding it, so the corpus holds the count the caller asked
+// for. Rounding down instead would have quietly measured 351 documents
+// under a label reading 359 — the corpus size is the independent
+// variable here, and a measurement that misreports it is worse than no
+// measurement.
 func buildCorpus(tb testing.TB, roots, docsTotal int) map[string]string {
 	tb.Helper()
 
 	base := tb.TempDir()
 	out := make(map[string]string, roots)
-	perRoot := docsTotal / roots
 	body := "---\ntitle: Doc\ntags: [a, b]\n---\n\n# Heading\n\n" +
 		"Body text that is long enough to be worth parsing and counting words over.\n\n" +
 		"## Section\n\nMore prose, several sentences of it, so the word count is not trivial.\n"
+	written := 0
 	for r := range roots {
 		name := fmt.Sprintf("root%02d", r)
 		dir := filepath.Join(base, name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			tb.Fatalf("mkdir: %v", err)
 		}
+		perRoot := docsTotal / roots
+		if r < docsTotal%roots {
+			perRoot++
+		}
 		for d := range perRoot {
 			path := filepath.Join(dir, fmt.Sprintf("doc-%03d.md", d))
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 				tb.Fatalf("write: %v", err)
 			}
+			written++
 		}
 		out[name] = dir
 	}
+	if written != docsTotal {
+		tb.Fatalf("built a %d-document corpus, wanted %d", written, docsTotal)
+	}
 	return out
+}
+
+// indexedDocuments counts the rows Refresh actually produced, so a
+// measurement reports the corpus it measured rather than the one on
+// disk.
+func indexedDocuments(tb testing.TB, store *Store) int {
+	tb.Helper()
+
+	var n int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM indexed_documents`).Scan(&n); err != nil {
+		tb.Fatalf("count indexed documents: %v", err)
+	}
+	return n
 }
 
 // BenchmarkRefreshAtProductionScale measures the cost the operations
@@ -95,7 +123,7 @@ func BenchmarkRefreshAtProductionScale(b *testing.B) {
 // instrumentation overhead cancel in the ratio and only a real change in
 // complexity trips it.
 func TestRefreshScalesLinearlyWithCorpusSize(t *testing.T) {
-	warmRefresh := func(t *testing.T, roots, docs int) time.Duration {
+	warmRefresh := func(t *testing.T, roots, docs int) (time.Duration, int) {
 		t.Helper()
 
 		db, err := database.OpenMemory()
@@ -120,7 +148,7 @@ func TestRefreshScalesLinearlyWithCorpusSize(t *testing.T) {
 		if err := store.Refresh(ctx); err != nil {
 			t.Fatalf("warm Refresh: %v", err)
 		}
-		return time.Since(start)
+		return time.Since(start), indexedDocuments(t, store)
 	}
 
 	const (
@@ -129,12 +157,17 @@ func TestRefreshScalesLinearlyWithCorpusSize(t *testing.T) {
 		factor    = 4
 	)
 
-	base := warmRefresh(t, baseRoots, baseDocs)
-	quad := warmRefresh(t, baseRoots, baseDocs*factor)
+	base, baseIndexed := warmRefresh(t, baseRoots, baseDocs)
+	quad, quadIndexed := warmRefresh(t, baseRoots, baseDocs*factor)
 
 	t.Logf("warm refresh: %s at %d docs, %s at %d docs",
-		base.Round(time.Millisecond), baseDocs,
-		quad.Round(time.Millisecond), baseDocs*factor)
+		base.Round(time.Millisecond), baseIndexed,
+		quad.Round(time.Millisecond), quadIndexed)
+
+	if baseIndexed != baseDocs || quadIndexed != baseDocs*factor {
+		t.Fatalf("indexed %d and %d documents, wanted %d and %d; the ratio below would compare corpora this test never built",
+			baseIndexed, quadIndexed, baseDocs, baseDocs*factor)
+	}
 
 	if base <= 0 {
 		t.Skip("base refresh too fast to time reliably on this machine")
