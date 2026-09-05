@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/memguard"
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -421,7 +422,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	// Log index: dropped records or write errors mean logs_query
 	// completeness degraded.
 	if i.src.IndexStats != nil {
+		indexDone := phasetrace.Phase(ctx, "health:index_stats")
 		stats := i.src.IndexStats()
+		indexDone()
 		row := HealthRow{Name: "log_index", Status: HealthOK}
 		if stats.DroppedRecords > 0 || stats.WriteErrors > 0 {
 			row.Status = HealthDegraded
@@ -433,7 +436,10 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	// Document-root sync: clean/fast-forwarded/pushed are healthy;
 	// diverged/blocked/remote_behind degrade; an errored pass fails.
 	if i.src.SyncStates != nil {
-		for _, st := range i.src.SyncStates() {
+		syncDone := phasetrace.Phase(ctx, "health:sync_states")
+		syncStates := i.src.SyncStates()
+		syncDone()
+		for _, st := range syncStates {
 			row := HealthRow{Name: "doc_sync:" + st.Name, Status: HealthOK}
 			if !st.LastSyncAt.IsZero() {
 				row.LastCheck = promptfmt.FormatDeltaOnly(st.LastSyncAt, now)
@@ -469,7 +475,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	// past the threshold degrades the row — the consumer is not keeping up.
 	if i.src.QueueStats != nil {
 		row := HealthRow{Name: "queue_backlog", Status: HealthOK}
+		queueDone := phasetrace.Phase(ctx, "health:queue_stats")
 		stats, err := i.src.QueueStats(ctx)
+		queueDone()
 		if err != nil {
 			row.Status = HealthDegraded
 			row.Detail = fmt.Sprintf("backlog probe failed: %v", err)
@@ -495,7 +503,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	// Loop fleet: the census plus one lamp that degrades when any loop
 	// is errored.
 	if i.src.LoopStatuses != nil {
+		loopsDone := phasetrace.Phase(ctx, "health:loop_statuses")
 		statuses := i.src.LoopStatuses()
+		loopsDone()
 		snap.Loops = buildLoopCensus(statuses)
 		// Honest window: the in-memory wake ring only spans the uptime.
 		// With no usable start time the window is unknown, and unknown
@@ -539,7 +549,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	}
 
 	if i.src.LogSeverity != nil {
+		sevDone := phasetrace.Phase(ctx, "health:log_severity")
 		sev := i.src.LogSeverity()
+		sevDone()
 		snap.LogActivity = LogActivity{
 			ErrorsLastHour:  sev.ErrorsLastHour,
 			WarnsLastHour:   sev.WarnsLastHour,
@@ -559,9 +571,13 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		}
 	}
 
+	hostDone := phasetrace.Phase(ctx, "health:host_probe")
 	snap.Host = collectHostInfo(i.src.DataDir, i.src.StartedAt, now)
+	hostDone()
 	if i.src.Telemetry != nil {
+		telemetryDone := phasetrace.Phase(ctx, "health:telemetry")
 		metrics := i.src.Telemetry.Collect(ctx)
+		telemetryDone()
 		snap.Telemetry = TelemetryRollup{
 			Requests24h:  metrics.Requests24h,
 			Errors24h:    metrics.Errors24h,
@@ -582,7 +598,12 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	if i.src.BootHistory == nil {
 		return info
 	}
+	// The boot journal is a query against production state, not an
+	// in-memory read like the other collectors — so it gets its own
+	// phases rather than disappearing into the health aggregate.
+	historyDone := phasetrace.Phase(ctx, "health:boot_history")
 	boots, err := i.src.BootHistory(ctx)
+	historyDone()
 	if err != nil || len(boots) == 0 {
 		return info
 	}
@@ -622,7 +643,10 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	}
 	info.BootsLast24h = pageCount
 	if i.src.BootCountSince != nil {
-		if count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour)); err == nil {
+		countDone := phasetrace.Phase(ctx, "health:boot_count")
+		count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour))
+		countDone()
+		if err == nil {
 			info.BootsLast24h = count
 		}
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -1763,5 +1764,74 @@ func TestLateGatedProviderGetsAUsableSlice(t *testing.T) {
 	if got < 70*time.Millisecond {
 		t.Errorf("last provider got %s; too small to do useful work, which is what sizing the reserve by provider count is for",
 			got.Round(time.Millisecond))
+	}
+}
+
+// phasedProvider records a phase, then runs long enough to trip the
+// slow-source threshold.
+type phasedProvider struct {
+	phase string
+	work  time.Duration
+}
+
+func (p *phasedProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+	done := phasetrace.Phase(ctx, p.phase)
+	time.Sleep(p.work)
+	done()
+	return "content", nil
+}
+
+// TestSlowProviderWarningCarriesItsBreakdown pins the fix for the gap
+// that made a one-day investigation necessary.
+//
+// The warning said a provider took two seconds. The provider was two
+// halves — a health snapshot and a document-activity walk — and the line
+// named neither, so which one to look at was answerable only by reading
+// source and querying production by hand. It now carries the phases the
+// provider recorded, longest first.
+func TestSlowProviderWarningCarriesItsBreakdown(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	a.RegisterTaggedProvider("metacognitive", &phasedProvider{
+		phase: "health",
+		work:  slowContextSourceThreshold + 80*time.Millisecond,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	a.BuildSections(ctx, agentctx.ContextRequest{
+		ActiveTags: map[string]bool{"metacognitive": true},
+	})
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "ran long against the shared assembly budget") {
+		t.Fatalf("no slow-source warning:\n%s", logs)
+	}
+	if !strings.Contains(logs, "phases=") || !strings.Contains(logs, "health=") {
+		t.Errorf("the warning does not say which phase was slow:\n%s", logs)
+	}
+}
+
+// TestFastProviderWarningStaysQuiet pins that the breakdown costs
+// nothing on a healthy turn: no warning at all, so no phases either.
+func TestFastProviderWarningStaysQuiet(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{Logger: logger})
+	a.RegisterTaggedProvider("metacognitive", &phasedProvider{phase: "health", work: time.Millisecond})
+
+	a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags: map[string]bool{"metacognitive": true},
+	})
+
+	if logs := logBuf.String(); strings.Contains(logs, "phases=") {
+		t.Errorf("a fast provider emitted a breakdown:\n%s", logs)
 	}
 }

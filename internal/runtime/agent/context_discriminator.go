@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
@@ -257,8 +258,9 @@ func (a *TagContextAssembler) materializeContextAdvertisements(ctx context.Conte
 	used := 0
 	for _, item := range selected {
 		started := time.Now()
-		content, err := item.advertiser.MaterializeContextAdvertisement(materializeCtx, req, item.selection)
-		warnSlowContextSource(a.logger, "context_advertisement_materialization", item.selection.Advertisement.Source+"/"+item.selection.Advertisement.ID, started)
+		tracedCtx, trace := phasetrace.New(materializeCtx)
+		content, err := item.advertiser.MaterializeContextAdvertisement(tracedCtx, req, item.selection)
+		warnSlowContextSource(a.logger, "context_advertisement_materialization", item.selection.Advertisement.Source+"/"+item.selection.Advertisement.ID, started, trace)
 		if err != nil {
 			a.logger.Warn("context advertisement materialization failed",
 				"source", item.selection.Advertisement.Source,
