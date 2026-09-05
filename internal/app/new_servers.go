@@ -704,7 +704,7 @@ func (a *App) initServers(s *newState) error {
 	if a.mqttPub != nil && s.personTracker != nil && cfg.Unifi.Configured() {
 		var apSensors []mqtt.DynamicSensor
 		mqttInstanceID := a.mqttInstanceID
-		for _, entityID := range cfg.Person.Track {
+		for _, entityID := range s.personTracker.EntityIDs() {
 			shortName := entityID
 			if idx := strings.IndexByte(entityID, '.'); idx >= 0 {
 				shortName = entityID[idx+1:]

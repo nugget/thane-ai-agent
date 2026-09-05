@@ -50,7 +50,7 @@ const (
 // members below use the same predicates — so the gate and its members cannot
 // drift into an empty container or a member orphaned under a missing parent.
 func unifiPollerEnabled(cfg *config.Config) bool {
-	return cfg.Unifi.Configured() && len(cfg.Person.Track) > 0
+	return cfg.Unifi.Configured() && len(cfg.Person.Devices) > 0
 }
 
 func emailServicesEnabled(cfg *config.Config) bool {
