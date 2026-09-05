@@ -76,10 +76,12 @@ func renderWatchedState(
 	now time.Time,
 	registries *renderRegistries,
 	transitions TransitionSource,
+	presence PersonPresenceSource,
 ) string {
 	state = watchlistStateWithForecast(ctx, ha, logger, sub, state, "failed to fetch watched weather forecast")
 
 	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(sub.EntityID, state, sub.Include))
+	content = enrichPersonPresence(content, state, presence)
 	content = enrichWithLastKnownGood(ctx, ha, content, state, now)
 	content = enrichUnavailable(content, state, registries)
 	if sub.WantsTransitions() {
@@ -133,6 +135,7 @@ func expandGlobSubscription(
 	now time.Time,
 	registries *renderRegistries,
 	transitions TransitionSource,
+	presence PersonPresenceSource,
 	maxExpansion int,
 	exclude map[string]struct{},
 ) string {
@@ -159,7 +162,7 @@ func expandGlobSubscription(
 	globMarker := func(matched, shown int) string {
 		return formatGlobTruncation(pattern, matched, shown)
 	}
-	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, transitions, maxExpansion, globMarker)
+	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, transitions, presence, maxExpansion, globMarker)
 }
 
 // formatGlobTruncation renders the marker appended when a glob matched

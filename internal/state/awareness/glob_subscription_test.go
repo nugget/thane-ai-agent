@@ -128,6 +128,7 @@ func TestExpandGlobSubscription_ExcludesAlreadyVisible(t *testing.T) {
 		time.Now(),
 		nil, // no registries
 		nil, // no transition source
+		nil, // no presence source
 		25,
 		exclude,
 	)
