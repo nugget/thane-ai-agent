@@ -139,10 +139,13 @@ func (a *App) initChannels(s *newState) error {
 		return err
 	}
 	a.contactBindingsConfigOwned = contactIdentity.configOwnsHAPersonBindings
-	a.operatorContactID = contactIdentity.operatorContactID
-	a.legacyOwnerContactName = contactIdentity.legacyOwnerContactName
 	operatorContactID := contactIdentity.operatorContactID
 	legacyOwnerContactName := contactIdentity.legacyOwnerContactName
+	a.contactBindingResolver = &contactChannelBindingResolver{
+		store:                  contactStore,
+		operatorContactID:      operatorContactID,
+		legacyOwnerContactName: legacyOwnerContactName,
+	}
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()
@@ -834,17 +837,13 @@ func (a *App) initChannels(s *newState) error {
 			a.onCloseErr("signal", signalClient.Close)
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:        signalClient,
-				Runner:        &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
-				Logger:        a.logger,
-				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
-				HandleTimeout: a.cfg.Signal.HandleTimeout,
-				Routing:       a.cfg.Signal.Routing,
-				Resolver: &contactChannelBindingResolver{
-					store:                  contactStore,
-					operatorContactID:      operatorContactID,
-					legacyOwnerContactName: legacyOwnerContactName,
-				},
+				Client:           signalClient,
+				Runner:           &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
+				Logger:           a.logger,
+				RateLimit:        a.cfg.Signal.RateLimitPerMinute,
+				HandleTimeout:    a.cfg.Signal.HandleTimeout,
+				Routing:          a.cfg.Signal.Routing,
+				Resolver:         a.contactBindingResolver,
 				BindConversation: a.mem.BindConversationChannel,
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,

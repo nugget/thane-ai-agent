@@ -234,29 +234,48 @@ func (t *PresenceTracker) TagContextBucket() agentctx.ContextBucket {
 // tracked. Implements [agent.TagContextProvider]; registered via
 // RegisterAlwaysContextProvider.
 //
-// People with known state are formatted as compact JSON with delta-
-// annotated timestamps following #458 conventions. People with unknown
-// or unset state are rendered as plain markdown text.
+// Every row is compact JSON with delta-annotated timestamps following
+// #458 conventions, including people whose state is unknown or unset —
+// those carry state "unknown" and no state_since.
+//
+// Live state is snapshotted under the read lock and the lock is released
+// before contact resolution, which reaches the contacts database and
+// would otherwise hold presence writers behind SQLite's busy wait.
 func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if len(t.order) == 0 {
+	rows := t.presenceRows(time.Now())
+	if len(rows) == 0 {
 		return "", nil
 	}
-
-	now := time.Now()
 
 	var sb strings.Builder
 	sb.WriteString("### People & Presence\n\n")
 
+	for i := range rows {
+		if t.contactResolver != nil {
+			if c, ok := t.contactResolver(rows[i].EntityID); ok {
+				rows[i].Contact = &c
+			}
+		}
+		sb.WriteString(FormatPersonPresence(rows[i]))
+		sb.WriteByte('\n')
+	}
+
+	return sb.String(), nil
+}
+
+// presenceRows copies the tracked people into render inputs. It takes the
+// read lock and performs no I/O, so applyPersonState reclaims the write
+// lock without waiting on contact resolution.
+func (t *PresenceTracker) presenceRows(now time.Time) []PersonPresenceInput {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	rows := make([]PersonPresenceInput, 0, len(t.order))
 	for _, id := range t.order {
 		p := t.people[id]
-		displayName := TitleCase(p.FriendlyName)
-
 		in := PersonPresenceInput{
 			EntityID:     p.EntityID,
-			Name:         displayName,
+			Name:         TitleCase(p.FriendlyName),
 			State:        p.State,
 			StateSince:   p.Since,
 			Room:         p.Room,
@@ -264,11 +283,6 @@ func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextReques
 			RoomSource:   p.RoomSource,
 			RoomConflict: p.roomConflict,
 			Now:          now,
-		}
-		if t.contactResolver != nil {
-			if c, ok := t.contactResolver(p.EntityID); ok {
-				in.Contact = &c
-			}
 		}
 		// Unknown renders as JSON too. It used to be a markdown bullet
 		// carrying only a display name, so on the one turn the model most
@@ -279,11 +293,9 @@ func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextReques
 			in.Room, in.RoomProvider, in.RoomSource = "", "", ""
 			in.RoomConflict = false
 		}
-		sb.WriteString(FormatPersonPresence(in))
-		sb.WriteByte('\n')
+		rows = append(rows, in)
 	}
-
-	return sb.String(), nil
+	return rows
 }
 
 // SetDeviceMACs configures the MAC addresses associated with a tracked

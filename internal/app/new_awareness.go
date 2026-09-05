@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -330,19 +329,28 @@ func (a *App) initAwareness(s *newState) error {
 		var presenceOpts []contacts.PresenceOption
 		if a.contactStore != nil {
 			store := a.contactStore
+			bindings := a.contactBindingResolver
 			presenceOpts = append(presenceOpts, contacts.WithContactResolver(
 				func(entityID string) (contacts.ContactIdentity, bool) {
 					contact, err := store.FindByHAPersonEntity(entityID)
-					if err != nil || contact == nil {
+					if err != nil {
+						// An unclaimed entity is (nil, nil) and degrades
+						// silently by design. A store failure degrades
+						// identically but is not routine: it strips
+						// contact_id and operator status out of an
+						// always-on block, so say so.
+						logger.Warn("presence contact resolution failed, rendering entity-only",
+							"entity_id", entityID, "error", err)
 						return contacts.ContactIdentity{}, false
 					}
-					operatorConfigured := a.operatorContactID != uuid.Nil ||
-						strings.TrimSpace(a.legacyOwnerContactName) != ""
+					if contact == nil {
+						return contacts.ContactIdentity{}, false
+					}
 					return contacts.ContactIdentity{
 						ID:         contact.ID.String(),
 						Name:       contact.FormattedName,
 						TrustZone:  contact.TrustZone,
-						IsOperator: isOwnerContact(store, contact, operatorConfigured, a.operatorContactID),
+						IsOperator: bindings.isOperator(contact),
 					}, true
 				}))
 		}
