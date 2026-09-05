@@ -87,6 +87,12 @@ type App struct {
 	// contactBindingsConfigOwned records the verified startup decision so
 	// CardDAV cannot reinterpret an ignored unverified config later.
 	contactBindingsConfigOwned bool
+	// Operator identity, built in initChannels and read by later stages.
+	// initAwareness runs after channels, so the presence contact
+	// resolver can rely on this being set. Shared with the Signal
+	// bridge so both surfaces pin the same contact as operator,
+	// including under the legacy identity.owner_contact_name selector.
+	contactBindingResolver *contactChannelBindingResolver
 
 	// LLM clients
 	llmClient             llm.Client

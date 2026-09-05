@@ -329,6 +329,56 @@ func TestContactChannelBindingResolverCachesLegacyConfiguredContactName(t *testi
 	}
 }
 
+// TestContactBindingResolverOperatorUnderLegacyName pins the legacy
+// identity.owner_contact_name selector against isOperator, the path the
+// contact-rooted presence block uses to decide is_operator.
+//
+// Passing the raw config values to isOwnerContact fails closed here:
+// the selector counts as configured, so the single-admin fallback is
+// skipped, but the name was never resolved to a UUID, leaving the
+// comparison against uuid.Nil. Only resolvedOperatorContactID makes the
+// legacy configuration mark anyone as the operator.
+func TestContactBindingResolverOperatorUnderLegacyName(t *testing.T) {
+	db, err := database.Open(t.TempDir() + "/contacts.db")
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := contacts.NewStore(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	tools := contacts.NewTools(store, nil)
+	for _, name := range []string{"Aimee", "Blake"} {
+		if _, err := tools.SaveContact(`{"name":"` + name + `","kind":"individual"}`); err != nil {
+			t.Fatalf("SaveContact %s: %v", name, err)
+		}
+	}
+	operator, err := store.FindByName("Aimee")
+	if err != nil {
+		t.Fatalf("FindByName: %v", err)
+	}
+	other, err := store.FindByName("Blake")
+	if err != nil {
+		t.Fatalf("FindByName: %v", err)
+	}
+
+	resolver := &contactChannelBindingResolver{
+		store:                  store,
+		legacyOwnerContactName: "Aimee",
+	}
+	if !resolver.isOperator(operator) {
+		t.Error("isOperator(operator) = false under identity.owner_contact_name, want true")
+	}
+	if resolver.isOperator(other) {
+		t.Error("isOperator(other) = true, want false")
+	}
+	if resolver.isOperator(nil) {
+		t.Error("isOperator(nil) = true, want false")
+	}
+}
+
 func TestContactChannelBindingResolverUsesConfiguredOperatorID(t *testing.T) {
 	configured := uuid.New()
 	resolver := &contactChannelBindingResolver{operatorContactID: configured}

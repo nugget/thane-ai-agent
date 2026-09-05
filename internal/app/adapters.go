@@ -161,8 +161,28 @@ type contactChannelBindingResolver struct {
 // channel/address pair. It always returns a channel-scoped binding when
 // the inputs are non-empty, even if no contact match is found.
 func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
-	operatorConfigured := r.operatorContactID != uuid.Nil || strings.TrimSpace(r.legacyOwnerContactName) != ""
-	return resolveChannelBinding(r.store, channel, address, operatorConfigured, r.resolvedOperatorContactID())
+	return resolveChannelBinding(r.store, channel, address, r.operatorConfigured(), r.resolvedOperatorContactID())
+}
+
+// operatorConfigured reports whether either operator selector is set.
+// Both are: identity.operator_contact_id names a UUID directly, and the
+// legacy identity.owner_contact_name names a contact to look up.
+func (r *contactChannelBindingResolver) operatorConfigured() bool {
+	if r == nil {
+		return false
+	}
+	return r.operatorContactID != uuid.Nil || strings.TrimSpace(r.legacyOwnerContactName) != ""
+}
+
+// isOperator reports whether the given contact is the configured
+// operator. It routes through resolvedOperatorContactID so the legacy
+// name selector resolves to a UUID rather than failing closed, and so
+// every surface pins the same contact from the same cache.
+func (r *contactChannelBindingResolver) isOperator(contact *contacts.Contact) bool {
+	if r == nil {
+		return false
+	}
+	return isOwnerContact(r.store, contact, r.operatorConfigured(), r.resolvedOperatorContactID())
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
