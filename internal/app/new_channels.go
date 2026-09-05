@@ -139,6 +139,8 @@ func (a *App) initChannels(s *newState) error {
 		return err
 	}
 	a.contactBindingsConfigOwned = contactIdentity.configOwnsHAPersonBindings
+	a.operatorContactID = contactIdentity.operatorContactID
+	a.legacyOwnerContactName = contactIdentity.legacyOwnerContactName
 	operatorContactID := contactIdentity.operatorContactID
 	legacyOwnerContactName := contactIdentity.legacyOwnerContactName
 

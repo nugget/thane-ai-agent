@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
@@ -87,6 +88,11 @@ type App struct {
 	// contactBindingsConfigOwned records the verified startup decision so
 	// CardDAV cannot reinterpret an ignored unverified config later.
 	contactBindingsConfigOwned bool
+	// Operator identity, resolved in initChannels and read by later
+	// stages. initAwareness runs after channels, so the presence
+	// contact resolver can rely on these being set.
+	operatorContactID      uuid.UUID
+	legacyOwnerContactName string
 
 	// LLM clients
 	llmClient             llm.Client

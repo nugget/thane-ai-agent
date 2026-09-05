@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -321,7 +322,31 @@ func (a *App) initAwareness(s *newState) error {
 	// after construction when HA is available. Initialize is idempotent,
 	// so a redundant call from OnReady is harmless.
 	if len(cfg.Person.Track) > 0 {
-		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
+		// Contact-rooted presence: the model reasons about people, and
+		// without a contact id here it cannot chain into
+		// contact_whereabouts on a turn with no counterparty binding.
+		// Resolved per render, so a contact bound to a person entity
+		// after startup is picked up without a restart.
+		var presenceOpts []contacts.PresenceOption
+		if a.contactStore != nil {
+			store := a.contactStore
+			presenceOpts = append(presenceOpts, contacts.WithContactResolver(
+				func(entityID string) (contacts.ContactIdentity, bool) {
+					contact, err := store.FindByHAPersonEntity(entityID)
+					if err != nil || contact == nil {
+						return contacts.ContactIdentity{}, false
+					}
+					operatorConfigured := a.operatorContactID != uuid.Nil ||
+						strings.TrimSpace(a.legacyOwnerContactName) != ""
+					return contacts.ContactIdentity{
+						ID:         contact.ID.String(),
+						Name:       contact.FormattedName,
+						TrustZone:  contact.TrustZone,
+						IsOperator: isOwnerContact(store, contact, operatorConfigured, a.operatorContactID),
+					}, true
+				}))
+		}
+		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger, presenceOpts...)
 		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
 		s.personTracker.OnLinkedTrackersChange(func(entityIDs []string) {
 			if a.ha == nil || len(entityIDs) == 0 {
