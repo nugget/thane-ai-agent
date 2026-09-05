@@ -448,19 +448,68 @@ func TestAgentConfig_NoDefaultsWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestValidate_PersonDevicesUntrackedEntity(t *testing.T) {
+// TestValidate_PersonDevicesOutsideTrackIsAllowed pins the inversion.
+// Presence membership comes from contact ha_person_entity bindings, which
+// config validation cannot read, so a device mapping for an entity absent
+// from person.track is legitimate — and rejecting it would leave UniFi
+// room presence hostage to the list that no longer decides membership.
+func TestValidate_PersonDevicesOutsideTrackIsAllowed(t *testing.T) {
 	cfg := Default()
 	cfg.Person.Track = []string{"person.alice"}
 	cfg.Person.Devices = map[string][]DeviceMapping{
-		"person.bob": {{MAC: "aa:bb:cc:dd:ee:ff"}}, // bob is not tracked
+		"person.bob": {{MAC: "aa:bb:cc:dd:ee:ff"}},
 	}
 
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for untracked entity in person.devices")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a device mapping outside person.track to be accepted", err)
 	}
-	if !strings.Contains(err.Error(), "person.bob") {
-		t.Errorf("error should mention person.bob, got: %v", err)
+}
+
+// TestValidate_PersonDevicesShape covers what config CAN still answer:
+// the key is a well-formed person entity, and the list is not empty. An
+// empty list passes a len(Devices) > 0 gate while contributing no MAC,
+// which starts a UniFi poll loop that can never attribute a client.
+func TestValidate_PersonDevicesShape(t *testing.T) {
+	tests := []struct {
+		name      string
+		devices   map[string][]DeviceMapping
+		wantError string
+	}{
+		{
+			name:      "empty device list",
+			devices:   map[string][]DeviceMapping{"person.alice": {}},
+			wantError: "lists no devices",
+		},
+		{
+			name:      "malformed key",
+			devices:   map[string][]DeviceMapping{"person.Alice": {{MAC: "aa:bb:cc:dd:ee:ff"}}},
+			wantError: "must match person.<object_id>",
+		},
+		{
+			name:      "empty mac",
+			devices:   map[string][]DeviceMapping{"person.alice": {{MAC: ""}}},
+			wantError: "must not be empty",
+		},
+		{
+			name:    "well formed",
+			devices: map[string][]DeviceMapping{"person.alice": {{MAC: "aa:bb:cc:dd:ee:ff"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Person.Devices = tt.devices
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantError)
+			}
+		})
 	}
 }
 
@@ -1036,9 +1085,11 @@ func TestValidate_PersonContactBindings(t *testing.T) {
 			wantError: "must match person.<object_id>",
 		},
 		{
-			name:      "untracked person entity",
-			bindings:  map[string]string{aliceID: "person.carol"},
-			wantError: "untracked entity",
+			// The contact store decides membership, so a binding for an
+			// entity person.track omits is legitimate; presenceRoster
+			// reconciles the two at startup where bindings are readable.
+			name:     "person entity outside person.track",
+			bindings: map[string]string{aliceID: "person.carol"},
 		},
 		{
 			name:      "duplicate person claim",

@@ -61,8 +61,9 @@ Initialization first generates a stable UUID into
 Pass
 `-operator-name "Your Name"` to `thane init` to name it immediately; the
 default display name is `Operator`. The generated config includes an explicit
-empty `person.contact_bindings` map, ready for UUID-to-Home-Assistant-person
-bindings once `person.track` is configured.
+empty `person.contact_bindings` map. Adding a binding there is what puts a
+person in the presence roster — the binding is the declaration of interest,
+and nothing else has to be configured to track them.
 
 In normal operation the runtime reads `core/config.yaml` from the
 workspace and nothing else (`-insecure-config` exists as a recovery path

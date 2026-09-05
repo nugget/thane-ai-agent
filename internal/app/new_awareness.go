@@ -407,7 +407,7 @@ func (a *App) initAwareness(s *newState) error {
 	// roster to place and MAC mappings to place them by; the predicate
 	// must stay identical to unifiPollerEnabled, or the loop definition
 	// and the poller it describes drift apart.
-	if cfg.Unifi.Configured() && s.personTracker != nil && len(cfg.Person.Devices) > 0 {
+	if cfg.Unifi.Configured() && s.personTracker != nil && personDeviceMappings(cfg) > 0 {
 		unifiClient := unifi.NewClient(cfg.Unifi.URL, cfg.Unifi.APIKey, logger)
 
 		// Build MAC -> entity_id mapping from config.
@@ -445,7 +445,7 @@ func (a *App) initAwareness(s *newState) error {
 		)
 	} else if cfg.Unifi.Configured() && s.personTracker == nil {
 		logger.Warn("unifi configured but no contact carries an ha_person_entity binding, so there is nobody to place in a room")
-	} else if cfg.Unifi.Configured() && len(cfg.Person.Devices) == 0 {
+	} else if cfg.Unifi.Configured() && personDeviceMappings(cfg) == 0 {
 		logger.Warn("unifi configured but person.devices maps no MAC addresses, so room presence cannot attribute a client to anyone")
 	}
 

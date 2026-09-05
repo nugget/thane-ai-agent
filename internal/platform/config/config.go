@@ -2241,15 +2241,22 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
-// PersonConfig configures household member presence tracking. When Track
-// contains entity IDs, the person tracker maintains in-memory state from Home
-// Assistant, follows each person's linked device trackers for supported room
-// providers, and injects a presence summary into the agent's system prompt on
-// every wake.
+// PersonConfig configures household member presence tracking.
+// When the contact store holds ha_person_entity bindings, the person tracker
+// maintains in-memory state from Home Assistant for those people, follows each
+// one's linked device trackers for supported room providers, and injects a
+// presence summary into the agent's system prompt on every wake.
 type PersonConfig struct {
-	// Track is a list of Home Assistant person entity IDs to monitor
-	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin
-	// with "person.". An empty list disables person tracking.
+	// Track is a startup assertion, not the roster. Presence membership
+	// comes from the contact store: a contact is tracked because it
+	// carries an ha_person_entity binding. Every entity listed here must
+	// be claimed by some contact, or startup fails and names the
+	// unclaimed ones — which catches a config that has drifted from the
+	// contact graph instead of quietly shrinking the roster.
+	//
+	// Each entry must begin with "person.". An empty list asserts
+	// nothing and does not disable tracking; a contact store with no
+	// bindings does that.
 	Track []string `yaml:"track"`
 
 	// ContactBindings maps stable contact UUIDs to tracked Home
@@ -2261,9 +2268,12 @@ type PersonConfig struct {
 	// bindings; this key is ignored in recovery mode.
 	ContactBindings map[string]string `yaml:"contact_bindings"`
 
-	// Devices maps tracked person entity IDs to their wireless device
-	// MAC addresses. Used by the UniFi poller to determine which person
-	// a wireless client belongs to for room-level presence.
+	// Devices maps person entity IDs to their wireless device MAC
+	// addresses. Used by the UniFi poller to determine which person a
+	// wireless client belongs to for room-level presence. Keys need not
+	// appear in Track — membership is the contact store's answer, not
+	// this file's — but each key must name at least one MAC, since the
+	// poller with no mappings can attribute nothing.
 	Devices map[string][]DeviceMapping `yaml:"devices"`
 
 	// APRooms maps AP names (e.g., "ap-hor-office") to human-readable
@@ -3619,11 +3629,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("person.track[%d] %q must start with \"person.\"", i, id)
 		}
 	}
-	// Validate person.devices references only tracked entities.
-	tracked := make(map[string]bool, len(c.Person.Track))
-	for _, id := range c.Person.Track {
-		tracked[id] = true
-	}
 	contactIDs := make([]string, 0, len(c.Person.ContactBindings))
 	for contactID := range c.Person.ContactBindings {
 		contactIDs = append(contactIDs, contactID)
@@ -3639,20 +3644,21 @@ func (c *Config) Validate() error {
 		if !validHAPersonEntityID(entityID) {
 			return fmt.Errorf("person.contact_bindings[%s] %q must match person.<object_id> (lowercase letters, digits, underscores)", contactID, entityID)
 		}
-		if !tracked[entityID] {
-			return fmt.Errorf("person.contact_bindings[%s] references untracked entity %q", contactID, entityID)
-		}
 		if holder, exists := claimedPeople[entityID]; exists {
 			return fmt.Errorf("person.contact_bindings assigns %q to both %s and %s", entityID, holder, contactID)
 		}
 		claimedPeople[entityID] = contactID
 	}
-	for entityID := range c.Person.Devices {
-		if !tracked[entityID] {
-			return fmt.Errorf("person.devices references untracked entity %q", entityID)
-		}
-	}
 	for entityID, devs := range c.Person.Devices {
+		// Membership lives in the contact store, which config validation
+		// cannot reach, so this checks shape only: presenceRoster does the
+		// reconciliation at startup where the bindings are readable.
+		if !validHAPersonEntityID(entityID) {
+			return fmt.Errorf("person.devices key %q must match person.<object_id> (lowercase letters, digits, underscores)", entityID)
+		}
+		if len(devs) == 0 {
+			return fmt.Errorf("person.devices[%s] lists no devices; remove the key or give it a MAC, since an empty list polls UniFi and can attribute nothing", entityID)
+		}
 		for i, d := range devs {
 			if d.MAC == "" {
 				return fmt.Errorf("person.devices[%s][%d].mac must not be empty", entityID, i)

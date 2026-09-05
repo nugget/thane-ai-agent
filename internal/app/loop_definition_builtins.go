@@ -50,7 +50,20 @@ const (
 // members below use the same predicates — so the gate and its members cannot
 // drift into an empty container or a member orphaned under a missing parent.
 func unifiPollerEnabled(cfg *config.Config) bool {
-	return cfg.Unifi.Configured() && len(cfg.Person.Devices) > 0
+	return cfg.Unifi.Configured() && personDeviceMappings(cfg) > 0
+}
+
+// personDeviceMappings counts configured MAC-to-person mappings, which is
+// the UniFi poller's real input: deviceOwners is built solely from
+// person.devices, so a poller with none polls the controller every
+// interval and can attribute nothing. Counting mappings rather than map
+// keys means `person.devices: {person.alice: []}` does not enable it.
+func personDeviceMappings(cfg *config.Config) int {
+	total := 0
+	for _, devices := range cfg.Person.Devices {
+		total += len(devices)
+	}
+	return total
 }
 
 func emailServicesEnabled(cfg *config.Config) bool {
