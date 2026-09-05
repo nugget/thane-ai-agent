@@ -1193,7 +1193,7 @@ compaction:
 #     collected and published. Default: 60. Minimum: 10.
 #     interval: 60
 #
-# (optional) Person configures household member presence tracking. When Track
+# (optional) Person configures household member presence tracking.
 # person:
 #   Track is a startup assertion, not the roster. Presence membership
 #   comes from the contact store: a contact is tracked because it

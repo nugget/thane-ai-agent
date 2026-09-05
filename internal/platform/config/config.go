@@ -381,8 +381,9 @@ type Config struct {
 	// set, Thane connects to the broker and registers as an HA device.
 	MQTT MQTTConfig `yaml:"mqtt"`
 
-	// Person configures household member presence tracking. When Track
-	// contains entity IDs, the agent receives a "People & Presence"
+	// Person configures household member presence tracking.
+	// Membership comes from the contact store: when a contact carries an
+	// ha_person_entity binding, the agent receives a "People & Presence"
 	// section in its system prompt on every wake, eliminating tool
 	// calls for basic presence questions.
 	Person PersonConfig `yaml:"person"`

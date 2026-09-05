@@ -188,14 +188,8 @@ stub with that exact ID, and start with an explicit empty
 `person.contact_bindings` is an exact contact-UUID-to-person-entity map, and
 it is what decides the presence roster: a contact is tracked because it
 carries an `ha_person_entity` binding. Every referenced contact must exist at
-startup, and a person may belong to only one active contact.
-
-`person.track` is a startup assertion rather than the roster. Every entity it
-lists must be claimed by some contact, or Thane refuses to start and names
-the unclaimed ones — which catches a config that has drifted from the contact
-graph instead of quietly shrinking the roster and taking the ingest floor,
-channel enrichment, UniFi room updates, and the MQTT AP sensors with it. It
-may be omitted entirely; the bindings alone are sufficient. When the key is present — even as `{}` — startup
+startup, and a person may belong to only one active contact. When
+`person.contact_bindings` is present — even as `{}` — startup
 atomically reconciles the stored set to config. CardDAV still emits
 `X-THANE-HA-PERSON`, but treats it as a read-only projection and preserves
 it when clients omit unknown vCard fields. An explicitly present value must
@@ -203,6 +197,13 @@ match the projection; attempting to change or clear it is rejected. Removing
 a map entry clears that binding on the next restart. A contact with a
 configured binding cannot be deleted through CardDAV until its map entry is
 removed and Thane restarts; unbound contacts remain deletable.
+
+`person.track` is a startup assertion rather than the roster. Every entity it
+lists must be claimed by some contact, or Thane refuses to start and names
+the unclaimed ones — which catches a config that has drifted from the contact
+graph instead of quietly shrinking the roster and taking the ingest floor,
+channel enrichment, UniFi room updates, and the MQTT AP sensors with it. It
+may be omitted entirely; the bindings alone are sufficient.
 
 Configs loaded through `-insecure-config` cannot declare these identity
 relationships. Thane ignores `person.contact_bindings`,
