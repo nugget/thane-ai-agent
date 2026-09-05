@@ -677,9 +677,12 @@ func (a *App) presenceContactResolver(logger *slog.Logger) func(string) (contact
 //
 // The tracker is constructed after the providers that render its people,
 // so this closes over the init state and reads the tracker per render.
-// Everything degrades to raw Home Assistant state: no tracker, an
-// untracked entity, or no contact claiming it each return the row
-// unchanged rather than inventing an identity.
+//
+// Degradation is per-source, not all-or-nothing. No tracker or an
+// untracked entity yields nothing, and the row renders as raw Home
+// Assistant state. A tracked person whom no contact claims — or whom
+// contact resolution could not resolve — still contributes room data;
+// only the identity fields are omitted, rather than inventing one.
 func (a *App) watchedPersonPresence(s *newState, logger *slog.Logger) awareness.PersonPresenceSource {
 	resolveContact := a.presenceContactResolver(logger)
 	return func(entityID string) (awareness.PersonPresenceFields, bool) {
