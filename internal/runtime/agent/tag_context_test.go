@@ -1853,8 +1853,9 @@ func TestBuildRefsExpandsTemporalTemplates(t *testing.T) {
 		t.Fatalf("write document: %v", err)
 	}
 	resolver := paths.New(map[string]string{"kb": documentRoot})
-	assembler := NewTagContextAssembler(TagContextAssemblerConfig{Resolver: resolver})
-	// A fixed now makes the rendered distance deterministic.
+	// UTC explicitly: an unset Timezone falls back to the host zone, and
+	// 09:00 UTC is still December 4 west of the line, which renders +21d.
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{Resolver: resolver, Timezone: "UTC"})
 	assembler.nowFunc = func() time.Time { return time.Date(2026, 12, 5, 9, 0, 0, 0, time.UTC) }
 
 	got := assembler.BuildRefs(context.Background(), []string{"kb:winter.md"})
@@ -1863,5 +1864,40 @@ func TestBuildRefsExpandsTemporalTemplates(t *testing.T) {
 	}
 	if !strings.Contains(got, "+20d") {
 		t.Fatalf("template did not render as a day distance: %q", got)
+	}
+}
+
+// TestBuildRefsSamplesOneClockForEveryRef holds the same invariant the
+// tagged-article path holds: two refs carrying the identical date must
+// render identical words. A per-ref clock sample lets one prompt say
+// "today" above and "tomorrow" below for the same day, which reads as
+// two documents disagreeing when only the clock moved.
+func TestBuildRefsSamplesOneClockForEveryRef(t *testing.T) {
+	t.Parallel()
+
+	documentRoot := t.TempDir()
+	body := "Freeze lands {{delta:2026-12-06}}."
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(documentRoot, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	resolver := paths.New(map[string]string{"kb": documentRoot})
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{Resolver: resolver, Timezone: "UTC"})
+
+	// The clock crosses midnight between the two reads, so a per-ref
+	// sample renders "tomorrow" for the first and "today" for the second.
+	calls := 0
+	assembler.nowFunc = func() time.Time {
+		calls++
+		if calls == 1 {
+			return time.Date(2026, 12, 5, 23, 59, 0, 0, time.UTC)
+		}
+		return time.Date(2026, 12, 6, 0, 1, 0, 0, time.UTC)
+	}
+
+	got := assembler.BuildRefs(context.Background(), []string{"kb:one.md", "kb:two.md"})
+	if strings.Count(got, "tomorrow") != 2 {
+		t.Fatalf("refs rendered the same date differently: %q", got)
 	}
 }

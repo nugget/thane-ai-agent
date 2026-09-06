@@ -74,13 +74,17 @@ type TokenObserver interface {
 
 // Server is the HTTP API server.
 type Server struct {
-	address                            string
-	port                               int
-	handler                            http.Handler
-	handlerOnce                        sync.Once
-	auth                               *authGate
-	routes                             []string
-	loop                               *agent.Loop
+	address     string
+	port        int
+	handler     http.Handler
+	handlerOnce sync.Once
+	auth        *authGate
+	routes      []string
+	loop        *agent.Loop
+	// nowFunc returns the current time. Tests override it to pin
+	// temporal template expansion on the reader surfaces to a fixed
+	// instant; production leaves it nil and reads the wall clock.
+	nowFunc                            func() time.Time
 	router                             *router.Router
 	checkpointer                       *checkpoint.Checkpointer
 	memoryStore                        *memory.SQLiteStore

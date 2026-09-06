@@ -822,6 +822,13 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		return ""
 	}
 
+	// One clock for the whole aggregate. Sampling per ref would let two
+	// documents carrying the same date render "today" above and
+	// "tomorrow" below if the call crossed local midnight — two refs
+	// appearing to disagree when only the clock moved. The tagged
+	// article path holds the same invariant.
+	templateNow := a.templateNow()
+
 	seen := make(map[string]bool, len(refs))
 	var buf strings.Builder
 	for _, ref := range refs {
@@ -859,7 +866,7 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		// state fetched a moment ago. Contact origin policy points these
 		// refs at dossiers, which are exactly the documents the house
 		// rule tells authors to write templates into.
-		content = promptfmt.ExpandTemporalTemplates(content, a.templateNow())
+		content = promptfmt.ExpandTemporalTemplates(content, templateNow)
 		resolved := homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		var entry strings.Builder
 		entry.WriteString("#### ")
