@@ -58,7 +58,11 @@ func (r *Registry) EnableCounterpartyTools(deps CounterpartyToolDeps) {
 			"companion_last_known_location only when you need one specific device's stored fix. " +
 			"Pass name (resolved like other contact tools) or contact_id (UUID). A contact with no HA " +
 			"person binding and no bound companion devices returns an error saying so — that is a " +
-			"configuration gap, not an unknown location.",
+			"configuration gap, not an unknown location. " +
+			"Every moment ships twice: since/room_since are deltas for judging recency in this turn, " +
+			"since_at/room_since_at are the same moments absolutely. Anything you write into a document " +
+			"takes the absolute form — a delta copied into stored prose is wrong minutes later, and " +
+			"document writes refuse it.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
