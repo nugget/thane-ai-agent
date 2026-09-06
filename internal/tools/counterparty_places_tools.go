@@ -26,9 +26,18 @@ type placeView struct {
 	// Arrived is a delta, or absent when the stay began before the
 	// device started watching. ArrivalTimed says which, so a reader
 	// never mistakes an unobserved arrival for a recent one.
+	//
+	// ArrivedAt and DepartedAt carry the same moments absolutely. Both
+	// forms ship because they serve opposite jobs: the delta is how a
+	// reader judges recency in this turn, the instant is the only form
+	// that survives being written down. A caller with just the delta
+	// either copies a value that starts rotting immediately or does
+	// clock arithmetic this project deliberately keeps away from models.
 	Arrived      string `json:"arrived,omitempty"`
+	ArrivedAt    string `json:"arrived_at,omitempty"`
 	ArrivalTimed bool   `json:"arrival_timed"`
 	Departed     string `json:"departed,omitempty"`
+	DepartedAt   string `json:"departed_at,omitempty"`
 	// Dwell is how long the stay lasted; DwellStillAccruing marks one
 	// that has not finished, so "11m" is not read as a completed visit.
 	Dwell              string  `json:"dwell,omitempty"`
@@ -44,6 +53,7 @@ type recentPlacesResult struct {
 	// several reports the one whose window was read.
 	Device      string      `json:"device,omitempty"`
 	CapturedAgo string      `json:"captured_ago,omitempty"`
+	CapturedAt  string      `json:"captured_at,omitempty"`
 	WindowHours float64     `json:"window_hours,omitempty"`
 	Places      []placeView `json:"places,omitempty"`
 	// Truncated reports the device dropping stays from its own window;
@@ -74,6 +84,8 @@ func (r *Registry) EnableCounterpartyPlacesTools(deps CounterpartyToolDeps) {
 			"state is here_now for a stay still underway and left once it ended; dwell_still_accruing marks a dwell that has not finished, so an in-progress stay is never read as a completed one. " +
 			"arrival_timed is false when the stay was already underway before the device started watching — the arrival is genuinely unknown rather than zero. " +
 			"Reach for contact_whereabouts when you need where somebody is right now fused across every source; reach here when the sequence and the dwells are the point. " +
+			"Every moment ships twice: arrived/departed/captured_ago are deltas for judging recency in this turn, arrived_at/departed_at/captured_at are the same moments absolutely. " +
+			"Anything you write into a document takes the absolute form — a delta copied into stored prose is wrong minutes later, and document writes refuse it. " +
 			"Pass name (resolved like other contact tools) or contact_id (UUID).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -135,6 +147,7 @@ func handleContactRecentPlaces(ctx context.Context, deps CounterpartyToolDeps, n
 	result.Truncated = window.Truncated
 	if !window.CapturedAt.IsZero() {
 		result.CapturedAgo = promptfmt.FormatDeltaOnly(window.CapturedAt, now)
+		result.CapturedAt = window.CapturedAt.In(now.Location()).Format(time.RFC3339)
 	}
 
 	visits := window.Visits
@@ -153,9 +166,11 @@ func handleContactRecentPlaces(ctx context.Context, deps CounterpartyToolDeps, n
 		}
 		if v.ArrivedAt != nil {
 			place.Arrived = promptfmt.FormatDeltaOnly(*v.ArrivedAt, now)
+			place.ArrivedAt = v.ArrivedAt.In(now.Location()).Format(time.RFC3339)
 		}
 		if v.DepartedAt != nil {
 			place.Departed = promptfmt.FormatDeltaOnly(*v.DepartedAt, now)
+			place.DepartedAt = v.DepartedAt.In(now.Location()).Format(time.RFC3339)
 		}
 		if v.DwellSeconds > 0 {
 			place.Dwell = (time.Duration(v.DwellSeconds) * time.Second).Round(time.Minute).String()

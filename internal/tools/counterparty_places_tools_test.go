@@ -128,3 +128,50 @@ const productionVisitWindowJSON = `{"captured_at":"2026-09-06T17:05:50.111Z","ma
 {"arrival":"precise","arrived_at":"2026-09-06T16:21:51.633Z","captured_at":"2026-09-06T16:37:18.763Z","dwell_is_partial":true,"dwell_seconds":927.13,"horizontal_accuracy_meters":50.47,"latitude":29.79694558881348,"longitude":-98.4184658414713,"state":"ongoing"},
 {"arrival":"unknown","captured_at":"2026-09-06T16:12:23.138Z","departed_at":"2026-09-06T16:11:57.501Z","dwell_is_partial":false,"horizontal_accuracy_meters":13.05,"latitude":29.83122951133177,"longitude":-98.46431478315205,"state":"settled"}],
 "window_hours":48}`
+
+// TestRecentPlacesCarriesAbsoluteInstants pins the pairing this tool
+// owes a caller writing a document. The delta answers "how recent" in
+// this turn; only the instant survives being written down. Shipping the
+// delta alone is what put "arrived -2h45m, departed -2h22m" into
+// production prose — the loop quoted its evidence verbatim, exactly as
+// asked, and the document was wrong minutes later.
+func TestRecentPlacesCarriesAbsoluteInstants(t *testing.T) {
+	deps, contactID := newPlacesFixture(t, productionVisitWindowJSON)
+	out, err := handleContactRecentPlaces(context.Background(), deps, "", contactID)
+	if err != nil {
+		t.Fatalf("handleContactRecentPlaces: %v", err)
+	}
+	var result recentPlacesResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v\n%s", err, out)
+	}
+
+	if result.CapturedAgo == "" || result.CapturedAt == "" {
+		t.Errorf("window carries captured_ago=%q captured_at=%q, want both", result.CapturedAgo, result.CapturedAt)
+	}
+	if _, err := time.Parse(time.RFC3339, result.CapturedAt); err != nil {
+		t.Errorf("captured_at %q is not RFC3339: %v", result.CapturedAt, err)
+	}
+
+	timed := 0
+	for i, place := range result.Places {
+		if place.ArrivalTimed {
+			timed++
+			if place.ArrivedAt == "" {
+				t.Errorf("place %d has a timed arrival but no arrived_at: %+v", i, place)
+				continue
+			}
+			if _, err := time.Parse(time.RFC3339, place.ArrivedAt); err != nil {
+				t.Errorf("place %d arrived_at %q is not RFC3339: %v", i, place.ArrivedAt, err)
+			}
+		} else if place.ArrivedAt != "" {
+			t.Errorf("place %d reports arrived_at without a timed arrival: %+v", i, place)
+		}
+		if place.Departed != "" && place.DepartedAt == "" {
+			t.Errorf("place %d has a departure delta but no departed_at: %+v", i, place)
+		}
+	}
+	if timed == 0 {
+		t.Fatal("fixture exercised no timed arrival")
+	}
+}
