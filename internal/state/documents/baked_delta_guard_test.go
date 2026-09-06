@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -171,4 +172,71 @@ func assertBakedDeltaRefusal(t *testing.T, err error, wantText string) {
 	if !strings.Contains(refusal.Error(), "backticks") {
 		t.Errorf("refusal must name the escape hatch: %s", refusal.Error())
 	}
+}
+
+// TestGuardWarningReachesTheModel pins the tier-2 advisory at the layer
+// that matters. The store's MutationResult is not what an author sees:
+// the tool surface re-projects it through modelMutationResult, and a
+// warning that stops at that boundary makes the whole advisory tier a
+// no-op while a store-level test still passes.
+func TestGuardWarningReachesTheModel(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, _ := newMutationStore(t)
+	tools := NewTools(store)
+
+	out, err := tools.Write(ctx, WriteArgs{
+		Ref:   "kb:narrative.md",
+		Title: "N",
+		Body:  stringPtr("Awaiting the sensor installation tomorrow morning.\n"),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var payload struct {
+		Applied  bool     `json:"applied"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("decode tool result %q: %v", out, err)
+	}
+	if !payload.Applied {
+		t.Errorf("tier 2 must not block the write: %s", out)
+	}
+	if len(payload.Warnings) != 1 {
+		t.Fatalf("model-facing warnings = %v, want exactly one\n%s", payload.Warnings, out)
+	}
+	if !strings.Contains(payload.Warnings[0], "tomorrow") {
+		t.Errorf("warning does not name the phrase: %s", payload.Warnings[0])
+	}
+}
+
+// TestGuardCleanWriteCarriesNoWarningsField pins the quiet case: a
+// clean write must not grow a warnings key, so its presence in a tool
+// result always means something.
+func TestGuardCleanWriteCarriesNoWarningsField(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tools := NewTools(mustMutationStore(t))
+
+	out, err := tools.Write(ctx, WriteArgs{
+		Ref:   "kb:clean.md",
+		Title: "C",
+		Body:  stringPtr("Home since 12:06 CDT.\n"),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if strings.Contains(out, "warnings") {
+		t.Errorf("clean write carried a warnings key: %s", out)
+	}
+}
+
+func mustMutationStore(t *testing.T) *Store {
+	t.Helper()
+	store, _ := newMutationStore(t)
+	return store
 }

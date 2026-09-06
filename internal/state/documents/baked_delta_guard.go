@@ -63,6 +63,13 @@ func describeBakedDeltas(findings []promptfmt.BakedDelta) string {
 // on account of prose the author did not touch, and the loop whose
 // document rotted would be the one loop unable to repair it.
 //
+// It also sits above Write/Edit/JournalUpdate rather than at the file
+// writer, which is what keeps Move, Copy and the section transfers out
+// of scope: those relocate prose that already exists instead of
+// authoring it, and refusing them would leave a rotted document
+// permanently unmovable — unable to be filed, archived, or split apart
+// on the way to being fixed.
+//
 // Tier 1 refuses: those shapes are this package's own formatter output,
 // and prose almost always acquires one by transcribing a tool result
 // verbatim. Tier 2 warns and lets the write through: "yesterday" decays
