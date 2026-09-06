@@ -59,9 +59,11 @@ func containsAnyFold(have, want []string) bool {
 const audienceFrontmatterKey = "audience"
 
 // restrictedAudienceValues are the reaches narrower than agent-wide. A
-// document declaring one is never advertised and never returned by a
-// search; explicit reads by ref are unaffected, so this is context
-// hygiene rather than access control.
+// document declaring one is never advertised, and search excludes it by
+// default — [SearchQuery.IncludeRestricted], or filtering the audience
+// key explicitly, still returns it. Explicit reads by ref are
+// unaffected. Only the advertising exclusion is an invariant; the rest
+// is context hygiene rather than access control.
 //
 // "internal" is the retired spelling of "private" and still parses,
 // because frontmatter written before the rename is on disk.
