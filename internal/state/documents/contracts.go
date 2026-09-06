@@ -46,7 +46,7 @@ type SearchQuery struct {
 	ModifiedBefore  *time.Time          `json:"-"`
 	Limit           int                 `json:"limit,omitempty"`
 	// IncludeRestricted includes documents whose audience reaches less
-	// than the whole agent (frontmatter
-	// audience: internal), which default search excludes.
+	// than the whole agent — audience private or subscribers, and the
+	// retired spelling internal — which default search excludes.
 	IncludeRestricted bool `json:"include_restricted,omitempty"`
 }

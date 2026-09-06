@@ -90,12 +90,18 @@ const (
 	// OutputAudiencePrivate restricts the content to the owning loop's
 	// own context and explicit by-ref reads. A loop's working notes.
 	OutputAudiencePrivate OutputAudience = "private"
-	// OutputAudienceSubscribers reaches loops holding a subscription to
-	// this output, and nothing else. Never offered on the ambient rail,
-	// never surfaced by search. How a loop came to hold the
-	// subscription — declared on its spec, inherited from a container,
-	// or granted by tooling — is the subscription's business, not this
-	// field's; what matters here is that reach requires one.
+	// OutputAudienceSubscribers is the reach for an output read by the
+	// loops that subscribe to it and nobody else: never offered on the
+	// ambient rail, excluded from search unless a caller opts in.
+	//
+	// The delivery half is NOT built. Spec.Subscriptions carries Home
+	// Assistant entities only, so no loop can yet declare a subscription
+	// to an output, and this rung currently behaves like private plus a
+	// search opt-in. It exists ahead of that work because the vocabulary
+	// is written into frontmatter on disk and is the expensive half to
+	// change later, and because facets are refused on private — without
+	// this rung there is no way to declare a faceted document that is
+	// not advertised to the whole agent.
 	OutputAudienceSubscribers OutputAudience = "subscribers"
 	// OutputAudienceAgent reaches anything in this Thane instance:
 	// search results, context injection, the ambient rail. Membership
