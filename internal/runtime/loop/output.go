@@ -272,10 +272,12 @@ func (o OutputSpec) Validate() error {
 	return nil
 }
 
-// validateOutputFacets checks a declared facet set. Facets are a
-// published-projection contract, so they attach only to published
-// maintained documents. Each document declares only the projections its
-// consumers need; full remains implicit and always present.
+// validateOutputFacets checks a declared facet set. A facet is a
+// projection cut for a reader, so it attaches to any maintained document
+// somebody other than the owning loop can read — agent-wide or
+// subscribers — and never to a private one. Each document declares only
+// the projections its consumers need; full remains implicit and always
+// present.
 func validateOutputFacets(o OutputSpec) error {
 	if len(o.Facets) == 0 {
 		return nil

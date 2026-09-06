@@ -218,11 +218,12 @@ and search that root explicitly before concluding the thing does not
 exist. Reporting "there is no record of X" on the strength of a search
 that never looked is the failure mode this block exists to prevent.
 
-Separately, documents whose frontmatter marks them `audience: internal`
-— loop working notes, process logs — stay out of results by default.
-Pass `include_internal: true` when you specifically want them; they hold
-reasoning about how an understanding evolved rather than the current
-state.
+Separately, documents whose audience reaches less than the whole agent
+stay out of results by default: `private` ones — loop working notes,
+process logs — and `subscribers` ones, scoped to the loops that
+subscribe to them. Pass `include_restricted: true` when you specifically
+want them; working notes hold reasoning about how an understanding
+evolved rather than the current state.
 
 Skip this step when you already know the right root (most queries about
 people go to `dossiers`, most network/infra notes go to `kb`, etc.) —
