@@ -409,11 +409,6 @@ func (a *App) initServers(s *newState) error {
 	// apps to be configured — and both degrade to absence when their
 	// source is missing.
 	// Canonical contact-UUID → bound companion accounts, shared by the
-	// channel enrichment join and the fused whereabouts tool. Config
-	// may spell a binding in any form uuid.Parse accepts; lookups
-	// compare against contact.ID.String().
-	accountsByContact := companionAccountsByContact(cfg.Companion)
-
 	if s.contactLookup != nil {
 		if s.personTracker != nil {
 			tracker := s.personTracker
@@ -425,17 +420,9 @@ func (a *App) initServers(s *newState) error {
 				return counterpartyPresenceView(snap, time.Now())
 			}
 		}
-		if len(accountsByContact) > 0 && a.companionDevices != nil {
+		if a.companionDevices != nil {
 			s.contactLookup.devicesFor = func(ctx context.Context, contactID string) []agent.CounterpartyDevice {
-				accounts := accountsByContact[contactID]
-				if len(accounts) == 0 {
-					return nil
-				}
-				owned := make(map[string]bool, len(accounts))
-				for _, acct := range accounts {
-					owned[acct] = true
-				}
-				devices, err := a.companionDevices.List(ctx)
+				devices, err := a.companionDevices.DevicesForContact(ctx, contactID)
 				if err != nil {
 					logger.Warn("counterparty device join failed", "error", err)
 					return nil
@@ -449,9 +436,6 @@ func (a *App) initServers(s *newState) error {
 				now := time.Now()
 				var views []agent.CounterpartyDevice
 				for _, d := range devices {
-					if !owned[d.Account] || d.State != companions.DeviceStateActive {
-						continue
-					}
 					availability := "offline"
 					if live[[2]string{d.Account, d.ClientID}] {
 						availability = "online"
@@ -482,11 +466,6 @@ func (a *App) initServers(s *newState) error {
 		}
 		if s.personTracker != nil {
 			deps.Presence = s.personTracker.Snapshot
-		}
-		if len(accountsByContact) > 0 {
-			deps.AccountsForContact = func(contactID string) []string {
-				return accountsByContact[contactID]
-			}
 		}
 		if a.companionRegistry != nil {
 			registry := a.companionRegistry
@@ -990,19 +969,28 @@ func counterpartyPresenceView(snap contacts.PersonSnapshot, now time.Time) *agen
 // companion source is configured. Provider entries may remain in disabled
 // config, but they must not keep persisted companion data reachable through
 // contact joins after the operator disables the integration.
-func companionAccountsByContact(cfg config.CompanionConfig) map[string][]string {
+// companionContactForAccount resolves an account to the canonical
+// contact UUID the operator declared for it, or "" when the account is
+// unclaimed or the binding is unparseable.
+//
+// Config may spell a binding in any form uuid.Parse accepts; the value
+// this returns is canonical, because it is written to the device row and
+// compared against contact.ID.String().
+func companionContactForAccount(cfg config.CompanionConfig) func(string) string {
 	if !cfg.Configured() {
 		return nil
 	}
-	accountsByContact := make(map[string][]string)
+	contactByAccount := make(map[string]string, len(cfg.Providers))
 	for account, provider := range cfg.Providers {
 		if provider.Contact == "" {
 			continue
 		}
 		if id, err := uuid.Parse(provider.Contact); err == nil {
-			canonicalID := id.String()
-			accountsByContact[canonicalID] = append(accountsByContact[canonicalID], account)
+			contactByAccount[account] = id.String()
 		}
 	}
-	return accountsByContact
+	if len(contactByAccount) == 0 {
+		return nil
+	}
+	return func(account string) string { return contactByAccount[account] }
 }

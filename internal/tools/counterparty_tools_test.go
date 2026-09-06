@@ -77,7 +77,10 @@ func newWhereaboutsFixture(t *testing.T, state, room string, observations map[st
 		t.Fatal(err)
 	}
 
-	companionStore := newObservationToolStore(t)
+	// The account-to-contact declaration reaches the store as a resolver,
+	// so seeded devices are stamped with alice's contact exactly as a real
+	// registration would stamp them.
+	companionStore := newObservationToolStoreForContact(t, map[string]string{"alice-acct": alice.ID.String()})
 	now := time.Now().UTC()
 	i := 0
 	for device, status := range observations {
@@ -100,12 +103,6 @@ func newWhereaboutsFixture(t *testing.T, state, room string, observations map[st
 				snap.RoomSince = now.Add(-20 * time.Minute)
 			}
 			return snap, true
-		},
-		AccountsForContact: func(id string) []string {
-			if id == alice.ID.String() {
-				return []string{"alice-acct"}
-			}
-			return nil
 		},
 		LiveIdentities: func() map[[2]string]bool { return nil },
 	}

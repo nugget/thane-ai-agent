@@ -1,7 +1,6 @@
 package app
 
 import (
-	"slices"
 	"testing"
 	"time"
 
@@ -96,12 +95,20 @@ func TestCounterpartyPresenceView(t *testing.T) {
 	}
 }
 
-func TestCompanionAccountsByContactRequiresConfiguredSource(t *testing.T) {
+// TestCompanionContactForAccountRequiresConfiguredSource pins the
+// resolver that stamps a device's contact at registration. An
+// unconfigured or unclaimed source must yield nil rather than an empty
+// resolver, because a resolver that answers "" for everything would
+// unbind every device on the next reconcile.
+func TestCompanionContactForAccountRequiresConfiguredSource(t *testing.T) {
 	const contactID = "8A1F50A7-91C1-4DE5-90D3-B239719D29A8"
+	const canonical = "8a1f50a7-91c1-4de5-90d3-b239719d29a8"
 	tests := []struct {
-		name string
-		cfg  config.CompanionConfig
-		want map[string][]string
+		name    string
+		cfg     config.CompanionConfig
+		account string
+		want    string
+		wantNil bool
 	}{
 		{
 			name: "disabled with retained provider",
@@ -110,6 +117,7 @@ func TestCompanionAccountsByContactRequiresConfiguredSource(t *testing.T) {
 					"alice": {Tokens: []string{"token"}, Contact: contactID},
 				},
 			},
+			wantNil: true,
 		},
 		{
 			name: "enabled without token",
@@ -119,30 +127,46 @@ func TestCompanionAccountsByContactRequiresConfiguredSource(t *testing.T) {
 					"alice": {Contact: contactID},
 				},
 			},
+			wantNil: true,
 		},
 		{
-			name: "configured",
+			name: "configured binding is canonicalized",
 			cfg: config.CompanionConfig{
 				Enabled: true,
 				Providers: map[string]config.CompanionProviderConfig{
 					"alice": {Tokens: []string{"token"}, Contact: contactID},
 				},
 			},
-			want: map[string][]string{
-				"8a1f50a7-91c1-4de5-90d3-b239719d29a8": {"alice"},
+			account: "alice",
+			want:    canonical,
+		},
+		{
+			name: "configured account the operator did not claim",
+			cfg: config.CompanionConfig{
+				Enabled: true,
+				Providers: map[string]config.CompanionProviderConfig{
+					"alice": {Tokens: []string{"token"}, Contact: contactID},
+					"bob":   {Tokens: []string{"token"}},
+				},
 			},
+			account: "bob",
+			want:    "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := companionAccountsByContact(tt.cfg)
-			if len(got) != len(tt.want) {
-				t.Fatalf("bindings = %#v, want %#v", got, tt.want)
-			}
-			for contactID, wantAccounts := range tt.want {
-				if !slices.Equal(got[contactID], wantAccounts) {
-					t.Errorf("accounts for %s = %#v, want %#v", contactID, got[contactID], wantAccounts)
+			resolve := companionContactForAccount(tt.cfg)
+			if tt.wantNil {
+				if resolve != nil {
+					t.Fatalf("resolver = non-nil, want nil for an unconfigured source")
 				}
+				return
+			}
+			if resolve == nil {
+				t.Fatal("resolver = nil, want a resolver")
+			}
+			if got := resolve(tt.account); got != tt.want {
+				t.Errorf("resolve(%q) = %q, want %q", tt.account, got, tt.want)
 			}
 		})
 	}

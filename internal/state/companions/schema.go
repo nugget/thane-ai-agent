@@ -38,6 +38,7 @@ var devicesSchema = database.Schema{
 				capabilities         TEXT NOT NULL DEFAULT '[]',
 				capabilities_recorded_at TIMESTAMP,
 				state                TEXT NOT NULL DEFAULT 'active',
+				contact_id           TEXT NOT NULL DEFAULT '',
 				UNIQUE (account, client_id)
 			)`,
 		},
@@ -46,6 +47,17 @@ var devicesSchema = database.Schema{
 		// from TableCreate above.
 		database.ColumnAdd{
 			Table: "companion_devices", Column: "metadata_recorded_at", Typedef: "TIMESTAMP",
+		},
+		// The contact a device belongs to lives on the row rather than in
+		// config, so a phone that pairs after boot joins its person without
+		// waiting for a restart, and so "which devices can observe this
+		// contact" is one query instead of a config lookup feeding a filter.
+		database.ColumnAdd{
+			Table: "companion_devices", Column: "contact_id", Typedef: "TEXT NOT NULL DEFAULT ''",
+		},
+		database.IndexCreate{
+			Name: "idx_companion_devices_contact",
+			SQL:  `CREATE INDEX IF NOT EXISTS idx_companion_devices_contact ON companion_devices(contact_id) WHERE contact_id != ''`,
 		},
 		// Anchor legacy metadata to the connection time that guarded it before
 		// observation ingestion added a shared cross-transport recency timestamp.
