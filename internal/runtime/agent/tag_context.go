@@ -822,6 +822,13 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		return ""
 	}
 
+	// One clock for the whole aggregate. Sampling per ref would let two
+	// documents carrying the same date render "today" above and
+	// "tomorrow" below if the call crossed local midnight — two refs
+	// appearing to disagree when only the clock moved. The tagged
+	// article path holds the same invariant.
+	templateNow := a.templateNow()
+
 	seen := make(map[string]bool, len(refs))
 	var buf strings.Builder
 	for _, ref := range refs {
@@ -851,6 +858,15 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		if content == "" {
 			continue
 		}
+		// Same reader-surface treatment as tagged-article injection, and
+		// for the same reason: this content is injected whole for the
+		// model to act on, so a curated "{{delta:2026-09-18}}" must read
+		// as "+20d" rather than as braces. Expansion precedes ha-inject
+		// resolution so only authored prose is expanded, never entity
+		// state fetched a moment ago. Contact origin policy points these
+		// refs at dossiers, which are exactly the documents the house
+		// rule tells authors to write templates into.
+		content = promptfmt.ExpandTemporalTemplates(content, templateNow)
 		resolved := homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		var entry strings.Builder
 		entry.WriteString("#### ")

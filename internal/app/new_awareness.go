@@ -239,6 +239,17 @@ func (a *App) initAwareness(s *newState) error {
 	// class-aware projection so the window reads closed→open for a
 	// garage_door, not off→on — injected here because contextfmt imports
 	// the homeassistant package and the provider cannot import it back.
+	// One derivation of the household zone for every provider that
+	// renders day words or expands temporal templates. Two derivations
+	// would be two chances to disagree about which day it is, and the
+	// disagreement would only ever show up late in a local evening.
+	homeZone := time.Local
+	if cfg.Timezone != "" {
+		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			homeZone = loc
+		}
+	}
+
 	// The system's one-line self-assessment: metacog's published
 	// status_line facet, the annunciator of judgments beside the state
 	// window's annunciator of facts (#1351). Always-on (ambient
@@ -247,7 +258,7 @@ func (a *App) initAwareness(s *newState) error {
 	// The provider advertises this signal before reading it. The final
 	// discriminator selects it and prepends the materialized projection to
 	// Live State, so a busy eager state window cannot starve the verdict.
-	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
+	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, homeZone, logger))
 
 	// The corpus advertiser: any document root whose context policy opts
 	// in (advertise: always|tagged) offers its faceted documents to the
@@ -271,12 +282,6 @@ func (a *App) initAwareness(s *newState) error {
 			advertisePolicies[name] = documents.DocumentRootAdvertisePolicy{
 				Mode:        rootCfg.Context.EffectiveAdvertise(),
 				RequiresTag: rootCfg.Context.RequiresTag,
-			}
-		}
-		homeZone := time.Local
-		if cfg.Timezone != "" {
-			if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
-				homeZone = loc
 			}
 		}
 		registry := a.loopDefinitionRegistry

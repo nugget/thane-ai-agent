@@ -594,6 +594,10 @@ paths:
         ranked by q-value (q=0 refuses a type), then specificity (exact
         beats `text/*` beats `*/*`), then listed order, so a client whose
         header names application/json ahead of text/plain gets JSON.
+        This is a reader surface: temporal templates in the authored
+        prose ({{delta:2026-09-18}}) arrive expanded against the current
+        time in the household timezone, identically in every
+        representation. The stored document keeps the raw template.
       x-thane-scope: definitions:read
       parameters:
         - name: name

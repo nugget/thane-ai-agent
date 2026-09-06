@@ -224,13 +224,37 @@ Curated prose gets the same treatment through temporal templates:
 time via `promptfmt.ExpandTemporalTemplates` — day words for a date
 ("today", "+20d"), a signed compact delta for an instant ("+3d16h") —
 so an authored document stays true between rewrites. Only reader
-surfaces expand — tagged-article injection and advertisement
-materialization; author surfaces
-(`doc_read`, the publish tools, git) keep the raw template so the
-round-trip is byte-exact, and a malformed template renders verbatim
-rather than disappearing. Templates render values, never claims —
-prose whose truth changes with data is a wake concern, not a
-substitution concern (#1431).
+surfaces expand — tagged-article injection, origin-derived context
+refs (`BuildRefs`), the document advertiser's materializations, the
+metacognitive verdict block, and the loop-output endpoint
+(`GET /v1/loops/{name}/outputs/{output}`, every negotiated
+representation); author surfaces (`doc_read`, the publish tools, git)
+keep the raw template so the round-trip is byte-exact, and a malformed
+template renders verbatim rather than disappearing. Classify each new
+surface as it is built: a reader that forgets to expand ships braces
+to the model, and an author surface that expands silently bakes a
+delta into the stored document at the next rewrite. Templates render
+values, never claims — prose whose truth changes with data is a wake
+concern, not a substitution concern (#1431).
+
+Materialization is not one surface but one per advertiser, and each
+carries the obligation separately — a new `ContextAdvertiser` that
+returns authored prose expands nothing until it says so. The
+metacognitive verdict is the worked example of the trap: it reaches
+the model as a rendered block (heading plus age stamp), so it is a
+presentation of the status_line rather than the author's view of it,
+and it went a release shipping braces while the same facet served over
+HTTP rendered correctly.
+
+Day words are a calendar comparison, so every reader expands against
+*now in the household timezone* — expanding in UTC renders tomorrow as
+"today" through the last hours of a local evening. Each rendered
+aggregate samples that clock exactly once: the tagged-article set, the
+ref set, and each materialized block. Sampling per document instead
+would let one block render the same date as "today" above and
+"tomorrow" below. The guarantee stops at the aggregate, though — a
+single prompt assembles several, so a prompt built across local
+midnight can still carry two of them a day apart.
 
 ### Keep schemas stable and deterministic
 
