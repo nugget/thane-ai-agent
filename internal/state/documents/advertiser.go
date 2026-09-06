@@ -285,8 +285,8 @@ func (d *DocumentAdvertiser) MaterializeContextAdvertisement(ctx context.Context
 		return "", fmt.Errorf("read %s: %w", ref, err)
 	}
 	meta, body := splitFrontmatter(string(raw))
-	if isInternalAudienceDocument(meta) {
-		return "", fmt.Errorf("document %s is audience-internal; refusing to materialize", ref)
+	if isRestrictedAudienceDocument(meta) {
+		return "", fmt.Errorf("document %s declares a reach narrower than agent-wide; refusing to materialize", ref)
 	}
 
 	contract := parsedFacetContract(meta, body)

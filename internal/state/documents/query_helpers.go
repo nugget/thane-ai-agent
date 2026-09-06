@@ -53,23 +53,31 @@ func containsAnyFold(have, want []string) bool {
 	return false
 }
 
-// audienceFrontmatterKey and audienceInternalValue are the documents-layer
-// half of the #1250 audience contract: a document whose frontmatter
-// declares audience: internal is a private working surface (loop working
-// notes, process logs) rather than published content.
-const (
-	audienceFrontmatterKey = "audience"
-	audienceInternalValue  = "internal"
-)
+// audienceFrontmatterKey is the documents-layer half of the #1250
+// audience contract: frontmatter declares how far a document reaches
+// inside this Thane instance.
+const audienceFrontmatterKey = "audience"
 
-// isInternalAudienceDocument reports whether a document declares itself
-// internal-audience via frontmatter. Search excludes internal documents
-// by default so process narration never leaks into consumer contexts
-// through a search hit; explicit reads by ref are unaffected.
-func isInternalAudienceDocument(frontmatter map[string][]string) bool {
+// restrictedAudienceValues are the reaches narrower than agent-wide. A
+// document declaring one is never advertised and never returned by a
+// search; explicit reads by ref are unaffected, so this is context
+// hygiene rather than access control.
+//
+// "internal" is the retired spelling of "private" and still parses,
+// because frontmatter written before the rename is on disk.
+var restrictedAudienceValues = []string{"private", "internal", "subscribers"}
+
+// isRestrictedAudienceDocument reports whether a document declares a
+// reach narrower than agent-wide. An absent audience is agent-wide, so
+// documents that are not loop outputs keep advertising as they always
+// have.
+func isRestrictedAudienceDocument(frontmatter map[string][]string) bool {
 	for _, value := range frontmatter[audienceFrontmatterKey] {
-		if strings.EqualFold(strings.TrimSpace(value), audienceInternalValue) {
-			return true
+		trimmed := strings.TrimSpace(value)
+		for _, restricted := range restrictedAudienceValues {
+			if strings.EqualFold(trimmed, restricted) {
+				return true
+			}
 		}
 	}
 	return false
@@ -140,4 +148,28 @@ func normalizeSearchFrontmatter(in map[string][]string) map[string][]string {
 		return nil
 	}
 	return out
+}
+
+// restrictedAudienceArgs returns restrictedAudienceValues as query
+// arguments. The SQL gate names one placeholder per value, so the two
+// must stay the same length.
+func restrictedAudienceArgs() []any {
+	args := make([]any, 0, len(restrictedAudienceValues))
+	for _, value := range restrictedAudienceValues {
+		args = append(args, value)
+	}
+	return args
+}
+
+// IsRestrictedAudience reports whether a single frontmatter audience
+// value declares a reach narrower than agent-wide. Exported for callers
+// outside this package that gate on the same question.
+func IsRestrictedAudience(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	for _, restricted := range restrictedAudienceValues {
+		if strings.EqualFold(trimmed, restricted) {
+			return true
+		}
+	}
+	return false
 }

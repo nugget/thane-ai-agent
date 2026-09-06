@@ -128,9 +128,13 @@ Output shapes available today:
   outward-facing signals with different shape budgets, while `digest`
   carries enough context to act.
 - **Working notes** outputs are a loop's private append-only process
-  log. They are internal-audience: excluded from document search and
-  from tagged-guidance injection, though the operator and the archive
-  still see them.
+  log. Their audience is `private`, the narrowest reach: excluded from
+  document search and from tagged-guidance injection, though the
+  operator and the archive still see them. `subscribers` is the middle
+  reach — read by the loops that subscribe to an output, never
+  advertised — and `agent` is the whole instance. Every reach stays
+  inside Thane; none of them lets a projection leave for an external
+  surface.
 
 The same declaration also feeds context assembly. Each turn receives a
 `Declared Durable Outputs` block with the output name, document root

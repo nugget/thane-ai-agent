@@ -183,7 +183,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md`, modified-time delta fields like `-3600s`, available facets, and the exact write_tool for mutation—not full bodies. A faceted document’s summary is its authored outward-facing signal: teaser when present, otherwise status_line, rather than a derived excerpt. The hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md`, modified-time delta fields like `-3600s`, available facets, and the exact write_tool for mutation—not full bodies. A faceted document’s summary is its authored outward-facing signal: teaser when present, otherwise status_line, rather than a derived excerpt. The hit lists its available facets so the next step is one deliberate doc_read with level. Documents whose frontmatter declares an audience reaching less than the whole agent — `private` working surfaces such as loop working notes, and `subscribers` outputs scoped to the loops that subscribe to them — are excluded by default; set include_restricted true, or filter on the audience key explicitly, to see them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -240,9 +240,9 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 					"type":        "integer",
 					"description": "Maximum number of results to return (default 20, max 100).",
 				},
-				"include_internal": map[string]any{
+				"include_restricted": map[string]any{
 					"type":        "boolean",
-					"description": "Include internal-audience documents (frontmatter `audience: internal`), which are excluded by default. Default false.",
+					"description": "Include documents whose audience reaches less than the whole agent (`private` or `subscribers`), which are excluded by default. Default false.",
 				},
 			},
 		},
@@ -255,19 +255,19 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			frontmatterKeys := documentStringSliceArg(args["frontmatter_keys"])
 			modifiedAfter, _ := args["modified_after"].(string)
 			modifiedBefore, _ := args["modified_before"].(string)
-			includeInternal, _ := args["include_internal"].(bool)
+			includeRestricted, _ := args["include_restricted"].(bool)
 			limit := numericArg(args["limit"], 20, 100)
 			return dt.Search(ctx, documents.SearchArgs{
-				Root:            root,
-				PathPrefix:      pathPrefix,
-				Query:           query,
-				Tags:            tags,
-				Frontmatter:     frontmatter,
-				FrontmatterKeys: frontmatterKeys,
-				ModifiedAfter:   modifiedAfter,
-				ModifiedBefore:  modifiedBefore,
-				Limit:           limit,
-				IncludeInternal: includeInternal,
+				Root:              root,
+				PathPrefix:        pathPrefix,
+				Query:             query,
+				Tags:              tags,
+				Frontmatter:       frontmatter,
+				FrontmatterKeys:   frontmatterKeys,
+				ModifiedAfter:     modifiedAfter,
+				ModifiedBefore:    modifiedBefore,
+				Limit:             limit,
+				IncludeRestricted: includeRestricted,
 			})
 		},
 	})

@@ -355,10 +355,10 @@ func TestValidateOutputsRejectsSecondWorkingNotes(t *testing.T) {
 		Name:     "shop log",
 		Type:     OutputTypeMaintainedDocument,
 		Ref:      "core:shop-log.md",
-		Audience: OutputAudienceInternal,
+		Audience: OutputAudiencePrivate,
 	}
 	if err := spec.ValidatePersistable(); err != nil {
-		t.Fatalf("ValidatePersistable() with an internal journal alongside working notes: %v", err)
+		t.Fatalf("ValidatePersistable() with a private journal alongside working notes: %v", err)
 	}
 }
 

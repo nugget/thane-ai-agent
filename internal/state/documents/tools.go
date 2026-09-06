@@ -55,16 +55,16 @@ type BrowseArgs struct {
 
 // SearchArgs requests structured document search over indexed roots.
 type SearchArgs struct {
-	Root            string              `json:"root,omitempty"`
-	PathPrefix      string              `json:"path_prefix,omitempty"`
-	Query           string              `json:"query,omitempty"`
-	Tags            []string            `json:"tags,omitempty"`
-	Frontmatter     map[string][]string `json:"frontmatter,omitempty"`
-	FrontmatterKeys []string            `json:"frontmatter_keys,omitempty"`
-	ModifiedAfter   string              `json:"modified_after,omitempty"`
-	ModifiedBefore  string              `json:"modified_before,omitempty"`
-	Limit           int                 `json:"limit,omitempty"`
-	IncludeInternal bool                `json:"include_internal,omitempty"`
+	Root              string              `json:"root,omitempty"`
+	PathPrefix        string              `json:"path_prefix,omitempty"`
+	Query             string              `json:"query,omitempty"`
+	Tags              []string            `json:"tags,omitempty"`
+	Frontmatter       map[string][]string `json:"frontmatter,omitempty"`
+	FrontmatterKeys   []string            `json:"frontmatter_keys,omitempty"`
+	ModifiedAfter     string              `json:"modified_after,omitempty"`
+	ModifiedBefore    string              `json:"modified_before,omitempty"`
+	Limit             int                 `json:"limit,omitempty"`
+	IncludeRestricted bool                `json:"include_restricted,omitempty"`
 }
 
 // RefArgs identifies one managed document by canonical semantic ref.
@@ -218,14 +218,14 @@ func (t *Tools) Search(ctx context.Context, args SearchArgs) (string, error) {
 		return "", fmt.Errorf("document index not configured")
 	}
 	query := SearchQuery{
-		Root:            args.Root,
-		PathPrefix:      args.PathPrefix,
-		Query:           args.Query,
-		Tags:            args.Tags,
-		Frontmatter:     args.Frontmatter,
-		FrontmatterKeys: args.FrontmatterKeys,
-		Limit:           clampLimit(args.Limit, 20, 100),
-		IncludeInternal: args.IncludeInternal,
+		Root:              args.Root,
+		PathPrefix:        args.PathPrefix,
+		Query:             args.Query,
+		Tags:              args.Tags,
+		Frontmatter:       args.Frontmatter,
+		FrontmatterKeys:   args.FrontmatterKeys,
+		Limit:             clampLimit(args.Limit, 20, 100),
+		IncludeRestricted: args.IncludeRestricted,
 	}
 	now := nowUTC()
 	if args.ModifiedAfter != "" {

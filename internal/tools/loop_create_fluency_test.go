@@ -287,7 +287,7 @@ func TestGuidedCreateScaffoldsFacetSkeleton(t *testing.T) {
 	for _, want := range []string{
 		`"status_line"`, `"digest"`, `"full"`,
 		"awaiting first cycle",
-		`"audience"`, `"published"`,
+		`"audience"`, `"agent"`,
 		`"write_tool"`, `"publish_output_closet_guardian"`,
 	} {
 		if !strings.Contains(doc, want) {
@@ -330,7 +330,7 @@ func TestGuidedCreateScaffoldsWorkingNotes(t *testing.T) {
 		t.Fatalf("read notes scaffold: %v", err)
 	}
 	for _, want := range []string{
-		`"audience"`, `"internal"`,
+		`"audience"`, `"private"`,
 		`"write_tool"`, `"replace_output_closet_guardian_notes"`,
 		"loop_definition_name",
 		"awaiting first cycle",

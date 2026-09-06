@@ -1225,10 +1225,11 @@ func scanKBArticles(dir, untagged string) ([]kbArticle, error) {
 			}
 			return nil // untagged documents are not auto-loaded
 		}
-		if strings.EqualFold(strings.TrimSpace(meta.Audience), "internal") {
-			// The #1250 audience contract: an internal-audience document
-			// is a private working surface (loop working notes, process
-			// logs). Tags on it must not turn it into injected guidance —
+		if documents.IsRestrictedAudience(meta.Audience) {
+			// The #1250 audience contract: a document reaching less than
+			// the whole agent is a working surface (loop working notes,
+			// process logs) or is scoped to its subscribers. Tags on it
+			// must not turn it into injected guidance —
 			// doc_search already excludes it, and this scanner is the
 			// other injection path.
 			return nil
