@@ -149,11 +149,32 @@ func (a *App) initStores(s *newState) error {
 	// companion config that feeds it — unconfiguring companions must not
 	// orphan the records. Shares the main thane.db connection; no
 	// separate close hook (mem owns the DB).
-	companionDevices, err := companions.NewStore(a.mem.DB(), logger)
+	// The operator's account-to-contact declaration reaches the store as
+	// a resolver, so a device is stamped with its contact as it registers
+	// rather than joined to one through config at read time.
+	contactForAccount := companionContactForAccount(a.cfg.Companion)
+	companionDevices, err := companions.NewStore(a.mem.DB(), logger,
+		companions.WithContactForAccount(contactForAccount))
 	if err != nil {
 		return fmt.Errorf("companion device store: %w", err)
 	}
 	a.companionDevices = companionDevices
+
+	// Registration stamps a device as it connects, which covers every
+	// future pairing. This covers the rest in one pass: rows written
+	// before the column existed, and accounts whose declared contact
+	// changed while their devices were not connecting. A failure here
+	// leaves stale bindings rather than none, so it warns instead of
+	// refusing the boot.
+	if accounts := companionAccountNames(a.cfg.Companion); len(accounts) > 0 {
+		changed, err := companionDevices.ReconcileContactBindings(s.ctx, accounts)
+		switch {
+		case err != nil:
+			logger.Warn("companion contact binding reconcile incomplete; some devices may still name a stale contact", "error", err)
+		case changed > 0:
+			logger.Info("companion contact bindings reconciled", "devices", changed)
+		}
+	}
 
 	// Daily prune for the completions journal Ack writes — the audit
 	// trail is bounded by age, mirroring the log-index pruner's shape.

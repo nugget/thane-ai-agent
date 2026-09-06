@@ -53,6 +53,11 @@ type Device struct {
 	// non-empty device metadata accepted from any companion transport.
 	MetadataRecordedAt time.Time
 
+	// ContactID is the contact this device belongs to, empty when the
+	// account is unclaimed. Stamped at registration from the operator's
+	// account declaration, so a reader asks the row rather than config.
+	ContactID string
+
 	FirstSeenAt time.Time
 	LastSeenAt  time.Time
 	// LastConnectedAt and LastDisconnectedAt are zero when the event has
@@ -76,18 +81,55 @@ type Device struct {
 type Store struct {
 	db     *sql.DB
 	logger *slog.Logger
+
+	// contactForAccount resolves an account to the contact the operator
+	// declared it belongs to. Nil leaves every device unbound.
+	contactForAccount func(account string) string
 }
 
 // NewStore creates a companion-device store, running migrations on
 // first use. The db handle is borrowed (the memory store owns it).
-func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
+func NewStore(db *sql.DB, logger *slog.Logger, opts ...StoreOption) (*Store, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if err := database.Migrate(db, devicesSchema, logger); err != nil {
 		return nil, err
 	}
-	return &Store{db: db, logger: logger}, nil
+	store := &Store{db: db, logger: logger}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(store)
+		}
+	}
+	return store, nil
+}
+
+// StoreOption configures optional store wiring. A construction option
+// rather than a setter: the resolver is fixed for the store's life, and
+// the architecture baseline counts exported mutator growth deliberately.
+type StoreOption func(*Store)
+
+// WithContactForAccount supplies the operator's account-to-contact
+// declaration. A device is stamped with its account's contact when it
+// registers, so a phone that pairs after boot joins its person without
+// waiting for a restart.
+//
+// The mapping stays operator config — who a device belongs to is a
+// custody decision, not something a device asserts about itself — but
+// the binding it produces lives on the row, where a reader can ask for
+// it without consulting config.
+func WithContactForAccount(resolve func(account string) string) StoreOption {
+	return func(s *Store) { s.contactForAccount = resolve }
+}
+
+// contactIDForAccount resolves an account's configured contact, or ""
+// when the account is unclaimed or no resolver is wired.
+func (s *Store) contactIDForAccount(account string) string {
+	if s == nil || s.contactForAccount == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.contactForAccount(account))
 }
 
 // RecordConnected upserts the device row for a successful companion
@@ -116,9 +158,10 @@ func (s *Store) RecordConnected(ctx context.Context, account, clientID string, m
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO companion_devices (
 			device_id, account, client_id, client_name, platform, app_version, os_version, metadata_recorded_at,
-			first_seen_at, last_seen_at, last_connected_at, state
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			first_seen_at, last_seen_at, last_connected_at, state, contact_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account, client_id) DO UPDATE SET
+			contact_id = excluded.contact_id,
 			first_seen_at = MIN(companion_devices.first_seen_at, excluded.first_seen_at),
 			client_name = CASE WHEN excluded.client_name != ''
 					AND (companion_devices.client_name = '' OR companion_devices.metadata_recorded_at IS NULL
@@ -144,7 +187,8 @@ func (s *Store) RecordConnected(ctx context.Context, account, clientID string, m
 			last_connected_at = MAX(companion_devices.last_connected_at, excluded.last_connected_at)
 	`, deviceID, account, clientID,
 		meta.ClientName, meta.Platform, meta.AppVersion, meta.OSVersion,
-		deviceMetadataTime(meta, at), at, at, at, DeviceStateActive)
+		deviceMetadataTime(meta, at), at, at, at, DeviceStateActive,
+		s.contactIDForAccount(account))
 	if err != nil {
 		return fmt.Errorf("record companion connect %s/%s: %w", account, clientID, err)
 	}
@@ -249,7 +293,7 @@ func (s *Store) Get(ctx context.Context, account, clientID string) (Device, bool
 	devices, err := s.scanDevices(ctx, `
 		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
 		       metadata_recorded_at, first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
-		       capabilities, capabilities_recorded_at, state
+		       capabilities, capabilities_recorded_at, state, contact_id
 		FROM companion_devices
 		WHERE account = ? AND client_id = ?
 	`, account, clientID)
@@ -268,10 +312,59 @@ func (s *Store) List(ctx context.Context) ([]Device, error) {
 	return s.scanDevices(ctx, `
 		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
 		       metadata_recorded_at, first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
-		       capabilities, capabilities_recorded_at, state
+		       capabilities, capabilities_recorded_at, state, contact_id
 		FROM companion_devices
 		ORDER BY account ASC, client_id ASC
 	`)
+}
+
+// DevicesForContact returns the active devices belonging to one
+// contact, newest connection first.
+//
+// This is the live answer to "what companion hardware can observe this
+// person right now": it reads the binding off the row, so a device that
+// paired since boot is included and one whose account lost its claim is
+// not. Callers previously mapped a contact to accounts through config
+// and filtered the full device list, which could only be as current as
+// the last restart.
+func (s *Store) DevicesForContact(ctx context.Context, contactID string) ([]Device, error) {
+	contactID = strings.TrimSpace(contactID)
+	if contactID == "" {
+		return nil, nil
+	}
+	return s.scanDevices(ctx, `
+		SELECT device_id, account, client_id, client_name, platform, app_version, os_version,
+		       metadata_recorded_at, first_seen_at, last_seen_at, last_connected_at, last_disconnected_at,
+		       capabilities, capabilities_recorded_at, state, contact_id
+		FROM companion_devices
+		WHERE contact_id = ? AND state = ?
+		ORDER BY last_seen_at DESC, account ASC, client_id ASC
+	`, contactID, DeviceStateActive)
+}
+
+// ReconcileContactBindings stamps every device with its account's
+// configured contact and returns how many rows changed.
+//
+// Registration stamps a device as it connects, which covers everything
+// that pairs from now on. This covers the rest: rows written before the
+// column existed, and rows whose account changed hands in config while
+// the device was not connecting. Config is the source of truth in both
+// directions — an account the operator no longer claims has its devices
+// unbound rather than left pointing at the old contact.
+func (s *Store) ReconcileContactBindings(ctx context.Context, accounts []string) (int, error) {
+	changed := 0
+	for _, account := range accounts {
+		result, err := s.db.ExecContext(ctx,
+			`UPDATE companion_devices SET contact_id = ? WHERE account = ? AND contact_id != ?`,
+			s.contactIDForAccount(account), account, s.contactIDForAccount(account))
+		if err != nil {
+			return changed, fmt.Errorf("reconcile companion contact binding for %s: %w", account, err)
+		}
+		if n, err := result.RowsAffected(); err == nil {
+			changed += int(n)
+		}
+	}
+	return changed, nil
 }
 
 func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]Device, error) {
@@ -294,7 +387,7 @@ func (s *Store) scanDevices(ctx context.Context, query string, args ...any) ([]D
 		if err := rows.Scan(
 			&d.DeviceID, &d.Account, &d.ClientID, &d.ClientName, &d.Platform, &d.AppVersion, &d.OSVersion,
 			&metadataAt, &d.FirstSeenAt, &d.LastSeenAt, &connected, &disconnected,
-			&capsJSON, &capsAt, &d.State,
+			&capsJSON, &capsAt, &d.State, &d.ContactID,
 		); err != nil {
 			return nil, err
 		}
