@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -467,25 +466,6 @@ func (a *App) initServers(s *newState) error {
 		}
 		if s.personTracker != nil {
 			deps.Presence = s.personTracker.Snapshot
-		}
-		if a.companionDevices != nil {
-			devices := a.companionDevices
-			deps.AccountsForContact = func(contactID string) []string {
-				bound, err := devices.DevicesForContact(context.Background(), contactID)
-				if err != nil {
-					logger.Warn("companion accounts for contact failed", "contact_id", contactID, "error", err)
-					return nil
-				}
-				seen := make(map[string]bool, len(bound))
-				accounts := make([]string, 0, len(bound))
-				for _, d := range bound {
-					if !seen[d.Account] {
-						seen[d.Account] = true
-						accounts = append(accounts, d.Account)
-					}
-				}
-				return accounts
-			}
 		}
 		if a.companionRegistry != nil {
 			registry := a.companionRegistry
@@ -1013,18 +993,4 @@ func companionContactForAccount(cfg config.CompanionConfig) func(string) string 
 		return nil
 	}
 	return func(account string) string { return contactByAccount[account] }
-}
-
-// companionAccountNames lists every configured companion account, so
-// startup can reconcile each one's device bindings against config.
-func companionAccountNames(cfg config.CompanionConfig) []string {
-	if !cfg.Configured() {
-		return nil
-	}
-	accounts := make([]string, 0, len(cfg.Providers))
-	for account := range cfg.Providers {
-		accounts = append(accounts, account)
-	}
-	sort.Strings(accounts)
-	return accounts
 }

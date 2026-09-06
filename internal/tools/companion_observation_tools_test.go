@@ -12,6 +12,25 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/companions"
 )
 
+// newObservationToolStoreForContact builds a store whose registrations
+// stamp each account's declared contact, mirroring how the app wires the
+// operator's companion.providers.<account>.contact declaration.
+func newObservationToolStoreForContact(t *testing.T, contactByAccount map[string]string) *companions.Store {
+	t.Helper()
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := companions.NewStore(db, nil, companions.WithContactForAccount(func(account string) string {
+		return contactByAccount[account]
+	}))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	return store
+}
+
 func newObservationToolStore(t *testing.T) *companions.Store {
 	t.Helper()
 	db, err := database.OpenMemory()

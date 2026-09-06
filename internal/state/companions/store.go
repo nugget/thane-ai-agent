@@ -319,7 +319,7 @@ func (s *Store) List(ctx context.Context) ([]Device, error) {
 }
 
 // DevicesForContact returns the active devices belonging to one
-// contact, newest connection first.
+// contact, most recently seen first.
 //
 // This is the live answer to "what companion hardware can observe this
 // person right now": it reads the binding off the row, so a device that
@@ -342,21 +342,49 @@ func (s *Store) DevicesForContact(ctx context.Context, contactID string) ([]Devi
 	`, contactID, DeviceStateActive)
 }
 
-// ReconcileContactBindings stamps every device with its account's
-// configured contact and returns how many rows changed.
+// ReconcileContactBindings brings every persisted device's contact into
+// line with the operator's declaration, and returns how many rows
+// changed.
 //
 // Registration stamps a device as it connects, which covers everything
 // that pairs from now on. This covers the rest: rows written before the
-// column existed, and rows whose account changed hands in config while
-// the device was not connecting. Config is the source of truth in both
-// directions — an account the operator no longer claims has its devices
-// unbound rather than left pointing at the old contact.
-func (s *Store) ReconcileContactBindings(ctx context.Context, accounts []string) (int, error) {
+// column existed, and rows whose account changed hands while the device
+// was not connecting.
+//
+// It walks the accounts PRESENT IN THE TABLE rather than the accounts
+// present in config, because the dangerous case is the account config no
+// longer mentions. A provider that is deleted, renamed, or disabled is
+// never visited by a config-driven sweep, so its devices keep a binding
+// the operator has revoked and keep answering for that contact. Walking
+// the table means an account with no declaration resolves to "" and is
+// unbound, which is also what happens when companions are switched off
+// entirely — the binding is a projection of config, so config saying
+// nothing means no binding.
+func (s *Store) ReconcileContactBindings(ctx context.Context) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account FROM companion_devices`)
+	if err != nil {
+		return 0, fmt.Errorf("enumerate companion accounts for reconcile: %w", err)
+	}
+	var accounts []string
+	for rows.Next() {
+		var account string
+		if err := rows.Scan(&account); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan companion account for reconcile: %w", err)
+		}
+		accounts = append(accounts, account)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("enumerate companion accounts for reconcile: %w", err)
+	}
+
 	changed := 0
 	for _, account := range accounts {
+		want := s.contactIDForAccount(account)
 		result, err := s.db.ExecContext(ctx,
 			`UPDATE companion_devices SET contact_id = ? WHERE account = ? AND contact_id != ?`,
-			s.contactIDForAccount(account), account, s.contactIDForAccount(account))
+			want, account, want)
 		if err != nil {
 			return changed, fmt.Errorf("reconcile companion contact binding for %s: %w", account, err)
 		}

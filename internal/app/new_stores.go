@@ -166,14 +166,14 @@ func (a *App) initStores(s *newState) error {
 	// changed while their devices were not connecting. A failure here
 	// leaves stale bindings rather than none, so it warns instead of
 	// refusing the boot.
-	if accounts := companionAccountNames(a.cfg.Companion); len(accounts) > 0 {
-		changed, err := companionDevices.ReconcileContactBindings(s.ctx, accounts)
-		switch {
-		case err != nil:
-			logger.Warn("companion contact binding reconcile incomplete; some devices may still name a stale contact", "error", err)
-		case changed > 0:
-			logger.Info("companion contact bindings reconciled", "devices", changed)
-		}
+	// Unconditional: the case that matters is the account config no
+	// longer declares, and a sweep gated on configured accounts is
+	// exactly the sweep that never visits it.
+	switch changed, err := companionDevices.ReconcileContactBindings(s.ctx); {
+	case err != nil:
+		logger.Warn("companion contact binding reconcile incomplete; some devices may still name a stale contact", "error", err)
+	case changed > 0:
+		logger.Info("companion contact bindings reconciled", "devices", changed)
 	}
 
 	// Daily prune for the completions journal Ack writes — the audit
