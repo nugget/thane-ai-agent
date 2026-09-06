@@ -74,7 +74,7 @@ validation from `loop_definition_lint` before anything persists.)
 
 | Key | Meaning |
 |---|---|
-| `outputs` | Durable documents the loop maintains through generated tools. Entry keys: `name`, `type` (`maintained_document`, or `working_notes` for the loop-private variant), `ref` (managed document ref like `self:ego.md`), `mode` (`replace`), `purpose` (model-facing guidance), `facets` (declare the needed `status_line` / `teaser` / `digest` projections; declaring any swaps the write tool to `publish_output_*`; `status_line` and `teaser` are both outward-facing signals with different shape budgets), `audience` (`published` or `internal`) |
+| `outputs` | Durable documents the loop maintains through generated tools. Entry keys: `name`, `type` (`maintained_document`, or `working_notes` for the loop-private variant), `ref` (managed document ref like `self:ego.md`), `mode` (`replace`), `purpose` (model-facing guidance), `facets` (declare the needed `status_line` / `teaser` / `digest` projections; declaring any swaps the write tool to `publish_output_*`; `status_line` and `teaser` are both outward-facing signals with different shape budgets), `audience` (`agent`, `subscribers`, or `private` — how far the output reaches inside Thane; the retired `published` and `internal` still parse as `agent` and `private`) |
 
 ## Watching
 

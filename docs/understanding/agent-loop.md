@@ -127,10 +127,24 @@ Output shapes available today:
   document's consumers need: `status_line` and `teaser` are compact
   outward-facing signals with different shape budgets, while `digest`
   carries enough context to act.
-- **Working notes** outputs are a loop's private append-only process
-  log. They are internal-audience: excluded from document search and
-  from tagged-guidance injection, though the operator and the archive
-  still see them.
+Every output declares an `audience`: how far its content reaches inside
+Thane. `private` is the narrowest — the owning loop's own context and
+explicit reads by ref, which is what working notes get; it is excluded
+from document search and from tagged-guidance injection, though the
+operator and the archive still see it. `agent` is the whole instance:
+search, context injection, the ambient rail. `subscribers` sits between
+them, for an output only the loops that subscribe to it should read.
+
+The delivery half of `subscribers` is not built yet — a loop cannot
+declare a subscription to another loop's output, so today the tier
+behaves like `private` plus a `doc_search` opt-in. It exists because the
+vocabulary is written into frontmatter on disk, and because facets are
+refused on `private`, so it is the only way to declare a faceted document
+that is not advertised to the whole agent.
+
+Every reach stays inside Thane. Whether a projection may leave for an
+external surface is a separate declaration, so widening reach never
+widens the trust boundary.
 
 The same declaration also feeds context assembly. Each turn receives a
 `Declared Durable Outputs` block with the output name, document root

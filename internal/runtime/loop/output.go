@@ -75,19 +75,59 @@ const (
 	OutputManagedByFrontmatterKey = "managed_by"
 )
 
-// OutputAudience describes which surfaces may project an output's
-// content.
+// OutputAudience describes how far an output's content reaches inside
+// this Thane instance.
+//
+// Every value on this axis stays within Thane. Reach never implies
+// egress: whether a projection may leave for Home Assistant, an HTTP
+// endpoint, or any other external surface is a separate, additive
+// declaration, so widening reach can never quietly widen the trust
+// boundary. This is context hygiene rather than secrecy at every tier —
+// operators and the archive see all of it.
 type OutputAudience string
 
 const (
-	// OutputAudiencePublished allows projection into any consumer
-	// surface: search results, context injection, ambient rails.
-	OutputAudiencePublished OutputAudience = "published"
-	// OutputAudienceInternal restricts the content to the owning loop's
-	// own context and explicit by-ref reads. This is context hygiene,
-	// not secrecy: operators and the archive still see the document.
-	OutputAudienceInternal OutputAudience = "internal"
+	// OutputAudiencePrivate restricts the content to the owning loop's
+	// own context and explicit by-ref reads. A loop's working notes.
+	OutputAudiencePrivate OutputAudience = "private"
+	// OutputAudienceSubscribers is the reach for an output read by the
+	// loops that subscribe to it and nobody else: never offered on the
+	// ambient rail, excluded from search unless a caller opts in.
+	//
+	// The delivery half is NOT built. Spec.Subscriptions carries Home
+	// Assistant entities only, so no loop can yet declare a subscription
+	// to an output, and this rung currently behaves like private plus a
+	// search opt-in. It exists ahead of that work because the vocabulary
+	// is written into frontmatter on disk and is the expensive half to
+	// change later, and because facets are refused on private — without
+	// this rung there is no way to declare a faceted document that is
+	// not advertised to the whole agent.
+	OutputAudienceSubscribers OutputAudience = "subscribers"
+	// OutputAudienceAgent reaches anything in this Thane instance:
+	// search results, context injection, the ambient rail. Membership
+	// of the instance is the only credential required.
+	OutputAudienceAgent OutputAudience = "agent"
 )
+
+// legacyOutputAudiences maps the retired vocabulary onto the reach
+// ladder. "internal" named two different things across the tree — an
+// output nobody else may read, and a message Thane authored rather than
+// received — so it is retired from this axis and left to mean only the
+// second. Frontmatter already on disk still parses.
+var legacyOutputAudiences = map[OutputAudience]OutputAudience{
+	"internal":  OutputAudiencePrivate,
+	"published": OutputAudienceAgent,
+}
+
+// NormalizeOutputAudience resolves a stored or configured value to a
+// current one. An unrecognized value is returned unchanged so validation
+// can reject it by name.
+func NormalizeOutputAudience(audience OutputAudience) OutputAudience {
+	if current, ok := legacyOutputAudiences[audience]; ok {
+		return current
+	}
+	return audience
+}
 
 // OutputSpec declares one durable document surface a loop is allowed to
 // maintain. The declaration is persistable; runtime hydration turns it
@@ -159,12 +199,12 @@ func (o OutputSpec) EffectiveMode() OutputMode {
 // audience implied by the output type.
 func (o OutputSpec) EffectiveAudience() OutputAudience {
 	if o.Audience != "" {
-		return o.Audience
+		return NormalizeOutputAudience(o.Audience)
 	}
 	if o.Type == OutputTypeWorkingNotes {
-		return OutputAudienceInternal
+		return OutputAudiencePrivate
 	}
-	return OutputAudiencePublished
+	return OutputAudienceAgent
 }
 
 // ToolName returns the scoped mutation tool name generated for this
@@ -218,13 +258,13 @@ func (o OutputSpec) Validate() error {
 	default:
 		return fmt.Errorf("unsupported mode %q", mode)
 	}
-	switch o.Audience {
-	case "", OutputAudiencePublished, OutputAudienceInternal:
+	switch NormalizeOutputAudience(o.Audience) {
+	case "", OutputAudiencePrivate, OutputAudienceSubscribers, OutputAudienceAgent:
 	default:
-		return fmt.Errorf("unsupported audience %q; use %q or %q", o.Audience, OutputAudiencePublished, OutputAudienceInternal)
+		return fmt.Errorf("unsupported audience %q; use %q, %q, or %q", o.Audience, OutputAudiencePrivate, OutputAudienceSubscribers, OutputAudienceAgent)
 	}
-	if o.Type == OutputTypeWorkingNotes && o.Audience == OutputAudiencePublished {
-		return fmt.Errorf("audience %q contradicts type %q; working notes are a loop's private thinking — declare a maintained_document for anything a reader should see", OutputAudiencePublished, OutputTypeWorkingNotes)
+	if o.Type == OutputTypeWorkingNotes && o.Audience != "" && NormalizeOutputAudience(o.Audience) != OutputAudiencePrivate {
+		return fmt.Errorf("audience %q contradicts type %q; working notes are a loop's private thinking — declare a maintained_document for anything a reader should see", o.Audience, OutputTypeWorkingNotes)
 	}
 	if err := validateOutputFacets(o); err != nil {
 		return err
@@ -232,10 +272,12 @@ func (o OutputSpec) Validate() error {
 	return nil
 }
 
-// validateOutputFacets checks a declared facet set. Facets are a
-// published-projection contract, so they attach only to published
-// maintained documents. Each document declares only the projections its
-// consumers need; full remains implicit and always present.
+// validateOutputFacets checks a declared facet set. A facet is a
+// projection cut for a reader, so it attaches to any maintained document
+// somebody other than the owning loop can read — agent-wide or
+// subscribers — and never to a private one. Each document declares only
+// the projections its consumers need; full remains implicit and always
+// present.
 func validateOutputFacets(o OutputSpec) error {
 	if len(o.Facets) == 0 {
 		return nil
@@ -243,8 +285,8 @@ func validateOutputFacets(o OutputSpec) error {
 	if o.Type != OutputTypeMaintainedDocument {
 		return fmt.Errorf("facets are only valid for type %q; %q outputs have none", OutputTypeMaintainedDocument, o.Type)
 	}
-	if o.EffectiveAudience() == OutputAudienceInternal {
-		return fmt.Errorf("facets declare published projections, but audience is %q; an internal output has no consumers to cut a facet for", OutputAudienceInternal)
+	if o.EffectiveAudience() == OutputAudiencePrivate {
+		return fmt.Errorf("facets are projections cut for a reader, but audience is %q; nobody but the owning loop can read this output. Use %q for an output only its subscribers read, or %q for one the whole agent may", OutputAudiencePrivate, OutputAudienceSubscribers, OutputAudienceAgent)
 	}
 	seen := make(map[OutputFacet]struct{}, len(o.Facets))
 	hasStatusLine := false
@@ -287,7 +329,7 @@ func validateOutputs(outputs []OutputSpec) error {
 			// document can declare a maintained_document with
 			// audience: internal, which carries no such implicit target.
 			if workingNotes != "" {
-				return fmt.Errorf("outputs[%d]: loop already declares the working_notes output %q; a loop has one place for its current thinking, so put it all there — for an additional private document declare a maintained_document with audience: %q", i, workingNotes, OutputAudienceInternal)
+				return fmt.Errorf("outputs[%d]: loop already declares the working_notes output %q; a loop has one place for its current thinking, so put it all there — for an additional private document declare a maintained_document with audience: %q", i, workingNotes, OutputAudiencePrivate)
 			}
 			workingNotes = output.Name
 		}

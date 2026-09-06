@@ -204,8 +204,8 @@ func loopOutputSpecSchema() map[string]any {
 			},
 			"audience": map[string]any{
 				"type":        "string",
-				"enum":        []string{"published", "internal"},
-				"description": "Who may see this output's content. published (default) allows projection into search results, context injection, and ambient surfaces; internal keeps it to this loop's own context and explicit reads by ref. working_notes outputs are internal automatically. Internal is context hygiene, not secrecy: operators and the archive still see the document.",
+				"enum":        []string{"agent", "subscribers", "private"},
+				"description": "How far this output's content reaches inside Thane. agent (default) allows projection into search results, context injection, and ambient surfaces; subscribers is for an output only the loops subscribing to it should read — never advertised, and excluded from search by default (doc_search returns it on include_restricted, or when filtering the audience key explicitly). Its delivery half is not built yet: no loop can declare a subscription to an output, so today it behaves like private plus that search opt-in, and choosing it will not deliver the output to anything; private keeps it to this loop's own context and explicit reads by ref. working_notes outputs are private automatically. Every value stays inside Thane and none of them permit anything to leave for an external surface — that is a separate declaration. This is context hygiene, not secrecy: operators and the archive still see the document.",
 			},
 			"ref":     map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
 			"mode":    map[string]any{"type": "string", "enum": []string{"replace"}, "description": "Write mode. Both output types are rewritten each cycle, so this defaults correctly when omitted and there is no reason to set it. A faceted maintained_document publishes projections instead."},

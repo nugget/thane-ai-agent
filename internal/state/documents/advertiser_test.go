@@ -403,7 +403,7 @@ func TestDocumentAdvertiserRefusesAFileChangedSinceTheOffer(t *testing.T) {
 	}
 }
 
-func TestDocumentAdvertiserRefusesAFreshlyInternalDocument(t *testing.T) {
+func TestDocumentAdvertiserRefusesAFreshlyRestrictedDocument(t *testing.T) {
 	store, dirs := newAdvertiseStore(t)
 	adv := NewDocumentAdvertiser(DocumentAdvertiserConfig{
 		Store:      store,
@@ -442,8 +442,8 @@ func TestDocumentAdvertiserRefusesAFreshlyInternalDocument(t *testing.T) {
 		Advertisement: ads[0],
 		Projection:    agentctx.ContextProjection{Name: "status_line", Role: agentctx.ContextRoleSignal, Format: "text/markdown", EstimatedBytes: 512},
 	})
-	if err == nil || !strings.Contains(err.Error(), "audience-internal") {
-		t.Fatalf("want audience-internal refusal, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "narrower than agent-wide") {
+		t.Fatalf("want a narrower-than-agent refusal, got %v", err)
 	}
 }
 

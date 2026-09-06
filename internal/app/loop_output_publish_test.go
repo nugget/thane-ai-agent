@@ -137,7 +137,7 @@ func TestPublishToolRendersDocumentAndStampsFrontmatter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got := firstFrontmatterValue(doc, "audience"); got != "published" {
+	if got := firstFrontmatterValue(doc, "audience"); got != "agent" {
 		t.Fatalf("audience frontmatter = %q, want published", got)
 	}
 	if got := firstFrontmatterValue(doc, "managed_by"); got != "publish_output_office_status" {
@@ -179,7 +179,7 @@ func TestPublishToolRejectsOverBudgetWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
+func TestPublishToolNotesReplacePrivateWorkingNotes(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
@@ -217,8 +217,8 @@ func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read notes: %v", err)
 	}
-	if got := firstFrontmatterValue(notesDoc, "audience"); got != "internal" {
-		t.Fatalf("working notes audience = %q, want internal:\n%s", got, notes)
+	if got := firstFrontmatterValue(notesDoc, "audience"); got != "private" {
+		t.Fatalf("working notes audience = %q, want private:\n%s", got, notes)
 	}
 
 	// The note must not leak into the published document.
@@ -231,7 +231,7 @@ func TestPublishToolNotesReplaceInternalWorkingNotes(t *testing.T) {
 	}
 }
 
-func TestWorkingNotesToolStampsInternalAudience(t *testing.T) {
+func TestWorkingNotesToolStampsPrivateAudience(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
@@ -258,8 +258,8 @@ func TestWorkingNotesToolStampsInternalAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read notes: %v", err)
 	}
-	if got := firstFrontmatterValue(doc, "audience"); got != "internal" {
-		t.Fatalf("direct working-notes append missing the internal stamp: audience = %q", got)
+	if got := firstFrontmatterValue(doc, "audience"); got != "private" {
+		t.Fatalf("direct working-notes append missing the private stamp: audience = %q", got)
 	}
 }
 
@@ -293,8 +293,8 @@ func TestFacetedOutputContextAdvertisesProjections(t *testing.T) {
 	for _, want := range []string{
 		"publish_output_office_status",
 		`"status_line"`,
-		`"audience": "published"`,
-		`"audience": "internal"`,
+		`"audience": "agent"`,
+		`"audience": "private"`,
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("output context missing %q:\n%s", want, block)
@@ -407,7 +407,7 @@ func TestWorkingNotesRewriteKeepsAudienceStamp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read after write %d: %v", i, err)
 		}
-		if got := firstFrontmatterValue(doc, "audience"); got != "internal" {
+		if got := firstFrontmatterValue(doc, "audience"); got != "private" {
 			t.Fatalf("write %d dropped the audience stamp: audience = %q", i, got)
 		}
 	}

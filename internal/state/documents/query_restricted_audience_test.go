@@ -56,13 +56,13 @@ func TestSearchExcludesInternalAudienceByDefault(t *testing.T) {
 	}
 }
 
-func TestSearchIncludeInternalFlagIncludesInternal(t *testing.T) {
+func TestSearchIncludeRestrictedFlagIncludesInternal(t *testing.T) {
 	t.Parallel()
 
 	store := seedAudienceSearchDocs(t)
-	refs := searchRefs(t, store, SearchQuery{Root: "kb", Query: "climate", Limit: 10, IncludeInternal: true})
+	refs := searchRefs(t, store, SearchQuery{Root: "kb", Query: "climate", Limit: 10, IncludeRestricted: true})
 	if !refs["kb:climate/status.md"] || !refs["kb:climate/notes.md"] {
-		t.Fatalf("include_internal search missing docs: %v", refs)
+		t.Fatalf("include_restricted search missing docs: %v", refs)
 	}
 }
 
