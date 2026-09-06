@@ -6,7 +6,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -221,6 +223,18 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This is a reader surface: whoever fetches this is consuming the
+	// prose, not about to rewrite it, so curated "{{delta:2026-09-18}}"
+	// must arrive as "+20d" rather than as braces. Expanded before the
+	// facet parse so every negotiated representation agrees; the stored
+	// document keeps the raw template, which is what the author
+	// round-trip depends on.
+	//
+	// Day distance is a calendar comparison, so now is taken in the
+	// household zone — expanding in UTC renders tomorrow as "today" for
+	// the last hours of a local evening.
+	record.Body = promptfmt.ExpandTemporalTemplates(record.Body, s.readerTemplateNow())
+
 	// The declared contract gates every representation: this endpoint
 	// is addressed by an output name on a definition, so what it serves
 	// is what that definition declares. A hand-edited body that happens
@@ -233,6 +247,15 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		declared[string(facet.Name)] = true
 	}
 
+	// This is a reader surface: whoever fetches this is consuming the
+	// prose, not about to rewrite it, so curated "{{delta:2026-09-18}}"
+	// must arrive as "+20d" rather than as braces. Expanded once here so
+	// every negotiated representation agrees; the stored document keeps
+	// the raw template, which is what the author round-trip depends on.
+	//
+	// Day distance is a calendar comparison, so now is taken in the
+	// household zone — expanding in UTC renders tomorrow as "today" for
+	// the last hours of a local evening.
 	verdict := ""
 	if faceted && declared[string(looppkg.OutputFacetStatusLine)] {
 		if line, ok := payload.FacetByKey(string(looppkg.OutputFacetStatusLine)); ok {
@@ -286,4 +309,24 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		}
 		s.errorResponse(w, http.StatusNotAcceptable, "output "+outputName+" declares or has published no status_line; available representations: "+available)
 	}
+}
+
+// readerTemplateNow is the instant temporal templates expand against on
+// this reader surface, in the household timezone the loop renders in.
+// An unset or unloadable zone falls back to local time, which is the
+// honest answer when the zone database cannot say otherwise.
+func (s *Server) readerTemplateNow() time.Time {
+	now := time.Now()
+	if s == nil || s.loop == nil {
+		return now
+	}
+	name := strings.TrimSpace(s.loop.Timezone())
+	if name == "" {
+		return now
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return now
+	}
+	return now.In(loc)
 }

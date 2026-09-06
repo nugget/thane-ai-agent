@@ -703,6 +703,20 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	}
 }
 
+// Timezone returns the IANA household timezone the loop renders
+// now-relative values in, or "" when none is configured.
+//
+// Exported for reader surfaces outside the prompt path: temporal
+// templates render day distances as a calendar comparison, so a caller
+// that expands them must use the zone the reader thinks in or a late
+// evening renders tomorrow's date as "today".
+func (l *Loop) Timezone() string {
+	if l == nil {
+		return ""
+	}
+	return l.timezone
+}
+
 func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 	l.pendingProvidersMu.Lock()
 	assembler := l.tagContextAssembler

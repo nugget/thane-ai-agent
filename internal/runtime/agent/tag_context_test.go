@@ -1835,3 +1835,33 @@ func TestFastProviderWarningStaysQuiet(t *testing.T) {
 		t.Errorf("a fast provider emitted a breakdown:\n%s", logs)
 	}
 }
+
+// TestBuildRefsExpandsTemporalTemplates pins session-origin context refs
+// as a reader surface, matching its sibling in the same file.
+//
+// These refs are injected whole for the model to act on, and contact
+// origin policy points them at dossiers — the documents the house rule
+// most wants templates in. Before this they were the only injection path
+// that resolved ha-inject without expanding, so a curated date arrived as
+// braces and the author had no way to tell from the teaching.
+func TestBuildRefsExpandsTemporalTemplates(t *testing.T) {
+	t.Parallel()
+
+	documentRoot := t.TempDir()
+	body := "The hard freeze lands {{delta:2026-12-25}} and the pipes need wrapping."
+	if err := os.WriteFile(filepath.Join(documentRoot, "winter.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write document: %v", err)
+	}
+	resolver := paths.New(map[string]string{"kb": documentRoot})
+	assembler := NewTagContextAssembler(TagContextAssemblerConfig{Resolver: resolver})
+	// A fixed now makes the rendered distance deterministic.
+	assembler.nowFunc = func() time.Time { return time.Date(2026, 12, 5, 9, 0, 0, 0, time.UTC) }
+
+	got := assembler.BuildRefs(context.Background(), []string{"kb:winter.md"})
+	if strings.Contains(got, "{{delta:") {
+		t.Fatalf("session-origin ref delivered a raw template to a reader: %q", got)
+	}
+	if !strings.Contains(got, "+20d") {
+		t.Fatalf("template did not render as a day distance: %q", got)
+	}
+}
