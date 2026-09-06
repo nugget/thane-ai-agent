@@ -1059,9 +1059,22 @@ func thaneLoopCreateSchema() map[string]any {
 						"description": "Optional human title for the document. Defaults to the loop name.",
 					},
 					"facets": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-						"description": "Publish selected projections alongside the full body, so each consumer takes the shape it needs. status_line and teaser are both outward-facing signals: status_line is the tight ambient form and teaser is the roomier search or cross-reference form. digest carries enough context to act. status_line is required whenever facets are declared — the one-line projection every surface can take — and teaser and digest are optional. Declaring any swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per declared projection plus full.",
+						"type": "array",
+						"items": map[string]any{
+							"anyOf": []map[string]any{
+								{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+								{
+									"type": "object",
+									"properties": map[string]any{
+										"name":   map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+										"format": map[string]any{"type": "string", "enum": []string{"markdown", "plain", "json"}},
+									},
+									"required":             []string{"name"},
+									"additionalProperties": false,
+								},
+							},
+						},
+						"description": "Publish selected projections alongside the full body, so each consumer takes the shape it needs. status_line and teaser are both outward-facing signals: status_line is the tight ambient form and teaser is the roomier search or cross-reference form. digest carries enough context to act. status_line is required whenever facets are declared — the one-line projection every surface can take — and teaser and digest are optional. Declaring any swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per declared projection plus full. Write a bare name for the default markdown encoding, or {\"name\": \"digest\", \"format\": \"json\"} for a projection a program reads rather than a person — a json projection is rejected at publish if it is not valid JSON, so a consumer that asked for json never receives prose.",
 					},
 					"initial": map[string]any{
 						"type":        "object",

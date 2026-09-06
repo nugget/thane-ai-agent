@@ -566,38 +566,82 @@ func parseOutputFacets(raw any) ([]looppkg.FacetSpec, error) {
 	}
 
 	// A decoded tool call yields []any; a Go caller is likelier to build
-	// []string. Both are accepted, and a non-string element is named by
-	// index and type rather than coerced — an element coerced to "" would
-	// be reported as an empty facet name, which describes the symptom
-	// instead of the mistake.
-	var names []string
+	// []string. Both are accepted. An element is a bare name for the
+	// default encoding, or an object naming a format — the same shape
+	// the spec-based loop tools already accept by unmarshalling straight
+	// into looppkg.Spec, so the guided path is not the narrower one.
+	var items []any
 	switch v := raw.(type) {
 	case []string:
-		names = v
-	case []any:
-		names = make([]string, 0, len(v))
-		for i, item := range v {
-			name, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("output.facets[%d] is %T; facet names are strings — status_line, teaser, or digest", i, item)
-			}
-			names = append(names, name)
+		items = make([]any, 0, len(v))
+		for _, name := range v {
+			items = append(items, name)
 		}
+	case []looppkg.FacetSpec:
+		return append([]looppkg.FacetSpec(nil), v...), nil
+	case []any:
+		items = v
 	default:
-		return nil, fmt.Errorf("output.facets must be an array of facet names, got %T", raw)
+		return nil, fmt.Errorf("output.facets must be an array of facet names or {name, format} objects, got %T", raw)
 	}
 
-	out := make([]looppkg.FacetSpec, 0, len(names))
-	for _, name := range names {
-		facet := looppkg.OutputFacet(strings.TrimSpace(name))
-		switch facet {
-		case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
-			out = append(out, looppkg.FacetSpec{Name: facet})
-		default:
-			return nil, fmt.Errorf("output.facets %q is not a projection; use status_line, teaser, or digest", name)
+	out := make([]looppkg.FacetSpec, 0, len(items))
+	for i, item := range items {
+		spec, err := parseOutputFacetItem(i, item)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, spec)
 	}
 	return out, nil
+}
+
+// parseOutputFacetItem reads one declared projection. A non-string,
+// non-object element is named by index and type rather than coerced — an
+// element coerced to "" would be reported as an empty facet name, which
+// describes the symptom instead of the mistake.
+func parseOutputFacetItem(index int, item any) (looppkg.FacetSpec, error) {
+	var rawName, rawFormat string
+	switch v := item.(type) {
+	case string:
+		rawName = v
+	case looppkg.FacetSpec:
+		return v, nil
+	case map[string]any:
+		name, ok := v["name"]
+		if !ok {
+			return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d] has no name; an object facet is {\"name\": \"digest\", \"format\": \"json\"}", index)
+		}
+		if rawName, ok = name.(string); !ok {
+			return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d].name is %T; facet names are strings — status_line, teaser, or digest", index, name)
+		}
+		if format, present := v["format"]; present {
+			if rawFormat, ok = format.(string); !ok {
+				return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d].format is %T; formats are strings — %s, %s, or %s", index, format, looppkg.FacetFormatMarkdown, looppkg.FacetFormatPlain, looppkg.FacetFormatJSON)
+			}
+		}
+	default:
+		return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d] is %T; write a bare name like \"digest\", or {\"name\": \"digest\", \"format\": \"json\"}", index, item)
+	}
+
+	facet := looppkg.OutputFacet(strings.TrimSpace(rawName))
+	switch facet {
+	case looppkg.OutputFacetStatusLine, looppkg.OutputFacetTeaser, looppkg.OutputFacetDigest:
+	default:
+		return looppkg.FacetSpec{}, fmt.Errorf("output.facets %q is not a projection; use status_line, teaser, or digest", rawName)
+	}
+
+	spec := looppkg.FacetSpec{Name: facet}
+	if trimmed := strings.TrimSpace(rawFormat); trimmed != "" {
+		format := looppkg.FacetFormat(trimmed)
+		switch format {
+		case looppkg.FacetFormatMarkdown, looppkg.FacetFormatPlain, looppkg.FacetFormatJSON:
+			spec.Format = format
+		default:
+			return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d].format %q is not an encoding; use %s, %s, or %s", index, rawFormat, looppkg.FacetFormatMarkdown, looppkg.FacetFormatPlain, looppkg.FacetFormatJSON)
+		}
+	}
+	return spec, nil
 }
 
 // buildWorkingNotesSpec derives the private log that sits beside a
