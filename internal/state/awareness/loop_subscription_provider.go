@@ -28,6 +28,7 @@ type LoopSubscriptionProvider struct {
 	transitions      TransitionSource // optional; nil marks requested logs unavailable
 	logger           *slog.Logger
 	maxGlobExpansion int
+	presence         PersonPresenceSource // optional; nil renders person entities as raw HA state
 }
 
 // SetTransitionSource wires the per-entity retention that backs
@@ -46,11 +47,12 @@ func (p *LoopSubscriptionProvider) SetTransitionSource(source TransitionSource) 
 // loop-scoped would render twice in the prompt and double the HA
 // fetch traffic. Pass nil only in tests that don't care about the
 // double-render guard.
-func NewLoopSubscriptionProvider(loops *looppkg.Registry, store *WatchlistStore, ha StateGetter, logger *slog.Logger) *LoopSubscriptionProvider {
+func NewLoopSubscriptionProvider(loops *looppkg.Registry, store *WatchlistStore, ha StateGetter, logger *slog.Logger, opts ...SubscriptionOption) *LoopSubscriptionProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LoopSubscriptionProvider{loops: loops, store: store, ha: ha, logger: logger, maxGlobExpansion: defaultMaxGlobExpansion}
+	resolved := newSubscriptionOptions(opts)
+	return &LoopSubscriptionProvider{loops: loops, store: store, ha: ha, logger: logger, maxGlobExpansion: defaultMaxGlobExpansion, presence: resolved.presence}
 }
 
 // SetMaxGlobExpansion overrides the per-turn cap on how many entities a
@@ -174,10 +176,10 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.
 			// Pass alreadyVisible so a loop glob (e.g. sensor.*) doesn't
 			// re-render entities the always-visible watchlist already
 			// injects — same dedup the concrete path applies below.
-			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, alreadyVisible))
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.transitions, p.presence, p.maxGlobExpansion, alreadyVisible))
 		case target.IsRegistryTarget():
 			states, statesErr := snap.get(ctx)
-			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, alreadyVisible))
+			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.transitions, p.presence, p.maxGlobExpansion, alreadyVisible))
 		default:
 			if _, dup := alreadyVisible[sub.EntityID]; dup {
 				continue
@@ -208,5 +210,5 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 		)
 		return formatFetchError(sub.EntityID)
 	}
-	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries, p.transitions)
+	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries, p.transitions, p.presence)
 }

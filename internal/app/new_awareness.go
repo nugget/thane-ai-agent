@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -161,7 +162,14 @@ func (a *App) initAwareness(s *newState) error {
 		// The registry client stays the concrete a.ha: registry reads
 		// are a different interface with their own cache.
 		haStateReads = homeassistant.NewStateReadCache(a.ha)
-		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, haStateReads, logger)
+
+		// Presence enrichment is bound lazily: the person tracker is
+		// built further down this function, after both providers are
+		// registered, so the closure reads it at render time rather
+		// than capturing a nil.
+		presenceOption := awareness.WithPersonPresence(a.watchedPersonPresence(s, logger))
+
+		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, haStateReads, logger, presenceOption)
 		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
@@ -172,7 +180,7 @@ func (a *App) initAwareness(s *newState) error {
 		// scope_tag indirection. Loop-scoped, not always-on: a loop's
 		// declared watch set is its eyes, and a task-mode worker keeps
 		// its eyes while shedding the ambient identity (#1363).
-		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, haStateReads, logger)
+		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, haStateReads, logger, presenceOption)
 		loopSubProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterLoopScopedContextProvider(loopSubProvider)
 
@@ -333,32 +341,8 @@ func (a *App) initAwareness(s *newState) error {
 		// Resolved per render, so a contact renamed or re-zoned after
 		// startup is picked up without a restart.
 		var presenceOpts []contacts.PresenceOption
-		if a.contactStore != nil {
-			store := a.contactStore
-			bindings := a.contactBindingResolver
-			presenceOpts = append(presenceOpts, contacts.WithContactResolver(
-				func(entityID string) (contacts.ContactIdentity, bool) {
-					contact, err := store.FindByHAPersonEntity(entityID)
-					if err != nil {
-						// An unclaimed entity is (nil, nil) and degrades
-						// silently by design. A store failure degrades
-						// identically but is not routine: it strips
-						// contact_id and operator status out of an
-						// always-on block, so say so.
-						logger.Warn("presence contact resolution failed, rendering entity-only",
-							"entity_id", entityID, "error", err)
-						return contacts.ContactIdentity{}, false
-					}
-					if contact == nil {
-						return contacts.ContactIdentity{}, false
-					}
-					return contacts.ContactIdentity{
-						ID:         contact.ID.String(),
-						Name:       contact.FormattedName,
-						TrustZone:  contact.TrustZone,
-						IsOperator: bindings.isOperator(contact),
-					}, true
-				}))
+		if resolver := a.presenceContactResolver(logger); resolver != nil {
+			presenceOpts = append(presenceOpts, contacts.WithContactResolver(resolver))
 		}
 		s.personTracker = contacts.NewPresenceTracker(presenceRoster, cfg.Timezone, logger, presenceOpts...)
 		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
@@ -648,4 +632,81 @@ func pluralEntity(n int) string {
 		return "entity"
 	}
 	return "entities"
+}
+
+// presenceContactResolver resolves a Home Assistant person entity to the
+// contact that claims it. Returns nil when there is no contact store, in
+// which case presence renders entity-only.
+//
+// One resolver serves every surface that names a person — the ambient
+// presence block and subscription rendering both — so the two cannot
+// disagree about who somebody is, or about whether they are the operator.
+func (a *App) presenceContactResolver(logger *slog.Logger) func(string) (contacts.ContactIdentity, bool) {
+	if a.contactStore == nil {
+		return nil
+	}
+	store := a.contactStore
+	bindings := a.contactBindingResolver
+	return func(entityID string) (contacts.ContactIdentity, bool) {
+		contact, err := store.FindByHAPersonEntity(entityID)
+		if err != nil {
+			// An unclaimed entity is (nil, nil) and degrades silently by
+			// design. A store failure degrades identically but is not
+			// routine: it strips contact_id and operator status out of an
+			// always-on block, so say so.
+			logger.Warn("presence contact resolution failed, rendering entity-only",
+				"entity_id", entityID, "error", err)
+			return contacts.ContactIdentity{}, false
+		}
+		if contact == nil {
+			return contacts.ContactIdentity{}, false
+		}
+		return contacts.ContactIdentity{
+			ID:         contact.ID.String(),
+			Name:       contact.FormattedName,
+			TrustZone:  contact.TrustZone,
+			IsOperator: bindings.isOperator(contact),
+		}, true
+	}
+}
+
+// watchedPersonPresence joins a subscribed person entity to the presence
+// tracker's view of them, so a service loop that declares person.* in its
+// subscriptions sees who the person is and which room they are in rather
+// than a bare "not_home".
+//
+// The tracker is constructed after the providers that render its people,
+// so this closes over the init state and reads the tracker per render.
+//
+// Degradation is per-source, not all-or-nothing. No tracker or an
+// untracked entity yields nothing, and the row renders as raw Home
+// Assistant state. A tracked person whom no contact claims — or whom
+// contact resolution could not resolve — still contributes room data;
+// only the identity fields are omitted, rather than inventing one.
+func (a *App) watchedPersonPresence(s *newState, logger *slog.Logger) awareness.PersonPresenceSource {
+	resolveContact := a.presenceContactResolver(logger)
+	return func(entityID string) (awareness.PersonPresenceFields, bool) {
+		if s.personTracker == nil {
+			return awareness.PersonPresenceFields{}, false
+		}
+		snap, tracked := s.personTracker.Snapshot(entityID)
+		if !tracked {
+			return awareness.PersonPresenceFields{}, false
+		}
+		fields := awareness.PersonPresenceFields{
+			Room:         snap.Room,
+			RoomProvider: snap.RoomProvider,
+			RoomSource:   snap.RoomSource,
+			RoomConflict: snap.RoomConflict,
+		}
+		if resolveContact != nil {
+			if identity, ok := resolveContact(entityID); ok {
+				fields.Contact = identity.Name
+				fields.ContactID = identity.ID
+				fields.TrustZone = identity.TrustZone
+				fields.IsOperator = identity.IsOperator
+			}
+		}
+		return fields, true
+	}
 }
