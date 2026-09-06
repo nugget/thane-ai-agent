@@ -608,6 +608,16 @@ func parseOutputFacetItem(index int, item any) (looppkg.FacetSpec, error) {
 	case looppkg.FacetSpec:
 		return v, nil
 	case map[string]any:
+		// The schema declares additionalProperties: false, but nothing
+		// enforces a tool's JSON Schema at entry. Left unchecked, a
+		// typo'd key is silently ignored and the projection quietly
+		// defaults to markdown — the caller asked for one encoding and
+		// got another, with no error to notice.
+		for key := range v {
+			if key != "name" && key != "format" {
+				return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d] has unknown key %q; an object facet takes name and format only", index, key)
+			}
+		}
 		name, ok := v["name"]
 		if !ok {
 			return looppkg.FacetSpec{}, fmt.Errorf("output.facets[%d] has no name; an object facet is {\"name\": \"digest\", \"format\": \"json\"}", index)

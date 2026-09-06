@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -82,5 +83,68 @@ func TestParseOutputFacetsStillTakesBareNames(t *testing.T) {
 	}
 	if nilFacets, err := parseOutputFacets(nil); err != nil || nilFacets != nil {
 		t.Errorf("parseOutputFacets(nil) = %v, %v; want nil, nil", nilFacets, err)
+	}
+}
+
+// TestParseOutputFacetsRejectsUnknownKeys covers the gap between the
+// declared schema and the handler. Nothing enforces a tool's JSON Schema
+// at entry, so additionalProperties: false is a promise the parser has to
+// keep itself — otherwise a typo'd key is dropped and the projection
+// silently falls back to markdown while the caller believes it asked for
+// json.
+func TestParseOutputFacetsRejectsUnknownKeys(t *testing.T) {
+	_, err := parseOutputFacets([]any{map[string]any{"name": "digest", "formatt": "json"}})
+	if err == nil {
+		t.Fatal("parseOutputFacets accepted an unknown key; the caller would silently get markdown")
+	}
+	if !strings.Contains(err.Error(), "formatt") {
+		t.Errorf("error does not name the offending key: %v", err)
+	}
+}
+
+// TestCreateToolSchemaOffersBothFacetForms pins the model-visible half of
+// this change. Every parser test here passes with the schema's object
+// alternative deleted, so without this the contract models actually read
+// is uncovered.
+func TestCreateToolSchemaOffersBothFacetForms(t *testing.T) {
+	rig := newCurateTestRig(t)
+
+	props := rig.tool.Parameters["properties"].(map[string]any)
+	output := props["output"].(map[string]any)["properties"].(map[string]any)
+	items := output["facets"].(map[string]any)["items"].(map[string]any)
+
+	alternatives, ok := items["anyOf"].([]map[string]any)
+	if !ok || len(alternatives) != 2 {
+		t.Fatalf("output.facets.items does not offer two alternatives: %#v", items)
+	}
+
+	bare, object := alternatives[0], alternatives[1]
+	if bare["type"] != "string" {
+		t.Errorf("first alternative is not the bare name form: %#v", bare)
+	}
+	if object["type"] != "object" {
+		t.Fatalf("second alternative is not the object form: %#v", object)
+	}
+	if additional, present := object["additionalProperties"]; !present || additional != false {
+		t.Errorf("object form must refuse unknown keys, got additionalProperties=%v", additional)
+	}
+
+	objectProps := object["properties"].(map[string]any)
+	formats := objectProps["format"].(map[string]any)["enum"].([]string)
+	for _, want := range []string{"markdown", "plain", "json"} {
+		if !slices.Contains(formats, want) {
+			t.Errorf("format enum missing %q: %v", want, formats)
+		}
+	}
+
+	// Every name the parser accepts must be offered, in both forms, or a
+	// model reading the schema cannot reach a projection that works.
+	for _, alternative := range []map[string]any{bare, objectProps["name"].(map[string]any)} {
+		names := alternative["enum"].([]string)
+		for _, want := range []string{"status_line", "teaser", "digest"} {
+			if !slices.Contains(names, want) {
+				t.Errorf("facet name enum missing %q: %v", want, names)
+			}
+		}
 	}
 }
