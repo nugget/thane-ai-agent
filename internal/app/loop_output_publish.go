@@ -35,7 +35,7 @@ func buildFacetPublishTool(docTools *documents.Tools, output looppkg.OutputSpec,
 	properties := make(map[string]any, len(fields)+1)
 	required := make([]string, 0, len(fields))
 	for _, field := range fields {
-		description := field.Guidance + looppkg.FormatGuidance(field.Format)
+		description := field.Guidance + looppkg.FormatGuidance(field.Format) + documentfacets.RelativeTimeGuidance
 		if field.MaxRunes > 0 {
 			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
 		}

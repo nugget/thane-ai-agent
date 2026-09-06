@@ -385,7 +385,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 	}
 	required := []string{"contact_id"}
 	for _, field := range fields {
-		description := field.Guidance + documentfacets.FormatGuidance(field.Format)
+		description := field.Guidance + documentfacets.FormatGuidance(field.Format) + documentfacets.RelativeTimeGuidance
 		if field.Key == "status_line" || field.Key == "teaser" {
 			description += " Omit the contact's canonical name: the structured record and dossier title already identify the subject."
 		}

@@ -219,6 +219,12 @@ func IsKey(key string) bool {
 	return ok
 }
 
+// RelativeTimeGuidance is the one clause every prose-carrying parameter
+// appends. Stored prose outlives the moment it was written, so a
+// rendered delta is a defect the write path refuses outright; saying so
+// at the parameter costs one clause and saves a refused write.
+const RelativeTimeGuidance = " Never write a rendered delta (-2h2m) or a relative phrase (\"yesterday\"): wrap the absolute value as {{delta:2026-09-18}} or {{delta:2026-09-18T14:30:00-05:00}} and it re-renders on every read."
+
 // FormatGuidance returns model-facing guidance for non-default encodings.
 func FormatGuidance(format Format) string {
 	switch format {

@@ -46,11 +46,11 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown body content to write. Omit to preserve an existing document's body; pass an empty string to intentionally clear it. Creating a new document requires body. Ordinary content-mutation tools name their markdown parameter body; structured publish tools expose projections such as full instead.",
+					"description": "Markdown body content to write. Omit to preserve an existing document's body; pass an empty string to intentionally clear it. Creating a new document requires body. Ordinary content-mutation tools name their markdown parameter body; structured publish tools expose projections such as full instead." + documentfacets.RelativeTimeGuidance,
 				},
 				"journal_entry": map[string]any{
 					"type":        "string",
-					"description": "Optional timestamped note to append under the managed `Journal` section while writing the current document state.",
+					"description": "Optional timestamped note to append under the managed `Journal` section while writing the current document state." + documentfacets.RelativeTimeGuidance,
 				},
 			},
 			"required": []string{"ref"},
@@ -109,7 +109,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown text for the body-only edit — the same parameter name doc_body_write uses. For the body modes this is the document's new body (whole or appended/prepended text); for upsert_section it is only that one section's text — never the whole document, and never the section's heading line (the heading is rendered automatically from `section`/`heading`; a leading duplicate heading line is stripped).",
+					"description": "Markdown text for the body-only edit — the same parameter name doc_body_write uses. For the body modes this is the document's new body (whole or appended/prepended text); for upsert_section it is only that one section's text — never the whole document, and never the section's heading line (the heading is rendered automatically from `section`/`heading`; a leading duplicate heading line is stripped)." + documentfacets.RelativeTimeGuidance,
 				},
 				"section": map[string]any{
 					"type":        "string",
@@ -197,7 +197,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"entry": map[string]any{
 					"type":        "string",
-					"description": "Journal note content to append under the current rolling window.",
+					"description": "Journal note content to append under the current rolling window." + documentfacets.RelativeTimeGuidance,
 				},
 				"window": map[string]any{
 					"type":        "string",
@@ -288,7 +288,7 @@ func registerDocumentWriteTool(r *Registry, dt *documents.Tools) {
 		if !ok {
 			continue
 		}
-		description := field.Guidance + documentfacets.FormatGuidance(field.Format)
+		description := field.Guidance + documentfacets.FormatGuidance(field.Format) + documentfacets.RelativeTimeGuidance
 		if field.MaxRunes > 0 {
 			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
 		}
