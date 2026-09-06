@@ -224,13 +224,23 @@ Curated prose gets the same treatment through temporal templates:
 time via `promptfmt.ExpandTemporalTemplates` — day words for a date
 ("today", "+20d"), a signed compact delta for an instant ("+3d16h") —
 so an authored document stays true between rewrites. Only reader
-surfaces expand — tagged-article injection and advertisement
-materialization; author surfaces
-(`doc_read`, the publish tools, git) keep the raw template so the
-round-trip is byte-exact, and a malformed template renders verbatim
-rather than disappearing. Templates render values, never claims —
-prose whose truth changes with data is a wake concern, not a
-substitution concern (#1431).
+surfaces expand — tagged-article injection, origin-derived context
+refs (`BuildRefs`), advertisement materialization, and the loop-output
+endpoint (`GET /v1/loops/{name}/outputs/{output}`, every negotiated
+representation); author surfaces (`doc_read`, the publish tools, git)
+keep the raw template so the round-trip is byte-exact, and a malformed
+template renders verbatim rather than disappearing. Classify each new
+surface as it is built: a reader that forgets to expand ships braces
+to the model, and an author surface that expands silently bakes a
+delta into the stored document at the next rewrite. Templates render
+values, never claims — prose whose truth changes with data is a wake
+concern, not a substitution concern (#1431).
+
+Day words are a calendar comparison, so every reader expands against
+*now in the household timezone*, sampled once per assembly. Expanding
+in UTC renders tomorrow as "today" through the last hours of a local
+evening, and sampling per document lets one prompt render the same
+date two ways a few lines apart.
 
 ### Keep schemas stable and deterministic
 

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // TestHandleLoopOutputGetNegotiatesFidelity pins the #1250 HTTP read
@@ -372,5 +376,90 @@ func TestReaderTemplateNowWithoutALoop(t *testing.T) {
 	s := &Server{logger: slog.Default(), nowFunc: func() time.Time { return now }}
 	if got := s.readerTemplateNow(); !got.Equal(now) {
 		t.Errorf("readerTemplateNow without a loop = %v, want %v", got, now)
+	}
+}
+
+// refusingLLM satisfies [llm.Client] so a test can stand up a real
+// *agent.Loop. Every method refuses rather than answering: these tests
+// never take a turn, so a call here means the test drifted into
+// exercising the model instead of the handler.
+type refusingLLM struct{}
+
+func (refusingLLM) Chat(context.Context, string, []llm.Message, []map[string]any) (*llm.ChatResponse, error) {
+	return nil, errors.New("refusingLLM: handler tests do not take turns")
+}
+
+func (refusingLLM) ChatStream(context.Context, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, error) {
+	return nil, errors.New("refusingLLM: handler tests do not take turns")
+}
+
+func (refusingLLM) Ping(context.Context) error { return nil }
+
+// TestHandleLoopOutputGetExpandsInTheHouseholdZone runs the expansion
+// through the production wiring — a real *agent.Loop carrying a
+// non-UTC household zone — rather than through templateNowInZone
+// directly. The pure-function test pins what the zone math does; this
+// pins that the handler actually asks the loop for a zone. Without
+// that call the two tests would both stay green while every date
+// regressed to UTC, which is wrong for the household for the last
+// hours of every evening.
+func TestHandleLoopOutputGetExpandsInTheHouseholdZone(t *testing.T) {
+	t.Parallel()
+
+	loop, err := agent.NewLoop(agent.LoopOptions{
+		Logger:   slog.Default(),
+		Memory:   memory.NewStore(8),
+		LLM:      refusingLLM{},
+		Model:    "test-model",
+		Timezone: "America/Chicago",
+	})
+	if err != nil {
+		t.Fatalf("agent.NewLoop: %v", err)
+	}
+
+	reg, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{{
+		Name:      "whereabouts_nugget",
+		Enabled:   true,
+		Task:      "track one contact",
+		Operation: looppkg.OperationService,
+		Outputs: []looppkg.OutputSpec{{
+			Name:   "whereabouts",
+			Type:   looppkg.OutputTypeMaintainedDocument,
+			Ref:    "whereabouts:nugget.md",
+			Facets: []looppkg.FacetSpec{{Name: looppkg.OutputFacetStatusLine}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	// 03:00 UTC on the 7th is 22:00 on the 6th in Chicago: the two
+	// zones disagree about today's date, which is exactly the window
+	// the household zone exists to get right. Expanding in UTC renders
+	// this "yesterday" while the household is still living the day.
+	now := time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC)
+
+	s := &Server{logger: slog.Default(), loop: loop, nowFunc: func() time.Time { return now }}
+	s.UseLoopDefinitionRegistry(reg)
+	s.UseDocumentReader(func(_ context.Context, ref string) (*documents.DocumentRecord, error) {
+		return &documents.DocumentRecord{
+			Ref:  ref,
+			Body: "## Status Line\n\nhome since {{delta:2026-09-06}}\n\n## Details\n\nbody\n",
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/loops/whereabouts_nugget/outputs/whereabouts", nil)
+	req.Header.Set("Accept", "text/plain")
+	req.SetPathValue("name", "whereabouts_nugget")
+	req.SetPathValue("output", "whereabouts")
+	rec := httptest.NewRecorder()
+	s.handleLoopOutputGet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %q", rec.Code, rec.Body.String())
+	}
+	if got, want := strings.TrimSpace(rec.Body.String()), "home since today"; got != want {
+		t.Errorf("text/plain = %q, want %q — expanded in %s, not the household zone",
+			got, want, now.Location())
 	}
 }
