@@ -478,6 +478,7 @@ func (a *App) initServers(s *newState) error {
 			}
 		}
 		a.loop.Tools().EnableCounterpartyTools(deps)
+		a.loop.Tools().EnableCounterpartyPlacesTools(deps)
 	}
 
 	// --- CardDAV server ---
