@@ -92,9 +92,16 @@ type whereaboutsSource struct {
 	State string `json:"state,omitempty"`
 	Room  string `json:"room,omitempty"`
 	// RoomVia is provider-specific evidence, such as a UniFi AP name.
-	RoomVia   string `json:"room_via,omitempty"`
-	Since     string `json:"since,omitempty"`
-	RoomSince string `json:"room_since,omitempty"`
+	RoomVia string `json:"room_via,omitempty"`
+	// Since and RoomSince are deltas; SinceAt and RoomSinceAt are the
+	// same moments absolutely. Both forms ship because they serve
+	// opposite jobs: the delta is how a reader judges recency in this
+	// turn, the instant is the only form that survives being written
+	// down. Quote the instant into a document and the delta nowhere.
+	Since       string `json:"since,omitempty"`
+	SinceAt     string `json:"since_at,omitempty"`
+	RoomSince   string `json:"room_since,omitempty"`
+	RoomSinceAt string `json:"room_since_at,omitempty"`
 
 	// Device fields (companion_location sources). Account, ClientID,
 	// and DeviceID make each entry uniquely identifiable and let the
@@ -175,6 +182,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 				zone := whereaboutsSource{Source: "ha_person_zone", State: snap.State}
 				if !snap.Since.IsZero() {
 					zone.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
+					zone.SinceAt = snap.Since.In(now.Location()).Format(time.RFC3339)
 				}
 				if home && !roomConflict && snap.Room != "" {
 					room := whereaboutsSource{
@@ -184,6 +192,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 					}
 					if !snap.RoomSince.IsZero() {
 						room.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+						room.RoomSinceAt = snap.RoomSince.In(now.Location()).Format(time.RFC3339)
 					}
 					presenceSources = append(presenceSources, room)
 				}
