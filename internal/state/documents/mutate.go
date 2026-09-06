@@ -124,6 +124,11 @@ type MutationResult struct {
 	SizeBytes   int64    `json:"size_bytes"`
 	Section     string   `json:"section,omitempty"`
 	Window      string   `json:"window,omitempty"`
+	// Warnings carry advisories about a write that succeeded — today,
+	// relative-time prose that will not stay true. Advisory rather than
+	// fatal because the author still wrote something legible; the
+	// refusals live in typed errors.
+	Warnings []string `json:"warnings,omitempty"`
 	// Revision advances the hidden read receipt after a successful mutation.
 	Revision string `json:"-"`
 }
@@ -229,6 +234,14 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 		args.Body = &normalized
 	}
 	args.JournalEntry = normalizeGlyphArtifacts(args.JournalEntry)
+	suppliedBody := ""
+	if args.Body != nil {
+		suppliedBody = *args.Body
+	}
+	warnings, err := guardAuthoredProse(args.Ref, suppliedBody, args.JournalEntry)
+	if err != nil {
+		return nil, err
+	}
 	root, relPath, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, err
@@ -311,7 +324,9 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 		return nil, err
 	}
 	s.attachMutationRevision(ctx, record, revision)
-	return mutationResultFromRecord(action, record, existed, sectionName, ""), nil
+	result := mutationResultFromRecord(action, record, existed, sectionName, "")
+	result.Warnings = warnings
+	return result, nil
 }
 
 func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error) {
@@ -365,6 +380,15 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 		return nil, fmt.Errorf("unsupported edit mode %q; use one of [metadata, replace_body, append_body, prepend_body, upsert_section, delete_section]", args.Mode)
 	}
 
+	var warnings []string
+	switch mode {
+	case "replace_body", "append_body", "prepend_body", "upsert_section":
+		warnings, err = guardAuthoredProse(args.Ref, args.Body)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	raw := rawFrontmatter
 	if len(args.Frontmatter) > 0 || args.Title != "" || args.Description != "" || len(args.Tags) > 0 {
 		meta := mergeDocumentFrontmatter(record, args.Title, args.Description, args.Tags, args.Frontmatter, time.Now())
@@ -383,12 +407,18 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 		return nil, err
 	}
 	s.attachMutationRevision(ctx, record, revision)
-	return mutationResultFromRecord("doc_edit", record, true, sectionName, ""), nil
+	editResult := mutationResultFromRecord("doc_edit", record, true, sectionName, "")
+	editResult.Warnings = warnings
+	return editResult, nil
 }
 
 func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*MutationResult, error) {
 	args.Entry = normalizeGlyphArtifacts(args.Entry)
 	root, relPath, err := parseRef(args.Ref)
+	if err != nil {
+		return nil, err
+	}
+	journalWarnings, err := guardAuthoredProse(args.Ref, args.Entry)
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +489,9 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 		return nil, err
 	}
 	s.attachMutationRevision(ctx, record, revision)
-	return mutationResultFromRecord("doc_journal_update", record, existed, windowHeading, windowKind), nil
+	journalResult := mutationResultFromRecord("doc_journal_update", record, existed, windowHeading, windowKind)
+	journalResult.Warnings = journalWarnings
+	return journalResult, nil
 }
 
 // maxReadableDocumentBytes caps how much of a managed document Thane will read

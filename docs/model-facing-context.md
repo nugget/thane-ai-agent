@@ -246,6 +246,21 @@ presentation of the status_line rather than the author's view of it,
 and it went a release shipping braces while the same facet served over
 HTTP rendered correctly.
 
+The write path enforces this rather than trusting it. Prose supplied to
+`doc_write`, `doc_edit`, `doc_journal_update` or any publish tool is
+scanned, and a rendered delta — this project's own `-2h2m` shape — is
+refused outright, because prose acquires one almost exclusively by
+transcribing a tool result verbatim. Natural-language relative time
+("yesterday", "21 minutes ago") decays just as fast but is ordinary
+English, so it warns and the write lands. The scan skips frontmatter,
+fenced blocks and inline code, which is both the escape hatch for
+writing a literal delta and the reason JSON facets need no special case
+— a faceted document stores one as a fenced block.
+
+Only the text a call supplies is scanned, never the merged document. A
+document that already rotted has to stay writable, or the loop whose
+prose went stale would be the one loop unable to repair it.
+
 Day words are a calendar comparison, so every reader expands against
 *now in the household timezone* — expanding in UTC renders tomorrow as
 "today" through the last hours of a local evening. Each rendered
