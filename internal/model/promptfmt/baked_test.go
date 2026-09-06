@@ -36,6 +36,10 @@ func TestFindBakedDeltasTiers(t *testing.T) {
 		// the look-behind exists for: every other guard passes it.
 		{"suffix on an identifier", "the retention-30d policy applies", nil},
 		{"countdown notation", "at T-5m we abort", nil},
+		// Boundaries are runes, not ASCII bytes: an accented identifier
+		// must be exempt exactly as its plain-ASCII twin is.
+		{"non-ASCII identifier", "the café-1h special", nil},
+		{"CJK identifier", "the 保持-30d policy", nil},
 		{"spelled-out unit", "waited +3days", nil},
 		{"abbreviated unit", "waited -5min", nil},
 		{"sign with no terms", "a - b and c + d", nil},
@@ -112,6 +116,83 @@ func TestFindBakedDeltasSkipsNonProseRegions(t *testing.T) {
 	}
 	if got[0].Line != 18 {
 		t.Errorf("line = %d, want 18 — line numbers must survive every skipped region", got[0].Line)
+	}
+}
+
+// TestFindBakedDeltasUnterminatedFrontmatterIsProse pins the bypass this
+// guard would otherwise hand any author: a body whose first line is a
+// thematic break rather than an envelope. Skipping to EOF looking for a
+// delimiter that never comes would make "---" at the top of a page a
+// way to write anything at all past the guard.
+func TestFindBakedDeltasUnterminatedFrontmatterIsProse(t *testing.T) {
+	t.Parallel()
+
+	got := FindBakedDeltas("---\narrived -2h\n")
+	if len(got) != 1 || got[0].Text != "-2h" {
+		t.Errorf("FindBakedDeltas = %+v, want the delta scanned as prose", got)
+	}
+}
+
+// TestFindBakedDeltasFenceMarkersDoNotCross pins CommonMark's rule that
+// a fence closes only with the character it opened with. A "```" line
+// inside a "~~~" block is content, and treating it as a close drops the
+// rest of that block back into the scan — refusing a write over a
+// documented example.
+func TestFindBakedDeltasFenceMarkersDoNotCross(t *testing.T) {
+	t.Parallel()
+
+	body := "~~~\n```\n-2h\n~~~\nafter -3h\n"
+	got := FindBakedDeltas(body)
+	if len(got) != 1 {
+		t.Fatalf("want only the prose after the block, got %+v", got)
+	}
+	if got[0].Text != "-3h" || got[0].Line != 5 {
+		t.Errorf("finding = %+v, want -3h on line 5", got[0])
+	}
+}
+
+// TestFindBakedDeltasMultiBacktickSpans pins the escape hatch the
+// refusal message promises. CommonMark delimits a span with equal-length
+// backtick runs, so a doubled span is code exactly as a single one is;
+// pairing individual backticks would expose the inner text and refuse a
+// write over the very escape the message offered.
+func TestFindBakedDeltasMultiBacktickSpans(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"single", "write `-2h` here", 0},
+		{"doubled", "write ``-2h`` here", 0},
+		{"tripled around a tick", "write ```-2h``` here", 0},
+		{"doubled span containing a single tick", "write ``a ` -2h`` here", 0},
+		{"unmatched width leaves prose", "write ``-2h` here", 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := FindBakedDeltas(tc.body); len(got) != tc.want {
+				t.Errorf("FindBakedDeltas(%q) = %+v, want %d finding(s)", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFindBakedDeltasVocabularyIsWiderThanFormatterOutput pins a
+// deliberate choice. The matcher confirms candidates with the parser
+// ParseTimeOrDelta uses, not the narrower set FormatDeltaOnly emits:
+// "-30m" and "-2w" never come off a formatter, but a model that writes
+// either has still hardcoded a time that decays.
+func TestFindBakedDeltasVocabularyIsWiderThanFormatterOutput(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"waited -30m", "waited -2w", "stamped +0s"} {
+		got := FindBakedDeltas(body)
+		if len(got) != 1 || got[0].Tier != BakedDeltaFormatted {
+			t.Errorf("FindBakedDeltas(%q) = %+v, want one tier-1 finding", body, got)
+		}
 	}
 }
 

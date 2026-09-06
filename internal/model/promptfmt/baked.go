@@ -3,6 +3,8 @@ package promptfmt
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // BakedDeltaTier ranks how confident a finding is that stored prose
@@ -83,27 +85,17 @@ func FindBakedDeltas(body string) []BakedDelta {
 	var found []BakedDelta
 
 	lines := strings.Split(body, "\n")
-	inFence := false
-	inFrontmatter := len(lines) > 0 && strings.TrimRight(lines[0], "\r") == "---"
+	skipTo := frontmatterEnd(lines)
+	var fence fenceState
 
 	for i, raw := range lines {
+		if i < skipTo {
+			continue
+		}
 		line := strings.TrimRight(raw, "\r")
 		lineNo := i + 1
 
-		// Frontmatter runs from the opening --- to the next one. Its
-		// contents are the writer's stamps, not the author's prose.
-		if inFrontmatter {
-			if i > 0 && (line == "---" || line == "...") {
-				inFrontmatter = false
-			}
-			continue
-		}
-
-		if isFenceDelimiter(line) {
-			inFence = !inFence
-			continue
-		}
-		if inFence {
+		if closed := fence.consume(line); closed || fence.open {
 			continue
 		}
 
@@ -119,48 +111,156 @@ func FindBakedDeltas(body string) []BakedDelta {
 	return found
 }
 
-// isFenceDelimiter reports whether a line opens or closes a fenced code
-// block. Both CommonMark fence characters count, and an info string
-// ("```json") rides along on the opening line.
-func isFenceDelimiter(line string) bool {
-	trimmed := strings.TrimLeft(line, " \t")
-	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+// frontmatterEnd returns the first line index that is prose, skipping a
+// leading YAML frontmatter block when there is one.
+//
+// A block counts only when its closing delimiter is actually present.
+// The guarded inputs are document bodies, where a leading "---" is far
+// more likely a thematic break than an envelope, and an unterminated
+// block would otherwise swallow the entire document — turning a
+// horizontal rule at the top of a page into a way to write anything at
+// all past the guard.
+func frontmatterEnd(lines []string) int {
+	if len(lines) == 0 || strings.TrimRight(lines[0], "\r") != "---" {
+		return 0
+	}
+	for i := 1; i < len(lines); i++ {
+		switch strings.TrimRight(lines[i], "\r") {
+		case "---", "...":
+			return i + 1
+		}
+	}
+	return 0
 }
 
-// outsideCodeSpans splits a line into the runs that sit outside
-// backtick-delimited spans. An unterminated backtick opens nothing —
-// the rest of the line stays prose — because a stray tick in ordinary
-// writing must not blind the scanner to everything after it.
+// fenceState tracks an open fenced code block. CommonMark closes a
+// fence only with the character it opened with, at least as long as the
+// opening run, so a "```" line inside a "~~~" block is content — and
+// treating it as a close would drop the rest of that block back into
+// the scan and refuse a write over a documented example.
+type fenceState struct {
+	open   bool
+	marker byte
+	length int
+}
+
+// consume applies one line to the fence state and reports whether that
+// line was the closing delimiter (which is itself not prose).
+func (f *fenceState) consume(line string) bool {
+	marker, length, ok := fenceDelimiter(line)
+	if !ok {
+		return false
+	}
+	if !f.open {
+		f.open, f.marker, f.length = true, marker, length
+		return true
+	}
+	if marker == f.marker && length >= f.length {
+		f.open, f.marker, f.length = false, 0, 0
+		return true
+	}
+	return false
+}
+
+// fenceDelimiter reports the marker byte and run length of a fence
+// line: up to three leading spaces, then three or more backticks or
+// tildes.
+func fenceDelimiter(line string) (byte, int, bool) {
+	i := 0
+	for i < len(line) && i < 3 && line[i] == ' ' {
+		i++
+	}
+	if i >= len(line) || (line[i] != '`' && line[i] != '~') {
+		return 0, 0, false
+	}
+	marker := line[i]
+	run := 0
+	for i+run < len(line) && line[i+run] == marker {
+		run++
+	}
+	if run < 3 {
+		return 0, 0, false
+	}
+	return marker, run, true
+}
+
+// outsideCodeSpans splits a line into the runs that sit outside inline
+// code spans. CommonMark delimits a span with equal-length backtick
+// runs, so "“-2h“" is code just as "`-2h`" is; pairing single
+// backticks instead would leave the inner text exposed and refuse a
+// write over the very escape hatch the refusal message offers.
+//
+// An unterminated run opens nothing — the rest of the line stays prose
+// — because a stray tick in ordinary writing must not blind the scanner
+// to everything after it.
 func outsideCodeSpans(line string) []string {
 	if !strings.Contains(line, "`") {
 		return []string{line}
 	}
 	var out []string
-	for {
-		open := strings.IndexByte(line, '`')
-		if open < 0 {
-			out = append(out, line)
+	pos := 0
+	for pos < len(line) {
+		openStart, openLen := backtickRun(line, pos)
+		if openLen == 0 {
+			out = append(out, line[pos:])
 			return out
 		}
-		close := strings.IndexByte(line[open+1:], '`')
-		if close < 0 {
-			out = append(out, line)
+		closeStart, ok := matchingBacktickRun(line, openStart+openLen, openLen)
+		if !ok {
+			out = append(out, line[pos:])
 			return out
 		}
-		out = append(out, line[:open])
-		line = line[open+1+close+1:]
+		out = append(out, line[pos:openStart])
+		pos = closeStart + openLen
 	}
+	return out
 }
 
-// formattedDeltasIn finds this package's own delta vocabulary in a run
-// of prose. Hand-rolled rather than a regexp because the boundary rule
+// backtickRun finds the next run of backticks at or after from,
+// returning its start and length (length 0 when there is none).
+func backtickRun(line string, from int) (int, int) {
+	start := strings.IndexByte(line[from:], '`')
+	if start < 0 {
+		return 0, 0
+	}
+	start += from
+	run := 0
+	for start+run < len(line) && line[start+run] == '`' {
+		run++
+	}
+	return start, run
+}
+
+// matchingBacktickRun finds the next backtick run of exactly want
+// length, which is what closes a span of that width.
+func matchingBacktickRun(line string, from, want int) (int, bool) {
+	for pos := from; pos < len(line); {
+		start, run := backtickRun(line, pos)
+		if run == 0 {
+			return 0, false
+		}
+		if run == want {
+			return start, true
+		}
+		pos = start + run
+	}
+	return 0, false
+}
+
+// formattedDeltasIn finds this package's delta vocabulary in a run of
+// prose. Hand-rolled rather than a regexp because the boundary rule
 // needs a look behind the candidate — RE2 has no lookaround, and
 // without one "-98.41852298892312" (a longitude, which this corpus is
 // full of) would need the surrounding bytes checked anyway.
 //
-// A candidate is confirmed by [parseDeltaTerms], the same parser
-// [ParseTimeOrDelta] uses, so the matcher accepts exactly the grammar
-// the formatters emit rather than a second, drifting definition of it.
+// A candidate is confirmed by [parseDeltaTerms], which is the vocabulary
+// [ParseTimeOrDelta] accepts rather than the narrower set
+// [FormatDeltaOnly] emits. That is deliberate and slightly wider than
+// "machine output": "-30m" and "-2w" never come off a formatter (which
+// would render them "-1800s" and "-14d"), but a model that writes
+// either has still hardcoded a relative time that decays, and a tool
+// argument may echo one back verbatim. Matching the parser also keeps
+// one definition of the grammar instead of a second that drifts.
 func formattedDeltasIn(prose string) []string {
 	var out []string
 	for i := 0; i < len(prose); i++ {
@@ -169,7 +269,7 @@ func formattedDeltasIn(prose string) []string {
 		}
 		// A sign glued to a word or a number is part of that token
 		// ("UTC-5", "29.83-98.46"), not the start of a delta.
-		if i > 0 && isDeltaBoundaryByte(prose[i-1]) {
+		if gluedBefore(prose, i) {
 			continue
 		}
 		end := i + 1
@@ -182,7 +282,7 @@ func formattedDeltasIn(prose string) []string {
 		// A trailing word character means the run was a fragment of
 		// something longer ("+3days", "-5min"), which the formatters
 		// never emit.
-		if end < len(prose) && isDeltaBoundaryByte(prose[end]) {
+		if gluedAfter(prose, end) {
 			continue
 		}
 		candidate := prose[i:end]
@@ -202,13 +302,28 @@ func isDeltaUnit(b byte) bool {
 	return ok
 }
 
-// isDeltaBoundaryByte reports whether a byte glues a candidate to a
-// neighbouring token. Letters and digits obviously do; so does '.',
-// which is what keeps decimal coordinates out of the results.
-func isDeltaBoundaryByte(b byte) bool {
-	switch {
-	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', isDigit(b), b == '.', b == '_':
-		return true
+// glued reports whether the rune ending at (or starting at) an offset
+// joins a candidate to a neighbouring token. Letters and digits of any
+// script count, not just ASCII: "café-1h" is one identifier the same
+// way "retention-1h" is, and an ASCII-only check would refuse a write
+// over the accented one while exempting the plain one. '.' and '_'
+// join too, which is what keeps decimal coordinates out of the results.
+func gluedRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_'
+}
+
+func gluedBefore(prose string, i int) bool {
+	if i == 0 {
+		return false
 	}
-	return false
+	r, _ := utf8.DecodeLastRuneInString(prose[:i])
+	return gluedRune(r)
+}
+
+func gluedAfter(prose string, i int) bool {
+	if i >= len(prose) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(prose[i:])
+	return gluedRune(r)
 }

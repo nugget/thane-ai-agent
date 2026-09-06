@@ -109,7 +109,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown text for the body-only edit — the same parameter name doc_body_write uses. For the body modes this is the document's new body (whole or appended/prepended text); for upsert_section it is only that one section's text — never the whole document, and never the section's heading line (the heading is rendered automatically from `section`/`heading`; a leading duplicate heading line is stripped).",
+					"description": "Markdown text for the body-only edit — the same parameter name doc_body_write uses. For the body modes this is the document's new body (whole or appended/prepended text); for upsert_section it is only that one section's text — never the whole document, and never the section's heading line (the heading is rendered automatically from `section`/`heading`; a leading duplicate heading line is stripped)." + documentfacets.RelativeTimeGuidance,
 				},
 				"section": map[string]any{
 					"type":        "string",
@@ -197,7 +197,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"entry": map[string]any{
 					"type":        "string",
-					"description": "Journal note content to append under the current rolling window.",
+					"description": "Journal note content to append under the current rolling window." + documentfacets.RelativeTimeGuidance,
 				},
 				"window": map[string]any{
 					"type":        "string",
