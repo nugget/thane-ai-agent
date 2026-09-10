@@ -3,23 +3,26 @@ package email
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
-// Manager holds multiple named IMAP email clients and routes requests
-// to the appropriate account. The first configured account becomes the
-// primary (default) account.
+// Manager holds one [Client] per configured account and routes
+// requests to them by name. The first configured account is the
+// primary, which an empty account name selects.
 type Manager struct {
 	clients  map[string]*Client
 	configs  map[string]AccountConfig
+	order    []string // config order; order[0] is primary
 	bccOwner string
-	primary  string
 	logger   *slog.Logger
 }
 
 // NewManager creates a manager from the email configuration. Each
-// configured account gets a lazily-connected Client. The first account
-// becomes the primary.
+// configured account gets a lazily connected Client.
 func NewManager(cfg Config, logger *slog.Logger) *Manager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	m := &Manager{
 		clients:  make(map[string]*Client, len(cfg.Accounts)),
 		configs:  make(map[string]AccountConfig, len(cfg.Accounts)),
@@ -27,69 +30,89 @@ func NewManager(cfg Config, logger *slog.Logger) *Manager {
 		logger:   logger,
 	}
 
-	for i, acct := range cfg.Accounts {
-		client := NewClient(acct.IMAP, logger.With("email_account", acct.Name))
+	for _, acct := range cfg.Accounts {
+		client := NewClient(acct.Name, acct.IMAP, logger.With("email_account", acct.Name))
 		m.clients[acct.Name] = client
 		m.configs[acct.Name] = acct
-		if i == 0 {
-			m.primary = acct.Name
-		}
+		m.order = append(m.order, acct.Name)
 	}
 
 	return m
 }
 
-// Account returns the named client, or the primary client if name is
-// empty. Returns an error if the account is not found.
-func (m *Manager) Account(name string) (*Client, error) {
+// resolveName maps an account argument to a configured name: empty
+// selects the primary, and an unknown name is refused with the list
+// of names that exist so the caller can pick one.
+func (m *Manager) resolveName(name string) (string, error) {
+	if len(m.order) == 0 {
+		return "", fmt.Errorf("no email accounts are configured")
+	}
 	if name == "" {
-		name = m.primary
+		return m.order[0], nil
 	}
-	client, ok := m.clients[name]
-	if !ok {
-		return nil, fmt.Errorf("email account %q not found", name)
+	if _, ok := m.clients[name]; !ok {
+		return "", fmt.Errorf("email account %q not found; retry with account set to one of [%s]", name, strings.Join(m.order, ", "))
 	}
-	return client, nil
+	return name, nil
+}
+
+// Account returns the named client, or the primary client if name is
+// empty.
+func (m *Manager) Account(name string) (*Client, error) {
+	resolved, err := m.resolveName(name)
+	if err != nil {
+		return nil, err
+	}
+	return m.clients[resolved], nil
 }
 
 // AccountConfig returns the full configuration for the named account,
 // or the primary account if name is empty. This includes SMTP settings
 // and the default From address needed for sending.
 func (m *Manager) AccountConfig(name string) (AccountConfig, error) {
-	if name == "" {
-		name = m.primary
+	resolved, err := m.resolveName(name)
+	if err != nil {
+		return AccountConfig{}, err
 	}
-	cfg, ok := m.configs[name]
-	if !ok {
-		return AccountConfig{}, fmt.Errorf("email account %q not found", name)
-	}
-	return cfg, nil
+	return m.configs[resolved], nil
 }
 
-// BccOwner returns the configured auto-Bcc address for outbound email.
-// Returns empty if no Bcc owner is configured.
+// BccOwner returns the configured auto-Bcc address for outbound email,
+// or empty when none is configured.
 func (m *Manager) BccOwner() string {
 	return m.bccOwner
 }
 
-// Primary returns the default account name.
+// Primary returns the default account name, or empty when no account
+// is configured.
 func (m *Manager) Primary() string {
-	return m.primary
+	if len(m.order) == 0 {
+		return ""
+	}
+	return m.order[0]
 }
 
-// AccountNames returns all configured account names in no particular order.
+// AccountNames returns all configured account names in configuration
+// order, primary first.
 func (m *Manager) AccountNames() []string {
-	names := make([]string, 0, len(m.clients))
-	for name := range m.clients {
-		names = append(names, name)
+	return append([]string(nil), m.order...)
+}
+
+// AccountsInConfigOrder returns the account configurations in
+// declaration order, primary first, so renderers never reach into the
+// manager's maps.
+func (m *Manager) AccountsInConfigOrder() []AccountConfig {
+	out := make([]AccountConfig, 0, len(m.order))
+	for _, name := range m.order {
+		out = append(out, m.configs[name])
 	}
-	return names
+	return out
 }
 
 // Close closes all client connections.
 func (m *Manager) Close() {
-	for name, client := range m.clients {
-		if err := client.Close(); err != nil {
+	for _, name := range m.order {
+		if err := m.clients[name].Close(); err != nil {
 			m.logger.Warn("error closing email client", "account", name, "error", err)
 		}
 	}

@@ -3,9 +3,10 @@ package email
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -13,66 +14,69 @@ import (
 	"github.com/emersion/go-message/mail"
 )
 
-// maxBodySize is the maximum body size to include in a message.
-// Larger bodies are truncated with a note.
+// maxBodySize is the most of a text part that is kept. Larger parts
+// are cut on a rune boundary and [Message.BodyTruncated] is set.
 const maxBodySize = 32 * 1024
 
-// maxRawMessageSize is the maximum raw RFC822 message size to buffer
-// when reading from the IMAP literal. Messages larger than this (e.g.
-// with huge attachments) are truncated — the remainder of the literal
-// is drained to keep the IMAP stream in sync. The parsed text body
-// is further truncated at maxBodySize by parseBody.
+// maxRawMessageSize is the most of a raw RFC 5322 message that is
+// buffered from the IMAP literal. The remainder is drained so the
+// stream stays in sync, [Message.RawTruncated] is set, and parts past
+// the cut are never seen.
 const maxRawMessageSize = 5 * 1024 * 1024
 
-// ReadMessage fetches and parses a single message by UID from the
-// specified folder. The MIME structure is walked to extract text/plain
-// and text/html bodies.
-func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*Message, error) {
+// errMissingUID marks a FETCH response with no UID item, which cannot
+// be attributed to a message.
+var errMissingUID = errors.New("fetch response missing UID")
+
+// ReadMessage fetches one message and parses its MIME structure into a
+// [Message]: envelope, threading headers, the readable body, and a
+// description of attachments. The body is fetched with BODY.PEEK when
+// opts.Peek is set, leaving the unseen state alone; otherwise the
+// server marks the message seen. A UID the folder does not have is
+// [FailureMessageNotFound].
+func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
+	folder := normalizeFolder(opts.Folder)
 
-	if folder == "" {
-		folder = "INBOX"
-	}
-
-	if _, err := c.selectFolder(folder); err != nil {
+	if _, err := c.selectFolder(ctx, folder, opts.Peek); err != nil {
 		return nil, err
 	}
 
 	uidSet := imap.UIDSet{}
-	uidSet.AddNum(imap.UID(uid))
+	uidSet.AddNum(imap.UID(opts.UID))
 
 	fetchOpts := &imap.FetchOptions{
-		UID:        true,
-		Envelope:   true,
-		Flags:      true,
-		RFC822Size: true,
-		BodySection: []*imap.FetchItemBodySection{
-			{Peek: false}, // Mark as \Seen — reading means read.
-		},
+		UID:         true,
+		Envelope:    true,
+		Flags:       true,
+		RFC822Size:  true,
+		BodySection: []*imap.FetchItemBodySection{{Peek: opts.Peek}},
 	}
 
-	fetchCmd := c.client.Fetch(uidSet, fetchOpts)
+	release := c.guard(ctx)
+	defer release()
 
+	fetchCmd := c.client.Fetch(uidSet, fetchOpts)
 	msg := fetchCmd.Next()
 	if msg == nil {
-		_ = fetchCmd.Close()
-		return nil, fmt.Errorf("message UID %d not found in %s", uid, folder)
+		if err := fetchCmd.Close(); err != nil {
+			return nil, c.wrap(ctx, "fetch message", folder, opts.UID, err)
+		}
+		return nil, &ClientError{Account: c.name, Op: "fetch message", Folder: folder, UID: opts.UID, Kind: FailureMessageNotFound}
 	}
 
 	result := &Message{}
 	var rawBody []byte
-
 	for {
 		item := msg.Next()
 		if item == nil {
 			break
 		}
-
 		switch data := item.(type) {
 		case imapclient.FetchItemDataUID:
 			result.UID = uint32(data.UID)
@@ -83,84 +87,64 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 		case imapclient.FetchItemDataRFC822Size:
 			result.Size = uint32(data.Size)
 		case imapclient.FetchItemDataEnvelope:
-			if data.Envelope != nil {
-				result.Date = data.Envelope.Date
-				result.Subject = data.Envelope.Subject
-				result.MessageID = data.Envelope.MessageID
-				result.InReplyTo = data.Envelope.InReplyTo
-				if len(data.Envelope.From) > 0 {
-					result.From = formatAddress(data.Envelope.From[0])
-				}
-				for _, addr := range data.Envelope.To {
-					result.To = append(result.To, formatAddress(addr))
-				}
-				for _, addr := range data.Envelope.Cc {
-					result.Cc = append(result.Cc, formatAddress(addr))
-				}
-				if len(data.Envelope.ReplyTo) > 0 {
-					result.ReplyTo = formatAddress(data.Envelope.ReplyTo[0])
-				}
-			}
+			applyEnvelope(&result.Envelope, data.Envelope)
 		case imapclient.FetchItemDataBodySection:
-			// Consume the literal immediately. go-imap/v2 streams
-			// data from the IMAP connection; msg.Next() advances
-			// past unread literals, so deferring the read would
-			// lose the body data.
+			// Consume the literal immediately. go-imap/v2 streams data
+			// from the connection and msg.Next() advances past unread
+			// literals, so deferring the read would lose the body.
 			if data.Literal == nil {
-				c.logger.Debug("nil body literal", "uid", uid)
+				c.logger.Debug("nil body literal", "uid", opts.UID)
 				continue
 			}
 			var readErr error
 			rawBody, readErr = io.ReadAll(io.LimitReader(data.Literal, maxRawMessageSize))
-			// Drain any remaining data so the IMAP stream stays in sync.
-			_, _ = io.Copy(io.Discard, data.Literal)
+			// Drain whatever is left so the IMAP stream stays in sync,
+			// and count it so RawTruncated is honest.
+			if rest, _ := io.Copy(io.Discard, data.Literal); rest > 0 {
+				result.RawTruncated = true
+			}
 			if readErr != nil {
-				c.logger.Debug("error reading body literal", "uid", uid, "error", readErr)
+				c.logger.Debug("error reading body literal", "uid", opts.UID, "error", readErr)
 				rawBody = nil
 			}
 		}
 	}
+	if err := fetchCmd.Close(); err != nil {
+		return nil, c.wrap(ctx, "fetch message", folder, opts.UID, err)
+	}
 
-	// Parse the message body from the buffered bytes.
 	if rawBody != nil {
 		if err := c.parseBody(result, bytes.NewReader(rawBody)); err != nil {
-			c.logger.Debug("body parse error", "uid", uid, "error", err)
+			c.logger.Debug("body parse error", "uid", opts.UID, "error", err)
 		}
 	}
-
-	if err := fetchCmd.Close(); err != nil {
-		return nil, fmt.Errorf("fetch message UID %d: %w", uid, err)
-	}
-
+	finishBody(result)
 	return result, nil
 }
 
-// parseBody walks the MIME structure and extracts text content and
-// the References header (not available from the IMAP Envelope).
+// parseBody walks the MIME structure and extracts the text bodies,
+// the References header (not available from the IMAP envelope), and a
+// description of every non-text part.
 //
-// The go-message library's mail.CreateReader and NextPart may return
-// both a valid reader/part AND an error when the message uses an
-// unknown charset or transfer encoding. We treat those as non-fatal
-// and continue parsing — the content may be slightly garbled but is
-// still useful for triage.
+// go-message's mail.CreateReader and NextPart may return both a valid
+// reader and an error when a part uses an unknown charset or transfer
+// encoding. Those are non-fatal: the content may be slightly garbled
+// but is still useful for triage, so parsing continues.
 func (c *Client) parseBody(msg *Message, r io.Reader) error {
 	mailReader, err := mail.CreateReader(r)
 	if err != nil && !message.IsUnknownCharset(err) {
-		return fmt.Errorf("create mail reader: %w", err)
+		return err
 	}
 	if mailReader == nil {
 		if err != nil {
-			return fmt.Errorf("create mail reader returned nil: %w", err)
+			return err
 		}
-		return fmt.Errorf("create mail reader returned nil")
+		return errors.New("mail reader is nil")
 	}
 	if err != nil {
 		c.logger.Debug("mail reader created with charset warning", "error", err)
 	}
 
-	// Extract References from the top-level mail header.
-	// This is not available in the IMAP ENVELOPE; it must be parsed
-	// from the raw message.
 	if refs, err := mailReader.Header.MsgIDList("References"); err == nil && len(refs) > 0 {
 		msg.References = refs
 	}
@@ -171,7 +155,7 @@ func (c *Client) parseBody(msg *Message, r io.Reader) error {
 			break
 		}
 		if err != nil && !message.IsUnknownCharset(err) {
-			return fmt.Errorf("next part: %w", err)
+			return err
 		}
 		if part == nil {
 			continue
@@ -180,44 +164,92 @@ func (c *Client) parseBody(msg *Message, r io.Reader) error {
 			c.logger.Debug("part has charset warning", "error", err)
 		}
 
-		// Determine content type by checking the header type.
-		var contentType string
 		switch h := part.Header.(type) {
 		case *mail.InlineHeader:
-			contentType, _, _ = h.ContentType()
+			contentType, _, _ := h.ContentType()
+			contentType = strings.ToLower(contentType)
+			switch {
+			case contentType == "text/plain" && msg.TextBody == "":
+				body, truncated := readBounded(part.Body, maxBodySize)
+				msg.TextBody = strings.TrimSpace(body)
+				msg.BodyTruncated = msg.BodyTruncated || truncated
+			case contentType == "text/html" && msg.HTMLBody == "":
+				body, truncated := readBounded(part.Body, maxBodySize)
+				msg.HTMLBody = strings.TrimSpace(body)
+				msg.BodyTruncated = msg.BodyTruncated || truncated
+			case strings.HasPrefix(contentType, "text/"):
+				// A further text part (a second alternative, a quoted
+				// original) is not the body; count it as inline content.
+				msg.Attachments = append(msg.Attachments, describePart(h.Header, contentType, part.Body, true))
+			default:
+				msg.Attachments = append(msg.Attachments, describePart(h.Header, contentType, part.Body, true))
+			}
 		case *mail.AttachmentHeader:
-			// Skip attachment bodies.
-			continue
+			contentType, _, _ := h.ContentType()
+			att := describePart(h.Header, strings.ToLower(contentType), part.Body, false)
+			if name, err := h.Filename(); err == nil {
+				att.Filename = name
+			}
+			msg.Attachments = append(msg.Attachments, att)
 		default:
-			continue
-		}
-
-		switch {
-		case contentType == "text/plain" && msg.TextBody == "":
-			body, err := io.ReadAll(io.LimitReader(part.Body, maxBodySize+1))
-			if err != nil {
-				c.logger.Debug("error reading text/plain part", "error", err)
-				continue
-			}
-			text := string(body)
-			if len(body) > maxBodySize {
-				text = text[:maxBodySize] + "\n\n[truncated — message exceeds 32KB]"
-			}
-			msg.TextBody = strings.TrimSpace(text)
-
-		case contentType == "text/html" && msg.HTMLBody == "":
-			body, err := io.ReadAll(io.LimitReader(part.Body, maxBodySize+1))
-			if err != nil {
-				c.logger.Debug("error reading text/html part", "error", err)
-				continue
-			}
-			text := string(body)
-			if len(body) > maxBodySize {
-				text = text[:maxBodySize] + "\n\n[truncated — message exceeds 32KB]"
-			}
-			msg.HTMLBody = strings.TrimSpace(text)
+			_, _ = io.Copy(io.Discard, part.Body)
 		}
 	}
-
 	return nil
+}
+
+// describePart records a non-body part without keeping its content.
+// The body is drained through a counter so the size reported is the
+// decoded size the recipient would download.
+func describePart(h message.Header, contentType string, body io.Reader, inline bool) Attachment {
+	att := Attachment{ContentType: contentType, Inline: inline}
+	if _, params, err := h.ContentType(); err == nil {
+		att.Filename = params["name"]
+	}
+	if n, err := io.Copy(io.Discard, body); err == nil {
+		att.Size = n
+	}
+	return att
+}
+
+// readBounded reads at most limit bytes of r plus a probe byte to
+// learn whether more followed, cuts on a rune boundary, and drains the
+// rest so the enclosing MIME reader stays positioned. It returns the
+// text and whether it was truncated.
+func readBounded(r io.Reader, limit int) (string, bool) {
+	buf, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+	if err != nil {
+		return string(buf), false
+	}
+	truncated := len(buf) > limit
+	if truncated {
+		buf = buf[:limit]
+		_, _ = io.Copy(io.Discard, r)
+	}
+	return truncateUTF8(string(buf), limit), truncated
+}
+
+// truncateUTF8 cuts s to at most maxBytes on a rune boundary, so a
+// multi-byte character straddling the cut is dropped whole rather than
+// left as an invalid prefix.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
+
+// finishBody settles the readable body: a text part wins, an HTML-only
+// message is rendered to text, and BodySource records which happened.
+func finishBody(msg *Message) {
+	switch {
+	case msg.TextBody != "":
+		msg.BodySource = "text"
+	case msg.HTMLBody != "":
+		msg.TextBody = htmlToText(msg.HTMLBody)
+		msg.BodySource = "html"
+	}
 }

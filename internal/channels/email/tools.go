@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emersion/go-imap/v2"
+
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
@@ -18,13 +20,18 @@ import (
 type Tools struct {
 	manager  *Manager
 	contacts ContactResolver
+	logger   *slog.Logger
 }
 
 // NewTools creates email tools backed by the given manager and optional
 // contact resolver for trust zone gating. Pass nil for contacts to
 // disable trust zone checks on outbound email.
 func NewTools(mgr *Manager, contacts ContactResolver) *Tools {
-	return &Tools{manager: mgr, contacts: contacts}
+	logger := slog.Default()
+	if mgr != nil && mgr.logger != nil {
+		logger = mgr.logger
+	}
+	return &Tools{manager: mgr, contacts: contacts, logger: logger}
 }
 
 // HandleList lists recent emails in a folder.
@@ -41,20 +48,16 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 
-	envelopes, err := client.ListMessages(ctx, opts)
+	listed, err := client.ListMessages(ctx, opts)
 	if err != nil {
 		return "", err
 	}
 
-	if len(envelopes) == 0 {
-		folder := opts.Folder
-		if folder == "" {
-			folder = "INBOX"
-		}
-		return fmt.Sprintf("No messages in %s", folder), nil
+	if len(listed.Envelopes) == 0 {
+		return fmt.Sprintf("No messages in %s", listed.Folder), nil
 	}
 
-	return formatEnvelopeList(envelopes), nil
+	return formatEnvelopeList(listed), nil
 }
 
 // HandleRead reads a single email by UID.
@@ -72,7 +75,7 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 
-	msg, err := client.ReadMessage(ctx, folder, uid)
+	msg, err := client.ReadMessage(ctx, ReadOptions{Folder: folder, UID: uid, Peek: !toolargs.BoolOr(args, "mark_seen", true)})
 	if err != nil {
 		return "", err
 	}
@@ -111,15 +114,20 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		Account: toolargs.String(args, "account"),
 	}
 
+	now := time.Now()
 	if s := toolargs.String(args, "since"); s != "" {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			opts.Since = t
+		since, err := parseSearchDate(s, now)
+		if err != nil {
+			return "", fmt.Errorf("since must be YYYY-MM-DD, RFC 3339, or a delta like -7d (got %q)", s)
 		}
+		opts.Since = since
 	}
 	if s := toolargs.String(args, "before"); s != "" {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			opts.Before = t
+		before, err := parseSearchDate(s, now)
+		if err != nil {
+			return "", fmt.Errorf("before must be YYYY-MM-DD, RFC 3339, or a delta like -1d (got %q)", s)
 		}
+		opts.Before = before
 	}
 
 	client, err := t.manager.Account(opts.Account)
@@ -127,16 +135,26 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", err
 	}
 
-	envelopes, err := client.SearchMessages(ctx, opts)
+	found, err := client.SearchMessages(ctx, opts)
 	if err != nil {
 		return "", err
 	}
 
-	if len(envelopes) == 0 {
+	if len(found.Envelopes) == 0 {
 		return "No messages match the search criteria", nil
 	}
 
-	return formatEnvelopeList(envelopes), nil
+	return formatEnvelopeList(found), nil
+}
+
+// parseSearchDate accepts the shapes a model plausibly sends for a
+// date bound: a bare YYYY-MM-DD, an RFC 3339 instant, or a delta such
+// as "-7d" relative to now.
+func parseSearchDate(s string, now time.Time) (time.Time, error) {
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return promptfmt.ParseTimeOrDelta(s, now)
 }
 
 // HandleMark modifies flags on specified messages.
@@ -144,10 +162,10 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	action := parseMarkAction(args)
 
 	if len(action.UIDs) == 0 {
-		return "", fmt.Errorf("uids is required")
+		return "", fmt.Errorf("uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
 	}
 	if action.Flag == "" {
-		return "", fmt.Errorf("flag is required (seen, flagged, answered)")
+		return "", fmt.Errorf("flag is required (%s)", strings.Join(ValidFlagNames(), ", "))
 	}
 
 	client, err := t.manager.Account(action.Account)
@@ -155,7 +173,8 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 
-	if err := client.MarkMessages(ctx, action); err != nil {
+	result, err := client.MarkMessages(ctx, action)
+	if err != nil {
 		return "", err
 	}
 
@@ -163,7 +182,21 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if !action.Add {
 		verb = "Removed"
 	}
-	return fmt.Sprintf("%s %q flag on %d message(s)", verb, action.Flag, len(action.UIDs)), nil
+	if len(result.Affected) < len(result.Requested) {
+		return fmt.Sprintf("%s %q flag on %d of %d message(s) in %s; UIDs not found in this folder: %v", verb, action.Flag, len(result.Affected), len(result.Requested), result.Folder, missingUIDs(result.Requested, result.Affected)), nil
+	}
+	return fmt.Sprintf("%s %q flag on %d message(s) in %s", verb, action.Flag, len(result.Affected), result.Folder), nil
+}
+
+// missingUIDs returns the requested UIDs the server did not report back.
+func missingUIDs(requested, affected []uint32) []uint32 {
+	var missing []uint32
+	for _, uid := range requested {
+		if !slices.Contains(affected, uid) {
+			missing = append(missing, uid)
+		}
+	}
+	return missing
 }
 
 // parseMarkAction translates the raw tool-argument map into a
@@ -204,7 +237,7 @@ func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, er
 	}
 
 	if len(opts.To) == 0 {
-		return "", fmt.Errorf("to is required")
+		return "", fmt.Errorf("to is required (array of email addresses)")
 	}
 	if opts.Subject == "" {
 		return "", fmt.Errorf("subject is required")
@@ -227,55 +260,32 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 	}
 
 	if opts.UID == 0 {
-		return "", fmt.Errorf("uid is required")
+		return "", fmt.Errorf("uid is required (integer) — the UID of the message being replied to, from an email_list or email_read result")
 	}
 	if opts.Body == "" {
 		return "", fmt.Errorf("body is required")
 	}
 
-	// Fetch the original message for threading info.
+	// Fetch the original message for threading info. Peek so that
+	// replying does not itself change the original's seen state.
 	client, err := t.manager.Account(opts.Account)
 	if err != nil {
 		return "", err
 	}
 
-	original, err := client.ReadMessage(ctx, opts.Folder, opts.UID)
+	original, err := client.ReadMessage(ctx, ReadOptions{Folder: opts.Folder, UID: opts.UID, Peek: true})
 	if err != nil {
 		return "", fmt.Errorf("fetch original message: %w", err)
 	}
 
-	// Build reply subject.
 	subject := original.Subject
 	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
 		subject = "Re: " + subject
 	}
 
-	// Build recipient list.
-	var to []string
-	if original.ReplyTo != "" {
-		to = []string{original.ReplyTo}
-	} else {
-		to = []string{original.From}
-	}
-
-	var cc []string
-	if opts.ReplyAll {
-		// Add original To and Cc, excluding our own address.
-		acctCfg, err := t.manager.AccountConfig(opts.Account)
-		if err != nil {
-			return "", err
-		}
-		ownAddr := extractAddress(acctCfg.DefaultFrom)
-		for _, addr := range original.To {
-			if extractAddress(addr) != ownAddr {
-				to = append(to, addr)
-			}
-		}
-		for _, addr := range original.Cc {
-			if extractAddress(addr) != ownAddr {
-				cc = append(cc, addr)
-			}
-		}
+	to, cc, err := t.replyRecipients(opts.Account, original, opts.ReplyAll)
+	if err != nil {
+		return "", err
 	}
 
 	// Build threading references.
@@ -285,7 +295,49 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 		refs = append(refs, original.MessageID)
 	}
 
-	return t.sendEmail(ctx, opts.Account, to, cc, subject, opts.Body, original.MessageID, refs)
+	return t.sendEmail(ctx, opts.Account, addressStrings(to), addressStrings(cc), subject, opts.Body, original.MessageID, refs)
+}
+
+// replyRecipients picks the recipients of a reply: Reply-To when the
+// original set one, else From; with replyAll, the original To and Cc
+// as well, minus the account's own address and minus duplicates.
+func (t *Tools) replyRecipients(account string, original *Message, replyAll bool) (to, cc []Address, err error) {
+	if len(original.ReplyTo) > 0 {
+		to = append(to, original.ReplyTo...)
+	} else if !original.From.IsZero() {
+		to = append(to, original.From)
+	}
+	if len(to) == 0 {
+		return nil, nil, fmt.Errorf("original message has no reply address")
+	}
+	if !replyAll {
+		return to, nil, nil
+	}
+
+	acctCfg, err := t.manager.AccountConfig(account)
+	if err != nil {
+		return nil, nil, err
+	}
+	var own Address
+	if acctCfg.DefaultFrom != "" {
+		if parsed, err := parseAddress(acctCfg.DefaultFrom); err == nil {
+			own = parsed
+		}
+	}
+	exclude := func(a Address) bool {
+		return (!own.IsZero() && a.Key() == own.Key()) || containsAddress(to, a) || containsAddress(cc, a)
+	}
+	for _, addr := range original.To {
+		if !exclude(addr) {
+			to = append(to, addr)
+		}
+	}
+	for _, addr := range original.Cc {
+		if !exclude(addr) {
+			cc = append(cc, addr)
+		}
+	}
+	return to, cc, nil
 }
 
 // HandleMove moves messages between folders.
@@ -316,10 +368,10 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	}
 
 	if len(opts.UIDs) == 0 {
-		return "", fmt.Errorf("uids is required")
+		return "", fmt.Errorf("uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
 	}
 	if opts.Destination == "" {
-		return "", fmt.Errorf("destination is required")
+		return "", fmt.Errorf("destination is required: an existing folder in the same account (see email_folders)")
 	}
 
 	client, err := t.manager.Account(opts.Account)
@@ -327,19 +379,20 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 
-	if err := client.MoveMessages(ctx, opts); err != nil {
+	result, err := client.MoveMessages(ctx, opts)
+	if err != nil {
 		return "", err
 	}
 
-	folder := opts.Folder
-	if folder == "" {
-		folder = "INBOX"
+	if result.DestUIDsKnown {
+		return fmt.Sprintf("Moved %d message(s) from %s to %s; new UIDs in %s: %v", len(result.UIDs), result.SourceFolder, result.Destination, result.Destination, result.DestUIDs), nil
 	}
-	return fmt.Sprintf("Moved %d message(s) from %s to %s", len(opts.UIDs), folder, opts.Destination), nil
+	return fmt.Sprintf("Moved %d message(s) from %s to %s (new UIDs unknown; list %s to find them)", len(result.UIDs), result.SourceFolder, result.Destination, result.Destination), nil
 }
 
 // sendEmail is the shared send path for HandleSend and HandleReply.
-// It handles trust zone gating, auto-Bcc, message composition, and SMTP delivery.
+// It handles trust zone gating, auto-Bcc, message composition, and
+// SMTP delivery.
 func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, subject, body, inReplyTo string, references []string) (string, error) {
 	acctCfg, err := t.manager.AccountConfig(account)
 	if err != nil {
@@ -347,16 +400,19 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 	}
 
 	if !acctCfg.SMTPConfigured() {
-		return "", fmt.Errorf("SMTP not configured for account %q", acctCfg.Name)
+		return "", fmt.Errorf("SMTP not configured for account %q; this account can read and organize mail but not send it", acctCfg.Name)
 	}
 
-	// Auto-Bcc owner if configured.
+	// Auto-Bcc owner if configured and not already a recipient.
 	var bcc []string
 	if owner := t.manager.BccOwner(); owner != "" {
-		ownerBare := extractAddress(owner)
+		ownerAddr, err := parseAddress(owner)
+		if err != nil {
+			return "", fmt.Errorf("configured bcc_owner %q is not a valid address: %w", owner, err)
+		}
 		alreadyRecipient := false
 		for _, addr := range slices.Concat(to, cc) {
-			if extractAddress(addr) == ownerBare {
+			if parsed, err := parseAddress(addr); err == nil && parsed.Key() == ownerAddr.Key() {
 				alreadyRecipient = true
 				break
 			}
@@ -373,8 +429,7 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 		return "", fmt.Errorf("recipient trust issues: %s", trust.FormatIssues())
 	}
 
-	// Compose the MIME message.
-	msg, err := ComposeMessage(ComposeOptions{
+	composed, err := ComposeMessage(ComposeOptions{
 		From:       acctCfg.DefaultFrom,
 		To:         to,
 		Cc:         cc,
@@ -388,109 +443,42 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 		return "", fmt.Errorf("compose message: %w", err)
 	}
 
-	// Collect all SMTP recipients (To + Cc + Bcc).
-	smtpRecipients := collectRecipients(to, cc, bcc)
+	bccAddrs, err := parseAddresses(bcc)
+	if err != nil {
+		return "", fmt.Errorf("bcc addresses: %w", err)
+	}
+	smtpRecipients := collectRecipients(composed.To, composed.Cc, bccAddrs)
 
-	// Send via SMTP.
-	fromAddr := extractAddress(acctCfg.DefaultFrom)
-	if err := SendMail(ctx, acctCfg.SMTP, fromAddr, smtpRecipients, msg); err != nil {
-		return "", fmt.Errorf("send email: %w", err)
+	if err := sendMail(ctx, acctCfg.Name, acctCfg.SMTP, composed.From.Address, smtpRecipients, composed.Bytes); err != nil {
+		return "", err
 	}
 
-	slog.Info("email sent",
-		"from", acctCfg.DefaultFrom,
-		"to", to,
-		"subject", subject,
+	t.logger.Info("email sent",
 		"account", acctCfg.Name,
+		"message_id", composed.MessageID,
+		"recipient_count", len(smtpRecipients),
+		"in_reply_to", inReplyTo,
 	)
 
 	// Store a copy in the configured Sent folder via IMAP APPEND.
 	if acctCfg.SentFolder != "" {
 		client, err := t.manager.Account(account)
 		if err != nil {
-			slog.Warn("failed to retrieve account for storing sent message",
+			t.logger.Warn("failed to retrieve account for storing sent message",
 				"folder", acctCfg.SentFolder,
 				"account", acctCfg.Name,
+				"message_id", composed.MessageID,
 				"error", err,
 			)
-		} else if appendErr := client.AppendMessage(ctx, acctCfg.SentFolder, msg); appendErr != nil {
-			slog.Warn("failed to store sent message in IMAP folder",
+		} else if _, appendErr := client.AppendMessage(ctx, acctCfg.SentFolder, composed.Bytes, []imap.Flag{imap.FlagSeen}); appendErr != nil {
+			t.logger.Warn("failed to store sent message in IMAP folder",
 				"folder", acctCfg.SentFolder,
 				"account", acctCfg.Name,
+				"message_id", composed.MessageID,
 				"error", appendErr,
 			)
 		}
 	}
 
-	return fmt.Sprintf("Email sent to %s — subject: %s", strings.Join(to, ", "), subject), nil
-}
-
-// --- Formatting helpers ---
-
-func formatEnvelopeList(envelopes []Envelope) string {
-	now := time.Now()
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d message(s):\n\n", len(envelopes)))
-
-	for _, env := range envelopes {
-		sb.WriteString(fmt.Sprintf("UID: %d\n", env.UID))
-		sb.WriteString(fmt.Sprintf("From: %s\n", env.From))
-		sb.WriteString(fmt.Sprintf("Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("Date: %s\n", promptfmt.FormatDelta(env.Date, now)))
-
-		if len(env.Flags) > 0 {
-			sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(env.Flags, ", ")))
-		}
-		sb.WriteString(fmt.Sprintf("Size: %d bytes\n", env.Size))
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-func formatMessage(msg *Message) string {
-	now := time.Now()
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("From: %s\n", msg.From))
-	sb.WriteString(fmt.Sprintf("To: %s\n", strings.Join(msg.To, ", ")))
-	if len(msg.Cc) > 0 {
-		sb.WriteString(fmt.Sprintf("Cc: %s\n", strings.Join(msg.Cc, ", ")))
-	}
-	sb.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-	sb.WriteString(fmt.Sprintf("Date: %s\n", promptfmt.FormatDelta(msg.Date, now)))
-	if len(msg.Flags) > 0 {
-		sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(msg.Flags, ", ")))
-	}
-	if msg.MessageID != "" {
-		sb.WriteString(fmt.Sprintf("Message-ID: %s\n", msg.MessageID))
-	}
-	sb.WriteString(fmt.Sprintf("UID: %d | Size: %d bytes\n", msg.UID, msg.Size))
-	sb.WriteString("\n---\n\n")
-
-	if msg.TextBody != "" {
-		sb.WriteString(msg.TextBody)
-	} else if msg.HTMLBody != "" {
-		sb.WriteString("[HTML content — no plain text version available]\n\n")
-		sb.WriteString(msg.HTMLBody)
-	} else {
-		sb.WriteString("[No text content available]")
-	}
-
-	return sb.String()
-}
-
-func formatFolderList(folders []Folder) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d folder(s):\n\n", len(folders)))
-
-	for _, f := range folders {
-		sb.WriteString(fmt.Sprintf("%-30s  %d messages", f.Name, f.Messages))
-		if f.Unseen > 0 {
-			sb.WriteString(fmt.Sprintf(" (%d unseen)", f.Unseen))
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
+	return fmt.Sprintf("Email sent to %s — subject: %s (Message-ID: %s)", strings.Join(to, ", "), subject, composed.MessageID), nil
 }

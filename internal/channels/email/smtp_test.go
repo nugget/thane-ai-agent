@@ -1,57 +1,158 @@
 package email
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"net/textproto"
+	"strings"
+	"testing"
+	"time"
+)
 
-func TestExtractAddress(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"bare address", "user@example.com", "user@example.com"},
-		{"name and address", "Alice <alice@example.com>", "alice@example.com"},
-		{"just angle brackets", "<user@test.com>", "user@test.com"},
-		{"empty", "", ""},
-		{"no closing bracket", "Alice <user@test.com", "Alice <user@test.com"},
+func TestSendMailOverSTARTTLS(t *testing.T) {
+	fake := newSMTPFake(t, nil)
+	cfg := fake.config("alice@example.com", "secret")
+	msg := []byte("Subject: hello\r\n\r\nbody\r\n")
+
+	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"bob@example.com", "carol@example.com"}, msg)
+	if err != nil {
+		t.Fatalf("sendMail: %v", err)
 	}
+	got := fake.received()
+	if len(got) != 1 {
+		t.Fatalf("deliveries = %d, want 1", len(got))
+	}
+	d := got[0]
+	if !d.IsTLS {
+		t.Error("message must have been delivered after STARTTLS")
+	}
+	if d.Auth == "" {
+		t.Error("credentials configured, so AUTH PLAIN must have happened")
+	}
+	if d.From != "alice@example.com" {
+		t.Errorf("MAIL FROM = %q", d.From)
+	}
+	if len(d.To) != 2 {
+		t.Errorf("RCPT TO = %v", d.To)
+	}
+	if !strings.Contains(d.Data, "Subject: hello") {
+		t.Errorf("DATA = %q", d.Data)
+	}
+	if d.Helo == "" || strings.EqualFold(d.Helo, "localhost") {
+		t.Errorf("EHLO name = %q; must announce the real host, not localhost", d.Helo)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractAddress(tt.input)
-			if got != tt.want {
-				t.Errorf("extractAddress(%q) = %q, want %q", tt.input, got, tt.want)
+func TestSendMailOverImplicitTLS(t *testing.T) {
+	fake := newSMTPFake(t, func(f *smtpFake) { f.implicit = true; f.starttls = false })
+	cfg := fake.config("alice@example.com", "secret")
+
+	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"bob@example.com"}, []byte("Subject: x\r\n\r\ny\r\n"))
+	if err != nil {
+		t.Fatalf("sendMail: %v", err)
+	}
+	if got := fake.received(); len(got) != 1 || !got[0].IsTLS {
+		t.Fatalf("deliveries = %+v, want one TLS delivery", got)
+	}
+}
+
+func TestSendMailRefusesPlaintextWhenSTARTTLSMissing(t *testing.T) {
+	fake := newSMTPFake(t, func(f *smtpFake) { f.starttls = false })
+	cfg := fake.config("alice@example.com", "secret")
+
+	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"bob@example.com"}, []byte("x"))
+	if DeliveryKindOf(err) != DeliveryConnect {
+		t.Fatalf("err = %v (kind %q), want connect_failed refusal", err, DeliveryKindOf(err))
+	}
+	mustContain(t, err.Error(), "STARTTLS", `"primary"`)
+	if len(fake.received()) != 0 {
+		t.Error("nothing may be delivered in the clear")
+	}
+}
+
+func TestSendMailClassifiesPermanentRecipientReject(t *testing.T) {
+	fake := newSMTPFake(t, func(f *smtpFake) { f.rejectRcpt["nobody@example.com"] = 550 })
+	cfg := fake.config("alice@example.com", "secret")
+
+	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"nobody@example.com"}, []byte("x"))
+	var dErr *DeliveryError
+	if !errors.As(err, &dErr) {
+		t.Fatalf("err = %v (%T), want *DeliveryError", err, err)
+	}
+	if dErr.Kind != DeliveryPermanent || dErr.Account != "primary" || !strings.HasPrefix(dErr.Op, "RCPT TO nobody@example.com") {
+		t.Errorf("DeliveryError = %+v", dErr)
+	}
+	mustContain(t, err.Error(), "permanently refused", "recipient address")
+}
+
+func TestSendMailClassifiesTransientReject(t *testing.T) {
+	fake := newSMTPFake(t, func(f *smtpFake) { f.rejectRcpt["later@example.com"] = 450 })
+	cfg := fake.config("alice@example.com", "secret")
+
+	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"later@example.com"}, []byte("x"))
+	if DeliveryKindOf(err) != DeliveryTransient {
+		t.Fatalf("err = %v (kind %q), want transient_reject", err, DeliveryKindOf(err))
+	}
+	mustContain(t, err.Error(), "temporarily refused", "retry later")
+}
+
+func TestSendMailClassifiesAuthFailure(t *testing.T) {
+	fake := newSMTPFake(t, func(f *smtpFake) { f.rejectAuth = true })
+	cfg := fake.config("alice@example.com", "wrong")
+
+	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"bob@example.com"}, []byte("x"))
+	if DeliveryKindOf(err) != DeliveryAuthentication {
+		t.Fatalf("err = %v (kind %q), want authentication_failed", err, DeliveryKindOf(err))
+	}
+	mustContain(t, err.Error(), "rejected the login", "operator")
+}
+
+func TestSendMailHonorsContextDeadline(t *testing.T) {
+	host, port := hungListener(t)
+	cfg := SMTPConfig{Host: host, Port: port, Username: "a", Password: "b", StartTLS: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := sendMail(ctx, "primary", cfg, "a@example.com", []string{"b@example.com"}, []byte("x"))
+	if err == nil {
+		t.Fatal("a server that never greets must fail")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("sendMail took %v; the deadline must bound the greeting wait", time.Since(start))
+	}
+	if DeliveryKindOf(err) != DeliveryConnect {
+		t.Errorf("kind = %q, want connect_failed (%v)", DeliveryKindOf(err), err)
+	}
+}
+
+func TestClassifySMTPError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want DeliveryKind
+	}{
+		{"nil", nil, DeliveryUnclassified},
+		{"535 auth", &textproto.Error{Code: 535, Msg: "bad creds"}, DeliveryAuthentication},
+		{"530 auth required", &textproto.Error{Code: 530, Msg: "auth required"}, DeliveryAuthentication},
+		{"550 permanent", &textproto.Error{Code: 550, Msg: "no such user"}, DeliveryPermanent},
+		{"552 too big", &textproto.Error{Code: 552, Msg: "too big"}, DeliveryPermanent},
+		{"421 transient", &textproto.Error{Code: 421, Msg: "try later"}, DeliveryTransient},
+		{"450 transient", &textproto.Error{Code: 450, Msg: "greylisted"}, DeliveryTransient},
+		{"plain error", errors.New("boom"), DeliveryUnclassified},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifySMTPError(tc.err); got != tc.want {
+				t.Errorf("classifySMTPError = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestCollectRecipients(t *testing.T) {
-	result := collectRecipients(
-		[]string{"Alice <alice@example.com>", "bob@example.com"},
-		[]string{"cc@example.com"},
-		[]string{"bcc@example.com", "alice@example.com"}, // duplicate of alice
-	)
-
-	// Should have 4 unique addresses (alice deduplicated).
-	if len(result) != 4 {
-		t.Errorf("collectRecipients = %d addresses, want 4: %v", len(result), result)
-	}
-
-	// Check that alice appears only once.
-	count := 0
-	for _, r := range result {
-		if r == "alice@example.com" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("alice should appear once, got %d", count)
-	}
-}
-
-func TestCollectRecipients_Empty(t *testing.T) {
-	result := collectRecipients(nil, nil, nil)
-	if len(result) != 0 {
-		t.Errorf("empty inputs should return empty, got %v", result)
+func TestHeloNameIsASingleToken(t *testing.T) {
+	name := heloName()
+	if name == "" || strings.ContainsAny(name, " \t\r\n") || strings.EqualFold(name, "localhost") {
+		t.Errorf("heloName = %q", name)
 	}
 }

@@ -76,99 +76,88 @@ func uint32SliceEqual(a, b []uint32) bool {
 }
 
 func TestFormatEnvelopeList(t *testing.T) {
-	envelopes := []Envelope{
-		{
-			UID:     100,
-			From:    "Alice <alice@example.com>",
-			Subject: "Hello",
-			Date:    time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
-			Flags:   []string{`\Seen`},
-			Size:    1024,
-		},
-		{
-			UID:     99,
-			From:    "bob@example.com",
-			Subject: "Meeting",
-			Date:    time.Date(2025, 1, 14, 8, 0, 0, 0, time.UTC),
-			Size:    512,
+	listed := ListResult{
+		Folder:       "INBOX",
+		TotalMatched: 2,
+		Envelopes: []Envelope{
+			{
+				UID:     100,
+				From:    Address{Name: "Alice", Address: "alice@example.com"},
+				Subject: "Hello",
+				Date:    time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
+				Flags:   []string{`\Seen`},
+				Size:    1024,
+			},
+			{
+				UID:     99,
+				From:    Address{Address: "bob@example.com"},
+				Subject: "Meeting",
+				Date:    time.Date(2025, 1, 14, 8, 0, 0, 0, time.UTC),
+				Size:    512,
+			},
 		},
 	}
 
-	result := formatEnvelopeList(envelopes)
+	result := formatEnvelopeList(listed)
 
-	if !strings.Contains(result, "Found 2 message(s)") {
-		t.Error("should contain message count")
-	}
-	if !strings.Contains(result, "UID: 100") {
-		t.Error("should contain first UID")
-	}
-	if !strings.Contains(result, "Alice <alice@example.com>") {
-		t.Error("should contain first sender")
-	}
-	if !strings.Contains(result, `\Seen`) {
-		t.Error("should contain flags when present")
-	}
-	if !strings.Contains(result, "UID: 99") {
-		t.Error("should contain second UID")
-	}
-	if !strings.Contains(result, "1024 bytes") {
-		t.Error("should contain message size")
-	}
+	mustContain(t, result, "Found 2 message(s) in INBOX", "UID: 100", `"Alice" <alice@example.com>`, `\Seen`, "UID: 99", "1024 bytes")
+}
+
+func TestFormatEnvelopeList_TruncatedSaysSo(t *testing.T) {
+	listed := ListResult{Folder: "Archive", TotalMatched: 5, Envelopes: []Envelope{{UID: 1}, {UID: 2}}}
+	result := formatEnvelopeList(listed)
+	mustContain(t, result, "Showing 2 of 5 message(s) in Archive")
 }
 
 func TestFormatMessage(t *testing.T) {
 	msg := &Message{
 		Envelope: Envelope{
-			UID:     42,
-			From:    "Alice <alice@example.com>",
-			To:      []string{"bob@example.com", "carol@example.com"},
-			Subject: "Test Subject",
-			Date:    time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC),
-			Flags:   []string{`\Seen`, `\Flagged`},
-			Size:    2048,
+			UID:       42,
+			From:      Address{Name: "Alice", Address: "alice@example.com"},
+			To:        []Address{{Address: "bob@example.com"}, {Address: "carol@example.com"}},
+			Cc:        []Address{{Address: "dave@example.com"}},
+			ReplyTo:   []Address{{Address: "alice-work@example.com"}},
+			Subject:   "Test Subject",
+			Date:      time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC),
+			Flags:     []string{`\Seen`, `\Flagged`},
+			Size:      2048,
+			MessageID: "abc123@example.com",
 		},
-		Cc:        []string{"dave@example.com"},
-		MessageID: "abc123@example.com",
-		TextBody:  "Hello, this is the body.",
+		TextBody:   "Hello, this is the body.",
+		BodySource: "text",
+		Attachments: []Attachment{
+			{Filename: "q3.pdf", ContentType: "application/pdf", Size: 1234},
+			{ContentType: "image/png", Size: 99, Inline: true},
+		},
 	}
 
 	result := formatMessage(msg)
 
-	if !strings.Contains(result, "From: Alice <alice@example.com>") {
-		t.Error("should contain From header")
-	}
-	if !strings.Contains(result, "bob@example.com, carol@example.com") {
-		t.Error("should contain all To recipients")
-	}
-	if !strings.Contains(result, "Cc: dave@example.com") {
-		t.Error("should contain Cc header")
-	}
-	if !strings.Contains(result, "Message-ID: abc123@example.com") {
-		t.Error("should contain Message-ID header")
-	}
-	if !strings.Contains(result, "Test Subject") {
-		t.Error("should contain subject")
-	}
-	if !strings.Contains(result, "UID: 42") {
-		t.Error("should contain UID")
-	}
-	if !strings.Contains(result, "Hello, this is the body.") {
-		t.Error("should contain text body")
-	}
-	if !strings.Contains(result, `\Seen`) {
-		t.Error("should contain flags")
-	}
+	mustContain(t, result,
+		`From: "Alice" <alice@example.com>`,
+		"bob@example.com, carol@example.com",
+		"Cc: dave@example.com",
+		"Reply-To: alice-work@example.com",
+		"Message-ID: abc123@example.com",
+		"Test Subject",
+		"UID: 42",
+		"Hello, this is the body.",
+		`\Seen`,
+		"q3.pdf (application/pdf, 1234 bytes, attachment)",
+		"(unnamed) (image/png, 99 bytes, inline)",
+	)
 }
 
 func TestFormatMessage_NoCcNoMessageID(t *testing.T) {
 	msg := &Message{
 		Envelope: Envelope{
 			UID:     10,
-			From:    "sender@example.com",
+			From:    Address{Address: "sender@example.com"},
 			Subject: "Simple",
 			Date:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
-		TextBody: "body",
+		TextBody:   "body",
+		BodySource: "text",
 	}
 
 	result := formatMessage(msg)
@@ -179,26 +168,29 @@ func TestFormatMessage_NoCcNoMessageID(t *testing.T) {
 	if strings.Contains(result, "Message-ID:") {
 		t.Error("should not contain Message-ID header when empty")
 	}
+	if strings.Contains(result, "Attachments:") {
+		t.Error("should not list attachments when there are none")
+	}
 }
 
-func TestFormatMessage_HTMLOnly(t *testing.T) {
+func TestFormatMessage_HTMLRendered(t *testing.T) {
 	msg := &Message{
 		Envelope: Envelope{
 			UID:     10,
-			From:    "sender@example.com",
+			From:    Address{Address: "sender@example.com"},
 			Subject: "HTML Only",
 			Date:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
-		HTMLBody: "<p>Hello</p>",
+		HTMLBody:   "<p>Hello</p>",
+		TextBody:   "Hello",
+		BodySource: "html",
 	}
 
 	result := formatMessage(msg)
 
-	if !strings.Contains(result, "[HTML content") {
-		t.Error("should indicate HTML-only content")
-	}
-	if !strings.Contains(result, "<p>Hello</p>") {
-		t.Error("should contain HTML body")
+	mustContain(t, result, "[body rendered from HTML]", "Hello")
+	if strings.Contains(result, "<p>") {
+		t.Error("raw HTML must never reach the model")
 	}
 }
 
@@ -206,7 +198,7 @@ func TestFormatMessage_NoBody(t *testing.T) {
 	msg := &Message{
 		Envelope: Envelope{
 			UID:     10,
-			From:    "sender@example.com",
+			From:    Address{Address: "sender@example.com"},
 			Subject: "Empty",
 			Date:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
@@ -219,28 +211,22 @@ func TestFormatMessage_NoBody(t *testing.T) {
 	}
 }
 
+func TestFormatMessage_TruncatedBodyFlagged(t *testing.T) {
+	msg := &Message{Envelope: Envelope{UID: 1, From: Address{Address: "a@example.com"}}, TextBody: "head", BodySource: "text", BodyTruncated: true}
+	mustContain(t, formatMessage(msg), "[truncated — body exceeds 32 KB]")
+}
+
 func TestFormatFolderList(t *testing.T) {
 	folders := []Folder{
-		{Name: "INBOX", Messages: 150, Unseen: 5},
-		{Name: "Sent", Messages: 42, Unseen: 0},
-		{Name: "Drafts", Messages: 3, Unseen: 0},
+		{Name: "INBOX", Role: RoleInbox, Selectable: true, Messages: 150, Unseen: 5},
+		{Name: "Sent", Role: RoleSent, Selectable: true, Messages: 42, Unseen: 0},
+		{Name: "Drafts", Role: RoleDrafts, Selectable: true, Messages: 3, Unseen: 0},
+		{Name: "[Gmail]", Selectable: false},
 	}
 
 	result := formatFolderList(folders)
 
-	if !strings.Contains(result, "Found 3 folder(s)") {
-		t.Error("should contain folder count")
-	}
-	if !strings.Contains(result, "INBOX") {
-		t.Error("should contain INBOX")
-	}
-	if !strings.Contains(result, "(5 unseen)") {
-		t.Error("should show unseen count for INBOX")
-	}
-	if !strings.Contains(result, "Sent") {
-		t.Error("should contain Sent")
-	}
-	// Sent has 0 unseen — should not show unseen annotation.
+	mustContain(t, result, "Found 4 folder(s)", "INBOX", "(5 unseen)", "[inbox]", "[sent]", "[drafts]", "[not selectable]")
 	for line := range strings.SplitSeq(result, "\n") {
 		if strings.Contains(line, "Sent") && strings.Contains(line, "unseen") {
 			t.Error("should not show unseen annotation for zero unseen")
@@ -249,9 +235,9 @@ func TestFormatFolderList(t *testing.T) {
 }
 
 func TestFormatEnvelopeList_Empty(t *testing.T) {
-	result := formatEnvelopeList(nil)
-	if !strings.Contains(result, "Found 0 message(s)") {
-		t.Error("should handle nil envelope slice")
+	result := formatEnvelopeList(ListResult{Folder: "INBOX"})
+	if !strings.Contains(result, "Found 0 message(s) in INBOX") {
+		t.Error("should handle an empty result")
 	}
 }
 
@@ -259,5 +245,37 @@ func TestFormatFolderList_Empty(t *testing.T) {
 	result := formatFolderList(nil)
 	if !strings.Contains(result, "Found 0 folder(s)") {
 		t.Error("should handle nil folder slice")
+	}
+}
+
+func TestParseSearchDate(t *testing.T) {
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		in      string
+		want    time.Time
+		wantErr bool
+	}{
+		{"2026-09-01", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), false},
+		{"2026-09-01T08:00:00Z", time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC), false},
+		{"-7d", now.Add(-7 * 24 * time.Hour), false},
+		{"yesterday", time.Time{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := parseSearchDate(tc.in, now)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && !got.Equal(tc.want) {
+				t.Errorf("parseSearchDate(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMissingUIDs(t *testing.T) {
+	got := missingUIDs([]uint32{1, 2, 3}, []uint32{1, 3})
+	if fmtUIDs(got) != fmtUIDs([]uint32{2}) {
+		t.Errorf("missingUIDs = %v", got)
 	}
 }

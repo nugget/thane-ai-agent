@@ -3,154 +3,132 @@ package email
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
+	"errors"
 	"net"
 	"net/smtp"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
-// smtpDialTimeout is the maximum time to establish an SMTP connection.
-const smtpDialTimeout = 30 * time.Second
-
-// SendMail connects to the SMTP server, authenticates, and delivers the
-// given message. Connections are ephemeral — each call opens and closes
-// its own connection. The msg parameter should be a complete RFC 5322
-// message (as returned by ComposeMessage). The context controls the
-// overall deadline for the entire send operation.
-func SendMail(ctx context.Context, cfg SMTPConfig, from string, recipients []string, msg []byte) error {
-	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
-
-	// Use context deadline for the dial timeout, falling back to the
-	// package default.
-	dialTimeout := smtpDialTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < dialTimeout {
-			dialTimeout = remaining
-		}
+// sendMail connects to the account's SMTP server, authenticates, and
+// delivers msg to recipients. Connections are per-send. The caller's
+// context bounds the whole exchange: its deadline (or defaultOpTimeout)
+// becomes the connection deadline, so a server that stalls after the
+// greeting cannot hold the caller. Failures are [*DeliveryError]
+// values classified by SMTP reply code.
+//
+// It is unexported on purpose: every path to SMTP goes through the
+// package's send pipeline, so no caller can deliver mail around the
+// checks that pipeline applies.
+func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, recipients []string, msg []byte) error {
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	fail := func(op string, err error) error {
+		return &DeliveryError{Account: account, Op: op, Kind: classifySMTPError(err), Err: err}
+	}
+	connectFail := func(op string, err error) error {
+		return &DeliveryError{Account: account, Op: op, Kind: DeliveryConnect, Err: err}
 	}
 
 	dialer := &net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return connectFail("dial SMTP "+addr, err)
+	}
+	// One deadline for the whole exchange, derived from the caller.
+	deadline := time.Now().Add(defaultOpTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
 
 	var client *smtp.Client
-	var err error
-
 	if !cfg.StartTLS {
-		// Implicit TLS (port 465): connect over TLS from the start.
-		// Use DialContext + tls.Client instead of tls.DialWithDialer so
-		// the connection respects context cancellation during the dial.
-		tlsCfg := &tls.Config{ServerName: cfg.Host}
-		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
-		if dialErr != nil {
-			return fmt.Errorf("dial SMTPS %s: %w", addr, dialErr)
-		}
-		tlsConn := tls.Client(conn, tlsCfg)
-		if hsErr := tlsConn.Handshake(); hsErr != nil {
-			tlsConn.Close()
-			return fmt.Errorf("TLS handshake with %s: %w", addr, hsErr)
+		// Implicit TLS (port 465): the connection is TLS from the start.
+		tlsConn := tls.Client(conn, tlsConfigFor(cfg.Host))
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = tlsConn.Close()
+			return connectFail("TLS handshake with "+addr, err)
 		}
 		client, err = smtp.NewClient(tlsConn, cfg.Host)
 		if err != nil {
-			tlsConn.Close()
-			return fmt.Errorf("create SMTP client on %s: %w", addr, err)
+			_ = tlsConn.Close()
+			return connectFail("read SMTP greeting from "+addr, err)
 		}
 	} else {
-		// STARTTLS (port 587): connect plain, then upgrade.
-		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
-		if dialErr != nil {
-			return fmt.Errorf("dial SMTP %s: %w", addr, dialErr)
-		}
 		client, err = smtp.NewClient(conn, cfg.Host)
 		if err != nil {
-			conn.Close()
-			return fmt.Errorf("create SMTP client on %s: %w", addr, err)
+			_ = conn.Close()
+			return connectFail("read SMTP greeting from "+addr, err)
 		}
 	}
 	defer client.Close()
 
-	// EHLO.
-	if err := client.Hello("localhost"); err != nil {
-		return fmt.Errorf("EHLO: %w", err)
+	if err := client.Hello(heloName()); err != nil {
+		return fail("EHLO", err)
 	}
 
-	// Upgrade to TLS if using STARTTLS.
 	if cfg.StartTLS {
-		tlsCfg := &tls.Config{ServerName: cfg.Host}
-		if err := client.StartTLS(tlsCfg); err != nil {
-			return fmt.Errorf("STARTTLS: %w", err)
+		if ok, _ := client.Extension("STARTTLS"); !ok {
+			return connectFail("STARTTLS", errors.New("server does not offer STARTTLS; refusing to send credentials in the clear"))
+		}
+		if err := client.StartTLS(tlsConfigFor(cfg.Host)); err != nil {
+			return connectFail("STARTTLS", err)
 		}
 	}
 
-	// Authenticate if credentials are provided.
 	if cfg.Username != "" && cfg.Password != "" {
 		auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
 		if err := client.Auth(auth); err != nil {
-			return fmt.Errorf("AUTH: %w", err)
+			dErr := fail("AUTH", err)
+			// net/smtp reports a rejected credential as a 535; treat any
+			// failure at this step as authentication so the text says
+			// the operator must act.
+			if de, ok := dErr.(*DeliveryError); ok && de.Kind == DeliveryUnclassified {
+				de.Kind = DeliveryAuthentication
+			}
+			return dErr
 		}
 	}
 
-	// Set the sender.
 	if err := client.Mail(from); err != nil {
-		return fmt.Errorf("MAIL FROM: %w", err)
+		return fail("MAIL FROM "+from, err)
 	}
-
-	// Set all recipients (To + Cc + Bcc).
 	for _, rcpt := range recipients {
 		if err := client.Rcpt(rcpt); err != nil {
-			return fmt.Errorf("RCPT TO %s: %w", rcpt, err)
+			return fail("RCPT TO "+rcpt, err)
 		}
 	}
 
-	// Write the message body.
 	w, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("DATA: %w", err)
+		return fail("DATA", err)
 	}
 	if _, err := w.Write(msg); err != nil {
-		return fmt.Errorf("write message: %w", err)
+		return fail("write message", err)
 	}
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("close DATA: %w", err)
+		return fail("finish DATA", err)
 	}
-
-	return client.Quit()
+	if err := client.Quit(); err != nil {
+		// The message was accepted at end-of-DATA; a failed QUIT does
+		// not undo delivery and must not be reported as one.
+		return nil
+	}
+	return nil
 }
 
-// extractAddress extracts the bare email address from a string that
-// may be in "Name <addr>" or just "addr" format.
-func extractAddress(s string) string {
-	if idx := len(s) - 1; idx > 0 && s[idx] == '>' {
-		if start := lastIndexByte(s, '<'); start >= 0 {
-			return s[start+1 : idx]
-		}
+// heloName is the name announced in EHLO. Submission servers and spam
+// heuristics expect the client's host name; "localhost" is what a
+// misconfigured bot says. The name must be a single token, so a host
+// name with spaces or nothing at all falls back to the RFC 5321
+// address-literal form for the loopback address.
+func heloName() string {
+	name, err := os.Hostname()
+	name = strings.TrimSpace(name)
+	if err != nil || name == "" || strings.ContainsAny(name, " \t\r\n") {
+		return "[127.0.0.1]"
 	}
-	return s
-}
-
-// lastIndexByte returns the index of the last occurrence of c in s, or -1.
-func lastIndexByte(s string, c byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}
-
-// collectRecipients gathers all unique bare email addresses from the
-// To, Cc, and Bcc fields for SMTP RCPT TO commands.
-func collectRecipients(to, cc, bcc []string) []string {
-	seen := make(map[string]bool)
-	var result []string
-
-	for _, lists := range [][]string{to, cc, bcc} {
-		for _, addr := range lists {
-			bare := extractAddress(addr)
-			if bare != "" && !seen[bare] {
-				seen[bare] = true
-				result = append(result, bare)
-			}
-		}
-	}
-
-	return result
+	return name
 }
