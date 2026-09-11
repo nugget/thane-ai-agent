@@ -309,6 +309,7 @@ type Loop struct {
 	requestRecorder     logging.RequestRecordFunc      // nil = request detail inspection disabled
 	usageStore          *usage.Store                   // nil = no usage recording
 	pricing             map[string]config.PricingEntry // model→cost for usage recording
+	unpricedModels      sync.Map                       // paid models already warned as missing from pricing
 	usageCatalog        *fleet.Catalog
 	modelRegistry       *fleet.Registry
 	modelRuntime        *fleet.Runtime
@@ -3659,6 +3660,11 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 
 	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
 	cost := usage.ComputeDetailedCostForIdentityWithTTL(identity, totalIn, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn, totalOut, l.pricing)
+	if identity.Provider == "anthropic" {
+		if _, priced := usage.PricingFor(identity, l.pricing); !priced {
+			l.warnUnpricedModel(identity)
+		}
+	}
 	rec := usage.Record{
 		Timestamp:                  time.Now(),
 		RequestID:                  requestID,
@@ -3686,4 +3692,19 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 			"request_id", requestID,
 		)
 	}
+}
+
+// warnUnpricedModel reports, once per model, a paid-provider model
+// with no pricing entry. Its usage records carry cost_usd 0, so every
+// cost report under-counts until the model is added to the pricing
+// table.
+func (l *Loop) warnUnpricedModel(identity usage.ModelIdentity) {
+	if _, seen := l.unpricedModels.LoadOrStore(identity.Model, struct{}{}); seen {
+		return
+	}
+	l.logger.Warn("usage cost not recorded: model has no pricing entry",
+		"model", identity.Model,
+		"upstream_model", identity.UpstreamModel,
+		"provider", identity.Provider,
+	)
 }
