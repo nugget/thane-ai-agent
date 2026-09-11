@@ -141,16 +141,32 @@ Thane enforces this in `applyCacheBreakpointGuards`: under-minimum runs
 have their `cache_control` stripped at request time with a WARN log.
 Unknown model families default to the strictest minimum.
 
+### Conversation History
+
+Every request also carries Anthropic's automatic, request-level
+`cache_control`. It lands on the last message block and moves forward
+as the conversation grows, so each call in a tool loop reads the
+transcript the previous call wrote and pays full input price only for
+what is new since then. It composes with the explicit system and tool
+markers: the explicit markers pin the stable prefix, the automatic one
+follows the tail. Without it, a long tool loop re-sends its whole
+growing transcript as uncached input on every iteration.
+
+It keeps the default 5m TTL. Anthropic requires longer-TTL entries to
+precede shorter ones, and the tail sits after the `5m` system run.
+
 ### The 4-Breakpoint Cap
 
 Anthropic rejects requests carrying more than four `cache_control`
-markers total across system blocks, tools, and messages. Today's policy
-normally emits two system breakpoints plus one tool breakpoint.
+markers total across system blocks, tools, and messages, and the
+automatic breakpoint counts as one. Today's policy normally emits two
+system breakpoints, one tool breakpoint, and the automatic one.
 
-The guard in `applyCacheBreakpointGuards` drops excess breakpoints
-before the request is sent. It drops the blanket tool breakpoint first,
-then trims trailing system breakpoints. Every drop logs a WARN so
-operators can see why the cache did not apply.
+The guard in `applyCacheBreakpointGuards` reserves the automatic slot,
+then drops excess explicit breakpoints before the request is sent. It
+drops the blanket tool breakpoint first, then trims trailing system
+breakpoints. Every drop logs a WARN so operators can see why the cache
+did not apply.
 
 ### Anthropic Anti-Patterns
 
@@ -158,7 +174,8 @@ operators can see why the cache did not apply.
   `LIVE STATE`, or `CONTINUITY CONTEXT`.
 - Fragmenting stable sections into many TTL runs. Each TTL transition
   can create a breakpoint.
-- Assuming four breakpoints is plenty. Tools already take one slot.
+- Assuming four breakpoints is plenty. Tools and the conversation tail
+  already take two.
 - Ignoring minimum prefix lengths. A too-short breakpoint is a no-op.
 
 ## Future Providers
@@ -192,6 +209,9 @@ For Anthropic today, inspect:
 - `cache_hit_rate` on Anthropic debug log lines
 - `cache_hit_rate` in the session stats JSON served by `/stats`
 - raw `cache_creation_input_tokens` and `cache_read_input_tokens`
+- `request_cache_control_ttl` on the debug `outbound cache markers`
+  line: `default` means the conversation tail carries the automatic
+  breakpoint; empty means history is being re-sent uncached
 
 ## References
 
