@@ -106,6 +106,11 @@ email:
         starttls: true
       default_from: "Thane <thane@example.com>"
       sent_folder: Sent
+      drafts_folder: Drafts
+      policy:
+        access: send
+        delivery: by_trust_zone
+        denied_recipient_domains: [example.org]
     - name: packages
       description: "Parcel and delivery notifications. Read and file only; never sends."
       imap:
@@ -113,6 +118,8 @@ email:
         port: 993
         username: packages@example.com
         password: ${PACKAGES_PASSWORD}
+      policy:
+        access: organize
 ```
 
 Optional. Each entry under `accounts` is one mailbox; the first is the
@@ -125,8 +132,32 @@ receives a copy of every sent message. `tls` defaults to true on every port
 except 143 and `starttls` to true on every port except 587's alternative,
 465; both accept an explicit `false`.
 
+Each account's `policy` says what the model may do there and where the
+mail it writes goes. `access` is `read` (list, search, and read without
+marking seen), `organize` (also flag and move), or `send` (also compose,
+reply, and draft); it defaults to `send` when `smtp` is configured and
+`organize` otherwise, and an account with `smtp` can still be held at
+`organize` to keep its credentials for the operator's own use. `delivery`
+decides what happens once every recipient has passed the trust gate:
+`by_trust_zone` (the default) sends directly to `admin` and `household`
+recipients when a human is attending the turn, holds mail for `trusted`
+recipients in the Drafts folder for the operator to send from their own
+client, refuses `known` and unknown recipients, and holds everything an
+unattended loop writes, so a poller-woken handler never sends on its own;
+`drafts` holds every message; `direct` sends everything the gate allows,
+including from unattended loops, and should be chosen deliberately. A
+drafted message carries the `bcc_owner` audit copy in its `Bcc` header so
+the operator's client sends it too. `drafts_folder` names where drafts go
+and defaults to the folder the server marks as drafts, else `Drafts`.
+`denied_recipient_domains` refuses recipients at those domains and their
+subdomains regardless of trust zone, and `allowed_recipient_domains`,
+when set, refuses every domain outside it. Every send ends in one of
+three dispositions, `sent`, `drafted`, or `refused`, and the tool result
+or refusal carries the decision that produced it.
+
 `bcc_owner` receives a blind copy of every message the agent sends. It is
-an audit copy for the operator, not a recipient the agent chose.
+an audit copy for the operator, not a recipient the agent chose, and it is
+exempt from the trust gate.
 
 `poll_interval` is how often, in seconds, every account's INBOX is checked
 for new mail; it defaults to 300 when email is configured and `0` disables

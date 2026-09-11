@@ -11,6 +11,35 @@ import (
 // configured and the operator did not set one.
 const defaultEmailPollIntervalSec = 300
 
+// Email access levels: the most the model may do with an account.
+const (
+	// EmailAccessRead permits listing, searching, and reading. Reading
+	// does not mark messages seen at this level.
+	EmailAccessRead = "read"
+
+	// EmailAccessOrganize also permits changing flags and moving mail.
+	EmailAccessOrganize = "organize"
+
+	// EmailAccessSend also permits composing, replying, and drafting.
+	EmailAccessSend = "send"
+)
+
+// Email delivery modes: where outbound mail goes once every recipient
+// has passed the trust gate.
+const (
+	// EmailDeliveryByTrustZone sends directly to admin and household
+	// recipients when a human is attending the turn, holds mail for
+	// trusted recipients in Drafts, refuses known and unknown ones,
+	// and holds everything an unattended loop writes.
+	EmailDeliveryByTrustZone = "by_trust_zone"
+
+	// EmailDeliveryDrafts holds every message in Drafts.
+	EmailDeliveryDrafts = "drafts"
+
+	// EmailDeliveryDirect sends everything the gate allows.
+	EmailDeliveryDirect = "direct"
+)
+
 // EmailConfig configures native IMAP and SMTP email. When at least one
 // account has an IMAP host and username, Thane lists, reads, searches,
 // files, and (for accounts with smtp configured) sends mail directly,
@@ -69,6 +98,55 @@ type EmailAccountConfig struct {
 	// sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 	// Leave empty to keep no server-side copy.
 	SentFolder string `yaml:"sent_folder"`
+
+	// DraftsFolder is the IMAP folder that receives messages held for the
+	// operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
+	// empty to use the folder the server marks as its drafts folder, or
+	// "Drafts" when it marks none.
+	DraftsFolder string `yaml:"drafts_folder"`
+
+	// Policy is what the model may do with this account beyond reading
+	// it, and where the mail it writes goes.
+	Policy EmailPolicyConfig `yaml:"policy"`
+}
+
+// EmailPolicyConfig is one account's access level and delivery policy.
+// Every outbound message ends in exactly one disposition: sent, held
+// in Drafts for the operator, or refused with a record of why.
+type EmailPolicyConfig struct {
+	// Access is the most the model may do with this account: "read"
+	// (list, search, and read without marking messages seen),
+	// "organize" (also flag and move), or "send" (also compose, reply,
+	// and draft). Default: "send" when smtp is configured, "organize"
+	// otherwise. An account with smtp configured may still be held at
+	// "organize", which keeps its credentials for the operator's own
+	// use; "send" without smtp can only draft and requires
+	// delivery: drafts.
+	Access string `yaml:"access"`
+
+	// Delivery decides where outbound mail goes once every recipient
+	// has passed the trust gate. "by_trust_zone" (default) sends
+	// directly to admin and household recipients when a human is
+	// attending the turn, holds mail for trusted recipients in the
+	// Drafts folder for the operator to send, and refuses known and
+	// unknown recipients; a turn no human is attending (a poller wake
+	// or a scheduled loop rather than a conversation with the operator)
+	// holds everything in Drafts, so an autonomous loop never sends on
+	// its own. "drafts" holds every message in Drafts. "direct" sends
+	// everything the gate allows, including to trusted recipients and
+	// from unattended loops; choose it deliberately.
+	Delivery string `yaml:"delivery"`
+
+	// DeniedRecipientDomains lists domains this account never writes
+	// to, even when the recipient is a trusted contact. An entry covers
+	// the domain and its subdomains ("example.com" also covers
+	// mail.example.com). Checked before allowed_recipient_domains.
+	DeniedRecipientDomains []string `yaml:"denied_recipient_domains"`
+
+	// AllowedRecipientDomains, when set, limits outbound recipients to
+	// these domains and their subdomains; every other recipient is
+	// refused. Empty means no limit.
+	AllowedRecipientDomains []string `yaml:"allowed_recipient_domains"`
 }
 
 // EmailIMAPConfig holds IMAP server connection parameters.
@@ -163,9 +241,64 @@ func (c EmailConfig) PollingInterval() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// SMTPConfigured reports whether this account can send mail.
+// SMTPConfigured reports whether this account has an SMTP connection.
+// Whether the model may use it is [EmailAccountConfig.CanDeliver].
 func (a EmailAccountConfig) SMTPConfigured() bool {
 	return a.SMTP.Host != "" && a.SMTP.Username != ""
+}
+
+// AccessLevel returns the effective access level, applying the
+// documented default when the policy does not set one.
+func (a EmailAccountConfig) AccessLevel() string {
+	if a.Policy.Access != "" {
+		return a.Policy.Access
+	}
+	if a.SMTPConfigured() {
+		return EmailAccessSend
+	}
+	return EmailAccessOrganize
+}
+
+// DeliveryMode returns the effective delivery mode.
+func (a EmailAccountConfig) DeliveryMode() string {
+	if a.Policy.Delivery != "" {
+		return a.Policy.Delivery
+	}
+	return EmailDeliveryByTrustZone
+}
+
+// CanDraft reports whether the model may write outbound mail from this
+// account at all, to SMTP or to Drafts.
+func (a EmailAccountConfig) CanDraft() bool {
+	return a.AccessLevel() == EmailAccessSend
+}
+
+// CanDeliver reports whether the model may hand mail from this account
+// to SMTP itself: access is send and smtp is configured.
+func (a EmailAccountConfig) CanDeliver() bool {
+	return a.CanDraft() && a.SMTPConfigured()
+}
+
+// validEmailAccess is the set of access levels an operator may write.
+var validEmailAccess = map[string]bool{EmailAccessRead: true, EmailAccessOrganize: true, EmailAccessSend: true}
+
+// validEmailDelivery is the set of delivery modes an operator may write.
+var validEmailDelivery = map[string]bool{EmailDeliveryByTrustZone: true, EmailDeliveryDrafts: true, EmailDeliveryDirect: true}
+
+// normalizeDomains lowercases, trims, and strips a leading dot from
+// each domain, dropping empties.
+func normalizeDomains(domains []string) []string {
+	if len(domains) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(domains))
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d), "."))
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // ApplyDefaults fills unset fields with their documented defaults.
@@ -194,6 +327,10 @@ func (c *EmailConfig) ApplyDefaults() {
 				acct.SMTP.StartTLS = &v
 			}
 		}
+		acct.Policy.Access = acct.AccessLevel()
+		acct.Policy.Delivery = acct.DeliveryMode()
+		acct.Policy.DeniedRecipientDomains = normalizeDomains(acct.Policy.DeniedRecipientDomains)
+		acct.Policy.AllowedRecipientDomains = normalizeDomains(acct.Policy.AllowedRecipientDomains)
 	}
 }
 
@@ -246,6 +383,39 @@ func (c EmailConfig) Validate() error {
 		if a.DefaultFrom != "" {
 			if _, err := mail.ParseAddress(strings.TrimSpace(a.DefaultFrom)); err != nil {
 				return fmt.Errorf("email.accounts[%d] (%s): default_from %q is not a valid email address: %w", i, a.Name, a.DefaultFrom, err)
+			}
+		}
+		if err := a.validatePolicy(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePolicy checks the account's access and delivery policy.
+func (a EmailAccountConfig) validatePolicy(i int) error {
+	if a.Policy.Access != "" && !validEmailAccess[a.Policy.Access] {
+		return fmt.Errorf("email.accounts[%d] (%s): policy.access %q is not one of read, organize, send", i, a.Name, a.Policy.Access)
+	}
+	if a.Policy.Delivery != "" && !validEmailDelivery[a.Policy.Delivery] {
+		return fmt.Errorf("email.accounts[%d] (%s): policy.delivery %q is not one of by_trust_zone, drafts, direct", i, a.Name, a.Policy.Delivery)
+	}
+	if a.CanDraft() && !a.SMTPConfigured() {
+		if a.DeliveryMode() != EmailDeliveryDrafts {
+			return fmt.Errorf("email.accounts[%d] (%s): policy.access send without smtp can only draft; set policy.delivery: drafts or configure smtp", i, a.Name)
+		}
+		if a.DefaultFrom == "" {
+			return fmt.Errorf("email.accounts[%d] (%s): default_from is required when policy.access is send", i, a.Name)
+		}
+	}
+	for _, list := range []struct {
+		key     string
+		domains []string
+	}{{"denied_recipient_domains", a.Policy.DeniedRecipientDomains}, {"allowed_recipient_domains", a.Policy.AllowedRecipientDomains}} {
+		for _, d := range list.domains {
+			d = strings.TrimSpace(d)
+			if d == "" || strings.ContainsAny(d, "@ /") {
+				return fmt.Errorf("email.accounts[%d] (%s): policy.%s entry %q is not a domain", i, a.Name, list.key, d)
 			}
 		}
 	}

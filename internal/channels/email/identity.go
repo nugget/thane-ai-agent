@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -38,7 +39,7 @@ const (
 // ZoneUnknown is the trust zone rendered for an address the directory
 // holds no record of. It is the contacts package's implicit zone for a
 // stranger and never appears on a stored record.
-const ZoneUnknown = "unknown"
+const ZoneUnknown = contacts.ZoneUnknown
 
 // Interaction directions recorded on a contact.
 const (

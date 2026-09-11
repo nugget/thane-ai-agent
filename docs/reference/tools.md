@@ -289,8 +289,8 @@ instead of being reimplemented in each loop prompt.
 | `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
 | `email_folders` | List an account's mailboxes with special-use roles and counts. |
 | `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. |
-| `email_send` | Compose and send (markdown → MIME) through the contact-directory trust gate. |
-| `email_reply` | Reply with threading headers through the same gate. |
+| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in Drafts for the operator, or refused with a decision record. |
+| `email_reply` | Reply with threading headers through the same gate and decision. |
 | `email_move` | Move messages within an account; reports the new UIDs when the server returns them. |
 
 Every email tool takes an `account`; in a loop bound with

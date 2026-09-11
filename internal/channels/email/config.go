@@ -16,3 +16,20 @@ type IMAPConfig = platformconfig.EmailIMAPConfig
 
 // SMTPConfig holds SMTP server connection parameters for sending.
 type SMTPConfig = platformconfig.EmailSMTPConfig
+
+// PolicyConfig is one account's access level and delivery policy.
+type PolicyConfig = platformconfig.EmailPolicyConfig
+
+// Access levels, in the email package's vocabulary.
+const (
+	AccessRead     = platformconfig.EmailAccessRead
+	AccessOrganize = platformconfig.EmailAccessOrganize
+	AccessSend     = platformconfig.EmailAccessSend
+)
+
+// Delivery modes, in the email package's vocabulary.
+const (
+	DeliveryByTrustZone = platformconfig.EmailDeliveryByTrustZone
+	DeliveryDrafts      = platformconfig.EmailDeliveryDrafts
+	DeliveryDirect      = platformconfig.EmailDeliveryDirect
+)
