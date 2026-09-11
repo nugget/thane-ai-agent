@@ -143,7 +143,7 @@ Unknown model families default to the strictest minimum.
 
 ### Conversation History
 
-Every request also carries Anthropic's automatic, request-level
+Requests worth caching also carry Anthropic's automatic, request-level
 `cache_control`. It lands on the last message block and moves forward
 as the conversation grows, so each call in a tool loop reads the
 transcript the previous call wrote and pays full input price only for
@@ -151,6 +151,14 @@ what is new since then. It composes with the explicit system and tool
 markers: the explicit markers pin the stable prefix, the automatic one
 follows the tail. Without it, a long tool loop re-sends its whole
 growing transcript as uncached input on every iteration.
+
+`anthropicPromptCacheControl` decides which requests are worth it. The
+automatic breakpoint is sent when the system prompt carries explicit
+markers, or when `shouldUseAnthropicPromptCaching` sees any of: tool
+definitions, three or more messages, an assistant turn, or a system
+prompt of at least 4096 characters. A short one-shot request with none
+of those goes out without it, because there is nothing a later call
+would read back.
 
 It keeps the default 5m TTL. Anthropic requires longer-TTL entries to
 precede shorter ones, and the tail sits after the `5m` system run.
@@ -160,13 +168,17 @@ precede shorter ones, and the tail sits after the `5m` system run.
 Anthropic rejects requests carrying more than four `cache_control`
 markers total across system blocks, tools, and messages, and the
 automatic breakpoint counts as one. Today's policy normally emits two
-system breakpoints, one tool breakpoint, and the automatic one.
+system breakpoints, one tool breakpoint, and the automatic one when the
+request qualifies for it.
 
-The guard in `applyCacheBreakpointGuards` reserves the automatic slot,
-then drops excess explicit breakpoints before the request is sent. It
-drops the blanket tool breakpoint first, then trims trailing system
-breakpoints. Every drop logs a WARN so operators can see why the cache
-did not apply.
+The guard in `applyCacheBreakpointGuards` reserves the automatic slot
+when one is being sent, then drops excess explicit breakpoints before
+the request is sent. It drops the blanket tool breakpoint first, then
+trims trailing system breakpoints. Each over-cap drop logs a WARN,
+since exceeding the cap means the assembly plan changed. Under-minimum
+drops log at DEBUG instead: a short section is a structural fact of
+the prompt that recurs on every request. Every drop, at either level,
+is also listed on the debug `outbound cache markers` line.
 
 ### Anthropic Anti-Patterns
 
@@ -211,7 +223,9 @@ For Anthropic today, inspect:
 - raw `cache_creation_input_tokens` and `cache_read_input_tokens`
 - `request_cache_control_ttl` on the debug `outbound cache markers`
   line: `default` means the conversation tail carries the automatic
-  breakpoint; empty means history is being re-sent uncached
+  breakpoint. Empty is expected on a short one-shot request; on a
+  tool-bearing or multi-turn request it means history is being re-sent
+  uncached
 
 ## References
 
