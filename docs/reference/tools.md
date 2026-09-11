@@ -284,14 +284,20 @@ instead of being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `email_list` | List messages in a folder. |
-| `email_read` | Read a message with its full body. |
-| `email_search` | Server-side IMAP search. |
-| `email_folders` | List available mailboxes. |
-| `email_mark` | Flag or unflag messages. |
-| `email_send` | Compose and send (markdown → MIME). |
-| `email_reply` | Reply with proper threading headers. |
-| `email_move` | Move messages between folders. |
+| `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. |
+| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body; marks seen unless `mark_seen: false`. |
+| `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
+| `email_folders` | List an account's mailboxes with special-use roles and counts. |
+| `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. |
+| `email_send` | Compose and send (markdown → MIME) through the contact-directory trust gate. |
+| `email_reply` | Reply with threading headers through the same gate. |
+| `email_move` | Move messages within an account; reports the new UIDs when the server returns them. |
+
+Every email tool takes an `account`; in a loop bound with
+`email_account` an omitted account resolves to the binding and other
+accounts are refused. The `email` tag also injects an **Email Accounts**
+context block listing each account, whether it can send, and its cached
+folder names with roles.
 
 ## `contacts` — directory and vCard administration
 

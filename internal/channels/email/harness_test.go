@@ -155,7 +155,8 @@ func (quietLogger) Printf(string, ...interface{}) {}
 
 // imapConfig returns the account configuration pointing at the server.
 func (m *memIMAP) imapConfig() IMAPConfig {
-	return IMAPConfig{Host: m.host, Port: m.port, Username: testIMAPUser, Password: testIMAPPass, TLS: m.tls}
+	implicit := m.tls
+	return IMAPConfig{Host: m.host, Port: m.port, Username: testIMAPUser, Password: testIMAPPass, TLS: &implicit}
 }
 
 // newClient returns a Client for the server, closed at test end.
@@ -339,7 +340,8 @@ func newSMTPFake(t *testing.T, configure func(*smtpFake)) *smtpFake {
 
 func (f *smtpFake) config(user, pass string) SMTPConfig {
 	tcp := f.ln.Addr().(*net.TCPAddr)
-	return SMTPConfig{Host: tcp.IP.String(), Port: tcp.Port, Username: user, Password: pass, StartTLS: !f.implicit}
+	startTLS := !f.implicit
+	return SMTPConfig{Host: tcp.IP.String(), Port: tcp.Port, Username: user, Password: pass, StartTLS: &startTLS}
 }
 
 func (f *smtpFake) received() []smtpDelivery {

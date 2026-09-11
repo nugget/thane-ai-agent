@@ -125,11 +125,11 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		}
 		return a.hydrateLoopOutputs(hydrateHAStateWatcherSpec(spec, a.haStateWatcher))
 	case emailPollerDefinitionName:
-		if a.emailPoller == nil {
+		if a.emailService == nil || !a.emailService.PollingEnabled() {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires email poller runtime", emailPollerDefinitionName)
 		}
 		spec.Handler = func(ctx context.Context, _ any) error {
-			wakes, err := a.emailPoller.CheckNewMessages(ctx)
+			wakes, err := a.emailService.CheckNewMessages(ctx)
 			if err != nil {
 				return err
 			}
@@ -293,6 +293,20 @@ func (a *App) validateLoopBindings(spec looppkg.Spec) error {
 		if _, err := a.forgeService.ResolveAccount(context.Background(), account); err != nil {
 			return fmt.Errorf("loop %q binds %s=%q: %w",
 				spec.Name, looppkg.BindingForgeAccount, account, err)
+		}
+	}
+
+	if account, ok := spec.Bindings[looppkg.BindingEmailAccount]; ok {
+		if a.emailService == nil {
+			return fmt.Errorf("loop %q binds %s=%q but no email accounts are configured at this site",
+				spec.Name, looppkg.BindingEmailAccount, account)
+		}
+		// Unbound for the same reason as the forge check above: the
+		// question is whether the account exists, not whether this
+		// caller may use it.
+		if _, err := a.emailService.ResolveAccount(context.Background(), account); err != nil {
+			return fmt.Errorf("loop %q binds %s=%q: %w",
+				spec.Name, looppkg.BindingEmailAccount, account, err)
 		}
 	}
 

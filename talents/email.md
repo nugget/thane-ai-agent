@@ -18,21 +18,22 @@ that goes out.
 
 **Inbound work is `email`. Outbound notifications are `notifications`.**
 A turn that's "respond to this email I got" is email; a turn that's
-"tell the user about something happening in the system" is
+"tell the operator about something happening in the system" is
 notifications. Both can produce a message-shaped artifact, but the
 audiences and trust models are different.
 
 | You want... | Surface |
 |---|---|
 | Find, read, respond to mail that arrived in your inbox | Activate `email`, then pick a leaf below |
-| Send a non-correspondence notification to the user | Activate `notifications` (which routes via push, etc.) |
+| Send a non-correspondence notification to the operator | Activate `notifications` (which routes via push, etc.) |
 | Look up a sender's history across past conversations | `archive_text`, scoped to the conversation if relevant |
 | Resolve a name to an email address | `contacts` — recipient validation depends on it (see below) |
 
 ## Choose by the shape of your question
 
 - **You want to see what's in the inbox** — activate `email_triage`.
-  Folders, list, search, read. Read-only; safe to cast a wide net.
+  Folders, list, search, read. Read-only apart from the seen flag;
+  safe to cast a wide net.
 
 - **You want to send or reply to mail** — activate `email_respond`.
   Compose, reply, the trust-zone gating that protects against
@@ -44,6 +45,21 @@ audiences and trust models are different.
 
 ## Constants across all branches
 
+- **Which account am I in?** The Email Accounts block in your context
+  lists every mailbox this site has configured — its name, address,
+  the operator's description of what it is for, whether it can send,
+  and its folder names with their roles. Every tool takes an
+  `account`. In a loop bound to one account, omitting `account`
+  resolves to that account and naming any other is refused; in an
+  unbound turn, omitting it means the primary account, which on a
+  multi-account site is usually the wrong one. A new-mail wake event
+  names its `account` and `folder` in metadata: pass both to every
+  call about that message.
+- **Results are JSON, and every UID comes with its account and
+  folder.** A UID identifies a message *within one folder of one
+  account*; the same number means something else in another folder.
+  Read `account` and `folder` off the result and pass them back
+  rather than remembering a number on its own.
 - **Recipients must be in the contact directory AND at a
   send-eligible trust zone.** Both `email_send` and `email_reply`
   route through a trust-zone gate that aborts the send on *any*
@@ -56,18 +72,15 @@ audiences and trust models are different.
   both leave the message unsent. Confirm contacts exist *and are at
   a send-eligible zone* via `contact_lookup` before composing — the
   rejection after you've drafted the body is annoying and avoidable.
-- **Sent mail is irreversible.** There is no "unsend." A draft sent to
-  the wrong audience is permanent. When uncertain about the recipient
-  list or the body's tone, draft into the conversation first and ask;
-  don't reach for `email_send` as an optimistic move.
-- **UIDs are folder-scoped.** A UID from `email_list(folder: "INBOX")`
-  identifies a message *within INBOX*. After `email_move` to Archive,
-  the message has a new UID in Archive; the old INBOX UID stops
-  resolving. Re-list after moving if you need to operate on the
-  moved messages.
-- **Accounts are configured per-host.** Most calls accept an `account`
-  parameter; omitting it uses the primary account. Multi-account hosts
-  should pass `account` explicitly to avoid silent misrouting.
+- **Sent mail is irreversible.** There is no "unsend." A message sent
+  to the wrong audience is permanent. When uncertain about the
+  recipient list or the body's tone, draft into the conversation
+  first and ask; don't reach for `email_send` as an optimistic move.
+- **Folders are exact names, never guesses.** `email_folders` for the
+  account is the only source of destination names; no email tool
+  creates a folder, and folders are not shared across accounts. A
+  move to a name the account lacks is refused and the refusal lists
+  the folders that exist.
 
 ## Cross-references
 
@@ -76,9 +89,11 @@ audiences and trust models are different.
   unless you're certain every recipient is already in the directory.
 - For high-volume triage loops (digest every morning, watch for
   specific senders), the right shape is usually `thane_loop_create`
-  with `operation=service` rather than a synchronous email turn. The
-  managed output document is optional, so a triage loop can run without
-  maintaining one. See `loops_examples_curate` for the pattern.
+  with `operation=service` rather than a synchronous email turn. Bind
+  the loop to one mailbox with `bindings: {email_account: "<name>"}`
+  when it should only ever see that account. The managed output
+  document is optional, so a triage loop can run without maintaining
+  one. See `loops_examples_curate` for the pattern.
 - For escalation when an email needs human attention (sensitive thread,
   legal/financial content), bounce to `notifications` —
   `request_human_decision` with the email summary in the body.
@@ -93,11 +108,13 @@ teaser: "Read-only inbox work — folders, list, search, read by UID."
 # Triage
 
 Reading the inbox. Four tools, picked by how specifically you can name
-what you're looking for.
+what you're looking for. Every result is JSON and names the `account`
+and `folder` it came from.
 
 ## Survey the folder structure
 
-`email_folders` enumerates mailboxes with message and unseen counts:
+`email_folders` enumerates mailboxes with their special-use role, whether
+they can hold messages, and message and unseen counts:
 
 ```json
 {
@@ -105,43 +122,59 @@ what you're looking for.
 }
 ```
 
-Useful when you don't know whether the host's archive lives in
-`Archive`, `[Gmail]/All Mail`, `Saved`, or somewhere else. Pick the
-folder name from the result; don't guess.
+The result is `{account, count, folders:[{name, role, selectable,
+delimiter, messages, unseen}]}`; `role` is `inbox`, `drafts`, `sent`,
+`trash`, `junk`, `archive`, or empty. Useful when you don't know whether
+the host's archive lives in `Archive`, `[Gmail]/All Mail`, `Saved`, or
+somewhere else. Pick the folder name from the result; don't guess.
 
 ## List recent messages
 
-`email_list` returns recent messages newest-first with sender, subject,
-date, and flags:
+`email_list` returns recent messages newest-first:
 
 ```json
 {
+  "account": "primary",
   "folder": "INBOX",
   "limit": 20,
   "unseen": true
 }
 ```
 
+The result is `{account, folder, count, total_matched, truncated,
+messages:[{uid, from:{name,address}, to, cc, subject, date, message_id,
+flags, size}]}`; `date` is a delta such as `-2h13m`. `limit` defaults to
+20 and caps at 100; `total_matched` says how many messages there were
+before the cap, and `truncated` is true when the cap dropped some.
 `unseen: true` is the right move when triaging — read what you haven't
 read, skip what you have. The UIDs in the result are what you'll feed
-to `email_read`, `email_mark`, or `email_move` next.
+to `email_read`, `email_mark`, or `email_move` next, together with the
+`account` and `folder` beside them.
 
 ## Search across content
 
-`email_search` runs text + header + date-range queries:
+`email_search` runs text, header, flag, and date-range queries in one
+folder:
 
 ```json
 {
+  "account": "primary",
   "query": "VLAN renumber",
-  "from": "nugget",
-  "since": "2026-04-01",
+  "from": "alice",
+  "since": "-30d",
   "folder": "INBOX",
   "limit": 30
 }
 ```
 
-All filters are optional; combine the ones you have. `since`/`before`
-take `YYYY-MM-DD`. Searches return newest-first like list does.
+All criteria are optional and combine with AND: `query` (anywhere in
+the message), `from`, `to`, `subject` (header substrings), `since` and
+`before` (`YYYY-MM-DD`, RFC 3339, or a delta like `-7d`; IMAP compares
+dates, not times), `unseen`, `flagged`, and `message_id` or
+`in_reply_to` (an exact Message-ID without angle brackets, which is how
+you find an original message or an existing reply to it). A malformed
+date is an error, not silently ignored. Results have the same shape as
+`email_list`, newest first.
 
 ## Read one in full
 
@@ -149,15 +182,24 @@ Once a UID looks worth reading, pull the body with `email_read`:
 
 ```json
 {
+  "account": "primary",
   "uid": 4827,
   "folder": "INBOX"
 }
 ```
 
-Returns full headers and body. The UID **must** match the folder it
-was listed from — `email_list(folder: "INBOX")` UIDs only resolve via
-`email_read(folder: "INBOX")`. Cross-folder UID confusion is a common
-silent failure.
+The result is a JSON header object — `{account, folder, uid,
+message_id, in_reply_to, references, from, to, cc, reply_to, subject,
+date, flags, size, marked_seen, body_source, body_truncated,
+attachments:[{filename, content_type, size, inline}]}` — followed by a
+line containing only `---` and then the readable body. The body is the
+text part, or the HTML part rendered to text when `body_source` is
+`html`; bodies over 32 KB are cut and `body_truncated` says so.
+Attachments are described, not downloaded. **Reading marks the message
+seen** unless you pass `mark_seen: false`, which matters when your
+triage recipe is "list unseen, read, list unseen again". The UID
+**must** come with the account and folder it was listed from; a UID the
+folder does not hold is an error naming both.
 
 ## Cross-references
 
@@ -181,7 +223,10 @@ teaser: "Compose a new email or reply to an existing one — trust-gated by the 
 # Respond
 
 Sending mail. Two tools, one safety surface that dwarfs both: **every
-recipient must be in the contact directory.**
+recipient must be in the contact directory.** An account without
+`smtp` configured cannot send at all; the Email Accounts block says
+which accounts can (`can_send`), and a send from one that cannot is
+refused by name.
 
 ## The trust-gated send
 
@@ -189,10 +234,11 @@ recipient must be in the contact directory.**
 
 ```json
 {
-  "to": ["nugget@macnugget.org"],
+  "account": "primary",
+  "to": ["alice@example.com"],
   "cc": [],
   "subject": "VLAN renumber — rollback note",
-  "body": "Hi,\n\nThe rollback worked cleanly. Logs attached in the next message.\n\n— Thane"
+  "body": "Hi Alice,\n\nThe rollback worked cleanly. Logs attached in the next message.\n\n— Thane"
 }
 ```
 
@@ -203,12 +249,17 @@ trust-gate issue aborts the whole send** — there is no "send the
 allowed ones and skip the others." Three result categories:
 
 - **Allowed through** — every recipient resolves to `admin`,
-  `household`, or `trusted`. The mail goes out.
+  `household`, or `trusted`. The mail goes out and the result is
+  `{disposition: "sent", account, message_id, to, cc, bcc_count,
+  subject, sent_folder_copy}`. `bcc_count` counts the operator's
+  configured audit copy; `message_id` is the key under which the
+  message can be found in the Sent folder and the value a reply's
+  `in_reply_to` will carry.
 - **Rejected, known-zone recipient** — at least one recipient is at
   the `known` trust zone. Result names the offender; nothing is
   sent. Recovery: promote the contact with `contact_save`
-  (deliberately, with user authorization), or remove them from the
-  recipient list.
+  (deliberately, with operator authorization), or remove them from
+  the recipient list.
 - **Rejected, missing contact** — at least one recipient has no
   contact record. Result names the offender; nothing is sent.
   Recovery: `contact_save` to add the contact deliberately, or
@@ -230,6 +281,7 @@ threads properly in the recipient's client:
 
 ```json
 {
+  "account": "primary",
   "uid": 4827,
   "folder": "INBOX",
   "body": "Confirmed — applying the change tonight.\n\n— Thane",
@@ -237,14 +289,18 @@ threads properly in the recipient's client:
 }
 ```
 
-`reply_all: false` (the default) replies only to the original sender.
-`reply_all: true` includes the original `Cc` list. **Both paths still
-go through the trust gate**, and the gate's all-or-nothing behavior
-means a reply_all to a thread where any CC is at `known` zone or has
-no contact record will be **rejected entirely** — the handler doesn't
-selectively drop bad recipients and send to the rest. When reply_all
-matters, do a `contact_lookup` sweep over the visible recipients
-first.
+The reply goes to the original message's `Reply-To` when it set one,
+else to its `From`. `reply_all: true` adds the original `To` and `Cc`
+recipients, minus this account's own address and minus duplicates.
+**Both paths still go through the trust gate**, and the gate's
+all-or-nothing behavior means a reply_all to a thread where any
+recipient is at `known` zone or has no contact record will be
+**rejected entirely** — the handler doesn't selectively drop bad
+recipients and send to the rest. The original's `to` and `cc` are in
+the `email_read` result you just took the UID from; check them against
+the directory before choosing `reply_all`. Replying does not change the
+original's seen state. The result has the same shape as `email_send`
+with `in_reply_to` set.
 
 ## reply vs send — the right shape
 
@@ -261,7 +317,7 @@ audience-wrong is a real leak.
   no contact record" message is recoverable, but it's faster to know
   the directory state going in.
 - For high-stakes outgoing mail (sensitive, legal, ambiguous tone),
-  draft the body in a `scratchpad:` doc and ask for owner sign-off
+  draft the body in a `scratchpad:` doc and ask for operator sign-off
   via `request_human_decision` before sending.
 - For the loop shape that reads incoming mail and decides whether to
   reply, see `loops_examples_curate` — a `thane_loop_create` with
@@ -277,8 +333,9 @@ teaser: "Mark messages read/flagged or move them between folders — UIDs are fo
 
 # Organize
 
-Curating the inbox structure. Two tools, both UID-driven, both can
-operate on arrays for bulk work.
+Curating the inbox structure. Two tools, both UID-driven, both operate
+on arrays for bulk work, both return JSON that says exactly which UIDs
+they touched.
 
 ## Mark messages
 
@@ -286,6 +343,7 @@ operate on arrays for bulk work.
 
 ```json
 {
+  "account": "primary",
   "uids": [4827, 4828, 4829],
   "flag": "seen",
   "add": true,
@@ -293,11 +351,13 @@ operate on arrays for bulk work.
 }
 ```
 
-`add: true` adds the flag; `add: false` removes it. `add` defaults
-to `true` when omitted — the common case is marking seen after a
-triage pass, so the schema and handler now agree on that default.
-Pass `add: false` to remove a flag. Single-message mode accepts
-`uid` (integer) instead of `uids` (array) as a convenience.
+`add: true` adds the flag; `add: false` removes it; `add` defaults to
+`true`, since marking seen after a triage pass is the common case.
+Single-message mode accepts `uid` (integer) instead of `uids` (array).
+The result is `{action: "flag_added" | "flag_removed", account, folder,
+flag, uids_affected, uids_not_found}`. A UID under `uids_not_found` no
+longer exists in that folder — it was moved or deleted since you listed
+it — so list again rather than retrying.
 
 The most common reason to reach for this: marking processed messages
 as read after a triage pass, so the next pass's `email_list(unseen:
@@ -305,39 +365,41 @@ true)` only shows what's new.
 
 ## Move messages
 
-`email_move` relocates messages between folders:
+`email_move` relocates messages between folders of one account:
 
 ```json
 {
+  "account": "primary",
   "uids": [4827, 4828],
   "folder": "INBOX",
   "destination": "Archive"
 }
 ```
 
-`folder` is the source; `destination` is the target. The handler
-accepts a convenience shorthand: if you pass only `folder` and omit
-`destination`, the `folder` value is treated as the destination and
-INBOX is assumed as the source. Prefer the explicit form for clarity.
+`folder` is the source; `destination` is the target and must be an
+existing folder name for the same account, taken from `email_folders`
+— moves never create folders, and there is no cross-account move. The
+handler accepts a convenience shorthand: if you pass only `folder` and
+omit `destination`, the `folder` value is treated as the destination
+and INBOX is assumed as the source. Prefer the explicit form for
+clarity. A destination the account lacks is refused and the refusal
+lists the folders that exist.
 
-## UIDs are folder-scoped — the canonical gotcha
+## UIDs are folder-scoped — and the result tells you the new ones
 
 A UID identifies a message *within one folder*. After `email_move`,
-the message has a fresh UID in the destination folder; the old UID
-in the source folder stops resolving. If you want to operate further
-on the moved messages, re-list after the move:
-
-```json
-{
-  "folder": "Archive",
-  "limit": 20
-}
-```
+the message has a fresh UID in the destination folder; the old UID in
+the source folder stops resolving. The result is `{action: "moved",
+account, source_folder, destination_folder, uids, destination_uids,
+destination_uids_known}`. When `destination_uids_known` is true, the
+`destination_uids` are the moved messages' new UIDs in order and you
+can operate on them immediately; when it is false the server did not
+report them and you must list the destination to find them.
 
 The bulk path that bites: moving 20 messages, then trying to
-`email_mark` them with the old INBOX UIDs. Silent failure or wrong
-messages flagged. Always re-list after a move when further operations
-are coming.
+`email_mark` them with the old INBOX UIDs. The mark result would list
+every one of them under `uids_not_found`. Use `destination_uids`, or
+re-list the destination, before further operations.
 
 ## Cross-references
 
@@ -347,5 +409,6 @@ are coming.
   this is service-loop territory — `thane_loop_create` with
   `operation=service`; see `loops_examples_curate`.
 - For deleting rather than archiving, the move pattern still applies
-  — `destination: "Trash"` is the conventional target. Trash retention
-  policy is server-side, not Thane-managed.
+  — `destination: "Trash"` (or whatever `email_folders` reports with
+  `role: "trash"`) is the conventional target. Trash retention policy
+  is server-side, not Thane-managed.

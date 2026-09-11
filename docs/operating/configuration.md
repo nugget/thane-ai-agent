@@ -87,26 +87,55 @@ wake subscriptions.
 
 ```yaml
 email:
+  bcc_owner: "Operator <operator@example.com>"
+  poll_interval: 300
   accounts:
     - name: primary
+      description: "Thane's own mailbox. Correspondence with the household and trusted contacts."
       imap:
         host: imap.example.com
         port: 993
         username: thane@example.com
-        password: app_password
+        password: ${IMAP_PASSWORD}
+        tls: true
       smtp:
         host: smtp.example.com
         port: 587
         username: thane@example.com
-        password: app_password
-      owner_email: you@example.com    # Bcc for audit trail
+        password: ${SMTP_PASSWORD}
+        starttls: true
+      default_from: "Thane <thane@example.com>"
+      sent_folder: Sent
+    - name: packages
+      description: "Parcel and delivery notifications. Read and file only; never sends."
+      imap:
+        host: imap.example.com
+        port: 993
+        username: packages@example.com
+        password: ${PACKAGES_PASSWORD}
 ```
 
-Optional. Multiple accounts supported. Each account has independent IMAP
-and SMTP settings. The `owner_email` receives Bcc copies of all outbound
-email for governance.
+Optional. Each entry under `accounts` is one mailbox; the first is the
+primary, which tools use when no `account` is named and no loop binding
+selects one. `description` is shown to the model beside the account so it
+learns what a mailbox is for before acting rather than by being refused.
+An account with an `smtp` block can send and needs `default_from`; one
+without is read-and-organize only. `sent_folder` names the IMAP folder that
+receives a copy of every sent message. `tls` defaults to true on every port
+except 143 and `starttls` to true on every port except 587's alternative,
+465; both accept an explicit `false`.
 
-Email polling is configured in the scheduler section (see below).
+`bcc_owner` receives a blind copy of every message the agent sends. It is
+an audit copy for the operator, not a recipient the agent chose.
+
+`poll_interval` is how often, in seconds, every account's INBOX is checked
+for new mail; it defaults to 300 when email is configured and `0` disables
+polling, which also removes the built-in `email-poller` and
+`email-default-handler` loops. See
+[Event Sources](../reference/event-sources.md) for what a new-mail wake
+carries. A loop that should only ever see one mailbox binds it with
+`bindings: {email_account: <name>}`; see
+[Loop Definitions](../reference/loop-definitions.md).
 
 ## Signal Messaging
 
@@ -407,17 +436,11 @@ read beside them but written under the agent's own signer policy.
 
 ## Scheduler
 
-```yaml
-scheduler:
-  tasks:
-    email_poll:
-      cron: "*/5 * * * *"
-      message: "Check for new email"
-```
-
-Cron-style task scheduling. Each task can override the model and routing
+Cron-style task scheduling is managed at runtime with the `task_schedule`
+tool rather than in this file. Each task can override the model and routing
 hints. See [Event Sources](../reference/event-sources.md) for how scheduled
-tasks integrate with the agent loop.
+tasks integrate with the agent loop. Email polling is not a scheduled task;
+it is the `email-poller` service loop driven by `email.poll_interval`.
 
 Self-reflection (`ego.md` maintenance) runs as the `ego` service loop,
 not as a scheduled task. See the `ego:` block in the example config for

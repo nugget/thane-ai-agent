@@ -29,6 +29,7 @@ const (
 // IMAP UIDs against a persisted high-water mark. It is not a tool — it
 // runs as infrastructure code called by the scheduler task executor.
 type Poller struct {
+	service   *Service
 	manager   *Manager
 	state     *opstate.Store
 	logger    *slog.Logger
@@ -51,12 +52,9 @@ func WithMessageBus(bus *messages.Bus) PollerOption {
 }
 
 // WithContactResolver lets the poller translate each sender into a
-// trust zone for wake-tag classification. Contacts the resolver
-// recognises stamp tags like "owner" / "trusted" / "household" /
-// "known" on the wake envelope; unrecognised senders stamp
-// "stranger". Without a resolver the poller falls back to "stranger"
-// for every message — wakes still fire, the model just won't see the
-// trust-derived hint.
+// trust zone, stamped on every wake event's metadata as trust_zone.
+// Without a resolver every sender reads as a stranger — wakes still
+// fire, the model just won't see the trust-derived hint.
 func WithContactResolver(c ContactResolver) PollerOption {
 	return func(p *Poller) { p.contacts = c }
 }
@@ -75,11 +73,24 @@ func WithDefaultWakeLoop(target messages.LoopWakeTarget) PollerOption {
 
 // NewPoller creates an email poller that checks all accounts managed by
 // the given Manager and tracks state in the provided opstate store.
+// [Service] constructs one through newPoller; this constructor exists
+// for callers that hold a Manager without a Service.
 func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger, opts ...PollerOption) *Poller {
+	return newPollerWith(nil, manager, state, logger, opts...)
+}
+
+// newPoller creates the poller a Service owns. The service reference
+// lets each poll refresh the folder cache the context block renders.
+func newPoller(service *Service, state *opstate.Store, logger *slog.Logger, opts ...PollerOption) *Poller {
+	return newPollerWith(service, service.manager, state, logger, opts...)
+}
+
+func newPollerWith(service *Service, manager *Manager, state *opstate.Store, logger *slog.Logger, opts ...PollerOption) *Poller {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	p := &Poller{
+		service: service,
 		manager: manager,
 		state:   state,
 		logger:  logger,
@@ -136,11 +147,10 @@ func (m highWaterMark) encode() string {
 // CheckNewMessages polls every configured account for messages newer
 // than its stored high-water mark and dispatches each new message as
 // a [messages.LoopEventPayload] to the configured wake_loop target
-// (default: [DefaultHandlerLoopName]). Each envelope carries the
-// per-message trust-zone tag derived from the sender via the
-// configured contact resolver, so the receiving loop's iteration sees
-// "owner" / "trusted" / "household" / "known" / "stranger" in its
-// Request.InitialTags and can route the triage accordingly.
+// (default: [DefaultHandlerLoopName]). Each event's metadata names the
+// account, folder, UID, and Message-ID of the message and the trust
+// zone of its sender, so the receiving iteration never has to guess
+// which mailbox a number belongs to or who is writing.
 //
 // On first run (no stored high-water mark), the folder's current
 // UIDNEXT is recorded silently without reporting anything as new —
@@ -217,6 +227,10 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 	}
 
 	stateKey := accountName + ":" + DefaultFolder
+
+	if p.service != nil {
+		p.service.refreshFoldersIfStale(ctx, ResolvedAccount{Name: accountName, Client: client})
+	}
 
 	status, err := client.MailboxStatus(ctx, DefaultFolder)
 	if err != nil {
@@ -351,11 +365,9 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 // previously-delivered message or losing the whole window.
 //
 // Batches are ordered oldest-first so partial progress always advances
-// monotonically. Each batch's wake envelope carries the deduplicated
-// union of sender-trust tags for the messages in that batch — a
-// stranger-heavy batch followed by an owner batch gets distinct tags
-// on each iteration, instead of always seeing the union across all
-// senders.
+// monotonically. The wake target's own tags pass through untouched; the
+// poller adds none, because a tag is a per-batch union that cannot name
+// any one message — identity rides in each event's metadata instead.
 //
 // Returns the total number of events delivered across all successful
 // batches. A nil message bus is a no-op (logs and returns 0) so a
@@ -385,10 +397,9 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 	for start := 0; start < len(ordered); start += batchSize {
 		end := min(start+batchSize, len(ordered))
 		chunk := ordered[start:end]
-		events, tags, batchMaxUID := p.buildBatchEvents(accountName, chunk)
+		events, batchMaxUID := p.buildBatchEvents(accountName, chunk)
 
 		target := p.wakeLoop
-		target.Tags = mergeUniqueStrings(target.Tags, tags)
 		env, err := messages.NewEventSourceEnvelope(
 			messages.Identity{Kind: messages.IdentitySystem, Name: "email_poller"},
 			target,
@@ -418,19 +429,19 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 }
 
 // buildBatchEvents converts a chunk of envelopes into structured
-// LoopEventPayloads, returning the events, the deduplicated sender-tag
-// set for the batch, and the highest UID observed in the chunk.
-func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messages.LoopEventPayload, []string, uint32) {
+// LoopEventPayloads and reports the highest UID observed in the chunk.
+// Every fact the handler needs to act on a message travels in the
+// event's metadata: the account and folder the UID belongs to, the
+// Message-ID, the sender's address and display name, and the trust
+// zone the contact directory assigns the address ("unknown" for a
+// stranger).
+func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messages.LoopEventPayload, uint32) {
 	events := make([]messages.LoopEventPayload, 0, len(chunk))
-	tagsSeen := make(map[string]struct{})
-	var tags []string
 	var maxUID uint32
 	for _, env := range chunk {
-		zone, _ := p.lookupTrustZone(env.From)
-		tag := senderTag(zone)
-		if _, dup := tagsSeen[tag]; !dup {
-			tagsSeen[tag] = struct{}{}
-			tags = append(tags, tag)
+		zone, found := p.lookupTrustZone(env.From)
+		if !found {
+			zone = "unknown"
 		}
 		if env.UID > maxUID {
 			maxUID = env.UID
@@ -442,7 +453,9 @@ func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messa
 			"from":         env.From.String(),
 			"from_address": env.From.Key(),
 			"trust_zone":   zone,
-			"tag":          tag,
+		}
+		if env.From.Name != "" {
+			metadata["from_name"] = env.From.Name
 		}
 		if env.MessageID != "" {
 			metadata["message_id"] = env.MessageID
@@ -457,7 +470,7 @@ func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messa
 			Metadata:   metadata,
 		})
 	}
-	return events, tags, maxUID
+	return events, maxUID
 }
 
 // setHighWaterMark persists the per-account cursor without consulting
@@ -473,7 +486,7 @@ func (p *Poller) setHighWaterMark(stateKey string, mark highWaterMark) error {
 
 // lookupTrustZone returns the contact's trust zone for a sender. An
 // unconfigured resolver, a missing contact, or a lookup error all
-// return ("", false) — the caller maps that to the "stranger" tag.
+// return ("", false) — the caller renders that as the "unknown" zone.
 func (p *Poller) lookupTrustZone(from Address) (string, bool) {
 	if p.contacts == nil {
 		return "", false
@@ -492,51 +505,6 @@ func (p *Poller) lookupTrustZone(from Address) (string, bool) {
 		return "", false
 	}
 	return zone, true
-}
-
-// senderTag maps a contacts trust zone to the iteration-scoped tag
-// stamped on the wake envelope. Senders without a matching contact
-// stamp "stranger" so the receiving loop can route triage by sender
-// familiarity. Unknown / unrecognised zones fall back to "stranger"
-// so a future zone added to the contacts model doesn't silently
-// promote a sender to "trusted".
-func senderTag(zone string) string {
-	switch zone {
-	case "admin":
-		return "owner"
-	case "household":
-		return "household"
-	case "trusted":
-		return "trusted"
-	case "known":
-		return "known"
-	default:
-		return "stranger"
-	}
-}
-
-// mergeUniqueStrings concatenates two string slices, dropping
-// whitespace-only entries and preserving the first slice's order.
-func mergeUniqueStrings(base, extra []string) []string {
-	seen := make(map[string]struct{}, len(base)+len(extra))
-	out := make([]string, 0, len(base)+len(extra))
-	for _, slice := range [][]string{base, extra} {
-		for _, s := range slice {
-			t := strings.TrimSpace(s)
-			if t == "" {
-				continue
-			}
-			if _, dup := seen[t]; dup {
-				continue
-			}
-			seen[t] = struct{}{}
-			out = append(out, t)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // filterSelfSent removes messages whose From is the account's own

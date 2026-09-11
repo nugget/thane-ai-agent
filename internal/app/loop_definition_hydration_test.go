@@ -77,7 +77,7 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsConfiguredBuiltIns(t *testing.T) {
 			},
 		},
 		Email: emailcfg.Config{
-			PollIntervalSec: 300,
+			PollInterval: ptrInt(300),
 			Accounts: []emailcfg.AccountConfig{{
 				Name: "personal",
 				IMAP: emailcfg.IMAPConfig{
@@ -295,7 +295,7 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 		},
 	}
 	cfg.Email = emailcfg.Config{
-		PollIntervalSec: 300,
+		PollInterval: ptrInt(300),
 		Accounts: []emailcfg.AccountConfig{{
 			Name: "personal",
 			IMAP: emailcfg.IMAPConfig{Host: "imap.example.com", Username: "dan@example.com"},
@@ -538,3 +538,6 @@ func TestHydrateLoopDefinitionSpec_HAStateWatcher(t *testing.T) {
 func builtInContainerDefinitionSpecsForTest(cfg *config.Config) []looppkg.Spec {
 	return builtInContainerDefinitionSpecs(cfg, nil)
 }
+
+// ptrInt returns a pointer to v for optional integer config fields.
+func ptrInt(v int) *int { return &v }

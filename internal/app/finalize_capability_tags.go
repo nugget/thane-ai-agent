@@ -163,6 +163,13 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		a.loop.RegisterTagContextProvider("forge", a.forgeService.ContextProvider())
 	}
 
+	// Email accounts, their folder vocabulary, and recent operations
+	// appear with the email capability tag, so a loop that can call
+	// email tools knows which mailboxes exist before it is refused.
+	if a.emailService != nil {
+		a.loop.RegisterTagContextProvider("email", a.emailService.ContextProvider())
+	}
+
 	// Build manifest entries with enriched context info.
 	kbCounts := tagCtxAssembler.KBArticleTags()
 	menuHints := mergeTalentMenuHints(tagCtxAssembler.KBMenuHints(), capTalents)

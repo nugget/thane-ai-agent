@@ -50,6 +50,13 @@ const (
 	// root handle without a trailing colon, and the root must exist at
 	// hydration.
 	BindingRepositoryRoot = "repo_root"
+
+	// BindingEmailAccount names the email account (from email.accounts in
+	// config) this loop's email tools resolve to. Its value is an account
+	// name, and the account must exist at hydration. The built-in
+	// email-default-handler is deliberately unbound: it triages every
+	// configured mailbox and reads the account from each wake event.
+	BindingEmailAccount = "email_account"
 )
 
 // registeredBindings is the closed set of binding keys, each with the
@@ -59,6 +66,7 @@ const (
 var registeredBindings = map[string]string{
 	BindingForgeAccount:   "Forge account name this loop's forge tools resolve to. Empty account arguments default to it, and other accounts are refused.",
 	BindingRepositoryRoot: "Repository root name this loop's file and repository-history tools resolve to. Omitted roots default to it, and other roots are refused.",
+	BindingEmailAccount:   "Email account name this loop's email tools resolve to. Empty account arguments default to it, and other accounts are refused.",
 }
 
 // BindingKeys returns the registered binding keys in sorted order, for
@@ -76,6 +84,19 @@ func BindingKeys() []string {
 // registered binding key, or "" when the key is not registered.
 func BindingDescription(key string) string {
 	return registeredBindings[key]
+}
+
+// BindingKeysProse renders every registered key with its description
+// as one sentence fragment, for tool schemas that enumerate the closed
+// set. Generating the list keeps a model-facing description from
+// silently omitting a key registered after it was written.
+func BindingKeysProse() string {
+	keys := BindingKeys()
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%q — %s", key, strings.TrimSuffix(registeredBindings[key], ".")))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // ValidateBindings checks that every key is registered and every value
