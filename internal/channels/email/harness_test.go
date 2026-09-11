@@ -47,12 +47,27 @@ type memIMAP struct {
 	mu      sync.Mutex
 	folders []string
 	attrs   map[string][]imap.MailboxAttr
+	tls     bool // implicit TLS listener
+
 }
 
 type memIMAPOptions struct {
 	// rev1Only advertises IMAP4rev1 alone, without LIST-STATUS,
-	// LIST-EXTENDED, or SPECIAL-USE, to exercise the fallback paths.
+	// LIST-EXTENDED, SPECIAL-USE, MOVE, or UIDPLUS, to exercise the
+	// fallback and refusal paths.
 	rev1Only bool
+
+	// implicitTLS wraps the listener in TLS so the client connects
+	// with tls: true and verifies the test chain.
+	implicitTLS bool
+
+	// noSTARTTLS withholds the STARTTLS capability on the plaintext
+	// listener, so a client with tls: false must refuse to log in.
+	noSTARTTLS bool
+
+	// untrustedCert serves a certificate the client's trust root does
+	// not contain.
+	untrustedCert bool
 }
 
 // newMemIMAP starts an in-memory IMAP server with INBOX, Drafts, Sent,
@@ -87,6 +102,15 @@ func newMemIMAP(t *testing.T, configure ...func(*memIMAPOptions)) *memIMAP {
 	}
 	mem.AddUser(user)
 
+	tlsCfg := testServerTLS(t)
+	if opts.untrustedCert {
+		tlsCfg = untrustedServerTLS(t)
+	}
+	var startTLS *tls.Config
+	if !opts.noSTARTTLS && !opts.implicitTLS {
+		startTLS = tlsCfg
+	}
+
 	caps := imap.CapSet{imap.CapIMAP4rev1: {}}
 	if !opts.rev1Only {
 		for _, c := range []imap.Cap{imap.CapIMAP4rev2, imap.CapUIDPlus, imap.CapMove, imap.CapListStatus, imap.CapListExtended, imap.CapSpecialUse} {
@@ -103,6 +127,7 @@ func newMemIMAP(t *testing.T, configure ...func(*memIMAPOptions)) *memIMAP {
 			return &specialUseSession{Session: sess, mem: m}, nil, nil
 		},
 		InsecureAuth: true,
+		TLSConfig:    startTLS,
 		Caps:         caps,
 		Logger:       quietLogger{},
 	})
@@ -110,6 +135,10 @@ func newMemIMAP(t *testing.T, configure ...func(*memIMAPOptions)) *memIMAP {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
+	}
+	m.tls = opts.implicitTLS
+	if opts.implicitTLS {
+		ln = tls.NewListener(ln, tlsCfg)
 	}
 	go func() { _ = m.server.Serve(ln) }()
 	t.Cleanup(func() { _ = m.server.Close() })
@@ -126,7 +155,7 @@ func (quietLogger) Printf(string, ...interface{}) {}
 
 // imapConfig returns the account configuration pointing at the server.
 func (m *memIMAP) imapConfig() IMAPConfig {
-	return IMAPConfig{Host: m.host, Port: m.port, Username: testIMAPUser, Password: testIMAPPass, TLS: false}
+	return IMAPConfig{Host: m.host, Port: m.port, Username: testIMAPUser, Password: testIMAPPass, TLS: m.tls}
 }
 
 // newClient returns a Client for the server, closed at test end.
@@ -440,36 +469,14 @@ var (
 func testServerTLS(t *testing.T) *tls.Config {
 	t.Helper()
 	testCertOnce.Do(func() {
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		cert, err := selfSignedCert()
 		if err != nil {
 			testCertErr = err
 			return
 		}
-		tmpl := &x509.Certificate{
-			SerialNumber:          big.NewInt(1),
-			Subject:               pkix.Name{CommonName: "email test server"},
-			NotBefore:             time.Now().Add(-time.Hour),
-			NotAfter:              time.Now().Add(24 * time.Hour),
-			KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
-			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-			DNSNames:              []string{"localhost"},
-			IsCA:                  true,
-			BasicConstraintsValid: true,
-		}
-		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-		if err != nil {
-			testCertErr = err
-			return
-		}
-		leaf, err := x509.ParseCertificate(der)
-		if err != nil {
-			testCertErr = err
-			return
-		}
-		testCert = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
+		testCert = cert
 		pool := x509.NewCertPool()
-		pool.AddCert(leaf)
+		pool.AddCert(cert.Leaf)
 		tlsRootCAs = pool
 	})
 	if testCertErr != nil {
@@ -478,24 +485,149 @@ func testServerTLS(t *testing.T) *tls.Config {
 	return &tls.Config{Certificates: []tls.Certificate{testCert}, MinVersion: tls.VersionTLS12}
 }
 
+// untrustedServerTLS returns a fresh self-signed certificate the
+// client's trust root does not contain, for negative controls: a
+// client that accepts it is not verifying chains.
+func untrustedServerTLS(t *testing.T) *tls.Config {
+	t.Helper()
+	testServerTLS(t) // install the trusted root first
+	cert, err := selfSignedCert()
+	if err != nil {
+		t.Fatalf("generate untrusted certificate: %v", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+}
+
+// selfSignedCert generates a CA-flagged self-signed certificate for
+// 127.0.0.1 and localhost.
+func selfSignedCert() (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "email test server"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, nil
+}
+
 // hungListener accepts connections and never speaks, for cancellation
-// tests.
+// tests. Accepted connections are closed at test end so nothing
+// outlives the test.
 func hungListener(t *testing.T) (host string, port int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+		}
+	}()
+	tcp := ln.Addr().(*net.TCPAddr)
+	return tcp.IP.String(), tcp.Port
+}
+
+// stallingIMAP is a scripted IMAP server over TLS that greets, answers
+// CAPABILITY, LOGIN, and NOOP, and on any other command writes one
+// untagged line and then goes silent, so the watchdog is the only
+// thing that can end the operation. It exists because imapmemserver
+// cannot be told to stall.
+func stallingIMAP(t *testing.T) (host string, port int) {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", testServerTLS(t))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
 			go func() {
-				<-time.After(time.Minute)
-				_ = conn.Close()
+				_, _ = fmt.Fprint(conn, "* OK stalling server ready\r\n")
+				reader := bufio.NewReader(conn)
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					fields := strings.Fields(line)
+					if len(fields) < 2 {
+						continue
+					}
+					tag, cmd := fields[0], strings.ToUpper(fields[1])
+					switch cmd {
+					case "CAPABILITY":
+						_, _ = fmt.Fprintf(conn, "* CAPABILITY IMAP4rev1\r\n%s OK done\r\n", tag)
+					case "LOGIN", "NOOP":
+						_, _ = fmt.Fprintf(conn, "%s OK done\r\n", tag)
+					case "LOGOUT":
+						_, _ = fmt.Fprintf(conn, "* BYE\r\n%s OK done\r\n", tag)
+						return
+					default:
+						// One response, then silence: the read deadline a
+						// caller might have set is reset by this line.
+						_, _ = fmt.Fprint(conn, "* 1 EXISTS\r\n")
+						select {} //nolint:staticcheck // held open until the test closes the conn
+					}
+				}
 			}()
 		}
 	}()

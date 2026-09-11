@@ -267,9 +267,9 @@ func TestParseBody_TruncationRespectsRuneBoundary(t *testing.T) {
 	c := testClient()
 	msg := &Message{}
 
-	// "é" is two bytes; an odd byte cap lands mid-rune unless the cut
-	// steps back to a boundary.
-	body := strings.Repeat("é", maxBodySize/2+50)
+	// "日" is three bytes; offset by one ASCII byte, the cap lands
+	// inside a rune unless the cut steps back to a boundary.
+	body := "a" + strings.Repeat("日", maxBodySize/3+50)
 	raw := "From: sender@example.com\r\n" +
 		"Content-Type: text/plain; charset=utf-8\r\n" +
 		"\r\n" +
@@ -286,6 +286,9 @@ func TestParseBody_TruncationRespectsRuneBoundary(t *testing.T) {
 	}
 	if strings.ContainsRune(msg.TextBody, utf8.RuneError) {
 		t.Error("truncated body must not contain a replacement rune")
+	}
+	if !strings.HasSuffix(msg.TextBody, "日") || len(msg.TextBody) > maxBodySize || len(msg.TextBody) < maxBodySize-3 {
+		t.Errorf("truncated body should end on a whole rune just under the cap; len=%d tail=%q", len(msg.TextBody), msg.TextBody[len(msg.TextBody)-6:])
 	}
 }
 

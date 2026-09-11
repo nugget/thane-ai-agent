@@ -223,7 +223,8 @@ func readBounded(r io.Reader, limit int) (string, bool) {
 	}
 	truncated := len(buf) > limit
 	if truncated {
-		buf = buf[:limit]
+		// Keep the probe byte: truncateUTF8 inspects s[limit] to
+		// decide whether the cut lands inside a multi-byte rune.
 		_, _ = io.Copy(io.Discard, r)
 	}
 	return truncateUTF8(string(buf), limit), truncated

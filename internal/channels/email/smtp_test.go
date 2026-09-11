@@ -38,8 +38,8 @@ func TestSendMailOverSTARTTLS(t *testing.T) {
 	if !strings.Contains(d.Data, "Subject: hello") {
 		t.Errorf("DATA = %q", d.Data)
 	}
-	if d.Helo == "" || strings.EqualFold(d.Helo, "localhost") {
-		t.Errorf("EHLO name = %q; must announce the real host, not localhost", d.Helo)
+	if d.Helo != "example.com" {
+		t.Errorf("EHLO name = %q; must announce the sender's domain, not the machine", d.Helo)
 	}
 }
 
@@ -61,10 +61,10 @@ func TestSendMailRefusesPlaintextWhenSTARTTLSMissing(t *testing.T) {
 	cfg := fake.config("alice@example.com", "secret")
 
 	err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"bob@example.com"}, []byte("x"))
-	if DeliveryKindOf(err) != DeliveryConnect {
-		t.Fatalf("err = %v (kind %q), want connect_failed refusal", err, DeliveryKindOf(err))
+	if DeliveryKindOf(err) != DeliveryTLS {
+		t.Fatalf("err = %v (kind %q), want tls_failed refusal", err, DeliveryKindOf(err))
 	}
-	mustContain(t, err.Error(), "STARTTLS", `"primary"`)
+	mustContain(t, err.Error(), "STARTTLS", `"primary"`, "operator", "no credential was sent")
 	if len(fake.received()) != 0 {
 		t.Error("nothing may be delivered in the clear")
 	}
@@ -150,9 +150,36 @@ func TestClassifySMTPError(t *testing.T) {
 	}
 }
 
-func TestHeloNameIsASingleToken(t *testing.T) {
-	name := heloName()
-	if name == "" || strings.ContainsAny(name, " \t\r\n") || strings.EqualFold(name, "localhost") {
-		t.Errorf("heloName = %q", name)
+func TestHeloNameAnnouncesTheSenderDomain(t *testing.T) {
+	for in, want := range map[string]string{
+		"example.com": "example.com",
+		"":            "[127.0.0.1]",
+		"bad host":    "[127.0.0.1]",
+		"localhost":   "[127.0.0.1]",
+	} {
+		if got := heloName(in); got != want {
+			t.Errorf("heloName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSendMailRejectsUntrustedCertificate is the negative control for
+// TLS verification: a server whose chain the client does not trust is
+// refused on both transports, classified as a TLS failure the
+// operator must fix, and nothing is delivered.
+func TestSendMailRejectsUntrustedCertificate(t *testing.T) {
+	for _, implicit := range []bool{false, true} {
+		fake := newSMTPFake(t, func(f *smtpFake) {
+			f.tlsCfg = untrustedServerTLS(t)
+			f.implicit = implicit
+		})
+		cfg := fake.config("alice@example.com", "secret")
+		err := sendMail(context.Background(), "primary", cfg, "alice@example.com", []string{"bob@example.com"}, []byte("x"))
+		if DeliveryKindOf(err) != DeliveryTLS {
+			t.Errorf("implicit=%v: err = %v (kind %q), want tls_failed", implicit, err, DeliveryKindOf(err))
+		}
+		if len(fake.received()) != 0 {
+			t.Errorf("implicit=%v: nothing may be delivered over an untrusted connection", implicit)
+		}
 	}
 }

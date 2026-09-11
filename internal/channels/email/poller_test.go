@@ -104,7 +104,7 @@ func TestParseHighWaterMark(t *testing.T) {
 		wantErr bool
 	}{
 		{"legacy bare uid", "391", highWaterMark{UID: 391}, false},
-		{"json", `{"uidvalidity":7,"uid":391}`, highWaterMark{UIDValidity: 7, UID: 391}, false},
+		{"json", `{"uid_validity":7,"uid":391}`, highWaterMark{UIDValidity: 7, UID: 391}, false},
 		{"empty", "", highWaterMark{}, true},
 		{"garbage", "not-a-number", highWaterMark{}, true},
 		{"bad json", `{"uid":`, highWaterMark{}, true},

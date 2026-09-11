@@ -39,6 +39,16 @@ func TestHTMLToText(t *testing.T) {
 			want: "Tom & Jerry — bold and italic text",
 		},
 		{
+			name: "entities decode exactly once",
+			in:   "<p>literal &amp;amp; stays and &amp;lt;b&amp;gt; is not a tag</p>",
+			want: "literal &amp; stays and &lt;b&gt; is not a tag",
+		},
+		{
+			name: "unclosed head does not swallow the body",
+			in:   "<html><head><title>Subject</title><style>p{}</style><body><p>Visible body</p></body></html>",
+			want: "Visible body",
+		},
+		{
 			name: "table cells separated",
 			in:   "<table><tr><td>Item</td><td>Qty</td></tr><tr><td>Apples</td><td>3</td></tr></table>",
 			want: "Item\tQty\nApples\t3",

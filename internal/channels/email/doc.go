@@ -25,10 +25,13 @@
 // operation behind a mutex, because a selected mailbox is
 // connection-wide state and two callers selecting different folders
 // on one connection would interleave. The caller's context bounds each
-// operation: a deadline becomes a connection deadline for the duration
-// of the call, and cancellation closes the connection so a blocked
-// command returns. The next call reconnects. SMTP connections are
-// per-send and follow the same context rules.
+// operation: a watchdog closes the connection when the context ends or
+// when defaultOpTimeout passes without the command completing, so a
+// blocked command returns instead of holding the account. The next
+// call reconnects. Every connection is TLS before a credential is sent,
+// by handshake on an implicit-TLS port or by STARTTLS on a plaintext
+// one, and a server that offers neither is refused. SMTP connections
+// are per-send and follow the same rules.
 //
 // # Failures
 //

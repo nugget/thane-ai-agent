@@ -20,7 +20,9 @@ func (c *Client) ListFolders(ctx context.Context) ([]Folder, error) {
 		return nil, err
 	}
 
+	release := c.guard(ctx)
 	caps := c.client.Caps()
+	release()
 	rev2 := caps.Has(imap.CapIMAP4rev2)
 	extended := rev2 || caps.Has(imap.CapListExtended)
 	listStatus := rev2 || caps.Has(imap.CapListStatus)
@@ -35,7 +37,7 @@ func (c *Client) ListFolders(ctx context.Context) ([]Folder, error) {
 		}
 	}
 
-	release := c.guard(ctx)
+	release = c.guard(ctx)
 	mailboxes, err := c.client.List("", "*", listOpts).Collect()
 	release()
 	if err != nil {

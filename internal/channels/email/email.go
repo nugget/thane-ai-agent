@@ -320,9 +320,11 @@ type MarkAction struct {
 	Account string
 }
 
-// MarkResult reports which of the requested UIDs the server changed. A
-// UID that no longer exists in the folder is requested but not
-// affected, which is how a stale UID stops looking like success.
+// MarkResult reports which of the requested UIDs are in the requested
+// flag state after the operation, whether the STORE changed them or
+// they were already there. A UID that no longer exists in the folder
+// is requested but not affected, which is how a stale UID stops
+// looking like success.
 type MarkResult struct {
 	Folder    string   `json:"folder"`
 	Flag      string   `json:"flag"`

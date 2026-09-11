@@ -87,7 +87,9 @@ func htmlToText(src string) string {
 			if skipDepth > 0 {
 				continue
 			}
-			text := html.UnescapeString(string(tokenizer.Text()))
+			// Text() already decodes entities; decoding again would turn
+			// a literal "&amp;amp;" in the mail into "&".
+			text := string(tokenizer.Text())
 			if inLink {
 				linkText.WriteString(text)
 			}
@@ -95,7 +97,9 @@ func htmlToText(src string) string {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			tok := tokenizer.Token()
 			switch tok.DataAtom {
-			case atom.Script, atom.Style, atom.Head, atom.Title, atom.Noscript, atom.Template:
+			case atom.Script, atom.Style, atom.Title, atom.Noscript, atom.Template:
+				// head itself is not skipped: real mail leaves it unclosed
+				// often enough that skipping it would drop the body.
 				if tt == html.StartTagToken {
 					skipDepth++
 				}
@@ -136,7 +140,7 @@ func htmlToText(src string) string {
 		case html.EndTagToken:
 			tok := tokenizer.Token()
 			switch tok.DataAtom {
-			case atom.Script, atom.Style, atom.Head, atom.Title, atom.Noscript, atom.Template:
+			case atom.Script, atom.Style, atom.Title, atom.Noscript, atom.Template:
 				if skipDepth > 0 {
 					skipDepth--
 				}

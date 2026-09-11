@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"net/smtp"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +29,9 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	connectFail := func(op string, err error) error {
 		return &DeliveryError{Account: account, Op: op, Kind: DeliveryConnect, Err: err}
 	}
+	tlsFail := func(op string, err error) error {
+		return &DeliveryError{Account: account, Op: op, Kind: DeliveryTLS, Err: err}
+	}
 
 	dialer := &net.Dialer{Timeout: dialTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
@@ -49,7 +51,7 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 		tlsConn := tls.Client(conn, tlsConfigFor(cfg.Host))
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = tlsConn.Close()
-			return connectFail("TLS handshake with "+addr, err)
+			return tlsFail("TLS handshake with "+addr, err)
 		}
 		client, err = smtp.NewClient(tlsConn, cfg.Host)
 		if err != nil {
@@ -65,16 +67,20 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	}
 	defer client.Close()
 
-	if err := client.Hello(heloName()); err != nil {
+	var fromDomain string
+	if sender, err := parseAddress(from); err == nil {
+		fromDomain = sender.Domain()
+	}
+	if err := client.Hello(heloName(fromDomain)); err != nil {
 		return fail("EHLO", err)
 	}
 
 	if cfg.StartTLS {
 		if ok, _ := client.Extension("STARTTLS"); !ok {
-			return connectFail("STARTTLS", errors.New("server does not offer STARTTLS; refusing to send credentials in the clear"))
+			return tlsFail("STARTTLS", errors.New("server does not offer STARTTLS; refusing to send credentials in the clear"))
 		}
 		if err := client.StartTLS(tlsConfigFor(cfg.Host)); err != nil {
-			return connectFail("STARTTLS", err)
+			return tlsFail("STARTTLS", err)
 		}
 	}
 
@@ -119,16 +125,17 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	return nil
 }
 
-// heloName is the name announced in EHLO. Submission servers and spam
-// heuristics expect the client's host name; "localhost" is what a
-// misconfigured bot says. The name must be a single token, so a host
-// name with spaces or nothing at all falls back to the RFC 5321
-// address-literal form for the loopback address.
-func heloName() string {
-	name, err := os.Hostname()
-	name = strings.TrimSpace(name)
-	if err != nil || name == "" || strings.ContainsAny(name, " \t\r\n") {
+// heloName is the name announced in EHLO, which the submission server
+// stamps into the Received header every recipient can read. It is the
+// sender's domain, already public in From and Message-ID, rather than
+// the machine's host name, which would leak the workstation's identity
+// to every correspondent. With no domain to announce it falls back to
+// the RFC 5321 address-literal form for the loopback address rather
+// than "localhost", which is what a misconfigured bot says.
+func heloName(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" || strings.ContainsAny(domain, " \t\r\n") || strings.EqualFold(domain, "localhost") {
 		return "[127.0.0.1]"
 	}
-	return name
+	return domain
 }

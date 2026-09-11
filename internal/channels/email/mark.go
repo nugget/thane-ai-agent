@@ -11,12 +11,14 @@ import (
 )
 
 // MarkMessages adds or removes a flag on the given messages and
-// reports which UIDs the server actually changed. After the STORE it
-// fetches the flags of the requested UIDs back: a UID that no longer
-// exists in the folder returns nothing and so appears in Requested but
-// not Affected, instead of vanishing into a silent success. The
-// read-back also makes the answer independent of whether the server
-// echoes UIDs in STORE responses.
+// reports which UIDs are in the requested state afterwards. After the
+// STORE it fetches the flags of the requested UIDs back: a UID that no
+// longer exists in the folder returns nothing and so appears in
+// Requested but not Affected, instead of vanishing into a silent
+// success, while a UID that already carried (or already lacked) the
+// flag counts as affected because it is in the state that was asked
+// for. The read-back also makes the answer independent of whether the
+// server echoes UIDs in STORE responses.
 func (c *Client) MarkMessages(ctx context.Context, action MarkAction) (MarkResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

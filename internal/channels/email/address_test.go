@@ -1,6 +1,7 @@
 package email
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/emersion/go-imap/v2"
@@ -44,8 +45,27 @@ func TestAddressKeyDomainString(t *testing.T) {
 	if a.Domain() != "example.com" {
 		t.Errorf("Domain = %q", a.Domain())
 	}
-	if a.String() != `"Alice" <Alice@Example.COM>` {
+	if a.String() != `Alice <Alice@Example.COM>` {
 		t.Errorf("String = %q", a.String())
+	}
+	// Model-facing rendering keeps the name readable and round-trips.
+	for _, tt := range []struct{ name, want string }{
+		{"Zoë Q", "Zoë Q <z@example.com>"},
+		{"Smith, John", `"Smith, John" <z@example.com>`},
+		{`Say "hi"`, `"Say \"hi\"" <z@example.com>`},
+		{"Dr. Who", `"Dr. Who" <z@example.com>`},
+	} {
+		got := Address{Name: tt.name, Address: "z@example.com"}.String()
+		if got != tt.want {
+			t.Errorf("String(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+		if strings.Contains(got, "=?") {
+			t.Errorf("String(%q) must not RFC 2047 encode: %q", tt.name, got)
+		}
+		back, err := parseAddress(got)
+		if err != nil || back.Name != tt.name || back.Address != "z@example.com" {
+			t.Errorf("String(%q) does not round-trip: %+v %v", tt.name, back, err)
+		}
 	}
 	bare := Address{Address: "bob@example.com"}
 	if bare.String() != "bob@example.com" {

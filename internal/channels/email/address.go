@@ -21,13 +21,37 @@ type Address struct {
 	Address string `json:"address"`
 }
 
-// String renders the address in RFC 5322 form: `"Name" <addr>` when a
-// name is present, else the bare addr-spec.
+// String renders the address for a reader: `Name <addr>` when a name
+// is present, else the bare addr-spec. The name is left as text, never
+// RFC 2047 encoded, because the result goes into tool results and
+// event metadata the model reads, not into message headers; header
+// construction goes through go-message in compose. The name is quoted
+// only when it contains characters that would otherwise change how
+// the string parses, so the rendering round-trips through
+// [parseAddress].
 func (a Address) String() string {
 	if a.Name == "" {
 		return a.Address
 	}
-	return (&mail.Address{Name: a.Name, Address: a.Address}).String()
+	return quoteDisplayName(a.Name) + " <" + a.Address + ">"
+}
+
+// quoteDisplayName returns name as an RFC 5322 quoted-string when it
+// contains a special character, and unchanged otherwise.
+func quoteDisplayName(name string) string {
+	if !strings.ContainsAny(name, "()<>[]:;@\\,.\"") {
+		return name
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range name {
+		if r == '"' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // Key is the comparison form of the address: the addr-spec lowercased

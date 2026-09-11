@@ -101,7 +101,7 @@ func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger, opts
 // under. A UIDVALIDITY change means the server renumbered the mailbox
 // and the stored UID says nothing about it, so the mark reseeds.
 type highWaterMark struct {
-	UIDValidity uint32 `json:"uidvalidity"`
+	UIDValidity uint32 `json:"uid_validity"`
 	UID         uint32 `json:"uid"`
 }
 

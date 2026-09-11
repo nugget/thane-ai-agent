@@ -2,8 +2,11 @@ package email
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/textproto"
 	"strings"
@@ -50,6 +53,22 @@ const (
 	// FailureCancelled marks an operation abandoned because the
 	// caller's context ended.
 	FailureCancelled FailureKind = "cancelled"
+
+	// FailureTimeout marks an operation the connection watchdog ended
+	// because the server stopped answering mid-command. The connection
+	// was dropped; the next call reconnects.
+	FailureTimeout FailureKind = "timed_out"
+
+	// FailureTLS marks a connection that could not be made secure: the
+	// server does not offer STARTTLS on a plaintext port, or its
+	// certificate failed verification. Retrying will fail the same
+	// way; the operator must fix the server or the account's tls
+	// setting.
+	FailureTLS FailureKind = "tls_failed"
+
+	// FailureUnsupported marks an operation the server lacks the
+	// extensions to perform safely. Nothing was changed.
+	FailureUnsupported FailureKind = "unsupported"
 )
 
 // ClientError is an IMAP operation failure with the account and folder
@@ -95,7 +114,7 @@ func (e *ClientError) Error() string {
 		return fmt.Sprintf("%s: email account %q rejected the login. Every operation on this account fails until the operator fixes the credential; do not retry, and say so plainly if the work depended on it (%v)", e.Op, account, e.Err)
 	case FailureFolderNotFound:
 		if len(e.Available) > 0 {
-			return fmt.Sprintf("%s: folder %q does not exist in email account %q; folders here are [%s]. Pick one of those exactly as spelled; moves never create folders and folders are not shared across accounts", e.Op, e.Folder, account, strings.Join(e.Available, ", "))
+			return fmt.Sprintf("%s: folder %q does not exist in email account %q; folders here are [%s]. Pick one of those exactly as spelled; moves never create folders and folders are not shared across accounts", e.Op, e.Folder, account, listFolders(e.Available))
 		}
 		return fmt.Sprintf("%s: folder %q does not exist in email account %q. Call email_folders for this account and pick a name from the result; folders are not shared across accounts", e.Op, e.Folder, account)
 	case FailureMessageNotFound:
@@ -108,9 +127,24 @@ func (e *ClientError) Error() string {
 		return fmt.Sprintf("%s: email account %q is unreachable or the server refused the connection. This is transient; retry later rather than immediately (%v)", e.Op, account, e.Err)
 	case FailureCancelled:
 		return fmt.Sprintf("%s: the operation on email account %q was cancelled before it completed (%v)", e.Op, account, e.Err)
+	case FailureTimeout:
+		return fmt.Sprintf("%s: the IMAP server for email account %q stopped answering mid-command and the connection was dropped. This is transient; retry later rather than immediately (%v)", e.Op, account, e.Err)
+	case FailureTLS:
+		return fmt.Sprintf("%s: email account %q could not be connected securely (%v). Retrying will fail the same way; the operator must fix the server's TLS or the account's tls setting, and no credential was sent", e.Op, account, e.Err)
+	case FailureUnsupported:
+		return fmt.Sprintf("%s: the IMAP server for email account %q lacks the extensions to do this safely, so nothing was changed. Retrying will fail the same way; report it (%v)", e.Op, account, e.Err)
 	default:
 		return fmt.Sprintf("%s: %v", e.Op, e.Err)
 	}
+}
+
+// listFolders renders a folder list for error text, capped so a
+// label-heavy mailbox does not turn one refusal into a page.
+func listFolders(names []string) string {
+	if len(names) <= maxListedFolders {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s, … and %d more; call email_folders for the full list", strings.Join(names[:maxListedFolders], ", "), len(names)-maxListedFolders)
 }
 
 // FailureKindOf returns the classification carried by err, or
@@ -155,15 +189,31 @@ func classifyIMAPError(ctx context.Context, err error) FailureKind {
 		return FailureUnclassified
 	}
 
+	if isTLSError(err) {
+		return FailureTLS
+	}
+	// A connection the server (or the watchdog) closed mid-command
+	// surfaces as the reader's EOF, not as a net.Error.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return FailureUnavailable
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return FailureUnavailable
 	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return FailureUnavailable
-	}
 	return FailureUnclassified
+}
+
+// isTLSError reports whether err is a certificate or record failure
+// from crypto/tls: a chain that does not verify, a name that does not
+// match, or a server speaking plaintext where TLS was expected.
+func isTLSError(err error) bool {
+	var certErr *tls.CertificateVerificationError
+	var recordErr tls.RecordHeaderError
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	return errors.As(err, &certErr) || errors.As(err, &recordErr) || errors.As(err, &unknownAuthority) || errors.As(err, &hostname) || errors.As(err, &invalid)
 }
 
 // DeliveryKind classifies an SMTP failure. The distinction that
@@ -185,9 +235,15 @@ const (
 	// DeliveryTransient marks a 4xx reply: try again later.
 	DeliveryTransient DeliveryKind = "transient_reject"
 
-	// DeliveryConnect marks a failure before any SMTP dialogue: dial,
-	// TLS handshake, or greeting.
+	// DeliveryConnect marks a failure before any SMTP dialogue: dial
+	// or greeting. Transient.
 	DeliveryConnect DeliveryKind = "connect_failed"
+
+	// DeliveryTLS marks a connection that could not be made secure:
+	// the server does not offer STARTTLS, or its certificate failed
+	// verification. Permanent until the operator acts; no credential
+	// was sent.
+	DeliveryTLS DeliveryKind = "tls_failed"
 )
 
 // DeliveryError is an SMTP failure with the account that was sending
@@ -224,6 +280,8 @@ func (e *DeliveryError) Error() string {
 		return fmt.Sprintf("%s: the SMTP server for email account %q temporarily refused the message. This is transient; retry later rather than immediately (%v)", e.Op, account, e.Err)
 	case DeliveryConnect:
 		return fmt.Sprintf("%s: could not reach the SMTP server for email account %q. This is transient; retry later rather than immediately (%v)", e.Op, account, e.Err)
+	case DeliveryTLS:
+		return fmt.Sprintf("%s: the SMTP server for email account %q could not be used securely (%v). Retrying will fail the same way; the operator must fix smtp.starttls, the port, or the server certificate, and no credential was sent", e.Op, account, e.Err)
 	default:
 		return fmt.Sprintf("%s: %v", e.Op, e.Err)
 	}
@@ -256,6 +314,9 @@ func classifySMTPError(err error) DeliveryKind {
 			return DeliveryTransient
 		}
 		return DeliveryUnclassified
+	}
+	if isTLSError(err) {
+		return DeliveryTLS
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {

@@ -10,6 +10,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,10 +25,16 @@ import (
 const dialTimeout = 30 * time.Second
 
 // defaultOpTimeout bounds one IMAP operation when the caller's context
-// has no deadline. A FETCH of a large body over a slow link can
-// legitimately take a while; a minute is generous for anything the
-// tools do.
-const defaultOpTimeout = 60 * time.Second
+// has no earlier deadline: when it expires the watchdog closes the
+// connection and the blocked command returns [FailureTimeout]. A FETCH
+// of a large body over a slow link can legitimately take a while; a
+// minute is generous for anything the tools do. It is a variable so
+// tests can shrink it.
+var defaultOpTimeout = 60 * time.Second
+
+// maxListedFolders caps how many folder names a folder_not_found error
+// spells out before pointing at email_folders for the rest.
+const maxListedFolders = 25
 
 // logoutTimeout bounds the courtesy LOGOUT on Close.
 const logoutTimeout = 5 * time.Second
@@ -61,6 +68,12 @@ type Client struct {
 	mu     sync.Mutex
 	conn   net.Conn
 	client *imapclient.Client
+
+	// watchdogFired records that the last guarded operation was ended
+	// by the operation timeout rather than by the caller's context, so
+	// wrap can classify the resulting connection error as a timeout.
+	// Guarded by mu like everything else on the connection.
+	watchdogFired bool
 }
 
 // NewClient creates an IMAP client for the named account. The
@@ -89,7 +102,11 @@ func (c *Client) Connect(ctx context.Context) error {
 	return c.connectLocked(ctx)
 }
 
-// connectLocked dials, greets, and logs in. Caller must hold c.mu.
+// connectLocked dials, secures, greets, and logs in. Caller must hold
+// c.mu. A connection is always TLS before a credential is sent: an
+// implicit-TLS port handshakes first, and a plaintext port is upgraded
+// with STARTTLS, or refused when the server does not offer it, the
+// same rule sendMail applies to SMTP.
 func (c *Client) connectLocked(ctx context.Context) error {
 	c.closeLocked()
 
@@ -102,26 +119,45 @@ func (c *Client) connectLocked(ctx context.Context) error {
 		return c.wrap(ctx, "dial IMAP "+addr, "", 0, err)
 	}
 
-	conn := raw
+	opts := &imapclient.Options{
+		WordDecoder: &mime.WordDecoder{CharsetReader: charset.Reader},
+		TLSConfig:   tlsConfigFor(c.cfg.Host, "imap"),
+	}
+	var client *imapclient.Client
 	if c.cfg.TLS {
-		tlsConn := tls.Client(raw, tlsConfigFor(c.cfg.Host, "imap"))
+		tlsConn := tls.Client(raw, opts.TLSConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = raw.Close()
 			return c.wrap(ctx, "TLS handshake with "+addr, "", 0, err)
 		}
-		conn = tlsConn
+		client = imapclient.New(tlsConn, opts)
+	} else {
+		err = withConnBound(ctx, raw, func() error {
+			var startErr error
+			client, startErr = imapclient.NewStartTLS(raw, opts)
+			return startErr
+		})
+		if err != nil {
+			_ = raw.Close()
+			kind := c.classify(ctx, err)
+			if kind != FailureCancelled {
+				kind = FailureTLS
+			}
+			return &ClientError{Account: c.name, Op: "STARTTLS with " + addr, Kind: kind, Err: err}
+		}
 	}
-
-	client := imapclient.New(conn, &imapclient.Options{
-		WordDecoder: &mime.WordDecoder{CharsetReader: charset.Reader},
-	})
-	c.conn = conn
+	c.conn = raw
 	c.client = client
 
 	release := c.guard(ctx)
 	err = client.WaitGreeting()
 	if err == nil {
 		err = client.Login(c.cfg.Username, c.cfg.Password).Wait()
+	}
+	if err == nil {
+		// Warm the capability set inside the guard so later reads of
+		// Caps never block on a round trip the caller cannot cancel.
+		_ = client.Caps()
 	}
 	release()
 	if err != nil {
@@ -156,37 +192,6 @@ func (c *Client) ensureConnected(ctx context.Context) error {
 	return c.connectLocked(ctx)
 }
 
-// guard binds one operation to ctx: the connection gets a deadline
-// derived from ctx (or defaultOpTimeout), and a watcher closes the
-// connection if ctx is cancelled mid-command so the blocked Wait
-// returns instead of holding the mutex until TCP gives up. The
-// returned function ends the guard and clears the deadline; call it
-// as soon as the command completes. Caller must hold c.mu.
-func (c *Client) guard(ctx context.Context) func() {
-	conn, client := c.conn, c.client
-	if conn == nil || client == nil {
-		return func() {}
-	}
-	deadline := time.Now().Add(defaultOpTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = conn.SetDeadline(deadline)
-
-	stop := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = client.Close()
-		case <-stop:
-		}
-	}()
-	return func() {
-		close(stop)
-		_ = conn.SetDeadline(time.Time{})
-	}
-}
-
 // wrap turns a failure into a classified *ClientError for this account.
 func (c *Client) wrap(ctx context.Context, op, folder string, uid uint32, err error) error {
 	if err == nil {
@@ -196,44 +201,15 @@ func (c *Client) wrap(ctx context.Context, op, folder string, uid uint32, err er
 	if errors.As(err, &existing) {
 		return err
 	}
+	kind, err := c.classified(ctx, err)
 	return &ClientError{
 		Account: c.name,
 		Op:      op,
 		Folder:  folder,
 		UID:     uid,
-		Kind:    classifyIMAPError(ctx, err),
+		Kind:    kind,
 		Err:     err,
 	}
-}
-
-// Ping checks that the IMAP connection is alive, reconnecting if
-// needed. connwatch calls it with a bounded context; a hung server
-// releases the account when that context expires.
-func (c *Client) Ping(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ensureConnected(ctx)
-}
-
-// Close logs out and closes the IMAP connection. A courtesy LOGOUT is
-// attempted with a short deadline so the server records a clean
-// disconnect; the connection is closed regardless.
-func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
-	defer cancel()
-	release := c.guard(ctx)
-	logoutErr := c.client.Logout().Wait()
-	release()
-	c.closeLocked()
-	if logoutErr != nil && ctx.Err() == nil {
-		c.logger.Debug("IMAP logout returned error", "host", c.cfg.Host, "error", logoutErr)
-	}
-	return nil
 }
 
 // closeLocked drops the connection without a LOGOUT. Caller must hold
@@ -272,23 +248,44 @@ func (c *Client) selectFolder(ctx context.Context, folder string, readOnly bool)
 }
 
 // folderError classifies a failure on a named folder. A NO reply to
-// SELECT or MOVE almost always means the folder does not exist, even
-// when the server omits the NONEXISTENT/TRYCREATE code, so an
-// unclassified NO on a folder operation is treated as not-found and the
-// account's folder list is attached. Caller must hold c.mu.
+// SELECT or MOVE usually means the folder does not exist, even when the
+// server omits the NONEXISTENT/TRYCREATE code, so an unclassified NO on
+// a folder operation is treated as not-found when the account's folder
+// list confirms the folder is absent; a NO on a folder that does exist
+// keeps the server's text, because "not found" with a list containing
+// the folder would teach the wrong lesson. Caller must hold c.mu.
 func (c *Client) folderError(ctx context.Context, op, folder string, err error) error {
-	kind := classifyIMAPError(ctx, err)
+	kind, err := c.classified(ctx, err)
+	var names []string
+	listed := false
 	if kind == FailureUnclassified {
 		var imapErr *imap.Error
 		if errors.As(err, &imapErr) && imapErr.Type == imap.StatusResponseTypeNo {
-			kind = FailureFolderNotFound
+			names, listed = c.folderNamesLocked(ctx), true
+			if !containsFolder(names, folder) {
+				kind = FailureFolderNotFound
+			}
 		}
 	}
 	cErr := &ClientError{Account: c.name, Op: op, Folder: folder, Kind: kind, Err: err}
 	if kind == FailureFolderNotFound {
-		cErr.Available = c.folderNamesLocked(ctx)
+		if !listed {
+			names = c.folderNamesLocked(ctx)
+		}
+		cErr.Available = names
 	}
 	return cErr
+}
+
+// containsFolder reports whether a listing names folder. Names are
+// case-sensitive except INBOX, which RFC 3501 makes case-insensitive.
+func containsFolder(names []string, folder string) bool {
+	for _, name := range names {
+		if name == folder || (strings.EqualFold(folder, "INBOX") && strings.EqualFold(name, "INBOX")) {
+			return true
+		}
+	}
+	return false
 }
 
 // folderNamesLocked lists the account's selectable folder names for

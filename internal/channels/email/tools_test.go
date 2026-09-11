@@ -100,7 +100,7 @@ func TestFormatEnvelopeList(t *testing.T) {
 
 	result := formatEnvelopeList(listed)
 
-	mustContain(t, result, "Found 2 message(s) in INBOX", "UID: 100", `"Alice" <alice@example.com>`, `\Seen`, "UID: 99", "1024 bytes")
+	mustContain(t, result, "Found 2 message(s) in INBOX", "UID: 100", `Alice <alice@example.com>`, `\Seen`, "UID: 99", "1024 bytes")
 }
 
 func TestFormatEnvelopeList_TruncatedSaysSo(t *testing.T) {
@@ -134,7 +134,7 @@ func TestFormatMessage(t *testing.T) {
 	result := formatMessage(msg)
 
 	mustContain(t, result,
-		`From: "Alice" <alice@example.com>`,
+		`From: Alice <alice@example.com>`,
 		"bob@example.com, carol@example.com",
 		"Cc: dave@example.com",
 		"Reply-To: alice-work@example.com",

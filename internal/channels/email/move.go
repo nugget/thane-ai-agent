@@ -9,10 +9,13 @@ import (
 
 // MoveMessages moves the given messages to another folder in the same
 // account, using MOVE when the server has it and COPY + STORE \Deleted
-// + EXPUNGE otherwise (go-imap handles the fallback). The result
-// reports the new UIDs in the destination when the server returned
-// COPYUID; a destination the account lacks is [FailureFolderNotFound]
-// with the real folder list attached.
+// + UID EXPUNGE otherwise. A server with neither MOVE nor UIDPLUS is
+// refused with [FailureUnsupported]: go-imap's fallback there would be
+// a plain EXPUNGE, which removes every message anyone had flagged
+// \Deleted in the source folder, not just the ones being moved. The
+// result reports the new UIDs in the destination when the server
+// returned COPYUID; a destination the account lacks is
+// [FailureFolderNotFound] with the real folder list attached.
 func (c *Client) MoveMessages(ctx context.Context, opts MoveOptions) (MoveResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -31,6 +34,14 @@ func (c *Client) MoveMessages(ctx context.Context, opts MoveOptions) (MoveResult
 		return result, fmt.Errorf("destination folder is required")
 	}
 
+	release := c.guard(ctx)
+	caps := c.client.Caps()
+	release()
+	if !caps.Has(imap.CapMove) && !caps.Has(imap.CapUIDPlus) {
+		return result, &ClientError{Account: c.name, Op: "move messages to folder", Folder: opts.Destination, Kind: FailureUnsupported,
+			Err: fmt.Errorf("server advertises neither MOVE nor UIDPLUS, and moving without them would expunge every message flagged \\Deleted in %q", source)}
+	}
+
 	if _, err := c.selectFolder(ctx, source, false); err != nil {
 		return result, err
 	}
@@ -40,7 +51,7 @@ func (c *Client) MoveMessages(ctx context.Context, opts MoveOptions) (MoveResult
 		uidSet.AddNum(imap.UID(uid))
 	}
 
-	release := c.guard(ctx)
+	release = c.guard(ctx)
 	data, err := c.client.Move(uidSet, opts.Destination).Wait()
 	release()
 	if err != nil {
