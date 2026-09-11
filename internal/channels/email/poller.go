@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -95,6 +96,43 @@ func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger, opts
 	return p
 }
 
+// highWaterMark is the persisted per-folder cursor: the highest UID
+// already dispatched, qualified by the UIDVALIDITY it was observed
+// under. A UIDVALIDITY change means the server renumbered the mailbox
+// and the stored UID says nothing about it, so the mark reseeds.
+type highWaterMark struct {
+	UIDValidity uint32 `json:"uid_validity"`
+	UID         uint32 `json:"uid"`
+}
+
+// parseHighWaterMark decodes a stored mark. Marks written before
+// UIDVALIDITY was tracked are bare decimal UIDs; they decode with a
+// zero validity, which the poller adopts on the next successful check
+// rather than treating as a mismatch.
+func parseHighWaterMark(raw string) (highWaterMark, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return highWaterMark{}, fmt.Errorf("empty high-water mark")
+	}
+	if raw[0] == '{' {
+		var mark highWaterMark
+		if err := json.Unmarshal([]byte(raw), &mark); err != nil {
+			return highWaterMark{}, fmt.Errorf("decode high-water mark %q: %w", raw, err)
+		}
+		return mark, nil
+	}
+	uid, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		return highWaterMark{}, fmt.Errorf("decode legacy high-water mark %q: %w", raw, err)
+	}
+	return highWaterMark{UID: uint32(uid)}, nil
+}
+
+func (m highWaterMark) encode() string {
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
 // CheckNewMessages polls every configured account for messages newer
 // than its stored high-water mark and dispatches each new message as
 // a [messages.LoopEventPayload] to the configured wake_loop target
@@ -104,9 +142,12 @@ func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger, opts
 // "owner" / "trusted" / "household" / "known" / "stranger" in its
 // Request.InitialTags and can route the triage accordingly.
 //
-// On first run (no stored high-water mark), the current highest UID
-// is recorded silently without reporting it as new — this prevents
-// flooding the agent with the entire inbox on initial deployment.
+// On first run (no stored high-water mark), the folder's current
+// UIDNEXT is recorded silently without reporting anything as new —
+// this prevents flooding the agent with the entire inbox on initial
+// deployment. The same happens when the folder's UIDVALIDITY differs
+// from the stored one, because the stored UID no longer identifies
+// anything.
 //
 // Per-account dispatch batches at [messages.MaxLoopEventsPerWake] and
 // the high-water mark advances per successful batch, so a bus failure
@@ -175,67 +216,80 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 		return 0, 0, fmt.Errorf("get account %q: %w", accountName, err)
 	}
 
-	stateKey := accountName + ":INBOX"
+	stateKey := accountName + ":" + DefaultFolder
+
+	status, err := client.MailboxStatus(ctx, DefaultFolder)
+	if err != nil {
+		return 0, 0, fmt.Errorf("status %q: %w", accountName, err)
+	}
+	// UIDNEXT is the UID the next message will get, so everything that
+	// exists now has a UID strictly below it.
+	current := highWaterMark{UIDValidity: status.UIDValidity}
+	if status.UIDNext > 0 {
+		current.UID = status.UIDNext - 1
+	}
 
 	storedStr, err := p.state.Get(pollNamespace, stateKey)
 	if err != nil {
 		return 0, 0, fmt.Errorf("get high-water mark %q: %w", stateKey, err)
 	}
 
-	var storedUID uint64
-	switch storedStr {
-	case "":
-		p.logger.Debug("email poll first run for account", "account", accountName)
-		envelopes, err := client.ListMessages(ctx, ListOptions{Folder: "INBOX", Limit: 1})
-		if err != nil {
-			return 0, 0, fmt.Errorf("seed list %q: %w", accountName, err)
-		}
-		if len(envelopes) == 0 {
-			return 0, 0, nil
-		}
-		seedUID := envelopes[0].UID
+	if storedStr == "" {
 		p.logger.Info("email poll first run, seeding high-water mark",
 			"account", accountName,
-			"uid", seedUID,
+			"uid", current.UID,
+			"uid_validity", current.UIDValidity,
 		)
-		if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(seedUID), 10)); err != nil {
-			return 0, 0, fmt.Errorf("seed high-water mark %q: %w", stateKey, err)
-		}
-		return 0, 0, nil
+		return 0, 0, p.setHighWaterMark(stateKey, current)
+	}
+	stored, err := parseHighWaterMark(storedStr)
+	if err != nil {
+		p.logger.Warn("corrupt high-water mark, reseeding",
+			"account", accountName,
+			"stored", storedStr,
+			"error", err,
+		)
+		return 0, 0, p.setHighWaterMark(stateKey, current)
+	}
 
-	default:
-		parsed, err := strconv.ParseUint(storedStr, 10, 32)
-		if err != nil {
-			p.logger.Warn("corrupt high-water mark, reseeding",
-				"account", accountName,
-				"stored", storedStr,
-			)
-			envelopes, err := client.ListMessages(ctx, ListOptions{Folder: "INBOX", Limit: 1})
-			if err != nil {
-				return 0, 0, fmt.Errorf("reseed list %q: %w", accountName, err)
-			}
-			if len(envelopes) > 0 {
-				if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(envelopes[0].UID), 10)); err != nil {
-					return 0, 0, fmt.Errorf("reseed high-water mark %q: %w", stateKey, err)
-				}
-			}
-			return 0, 0, nil
-		}
-		storedUID = parsed
+	if stored.UIDValidity != 0 && stored.UIDValidity != current.UIDValidity {
+		// The server renumbered the mailbox. Nothing about the old UID
+		// carries over, and replaying from zero would flood the
+		// handler with the whole folder, so reseed at the current top.
+		p.logger.Info("email poll mailbox UIDVALIDITY changed, reseeding high-water mark",
+			"account", accountName,
+			"stored_uid_validity", stored.UIDValidity,
+			"uid_validity", current.UIDValidity,
+			"uid", current.UID,
+		)
+		return 0, 0, p.setHighWaterMark(stateKey, current)
+	}
+	if stored.UIDValidity == 0 {
+		// Legacy bare-UID mark: adopt the validity we can now see.
+		stored.UIDValidity = current.UIDValidity
 	}
 
 	p.logger.Debug("email poll querying IMAP",
 		"account", accountName,
-		"since_uid", storedUID,
+		"since_uid", stored.UID,
 	)
 
-	newMessages, err := client.ListMessages(ctx, ListOptions{
-		Folder:   "INBOX",
-		SinceUID: uint32(storedUID),
+	listed, err := client.ListMessages(ctx, ListOptions{
+		Folder:   DefaultFolder,
+		SinceUID: stored.UID,
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("list messages %q: %w", accountName, err)
 	}
+	if listed.UIDValidity != 0 && listed.UIDValidity != stored.UIDValidity {
+		// Changed between STATUS and SELECT; next poll reseeds.
+		p.logger.Info("email poll UIDVALIDITY changed mid-poll, deferring",
+			"account", accountName,
+			"uid_validity", listed.UIDValidity,
+		)
+		return 0, 0, nil
+	}
+	newMessages := listed.Envelopes
 
 	p.logger.Debug("email poll IMAP results",
 		"account", accountName,
@@ -250,10 +304,10 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 	// so a successful run can advance the high-water mark past any
 	// self-sent UIDs above the last delivered batch. The advance is
 	// NOT applied here — that would lose mail on dispatch failure.
-	var overallMaxUID uint64
+	overallMax := stored
 	for _, env := range newMessages {
-		if uint64(env.UID) > overallMaxUID {
-			overallMaxUID = uint64(env.UID)
+		if env.UID > overallMax.UID {
+			overallMax.UID = env.UID
 		}
 	}
 
@@ -267,7 +321,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 		)
 	}
 
-	delivered, err := p.dispatchAccountBatches(ctx, accountName, stateKey, storedUID, newMessages)
+	delivered, err := p.dispatchAccountBatches(ctx, accountName, stateKey, stored, newMessages)
 	if err != nil {
 		// Partial progress is already persisted by dispatchAccountBatches
 		// (per-batch high-water advance on success). The next poll picks
@@ -278,9 +332,9 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 	// All filtered messages delivered. Bump the high-water mark past
 	// any self-sent UIDs above the final batch so the next poll
 	// doesn't re-observe them. No-op when the dispatched batches
-	// already covered overallMaxUID (the common case).
-	if overallMaxUID > 0 {
-		if err := p.setHighWaterMark(stateKey, overallMaxUID); err != nil {
+	// already covered overallMax (the common case).
+	if overallMax.UID > stored.UID {
+		if err := p.setHighWaterMark(stateKey, overallMax); err != nil {
 			return preFilterCount, delivered, err
 		}
 	}
@@ -306,7 +360,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 // Returns the total number of events delivered across all successful
 // batches. A nil message bus is a no-op (logs and returns 0) so a
 // transient bus-missing window doesn't error.
-func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateKey string, currentMark uint64, newMessages []Envelope) (int, error) {
+func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateKey string, currentMark highWaterMark, newMessages []Envelope) (int, error) {
 	if p.bus == nil {
 		p.logger.Warn("email message bus not configured; new mail observed but not dispatched",
 			"account", accountName,
@@ -329,10 +383,7 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 	delivered := 0
 	currentHigh := currentMark
 	for start := 0; start < len(ordered); start += batchSize {
-		end := start + batchSize
-		if end > len(ordered) {
-			end = len(ordered)
-		}
+		end := min(start+batchSize, len(ordered))
 		chunk := ordered[start:end]
 		events, tags, batchMaxUID := p.buildBatchEvents(accountName, chunk)
 
@@ -356,11 +407,11 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 		// actually exceeds the running mark — guards against
 		// non-monotonic advancement if the slice ever arrives
 		// reordered.
-		if batchMaxUID > currentHigh {
-			if err := p.setHighWaterMark(stateKey, batchMaxUID); err != nil {
+		if batchMaxUID > currentHigh.UID {
+			currentHigh.UID = batchMaxUID
+			if err := p.setHighWaterMark(stateKey, currentHigh); err != nil {
 				return delivered, err
 			}
-			currentHigh = batchMaxUID
 		}
 	}
 	return delivered, nil
@@ -369,11 +420,11 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 // buildBatchEvents converts a chunk of envelopes into structured
 // LoopEventPayloads, returning the events, the deduplicated sender-tag
 // set for the batch, and the highest UID observed in the chunk.
-func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messages.LoopEventPayload, []string, uint64) {
+func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messages.LoopEventPayload, []string, uint32) {
 	events := make([]messages.LoopEventPayload, 0, len(chunk))
 	tagsSeen := make(map[string]struct{})
 	var tags []string
-	var maxUID uint64
+	var maxUID uint32
 	for _, env := range chunk {
 		zone, _ := p.lookupTrustZone(env.From)
 		tag := senderTag(zone)
@@ -381,35 +432,40 @@ func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messa
 			tagsSeen[tag] = struct{}{}
 			tags = append(tags, tag)
 		}
-		if uint64(env.UID) > maxUID {
-			maxUID = uint64(env.UID)
+		if env.UID > maxUID {
+			maxUID = env.UID
+		}
+		metadata := map[string]string{
+			"account":      accountName,
+			"folder":       DefaultFolder,
+			"uid":          strconv.FormatUint(uint64(env.UID), 10),
+			"from":         env.From.String(),
+			"from_address": env.From.Key(),
+			"trust_zone":   zone,
+			"tag":          tag,
+		}
+		if env.MessageID != "" {
+			metadata["message_id"] = env.MessageID
 		}
 		events = append(events, messages.LoopEventPayload{
 			Source:     "email_poll",
 			Type:       "new_message",
 			ID:         fmt.Sprintf("%s:%d", accountName, env.UID),
 			Title:      env.Subject,
-			Summary:    fmt.Sprintf("From %s in %s/INBOX", env.From, accountName),
+			Summary:    fmt.Sprintf("From %s (account %s, folder %s)", env.From.String(), accountName, DefaultFolder),
 			ObservedAt: env.Date,
-			Metadata: map[string]string{
-				"account":    accountName,
-				"folder":     "INBOX",
-				"uid":        strconv.FormatUint(uint64(env.UID), 10),
-				"from":       env.From,
-				"trust_zone": zone,
-				"tag":        tag,
-			},
+			Metadata:   metadata,
 		})
 	}
 	return events, tags, maxUID
 }
 
-// setHighWaterMark persists a UID to the per-account high-water key
-// without consulting prior state. The caller is responsible for
-// monotonicity; dispatchAccountBatches enforces that by tracking the
-// running mark across batches.
-func (p *Poller) setHighWaterMark(stateKey string, uid uint64) error {
-	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uid, 10)); err != nil {
+// setHighWaterMark persists the per-account cursor without consulting
+// prior state. The caller is responsible for monotonicity;
+// dispatchAccountBatches enforces that by tracking the running mark
+// across batches.
+func (p *Poller) setHighWaterMark(stateKey string, mark highWaterMark) error {
+	if err := p.state.Set(pollNamespace, stateKey, mark.encode()); err != nil {
 		return fmt.Errorf("update high-water mark %q: %w", stateKey, err)
 	}
 	return nil
@@ -418,18 +474,18 @@ func (p *Poller) setHighWaterMark(stateKey string, uid uint64) error {
 // lookupTrustZone returns the contact's trust zone for a sender. An
 // unconfigured resolver, a missing contact, or a lookup error all
 // return ("", false) — the caller maps that to the "stranger" tag.
-func (p *Poller) lookupTrustZone(from string) (string, bool) {
+func (p *Poller) lookupTrustZone(from Address) (string, bool) {
 	if p.contacts == nil {
 		return "", false
 	}
-	addr := strings.ToLower(extractAddress(from))
+	addr := from.Key()
 	if addr == "" {
 		return "", false
 	}
 	zone, found, err := p.contacts.ResolveTrustZone(addr)
 	if err != nil {
 		p.logger.Warn("contact lookup failed for incoming email; treating as stranger",
-			"from", from, "error", err)
+			"from", from.String(), "error", err)
 		return "", false
 	}
 	if !found {
@@ -483,23 +539,29 @@ func mergeUniqueStrings(base, extra []string) []string {
 	return out
 }
 
-// filterSelfSent removes messages where From matches the account's
+// filterSelfSent removes messages whose From is the account's own
 // default_from address. This prevents the agent from triaging its own
-// outbound replies that appear in INBOX (Bcc-to-self, server-side copies).
-func (p *Poller) filterSelfSent(accountName string, messages []Envelope) []Envelope {
+// outbound replies that appear in INBOX (Bcc-to-self, server-side
+// copies). The suppression is logged at Info with the UID so a forged
+// From that silenced a wake is visible afterwards.
+func (p *Poller) filterSelfSent(accountName string, envelopes []Envelope) []Envelope {
 	acctCfg, err := p.manager.AccountConfig(accountName)
 	if err != nil || acctCfg.DefaultFrom == "" {
-		return messages // can't filter without a configured From address
+		return envelopes // can't filter without a configured From address
+	}
+	own, err := parseAddress(acctCfg.DefaultFrom)
+	if err != nil {
+		return envelopes
 	}
 
-	ownAddr := strings.ToLower(extractAddress(acctCfg.DefaultFrom))
-	filtered := make([]Envelope, 0, len(messages))
-	for _, env := range messages {
-		fromAddr := strings.ToLower(extractAddress(env.From))
-		if fromAddr == ownAddr {
-			p.logger.Debug("skipping self-sent message",
+	ownKey := own.Key()
+	filtered := make([]Envelope, 0, len(envelopes))
+	for _, env := range envelopes {
+		if env.From.Key() == ownKey {
+			p.logger.Info("email poll skipping self-sent message",
 				"account", accountName,
 				"uid", env.UID,
+				"message_id", env.MessageID,
 				"subject", env.Subject,
 			)
 			continue
@@ -507,37 +569,4 @@ func (p *Poller) filterSelfSent(accountName string, messages []Envelope) []Envel
 		filtered = append(filtered, env)
 	}
 	return filtered
-}
-
-// advanceHighWaterMark updates the stored high-water mark to the highest
-// UID found in the result set, but never decreases it. The function
-// scans all messages to determine the maximum UID rather than relying
-// on any particular ordering of the input slice.
-func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark uint64, allNew []Envelope) error {
-	// Find the highest UID across all fetched messages (including
-	// self-sent ones that will be filtered later). We scan all rather
-	// than trusting sort order as a defensive measure.
-	var highest uint64
-	for _, env := range allNew {
-		if uint64(env.UID) > highest {
-			highest = uint64(env.UID)
-		}
-	}
-
-	// Never decrease — UIDs can disappear when messages are moved/deleted
-	// but the mark must only advance.
-	if highest <= currentMark {
-		return nil
-	}
-
-	p.logger.Debug("advancing high-water mark",
-		"account", accountName,
-		"old_uid", currentMark,
-		"new_uid", highest,
-	)
-
-	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(highest, 10)); err != nil {
-		return fmt.Errorf("update high-water mark %q: %w", stateKey, err)
-	}
-	return nil
 }

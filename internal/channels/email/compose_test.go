@@ -96,7 +96,16 @@ func TestComposeMessage(t *testing.T) {
 		t.Fatalf("ComposeMessage() error: %v", err)
 	}
 
-	s := string(msg)
+	s := string(msg.Bytes)
+	if msg.MessageID == "" || !strings.HasSuffix(msg.MessageID, "@example.com") {
+		t.Errorf("MessageID = %q, want one generated under the sender's domain", msg.MessageID)
+	}
+	if !strings.Contains(s, "<"+msg.MessageID+">") {
+		t.Error("the reported Message-ID must be the one in the headers")
+	}
+	if msg.From.Address != "test@example.com" || len(msg.To) != 1 || msg.To[0].Address != "recipient@example.com" {
+		t.Errorf("parsed addresses = from %+v to %+v", msg.From, msg.To)
+	}
 
 	// Check required headers.
 	// go-message quotes display names: From: "Test User" <test@example.com>.
@@ -141,7 +150,7 @@ func TestComposeMessage_WithThreading(t *testing.T) {
 		t.Fatalf("ComposeMessage() error: %v", err)
 	}
 
-	s := string(msg)
+	s := string(msg.Bytes)
 
 	if !strings.Contains(s, "In-Reply-To:") {
 		t.Error("reply message should contain In-Reply-To header")
@@ -164,7 +173,7 @@ func TestComposeMessage_WithCcBcc(t *testing.T) {
 		t.Fatalf("ComposeMessage() error: %v", err)
 	}
 
-	s := string(msg)
+	s := string(msg.Bytes)
 
 	if !strings.Contains(s, "Cc:") {
 		t.Error("message should contain Cc header")

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // testClient returns a Client with only a logger, suitable for testing
@@ -251,10 +252,98 @@ func TestParseBody_Truncation(t *testing.T) {
 		t.Fatalf("parseBody: %v", err)
 	}
 
-	if !strings.Contains(msg.TextBody, "[truncated") {
-		t.Error("large body should contain truncation marker")
+	if !msg.BodyTruncated {
+		t.Error("large body should set BodyTruncated")
 	}
-	if len(msg.TextBody) > maxBodySize+200 {
-		t.Errorf("TextBody len = %d, should be bounded near maxBodySize", len(msg.TextBody))
+	if len(msg.TextBody) > maxBodySize {
+		t.Errorf("TextBody len = %d, must not exceed maxBodySize %d", len(msg.TextBody), maxBodySize)
+	}
+	if strings.Contains(msg.TextBody, "[truncated") {
+		t.Error("truncation is a field, not a marker spliced into the body")
+	}
+}
+
+func TestParseBody_TruncationRespectsRuneBoundary(t *testing.T) {
+	c := testClient()
+	msg := &Message{}
+
+	// "日" is three bytes; offset by one ASCII byte, the cap lands
+	// inside a rune unless the cut steps back to a boundary.
+	body := "a" + strings.Repeat("日", maxBodySize/3+50)
+	raw := "From: sender@example.com\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		body + "\r\n"
+
+	if err := c.parseBody(msg, strings.NewReader(raw)); err != nil {
+		t.Fatalf("parseBody: %v", err)
+	}
+	if !msg.BodyTruncated {
+		t.Fatal("expected truncation")
+	}
+	if !utf8.ValidString(msg.TextBody) {
+		t.Error("truncated body must remain valid UTF-8")
+	}
+	if strings.ContainsRune(msg.TextBody, utf8.RuneError) {
+		t.Error("truncated body must not contain a replacement rune")
+	}
+	if !strings.HasSuffix(msg.TextBody, "日") || len(msg.TextBody) > maxBodySize || len(msg.TextBody) < maxBodySize-3 {
+		t.Errorf("truncated body should end on a whole rune just under the cap; len=%d tail=%q", len(msg.TextBody), msg.TextBody[len(msg.TextBody)-6:])
+	}
+}
+
+func TestParseBody_AttachmentsDescribedNotBuffered(t *testing.T) {
+	c := testClient()
+	msg := &Message{}
+
+	raw := "From: sender@example.com\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=\"mix\"\r\n" +
+		"\r\n" +
+		"--mix\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		"See attached.\r\n" +
+		"--mix\r\n" +
+		"Content-Type: application/pdf; name=\"q3.pdf\"\r\n" +
+		"Content-Disposition: attachment; filename=\"q3.pdf\"\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		"\r\n" +
+		"JVBERi0xLjQK\r\n" +
+		"--mix--\r\n"
+
+	if err := c.parseBody(msg, strings.NewReader(raw)); err != nil {
+		t.Fatalf("parseBody: %v", err)
+	}
+	if msg.TextBody != "See attached." {
+		t.Errorf("TextBody = %q", msg.TextBody)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("Attachments = %+v, want 1", msg.Attachments)
+	}
+	att := msg.Attachments[0]
+	if att.Filename != "q3.pdf" || att.ContentType != "application/pdf" || att.Inline {
+		t.Errorf("attachment = %+v", att)
+	}
+	if att.Size != 9 { // "%PDF-1.4\n" decoded
+		t.Errorf("Size = %d, want 9 decoded bytes", att.Size)
+	}
+}
+
+func TestFinishBody_HTMLOnlyIsRendered(t *testing.T) {
+	msg := &Message{HTMLBody: "<p>Hello <b>there</b></p>"}
+	finishBody(msg)
+	if msg.BodySource != "html" || msg.TextBody != "Hello there" {
+		t.Errorf("finishBody = source %q body %q", msg.BodySource, msg.TextBody)
+	}
+	text := &Message{TextBody: "plain", HTMLBody: "<p>rich</p>"}
+	finishBody(text)
+	if text.BodySource != "text" || text.TextBody != "plain" {
+		t.Errorf("text part must win: %+v", text)
+	}
+	empty := &Message{}
+	finishBody(empty)
+	if empty.BodySource != "" {
+		t.Errorf("no body should leave BodySource empty, got %q", empty.BodySource)
 	}
 }
