@@ -50,9 +50,18 @@ The `email-poller` service loop checks every configured account's INBOX at
 `email-default-handler` loop (an event-driven built-in). Each event's
 metadata names the `account`, `folder`, and `uid` of the message, its
 `message_id`, the sender (`from`, `from_address`, `from_name`), and the
-sender's `trust_zone` from the contact directory (`unknown` for a
-stranger). The poller stamps no per-wake tags; identity rides in the
-event.
+contact directory's answer about the sender: `contact_status`
+(`matched`, `unmatched`, `ambiguous`, or `lookup_failed`), the effective
+`trust_zone` (`unknown` for a stranger, the least privileged candidate's
+zone when several records share the address), and, for a match,
+`contact_id`, `contact_name`, and `is_owner`. These are the same keys
+the Signal bridge stamps, so a handler reads identity the same way on
+both channels. `is_owner` says the matched record is the operator's; it
+does not say the operator wrote the message, because a From header is a
+claim until a signature verifies it. The poller stamps no per-wake tags;
+identity rides in the event. After each delivered batch the poller
+records an inbound interaction on every matched contact, once per
+contact at the newest message's date.
 
 High-water marks are stored in the operational state KV store (opstate)
 as `{uidvalidity, uid}` per account, not in prompt context. The poller

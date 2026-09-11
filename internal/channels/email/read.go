@@ -114,6 +114,7 @@ func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, e
 	}
 
 	if rawBody != nil {
+		result.raw = rawBody
 		if err := c.parseBody(result, bytes.NewReader(rawBody)); err != nil {
 			c.logger.Debug("body parse error", "uid", opts.UID, "error", err)
 		}

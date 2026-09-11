@@ -1,99 +1,134 @@
 package email
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
 
-// ContactResolver resolves email addresses to trust zone levels.
-// Implementations wrap a contact store without requiring the email
-// package to import the contacts package directly.
-type ContactResolver interface {
-	// ResolveTrustZone returns the trust zone ("admin", "household",
-	// "trusted", "known") for the given email address. Returns
-	// ("", false, nil) if no matching contact is found.
-	ResolveTrustZone(email string) (zone string, found bool, err error)
+// RecipientAssessment is the gate's verdict on one recipient.
+type RecipientAssessment struct {
+	Address       string        `json:"address"`
+	TrustZone     string        `json:"trust_zone"`
+	ContactStatus ContactStatus `json:"contact_status"`
+	ContactID     string        `json:"contact_id,omitempty"`
+	ContactName   string        `json:"contact_name,omitempty"`
+
+	// Allowed is whether this recipient alone would pass the gate.
+	Allowed bool `json:"allowed"`
+
+	// Reason explains a refusal and names the recovery.
+	Reason string `json:"reason,omitempty"`
 }
 
-// TrustResult categorizes recipient addresses by their trust zone
-// disposition for outbound email.
+// TrustResult is the gate's verdict on a recipient set. A message is
+// sent only when every recipient is allowed; the refusal text names
+// each recipient at issue and what would fix it.
 type TrustResult struct {
-	// Allowed contains addresses that can be sent to freely
-	// (trust zone "admin", "household", or "trusted").
+	// Allowed lists the recipients that passed, as given.
 	Allowed []string
 
-	// Warnings contains human-readable messages for "known" trust
-	// zone contacts that require user confirmation.
-	Warnings []string
-
-	// Blocked contains human-readable messages for addresses with
-	// no contact record.
+	// Blocked lists one refusal message per recipient that did not.
 	Blocked []string
+
+	// Assessments carries the per-recipient detail behind both lists.
+	Assessments []RecipientAssessment
 }
 
-// CheckRecipientTrust evaluates each address against the contact store
-// and categorizes them by trust zone. If cr is nil, all addresses are
-// allowed (trust gating is disabled). Addresses that do not parse are
-// blocked: an unparseable recipient can neither be looked up nor
-// delivered to.
-func CheckRecipientTrust(cr ContactResolver, addresses []string) TrustResult {
+// CheckRecipientTrust evaluates each address against the contact
+// directory. A nil resolver disables gating and allows everything. An
+// address that does not parse is blocked: it can neither be looked up
+// nor delivered to. A duplicate directory record and a store failure
+// are each blocked with their own reason rather than passed off as a
+// stranger.
+func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresses []string) TrustResult {
 	var result TrustResult
-
-	if cr == nil {
+	if resolver == nil {
 		result.Allowed = addresses
 		return result
 	}
 
-	for _, addr := range addresses {
-		parsed, err := parseAddress(addr)
+	lookup := newIdentityLookup(ctx, resolver, nil)
+	for _, raw := range addresses {
+		parsed, err := parseAddress(raw)
 		if err != nil {
-			result.Blocked = append(result.Blocked,
-				fmt.Sprintf("Cannot send to %q: not a valid email address.", addr))
+			result.Blocked = append(result.Blocked, fmt.Sprintf("Cannot send to %q: not a valid email address.", raw))
+			result.Assessments = append(result.Assessments, RecipientAssessment{Address: raw, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Reason: "not a valid email address"})
 			continue
 		}
-		bare := parsed.Key()
-		zone, found, err := cr.ResolveTrustZone(bare)
-		if err != nil {
-			result.Blocked = append(result.Blocked,
-				fmt.Sprintf("Cannot send to %s: contact lookup failed: %v", bare, err))
-			continue
-		}
-
-		if !found {
-			result.Blocked = append(result.Blocked,
-				fmt.Sprintf("Cannot send to %s: no contact record. Add with contact_save first.", bare))
-			continue
-		}
-
-		switch zone {
-		case "admin", "household", "trusted":
-			result.Allowed = append(result.Allowed, addr)
-		case "known":
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("Contact for %s is 'known' trust level — confirm with user before sending.", bare))
-		default:
-			result.Blocked = append(result.Blocked,
-				fmt.Sprintf("Cannot send to %s: unrecognized trust zone %q.", bare, zone))
+		assessment := assessRecipient(parsed, lookup.resolve(parsed))
+		result.Assessments = append(result.Assessments, assessment)
+		if assessment.Allowed {
+			result.Allowed = append(result.Allowed, raw)
+		} else {
+			result.Blocked = append(result.Blocked, "Cannot send to "+assessment.Address+": "+assessment.Reason)
 		}
 	}
-
 	return result
 }
 
-// HasIssues reports whether the trust check found any warnings or
-// blocked addresses that prevent immediate sending.
-func (tr TrustResult) HasIssues() bool {
-	return len(tr.Warnings) > 0 || len(tr.Blocked) > 0
+// assessRecipient applies the zone table to one resolved recipient.
+func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
+	a := RecipientAssessment{
+		Address:       addr.Key(),
+		TrustZone:     match.TrustZone,
+		ContactStatus: match.Status,
+	}
+	if match.Binding != nil {
+		a.ContactID = match.Binding.ContactID
+		a.ContactName = match.Binding.ContactName
+	}
+	switch match.Status {
+	case ContactLookupFailed:
+		a.Reason = fmt.Sprintf("the contact directory could not be consulted (%v); this is not a judgement about the recipient, retry later", match.Err)
+		return a
+	case ContactUnmatched:
+		a.Reason = "no contact record; add one deliberately with contact_save or drop the recipient"
+		return a
+	case ContactAmbiguous:
+		names := make([]string, 0, len(match.Candidates))
+		for _, c := range match.Candidates {
+			names = append(names, fmt.Sprintf("%s (%s, %s)", c.Name, c.ID, c.TrustZone))
+		}
+		a.Reason = fmt.Sprintf("the address belongs to %d contact records [%s]; the least privileged zone (%s) governs until the duplicates are merged", len(match.Candidates), strings.Join(names, "; "), match.TrustZone)
+		if sendEligibleZone(match.TrustZone) {
+			a.Allowed = true
+		}
+		return a
+	}
+
+	switch match.TrustZone {
+	case "admin", "household", "trusted":
+		a.Allowed = true
+	case "known":
+		a.Reason = "the contact is at the known trust zone, which does not permit sending; promote the contact deliberately (with the operator's authorization) or drop the recipient"
+	default:
+		a.Reason = fmt.Sprintf("the contact's trust zone %q does not permit sending", match.TrustZone)
+	}
+	return a
 }
 
-// FormatIssues returns a human-readable summary of all trust issues.
-func (tr TrustResult) FormatIssues() string {
-	parts := make([]string, 0, len(tr.Warnings)+len(tr.Blocked))
-	for _, w := range tr.Warnings {
-		parts = append(parts, "⚠ "+w)
+// sendEligibleZone reports whether a zone may receive mail from the
+// agent under today's gate.
+func sendEligibleZone(zone string) bool {
+	switch zone {
+	case "admin", "household", "trusted":
+		return true
 	}
+	return false
+}
+
+// HasIssues reports whether any recipient was blocked.
+func (tr TrustResult) HasIssues() bool {
+	return len(tr.Blocked) > 0
+}
+
+// FormatIssues renders the refusal for the model: every blocked
+// recipient with its reason, so one retry can fix all of them.
+func (tr TrustResult) FormatIssues() string {
+	parts := make([]string, 0, len(tr.Blocked))
 	for _, b := range tr.Blocked {
 		parts = append(parts, "✗ "+b)
 	}
-	return fmt.Sprintf("Email not sent — trust zone issues:\n\n%s", strings.Join(parts, "\n"))
+	return fmt.Sprintf("Email not sent — recipient trust issues:\n\n%s", strings.Join(parts, "\n"))
 }

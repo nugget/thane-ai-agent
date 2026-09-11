@@ -146,6 +146,10 @@ type Message struct {
 
 	// Attachments lists the non-text parts found while parsing.
 	Attachments []Attachment `json:"attachments,omitempty"`
+
+	// raw is the message as fetched, kept for an [Authenticator] to
+	// inspect. It is bounded by maxRawMessageSize and never rendered.
+	raw []byte
 }
 
 // FolderRole names the special-use purpose of a mailbox (RFC 6154),

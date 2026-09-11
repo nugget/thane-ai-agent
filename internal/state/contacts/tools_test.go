@@ -91,6 +91,31 @@ func TestSaveContact_Update(t *testing.T) {
 	}
 }
 
+// TestSaveContact_RefusesKeyCustodyFacts pins the custody boundary the
+// email authentication seam depends on: the key that verifies a
+// contact's messages cannot be installed through contact_save, in any
+// spelling, and the refusal leaves nothing behind.
+func TestSaveContact_RefusesKeyCustodyFacts(t *testing.T) {
+	tools := newTestTools(t)
+	for _, key := range []string{"KEY", "key", "Key", "X-THANE-KEY-PGP", "x-thane-key-smime"} {
+		_, err := tools.SaveContact(`{"name":"Key Holder","kind":"individual","facts":{"email":"holder@example.com","` + key + `":"-----BEGIN PGP PUBLIC KEY BLOCK-----"}}`)
+		if err == nil {
+			t.Fatalf("fact %q must be refused", key)
+		}
+		if !strings.Contains(err.Error(), "operator-custodied") || !strings.Contains(err.Error(), key) {
+			t.Errorf("refusal for %q must name the key and the custody rule: %v", key, err)
+		}
+	}
+	if _, err := tools.store.FindByName("Key Holder"); err == nil {
+		t.Error("a refused save must not create the contact")
+	}
+
+	// The same key at top level is rescued into facts and refused there too.
+	if _, err := tools.SaveContact(`{"name":"Key Holder","kind":"individual","KEY":"x"}`); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+		t.Errorf("top-level KEY must be refused after rescue: %v", err)
+	}
+}
+
 func TestSaveContact_WithFacts(t *testing.T) {
 	tools := newTestTools(t)
 

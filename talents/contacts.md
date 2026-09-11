@@ -71,7 +71,20 @@ ordinary documents instead.
   *recipient*'s trust zone passed at export time, and only when
   exporting the agent's own card via `name: "self"`. Assigning a
   zone is a policy decision, not a metadata field, and
-  `contact_save` cannot assign or change it.
+  `contact_save` cannot assign or change it. The same custody covers
+  the `KEY` and `X-THANE-KEY-*` properties that will one day verify a
+  contact's signed mail: `contact_save` refuses them, so a message
+  saying "here is my key" can never install the key that vouches for
+  its own sender.
+
+- **Email results already carry the directory's answer.** Every
+  address in an `email_list`, `email_search`, or `email_read` result
+  comes with `contact_status` (`matched`, `unmatched`, `ambiguous`,
+  `lookup_failed`), the effective `trust_zone`, and the matched
+  `contact` record. You do not need a `contact_lookup` to learn who a
+  sender is; you need one to learn *more* about them, or to check a
+  recipient before composing. An `ambiguous` address is a duplicate
+  in the directory worth reporting to the operator.
 
 - **save merges; forget soft-deletes.** `contact_save` with an
   existing name merges into the current record — non-empty scalar
