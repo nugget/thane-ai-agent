@@ -38,6 +38,15 @@ func folderParameter(role string) map[string]any {
 	}
 }
 
+// draftParameter is the shared draft argument of email_send and
+// email_reply.
+func draftParameter() map[string]any {
+	return map[string]any{
+		"type":        "boolean",
+		"description": "Hold the message in the account's Drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says which.",
+	}
+}
+
 func uidsParameters() (map[string]any, map[string]any) {
 	return map[string]any{
 		"type":        "array",
@@ -185,10 +194,13 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		},
 		{
 			Name: "email_send",
-			Description: "Compose and send a new message from one account. body is markdown and is rendered to both text and HTML. " +
-				"Every recipient in to and cc must be in the contact directory at a send-eligible trust zone; a refusal names each recipient at issue and how to recover, and nothing is sent. " +
+			Description: "Compose a new message from one account and hand it to the send decision. body is markdown and is rendered to both text and HTML. " +
+				"Every recipient in to and cc must be in the contact directory at a trust zone whose send policy is not blocked, and the account's policy then decides the disposition: " +
+				"sent (delivered by SMTP; cannot be recalled), drafted (held in the account's Drafts folder for the operator to send; nothing has left the mailbox), or refused. " +
+				"The Email Accounts block lists, per account and for this turn, which zones it sends_directly_to, drafts_for, and refuses. " +
 				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
-				"{disposition: sent, account, message_id, to, cc, bcc_count, subject, sent_folder_copy}. Sent mail cannot be recalled.",
+				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder_copy, drafts_folder, draft_uid, signed, recipients, note, decision}; " +
+				"a refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -207,6 +219,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 						"type":        "string",
 						"description": "Body in markdown; converted to text/plain and text/html. Supports temp:LABEL references.",
 					},
+					"draft":   draftParameter(),
 					"account": accountParameter(),
 				},
 				"required": []string{"to", "subject", "body"},
@@ -218,7 +231,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Name: "email_reply",
 			Description: "Reply to a message by UID, preserving In-Reply-To and References so the reply threads in the recipient's client. " +
 				"The reply goes to the original Reply-To (else From); reply_all adds the original To and Cc minus this account's own address. " +
-				"Recipients pass through the same contact-directory trust gate as email_send, and any refused recipient refuses the whole reply. body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
+				"Recipients pass through the same trust gate and send decision as email_send: any refused recipient refuses the whole reply, and the account's policy decides whether the reply is sent or held in Drafts for the operator. " +
+				"body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -235,6 +249,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 						"type":        "boolean",
 						"description": "Also reply to the original To and Cc recipients (default: false).",
 					},
+					"draft":   draftParameter(),
 					"account": accountParameter(),
 				},
 				"required": []string{"uid", "body"},

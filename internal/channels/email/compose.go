@@ -24,9 +24,16 @@ type ComposeOptions struct {
 	// Cc is the list of CC addresses.
 	Cc []string
 
-	// Bcc is the list of BCC addresses. They are never written into
-	// the message headers; callers put them only in the SMTP envelope.
+	// Bcc is the list of BCC addresses. They are written into the
+	// message header only when BccInHeader is set; otherwise callers
+	// put them only in the SMTP envelope.
 	Bcc []string
+
+	// BccInHeader writes Bcc into the header. Only a draft the operator
+	// will send from their own client sets it: the header tells that
+	// client who to blind-copy, and a message Thane delivers itself
+	// must never carry it.
+	BccInHeader bool
 
 	// Subject is the message subject line.
 	Subject string
@@ -98,9 +105,17 @@ func ComposeMessage(opts ComposeOptions) (Composed, error) {
 		h.SetAddressList("Cc", mailAddresses(cc))
 	}
 
-	// Bcc recipients are intentionally omitted from message headers to
-	// avoid leaking blind-copy information. Callers include Bcc
-	// addresses only in the SMTP envelope (RCPT TO).
+	// Bcc recipients are omitted from the headers of a message Thane
+	// delivers, so blind copies stay blind; they go in the SMTP
+	// envelope (RCPT TO) instead. A draft carries them so the operator's
+	// client sends the same copies.
+	if opts.BccInHeader && len(opts.Bcc) > 0 {
+		bcc, err := parseAddresses(opts.Bcc)
+		if err != nil {
+			return out, fmt.Errorf("bcc addresses: %w", err)
+		}
+		h.SetAddressList("Bcc", mailAddresses(bcc))
+	}
 
 	if opts.InReplyTo != "" {
 		h.SetMsgIDList("In-Reply-To", []string{opts.InReplyTo})

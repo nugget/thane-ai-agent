@@ -3,20 +3,19 @@ package email
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
-
-	"github.com/emersion/go-imap/v2"
 
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // The outbound handlers live apart from the read-side handlers because
-// they share one send path, sendEmail, which is the seam every outbound
-// message passes through: trust gating, the audit copy, composition,
-// delivery, and the Sent-folder copy happen there and nowhere else.
+// they share one path, [Service.Send], which is where every policy
+// decision about outbound mail is made: access, the audit copy, the
+// trust gate, delivery routing, inspection, signing, and the SMTP or
+// Drafts hand-off. The handlers only assemble the request and render
+// the outcome.
 
-// HandleSend composes and sends a new message.
+// HandleSend composes a new message and hands it to the send pipeline.
 func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, error) {
 	opts := SendOptions{
 		To:      toolargs.StringSlice(args, "to"),
@@ -44,7 +43,19 @@ func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
-	return t.sendEmail(ctx, "email_send", acct, opts.To, opts.Cc, opts.Subject, opts.Body, "", nil)
+	outcome, err := t.service.Send(ctx, SendRequest{
+		Tool:    "email_send",
+		Account: acct,
+		To:      opts.To,
+		Cc:      opts.Cc,
+		Subject: opts.Subject,
+		Body:    opts.Body,
+		Draft:   toolargs.Bool(args, "draft"),
+	})
+	if err != nil {
+		return "", err
+	}
+	return marshalResponse(newSendResponse(outcome, opts.Subject, ""))
 }
 
 // HandleReply replies to an existing message with threading headers.
@@ -72,6 +83,11 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 	if err != nil {
 		return "", err
 	}
+	// Refuse before fetching the original when the account cannot
+	// write mail at all; the fetch would only delay the same answer.
+	if err := t.service.sendAccessRefusal(ctx, "email_reply", acct); err != nil {
+		return "", err
+	}
 
 	// Peek so that replying does not itself change the original's
 	// seen state.
@@ -96,7 +112,21 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 		refs = append(refs, original.MessageID)
 	}
 
-	return t.sendEmail(ctx, "email_reply", acct, addressStrings(to), addressStrings(cc), subject, opts.Body, original.MessageID, refs)
+	outcome, err := t.service.Send(ctx, SendRequest{
+		Tool:       "email_reply",
+		Account:    acct,
+		To:         addressStrings(to),
+		Cc:         addressStrings(cc),
+		Subject:    subject,
+		Body:       opts.Body,
+		InReplyTo:  original.MessageID,
+		References: refs,
+		Draft:      toolargs.Bool(args, "draft"),
+	})
+	if err != nil {
+		return "", err
+	}
+	return marshalResponse(newSendResponse(outcome, subject, original.MessageID))
 }
 
 // replyRecipients picks the recipients of a reply: Reply-To when the
@@ -135,117 +165,4 @@ func replyRecipients(acctCfg AccountConfig, original *Message, replyAll bool) (t
 		}
 	}
 	return to, cc, nil
-}
-
-// sendEmail is the shared send path for HandleSend and HandleReply. It
-// handles trust zone gating, the audit copy, composition, SMTP
-// delivery, and the Sent-folder copy.
-func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount, to, cc []string, subject, body, inReplyTo string, references []string) (string, error) {
-	acctCfg := acct.Config
-	if !acctCfg.SMTPConfigured() {
-		return "", fmt.Errorf("email account %q has no smtp configured; it can read and organize mail but not send it. Use an account that can send, or report that this one cannot", acctCfg.Name)
-	}
-
-	// Auto-Bcc owner if configured and not already a recipient.
-	var bcc []string
-	if owner := t.service.BccOwner(); owner != "" {
-		ownerAddr, err := parseAddress(owner)
-		if err != nil {
-			return "", fmt.Errorf("configured bcc_owner %q is not a valid address: %w", owner, err)
-		}
-		alreadyRecipient := false
-		for _, addr := range slices.Concat(to, cc) {
-			if parsed, err := parseAddress(addr); err == nil && parsed.Key() == ownerAddr.Key() {
-				alreadyRecipient = true
-				break
-			}
-		}
-		if !alreadyRecipient {
-			bcc = append(bcc, owner)
-		}
-	}
-
-	// Trust zone gating: check all recipients including auto-Bcc.
-	allRecipients := slices.Concat(to, cc, bcc)
-	trust := CheckRecipientTrust(ctx, t.contacts, allRecipients)
-	if trust.HasIssues() {
-		return "", fmt.Errorf("recipient trust issues: %s", trust.FormatIssues())
-	}
-
-	composed, err := ComposeMessage(ComposeOptions{
-		From:       acctCfg.DefaultFrom,
-		To:         to,
-		Cc:         cc,
-		Bcc:        bcc,
-		Subject:    subject,
-		Body:       body,
-		InReplyTo:  inReplyTo,
-		References: references,
-	})
-	if err != nil {
-		return "", fmt.Errorf("compose message: %w", err)
-	}
-
-	bccAddrs, err := parseAddresses(bcc)
-	if err != nil {
-		return "", fmt.Errorf("bcc addresses: %w", err)
-	}
-	smtpRecipients := collectRecipients(composed.To, composed.Cc, bccAddrs)
-
-	wire := composed.Bytes
-	signed := false
-	if signer := t.service.signerFor(acctCfg.Name); signer != nil {
-		wire, err = signer.Sign(ctx, OutboundMessage{Account: acctCfg.Name, From: composed.From, Message: composed.Bytes})
-		if err != nil {
-			return "", fmt.Errorf("sign message for account %q: %w", acctCfg.Name, err)
-		}
-		signed = true
-	}
-
-	if err := sendMail(ctx, acctCfg.Name, acctCfg.SMTP, composed.From.Address, smtpRecipients, wire); err != nil {
-		return "", err
-	}
-
-	t.logger.Info("email sent",
-		"tool", tool,
-		"account", acctCfg.Name,
-		"message_id", composed.MessageID,
-		"recipient_count", len(smtpRecipients),
-		"in_reply_to", inReplyTo,
-	)
-
-	recipients := trust.Assessments
-	if recipients == nil {
-		recipients = []RecipientAssessment{}
-	}
-	resp := sendResponse{
-		Disposition: "sent",
-		Account:     acctCfg.Name,
-		MessageID:   composed.MessageID,
-		To:          nonNilStrings(addressStrings(composed.To)),
-		Cc:          nonNilStrings(addressStrings(composed.Cc)),
-		BccCount:    len(bccAddrs),
-		Subject:     subject,
-		InReplyTo:   inReplyTo,
-		Signed:      signed,
-		Recipients:  recipients,
-	}
-
-	// Store a copy in the configured Sent folder via IMAP APPEND.
-	if acctCfg.SentFolder != "" {
-		if _, appendErr := acct.Client.AppendMessage(ctx, acctCfg.SentFolder, wire, []imap.Flag{imap.FlagSeen}); appendErr != nil {
-			t.logger.Warn("failed to store sent message in IMAP folder",
-				"folder", acctCfg.SentFolder,
-				"account", acctCfg.Name,
-				"message_id", composed.MessageID,
-				"error", appendErr,
-			)
-			resp.SentFolderCopy = "failed"
-		} else {
-			resp.SentFolderCopy = acctCfg.SentFolder
-		}
-	}
-
-	t.service.recordOp(tool, acctCfg.Name, "", composed.MessageID)
-	return marshalResponse(resp)
 }

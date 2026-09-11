@@ -46,6 +46,8 @@ func twoAccountService(t *testing.T) (*Service, *memIMAP, *memIMAP) {
 	return svc, primary, packages
 }
 
+func agentctxRequest() agentctx.ContextRequest { return agentctx.ContextRequest{} }
+
 func boundEmailCtx(account string) context.Context {
 	return looppkg.WithBindings(context.Background(), map[string]string{looppkg.BindingEmailAccount: account})
 }

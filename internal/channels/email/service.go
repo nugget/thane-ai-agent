@@ -46,6 +46,10 @@ type ServiceDependencies struct {
 	// Signers picks a per-account outbound signer. Nil sends unsigned.
 	Signers SignerResolver `json:"-"`
 
+	// Inspector reviews every outbound message after the policy
+	// decision and may only refuse it. Nil inspects nothing.
+	Inspector Inspector `json:"-"`
+
 	// WakeTarget overrides the loop that receives new-mail wakes. Nil
 	// means [DefaultHandlerLoopName].
 	WakeTarget *messages.LoopWakeTarget `json:"-"`
@@ -69,8 +73,10 @@ type Service struct {
 	poller          *Poller
 	opLog           *OperationLog
 	contacts        ContactResolver
+	interactions    InteractionRecorder
 	authenticator   Authenticator
 	signers         SignerResolver
+	inspector       Inspector
 
 	foldersMu sync.Mutex
 	folders   map[string]folderSnapshot
@@ -120,8 +126,10 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 		opLog:         NewOperationLog(),
 		folders:       make(map[string]folderSnapshot),
 		contacts:      deps.Contacts,
+		interactions:  deps.Interactions,
 		authenticator: deps.Authenticator,
 		signers:       deps.Signers,
+		inspector:     deps.Inspector,
 	}
 	s.tools = newTools(s, deps.Contacts, deps.Logger)
 	s.contextProvider = newContextProvider(s)

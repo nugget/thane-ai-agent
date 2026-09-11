@@ -162,16 +162,22 @@ config-driven and validated at startup.
 
 ### Egress Gate
 
-**Status: Planned**
+**Status: Implemented for email; planned for Signal and other channels**
 
-Single enforcement point for all outbound messages (email, eventually
-Signal and other channels). Rate limiting by trust zone, Message-ID dedup,
-content scanning. The model's tool call passes through the gate; the gate
-decides whether to send.
-
-This is the most critical structural control not yet implemented. Without
-it, a model pursuing a goal has unrestricted outbound communication — the
-exact pattern that enabled the matplotlib reputational attack.
+Every outbound email passes through one Go path, `Service.Send`, and ends
+in exactly one disposition: sent, held in the account's Drafts folder for
+the operator to send, or refused with a decision record. The path checks
+the account's access level, adds the operator's audit copy outside the
+gate, assesses every recipient against the contact directory and the
+account's domain lists, routes on the most restrictive recipient's trust
+zone under the account's delivery policy, applies an unattended floor so a
+turn no human is attending drafts rather than sends unless the operator
+chose direct delivery, offers the composed message to a refuse-only
+inspector, signs, and only then delivers. The model's tool call cannot
+skip a stage, a refusal names each recipient at issue with its recovery,
+and one log line per decision records which rule settled it. Rate
+limiting and Message-ID dedup remain planned, as does extending the gate
+to Signal.
 
 ### Router Quality Floors
 
@@ -213,7 +219,11 @@ matching contact. Domain-level results (DKIM, DMARC) and headers a mail
 server wrote can never set it. The keys that would make such verification
 possible are operator custody: `contact_save` refuses `KEY` and
 `X-THANE-KEY-*` properties, so a message cannot install the key that
-verifies its own sender.
+verifies its own sender. The attended/unattended distinction the egress
+gate reads comes from the same place: a turn counts as attended only when
+the message entered through an operator-facing API or the conversation is
+bound to the operator's own contact, never because a message claimed to
+be from the operator.
 
 ## Known Behavioral Gaps
 

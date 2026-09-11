@@ -14,7 +14,14 @@ type RecipientAssessment struct {
 	ContactID     string        `json:"contact_id,omitempty"`
 	ContactName   string        `json:"contact_name,omitempty"`
 
-	// Allowed is whether this recipient alone would pass the gate.
+	// Gating is the send policy of the effective zone: allowed,
+	// confirmation (held in Drafts under by_trust_zone delivery), or
+	// blocked.
+	Gating string `json:"gating"`
+
+	// Allowed is whether this recipient alone would pass the gate: its
+	// gating is not blocked, so the message may leave as sent or as a
+	// draft.
 	Allowed bool `json:"allowed"`
 
 	// Reason explains a refusal and names the recovery.
@@ -53,7 +60,7 @@ func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresse
 		parsed, err := parseAddress(raw)
 		if err != nil {
 			result.Blocked = append(result.Blocked, fmt.Sprintf("Cannot send to %q: not a valid email address.", raw))
-			result.Assessments = append(result.Assessments, RecipientAssessment{Address: raw, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Reason: "not a valid email address"})
+			result.Assessments = append(result.Assessments, RecipientAssessment{Address: raw, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Gating: GatingBlocked, Reason: "not a valid email address"})
 			continue
 		}
 		assessment := assessRecipient(parsed, lookup.resolve(parsed))
@@ -67,12 +74,16 @@ func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresse
 	return result
 }
 
-// assessRecipient applies the zone table to one resolved recipient.
+// assessRecipient applies the contacts package's per-zone send policy
+// to one resolved recipient. Only a matched or ambiguous address has a
+// zone to read; a stranger and a failed lookup are blocked with their
+// own reasons, never passed off as a zone.
 func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 	a := RecipientAssessment{
 		Address:       addr.Key(),
 		TrustZone:     match.TrustZone,
 		ContactStatus: match.Status,
+		Gating:        GatingBlocked,
 	}
 	if match.Binding != nil {
 		a.ContactID = match.Binding.ContactID
@@ -86,36 +97,22 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 		a.Reason = "no contact record; add one deliberately with contact_save or drop the recipient"
 		return a
 	case ContactAmbiguous:
+		a.Gating = gatingForZone(match.TrustZone)
+		a.Allowed = a.Gating != GatingBlocked
 		names := make([]string, 0, len(match.Candidates))
 		for _, c := range match.Candidates {
 			names = append(names, fmt.Sprintf("%s (%s, %s)", c.Name, c.ID, c.TrustZone))
 		}
 		a.Reason = fmt.Sprintf("the address belongs to %d contact records [%s]; the least privileged zone (%s) governs until the duplicates are merged", len(match.Candidates), strings.Join(names, "; "), match.TrustZone)
-		if sendEligibleZone(match.TrustZone) {
-			a.Allowed = true
-		}
 		return a
 	}
 
-	switch match.TrustZone {
-	case "admin", "household", "trusted":
-		a.Allowed = true
-	case "known":
-		a.Reason = "the contact is at the known trust zone, which does not permit sending; promote the contact deliberately (with the operator's authorization) or drop the recipient"
-	default:
-		a.Reason = fmt.Sprintf("the contact's trust zone %q does not permit sending", match.TrustZone)
+	a.Gating = gatingForZone(match.TrustZone)
+	a.Allowed = a.Gating != GatingBlocked
+	if !a.Allowed {
+		a.Reason = fmt.Sprintf("the contact is at the %s trust zone, whose send policy is blocked; promote the contact deliberately (with the operator's authorization) or drop the recipient", match.TrustZone)
 	}
 	return a
-}
-
-// sendEligibleZone reports whether a zone may receive mail from the
-// agent under today's gate.
-func sendEligibleZone(zone string) bool {
-	switch zone {
-	case "admin", "household", "trusted":
-		return true
-	}
-	return false
 }
 
 // HasIssues reports whether any recipient was blocked.
