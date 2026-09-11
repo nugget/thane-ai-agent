@@ -355,13 +355,16 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 	fmt.Fprintf(w, "  Home Assistant:       %v\n", cfg.HomeAssistant.Configured())
 	fmt.Fprintf(w, "  Signal bridge:        %v\n", cfg.Signal.Enabled)
 	fmt.Fprintf(w, "  Embeddings:           %v\n", cfg.Embeddings.Enabled)
-	sending := 0
+	sending, drafting := 0, 0
 	for _, acct := range cfg.Email.Accounts {
-		if acct.SMTPConfigured() {
+		switch {
+		case acct.CanDeliver():
 			sending++
+		case acct.CanDraft():
+			drafting++
 		}
 	}
-	fmt.Fprintf(w, "  Email accounts:       %d (sending: %d, polling: %v)\n", len(cfg.Email.Accounts), sending, cfg.Email.PollingInterval() > 0)
+	fmt.Fprintf(w, "  Email accounts:       %d (sending: %d, drafting only: %d, polling: %v)\n", len(cfg.Email.Accounts), sending, drafting, cfg.Email.PollingInterval() > 0)
 	// The core service loops are deliberately absent here: their config
 	// enabled flags stopped stating whether they run once definition
 	// documents became authoritative (#1361), and the Core loop

@@ -23,8 +23,9 @@ Choose the next move deliberately:
   handles automatically) — activate `signal`.
 - If the relationship thread lives in inbox history or email
   correspondence rather than chat, activate `email` — it branches
-  into triage (read), respond (compose, trust-gated by contacts),
-  and organize (mark/move).
+  into triage (read), respond (compose; the account's policy and the
+  recipients' trust zones decide direct send, Drafts for the operator,
+  or refusal), and organize (mark/move).
 - If `owner` is already present and authenticated owner identity
   matters, use it as trustworthy ground truth.
 - If the person data you want lives on a paired companion device

@@ -189,6 +189,13 @@ func TestEmailConfig_Validate(t *testing.T) {
 		{"bcc_owner with display name is fine", EmailConfig{BccOwner: "Owner <owner@example.com>", Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap}}}, ""},
 		{"negative poll interval", EmailConfig{PollInterval: intPtr(-1), Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap}}}, "poll_interval"},
 		{"zero poll interval disables", EmailConfig{PollInterval: intPtr(0), Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap}}}, ""},
+		{"unknown access", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{Access: "write"}}}}, "policy.access"},
+		{"unknown delivery", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: smtp, DefaultFrom: "alice@example.com", Policy: EmailPolicyConfig{Delivery: "queue"}}}}, "policy.delivery"},
+		{"send without smtp must draft", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, DefaultFrom: "alice@example.com", Policy: EmailPolicyConfig{Access: EmailAccessSend}}}}, "can only draft"},
+		{"send without smtp drafting needs a from", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{Access: EmailAccessSend, Delivery: EmailDeliveryDrafts}}}}, "default_from is required when policy.access"},
+		{"send without smtp drafting is fine", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, DefaultFrom: "alice@example.com", Policy: EmailPolicyConfig{Access: EmailAccessSend, Delivery: EmailDeliveryDrafts}}}}, ""},
+		{"organize with smtp is fine", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: smtp, DefaultFrom: "alice@example.com", Policy: EmailPolicyConfig{Access: EmailAccessOrganize}}}}, ""},
+		{"domain entries are domains", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{"alice@example.com"}}}}}, "not a domain"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -203,6 +210,32 @@ func TestEmailConfig_Validate(t *testing.T) {
 				t.Fatalf("Validate() = %v, want error containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestEmailAccountConfig_PolicyDefaults pins the documented defaults:
+// send when smtp is configured, organize otherwise, by_trust_zone
+// delivery, and normalized domain lists.
+func TestEmailAccountConfig_PolicyDefaults(t *testing.T) {
+	withSMTP := EmailAccountConfig{Name: "a", IMAP: EmailIMAPConfig{Host: "h", Username: "u"}, SMTP: EmailSMTPConfig{Host: "s", Username: "u"}}
+	if withSMTP.AccessLevel() != EmailAccessSend || !withSMTP.CanDraft() || !withSMTP.CanDeliver() || withSMTP.DeliveryMode() != EmailDeliveryByTrustZone {
+		t.Errorf("smtp account defaults: access=%s draft=%v deliver=%v delivery=%s", withSMTP.AccessLevel(), withSMTP.CanDraft(), withSMTP.CanDeliver(), withSMTP.DeliveryMode())
+	}
+	readOnly := EmailAccountConfig{Name: "b", IMAP: EmailIMAPConfig{Host: "h", Username: "u"}}
+	if readOnly.AccessLevel() != EmailAccessOrganize || readOnly.CanDraft() || readOnly.CanDeliver() {
+		t.Errorf("imap-only account defaults: access=%s draft=%v deliver=%v", readOnly.AccessLevel(), readOnly.CanDraft(), readOnly.CanDeliver())
+	}
+	held := withSMTP
+	held.Policy.Access = EmailAccessOrganize
+	if held.CanDraft() || held.CanDeliver() {
+		t.Error("an explicit organize must win over configured smtp")
+	}
+
+	cfg := EmailConfig{Accounts: []EmailAccountConfig{{Name: "a", IMAP: EmailIMAPConfig{Host: "h", Username: "u"}, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{" .Example.COM ", ""}}}}}
+	cfg.ApplyDefaults()
+	got := cfg.Accounts[0].Policy
+	if got.Access != EmailAccessOrganize || got.Delivery != EmailDeliveryByTrustZone || len(got.DeniedRecipientDomains) != 1 || got.DeniedRecipientDomains[0] != "example.com" || got.AllowedRecipientDomains != nil {
+		t.Errorf("ApplyDefaults policy = %+v", got)
 	}
 }
 

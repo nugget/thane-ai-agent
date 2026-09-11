@@ -10,9 +10,9 @@ next_tags: [contacts_lookup, contacts_save, contacts_vcf]
 
 The contact directory is the canonical record of who counts as a known
 person, organization, or group on this host. Other surfaces depend on
-it: email send policy gates recipients by their trust zone, message
-channels resolve incoming senders against it, owner-only tools assert
-identity through it. Get the contact record right and the rest of the
+it: the email send decision reads each recipient's trust zone
+(`email_respond` has the table), message channels resolve incoming
+senders against it, owner-only tools assert identity through it. Get the contact record right and the rest of the
 agent's people-shaped work works; get it wrong and the consequences
 ripple.
 
@@ -65,8 +65,10 @@ ordinary documents instead.
 - **Trust zones drive downstream policy.** Every contact carries a zone:
   `admin` (full access), `household` (family-level), `trusted`
   (established relationship), `known` (default; lower-privilege gated
-  access). The zone is what `email_send`'s recipient gate reads and
-  what determines which contacts get owner-scoped privileges. Field
+  access). The zone is what the email send decision reads (a
+  `trusted` recipient's mail is drafted for the operator, a `known`
+  one's is refused; `email_respond` has the table) and what determines
+  which contacts get owner-scoped privileges. Field
   filtering on vCard exports is a separate axis — it uses the
   *recipient*'s trust zone passed at export time, and only when
   exporting the agent's own card via `name: "self"`. Assigning a

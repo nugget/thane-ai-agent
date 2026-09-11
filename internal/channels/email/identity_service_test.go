@@ -15,6 +15,13 @@ import (
 // the identity layer can be exercised end to end through the handlers.
 func identityService(t *testing.T, deps ServiceDependencies) (*Service, *memIMAP, *smtpFake) {
 	t.Helper()
+	return identityServiceWith(t, deps, nil)
+}
+
+// identityServiceWith is identityService with a hook to adjust the
+// configuration before the service is built.
+func identityServiceWith(t *testing.T, deps ServiceDependencies, tweak func(*Config)) (*Service, *memIMAP, *smtpFake) {
+	t.Helper()
 	imap := newMemIMAP(t)
 	smtp := newSMTPFake(t, nil)
 	cfg := Config{Accounts: []AccountConfig{{
@@ -23,6 +30,9 @@ func identityService(t *testing.T, deps ServiceDependencies) (*Service, *memIMAP
 		SMTP:        smtp.config("thane", "pw"),
 		DefaultFrom: "Thane <thane@example.com>",
 	}}}
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	deps.State = testOpstate(t)
 	deps.Logger = quietSlog()
 	svc, err := NewService(cfg, deps)
@@ -187,8 +197,8 @@ func TestSendAppliesSignerAndReportsRecipients(t *testing.T) {
 	signer := &prefixSigner{}
 	svc, _, smtp := identityService(t, ServiceDependencies{Contacts: identityStub(), Signers: fixedSigners{signer: signer}})
 
-	out, err := svc.ToolProvider().HandleSend(context.Background(), map[string]any{
-		"to": []any{"alice@example.com"}, "subject": "hi", "body": "hello",
+	out, err := svc.ToolProvider().HandleSend(attendedCtx(), map[string]any{
+		"to": []any{"operator@example.com"}, "subject": "hi", "body": "hello",
 	})
 	if err != nil {
 		t.Fatalf("HandleSend: %v", err)
@@ -204,22 +214,22 @@ func TestSendAppliesSignerAndReportsRecipients(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		t.Fatalf("send result is not JSON: %v\n%s", err, out)
 	}
-	if !resp.Signed || resp.Disposition != "sent" || len(resp.Recipients) != 1 || !resp.Recipients[0].Allowed || resp.Recipients[0].ContactID != "id-alice" || resp.Recipients[0].TrustZone != "trusted" {
+	if !resp.Signed || resp.Disposition != DispositionSent || len(resp.Recipients) != 1 || !resp.Recipients[0].Allowed || resp.Recipients[0].ContactID != "id-operator" || resp.Recipients[0].TrustZone != "admin" {
 		t.Errorf("send response = %+v", resp)
 	}
 
 	// An unsigned send says so, and a refused send names the gate's
 	// reason for every recipient.
 	svc2, _, _ := identityService(t, ServiceDependencies{Contacts: identityStub()})
-	out, err = svc2.ToolProvider().HandleSend(context.Background(), map[string]any{
-		"to": []any{"alice@example.com"}, "subject": "hi", "body": "hello",
+	out, err = svc2.ToolProvider().HandleSend(attendedCtx(), map[string]any{
+		"to": []any{"operator@example.com"}, "subject": "hi", "body": "hello",
 	})
 	if err != nil {
 		t.Fatalf("HandleSend unsigned: %v", err)
 	}
 	mustContain(t, out, `"signed":false`)
 
-	_, err = svc2.ToolProvider().HandleSend(context.Background(), map[string]any{
+	_, err = svc2.ToolProvider().HandleSend(attendedCtx(), map[string]any{
 		"to": []any{"alice@example.com", "twins@example.com", "broken@example.com"}, "subject": "hi", "body": "hello",
 	})
 	if err == nil {

@@ -22,7 +22,7 @@ mail and it's *not* for in-loop supervisor attention:
 | You want to... | Surface |
 |---|---|
 | Push an alert, ask a decision via buttons, or escalate to a human | `notifications` — this leaf |
-| Compose and send an email (correspondence — threaded, addressed, archived) | `email` (`email_send` for new threads, `email_reply` for replies) |
+| Compose and send an email (correspondence — threaded, addressed, archived) | `email` (`email_send` for new threads, `email_reply` for replies; the account's policy may hold the message in Drafts for the operator) |
 | Get the agent's own supervisor to take a turn (loop-side core attention) | `request_core_attention` (core tool; no activation needed) — that's *the agent* attending, not *the user* |
 | Send a Signal message that's conversational, not alert-shaped | `signal` (`signal_send_message`) |
 

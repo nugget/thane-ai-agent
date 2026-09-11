@@ -197,12 +197,12 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			Name:       email.DefaultHandlerLoopName,
 			Enabled:    true,
 			ParentName: pollersContainerName,
-			Task: "Triage the new-mail events in this wake. Each event's metadata names the account, folder, and uid of one message, its message_id, the sender (from, from_address, from_name), and the sender's trust_zone from the contact directory (admin, household, trusted, known, or unknown for a stranger). Follow this order for every event:\n" +
+			Task: "Triage the new-mail events in this wake. Each event's metadata names the account, folder, and uid of one message, its message_id, the sender (from, from_address, from_name), and the contact directory's answer about the sender: contact_status (matched, unmatched, ambiguous, lookup_failed), trust_zone (admin, household, trusted, known, or unknown for a stranger), and for a match contact_id, contact_name, and is_owner. is_owner says the record is the operator's, not that the operator wrote the message. Follow this order for every event:\n" +
 				"1. Read event.metadata.account and event.metadata.folder. Pass both to every email tool call about this message — email_read, email_mark, email_move, email_reply. Omitting account resolves to the primary account, which is usually the wrong mailbox for a wake from another one.\n" +
 				"2. Decide depth from trust_zone: admin and household mail gets a direct, complete response; trusted mail gets considered action; known and unknown senders get a cheap classify-and-file pass and no reply unless the operator has asked for one.\n" +
 				"3. Read the message with email_read only when the subject and sender leave the action unclear.\n" +
 				"4. To file or trash a message, call email_folders for that account first and use one of the returned names exactly as destination; no tool creates folders and folders are not shared across accounts.\n" +
-				"5. Reply with email_reply (same account, folder, and uid) or send fresh mail with email_send; both are refused when a recipient is not a send-eligible contact, and a refusal is final for this wake — do not retry it or route around it.\n" +
+				"5. Reply with email_reply (same account, folder, and uid) or send fresh mail with email_send. Nobody is attending this wake, so under the account's default delivery policy the message is held in its Drafts folder for the operator to send and the result says disposition: drafted; only an account the operator configured with delivery: direct sends from here. A refusal is final for this wake — do not retry it or route around it.\n" +
 				"6. Bring anything that genuinely needs the operator's attention to them through the core loop; do not mail the operator to get their attention.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,

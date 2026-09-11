@@ -1410,6 +1410,45 @@ compaction:
 #       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 #       Leave empty to keep no server-side copy.
 #       sent_folder: Sent
+#       DraftsFolder is the IMAP folder that receives messages held for the
+#       operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
+#       empty to use the folder the server marks as its drafts folder, or
+#       "Drafts" when it marks none.
+#       drafts_folder: Drafts
+#       Policy is what the model may do with this account beyond reading
+#       it, and where the mail it writes goes.
+#       policy:
+#         Access is the most the model may do with this account: "read"
+#         (list, search, and read without marking messages seen),
+#         "organize" (also flag and move), or "send" (also compose, reply,
+#         and draft). Default: "send" when smtp is configured, "organize"
+#         otherwise. An account with smtp configured may still be held at
+#         "organize", which keeps its credentials for the operator's own
+#         use; "send" without smtp can only draft and requires
+#         delivery: drafts.
+#         access: send
+#         Delivery decides where outbound mail goes once every recipient
+#         has passed the trust gate. "by_trust_zone" (default) sends
+#         directly to admin and household recipients when a human is
+#         attending the turn, holds mail for trusted recipients in the
+#         Drafts folder for the operator to send, and refuses known and
+#         unknown recipients; a turn no human is attending (a poller wake
+#         or a scheduled loop rather than a conversation with the operator)
+#         holds everything in Drafts, so an autonomous loop never sends on
+#         its own. "drafts" holds every message in Drafts. "direct" sends
+#         everything the gate allows, including to trusted recipients and
+#         from unattended loops; choose it deliberately.
+#         delivery: by_trust_zone
+#         DeniedRecipientDomains lists domains this account never writes
+#         to, even when the recipient is a trusted contact. An entry covers
+#         the domain and its subdomains ("example.com" also covers
+#         mail.example.com). Checked before allowed_recipient_domains.
+#         denied_recipient_domains:
+#           - example.org
+#         AllowedRecipientDomains, when set, limits outbound recipients to
+#         these domains and their subdomains; every other recipient is
+#         refused. Empty means no limit.
+#         allowed_recipient_domains: []
 #     - # Name is the short identifier tools and loop bindings use for this
 #       account (for example "personal" or "packages"). Required and unique.
 #       name: packages
@@ -1464,6 +1503,44 @@ compaction:
 #       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 #       Leave empty to keep no server-side copy.
 #       sent_folder: ""
+#       DraftsFolder is the IMAP folder that receives messages held for the
+#       operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
+#       empty to use the folder the server marks as its drafts folder, or
+#       "Drafts" when it marks none.
+#       drafts_folder: ""
+#       Policy is what the model may do with this account beyond reading
+#       it, and where the mail it writes goes.
+#       policy:
+#         Access is the most the model may do with this account: "read"
+#         (list, search, and read without marking messages seen),
+#         "organize" (also flag and move), or "send" (also compose, reply,
+#         and draft). Default: "send" when smtp is configured, "organize"
+#         otherwise. An account with smtp configured may still be held at
+#         "organize", which keeps its credentials for the operator's own
+#         use; "send" without smtp can only draft and requires
+#         delivery: drafts.
+#         access: organize
+#         Delivery decides where outbound mail goes once every recipient
+#         has passed the trust gate. "by_trust_zone" (default) sends
+#         directly to admin and household recipients when a human is
+#         attending the turn, holds mail for trusted recipients in the
+#         Drafts folder for the operator to send, and refuses known and
+#         unknown recipients; a turn no human is attending (a poller wake
+#         or a scheduled loop rather than a conversation with the operator)
+#         holds everything in Drafts, so an autonomous loop never sends on
+#         its own. "drafts" holds every message in Drafts. "direct" sends
+#         everything the gate allows, including to trusted recipients and
+#         from unattended loops; choose it deliberately.
+#         delivery: by_trust_zone
+#         DeniedRecipientDomains lists domains this account never writes
+#         to, even when the recipient is a trusted contact. An entry covers
+#         the domain and its subdomains ("example.com" also covers
+#         mail.example.com). Checked before allowed_recipient_domains.
+#         denied_recipient_domains: []
+#         AllowedRecipientDomains, when set, limits outbound recipients to
+#         these domains and their subdomains; every other recipient is
+#         refused. Empty means no limit.
+#         allowed_recipient_domains: []
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:

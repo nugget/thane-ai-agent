@@ -146,6 +146,10 @@ type readResponse struct {
 	RawTruncated   bool           `json:"raw_truncated,omitempty"`
 	Attachments    []Attachment   `json:"attachments"`
 	Authentication Authentication `json:"authentication"`
+
+	// AccessNote explains a read that could not mark the message seen
+	// because the account's access level is read.
+	AccessNote string `json:"access_note,omitempty"`
 }
 
 // bodySeparator divides the read result's JSON header from the body
@@ -223,9 +227,10 @@ type moveResponse struct {
 	Note                 string   `json:"note,omitempty"`
 }
 
-// sendResponse is the result of email_send and email_reply.
+// sendResponse is the result of email_send and email_reply. The
+// disposition says what happened; the decision says why.
 type sendResponse struct {
-	Disposition    string                `json:"disposition"`
+	Disposition    Disposition           `json:"disposition"`
 	Account        string                `json:"account"`
 	MessageID      string                `json:"message_id"`
 	To             []string              `json:"to"`
@@ -234,8 +239,36 @@ type sendResponse struct {
 	Subject        string                `json:"subject"`
 	InReplyTo      string                `json:"in_reply_to,omitempty"`
 	SentFolderCopy string                `json:"sent_folder_copy,omitempty"`
+	DraftsFolder   string                `json:"drafts_folder,omitempty"`
+	DraftUID       uint32                `json:"draft_uid,omitempty"`
 	Signed         bool                  `json:"signed"`
 	Recipients     []RecipientAssessment `json:"recipients"`
+	Note           string                `json:"note,omitempty"`
+	Decision       Decision              `json:"decision"`
+}
+
+// newSendResponse renders a delivered or drafted outcome.
+func newSendResponse(outcome SendOutcome, subject, inReplyTo string) sendResponse {
+	resp := sendResponse{
+		Disposition:    outcome.Decision.Disposition,
+		Account:        outcome.Decision.Account,
+		MessageID:      outcome.Composed.MessageID,
+		To:             nonNilStrings(addressStrings(outcome.Composed.To)),
+		Cc:             nonNilStrings(addressStrings(outcome.Composed.Cc)),
+		BccCount:       outcome.BccCount,
+		Subject:        subject,
+		InReplyTo:      inReplyTo,
+		SentFolderCopy: outcome.SentFolderCopy,
+		DraftsFolder:   outcome.DraftsFolder,
+		DraftUID:       outcome.DraftUID,
+		Signed:         outcome.Signed,
+		Recipients:     outcome.Decision.Recipients,
+		Decision:       outcome.Decision,
+	}
+	if resp.Disposition == DispositionDrafted {
+		resp.Note = "Held in " + outcome.DraftsFolder + " for the operator to send from their own client; nothing has left the mailbox. Do not resend it."
+	}
+	return resp
 }
 
 // marshalResponse renders a result as compact JSON.
