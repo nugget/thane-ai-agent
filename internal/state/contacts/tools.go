@@ -209,6 +209,25 @@ var propertyKeys = map[string]string{
 	"matrix": "IMPP",
 }
 
+// reservedKeyProperty is the vCard KEY property (RFC 6350 §6.8.1) and
+// the X-THANE-KEY-* family: public keys and certificates that
+// authenticate a contact's messages. Like trust zones, they are
+// operator custody. A model tool that could write them would let a
+// message that says "here is my key" install the key that verifies
+// its own sender, so contact_save refuses them by name.
+const reservedKeyProperty = "KEY"
+
+// reservedKeyPrefix is the Thane-specific key family reserved alongside
+// KEY.
+const reservedKeyPrefix = "X-THANE-KEY-"
+
+// isReservedKeyProperty reports whether a fact key, as the model wrote
+// it, would land on a key-custody property.
+func isReservedKeyProperty(key string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(key))
+	return upper == reservedKeyProperty || strings.HasPrefix(upper, reservedKeyPrefix)
+}
+
 // saveContactKnownFields lists the top-level JSON keys that SaveContactArgs
 // recognizes. Any other top-level string values are rescued into the Facts map
 // so models that flatten email, phone, etc. don't lose data silently.
@@ -286,6 +305,13 @@ func (t *Tools) saveContact(
 	// (X-THANE-TRUST-ZONE) or direct curation.
 	if args.TrustZone != "" {
 		return "", fmt.Errorf("trust_zone cannot be set through contact_save: zones are operator-custodied and confer device authority (#1450); ask the operator to assign the zone, then retry without trust_zone")
+	}
+	// Keys are custody in the same sense: the key that verifies a
+	// contact's messages must not be installable by a message.
+	for key := range args.Facts {
+		if isReservedKeyProperty(key) {
+			return "", fmt.Errorf("fact %q cannot be set through contact_save: KEY and X-THANE-KEY-* properties hold the keys that authenticate a contact's messages and are operator-custodied; ask the operator to install the key, then retry without it", key)
+		}
 	}
 
 	// Look for existing contact by name.

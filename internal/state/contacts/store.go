@@ -128,6 +128,18 @@ type InteractionMeta struct {
 	Channel   string   `json:"channel,omitempty"`    // e.g. "signal", "email"
 	SessionID string   `json:"session_id,omitempty"` // session that last interacted
 	Topics    []string `json:"topics,omitempty"`     // LLM-generated session tags
+
+	// Direction is "inbound" when the contact wrote to the agent and
+	// "outbound" when the agent wrote to them; empty for interactions
+	// recorded before the distinction existed.
+	Direction string `json:"direction,omitempty"`
+
+	// Account is the channel account the exchange went through, for
+	// channels that have several (an email mailbox name).
+	Account string `json:"account,omitempty"`
+
+	// MessageID identifies the message on channels that have one.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // Store manages contact persistence in SQLite.
@@ -899,6 +911,47 @@ func (s *Store) UpdateLastInteraction(contactID uuid.UUID, t time.Time, meta *In
 
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
+		return fmt.Errorf("contact not found or deleted: %s", contactID)
+	}
+	return nil
+}
+
+// RecordInteractionIfNewer sets a contact's last interaction only when
+// t is later than what is already recorded, and leaves updated_at
+// alone: an observed exchange is not an edit to the record. It exists
+// for channel pollers that may replay or reorder a batch, so a stale
+// timestamp is a silent no-op rather than a regression. A missing or
+// deleted contact is an error.
+func (s *Store) RecordInteractionIfNewer(contactID uuid.UUID, t time.Time, meta *InteractionMeta) error {
+	var metaJSON sql.NullString
+	if meta != nil {
+		b, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal interaction meta: %w", err)
+		}
+		metaJSON = sql.NullString{String: string(b), Valid: true}
+	}
+
+	stamp := t.UTC().Format(time.RFC3339)
+	result, err := s.db.Exec(`
+		UPDATE contacts SET last_interaction = ?, last_interaction_meta = ?
+		WHERE id = ? AND `+activeFilter+`
+		  AND (last_interaction IS NULL OR last_interaction = '' OR last_interaction < ?)`,
+		stamp, metaJSON, contactID.String(), stamp)
+	if err != nil {
+		return fmt.Errorf("record interaction: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected > 0 {
+		return nil
+	}
+
+	// Nothing changed: either the contact is gone or the stored
+	// interaction is already at least this new. Tell those apart.
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM contacts WHERE id = ? AND `+activeFilter, contactID.String()).Scan(&exists); err != nil {
+		return fmt.Errorf("record interaction: %w", err)
+	}
+	if exists == 0 {
 		return fmt.Errorf("contact not found or deleted: %s", contactID)
 	}
 	return nil

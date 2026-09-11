@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -109,23 +111,97 @@ func (s *signalChannelSender) SendMessage(ctx context.Context, recipient, messag
 	return err
 }
 
-// emailContactResolver resolves email addresses to trust zone levels
-// for the email package's send gating. Implements email.ContactResolver.
-type emailContactResolver struct {
+// ResolveEmailContact resolves one email address against the contact
+// directory for the email channel: result tagging, the send gate, and
+// wake metadata all read this one answer. It implements
+// email.ContactResolver on the same resolver the Signal bridge uses, so
+// both channels agree about who an address is. One record is a match
+// carrying the same binding a Signal sender would; several records
+// sharing the address are ambiguous, with the least privileged zone
+// governing and no candidate treated as the operator; and a store
+// failure is returned as an error, which the email package renders as
+// lookup_failed rather than as a stranger.
+func (r *contactChannelBindingResolver) ResolveEmailContact(_ context.Context, address string) (email.ContactMatch, error) {
+	if r == nil || r.store == nil {
+		return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
+	}
+	matches, err := r.store.FindByPropertyExact("EMAIL", address)
+	if err != nil {
+		return email.ContactMatch{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
+	case 1:
+		binding := resolveChannelBinding(r.store, "email", address, r.operatorConfigured(), r.resolvedOperatorContactID())
+		if binding == nil || binding.ContactID == "" {
+			// The record vanished between the two reads; treat it as
+			// the stranger it now is.
+			return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
+		}
+		return email.ContactMatch{Status: email.ContactMatched, Binding: binding, TrustZone: binding.TrustZone}, nil
+	}
+	candidates := make([]email.ContactCandidate, 0, len(matches))
+	for _, c := range matches {
+		candidates = append(candidates, email.ContactCandidate{ID: c.ID.String(), Name: c.FormattedName, TrustZone: c.TrustZone})
+	}
+	return email.ContactMatch{
+		Status:     email.ContactAmbiguous,
+		TrustZone:  leastPrivilegedZone(matches),
+		Candidates: candidates,
+	}, nil
+}
+
+// leastPrivilegedZone returns the lowest zone among the contacts, in
+// the hierarchy contacts.Policies declares. A zone the hierarchy does
+// not know ranks below every zone it does.
+func leastPrivilegedZone(matches []*contacts.Contact) string {
+	rank := make(map[string]int)
+	for i, policy := range contacts.Policies() {
+		rank[policy.Zone] = i
+	}
+	lowest := ""
+	lowestRank := -1
+	for _, c := range matches {
+		r, known := rank[c.TrustZone]
+		if !known {
+			return contacts.ZoneUnknown
+		}
+		if r > lowestRank {
+			lowestRank = r
+			lowest = c.TrustZone
+		}
+	}
+	if lowest == "" {
+		return contacts.ZoneUnknown
+	}
+	return lowest
+}
+
+// emailInteractionRecorder writes email exchanges onto contact records.
+// It implements email.InteractionRecorder over the contacts store's
+// newer-only update, so a replayed poll batch cannot move a contact's
+// last interaction backwards.
+type emailInteractionRecorder struct {
 	store *contacts.Store
 }
 
-// ResolveTrustZone returns the trust zone for the contact matching the
-// given email address. Returns ("", false, nil) if no contact is found.
-func (r *emailContactResolver) ResolveTrustZone(addr string) (string, bool, error) {
-	matches, err := r.store.FindByPropertyExact("EMAIL", addr)
+// RecordEmailInteraction records one exchange on the named contact.
+func (r *emailInteractionRecorder) RecordEmailInteraction(_ context.Context, in email.Interaction) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	id, err := uuid.Parse(in.ContactID)
 	if err != nil {
-		return "", false, err
+		return fmt.Errorf("contact id %q: %w", in.ContactID, err)
 	}
-	if len(matches) == 0 {
-		return "", false, nil
+	meta := &contacts.InteractionMeta{
+		Channel:   "email",
+		Direction: in.Direction,
+		Account:   in.Account,
+		MessageID: in.MessageID,
 	}
-	return matches[0].TrustZone, true, nil
+	return r.store.RecordInteractionIfNewer(id, in.At, meta)
 }
 
 // contactPhoneResolver resolves phone numbers to contact names via the

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
@@ -29,14 +30,15 @@ const (
 // IMAP UIDs against a persisted high-water mark. It is not a tool — it
 // runs as infrastructure code called by the scheduler task executor.
 type Poller struct {
-	service   *Service
-	manager   *Manager
-	state     *opstate.Store
-	logger    *slog.Logger
-	bus       *messages.Bus
-	contacts  ContactResolver
-	wakeLoop  messages.LoopWakeTarget
-	wakeReady bool
+	service      *Service
+	manager      *Manager
+	state        *opstate.Store
+	logger       *slog.Logger
+	bus          *messages.Bus
+	contacts     ContactResolver
+	interactions InteractionRecorder
+	wakeLoop     messages.LoopWakeTarget
+	wakeReady    bool
 }
 
 // PollerOption customizes poller behavior.
@@ -51,12 +53,19 @@ func WithMessageBus(bus *messages.Bus) PollerOption {
 	return func(p *Poller) { p.bus = bus }
 }
 
-// WithContactResolver lets the poller translate each sender into a
-// trust zone, stamped on every wake event's metadata as trust_zone.
-// Without a resolver every sender reads as a stranger — wakes still
-// fire, the model just won't see the trust-derived hint.
+// WithContactResolver lets the poller resolve each sender against the
+// contact directory, stamping the match (contact_id, contact_name,
+// is_owner, contact_status) and its trust_zone on every wake event.
+// Without a resolver every sender reads as unmatched — wakes still
+// fire, the model just won't see who is writing.
 func WithContactResolver(c ContactResolver) PollerOption {
 	return func(p *Poller) { p.contacts = c }
+}
+
+// WithInteractionRecorder lets the poller record an inbound
+// interaction on each matched contact after its wake is delivered.
+func WithInteractionRecorder(r InteractionRecorder) PollerOption {
+	return func(p *Poller) { p.interactions = r }
 }
 
 // WithDefaultWakeLoop overrides the wake target attached to email
@@ -397,7 +406,8 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 	for start := 0; start < len(ordered); start += batchSize {
 		end := min(start+batchSize, len(ordered))
 		chunk := ordered[start:end]
-		events, batchMaxUID := p.buildBatchEvents(accountName, chunk)
+		lookup := newIdentityLookup(ctx, p.contacts, p.logger)
+		events, batchMaxUID := p.buildBatchEvents(accountName, chunk, lookup)
 
 		target := p.wakeLoop
 		env, err := messages.NewEventSourceEnvelope(
@@ -413,6 +423,7 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 			return delivered, fmt.Errorf("deliver email wake envelope (batch %d-%d of %d): %w", start, end, len(ordered), err)
 		}
 		delivered += len(events)
+		p.recordInboundInteractions(ctx, accountName, chunk, lookup)
 
 		// Persist per-batch progress only when this batch's max UID
 		// actually exceeds the running mark — guards against
@@ -432,33 +443,39 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 // LoopEventPayloads and reports the highest UID observed in the chunk.
 // Every fact the handler needs to act on a message travels in the
 // event's metadata: the account and folder the UID belongs to, the
-// Message-ID, the sender's address and display name, and the trust
-// zone the contact directory assigns the address ("unknown" for a
-// stranger).
-func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messages.LoopEventPayload, uint32) {
+// Message-ID, the sender's address and display name, and the contact
+// directory's answer about the sender — contact_id, contact_name,
+// is_owner, contact_status, and the effective trust_zone ("unknown"
+// for a stranger). is_owner says the record is the operator's, not that
+// the operator wrote the message; a From header is a claim.
+func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope, lookup *identityLookup) ([]messages.LoopEventPayload, uint32) {
 	events := make([]messages.LoopEventPayload, 0, len(chunk))
 	var maxUID uint32
 	for _, env := range chunk {
-		zone, found := p.lookupTrustZone(env.From)
-		if !found {
-			zone = "unknown"
-		}
+		match := lookup.resolve(env.From)
 		if env.UID > maxUID {
 			maxUID = env.UID
 		}
 		metadata := map[string]string{
-			"account":      accountName,
-			"folder":       DefaultFolder,
-			"uid":          strconv.FormatUint(uint64(env.UID), 10),
-			"from":         env.From.String(),
-			"from_address": env.From.Key(),
-			"trust_zone":   zone,
+			"account":        accountName,
+			"folder":         DefaultFolder,
+			"uid":            strconv.FormatUint(uint64(env.UID), 10),
+			"from":           env.From.String(),
+			"from_address":   env.From.Key(),
+			"trust_zone":     match.TrustZone,
+			"contact_status": string(match.Status),
+			"is_owner":       "false",
 		}
 		if env.From.Name != "" {
 			metadata["from_name"] = env.From.Name
 		}
 		if env.MessageID != "" {
 			metadata["message_id"] = env.MessageID
+		}
+		if match.Binding != nil {
+			metadata["contact_id"] = match.Binding.ContactID
+			metadata["contact_name"] = match.Binding.ContactName
+			metadata["is_owner"] = strconv.FormatBool(match.Binding.IsOwner)
 		}
 		events = append(events, messages.LoopEventPayload{
 			Source:     "email_poll",
@@ -473,6 +490,47 @@ func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messa
 	return events, maxUID
 }
 
+// recordInboundInteractions notes, once per matched contact in a
+// delivered batch, that mail arrived from them: the newest message's
+// date wins, and the recorder ignores anything older than what it
+// already holds. Failures are logged and do not fail the poll — the
+// wake has already been delivered.
+func (p *Poller) recordInboundInteractions(ctx context.Context, accountName string, chunk []Envelope, lookup *identityLookup) {
+	if p.interactions == nil {
+		return
+	}
+	latest := make(map[string]Interaction)
+	for _, env := range chunk {
+		match := lookup.resolve(env.From)
+		if match.Binding == nil || match.Binding.ContactID == "" {
+			continue
+		}
+		at := env.Date
+		if at.IsZero() {
+			at = time.Now()
+		}
+		in, seen := latest[match.Binding.ContactID]
+		if !seen || at.After(in.At) {
+			latest[match.Binding.ContactID] = Interaction{
+				ContactID: match.Binding.ContactID,
+				At:        at,
+				Direction: DirectionInbound,
+				Account:   accountName,
+				MessageID: env.MessageID,
+			}
+		}
+	}
+	for _, in := range latest {
+		if err := p.interactions.RecordEmailInteraction(ctx, in); err != nil {
+			p.logger.Warn("recording inbound email interaction failed",
+				"account", accountName,
+				"contact_id", in.ContactID,
+				"error", err,
+			)
+		}
+	}
+}
+
 // setHighWaterMark persists the per-account cursor without consulting
 // prior state. The caller is responsible for monotonicity;
 // dispatchAccountBatches enforces that by tracking the running mark
@@ -482,29 +540,6 @@ func (p *Poller) setHighWaterMark(stateKey string, mark highWaterMark) error {
 		return fmt.Errorf("update high-water mark %q: %w", stateKey, err)
 	}
 	return nil
-}
-
-// lookupTrustZone returns the contact's trust zone for a sender. An
-// unconfigured resolver, a missing contact, or a lookup error all
-// return ("", false) — the caller renders that as the "unknown" zone.
-func (p *Poller) lookupTrustZone(from Address) (string, bool) {
-	if p.contacts == nil {
-		return "", false
-	}
-	addr := from.Key()
-	if addr == "" {
-		return "", false
-	}
-	zone, found, err := p.contacts.ResolveTrustZone(addr)
-	if err != nil {
-		p.logger.Warn("contact lookup failed for incoming email; treating as stranger",
-			"from", from.String(), "error", err)
-		return "", false
-	}
-	if !found {
-		return "", false
-	}
-	return zone, true
 }
 
 // filterSelfSent removes messages whose From is the account's own

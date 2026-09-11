@@ -13,16 +13,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
-// stubContacts implements ContactResolver from a fixed address→zone map.
-type stubContacts struct {
-	zones map[string]string
-}
-
-func (s stubContacts) ResolveTrustZone(addr string) (string, bool, error) {
-	zone, ok := s.zones[addr]
-	return zone, ok, nil
-}
-
 // recordingBus is a [messages.Bus] wired with a stub loop destination
 // that records every delivered envelope so tests can assert dispatch
 // shape without a live registry.
@@ -119,10 +109,10 @@ func TestPollerDispatchesPerMessageEvents(t *testing.T) {
 	}}}
 	mgr := NewManager(cfg, quietSlog())
 	bus, delivered := recordingBus()
-	contacts := stubContacts{zones: map[string]string{
-		"boss@example.com":   "admin",
-		"friend@example.com": "trusted",
-	}}
+	contacts := &stubContacts{
+		zones:  map[string]string{"boss@example.com": "admin", "friend@example.com": "trusted"},
+		owners: map[string]bool{"boss@example.com": true},
+	}
 	p := NewPoller(mgr, state, quietSlog(),
 		WithMessageBus(bus),
 		WithContactResolver(contacts),
@@ -167,6 +157,18 @@ func TestPollerDispatchesPerMessageEvents(t *testing.T) {
 	}
 	if byUID["101"].Metadata["trust_zone"] != "admin" || byUID["102"].Metadata["trust_zone"] != "trusted" || byUID["103"].Metadata["trust_zone"] != "unknown" {
 		t.Errorf("per-event trust zones wrong: %v", byUID)
+	}
+	if byUID["101"].Metadata["contact_status"] != "matched" || byUID["101"].Metadata["contact_id"] != "id-boss" || byUID["101"].Metadata["contact_name"] != "Boss" || byUID["101"].Metadata["is_owner"] != "true" {
+		t.Errorf("matched sender metadata wrong: %v", byUID["101"].Metadata)
+	}
+	if byUID["102"].Metadata["is_owner"] != "false" {
+		t.Errorf("a matched non-operator must say is_owner=false explicitly: %v", byUID["102"].Metadata)
+	}
+	if byUID["103"].Metadata["contact_status"] != "unmatched" || byUID["103"].Metadata["is_owner"] != "false" {
+		t.Errorf("stranger metadata wrong: %v", byUID["103"].Metadata)
+	}
+	if _, present := byUID["103"].Metadata["contact_id"]; present {
+		t.Error("a stranger must carry no contact_id")
 	}
 	if _, present := byUID["101"].Metadata["tag"]; present {
 		t.Error("the tag metadata key is retired")
@@ -381,7 +383,7 @@ func TestPollerEndToEnd(t *testing.T) {
 	t.Cleanup(mgr.Close)
 	state := testOpstate(t)
 	bus, delivered := recordingBus()
-	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus), WithContactResolver(stubContacts{zones: map[string]string{"alice@example.com": "trusted"}}))
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus), WithContactResolver(&stubContacts{zones: map[string]string{"alice@example.com": "trusted"}}))
 	ctx := context.Background()
 
 	preexisting := m.append("INBOX", rawMessage("old@example.com", "thane@example.com", "already there", "x"))
