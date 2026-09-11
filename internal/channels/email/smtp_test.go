@@ -109,7 +109,8 @@ func TestSendMailClassifiesAuthFailure(t *testing.T) {
 
 func TestSendMailHonorsContextDeadline(t *testing.T) {
 	host, port := hungListener(t)
-	cfg := SMTPConfig{Host: host, Port: port, Username: "a", Password: "b", StartTLS: true}
+	startTLS := true
+	cfg := SMTPConfig{Host: host, Port: port, Username: "a", Password: "b", StartTLS: &startTLS}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 

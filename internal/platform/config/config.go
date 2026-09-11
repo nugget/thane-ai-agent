@@ -38,7 +38,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -396,10 +395,10 @@ type Config struct {
 	// code review directly without an MCP forge server subprocess.
 	Forge ForgeConfig `yaml:"forge"`
 
-	// Email configures native IMAP email access. When configured, Thane
-	// can list, read, search, and manage email directly without an MCP
-	// email server subprocess.
-	Email email.Config `yaml:"email"`
+	// Email configures native IMAP and SMTP mailboxes. When configured,
+	// Thane reads, searches, files, and sends mail directly and polls
+	// each account for new messages.
+	Email EmailConfig `yaml:"email"`
 
 	// Identity configures contact identities for the agent and human operator.
 	Identity IdentityConfig `yaml:"identity"`

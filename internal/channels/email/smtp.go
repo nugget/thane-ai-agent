@@ -46,7 +46,8 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	_ = conn.SetDeadline(deadline)
 
 	var client *smtp.Client
-	if !cfg.StartTLS {
+	startTLS := cfg.StartTLSEnabled()
+	if !startTLS {
 		// Implicit TLS (port 465): the connection is TLS from the start.
 		tlsConn := tls.Client(conn, tlsConfigFor(cfg.Host))
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -75,7 +76,7 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 		return fail("EHLO", err)
 	}
 
-	if cfg.StartTLS {
+	if startTLS {
 		if ok, _ := client.Extension("STARTTLS"); !ok {
 			return tlsFail("STARTTLS", errors.New("server does not offer STARTTLS; refusing to send credentials in the clear"))
 		}

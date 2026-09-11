@@ -532,7 +532,8 @@ func TestClientBadCredentialsClassifyAsAuthentication(t *testing.T) {
 
 func TestClientCancellationReleasesAHungConnection(t *testing.T) {
 	host, port := hungListener(t)
-	c := NewClient("primary", IMAPConfig{Host: host, Port: port, Username: "a", Password: "b", TLS: false}, nil)
+	noTLS := false
+	c := NewClient("primary", IMAPConfig{Host: host, Port: port, Username: "a", Password: "b", TLS: &noTLS}, nil)
 	t.Cleanup(func() { _ = c.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

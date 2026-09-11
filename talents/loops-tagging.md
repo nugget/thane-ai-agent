@@ -82,7 +82,10 @@ job:
 - **Forge curator** (release digest, PR queue dashboard) — `forge`
   plus `documents` for the output doc.
 - **Email triage loop** — `email`. Add `contacts` if the loop should
-  ground claims in person records. Escalation is not a tag-add
+  ground claims in person records. On a multi-account site, bind the
+  loop to its mailbox with `bindings: {email_account: "<name>"}` so an
+  omitted `account` resolves correctly and other accounts are refused
+  by name. Escalation is not a tag-add
   decision: every loop already has `request_core_attention` from the
   core tool set, and that is the path. The `notifications` tag holds
   the human-egress tools the core loop calls *after* it decides to

@@ -74,28 +74,6 @@ func addr(s string) Address {
 	return a
 }
 
-// TestSenderTag pins the contacts-zone → wake-tag mapping documented
-// on senderTag. A new trust zone added to the contacts model defaults
-// to "stranger" instead of silently promoting senders.
-func TestSenderTag(t *testing.T) {
-	cases := []struct {
-		zone string
-		want string
-	}{
-		{"admin", "owner"},
-		{"household", "household"},
-		{"trusted", "trusted"},
-		{"known", "known"},
-		{"", "stranger"},
-		{"newzone", "stranger"},
-	}
-	for _, tc := range cases {
-		if got := senderTag(tc.zone); got != tc.want {
-			t.Errorf("senderTag(%q) = %q, want %q", tc.zone, got, tc.want)
-		}
-	}
-}
-
 func TestParseHighWaterMark(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -127,12 +105,12 @@ func TestParseHighWaterMark(t *testing.T) {
 	}
 }
 
-// TestPollerDispatchesPerMessageEventsWithTags pins the per-message
-// dispatch shape: each new IMAP message becomes one LoopEventPayload,
-// the envelope's wake_loop.Tags is the deduplicated union of
-// trust-zone-derived sender tags, and the envelope is delivered to the
+// TestPollerDispatchesPerMessageEvents pins the per-message dispatch
+// shape: each new IMAP message becomes one LoopEventPayload whose
+// metadata carries account, folder, uid, sender, and trust zone, no
+// per-wake tags are stamped, and the envelope is delivered to the
 // configured wake target (default: DefaultHandlerLoopName).
-func TestPollerDispatchesPerMessageEventsWithTags(t *testing.T) {
+func TestPollerDispatchesPerMessageEvents(t *testing.T) {
 	state := testOpstate(t)
 	cfg := Config{Accounts: []AccountConfig{{
 		Name:        "personal",
@@ -179,20 +157,25 @@ func TestPollerDispatchesPerMessageEventsWithTags(t *testing.T) {
 	if len(payload.Events) != 3 {
 		t.Fatalf("event count in envelope = %d, want 3", len(payload.Events))
 	}
-	tagSet := map[string]bool{}
-	for _, tag := range payload.Tags {
-		tagSet[tag] = true
-	}
-	if !tagSet["owner"] || !tagSet["trusted"] || !tagSet["stranger"] {
-		t.Errorf("payload.Tags = %v, want owner+trusted+stranger", payload.Tags)
+	if len(payload.Tags) != 0 {
+		t.Errorf("the poller must stamp no per-wake tags (identity rides in metadata), got %v", payload.Tags)
 	}
 
 	byUID := map[string]messages.LoopEventPayload{}
 	for _, ev := range payload.Events {
 		byUID[ev.Metadata["uid"]] = ev
 	}
-	if byUID["101"].Metadata["tag"] != "owner" || byUID["102"].Metadata["tag"] != "trusted" || byUID["103"].Metadata["tag"] != "stranger" {
-		t.Errorf("per-event tags wrong: %v", byUID)
+	if byUID["101"].Metadata["trust_zone"] != "admin" || byUID["102"].Metadata["trust_zone"] != "trusted" || byUID["103"].Metadata["trust_zone"] != "unknown" {
+		t.Errorf("per-event trust zones wrong: %v", byUID)
+	}
+	if _, present := byUID["101"].Metadata["tag"]; present {
+		t.Error("the tag metadata key is retired")
+	}
+	if byUID["102"].Metadata["from_name"] != "Friend" {
+		t.Errorf("from_name = %q", byUID["102"].Metadata["from_name"])
+	}
+	if _, present := byUID["101"].Metadata["from_name"]; present {
+		t.Error("from_name must be omitted when the header carries no display name")
 	}
 	// The lookup key is the lowercase bare address even when the
 	// header spelled it with a name and mixed case.

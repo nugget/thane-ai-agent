@@ -45,17 +45,24 @@ See [MQTT](../operating/mqtt.md) for setup details.
 
 ## Email Polling
 
-Scheduled IMAP checks with high-water mark tracking. The scheduler fires a
-polling task at a configured interval. The poller checks for messages with
-UIDs greater than the stored high-water mark — only new messages trigger
-agent wakes.
+The `email-poller` service loop checks every configured account's INBOX at
+`email.poll_interval` and dispatches each new message as one event to the
+`email-default-handler` loop (an event-driven built-in). Each event's
+metadata names the `account`, `folder`, and `uid` of the message, its
+`message_id`, the sender (`from`, `from_address`, `from_name`), and the
+sender's `trust_zone` from the contact directory (`unknown` for a
+stranger). The poller stamps no per-wake tags; identity rides in the
+event.
 
-High-water marks are stored in the operational state KV store (opstate),
-not in prompt context. This means the poller cannot be manipulated into
-re-processing old messages.
+High-water marks are stored in the operational state KV store (opstate)
+as `{uidvalidity, uid}` per account, not in prompt context. The poller
+cannot be manipulated into re-processing old messages, and a mailbox
+whose UIDVALIDITY changes reseeds silently instead of replaying.
+Messages the account itself sent (matching `default_from`) are skipped.
 
-Each email account is polled independently. Multiple accounts with different
-folders can be configured.
+Each account is polled independently; only INBOX is watched. The poller
+also refreshes the folder cache the Email Accounts context block renders,
+so a handler woken by the poller sees real folder names.
 
 ## Signal Messaging
 
