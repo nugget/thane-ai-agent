@@ -217,10 +217,11 @@ func (a *App) initChannels(s *newState) error {
 	// turns new mail into handler wakes.
 	if a.cfg.Email.Configured() {
 		svc, err := email.NewService(a.cfg.Email, email.ServiceDependencies{
-			State:      a.opStore,
-			MessageBus: a.messageBus,
-			Contacts:   &emailContactResolver{store: contactStore},
-			Logger:     a.logger,
+			State:        a.opStore,
+			MessageBus:   a.messageBus,
+			Contacts:     a.contactBindingResolver,
+			Interactions: &emailInteractionRecorder{store: contactStore},
+			Logger:       a.logger,
 		})
 		if err != nil {
 			return fmt.Errorf("create email service: %w", err)

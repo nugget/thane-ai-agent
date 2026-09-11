@@ -1398,6 +1398,59 @@ func TestUpdateLastInteraction_NotFound(t *testing.T) {
 	}
 }
 
+// TestRecordInteractionIfNewer pins the poller-facing update: a newer
+// timestamp lands, an older one is a silent no-op, neither touches
+// updated_at, and a missing contact is an error rather than silence.
+func TestRecordInteractionIfNewer(t *testing.T) {
+	store := newTestStore(t)
+	created, err := store.Upsert(&Contact{FormattedName: "Newer Test", Kind: "individual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	if err := store.RecordInteractionIfNewer(created.ID, first, &InteractionMeta{Channel: "email", Direction: "inbound", Account: "primary", MessageID: "a@example.com"}); err != nil {
+		t.Fatalf("first record: %v", err)
+	}
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LastInteraction.Equal(first) || got.LastInteractionMeta == nil || got.LastInteractionMeta.Direction != "inbound" || got.LastInteractionMeta.Account != "primary" || got.LastInteractionMeta.MessageID != "a@example.com" {
+		t.Errorf("after first record: %v %+v", got.LastInteraction, got.LastInteractionMeta)
+	}
+	if !got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("updated_at moved from %v to %v; an observed interaction is not an edit", before.UpdatedAt, got.UpdatedAt)
+	}
+
+	// Older: no-op, and the newer meta survives.
+	if err := store.RecordInteractionIfNewer(created.ID, first.Add(-time.Hour), &InteractionMeta{Channel: "email", Direction: "inbound", MessageID: "old@example.com"}); err != nil {
+		t.Fatalf("older record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if !got.LastInteraction.Equal(first) || got.LastInteractionMeta.MessageID != "a@example.com" {
+		t.Errorf("older timestamp must not regress the record: %v %+v", got.LastInteraction, got.LastInteractionMeta)
+	}
+
+	// Newer: lands.
+	later := first.Add(time.Hour)
+	if err := store.RecordInteractionIfNewer(created.ID, later, &InteractionMeta{Channel: "email", Direction: "outbound"}); err != nil {
+		t.Fatalf("later record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if !got.LastInteraction.Equal(later) || got.LastInteractionMeta.Direction != "outbound" {
+		t.Errorf("newer timestamp must land: %v %+v", got.LastInteraction, got.LastInteractionMeta)
+	}
+
+	if err := store.RecordInteractionIfNewer(uuid.New(), later, nil); err == nil {
+		t.Error("a missing contact must be an error")
+	}
+}
+
 func TestForeignKeysEnabled(t *testing.T) {
 	store := newTestStore(t)
 

@@ -49,7 +49,7 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
-	return marshalResponse(newListResponse(acct.Name, listed, time.Now()))
+	return marshalResponse(newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()))
 }
 
 // HandleRead reads a single message by UID.
@@ -70,8 +70,9 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
+	auth := t.service.authenticate(ctx, acct.Name, msg)
 	t.service.recordOp("email_read", acct.Name, folder, strconv.FormatUint(uint64(uid), 10))
-	return renderRead(newReadResponse(acct.Name, folder, msg, markSeen, time.Now()), msg)
+	return renderRead(newReadResponse(acct.Name, folder, msg, markSeen, auth, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()), msg)
 }
 
 // HandleFolders lists all folders with roles and counts.
@@ -137,7 +138,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", err
 	}
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
-	return marshalResponse(newListResponse(acct.Name, found, now))
+	return marshalResponse(newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now))
 }
 
 // parseSearchDate accepts the shapes a model plausibly sends for a

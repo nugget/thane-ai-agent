@@ -188,6 +188,33 @@ IMAP high-water mark stored in opstate KV. The poller cannot re-process old
 messages regardless of what the model requests. UID tracking is in Go, not
 in prompt context.
 
+### Email Sender Identity
+
+**Status: Implemented (resolution); seams only (authentication)**
+
+Every address the email tools render, and every sender the poller wakes a
+handler for, is resolved against the contact directory in Go and tagged
+with the result: `matched` with the contact and its trust zone,
+`unmatched`, `ambiguous` when several records share the address (the least
+privileged zone governs, and no candidate counts as the operator), or
+`lookup_failed` when the store could not answer. The model never infers a
+person from a display name. The same resolver serves Signal, so identity
+is one answer across channels.
+
+A From header is a claim, not a proof. A message from the operator's
+address is tagged `is_owner: true` because the *record* is the operator's,
+and nothing about that tag says the operator wrote it. The `authentication`
+field on every read result is the only place a message can be called
+verified, and today it always reads `absent`: no authenticator is
+configured, so nothing was checked and no suspicion attaches. When S/MIME
+and OpenPGP verification ship (#317), `verified` will be true only when
+Thane itself validated a signature with a key the directory holds for the
+matching contact. Domain-level results (DKIM, DMARC) and headers a mail
+server wrote can never set it. The keys that would make such verification
+possible are operator custody: `contact_save` refuses `KEY` and
+`X-THANE-KEY-*` properties, so a message cannot install the key that
+verifies its own sender.
+
 ## Known Behavioral Gaps
 
 These are areas where safety currently depends on prompt compliance. Each is

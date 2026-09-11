@@ -10,34 +10,67 @@ import (
 
 // The response structs in this file are the model-facing contract of
 // the email tools. Every result names the account and folder it was
-// resolved in beside every UID, because UIDs are scoped to both.
-// Timestamps render as deltas, empty lists render as empty arrays with
-// an explicit count, and mutations carry an action word.
+// resolved in beside every UID, because UIDs are scoped to both. Every
+// address carries the directory's answer about who it is. Timestamps
+// render as deltas, empty lists render as empty arrays with an explicit
+// count, and mutations carry an action word.
 
-// addressView is one mailbox as rendered to the model.
+// contactView is the matched directory record behind an address.
+type contactView struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+
+	// IsOwner means this contact record is the operator's. It says
+	// nothing about whether the operator wrote a given message; a From
+	// header is a claim until an Authentication verifies it.
+	IsOwner bool `json:"is_owner,omitempty"`
+}
+
+// addressView is one mailbox as rendered to the model, with the
+// directory's answer attached so the model never has to look the
+// address up itself or infer a person from a display name.
 type addressView struct {
 	Name    string `json:"name,omitempty"`
 	Address string `json:"address"`
+
+	// TrustZone is the effective zone: the contact's when matched, the
+	// least privileged candidate's when ambiguous, "unknown" otherwise.
+	TrustZone string `json:"trust_zone"`
+
+	// Contact is the matched record, or null when the status is
+	// anything but matched.
+	Contact *contactView `json:"contact"`
+
+	ContactStatus ContactStatus      `json:"contact_status"`
+	Candidates    []ContactCandidate `json:"candidates,omitempty"`
 }
 
-func viewAddress(a Address) *addressView {
+func viewAddress(a Address, lookup *identityLookup) *addressView {
 	if a.IsZero() {
 		return nil
 	}
-	view := addressView(a)
+	view := addressView{Name: a.Name, Address: a.Address, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched}
+	if lookup != nil {
+		match := lookup.resolve(a)
+		view.TrustZone = match.TrustZone
+		view.ContactStatus = match.Status
+		view.Candidates = match.Candidates
+		if match.Binding != nil {
+			view.Contact = &contactView{ID: match.Binding.ContactID, Name: match.Binding.ContactName, IsOwner: match.Binding.IsOwner}
+		}
+	}
 	return &view
 }
 
-func viewAddresses(list []Address) []addressView {
+func viewAddresses(list []Address, lookup *identityLookup) []addressView {
 	if len(list) == 0 {
 		return nil
 	}
 	out := make([]addressView, 0, len(list))
 	for _, a := range list {
-		if a.IsZero() {
-			continue
+		if v := viewAddress(a, lookup); v != nil {
+			out = append(out, *v)
 		}
-		out = append(out, addressView(a))
 	}
 	return out
 }
@@ -65,7 +98,7 @@ type listResponse struct {
 	Messages     []messageSummaryView `json:"messages"`
 }
 
-func newListResponse(account string, listed ListResult, now time.Time) listResponse {
+func newListResponse(account string, listed ListResult, lookup *identityLookup, now time.Time) listResponse {
 	resp := listResponse{
 		Account:      account,
 		Folder:       listed.Folder,
@@ -77,9 +110,9 @@ func newListResponse(account string, listed ListResult, now time.Time) listRespo
 	for _, env := range listed.Envelopes {
 		resp.Messages = append(resp.Messages, messageSummaryView{
 			UID:       env.UID,
-			From:      viewAddress(env.From),
-			To:        viewAddresses(env.To),
-			Cc:        viewAddresses(env.Cc),
+			From:      viewAddress(env.From, lookup),
+			To:        viewAddresses(env.To, lookup),
+			Cc:        viewAddresses(env.Cc, lookup),
 			Subject:   env.Subject,
 			Date:      deltaOrEmpty(env.Date, now),
 			MessageID: env.MessageID,
@@ -93,56 +126,58 @@ func newListResponse(account string, listed ListResult, now time.Time) listRespo
 // readResponse is the header object of an email_read result; the body
 // follows it after a separator line.
 type readResponse struct {
-	Account       string        `json:"account"`
-	Folder        string        `json:"folder"`
-	UID           uint32        `json:"uid"`
-	MessageID     string        `json:"message_id,omitempty"`
-	InReplyTo     []string      `json:"in_reply_to,omitempty"`
-	References    []string      `json:"references,omitempty"`
-	From          *addressView  `json:"from,omitempty"`
-	To            []addressView `json:"to,omitempty"`
-	Cc            []addressView `json:"cc,omitempty"`
-	ReplyTo       []addressView `json:"reply_to,omitempty"`
-	Subject       string        `json:"subject"`
-	Date          string        `json:"date,omitempty"`
-	Flags         []string      `json:"flags,omitempty"`
-	Size          uint32        `json:"size"`
-	MarkedSeen    bool          `json:"marked_seen"`
-	BodySource    string        `json:"body_source,omitempty"`
-	BodyTruncated bool          `json:"body_truncated,omitempty"`
-	RawTruncated  bool          `json:"raw_truncated,omitempty"`
-	Attachments   []Attachment  `json:"attachments"`
+	Account        string         `json:"account"`
+	Folder         string         `json:"folder"`
+	UID            uint32         `json:"uid"`
+	MessageID      string         `json:"message_id,omitempty"`
+	InReplyTo      []string       `json:"in_reply_to,omitempty"`
+	References     []string       `json:"references,omitempty"`
+	From           *addressView   `json:"from,omitempty"`
+	To             []addressView  `json:"to,omitempty"`
+	Cc             []addressView  `json:"cc,omitempty"`
+	ReplyTo        []addressView  `json:"reply_to,omitempty"`
+	Subject        string         `json:"subject"`
+	Date           string         `json:"date,omitempty"`
+	Flags          []string       `json:"flags,omitempty"`
+	Size           uint32         `json:"size"`
+	MarkedSeen     bool           `json:"marked_seen"`
+	BodySource     string         `json:"body_source,omitempty"`
+	BodyTruncated  bool           `json:"body_truncated,omitempty"`
+	RawTruncated   bool           `json:"raw_truncated,omitempty"`
+	Attachments    []Attachment   `json:"attachments"`
+	Authentication Authentication `json:"authentication"`
 }
 
 // bodySeparator divides the read result's JSON header from the body
 // text, the same shape forge uses for issue bodies.
 const bodySeparator = "\n\n---\n"
 
-func newReadResponse(account, folder string, msg *Message, markedSeen bool, now time.Time) readResponse {
+func newReadResponse(account, folder string, msg *Message, markedSeen bool, auth Authentication, lookup *identityLookup, now time.Time) readResponse {
 	attachments := msg.Attachments
 	if attachments == nil {
 		attachments = []Attachment{}
 	}
 	return readResponse{
-		Account:       account,
-		Folder:        folder,
-		UID:           msg.UID,
-		MessageID:     msg.MessageID,
-		InReplyTo:     msg.InReplyTo,
-		References:    msg.References,
-		From:          viewAddress(msg.From),
-		To:            viewAddresses(msg.To),
-		Cc:            viewAddresses(msg.Cc),
-		ReplyTo:       viewAddresses(msg.ReplyTo),
-		Subject:       msg.Subject,
-		Date:          deltaOrEmpty(msg.Date, now),
-		Flags:         msg.Flags,
-		Size:          msg.Size,
-		MarkedSeen:    markedSeen,
-		BodySource:    msg.BodySource,
-		BodyTruncated: msg.BodyTruncated,
-		RawTruncated:  msg.RawTruncated,
-		Attachments:   attachments,
+		Account:        account,
+		Folder:         folder,
+		UID:            msg.UID,
+		MessageID:      msg.MessageID,
+		InReplyTo:      msg.InReplyTo,
+		References:     msg.References,
+		From:           viewAddress(msg.From, lookup),
+		To:             viewAddresses(msg.To, lookup),
+		Cc:             viewAddresses(msg.Cc, lookup),
+		ReplyTo:        viewAddresses(msg.ReplyTo, lookup),
+		Subject:        msg.Subject,
+		Date:           deltaOrEmpty(msg.Date, now),
+		Flags:          msg.Flags,
+		Size:           msg.Size,
+		MarkedSeen:     markedSeen,
+		BodySource:     msg.BodySource,
+		BodyTruncated:  msg.BodyTruncated,
+		RawTruncated:   msg.RawTruncated,
+		Attachments:    attachments,
+		Authentication: auth,
 	}
 }
 
@@ -190,15 +225,17 @@ type moveResponse struct {
 
 // sendResponse is the result of email_send and email_reply.
 type sendResponse struct {
-	Disposition    string   `json:"disposition"`
-	Account        string   `json:"account"`
-	MessageID      string   `json:"message_id"`
-	To             []string `json:"to"`
-	Cc             []string `json:"cc"`
-	BccCount       int      `json:"bcc_count"`
-	Subject        string   `json:"subject"`
-	InReplyTo      string   `json:"in_reply_to,omitempty"`
-	SentFolderCopy string   `json:"sent_folder_copy,omitempty"`
+	Disposition    string                `json:"disposition"`
+	Account        string                `json:"account"`
+	MessageID      string                `json:"message_id"`
+	To             []string              `json:"to"`
+	Cc             []string              `json:"cc"`
+	BccCount       int                   `json:"bcc_count"`
+	Subject        string                `json:"subject"`
+	InReplyTo      string                `json:"in_reply_to,omitempty"`
+	SentFolderCopy string                `json:"sent_folder_copy,omitempty"`
+	Signed         bool                  `json:"signed"`
+	Recipients     []RecipientAssessment `json:"recipients"`
 }
 
 // marshalResponse renders a result as compact JSON.
