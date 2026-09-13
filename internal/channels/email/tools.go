@@ -385,9 +385,13 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	}
 
 	if result.DestUIDsKnown {
-		return fmt.Sprintf("Moved %d message(s) from %s to %s; new UIDs in %s: %v", len(result.UIDs), result.SourceFolder, result.Destination, result.Destination, result.DestUIDs), nil
+		msg := fmt.Sprintf("Moved %d message(s) from %s to %s; new UIDs in %s: %v", len(result.UIDs), result.SourceFolder, result.Destination, result.Destination, result.DestUIDs)
+		if missing := missingUIDs(opts.UIDs, result.UIDs); len(missing) > 0 {
+			msg += fmt.Sprintf("; %d requested UID(s) were not in %s and did not move: %v", len(missing), result.SourceFolder, missing)
+		}
+		return msg, nil
 	}
-	return fmt.Sprintf("Moved %d message(s) from %s to %s (new UIDs unknown; list %s to find them)", len(result.UIDs), result.SourceFolder, result.Destination, result.Destination), nil
+	return fmt.Sprintf("Moved the requested message(s) from %s to %s, but the server did not confirm which UIDs moved or their new UIDs; list %s to check", result.SourceFolder, result.Destination, result.Destination), nil
 }
 
 // sendEmail is the shared send path for HandleSend and HandleReply.

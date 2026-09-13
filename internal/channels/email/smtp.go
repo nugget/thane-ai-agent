@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/smtp"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -24,13 +23,13 @@ import (
 func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, recipients []string, msg []byte) error {
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	fail := func(op string, err error) error {
-		return &DeliveryError{Account: account, Op: op, Kind: classifySMTPError(err), Err: err}
+		return &DeliveryError{Account: account, Op: op, Kind: deliveryKind(ctx, classifySMTPError(err)), Err: err}
 	}
 	connectFail := func(op string, err error) error {
-		return &DeliveryError{Account: account, Op: op, Kind: DeliveryConnect, Err: err}
+		return &DeliveryError{Account: account, Op: op, Kind: deliveryKind(ctx, DeliveryConnect), Err: err}
 	}
 	tlsFail := func(op string, err error) error {
-		return &DeliveryError{Account: account, Op: op, Kind: DeliveryTLS, Err: err}
+		return &DeliveryError{Account: account, Op: op, Kind: deliveryKind(ctx, DeliveryTLS), Err: err}
 	}
 
 	dialer := &net.Dialer{Timeout: dialTimeout}
@@ -38,6 +37,17 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	if err != nil {
 		return connectFail("dial SMTP "+addr, err)
 	}
+	// The deadline below bounds a stalled exchange; this watcher makes a
+	// cancelled context end it too, instead of waiting out the deadline.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stop:
+		}
+	}()
 	// One deadline for the whole exchange, derived from the caller.
 	deadline := time.Now().Add(defaultOpTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
@@ -67,11 +77,7 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	}
 	defer client.Close()
 
-	var fromDomain string
-	if sender, err := parseAddress(from); err == nil {
-		fromDomain = sender.Domain()
-	}
-	if err := client.Hello(heloName(fromDomain)); err != nil {
+	if err := client.Hello(heloName(conn.LocalAddr())); err != nil {
 		return fail("EHLO", err)
 	}
 
@@ -80,6 +86,12 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 			return tlsFail("STARTTLS", errors.New("server does not offer STARTTLS; refusing to send credentials in the clear"))
 		}
 		if err := client.StartTLS(tlsConfigFor(cfg.Host)); err != nil {
+			// A 454 is a temporary TLS outage the server expects to
+			// clear; anything else means the connection cannot be made
+			// secure.
+			if classifySMTPError(err) == DeliveryTransient {
+				return fail("STARTTLS", err)
+			}
 			return tlsFail("STARTTLS", err)
 		}
 	}
@@ -125,17 +137,29 @@ func sendMail(ctx context.Context, account string, cfg SMTPConfig, from string, 
 	return nil
 }
 
-// heloName is the name announced in EHLO, which the submission server
-// stamps into the Received header every recipient can read. It is the
-// sender's domain, already public in From and Message-ID, rather than
-// the machine's host name, which would leak the workstation's identity
-// to every correspondent. With no domain to announce it falls back to
-// the RFC 5321 address-literal form for the loopback address rather
-// than "localhost", which is what a misconfigured bot says.
-func heloName(domain string) string {
-	domain = strings.TrimSpace(domain)
-	if domain == "" || strings.ContainsAny(domain, " \t\r\n") || strings.EqualFold(domain, "localhost") {
-		return "[127.0.0.1]"
+// heloName is the EHLO argument: the address literal of the
+// connection's local end, which RFC 5321 accepts from a client without a
+// suitable host name. It identifies this connection honestly without
+// announcing the workstation's host name, which the submission server
+// would stamp into the Received header every recipient reads.
+func heloName(local net.Addr) string {
+	if tcp, ok := local.(*net.TCPAddr); ok && tcp.IP != nil && !tcp.IP.IsUnspecified() {
+		if ip4 := tcp.IP.To4(); ip4 != nil {
+			return "[" + ip4.String() + "]"
+		}
+		return "[IPv6:" + tcp.IP.String() + "]"
 	}
-	return domain
+	return "[127.0.0.1]"
+}
+
+// deliveryKind reports a failure the caller caused by cancelling as
+// cancelled, whatever the connection error looked like, since closing
+// the connection is how cancellation ends an exchange. An expired
+// deadline is not a cancellation: it keeps its own class, so a stalled
+// server still reads as a connect or transient failure worth a retry.
+func deliveryKind(ctx context.Context, kind DeliveryKind) DeliveryKind {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return DeliveryCancelled
+	}
+	return kind
 }

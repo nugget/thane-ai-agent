@@ -12,6 +12,16 @@ import (
 // pre-JSON contract and are replaced wholesale when the handlers move
 // to structured results; nothing outside the handlers calls them.
 
+// maxListOutput and maxReadOutput cap the prose results at the sizes
+// AGENTS.md sets for tool output: search results 16 KB, transcripts
+// 32 KB. maxSubjectOutput keeps one oversized header from filling a
+// list on its own.
+const (
+	maxListOutput    = 16 * 1024
+	maxReadOutput    = 32 * 1024
+	maxSubjectOutput = 1024
+)
+
 func formatEnvelopeList(listed ListResult) string {
 	now := time.Now()
 	var sb strings.Builder
@@ -21,17 +31,29 @@ func formatEnvelopeList(listed ListResult) string {
 		sb.WriteString(fmt.Sprintf("Found %d message(s) in %s:\n\n", len(listed.Envelopes), listed.Folder))
 	}
 
+	shown := 0
 	for _, env := range listed.Envelopes {
-		sb.WriteString(fmt.Sprintf("UID: %d\n", env.UID))
-		sb.WriteString(fmt.Sprintf("From: %s\n", env.From.String()))
-		sb.WriteString(fmt.Sprintf("Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("Date: %s\n", promptfmt.FormatDelta(env.Date, now)))
+		var block strings.Builder
+		block.WriteString(fmt.Sprintf("UID: %d\n", env.UID))
+		block.WriteString(fmt.Sprintf("From: %s\n", truncateUTF8(env.From.String(), maxSubjectOutput)))
+		block.WriteString(fmt.Sprintf("Subject: %s\n", truncateUTF8(env.Subject, maxSubjectOutput)))
+		block.WriteString(fmt.Sprintf("Date: %s\n", promptfmt.FormatDelta(env.Date, now)))
 
 		if len(env.Flags) > 0 {
-			sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(env.Flags, ", ")))
+			block.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(env.Flags, ", ")))
 		}
-		sb.WriteString(fmt.Sprintf("Size: %d bytes\n", env.Size))
-		sb.WriteString("\n")
+		block.WriteString(fmt.Sprintf("Size: %d bytes\n", env.Size))
+		block.WriteString("\n")
+		// Leave room for the marker below so the capped result still
+		// fits in maxListOutput.
+		if sb.Len()+block.Len() > maxListOutput-256 {
+			break
+		}
+		sb.WriteString(block.String())
+		shown++
+	}
+	if rest := len(listed.Envelopes) - shown; rest > 0 {
+		sb.WriteString(fmt.Sprintf("[%d more message(s) not shown: the result is capped at %d KB; narrow the search or lower limit]\n", rest, maxListOutput/1024))
 	}
 
 	return sb.String()
@@ -71,6 +93,9 @@ func formatMessage(msg *Message) string {
 			}
 			sb.WriteString(fmt.Sprintf("  - %s (%s, %d bytes, %s)\n", name, att.ContentType, att.Size, kind))
 		}
+		if msg.AttachmentsOmitted > 0 {
+			sb.WriteString(fmt.Sprintf("  - and %d more part(s) not listed\n", msg.AttachmentsOmitted))
+		}
 	}
 	sb.WriteString("\n---\n\n")
 
@@ -86,8 +111,16 @@ func formatMessage(msg *Message) string {
 	if msg.BodyTruncated {
 		sb.WriteString(fmt.Sprintf("\n\n[truncated — body exceeds %d KB]", maxBodySize/1024))
 	}
+	if msg.RawTruncated {
+		sb.WriteString(fmt.Sprintf("\n\n[message exceeds %d MB; parts past the cut were not parsed, so the attachment list may be incomplete]", maxRawMessageSize/(1024*1024)))
+	}
 
-	return sb.String()
+	out := sb.String()
+	if len(out) > maxReadOutput {
+		marker := fmt.Sprintf("\n\n[output capped at %d KB]", maxReadOutput/1024)
+		out = truncateUTF8(out, maxReadOutput-len(marker)) + marker
+	}
+	return out
 }
 
 func formatFolderList(folders []Folder) string {

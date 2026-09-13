@@ -21,8 +21,8 @@ import (
 
 // dialTimeout bounds the TCP connect and TLS handshake of a new IMAP
 // or SMTP connection when the caller's context has no earlier
-// deadline.
-const dialTimeout = 30 * time.Second
+// deadline. It is a variable so tests can shrink it.
+var dialTimeout = 30 * time.Second
 
 // defaultOpTimeout bounds one IMAP operation when the caller's context
 // has no earlier deadline: when it expires the watchdog closes the
@@ -109,6 +109,9 @@ func (c *Client) Connect(ctx context.Context) error {
 // same rule sendMail applies to SMTP.
 func (c *Client) connectLocked(ctx context.Context) error {
 	c.closeLocked()
+	// A fresh connection starts with no watchdog verdict: a flag left by
+	// the stale connection's NOOP must not classify this one's failures.
+	c.watchdogFired = false
 
 	addr := net.JoinHostPort(c.cfg.Host, strconv.Itoa(c.cfg.Port))
 	c.logger.Debug("connecting to IMAP server", "host", c.cfg.Host, "port", c.cfg.Port, "tls", c.cfg.TLS)
@@ -126,7 +129,11 @@ func (c *Client) connectLocked(ctx context.Context) error {
 	var client *imapclient.Client
 	if c.cfg.TLS {
 		tlsConn := tls.Client(raw, opts.TLSConfig)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
+		// The dialer's timeout covers only the TCP connect; bound the
+		// handshake the way the STARTTLS path is bounded, so a peer that
+		// accepts and never speaks TLS cannot hold the account.
+		err = withConnBound(ctx, raw, func() error { return tlsConn.HandshakeContext(ctx) })
+		if err != nil {
 			_ = raw.Close()
 			return c.wrap(ctx, "TLS handshake with "+addr, "", 0, err)
 		}
@@ -186,7 +193,12 @@ func (c *Client) ensureConnected(ctx context.Context) error {
 			if err == nil {
 				return nil
 			}
-			c.logger.Debug("IMAP connection stale, reconnecting", "host", c.cfg.Host, "error", err)
+			if ctx.Err() != nil {
+				// The caller gave up; say so rather than reconnecting on a
+				// context that can no longer carry the new session.
+				return c.wrap(ctx, "IMAP operation", "", 0, err)
+			}
+			c.logger.Debug("IMAP connection stale, reconnecting", "host", c.cfg.Host, "error", err, "timed_out", c.watchdogFired)
 		}
 	}
 	return c.connectLocked(ctx)

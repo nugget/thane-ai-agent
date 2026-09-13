@@ -48,7 +48,7 @@ func (r *Registry) registerEmailTools() {
 
 	r.Register(&Tool{
 		Name:        "email_read",
-		Description: "Read a single email by its UID. Returns full headers and body content. Get UIDs from email_list or email_search results.",
+		Description: "Read a single email by its UID. Returns full headers and body content. Get UIDs from email_list or email_search results. Reading marks the message seen unless mark_seen is false.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -59,6 +59,10 @@ func (r *Registry) registerEmailTools() {
 				"folder": map[string]any{
 					"type":        "string",
 					"description": "Mailbox folder containing the message (default: INBOX)",
+				},
+				"mark_seen": map[string]any{
+					"type":        "boolean",
+					"description": "Mark the message seen as a side effect of reading (default: true). Pass false to read without changing its unseen state.",
 				},
 				"account": map[string]any{
 					"type":        "string",
@@ -105,11 +109,11 @@ func (r *Registry) registerEmailTools() {
 				},
 				"since": map[string]any{
 					"type":        "string",
-					"description": "Messages on or after this date (YYYY-MM-DD)",
+					"description": "Messages on or after this date: YYYY-MM-DD, an RFC 3339 instant, or a delta like -7d. IMAP compares dates, not times.",
 				},
 				"before": map[string]any{
 					"type":        "string",
-					"description": "Messages before this date (YYYY-MM-DD)",
+					"description": "Messages before this date: YYYY-MM-DD, an RFC 3339 instant, or a delta like -1d. IMAP compares dates, not times.",
 				},
 				"folder": map[string]any{
 					"type":        "string",
