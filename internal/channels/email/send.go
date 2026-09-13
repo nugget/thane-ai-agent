@@ -70,7 +70,9 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
 	if n := len(req.To) + len(req.Cc); n > maxRecipients {
-		return SendOutcome{}, fmt.Errorf("email has %d recipients in to and cc; one message may address at most %d. Split the audience, or ask the operator to send it from their own client", n, maxRecipients)
+		decision.Route = RouteRecipientLimit
+		decision.Reason = fmt.Sprintf("Email not sent: it addresses %d recipients in to and cc, and one message may address at most %d; split the audience, or ask the operator to send it from their own client.", n, maxRecipients)
+		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
 
 	bcc, err := s.auditCopy(req.To, req.Cc)

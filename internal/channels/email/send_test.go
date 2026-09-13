@@ -154,6 +154,8 @@ func TestFixedDeliveryModesAndRequestedDraft(t *testing.T) {
 	if len(smtp2.received()) != 0 {
 		t.Fatal("drafts mode must never reach SMTP")
 	}
+	block, _ := drafts.ContextProvider().TagContext(attendedCtx(), agentctxRequest())
+	mustContain(t, block, `"delivery":"drafts"`, `"can_send":false`)
 }
 
 // TestAccessLevelsGateEachTool pins access: organize refuses sends and

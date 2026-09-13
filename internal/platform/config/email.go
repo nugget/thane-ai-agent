@@ -278,9 +278,10 @@ func (a EmailAccountConfig) CanDraft() bool {
 }
 
 // CanDeliver reports whether the model may hand mail from this account
-// to SMTP itself: access is send and smtp is configured.
+// to SMTP itself: access is send, smtp is configured, and delivery is
+// not drafts, which holds every message whatever the credentials.
 func (a EmailAccountConfig) CanDeliver() bool {
-	return a.CanDraft() && a.SMTPConfigured()
+	return a.CanDraft() && a.SMTPConfigured() && a.DeliveryMode() != EmailDeliveryDrafts
 }
 
 // validEmailAccess is the set of access levels an operator may write.

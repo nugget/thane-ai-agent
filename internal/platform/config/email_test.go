@@ -232,6 +232,11 @@ func TestEmailAccountConfig_PolicyDefaults(t *testing.T) {
 	if readOnly.AccessLevel() != EmailAccessOrganize || readOnly.CanDraft() || readOnly.CanDeliver() {
 		t.Errorf("imap-only account defaults: access=%s draft=%v deliver=%v", readOnly.AccessLevel(), readOnly.CanDraft(), readOnly.CanDeliver())
 	}
+	draftsOnly := withSMTP
+	draftsOnly.Policy.Delivery = EmailDeliveryDrafts
+	if !draftsOnly.CanDraft() || draftsOnly.CanDeliver() {
+		t.Error("a drafts-delivery account can draft but must not claim it can hand mail to SMTP")
+	}
 	held := withSMTP
 	held.Policy.Access = EmailAccessOrganize
 	if held.CanDraft() || held.CanDeliver() {

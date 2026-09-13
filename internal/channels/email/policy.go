@@ -66,6 +66,10 @@ const (
 
 	// RouteNoSMTP: the decision was to send but the account cannot.
 	RouteNoSMTP = "no_smtp"
+
+	// RouteRecipientLimit: to and cc together name more addresses than
+	// one message may carry.
+	RouteRecipientLimit = "recipient_limit"
 )
 
 // Decision is the gate's complete account of one outbound message. It

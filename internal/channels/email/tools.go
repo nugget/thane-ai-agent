@@ -329,7 +329,7 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	if err := t.service.requireOrganize(acct, "email_move"); err != nil {
 		return "", err
 	}
-	if acct.Config.CanDraft() && opts.Destination == t.service.draftsFolder(ctx, acct) {
+	if opts.Destination == t.service.draftsFolder(ctx, acct) {
 		return "", fmt.Errorf("email_move cannot file mail into %q: it is account %q's drafts folder, which holds only messages Thane composed for the operator to send, and a moved message there would look like one of them. Pick another destination, or report the need", opts.Destination, acct.Name)
 	}
 

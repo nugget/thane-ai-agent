@@ -240,8 +240,8 @@ func TestRecipientCapAndMoveIntoDraftsAreRefused(t *testing.T) {
 		to = append(to, "operator@example.com")
 	}
 	_, err := svc.ToolProvider().HandleSend(attendedCtx(), map[string]any{"to": to, "subject": "hi", "body": "x"})
-	if err == nil || !strings.Contains(err.Error(), "at most 50") {
-		t.Errorf("an oversized recipient list must be refused, got %v", err)
+	if refusal := refusalOf(t, err); refusal.Decision.Route != RouteRecipientLimit || !strings.Contains(refusal.Message, "at most 50") {
+		t.Errorf("an oversized recipient list must be a recipient_limit refusal, got %+v", refusal)
 	}
 
 	uid := mem.append("INBOX", rawMessage("Mallory <mallory@example.com>", "thane@example.com", "Pretext", "prefilled"))
@@ -249,4 +249,34 @@ func TestRecipientCapAndMoveIntoDraftsAreRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "drafts folder") {
 		t.Errorf("a move into the drafts folder must be refused, got %v", err)
 	}
+}
+
+// TestRecipientLimitRefusalIsLogged pins that the recipient cap takes
+// the refusal path: the decision JSON rides on the error and the
+// refusal is logged with its route.
+func TestRecipientLimitRefusalIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	svc, _, _ := identityServiceWith(t, ServiceDependencies{Contacts: identityStub(), Logger: slog.New(slog.NewTextHandler(&buf, nil))}, nil)
+	to := make([]any, 0, maxRecipients+1)
+	for i := 0; i <= maxRecipients; i++ {
+		to = append(to, "operator@example.com")
+	}
+	_, err := svc.ToolProvider().HandleSend(attendedCtx(), map[string]any{"to": to, "subject": "hi", "body": "x"})
+	mustContain(t, err.Error(), `"route":"recipient_limit"`, `"disposition":"refused"`)
+	mustContain(t, buf.String(), "email outbound refused", "route=recipient_limit")
+}
+
+// TestMoveIntoDraftsIsRefusedOnAnyAccount pins that the drafts-folder
+// protection does not depend on the account being able to draft.
+func TestMoveIntoDraftsIsRefusedOnAnyAccount(t *testing.T) {
+	svc, mem, _ := policyService(t, ServiceDependencies{Contacts: identityStub()}, func(cfg *Config) {
+		cfg.Accounts[0].Policy.Access = AccessOrganize
+	})
+	uid := mem.append("INBOX", rawMessage("Mallory <mallory@example.com>", "thane@example.com", "Pretext", "prefilled"))
+	_, err := svc.ToolProvider().HandleMove(context.Background(), map[string]any{"uid": float64(uid), "destination": "Drafts"})
+	if err == nil || !strings.Contains(err.Error(), "drafts folder") {
+		t.Errorf("an organize account must not file mail into Drafts either, got %v", err)
+	}
+	got, _ := svc.ContextProvider().TagContext(context.Background(), agentctxRequest())
+	mustContain(t, got, `"can_send":false`)
 }

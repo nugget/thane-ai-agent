@@ -96,12 +96,12 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, access_note} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
 				"The whole result stays within 32 KB: a long body is cut to fit and body_truncated is true, to, cc, and reply_to list at most 25 addresses each with addresses_omitted counting the rest, and at most 50 attachments are described with attachments_omitted counting the rest; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
 				addressShapeDescription +
 				"authentication.verified is true only when Thane validated a signature with a key the directory holds for the sender; status absent means nothing was checked and carries no suspicion, failed means a signature did not validate, unavailable means a check could not complete. " +
-				"Reading marks the message seen unless mark_seen is false. " +
+				"Reading marks the message seen unless mark_seen is false or the account's access is read, in which case marked_seen is false and access_note says why. " +
 				"The UID must be given with the account and folder it was listed from; a UID the folder does not hold is an error naming both.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -181,7 +181,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Add or remove a flag on messages in one folder: seen, flagged, or answered. Provide uids (array of integers) or uid (single integer) " +
 				"from an email_list or email_search result in the same account and folder; add defaults to true. Returns JSON " +
 				"{action: flag_added|flag_removed, account, folder, flag, uids_affected, uids_not_found}. " +
-				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying.",
+				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying. An account whose access is read refuses this tool.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -277,7 +277,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"{action: moved, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known, uids_not_found}; " +
 				"when destination_uids_known is true, uids are the source UIDs the server confirmed moving, paired with destination_uids, and uids_not_found are requested UIDs the folder no longer held; " +
 				"when it is false the server confirmed nothing, and the destination must be listed to find the messages. " +
-				"A destination the account lacks is refused with the account's real folder list.",
+				"A destination the account lacks is refused with the account's real folder list, the account's drafts folder is never a destination, and an account whose access is read refuses this tool.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

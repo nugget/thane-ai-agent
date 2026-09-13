@@ -244,7 +244,8 @@ fit and `body_truncated` says so, address lists stop at 25 with
 `addresses_omitted` counting the rest, and at most 50 attachments are
 described with `attachments_omitted` counting the rest.
 Attachments are described, not downloaded. **Reading marks the message
-seen** unless you pass `mark_seen: false`, which matters when your
+seen** unless you pass `mark_seen: false` or the account's `access` is
+`read` (then `marked_seen` is false and `access_note` says why), which matters when your
 triage recipe is "list unseen, read, list unseen again". The UID
 **must** come with the account and folder it was listed from; a UID the
 folder does not hold is an error naming both.
@@ -352,8 +353,9 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   `decision.recipients` for each recipient's `reason`: a `known`
   contact to promote deliberately, a stranger to save deliberately,
   a duplicate to report, a `lookup_failed` to retry later, or a
-  denied domain to drop), or `inspector` (a Go-side review objected
-  to the message itself). A refusal is a decision, not a transient
+  denied domain to drop), `inspector` (a Go-side review objected
+  to the message itself), or `recipient_limit` (more than 50 addresses
+  in `to` and `cc` together). A refusal is a decision, not a transient
   error: change the recipient list or the message, or report it.
 
 When the result reports a refusal, the right move is usually
