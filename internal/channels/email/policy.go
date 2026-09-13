@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
-	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -155,24 +154,15 @@ type OutboundReview struct {
 }
 
 // attended reports whether the operator is present for this turn, which
-// decides where by_trust_zone delivery lands. A turn is attended only
-// when it is the operator's own message: one sent through Thane's
-// native API (the console and REST clients the operator drives; the
-// Ollama-compatible shim, which Home Assistant automations and voice
-// satellites call, does not count), or an inbound channel message in a
-// conversation bound to the operator's own contact. Poller wakes,
-// scheduled loops, and loops launched from the operator's conversation
-// are unattended even though they inherit the operator's binding,
-// because nobody typed the turn.
+// decides where by_trust_zone delivery lands. It is
+// [tools.OperatorAttended], the one predicate contact identity custody
+// also uses, so the two can never disagree about who is present: the
+// operator's own native-API message or their own inbound channel
+// message is attended, and poller wakes, scheduled loops, loops launched
+// from the operator's conversation, the Ollama-compatible shim, and
+// other people's conversations are not.
 func attended(ctx context.Context) bool {
-	switch tools.MessageOriginFromContext(ctx) {
-	case memory.OriginAPI:
-		return tools.HintsFromContext(ctx)["channel"] == "api"
-	case memory.OriginChannel:
-		binding := tools.ChannelBindingFromContext(ctx)
-		return binding != nil && binding.IsOwner
-	}
-	return false
+	return tools.OperatorAttended(ctx)
 }
 
 // gatingForZone reads the contacts package's send policy for a zone.

@@ -105,8 +105,10 @@ audiences and trust models are different.
   one with its recovery: ask the operator to assign a zone, report a
   duplicate, retry later, or drop the recipient. Only the operator
   can change a zone. A contact you create starts at `known`, which is
-  refused too, and adding a refused address to an existing contact
-  is forbidden. Nothing goes to the rest. Confirm recipients via
+  refused too, and outside the operator's own message `contact_save`
+  refuses to add an address to a contact above `known` or one an
+  elevated or operator contact already holds (see the refusal section
+  below). Nothing goes to the rest. Confirm recipients via
   `contact_lookup` before composing; the refusal after you've drafted
   the body is annoying and avoidable.
 - **Sent mail is irreversible; drafted mail is not.** There is no
@@ -377,14 +379,21 @@ When the result reports a refusal, the right move is usually
 `contact_lookup` to confirm what's actually in the directory (maybe
 the spelling differs, or an alias resolves elsewhere), then either
 revise the recipient list or tell the operator which recipient needs
-a zone. **Never use `contact_save` to clear a trust refusal.** A
-contact it creates starts at `known`, which the gate refuses too.
-Adding the refused address to an existing contact would get the send
-through today, because the gate trusts the record an address belongs
-to, and that is exactly why it is forbidden: it lends the contact's
-zone to whoever holds the address. A
-recipient who's `known` rather than `trusted` is information about the
-relationship; promoting them is the operator's trust-policy choice.
+a zone. **Never use `contact_save` to clear a trust refusal.** The
+gate trusts the record an address belongs to, so an address added to
+a contact lends that contact's zone to whoever holds it, and Go
+refuses the move: a contact `contact_save` creates starts at `known`,
+which the gate refuses too; outside the operator's own message,
+`contact_save` refuses to add an address to a contact above `known`;
+and in every turn it refuses an address an admin, household, trusted,
+or operator contact already holds. In the operator's own message the
+addition is allowed, but a send goes through only when that contact
+becomes the address's only holder at a zone the account sends to: a
+`known` contact that also holds the address keeps it at `known`. Make
+the addition only when the operator says the address belongs to that
+person, never because a refused send needs it. A recipient who's `known`
+rather than `trusted` is information about the relationship; promoting
+them is the operator's trust-policy choice.
 
 ## The threaded reply
 

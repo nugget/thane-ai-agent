@@ -219,7 +219,9 @@ matching contact. Domain-level results (DKIM, DMARC) and headers a mail
 server wrote can never set it. The keys that would make such verification
 possible are operator custody: `contact_save` refuses and `contact_import_vcf`
 drops `KEY` and `X-THANE-KEY-*` properties, so a message cannot install the key that
-verifies its own sender. The attended/unattended distinction the egress
+verifies its own sender. The addresses and numbers the resolver matches on
+are custody for the same reason; see
+[Contact Identity Custody](#contact-identity-custody). The attended/unattended distinction the egress
 gate reads comes from the same place: a turn counts as attended only when
 it is the operator's own message, sent through Thane's native API or
 written in a conversation bound to their own contact, never because a
@@ -227,6 +229,100 @@ message claimed to be from the operator. Loop wakes are never attended,
 even in a loop the operator launched from their own conversation, and
 neither is a call through the Ollama-compatible shim that Home Assistant
 automations and voice satellites use.
+
+### Contact Identity Custody
+
+**Status: Implemented**
+
+The resolvers above trust the record an address belongs to. An email
+address or Signal number lends its contact's trust zone to whoever writes
+from it, and on the operator's own contact it lends the operator's
+authority, because a channel conversation bound to that contact is
+attended. Which contact holds an address is therefore authority, not
+contact data, and Go keeps it with the operator the way it keeps trust
+zones and keys. The model-facing contact tools (`contact_save`,
+`contact_import_vcf`, `contact_forget`) enforce the rules below. CardDAV,
+`/v1/contacts`, and `thane init` write the store directly and keep full
+operator power.
+
+- **Custodied targets.** No model writer adds an `EMAIL`, `TEL`, or `IMPP`
+  value to an existing contact above `known` (a malformed zone counts as
+  above), or to the operator's own contact at any zone: the one
+  `identity.operator_contact_id` names, or the one the legacy owner name
+  resolves to. The operator's own message lifts this rule for
+  `contact_save` only. Attendance is `tools.OperatorAttended`, the same
+  predicate the egress gate reads, so the two cannot disagree about who is
+  present. `contact_import_vcf` never lifts it, because a vCard is content.
+- **Legacy operator name.** Under `identity.owner_contact_name` the
+  operator is whichever contact the name resolves to, so the app resolves
+  it once at startup through the channel resolver's cache and pins that
+  contact for custody and `contact_owner`; custody, `contact_owner` and
+  `IsOwner` then agree for the life of the process. In every turn,
+  `contact_save` refuses to create a contact, or set a nickname, that
+  carries the owner name on any contact but the operator's, and
+  `contact_import_vcf` leaves such a card or nickname out, because the
+  next resolution could pick the model's contact as the operator.
+- **Authority holders.** In every turn, no model writer adds a value that
+  another active contact already holds when that contact is above `known`
+  or is the operator's. Equivalence mirrors the resolver: email compares
+  case-insensitively, and a phone number is checked as `TEL` and as `IMPP`
+  `signal:`, with and without a leading `+`. A duplicate held only by
+  `known` contacts stays allowed, because it moves recognition between low
+  zones and never authority.
+- **Removal.** `contact_forget` refuses contacts above `known`, the
+  operator's own contact, and contacts bound to a Home Assistant person, in
+  every turn. It resolves the name once, deletes by ID only while the
+  contact still qualifies, and names what it removed.
+- **Fact keys.** A `contact_save` fact key must match
+  `^[A-Za-z][A-Za-z0-9_-]{0,63}$`. `KEY` and the whole `X-THANE-` namespace
+  are refused, and so is a value containing a control character. A key
+  carrying `.`, `;`, `:` or a line break would be emitted verbatim as a
+  vCard property name and decode as a different property, such as a live
+  `EMAIL` or a trust zone, on the operator's next CardDAV PUT. A key naming
+  a field the codec owns (`NOTE`, `TITLE`, `FN`, `BDAY` and the rest) is
+  refused too, because `ContactToCard` withholds such a row and the next
+  PUT deletes it. `contact_import_vcf` drops decoded properties whose names
+  fail the same grammar; go-vcard strips a single group, so `item1.EMAIL`
+  imports as `EMAIL` under the address rules.
+- **Values.** The go-vcard encoder escapes LF but writes CR raw, and a
+  client that reads a bare CR as a line ending would start a new property
+  mid-value. `contact_save` refuses a CR or other control character in
+  every argument (`note` and `ai_summary` keep plain line breaks), and
+  `contact_import_vcf` drops values that carry one.
+
+A `contact_save` refusal saves nothing and emits no contact mutation. It
+logs one warning, `contact identity custody refused`, with the contact ID,
+zone, rule, properties, holder ID, and the turn's request, conversation,
+and loop IDs. Import drops the refused values, keeps the rest of the card,
+logs the same warning (marked `dry_run` for a preview), and counts the drops
+in its result; its rows carry the turn's provenance under the source
+`contact_import_vcf`. A forget refusal logs the same warning with the
+contact ID, zone, rule, and the turn's request, conversation, and loop IDs. The save
+also re-reads the contact's trust zone and deleted state inside its
+transaction and aborts if either changed since the tool read the record, so
+a model save can no longer revert an operator's concurrent zone change or
+resurrect a deleted contact. Import writes each card in one transaction
+that repeats the same re-read and the holder and target checks, so an
+operator write that lands between the import's check and its write cannot
+give a value a second holder: a newly refused value is dropped and counted,
+and a card whose merge target changed zone or was deleted writes nothing
+and is counted as skipped.
+
+`ContactToCard` withholds any stored property whose name carries vCard
+syntax, a control character or U+2028 included, or is a field the codec
+owns (`FN`, `PHOTO`, `X-THANE-TRUST-ZONE`, `X-THANE-HA-PERSON`, and the
+rest). Such a row can predate these rules, be a `PHOTO` row stored through
+`/v1/contacts`, or arrive in the operator's own CardDAV PUT, because the
+decoder keeps a nested group as `B.EMAIL` and a vertical tab inside a name.
+CardDAV logs `contact properties withheld from CardDAV` with the contact ID
+and property names on every read of such a card, and the operator's next
+PUT of that card removes the rows. `ContactToCard` also rewrites every CR,
+and every other line break the encoder would emit raw, to an escaped LF, so
+a value stored before these rules cannot split a line either.
+
+The rules are forward-only. Addresses added to elevated contacts before
+they shipped keep matching, so reviewing them is the operator's job,
+through CardDAV or `/v1/contacts`.
 
 ## Known Behavioral Gaps
 

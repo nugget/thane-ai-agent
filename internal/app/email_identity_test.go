@@ -27,21 +27,23 @@ func newEmailIdentityStore(t *testing.T) *contacts.Store {
 	return store
 }
 
+// seedContact seeds a directory contact through the operator path, the
+// way CardDAV and /v1/contacts write: the record, its zone and its
+// address in one store write. Seeding a directory is operator action,
+// and contact_save refuses to give an address a second holder once one
+// carries authority.
 func seedContact(t *testing.T, store *contacts.Store, name, addr, zone string) *contacts.Contact {
 	t.Helper()
-	tools := contacts.NewTools(store, nil)
-	if _, err := tools.SaveContact(`{"name":"` + name + `","kind":"individual","facts":{"email":"` + addr + `"}}`); err != nil {
-		t.Fatalf("SaveContact %s: %v", name, err)
+	if zone == "" {
+		zone = contacts.ZoneKnown
 	}
-	c, err := store.FindByName(name)
+	c, err := store.UpsertWithProperties(&contacts.Contact{
+		FormattedName: name,
+		Kind:          "individual",
+		TrustZone:     zone,
+	}, []contacts.Property{{Property: "EMAIL", Value: addr}})
 	if err != nil {
-		t.Fatalf("FindByName %s: %v", name, err)
-	}
-	if zone != "" {
-		c.TrustZone = zone
-		if _, err := store.Upsert(c); err != nil {
-			t.Fatalf("Upsert zone: %v", err)
-		}
+		t.Fatalf("seed %s: %v", name, err)
 	}
 	return c
 }
