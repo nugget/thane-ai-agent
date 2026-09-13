@@ -264,3 +264,32 @@ func TestContactDirectoryFindingsClipPerField(t *testing.T) {
 		})
 	}
 }
+
+// TestLogContactDirectoryFindingsClipsFields pins that the boot Warn
+// clips the record name and the address the way the health row does, so
+// one oversized directory value cannot inflate the startup log.
+func TestLogContactDirectoryFindingsClipsFields(t *testing.T) {
+	store := newEmailIdentityStore(t)
+	// Two- and three-byte runes, so a cut that ignored rune boundaries
+	// would leave invalid UTF-8.
+	hugeName := strings.Repeat("é€", 60)
+	hugeAddress := "noreply+" + strings.Repeat("x", 300) + "@forge.example"
+	seedDirectoryRecord(t, store, hugeName, contacts.ZoneAdmin, hugeAddress)
+
+	capture := &auditLogCapture{}
+	logContactDirectoryFindings(context.Background(), store, slog.New(capture))
+	warns := capture.warns()
+	if len(warns) != 1 {
+		t.Fatalf("warns = %+v, want exactly one", warns)
+	}
+	got := warns[0].attrs
+	for _, key := range []string{"contact_name", "address"} {
+		v := got[key]
+		if len(v) > maxDirectoryFieldBytes || !utf8.ValidString(v) || !strings.HasSuffix(v, "…") {
+			t.Errorf("%s = %d bytes, valid UTF-8 %v; want a clipped value of at most %d bytes ending in …", key, len(v), utf8.ValidString(v), maxDirectoryFieldBytes)
+		}
+	}
+	if got["pattern"] != contacts.AutomatedNoReply || got["trust_zone"] != contacts.ZoneAdmin {
+		t.Errorf("clipping must leave the pattern and zone intact, got %+v", got)
+	}
+}

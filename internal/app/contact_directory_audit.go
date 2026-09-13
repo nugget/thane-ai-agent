@@ -79,7 +79,9 @@ func contactDirectoryFindingsSource(cfg *config.Config, store *contacts.Store) f
 
 // logContactDirectoryFindings emits one Warn per record above known
 // holding an automated-looking email address, at most
-// [maxContactDirectoryWarnings] of them followed by one summary. A
+// [maxContactDirectoryWarnings] of them followed by one summary, with
+// the record name and address each clipped to [maxDirectoryFieldBytes]
+// so one oversized directory value cannot inflate the boot log. A
 // store failure is logged and never fails boot; the health row reports
 // it again on every render.
 func logContactDirectoryFindings(ctx context.Context, store *contacts.Store, logger *slog.Logger) {
@@ -93,9 +95,9 @@ func logContactDirectoryFindings(ctx context.Context, store *contacts.Store, log
 	for _, f := range audit.Findings {
 		logger.Warn("contact record above known holds an automated-looking email address; its mail is read at known",
 			"contact_id", f.ContactID.String(),
-			"contact_name", f.Name,
+			"contact_name", clipDirectoryField(f.Name),
 			"trust_zone", f.TrustZone,
-			"address", f.Address,
+			"address", clipDirectoryField(f.Address),
 			"pattern", f.Pattern,
 			"read_as", contacts.ZoneKnown,
 			"remedy", contactDirectoryRemedy,
