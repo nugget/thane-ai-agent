@@ -205,7 +205,10 @@ func TestPollerDispatchesPerMessageEvents(t *testing.T) {
 // TestPollerNoBusAdvancesQuietly verifies the no-op-on-missing-bus
 // behavior: an event observed without a bus configured doesn't error,
 // just logs and continues.
-func TestPollerNoBusAdvancesQuietly(t *testing.T) {
+// TestPollerWithoutBusRefusesToAdvance pins the no-bus contract: new
+// mail with nowhere to deliver it is an error, so checkAccount leaves
+// the high-water mark alone and the next poll with a bus sees it.
+func TestPollerWithoutBusRefusesToAdvance(t *testing.T) {
 	state := testOpstate(t)
 	cfg := Config{Accounts: []AccountConfig{{
 		Name: "readonly",
@@ -214,14 +217,20 @@ func TestPollerNoBusAdvancesQuietly(t *testing.T) {
 	mgr := NewManager(cfg, quietSlog())
 	p := NewPoller(mgr, state, quietSlog())
 
-	sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", highWaterMark{}, []Envelope{
+	sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", highWaterMark{UIDValidity: 1, UID: 199}, []Envelope{
 		{UID: 200, From: addr("x@example.com")},
 	})
-	if err != nil {
-		t.Fatalf("dispatchAccountBatches without bus: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not dispatched") {
+		t.Fatalf("dispatch without a bus must fail, got %v", err)
 	}
 	if sent != 0 {
-		t.Errorf("delivered = %d, want 0 when bus is nil", sent)
+		t.Errorf("delivered = %d, want 0", sent)
+	}
+	if mark, _ := state.Get(pollNamespace, "readonly:INBOX"); mark != "" {
+		t.Errorf("high-water mark = %q; nothing may be recorded for undelivered mail", mark)
+	}
+	if sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", highWaterMark{}, nil); err != nil || sent != 0 {
+		t.Errorf("an empty window without a bus is not an error: %d, %v", sent, err)
 	}
 }
 

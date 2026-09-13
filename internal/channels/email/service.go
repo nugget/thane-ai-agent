@@ -19,15 +19,17 @@ import (
 const folderCacheMaxAge = 10 * time.Minute
 
 // ServiceDependencies supplies the runtime collaborators a [Service]
-// needs. Fields are optional unless stated: a service without a message
-// bus polls but cannot dispatch wakes, and one without a contact
-// resolver sends without trust gating.
+// needs. Fields are optional unless stated: a service without a contact
+// resolver sends without trust gating, and polling requires both a
+// state store and a message bus.
 type ServiceDependencies struct {
 	// State persists the poller's per-account high-water marks.
 	// Required when polling is enabled.
 	State *opstate.Store `json:"-"`
 
 	// MessageBus delivers new-mail wake envelopes to the handler loop.
+	// Required when polling is enabled: a poller that cannot deliver a
+	// wake must not advance past the mail it saw.
 	MessageBus *messages.Bus `json:"-"`
 
 	// Contacts resolves addresses to trust zones for the send gate and
@@ -80,8 +82,8 @@ type ResolvedAccount struct {
 // HealthProbe is one account's liveness check for connwatch: the
 // account name and a probe bound by the caller's context.
 type HealthProbe struct {
-	Account string
-	Probe   func(ctx context.Context) error
+	Account string                          `json:"account"`
+	Probe   func(ctx context.Context) error `json:"-"`
 }
 
 // NewService creates the email runtime from configuration and shared
@@ -112,10 +114,10 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 		if deps.State == nil {
 			return nil, fmt.Errorf("email polling is enabled but no operational state store was provided")
 		}
-		opts := []PollerOption{WithContactResolver(deps.Contacts)}
-		if deps.MessageBus != nil {
-			opts = append(opts, WithMessageBus(deps.MessageBus))
+		if deps.MessageBus == nil {
+			return nil, fmt.Errorf("email polling is enabled but no message bus was provided: new mail could not wake a handler. Provide a bus, or set email.poll_interval: 0 to disable polling")
 		}
+		opts := []PollerOption{WithContactResolver(deps.Contacts), WithMessageBus(deps.MessageBus)}
 		if deps.WakeTarget != nil {
 			opts = append(opts, WithDefaultWakeLoop(*deps.WakeTarget))
 		}
@@ -256,9 +258,9 @@ func (s *Service) recordOp(tool, account, folder, ref string) {
 
 // listFolders lists an account's folders and records the result in the
 // cache the context block renders from. Every successful LIST feeds the
-// cache — tool calls, the poller's refresh, and the error path that
-// lists folders to teach — so the block reflects the freshest listing
-// anyone made rather than depending on any one caller.
+// cache — email_folders, the poller's refresh, and the re-list a tool
+// makes after a folder-not-found failure — so the block reflects the
+// freshest listing anyone made rather than depending on any one caller.
 func (s *Service) listFolders(ctx context.Context, acct ResolvedAccount) ([]Folder, error) {
 	folders, err := acct.Client.ListFolders(ctx)
 	if err != nil {

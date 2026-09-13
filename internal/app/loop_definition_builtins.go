@@ -201,9 +201,9 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 				"1. Read event.metadata.account and event.metadata.folder. Pass both to every email tool call about this message — email_read, email_mark, email_move, email_reply. Omitting account resolves to the primary account, which is usually the wrong mailbox for a wake from another one.\n" +
 				"2. Decide depth from trust_zone: admin and household mail gets a direct, complete response; trusted mail gets considered action; known and unknown senders get a cheap classify-and-file pass and no reply unless the operator has asked for one.\n" +
 				"3. Read the message with email_read only when the subject and sender leave the action unclear.\n" +
-				"4. To file or trash a message, call email_folders for that account first and use one of the returned names exactly as destination; no tool creates folders and folders are not shared across accounts.\n" +
+				"4. To file or trash a message, use a folder name exactly as the Email Accounts block or email_folders lists it for that account; no tool creates folders and folders are not shared across accounts.\n" +
 				"5. Reply with email_reply (same account, folder, and uid) or send fresh mail with email_send; both are refused when a recipient is not a send-eligible contact, and a refusal is final for this wake — do not retry it or route around it.\n" +
-				"6. Bring anything that genuinely needs the operator's attention to them through the core loop; do not mail the operator to get their attention.",
+				"6. Bring anything that genuinely needs the operator's attention to them with request_core_attention; do not mail the operator to get their attention.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
 			// The email tag is the handler's permanent tool surface;

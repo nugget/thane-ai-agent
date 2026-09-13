@@ -117,11 +117,7 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 			SentFolder:  cfg.SentFolder,
 			Bound:       bound != "",
 		}
-		if cfg.DefaultFrom != "" {
-			if addr, err := parseAddress(cfg.DefaultFrom); err == nil {
-				view.Address = addr.Address
-			}
-		}
+		view.Address = accountAddress(cfg)
 		if snap, ok := p.service.cachedFolders(cfg.Name); ok {
 			view.Folders, view.FoldersTruncated = folderViews(snap.Folders)
 			view.FoldersAsOf = promptfmt.FormatDeltaOnly(snap.At, now)
@@ -158,6 +154,21 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 		return "", fmt.Errorf("marshal email context: %w", err)
 	}
 	return "### Email Accounts\n\n" + string(data) + "\n", nil
+}
+
+// accountAddress is the mailbox address the block shows for an
+// account: the default_from address when set, else the IMAP login when
+// it is itself an address, as it is on most read-only mailboxes.
+func accountAddress(cfg AccountConfig) string {
+	for _, candidate := range []string{cfg.DefaultFrom, cfg.IMAP.Username} {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if addr, err := parseAddress(candidate); err == nil && strings.Contains(addr.Address, "@") {
+			return addr.Address
+		}
+	}
+	return ""
 }
 
 // folderViews projects a listing for the block: selectable folders

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -38,7 +39,7 @@ func twoAccountService(t *testing.T) (*Service, *memIMAP, *memIMAP) {
 			},
 		},
 	}
-	svc, err := NewService(cfg, ServiceDependencies{State: testOpstate(t), Logger: quietSlog()})
+	svc, err := NewService(cfg, ServiceDependencies{State: testOpstate(t), MessageBus: messages.NewBus(nil), Logger: quietSlog()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -64,6 +65,10 @@ func TestNewServiceValidatesConfig(t *testing.T) {
 	_, err = NewService(Config{PollInterval: &interval, Accounts: []AccountConfig{{Name: "a", IMAP: IMAPConfig{Host: "h", Username: "u"}}}}, ServiceDependencies{})
 	if err == nil || !strings.Contains(err.Error(), "state") {
 		t.Fatalf("polling without state must be refused, got %v", err)
+	}
+	_, err = NewService(Config{PollInterval: &interval, Accounts: []AccountConfig{{Name: "a", IMAP: IMAPConfig{Host: "h", Username: "u"}}}}, ServiceDependencies{State: testOpstate(t)})
+	if err == nil || !strings.Contains(err.Error(), "message bus") {
+		t.Errorf("polling without a message bus must be refused, got %v", err)
 	}
 	// Polling off needs no state and no bus.
 	zero := 0

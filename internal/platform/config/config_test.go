@@ -2090,3 +2090,26 @@ func TestCompanionContactBindingValidation(t *testing.T) {
 		t.Errorf("rejection should name the account and value: %v", err)
 	}
 }
+
+// TestValidate_EmailBlockValidatedEvenWhenIncomplete pins that a
+// written but incomplete email block is reported rather than silently
+// disabled: an account missing its host, or a malformed bcc_owner with
+// no complete account, fails validation.
+func TestValidate_EmailBlockValidatedEvenWhenIncomplete(t *testing.T) {
+	cfg := Default()
+	cfg.Email.Accounts = []EmailAccountConfig{{Name: "personal", IMAP: EmailIMAPConfig{Username: "alice@example.com"}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "imap.host") {
+		t.Errorf("an account missing imap.host must fail validation, got %v", err)
+	}
+
+	cfg = Default()
+	cfg.Email.BccOwner = "not an address"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "bcc_owner") {
+		t.Errorf("a malformed bcc_owner must fail validation without any account, got %v", err)
+	}
+
+	cfg = Default()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("an absent email block must still validate: %v", err)
+	}
+}

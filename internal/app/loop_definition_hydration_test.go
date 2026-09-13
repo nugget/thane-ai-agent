@@ -541,3 +541,41 @@ func builtInContainerDefinitionSpecsForTest(cfg *config.Config) []looppkg.Spec {
 
 // ptrInt returns a pointer to v for optional integer config fields.
 func ptrInt(v int) *int { return &v }
+
+// TestValidateLoopBindings_EmailAccount pins the email_account binding
+// check at load: a real account hydrates, a misspelled one is refused
+// with text naming the loop, the key, the bad name, and the accounts
+// that exist, and a site without email refuses any email binding.
+func TestValidateLoopBindings_EmailAccount(t *testing.T) {
+	t.Parallel()
+
+	zero := 0
+	svc, err := emailcfg.NewService(emailcfg.Config{
+		PollInterval: &zero,
+		Accounts:     []emailcfg.AccountConfig{{Name: "primary", IMAP: emailcfg.IMAPConfig{Host: "imap.example.com", Username: "thane@example.com"}}},
+	}, emailcfg.ServiceDependencies{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	bound := func(account string) looppkg.Spec {
+		return looppkg.Spec{Name: "inbox-triage", Bindings: map[string]string{looppkg.BindingEmailAccount: account}}
+	}
+	a := &App{emailService: svc}
+	if err := a.validateLoopBindings(bound("primary")); err != nil {
+		t.Fatalf("a binding to a configured account must hydrate: %v", err)
+	}
+	err = a.validateLoopBindings(bound("ghost"))
+	if err == nil {
+		t.Fatal("a binding to an unknown account must be refused")
+	}
+	for _, want := range []string{"inbox-triage", looppkg.BindingEmailAccount, "ghost", "primary"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not mention %q", err, want)
+		}
+	}
+	if err := (&App{}).validateLoopBindings(bound("primary")); err == nil || !strings.Contains(err.Error(), "no email accounts are configured") {
+		t.Errorf("a site without email must refuse an email binding, got %v", err)
+	}
+}

@@ -161,9 +161,14 @@ func renderRead(header readResponse, msg *Message) (string, error) {
 
 // foldersResponse is the result of email_folders.
 type foldersResponse struct {
-	Account string   `json:"account"`
-	Count   int      `json:"count"`
-	Folders []Folder `json:"folders"`
+	Account string `json:"account"`
+
+	// Count is how many folders the result lists; Total is how many the
+	// account has. They differ only when Truncated is true.
+	Count     int      `json:"count"`
+	Total     int      `json:"total"`
+	Truncated bool     `json:"truncated"`
+	Folders   []Folder `json:"folders"`
 }
 
 // markResponse is the result of email_mark.
@@ -190,15 +195,19 @@ type moveResponse struct {
 
 // sendResponse is the result of email_send and email_reply.
 type sendResponse struct {
-	Disposition    string   `json:"disposition"`
-	Account        string   `json:"account"`
-	MessageID      string   `json:"message_id"`
-	To             []string `json:"to"`
-	Cc             []string `json:"cc"`
-	BccCount       int      `json:"bcc_count"`
-	Subject        string   `json:"subject"`
-	InReplyTo      string   `json:"in_reply_to,omitempty"`
-	SentFolderCopy string   `json:"sent_folder_copy,omitempty"`
+	Disposition string   `json:"disposition"`
+	Account     string   `json:"account"`
+	MessageID   string   `json:"message_id"`
+	To          []string `json:"to"`
+	Cc          []string `json:"cc"`
+	BccCount    int      `json:"bcc_count"`
+	Subject     string   `json:"subject"`
+	InReplyTo   string   `json:"in_reply_to,omitempty"`
+	// SentFolder is the folder a copy of the sent message was written
+	// to, and SentFolderCopy says whether that worked: "stored" or
+	// "failed". Both are omitted when the account keeps no Sent copy.
+	SentFolder     string `json:"sent_folder,omitempty"`
+	SentFolderCopy string `json:"sent_folder_copy,omitempty"`
 }
 
 // marshalResponse renders a result as compact JSON.

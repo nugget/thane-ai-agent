@@ -105,7 +105,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_folders",
 			Description: "List every folder (mailbox) in one account with its special-use role, whether it can hold messages, and its message and unseen counts. Returns JSON " +
-				"{account, count, folders:[{name, role, selectable, delimiter, messages, unseen}]}; role is one of inbox, drafts, sent, trash, junk, archive, or empty. " +
+				"{account, count, total, truncated, folders:[{name, role, selectable, delimiter, messages, unseen}]}; role is one of inbox, drafts, sent, trash, junk, archive, or empty. " +
+				"At most 200 folders are listed; when an account has more, role-bearing folders come first and truncated is true. " +
 				"Folder names are exact and per account: use them verbatim as email_move destinations. No email tool creates folders.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -188,7 +189,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Compose and send a new message from one account. body is markdown and is rendered to both text and HTML. " +
 				"Every recipient in to and cc must be in the contact directory at a send-eligible trust zone; a refusal names each recipient at issue and how to recover, and nothing is sent. " +
 				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
-				"{disposition: sent, account, message_id, to, cc, bcc_count, subject, sent_folder_copy}. Sent mail cannot be recalled.",
+				"{disposition: sent, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy}. sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder. Sent mail cannot be recalled.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

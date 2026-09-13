@@ -3689,10 +3689,11 @@ func (c *Config) Validate() error {
 			return err
 		}
 	}
-	if c.Email.Configured() {
-		if err := c.Email.Validate(); err != nil {
-			return err
-		}
+	// Email is validated whenever any of it is written, not only once an
+	// account is complete: an account missing its host is a
+	// misconfiguration to report, not a reason to disable email quietly.
+	if err := c.Email.Validate(); err != nil {
+		return err
 	}
 	if c.StateWindow.MaxEntries < 1 {
 		return fmt.Errorf("state_window.max_entries %d must be positive", c.StateWindow.MaxEntries)

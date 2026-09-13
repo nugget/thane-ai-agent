@@ -165,9 +165,10 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 		}
 	}
 
-	// Trust zone gating: check all recipients including auto-Bcc.
-	allRecipients := slices.Concat(to, cc, bcc)
-	trust := CheckRecipientTrust(t.contacts, allRecipients)
+	// Trust gating covers the recipients the model chose. The audit copy
+	// is the operator's configured sink, validated when the config
+	// loads, and by contract needs no contact record.
+	trust := CheckRecipientTrust(t.contacts, slices.Concat(to, cc))
 	if trust.HasIssues() {
 		return "", fmt.Errorf("recipient trust issues: %s", trust.FormatIssues())
 	}
@@ -217,6 +218,7 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 
 	// Store a copy in the configured Sent folder via IMAP APPEND.
 	if acctCfg.SentFolder != "" {
+		resp.SentFolder = acctCfg.SentFolder
 		if _, appendErr := acct.Client.AppendMessage(ctx, acctCfg.SentFolder, composed.Bytes, []imap.Flag{imap.FlagSeen}); appendErr != nil {
 			t.logger.Warn("failed to store sent message in IMAP folder",
 				"folder", acctCfg.SentFolder,
@@ -226,7 +228,7 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 			)
 			resp.SentFolderCopy = "failed"
 		} else {
-			resp.SentFolderCopy = acctCfg.SentFolder
+			resp.SentFolderCopy = "stored"
 		}
 	}
 

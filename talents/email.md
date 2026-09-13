@@ -122,9 +122,11 @@ they can hold messages, and message and unseen counts:
 }
 ```
 
-The result is `{account, count, folders:[{name, role, selectable,
-delimiter, messages, unseen}]}`; `role` is `inbox`, `drafts`, `sent`,
-`trash`, `junk`, `archive`, or empty. Useful when you don't know whether
+The result is `{account, count, total, truncated, folders:[{name, role,
+selectable, delimiter, messages, unseen}]}`; `role` is `inbox`,
+`drafts`, `sent`, `trash`, `junk`, `archive`, or empty. At most 200
+folders are listed; on a label-heavy account the role-bearing folders
+come first and `truncated` says the rest were left out. Useful when you don't know whether
 the host's archive lives in `Archive`, `[Gmail]/All Mail`, `Saved`, or
 somewhere else. Pick the folder name from the result; don't guess.
 
@@ -251,7 +253,9 @@ allowed ones and skip the others." Three result categories:
 - **Allowed through** — every recipient resolves to `admin`,
   `household`, or `trusted`. The mail goes out and the result is
   `{disposition: "sent", account, message_id, to, cc, bcc_count,
-  subject, sent_folder_copy}`. `bcc_count` counts the operator's
+  subject, sent_folder, sent_folder_copy}`; `sent_folder_copy` is
+  `stored` when the copy landed in `sent_folder` and `failed` when it
+  did not. `bcc_count` counts the operator's
   configured audit copy; `message_id` is the key under which the
   message can be found in the Sent folder and the value a reply's
   `in_reply_to` will carry.

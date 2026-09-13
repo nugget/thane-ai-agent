@@ -44,9 +44,9 @@ type PollerOption func(*Poller)
 
 // WithMessageBus enables event-source wake delivery for new-mail
 // detection. The poller dispatches a [messages.NewEventSourceEnvelope]
-// per account-poll cycle when the bus is configured; without it,
-// CheckNewMessages still advances the high-water mark but logs every
-// dispatch as suppressed.
+// per account-poll batch. Without a bus, a poll that finds new mail
+// fails and leaves the high-water mark where it was, so nothing is
+// skipped; [Service] refuses to build a poller without one.
 func WithMessageBus(bus *messages.Bus) PollerOption {
 	return func(p *Poller) { p.bus = bus }
 }
@@ -370,18 +370,15 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 // any one message — identity rides in each event's metadata instead.
 //
 // Returns the total number of events delivered across all successful
-// batches. A nil message bus is a no-op (logs and returns 0) so a
-// transient bus-missing window doesn't error.
+// batches. A nil message bus is an error, so checkAccount leaves the
+// high-water mark where it was instead of advancing past mail no
+// handler saw.
 func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateKey string, currentMark highWaterMark, newMessages []Envelope) (int, error) {
-	if p.bus == nil {
-		p.logger.Warn("email message bus not configured; new mail observed but not dispatched",
-			"account", accountName,
-			"new_messages", len(newMessages),
-		)
-		return 0, nil
-	}
 	if len(newMessages) == 0 {
 		return 0, nil
+	}
+	if p.bus == nil {
+		return 0, fmt.Errorf("email message bus not configured: %d new message(s) in account %q observed but not dispatched; the high-water mark stays where it was", len(newMessages), accountName)
 	}
 
 	// IMAP returns newest-first; flip to oldest-first so per-batch

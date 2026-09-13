@@ -46,7 +46,7 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 
 	listed, err := acct.Client.ListMessages(ctx, opts)
 	if err != nil {
-		return "", err
+		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
 	return marshalResponse(newListResponse(acct.Name, listed, time.Now()))
@@ -68,7 +68,7 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 
 	msg, err := acct.Client.ReadMessage(ctx, ReadOptions{Folder: folder, UID: uid, Peek: !markSeen})
 	if err != nil {
-		return "", err
+		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_read", acct.Name, folder, strconv.FormatUint(uint64(uid), 10))
 	return renderRead(newReadResponse(acct.Name, folder, msg, markSeen, time.Now()), msg)
@@ -88,8 +88,50 @@ func (t *Tools) HandleFolders(ctx context.Context, args map[string]any) (string,
 	if folders == nil {
 		folders = []Folder{}
 	}
+	shown, truncated := capFolders(folders)
 	t.service.recordOp("email_folders", acct.Name, "", strconv.Itoa(len(folders))+" folders")
-	return marshalResponse(foldersResponse{Account: acct.Name, Count: len(folders), Folders: folders})
+	return marshalResponse(foldersResponse{Account: acct.Name, Count: len(shown), Total: len(folders), Truncated: truncated, Folders: shown})
+}
+
+// maxFolderResults caps the folders one email_folders result lists. A
+// label-heavy account can have thousands; the cache the Email Accounts
+// block renders from keeps the full listing.
+const maxFolderResults = 200
+
+// capFolders returns at most maxFolderResults folders and whether any
+// were dropped. When the list must be cut, role-bearing folders sort
+// first so the folders a model files into survive, then by name.
+func capFolders(folders []Folder) ([]Folder, bool) {
+	if len(folders) <= maxFolderResults {
+		return folders, false
+	}
+	sorted := slices.Clone(folders)
+	slices.SortStableFunc(sorted, func(a, b Folder) int {
+		aRole, bRole := a.Role != "", b.Role != ""
+		if aRole != bRole {
+			if aRole {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return sorted[:maxFolderResults], true
+}
+
+// refreshOnFolderMiss re-lists an account's folders after an operation
+// failed because a folder does not exist, so the Email Accounts block
+// the next turn reads carries the real names, and returns err
+// unchanged. The listing is best-effort: the caller's error is the
+// answer either way.
+func (t *Tools) refreshOnFolderMiss(ctx context.Context, acct ResolvedAccount, err error) error {
+	if FailureKindOf(err) != FailureFolderNotFound {
+		return err
+	}
+	if _, listErr := t.service.listFolders(ctx, acct); listErr != nil {
+		t.logger.Debug("email folder re-list after folder miss failed", "account", acct.Name, "error", listErr)
+	}
+	return err
 }
 
 // HandleSearch searches for messages matching the given criteria.
@@ -134,7 +176,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 
 	found, err := acct.Client.SearchMessages(ctx, opts)
 	if err != nil {
-		return "", err
+		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
 	return marshalResponse(newListResponse(acct.Name, found, now))
@@ -174,7 +216,7 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 
 	result, err := acct.Client.MarkMessages(ctx, action)
 	if err != nil {
-		return "", err
+		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 
 	verb := "flag_added"
@@ -274,7 +316,7 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 
 	result, err := acct.Client.MoveMessages(ctx, opts)
 	if err != nil {
-		return "", err
+		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 
 	resp := moveResponse{
