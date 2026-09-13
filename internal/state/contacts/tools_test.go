@@ -181,7 +181,7 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 		"kind":"individual",
 		"facts":{"email":"person@example.com","timezone":"America/Chicago"},
 		"origin_tags":["signal","SIGNAL","projects"]
-	}`, provenance)
+	}`, provenance, false)
 	if err != nil {
 		t.Fatalf("SaveContactFromModel() error = %v", err)
 	}
@@ -222,7 +222,7 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 		"kind":"individual",
 		"facts":{"email":"PERSON@example.com","timezone":"america/chicago"},
 		"origin_tags":["PROJECTS","SIGNAL"]
-	}`, newer)
+	}`, newer, false)
 	if err != nil {
 		t.Fatalf("repeated SaveContactFromModel() error = %v", err)
 	}
@@ -256,7 +256,7 @@ func TestSaveContactFromModelDoesNotSignalRejectedOrRolledBackWrites(t *testing.
 		"name":"Custody Rejection",
 		"kind":"individual",
 		"trust_zone":"admin"
-	}`, provenance); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+	}`, provenance, false); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
 		t.Fatalf("trust-zone rejection error = %v", err)
 	}
 	if _, err := tools.store.db.Exec(`
@@ -272,7 +272,7 @@ func TestSaveContactFromModelDoesNotSignalRejectedOrRolledBackWrites(t *testing.
 		"name":"Rollback Rejection",
 		"kind":"individual",
 		"facts":{"email":"nobody@example.com"}
-	}`, provenance); err == nil || !strings.Contains(err.Error(), "forced property rollback") {
+	}`, provenance, false); err == nil || !strings.Contains(err.Error(), "forced property rollback") {
 		t.Fatalf("property rollback error = %v", err)
 	}
 	if calls != 0 {
@@ -580,7 +580,7 @@ func TestSaveContactFromModelQueuesRefreshBeforeEmbedding(t *testing.T) {
 		order = append(order, "embedding")
 	}})
 
-	if _, err := tools.SaveContactFromModel(t.Context(), `{"name":"Ordered Contact","kind":"individual"}`, &PropertyProvenance{Source: "contact_save"}); err != nil {
+	if _, err := tools.SaveContactFromModel(t.Context(), `{"name":"Ordered Contact","kind":"individual"}`, &PropertyProvenance{Source: "contact_save"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"refresh", "embedding"}; !reflect.DeepEqual(order, want) {
@@ -1128,12 +1128,13 @@ func TestExportVCF_SelfWithTrustZoneFilter(t *testing.T) {
 
 func TestOwnerContact_ConfiguredName(t *testing.T) {
 	tools := newTestTools(t)
-	tools.SetOwnerContactName("Aimee")
 
 	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operator seeds their record before the legacy name selects it.
+	tools.SetOwnerContactName("Aimee")
 	setZone(t, tools, "Aimee", "household")
 
 	result, err := tools.OwnerContact(`{}`)
@@ -1193,7 +1194,6 @@ func TestOwnerContact_FallsBackToSoleAdmin(t *testing.T) {
 
 func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
 	tools := newTestTools(t)
-	tools.SetOwnerContactName("Aimee")
 	tools.SetOwnerActivitySource(func() []OwnerChannelActivity {
 		return []OwnerChannelActivity{
 			{
@@ -1220,6 +1220,8 @@ func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operator seeds their record before the legacy name selects it.
+	tools.SetOwnerContactName("Aimee")
 	setZone(t, tools, "Aimee", "household")
 
 	result, err := tools.OwnerContact(`{}`)
@@ -1259,7 +1261,6 @@ func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {
 
 func TestOwnerContact_LimitsOwnerActivitySummary(t *testing.T) {
 	tools := newTestTools(t)
-	tools.SetOwnerContactName("Aimee")
 	tools.SetOwnerActivitySource(func() []OwnerChannelActivity {
 		out := make([]OwnerChannelActivity, 0, ownerActivitySummaryLimit+3)
 		for i := 0; i < ownerActivitySummaryLimit+3; i++ {
@@ -1276,6 +1277,8 @@ func TestOwnerContact_LimitsOwnerActivitySummary(t *testing.T) {
 	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`); err != nil {
 		t.Fatal(err)
 	}
+	// The operator seeds their record before the legacy name selects it.
+	tools.SetOwnerContactName("Aimee")
 
 	result, err := tools.OwnerContact(`{}`)
 	setZone(t, tools, "Aimee", "household")

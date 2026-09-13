@@ -21,7 +21,7 @@ func (r *Registry) registerContactTools() {
 	if r.contactTools == nil {
 		return
 	}
-	saveDescription := "Store or update structured identity for a person, organization, or group. Properties should be compact personal attributes such as communication coordinates, aliases, roles, and stable preferences. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Evolving person-specific relationship or collaboration synthesis belongs in contact_dossier_write when available; project knowledge, technical decisions, and other non-person knowledge belong in remember_fact or documents. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field."
+	saveDescription := "Store or update structured identity for a person, organization, or group. Properties should be compact personal attributes such as communication coordinates, aliases, roles, and stable preferences. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Evolving person-specific relationship or collaboration synthesis belongs in contact_dossier_write when available; project knowledge, technical decisions, and other non-person knowledge belong in remember_fact or documents. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field. Custody: the trust_zone argument, and KEY and X-THANE-* fact keys, are refused on every contact, and a new contact starts at known. Addresses and numbers (the email, phone, signal and matrix facts, or EMAIL, TEL and IMPP in any case) are how email and Signal recognize a contact and what the send gate trusts, so contact_save refuses to add one to an existing contact above known (admin, household or trusted) or to the operator's own contact at any zone. The operator's own message (sent through Thane's native API, or written in the operator's own channel conversation) lifts that one rule; there, add an address or number only when the operator says it belongs to that person. In every turn, contact_save refuses a value an admin, household, trusted or operator contact already holds (email in any case; a phone number as phone or signal, with or without a leading '+'), and refuses to give any contact but the operator's own the name Thane recognizes the operator by, as its name or nickname. Argument values may not contain carriage returns or other control characters; note and ai_summary may contain plain line breaks. When any fact is refused nothing is saved, and the error lists each refused fact and why; the operator adds refused values through CardDAV or the contacts API."
 	if r.contactTools.ContactRefreshesEnabled() {
 		saveDescription += " A committed change is queued once for later archivist dossier reconsideration; an identical no-op is not, so do not duplicate structured identity into dossier prose."
 	} else {
@@ -87,7 +87,7 @@ func (r *Registry) registerContactTools() {
 				},
 				"facts": map[string]any{
 					"type":                 "object",
-					"description":          "Attributes as key-value pairs. All entries are stored as contact properties. Standard keys like 'email' and 'phone' are mapped to vCard property names (EMAIL, TEL); others use their key as-is (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"ha_companion_app\": \"mobile_app_phone\"}).",
+					"description":          "Attributes as key-value pairs, each stored as a contact property. The keys email, phone, signal and matrix are addresses and numbers: email maps to EMAIL, phone to TEL, and signal and matrix to IMPP with a signal: or matrix: prefix; EMAIL, TEL and IMPP written in any case land on the same property. Every other key is stored as written and must be a plain name of letters, digits, '-' and '_' that starts with a letter, at most 64 characters, because '.', ';', ':', spaces and line breaks are vCard syntax; KEY and X-THANE-* keys are refused, and values may not contain line breaks or other control characters. A key naming a field the contact record owns (note, title, role, org, nickname, kind, or the vCard names FN, N, BDAY, ANNIVERSARY, GENDER, PHOTO, UID, REV and VERSION) is refused too, because a fact under that name would be lost on the operator's next edit; use the matching argument. Outside the operator's own message, addresses and numbers are refused on a contact above known and on the operator's own contact; in every turn they are refused when an admin, household, trusted or operator contact already holds them. Example: {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"ha_companion_app\": \"mobile_app_phone\"}.",
 					"additionalProperties": map[string]any{"type": "string"},
 				},
 			},
@@ -98,7 +98,7 @@ func (r *Registry) registerContactTools() {
 			if err != nil {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
-			return r.contactTools.SaveContactFromModel(ctx, string(argsJSON), contactPropertyProvenance(ctx))
+			return r.contactTools.SaveContactFromModel(ctx, string(argsJSON), contactPropertyProvenance(ctx, "contact_save"), OperatorAttended(ctx))
 		},
 	})
 
@@ -161,13 +161,13 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_forget",
-		Description: "Remove a contact from the directory by name.",
+		Description: "Remove one known contact from the directory; a soft delete that no model-facing tool can undo. The name is resolved once (exact name, then nickname, then a search that must match exactly one contact), and the result names the record removed as \"Forgot contact: <name> (<zone>, <uuid>)\". Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied and refused in every turn, the operator's own message included, because forgetting one turns that person's email and Signal traffic into a stranger's; nothing is removed, and the operator deletes or demotes those through CardDAV or DELETE /v1/contacts/{id}.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Name of the contact to remove",
+					"description": "Name of the contact to remove: its exact name or nickname, or a search term that matches exactly one contact. Confirm the record with contact_lookup first.",
 				},
 			},
 			"required": []string{"name"},
@@ -177,7 +177,7 @@ func (r *Registry) registerContactTools() {
 			if err != nil {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
-			return r.contactTools.ForgetContact(string(argsJSON))
+			return r.contactTools.ForgetContactFromModel(ctx, string(argsJSON), contactPropertyProvenance(ctx, "contact_forget"))
 		},
 	})
 
@@ -268,7 +268,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_import_vcf",
-		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, and TrustZone and AISummary are never overwritten. New contacts are always created at the default trust zone; a vCard X-THANE-TRUST-ZONE is ignored on import (trust zones are operator-assigned), and KEY and X-THANE-KEY-* properties are dropped (keys that authenticate a contact's messages are operator custody). Use dry_run to preview changes.",
+		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, and TrustZone and AISummary are never overwritten. New contacts are always created at the default trust zone; a vCard X-THANE-TRUST-ZONE is ignored on import (trust zones are operator-assigned), and KEY and X-THANE-KEY-* properties are dropped (keys that authenticate a contact's messages are operator custody). Addresses and numbers (EMAIL, TEL, IMPP) are dropped from a merge into a contact above known or the operator's own contact, and from any contact, new or merged, when an admin, household, trusted or operator contact already holds them; a vCard is content, not the operator's word, so no turn lifts this, and the operator adds dropped values through CardDAV or the contacts API. Properties whose decoded names are not plain names (a nested group such as a.b.EMAIL, spaces, or more than 64 characters) are dropped; a single group such as item1.EMAIL imports as EMAIL under the address rules above. Values carrying a carriage return or other control character are dropped, and a card that would create a contact, or fill a nickname, under the name Thane recognizes the operator by is left out. The result counts each kind of drop, and dry_run reports the same counts. Use dry_run to preview changes.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -295,7 +295,7 @@ func (r *Registry) registerContactTools() {
 			if err != nil {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
-			return r.contactTools.ImportVCF(string(argsJSON))
+			return r.contactTools.ImportVCFFromModel(ctx, string(argsJSON), contactPropertyProvenance(ctx, "contact_import_vcf"))
 		},
 	})
 
@@ -327,9 +327,11 @@ func (r *Registry) registerContactTools() {
 	})
 }
 
-func contactPropertyProvenance(ctx context.Context) *contacts.PropertyProvenance {
+// contactPropertyProvenance stamps the current model turn onto the rows a
+// contact tool writes, under the tool's own source name.
+func contactPropertyProvenance(ctx context.Context, source string) *contacts.PropertyProvenance {
 	provenance := &contacts.PropertyProvenance{
-		Source:         "contact_save",
+		Source:         source,
 		Model:          strings.TrimSpace(ModelFromContext(ctx)),
 		LoopID:         strings.TrimSpace(LoopIDFromContext(ctx)),
 		ConversationID: strings.TrimSpace(ConversationIDFromContext(ctx)),

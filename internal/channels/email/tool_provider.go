@@ -215,7 +215,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted. " +
 				"You can clear a refusal yourself only by changing the message: drop or correct a recipient, or pass draft: true when the account has no SMTP. " +
 				"The only legitimate recovery for a trust refusal is the operator assigning the recipient a zone, and only the operator can change the account's access, recipient-domain rules, or SMTP. " +
-				"Saving a new contact does not help, because it starts at known; never add a refused address to an existing contact, which would pass the gate today by lending that contact's zone to whoever holds the address.",
+				"Outside the operator's own message, contact_save cannot clear a trust refusal: a contact it creates starts at known, it refuses to add an address to a contact above known, and it refuses an address an admin, household, trusted or operator contact already holds. In the operator's own message, add an address to an existing contact only when the operator says it belongs to that person, never to get a send through.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

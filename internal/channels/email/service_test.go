@@ -154,6 +154,34 @@ func TestEveryEmailToolAccountParamUsesTheSharedDescription(t *testing.T) {
 	}
 }
 
+// TestEmailSendDescriptionTeachesIdentityCustody pins the email_send
+// sentence about contact_save to the rule contact identity custody
+// enforces, so the description never again presents laundering an
+// address onto an existing contact as a path that works.
+func TestEmailSendDescriptionTeachesIdentityCustody(t *testing.T) {
+	for _, tool := range (&Tools{}).toolDefinitions() {
+		if tool.Name != "email_send" {
+			continue
+		}
+		if strings.Contains(tool.Description, "would pass the gate today") {
+			t.Errorf("email_send still describes the closed laundering path: %q", tool.Description)
+		}
+		for _, want := range []string{
+			"contact_save cannot clear a trust refusal",
+			"starts at known",
+			"refuses to add an address to a contact above known",
+			"already holds",
+			"operator says it belongs to that person",
+		} {
+			if !strings.Contains(tool.Description, want) {
+				t.Errorf("email_send description lacks %q: %q", want, tool.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("email_send is not among the email tool definitions")
+}
+
 func TestServiceResolveAccountHonorsBinding(t *testing.T) {
 	svc, _, _ := twoAccountService(t)
 	tests := []struct {

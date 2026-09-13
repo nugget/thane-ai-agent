@@ -100,6 +100,25 @@ func applyContactIdentityConfig(cfg *config.Config, store *contacts.Store, logge
 	return resolved, nil
 }
 
+// configureContactToolsOperator tells the contact tools who the operator
+// is. Under the legacy owner-name selector it resolves the name now,
+// through the channel resolver's own cache and before any model turn can
+// create a contact, and pins that record for identity custody, so
+// custody protects exactly the contact the resolver marks IsOwner for
+// the life of the process.
+func configureContactToolsOperator(contactTools *contacts.Tools, resolver *contactChannelBindingResolver, identity contactIdentityConfig) {
+	if identity.operatorContactID != uuid.Nil {
+		contactTools.ConfigureOperatorContactID(identity.operatorContactID)
+	}
+	if identity.legacyOwnerContactName == "" {
+		return
+	}
+	contactTools.SetOwnerContactName(identity.legacyOwnerContactName)
+	if identity.operatorContactID == uuid.Nil {
+		contactTools.ConfigureLegacyOperatorContactID(resolver.resolvedOperatorContactID())
+	}
+}
+
 // initChannels wires tools and external channels into the agent loop.
 // Sections include fact store, contact directory, notifications, email,
 // forge, working memory, fact extraction, provenance,
@@ -139,12 +158,10 @@ func (a *App) initChannels(s *newState) error {
 		return err
 	}
 	a.contactBindingsConfigOwned = contactIdentity.configOwnsHAPersonBindings
-	operatorContactID := contactIdentity.operatorContactID
-	legacyOwnerContactName := contactIdentity.legacyOwnerContactName
 	a.contactBindingResolver = &contactChannelBindingResolver{
 		store:                  contactStore,
-		operatorContactID:      operatorContactID,
-		legacyOwnerContactName: legacyOwnerContactName,
+		operatorContactID:      contactIdentity.operatorContactID,
+		legacyOwnerContactName: contactIdentity.legacyOwnerContactName,
 	}
 
 	// Wire summarizer → contact interaction tracking now that the
@@ -170,12 +187,7 @@ func (a *App) initChannels(s *newState) error {
 	if a.cfg.Identity.ContactName != "" {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
 	}
-	if operatorContactID != uuid.Nil {
-		contactTools.ConfigureOperatorContactID(operatorContactID)
-	}
-	if legacyOwnerContactName != "" {
-		contactTools.SetOwnerContactName(legacyOwnerContactName)
-	}
+	configureContactToolsOperator(contactTools, a.contactBindingResolver, contactIdentity)
 	ownerActivity := (&ownerChannelActivityAdapter{
 		loops: &channelLoopAdapter{registry: a.loopRegistry},
 	}).ActiveOwnerChannels
