@@ -64,7 +64,9 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				addressShapeDescription +
 				"date is a delta such as -2h13m. An empty folder returns count 0 with an empty array. " +
 				"UIDs are scoped to the account and folder they were listed from — pass both back to email_read, email_mark, and email_move. " +
-				"limit defaults to 20 and caps at 100; total_matched says how many messages matched before the cap.",
+				"limit defaults to 20 and caps at 100; total_matched says how many messages matched before the cap. " +
+				"The result is capped at 16 KB: when that drops messages, count falls below what limit allowed and truncated is true. " +
+				"Each message lists at most 10 to and 10 cc addresses, with addresses_omitted counting the rest, and a subject over 1 KB is cut.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -85,9 +87,9 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], authentication:{method, status, verified}} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
-				"Bodies over 32 KB are cut and body_truncated is true; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
+				"The whole result stays within 32 KB: a long body is cut to fit and body_truncated is true, to, cc, and reply_to list at most 25 addresses each with addresses_omitted counting the rest, and at most 50 attachments are described with attachments_omitted counting the rest; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
 				addressShapeDescription +
 				"authentication.verified is true only when Thane validated a signature with a key the directory holds for the sender; status absent means nothing was checked and carries no suspicion, failed means a signature did not validate, unavailable means a check could not complete. " +
 				"Reading marks the message seen unless mark_seen is false. " +
@@ -256,8 +258,9 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Move messages to another folder in the same account. Provide uids (array of integers) or uid (single integer), and destination: " +
 				"an existing folder name for this account from email_folders (no tool creates folders, and there are no cross-account moves). " +
 				"If only folder is given without destination, folder is treated as the destination and INBOX as the source. Returns JSON " +
-				"{action: moved, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known}; " +
-				"when destination_uids_known is false the server did not report the new UIDs and the destination must be listed to find them. " +
+				"{action: moved, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known, uids_not_found}; " +
+				"when destination_uids_known is true, uids are the source UIDs the server confirmed moving, paired with destination_uids, and uids_not_found are requested UIDs the folder no longer held; " +
+				"when it is false the server confirmed nothing, and the destination must be listed to find the messages. " +
 				"A destination the account lacks is refused with the account's real folder list.",
 			Parameters: map[string]any{
 				"type": "object",

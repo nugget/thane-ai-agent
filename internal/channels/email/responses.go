@@ -75,6 +75,25 @@ func viewAddresses(list []Address, lookup *identityLookup) []addressView {
 	return out
 }
 
+// The results below are held to the sizes AGENTS.md sets for tool
+// output: search results 16 KB, transcripts 32 KB. The per-message
+// bounds keep any single message from filling a result on its own.
+const (
+	maxListOutput       = 16 * 1024
+	maxReadOutput       = 32 * 1024
+	maxSubjectOutput    = 1024
+	maxSummaryAddresses = 10
+	maxHeaderAddresses  = 25
+)
+
+// capAddresses returns at most n addresses and how many were left out.
+func capAddresses(list []Address, n int) ([]Address, int) {
+	if len(list) <= n {
+		return list, 0
+	}
+	return list[:n], len(list) - n
+}
+
 // messageSummaryView is one envelope in a list or search result.
 type messageSummaryView struct {
 	UID       uint32        `json:"uid"`
@@ -86,6 +105,10 @@ type messageSummaryView struct {
 	MessageID string        `json:"message_id,omitempty"`
 	Flags     []string      `json:"flags,omitempty"`
 	Size      uint32        `json:"size"`
+
+	// AddressesOmitted counts to and cc addresses past
+	// maxSummaryAddresses per list that the summary leaves out.
+	AddressesOmitted int `json:"addresses_omitted,omitempty"`
 }
 
 // listResponse is the result of email_list and email_search.
@@ -108,16 +131,19 @@ func newListResponse(account string, listed ListResult, lookup *identityLookup, 
 		Messages:     make([]messageSummaryView, 0, len(listed.Envelopes)),
 	}
 	for _, env := range listed.Envelopes {
+		to, toOmitted := capAddresses(env.To, maxSummaryAddresses)
+		cc, ccOmitted := capAddresses(env.Cc, maxSummaryAddresses)
 		resp.Messages = append(resp.Messages, messageSummaryView{
-			UID:       env.UID,
-			From:      viewAddress(env.From, lookup),
-			To:        viewAddresses(env.To, lookup),
-			Cc:        viewAddresses(env.Cc, lookup),
-			Subject:   env.Subject,
-			Date:      deltaOrEmpty(env.Date, now),
-			MessageID: env.MessageID,
-			Flags:     env.Flags,
-			Size:      env.Size,
+			UID:              env.UID,
+			From:             viewAddress(env.From, lookup),
+			To:               viewAddresses(to, lookup),
+			Cc:               viewAddresses(cc, lookup),
+			AddressesOmitted: toOmitted + ccOmitted,
+			Subject:          truncateUTF8(env.Subject, maxSubjectOutput),
+			Date:             deltaOrEmpty(env.Date, now),
+			MessageID:        env.MessageID,
+			Flags:            env.Flags,
+			Size:             env.Size,
 		})
 	}
 	return resp
@@ -146,6 +172,13 @@ type readResponse struct {
 	RawTruncated   bool           `json:"raw_truncated,omitempty"`
 	Attachments    []Attachment   `json:"attachments"`
 	Authentication Authentication `json:"authentication"`
+
+	// AttachmentsOmitted counts non-text parts past the fifty described.
+	AttachmentsOmitted int `json:"attachments_omitted,omitempty"`
+
+	// AddressesOmitted counts to, cc, and reply_to addresses past
+	// maxHeaderAddresses per list that the header leaves out.
+	AddressesOmitted int `json:"addresses_omitted,omitempty"`
 }
 
 // bodySeparator divides the read result's JSON header from the body
@@ -157,31 +190,38 @@ func newReadResponse(account, folder string, msg *Message, markedSeen bool, auth
 	if attachments == nil {
 		attachments = []Attachment{}
 	}
+	to, toOmitted := capAddresses(msg.To, maxHeaderAddresses)
+	cc, ccOmitted := capAddresses(msg.Cc, maxHeaderAddresses)
+	replyTo, replyToOmitted := capAddresses(msg.ReplyTo, maxHeaderAddresses)
 	return readResponse{
-		Account:        account,
-		Folder:         folder,
-		UID:            msg.UID,
-		MessageID:      msg.MessageID,
-		InReplyTo:      msg.InReplyTo,
-		References:     msg.References,
-		From:           viewAddress(msg.From, lookup),
-		To:             viewAddresses(msg.To, lookup),
-		Cc:             viewAddresses(msg.Cc, lookup),
-		ReplyTo:        viewAddresses(msg.ReplyTo, lookup),
-		Subject:        msg.Subject,
-		Date:           deltaOrEmpty(msg.Date, now),
-		Flags:          msg.Flags,
-		Size:           msg.Size,
-		MarkedSeen:     markedSeen,
-		BodySource:     msg.BodySource,
-		BodyTruncated:  msg.BodyTruncated,
-		RawTruncated:   msg.RawTruncated,
-		Attachments:    attachments,
-		Authentication: auth,
+		Account:            account,
+		Folder:             folder,
+		UID:                msg.UID,
+		MessageID:          msg.MessageID,
+		InReplyTo:          msg.InReplyTo,
+		References:         msg.References,
+		From:               viewAddress(msg.From, lookup),
+		To:                 viewAddresses(to, lookup),
+		Cc:                 viewAddresses(cc, lookup),
+		ReplyTo:            viewAddresses(replyTo, lookup),
+		AddressesOmitted:   toOmitted + ccOmitted + replyToOmitted,
+		AttachmentsOmitted: msg.AttachmentsOmitted,
+		Subject:            msg.Subject,
+		Date:               deltaOrEmpty(msg.Date, now),
+		Flags:              msg.Flags,
+		Size:               msg.Size,
+		MarkedSeen:         markedSeen,
+		BodySource:         msg.BodySource,
+		BodyTruncated:      msg.BodyTruncated,
+		RawTruncated:       msg.RawTruncated,
+		Attachments:        attachments,
+		Authentication:     auth,
 	}
 }
 
-// renderRead joins the header JSON and the body text.
+// renderRead joins the header JSON and the body text, cutting the body
+// so the whole result stays within maxReadOutput. A cut sets
+// body_truncated in the header and ends the body with a marker.
 func renderRead(header readResponse, msg *Message) (string, error) {
 	data, err := marshalResponse(header)
 	if err != nil {
@@ -191,7 +231,32 @@ func renderRead(header readResponse, msg *Message) (string, error) {
 	if body == "" {
 		body = "[no readable body]"
 	}
-	return data + bodySeparator + body, nil
+	if len(data)+len(bodySeparator)+len(body) <= maxReadOutput {
+		return data + bodySeparator + body, nil
+	}
+	header.BodyTruncated = true
+	if data, err = marshalResponse(header); err != nil {
+		return "", err
+	}
+	marker := fmt.Sprintf("\n\n[body cut to keep this result within %d KB]", maxReadOutput/1024)
+	budget := max(maxReadOutput-len(data)-len(bodySeparator)-len(marker), 0)
+	return data + bodySeparator + truncateUTF8(body, budget) + marker, nil
+}
+
+// marshalListResponse renders a list or search result within
+// maxListOutput, dropping the oldest messages (the list is newest
+// first) until it fits; a drop lowers count and sets truncated.
+func marshalListResponse(resp listResponse) (string, error) {
+	for {
+		data, err := marshalResponse(resp)
+		if err != nil || len(data) <= maxListOutput || len(resp.Messages) == 0 {
+			return data, err
+		}
+		cut := len(resp.Messages) - max(1, len(resp.Messages)/10)
+		resp.Messages = resp.Messages[:cut]
+		resp.Count = len(resp.Messages)
+		resp.Truncated = true
+	}
 }
 
 // foldersResponse is the result of email_folders.
@@ -225,7 +290,13 @@ type moveResponse struct {
 	UIDs                 []uint32 `json:"uids"`
 	DestinationUIDs      []uint32 `json:"destination_uids"`
 	DestinationUIDsKnown bool     `json:"destination_uids_known"`
-	Note                 string   `json:"note,omitempty"`
+
+	// UIDsNotFound lists requested UIDs the server's COPYUID did not
+	// include: they were not in the source folder and did not move. It
+	// is empty when destination_uids_known is false, because the server
+	// then confirmed nothing.
+	UIDsNotFound []uint32 `json:"uids_not_found"`
+	Note         string   `json:"note,omitempty"`
 }
 
 // sendResponse is the result of email_send and email_reply.

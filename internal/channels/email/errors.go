@@ -239,6 +239,10 @@ const (
 	// or greeting. Transient.
 	DeliveryConnect DeliveryKind = "connect_failed"
 
+	// DeliveryCancelled marks a send the caller's context ended before
+	// the server accepted the message.
+	DeliveryCancelled DeliveryKind = "cancelled"
+
 	// DeliveryTLS marks a connection that could not be made secure:
 	// the server does not offer STARTTLS, or its certificate failed
 	// verification. Permanent until the operator acts; no credential
@@ -280,6 +284,8 @@ func (e *DeliveryError) Error() string {
 		return fmt.Sprintf("%s: the SMTP server for email account %q temporarily refused the message. This is transient; retry later rather than immediately (%v)", e.Op, account, e.Err)
 	case DeliveryConnect:
 		return fmt.Sprintf("%s: could not reach the SMTP server for email account %q. This is transient; retry later rather than immediately (%v)", e.Op, account, e.Err)
+	case DeliveryCancelled:
+		return fmt.Sprintf("%s: the send from email account %q was cancelled before the server accepted the message (%v)", e.Op, account, e.Err)
 	case DeliveryTLS:
 		return fmt.Sprintf("%s: the SMTP server for email account %q could not be used securely (%v). Retrying will fail the same way; the operator must fix smtp.starttls, the port, or the server certificate, and no credential was sent", e.Op, account, e.Err)
 	default:

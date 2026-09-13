@@ -165,7 +165,9 @@ size}]}`, where every address is `{name, address, trust_zone, contact,
 contact_status}` as described under the `email` trailhead; `date` is a
 delta such as `-2h13m`. `limit` defaults to
 20 and caps at 100; `total_matched` says how many messages there were
-before the cap, and `truncated` is true when the cap dropped some.
+before the cap, and `truncated` is true when the cap, or the result's 16 KB size limit,
+dropped some. Each message lists at most 10 `to` and 10 `cc` addresses,
+with `addresses_omitted` counting the rest.
 `unseen: true` is the right move when triaging — read what you haven't
 read, skip what you have. The UIDs in the result are what you'll feed
 to `email_read`, `email_mark`, or `email_move` next, together with the
@@ -215,7 +217,10 @@ attachments:[{filename, content_type, size, inline}],
 authentication:{method, status, verified}}` — followed by a line
 containing only `---` and then the readable body. The body is the
 text part, or the HTML part rendered to text when `body_source` is
-`html`; bodies over 32 KB are cut and `body_truncated` says so.
+`html`; the whole result stays within 32 KB, so a long body is cut to
+fit and `body_truncated` says so, address lists stop at 25 with
+`addresses_omitted` counting the rest, and at most 50 attachments are
+described with `attachments_omitted` counting the rest.
 Attachments are described, not downloaded. **Reading marks the message
 seen** unless you pass `mark_seen: false`, which matters when your
 triage recipe is "list unseen, read, list unseen again". The UID
@@ -446,7 +451,9 @@ A UID identifies a message *within one folder*. After `email_move`,
 the message has a fresh UID in the destination folder; the old UID in
 the source folder stops resolving. The result is `{action: "moved",
 account, source_folder, destination_folder, uids, destination_uids,
-destination_uids_known}`. When `destination_uids_known` is true, the
+destination_uids_known, uids_not_found}`. When `destination_uids_known` is true,
+`uids` are the messages the server confirmed moving, `uids_not_found`
+the requested UIDs it did not find, and the
 `destination_uids` are the moved messages' new UIDs in order and you
 can operate on them immediately; when it is false the server did not
 report them and you must list the destination to find them.
