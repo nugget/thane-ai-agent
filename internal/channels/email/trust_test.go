@@ -131,11 +131,16 @@ func TestCheckRecipientTrust_ExtractsAddressAndMemoizes(t *testing.T) {
 	}
 }
 
-func TestTrustResultFormatIssuesNamesEveryRecipient(t *testing.T) {
-	resolver := &stubContacts{zones: map[string]string{"known@example.com": "known"}}
-	result := CheckRecipientTrust(context.Background(), resolver, []string{"known@example.com", "nobody@example.com"})
+func TestTrustResultHasIssuesFollowsAssessments(t *testing.T) {
+	resolver := &stubContacts{zones: map[string]string{"known@example.com": "known", "ok@example.com": "admin"}}
+	result := CheckRecipientTrust(context.Background(), resolver, []string{"ok@example.com", "known@example.com"})
 	if !result.HasIssues() {
-		t.Fatal("expected issues")
+		t.Fatal("a refused recipient is an issue")
 	}
-	mustContain(t, result.FormatIssues(), "Cannot send to known@example.com", "Cannot send to nobody@example.com", "contact_save")
+	if clean := CheckRecipientTrust(context.Background(), resolver, []string{"ok@example.com"}); clean.HasIssues() {
+		t.Errorf("an all-allowed result has no issues: %+v", clean)
+	}
+	if !strings.Contains(strings.Join(result.Blocked, "\n"), "Cannot send to known@example.com") {
+		t.Errorf("Blocked should carry the refusal line: %v", result.Blocked)
+	}
 }

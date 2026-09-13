@@ -48,7 +48,7 @@ func folderParameter(role string) map[string]any {
 func draftParameter() map[string]any {
 	return map[string]any{
 		"type":        "boolean",
-		"description": "Hold the message in the account's Drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says which.",
+		"description": "Hold the message in the account's Drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says what happened and decision.route says which rule decided.",
 	}
 }
 
@@ -204,11 +204,11 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_send",
 			Description: "Compose a new message from one account and hand it to the send decision. body is markdown and is rendered to both text and HTML. " +
-				"Every recipient in to and cc must be in the contact directory at a trust zone whose send policy is not blocked; an address several contact records share is governed by the least privileged of them, and one the directory could not be checked for is refused rather than treated as a stranger. " +
+				"Every recipient in to and cc (at most 50 together) must be in the contact directory at a trust zone whose send policy is not blocked and pass the account's recipient-domain rules, which the Email Accounts block lists; an address several contact records share is governed by the least privileged of them, and one the directory could not be checked for is refused rather than treated as a stranger. " +
 				"The account's policy then decides the disposition: sent (delivered by SMTP; cannot be recalled), drafted (held in the account's Drafts folder for the operator to send; nothing has left the mailbox), or refused. " +
 				"The Email Accounts block lists, per account and for this turn, which zones it sends_directly_to, drafts_for, and refuses. " +
 				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
-				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, signed, recipients:[{address, trust_zone, gating, contact_status, contact, allowed, reason}], note, decision}; " +
+				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, signed, note, decision:{disposition, route, attended, gating, reason, drafts_folder, recipients:[{address, trust_zone, gating, contact_status, contact, allowed, reason}]}}; " +
 				"sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder, and signed says whether an outbound signature was applied. " +
 				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted.",
 			Parameters: map[string]any{

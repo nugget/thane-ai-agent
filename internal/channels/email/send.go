@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
+
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // SendRequest is one outbound message as a handler assembled it.
@@ -30,6 +32,9 @@ type SendRequest struct {
 }
 
 // SendOutcome is what happened to a message that was not refused.
+// SentFolder names the folder a sent copy went to and SentFolderCopy is
+// "stored" or "failed"; both are empty for a draft or an account that
+// keeps no Sent copy.
 type SendOutcome struct {
 	Decision       Decision
 	Composed       Composed
@@ -62,7 +67,10 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	if !cfg.CanDraft() {
 		decision.Route = RouteAccess
 		decision.Reason = accessRefusalSentence(cfg)
-		return SendOutcome{}, s.refuse(req.Tool, decision)
+		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+	}
+	if n := len(req.To) + len(req.Cc); n > maxRecipients {
+		return SendOutcome{}, fmt.Errorf("email has %d recipients in to and cc; one message may address at most %d. Split the audience, or ask the operator to send it from their own client", n, maxRecipients)
 	}
 
 	bcc, err := s.auditCopy(req.To, req.Cc)
@@ -78,7 +86,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	if trust.HasIssues() {
 		decision.Route = RouteTrustGate
 		decision.Reason = trustRefusalSentence(trust)
-		return SendOutcome{}, s.refuse(req.Tool, decision)
+		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
 	decision.Gating = mostRestrictive(trust.Assessments)
 	decision.Disposition, decision.Route = routeDelivery(cfg.DeliveryMode(), decision.Gating, decision.Attended, req.Draft)
@@ -86,7 +94,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		decision.Disposition = DispositionRefused
 		decision.Route = RouteNoSMTP
 		decision.Reason = fmt.Sprintf("Email not sent: account %q has no smtp configured, so it can only draft; retry with draft: true or use an account that can send.", cfg.Name)
-		return SendOutcome{}, s.refuse(req.Tool, decision)
+		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
 
 	composed, err := ComposeMessage(ComposeOptions{
@@ -101,16 +109,21 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		References:  req.References,
 	})
 	if err != nil {
-		return SendOutcome{}, fmt.Errorf("compose message: %w", err)
+		err = fmt.Errorf("compose message: %w", err)
+		s.logDecision(ctx, req, decision, SendOutcome{}, err)
+		return SendOutcome{}, err
 	}
 
 	if s.inspector != nil {
+		// The inspector gets copies: a refuse-only seam must not be able
+		// to rewrite the envelope or the decision record through slices
+		// it shares with them.
 		objection, err := s.inspector.Inspect(ctx, OutboundReview{
 			Tool:      req.Tool,
-			Decision:  decision,
+			Decision:  reviewDecision(decision),
 			From:      composed.From,
-			To:        composed.To,
-			Cc:        composed.Cc,
+			To:        slices.Clone(composed.To),
+			Cc:        slices.Clone(composed.Cc),
 			Subject:   req.Subject,
 			Body:      req.Body,
 			InReplyTo: req.InReplyTo,
@@ -122,7 +135,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 			decision.Disposition = DispositionRefused
 			decision.Route = RouteInspector
 			decision.Reason = "Email not sent: the outbound inspector objected (" + objection + ")."
-			return SendOutcome{}, s.refuse(req.Tool, decision)
+			return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 		}
 	}
 
@@ -132,7 +145,10 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		folder := s.draftsFolder(ctx, req.Account)
 		appended, err := req.Account.Client.AppendMessage(ctx, folder, composed.Bytes, []imap.Flag{imap.FlagDraft, imap.FlagSeen})
 		if err != nil {
-			return SendOutcome{}, fmt.Errorf("hold message in drafts folder %q of account %q: %w", folder, cfg.Name, err)
+			decision.DraftsFolder = folder
+			err = fmt.Errorf("hold message in drafts folder %q of account %q: %w", folder, cfg.Name, err)
+			s.logDecision(ctx, req, decision, outcome, err)
+			return SendOutcome{}, err
 		}
 		decision.DraftsFolder = folder
 		outcome.DraftsFolder = folder
@@ -142,16 +158,21 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		if signer := s.signerFor(cfg.Name); signer != nil {
 			wire, err = signer.Sign(ctx, OutboundMessage{Account: cfg.Name, From: composed.From, Message: composed.Bytes})
 			if err != nil {
-				return SendOutcome{}, fmt.Errorf("sign message for account %q: %w", cfg.Name, err)
+				err = fmt.Errorf("sign message for account %q: %w", cfg.Name, err)
+				s.logDecision(ctx, req, decision, outcome, err)
+				return SendOutcome{}, err
 			}
 			outcome.Signed = true
 		}
 		bccAddrs, err := parseAddresses(bcc)
 		if err != nil {
-			return SendOutcome{}, fmt.Errorf("bcc addresses: %w", err)
+			err = fmt.Errorf("bcc addresses: %w", err)
+			s.logDecision(ctx, req, decision, outcome, err)
+			return SendOutcome{}, err
 		}
 		recipients := collectRecipients(composed.To, composed.Cc, bccAddrs)
 		if err := sendMail(ctx, cfg.Name, cfg.SMTP, composed.From.Address, recipients, wire); err != nil {
+			s.logDecision(ctx, req, decision, outcome, err)
 			return SendOutcome{}, err
 		}
 		if cfg.SentFolder != "" {
@@ -172,25 +193,58 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	}
 	outcome.Decision = decision
 
-	s.logger.Info("email outbound decision",
+	s.logDecision(ctx, req, decision, outcome, nil)
+	s.recordOp(req.Tool, cfg.Name, decision.DraftsFolder, composed.MessageID)
+	return outcome, nil
+}
+
+// maxRecipients bounds the addresses one message may carry in to and
+// cc, which also bounds the per-recipient assessments a result renders.
+const maxRecipients = 50
+
+// logDecision writes the one log line every decided message gets,
+// keyed to the loop and conversation that asked, whether delivery then
+// succeeded or not: a forensic pass must see attempted deliveries, not
+// only the ones that landed. deliveryErr is nil on success.
+func (s *Service) logDecision(ctx context.Context, req SendRequest, decision Decision, outcome SendOutcome, deliveryErr error) {
+	attrs := []any{
 		"tool", req.Tool,
-		"account", cfg.Name,
+		"account", decision.Account,
 		"disposition", decision.Disposition,
 		"route", decision.Route,
 		"attended", decision.Attended,
 		"gating", decision.Gating,
 		"recipient_count", len(decision.Recipients),
-		"message_id", composed.MessageID,
+		"message_id", outcome.Composed.MessageID,
 		"in_reply_to", req.InReplyTo,
 		"drafts_folder", decision.DraftsFolder,
 		"signed", outcome.Signed,
-	)
-	s.recordOp(req.Tool, cfg.Name, decision.DraftsFolder, composed.MessageID)
-	return outcome, nil
+		"loop_id", tools.LoopIDFromContext(ctx),
+		"conversation_id", tools.ConversationIDFromContext(ctx),
+	}
+	if deliveryErr != nil {
+		s.logger.Warn("email outbound decision not delivered", append(attrs, "error", deliveryErr)...)
+		return
+	}
+	s.logger.Info("email outbound decision", attrs...)
 }
 
-// refuse logs a refusal and returns it as the model-facing error.
-func (s *Service) refuse(tool string, decision Decision) error {
+// reviewDecision copies a decision for the inspector, recipients and
+// their contact records included.
+func reviewDecision(d Decision) Decision {
+	d.Recipients = slices.Clone(d.Recipients)
+	for i := range d.Recipients {
+		if c := d.Recipients[i].Contact; c != nil {
+			cp := *c
+			d.Recipients[i].Contact = &cp
+		}
+	}
+	return d
+}
+
+// refuse logs a refusal, keyed to the loop and conversation that asked,
+// and returns it as the model-facing error.
+func (s *Service) refuse(ctx context.Context, tool string, decision Decision) error {
 	decision.Disposition = DispositionRefused
 	s.logger.Info("email outbound refused",
 		"tool", tool,
@@ -200,6 +254,8 @@ func (s *Service) refuse(tool string, decision Decision) error {
 		"gating", decision.Gating,
 		"recipient_count", len(decision.Recipients),
 		"reason", decision.Reason,
+		"loop_id", tools.LoopIDFromContext(ctx),
+		"conversation_id", tools.ConversationIDFromContext(ctx),
 	)
 	return &PolicyRefusal{Message: decision.Reason, Decision: decision}
 }
@@ -211,7 +267,7 @@ func (s *Service) sendAccessRefusal(ctx context.Context, tool string, acct Resol
 	if acct.Config.CanDraft() {
 		return nil
 	}
-	return s.refuse(tool, Decision{
+	return s.refuse(ctx, tool, Decision{
 		Account:    acct.Config.Name,
 		Access:     acct.Config.AccessLevel(),
 		Delivery:   acct.Config.DeliveryMode(),
@@ -276,21 +332,35 @@ func (s *Service) auditCopy(to, cc []string) ([]string, error) {
 }
 
 // draftsFolder returns where an account's drafts go: the configured
-// folder, else the folder the server marks \Drafts, else "Drafts".
+// folder, else the folder the server marks \Drafts (listing the account
+// when nothing is cached yet), else "Drafts".
 func (s *Service) draftsFolder(ctx context.Context, acct ResolvedAccount) string {
-	if configured := strings.TrimSpace(acct.Config.DraftsFolder); configured != "" {
-		return configured
+	if folder := s.knownDraftsFolder(acct.Config); folder != "" {
+		return folder
 	}
-	folders, ok := s.cachedFolders(acct.Name)
-	if !ok {
-		if listed, err := s.listFolders(ctx, acct); err == nil {
-			folders = folderSnapshot{Folders: listed, At: time.Now()}
+	if _, ok := s.cachedFolders(acct.Name); !ok {
+		if _, err := s.listFolders(ctx, acct); err == nil {
+			if folder := s.knownDraftsFolder(acct.Config); folder != "" {
+				return folder
+			}
 		}
 	}
-	if f, found := FindFolderByRole(folders.Folders, RoleDrafts); found {
-		return f.Name
-	}
 	return "Drafts"
+}
+
+// knownDraftsFolder resolves an account's drafts folder without
+// touching the server: the configured folder, else the folder the
+// cached listing marks \Drafts, else empty when neither is known yet.
+func (s *Service) knownDraftsFolder(cfg AccountConfig) string {
+	if configured := strings.TrimSpace(cfg.DraftsFolder); configured != "" {
+		return configured
+	}
+	if snap, ok := s.cachedFolders(cfg.Name); ok {
+		if f, found := FindFolderByRole(snap.Folders, RoleDrafts); found {
+			return f.Name
+		}
+	}
+	return ""
 }
 
 // recordOutboundInteractions notes, once per matched recipient, that

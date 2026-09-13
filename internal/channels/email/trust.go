@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -38,7 +39,9 @@ type TrustResult struct {
 	// Allowed lists the recipients that passed, as given.
 	Allowed []string
 
-	// Blocked lists one refusal message per recipient that did not.
+	// Blocked lists one "Cannot send to <address>: <reason>" line per
+	// recipient that did not pass, for logs and tests; the model reads
+	// the assessments.
 	Blocked []string
 
 	// Assessments carries the per-recipient detail behind both lists.
@@ -118,17 +121,9 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 	return a
 }
 
-// HasIssues reports whether any recipient was blocked.
+// HasIssues reports whether any recipient was refused. It reads the
+// assessments, which are the model-facing record; Blocked is a
+// convenience list of the same refusals for logs and tests.
 func (tr TrustResult) HasIssues() bool {
-	return len(tr.Blocked) > 0
-}
-
-// FormatIssues renders the refusal for the model: every blocked
-// recipient with its reason, so one retry can fix all of them.
-func (tr TrustResult) FormatIssues() string {
-	parts := make([]string, 0, len(tr.Blocked))
-	for _, b := range tr.Blocked {
-		parts = append(parts, "✗ "+b)
-	}
-	return fmt.Sprintf("Email not sent — recipient trust issues:\n\n%s", strings.Join(parts, "\n"))
+	return slices.ContainsFunc(tr.Assessments, func(a RecipientAssessment) bool { return !a.Allowed })
 }

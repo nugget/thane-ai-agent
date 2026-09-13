@@ -11,7 +11,7 @@ next_tags: [contacts_lookup, contacts_save, contacts_vcf]
 The contact directory is the canonical record of who counts as a known
 person, organization, or group on this host. Other surfaces depend on
 it: the email send decision reads each recipient's trust zone
-(`email_respond` has the table), message channels resolve incoming
+against the sending account's policy, message channels resolve incoming
 senders against it, owner-only tools assert identity through it. Get the contact record right and the rest of the
 agent's people-shaped work works; get it wrong and the consequences
 ripple.
@@ -65,10 +65,11 @@ ordinary documents instead.
 - **Trust zones drive downstream policy.** Every contact carries a zone:
   `admin` (full access), `household` (family-level), `trusted`
   (established relationship), `known` (default; lower-privilege gated
-  access). The zone is what the email send decision reads (a
-  `trusted` recipient's mail is drafted for the operator, a `known`
-  one's is refused; `email_respond` has the table) and what determines
-  which contacts get owner-scoped privileges. Field
+  access). The zone is what the email send decision reads against
+  the sending account's policy (the Email Accounts block's
+  `sends_directly_to`, `drafts_for`, and `refuses` lists are the
+  authority for this turn) and what determines which contacts get
+  owner-scoped privileges. Field
   filtering on vCard exports is a separate axis — it uses the
   *recipient*'s trust zone passed at export time, and only when
   exporting the agent's own card via `name: "self"`. Assigning a
@@ -128,12 +129,12 @@ ordinary documents instead.
 ## Cross-references
 
 - For sending mail after looking up a recipient, bounce to `email` —
-  the recipient gate reads the trust zone assigned here. Only
-  `admin`/`household`/`trusted` zones send through;
-  `known` zone is rejected with a "promote-or-authorize" message,
-  and missing-contact recipients are rejected with a "no contact
-  record" message. The gate is all-or-nothing: any rejected
-  recipient aborts the whole send.
+  the send decision reads the trust zone assigned here against the
+  sending account's policy. The Email Accounts block lists, per
+  account and for this turn, which zones it `sends_directly_to`,
+  `drafts_for`, and `refuses`, and a refusal's `decision.recipients`
+  names each recipient at issue with its recovery. The gate is
+  all-or-nothing: any refused recipient refuses the whole message.
 - For Signal messages, the same contact directory backs sender
   recognition; activate `signal` for the messaging side.
 - For "what did this person and I last discuss" beyond what's in the

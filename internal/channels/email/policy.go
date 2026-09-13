@@ -58,7 +58,7 @@ const (
 	RouteTrustZone = "trust_zone"
 
 	// RouteUnattendedFloor: by_trust_zone delivery held the message
-	// because no human is attending this turn.
+	// because the operator is not present for this turn.
 	RouteUnattendedFloor = "unattended_floor"
 
 	// RouteInspector: the outbound inspector refused the message.
@@ -80,9 +80,9 @@ type Decision struct {
 	Access   string `json:"access"`
 	Delivery string `json:"delivery"`
 
-	// Attended is whether a human was present for the turn: the
-	// message arrived through an operator-facing API or the
-	// conversation is bound to the operator's own contact.
+	// Attended is whether the operator was present for the turn: it
+	// was their own message, through Thane's native API or in a
+	// conversation bound to their contact. Loop wakes never are.
 	Attended bool `json:"attended"`
 
 	// DraftRequested is whether the caller asked for a draft.
@@ -150,16 +150,23 @@ type OutboundReview struct {
 	InReplyTo string
 }
 
-// attended reports whether a human is present for this turn. It is
-// true when the message arrived through an operator-facing API or the
-// conversation is bound to the operator's own contact, and false for
-// poller wakes, scheduled loops, and conversations with anyone else.
+// attended reports whether the operator is present for this turn, which
+// decides where by_trust_zone delivery lands. A turn is attended only
+// when it is the operator's own message: one sent through Thane's
+// native API (the console and REST clients the operator drives; the
+// Ollama-compatible shim, which Home Assistant automations and voice
+// satellites call, does not count), or an inbound channel message in a
+// conversation bound to the operator's own contact. Poller wakes,
+// scheduled loops, and loops launched from the operator's conversation
+// are unattended even though they inherit the operator's binding,
+// because nobody typed the turn.
 func attended(ctx context.Context) bool {
-	if tools.MessageOriginFromContext(ctx) == memory.OriginAPI {
-		return true
-	}
-	if binding := tools.ChannelBindingFromContext(ctx); binding != nil && binding.IsOwner {
-		return true
+	switch tools.MessageOriginFromContext(ctx) {
+	case memory.OriginAPI:
+		return tools.HintsFromContext(ctx)["channel"] == "api"
+	case memory.OriginChannel:
+		binding := tools.ChannelBindingFromContext(ctx)
+		return binding != nil && binding.IsOwner
 	}
 	return false
 }

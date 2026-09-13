@@ -84,11 +84,15 @@ audiences and trust models are different.
   `refused` (one sentence, then a `decision` JSON naming every
   recipient at issue and its recovery; nothing was sent or drafted).
   Under the default `by_trust_zone` delivery, `admin` and `household`
-  recipients send directly when a human is attending the turn,
-  `trusted` recipients are drafted, blocked zones refuse the whole
-  message, and a turn nobody is attending (a poller wake, a scheduled
-  loop) drafts everything. The Email Accounts block says `attended`
-  for this turn and lists, per account, which zones it
+  recipients send directly when the operator is present for the
+  turn, `trusted` recipients are drafted, blocked zones refuse the
+  whole message, and every other turn drafts everything. `attended` in
+  the Email Accounts block is the authority: it is true only when this
+  turn is the operator's own message (Thane's native API, or their own
+  message in a conversation bound to their contact). A poller wake, a
+  scheduled loop, a loop launched from the operator's conversation, and
+  a conversation with anyone else are all unattended. The block also
+  lists, per account, which zones it
   `sends_directly_to`, `drafts_for`, and `refuses`, so read it before
   composing rather than learning the answer from the result. Pass
   `draft: true` to hold a message in Drafts on purpose.
@@ -288,7 +292,7 @@ decides whether the message is sent, held in Drafts for the operator,
 or refused.** The Email Accounts block is the map: `access` says
 whether the account may write mail at all (`send`) or only read and
 file it (`organize`, `read`), `can_send` says whether it may hand mail
-to SMTP itself, `attended` says whether a human is present for this
+to SMTP itself, `attended` says whether the operator is present for this
 turn, and `sends_directly_to` / `drafts_for` / `refuses` say where a
 message to each trust zone lands right now. A send from an account
 that cannot write mail is refused by name.
@@ -313,8 +317,8 @@ The body is markdown; the server converts to both `text/plain` and
 rules, then routes on the most restrictive recipient. **Any
 trust-gate issue refuses the whole message** — there is no "send the
 allowed ones and skip the others." The result is `{disposition,
-account, message_id, to, cc, bcc_count, subject, sent_folder_copy,
-drafts_folder, draft_uid, signed, recipients, note, decision}`, and
+account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy,
+drafts_folder, draft_uid, signed, note, decision}`, and
 `disposition` is one of three:
 
 - **`sent`** — SMTP accepted the message; `sent_folder_copy` is `stored`
@@ -324,7 +328,7 @@ drafts_folder, draft_uid, signed, recipients, note, decision}`, and
   which the message can be found in the Sent folder and the value a
   reply's `in_reply_to` will carry; `signed` says whether an outbound
   signature was applied (false until a signing scheme is configured);
-  `recipients` lists each address with its `trust_zone`, `gating`,
+  `decision.recipients` lists each address with its `trust_zone`, `gating`,
   `contact_status`, and `contact` (the shape an address carries in a
   read result), so the record of who you
   wrote to is in the result.
@@ -332,7 +336,7 @@ drafts_folder, draft_uid, signed, recipients, note, decision}`, and
   `drafts_folder` with the Draft flag, waiting for the operator to
   send it from their own client. Nothing has left the mailbox.
   `decision.route` says why it was held: `trust_zone` (a `trusted`
-  recipient), `unattended_floor` (nobody is attending this turn),
+  recipient), `unattended_floor` (the operator is not present for this turn),
   `policy_drafts` (the account always drafts), or `requested_draft`
   (you asked). Tell the person you are talking to, if any, that the
   message awaits the operator; do not resend it, and do not try to
@@ -347,7 +351,7 @@ drafts_folder, draft_uid, signed, recipients, note, decision}`, and
   to the message itself). A refusal is a decision, not a transient
   error: change the recipient list or the message, or report it.
 
-When the result reports a rejection, the right move is usually
+When the result reports a refusal, the right move is usually
 `contact_lookup` to confirm what's actually in the directory (maybe
 the spelling differs, or an alias resolves elsewhere), then either
 `contact_save` to add or promote, or revise the recipient list.
@@ -406,9 +410,11 @@ audience-wrong is a real leak.
 ## Cross-references
 
 - For looking up the right address before composing, bounce to
-  `contacts` (`contact_lookup`). The trust gate's "Cannot send to X:
-  no contact record" message is recoverable, but it's faster to know
-  the directory state going in.
+  `contacts` (`contact_lookup`). A trust-gate refusal names each
+  recipient in `decision.recipients` with a `reason` such as "no
+  contact record; add one deliberately with contact_save or drop the
+  recipient"; it is recoverable, but it's faster to know the directory
+  state going in.
 - For high-stakes outgoing mail (sensitive, legal, ambiguous tone),
   draft the body in a `scratchpad:` doc and ask for operator sign-off
   via `request_human_decision` before sending.
@@ -479,7 +485,9 @@ handler accepts a convenience shorthand: if you pass only `folder` and
 omit `destination`, the `folder` value is treated as the destination
 and INBOX is assumed as the source. Prefer the explicit form for
 clarity. A destination the account lacks is refused and the refusal
-lists the folders that exist.
+lists the folders that exist. The account's drafts folder is never a destination:
+it holds only what Thane composed for the operator to send, and a moved
+message there would look like one of them.
 
 ## UIDs are folder-scoped — and the result tells you the new ones
 

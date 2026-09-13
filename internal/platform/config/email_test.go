@@ -196,6 +196,12 @@ func TestEmailConfig_Validate(t *testing.T) {
 		{"send without smtp drafting is fine", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, DefaultFrom: "alice@example.com", Policy: EmailPolicyConfig{Access: EmailAccessSend, Delivery: EmailDeliveryDrafts}}}}, ""},
 		{"organize with smtp is fine", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: smtp, DefaultFrom: "alice@example.com", Policy: EmailPolicyConfig{Access: EmailAccessOrganize}}}}, ""},
 		{"domain entries are domains", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{"alice@example.com"}}}}}, "not a domain"},
+		{"empty allow entry is not a domain", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{AllowedRecipientDomains: []string{""}}}}}, "not a domain"},
+		{"wildcard is not a domain", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{"*"}}}}}, "not a domain"},
+		{"empty label is not a domain", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{"example..com"}}}}}, "not a domain"},
+		{"list separator is not a domain", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{"example.com,example.org"}}}}}, "not a domain"},
+		{"port is not a domain", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{"example.com:25"}}}}}, "not a domain"},
+		{"leading dot is a domain", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{".example.com"}}}}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -231,7 +237,7 @@ func TestEmailAccountConfig_PolicyDefaults(t *testing.T) {
 		t.Error("an explicit organize must win over configured smtp")
 	}
 
-	cfg := EmailConfig{Accounts: []EmailAccountConfig{{Name: "a", IMAP: EmailIMAPConfig{Host: "h", Username: "u"}, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{" .Example.COM ", ""}}}}}
+	cfg := EmailConfig{Accounts: []EmailAccountConfig{{Name: "a", IMAP: EmailIMAPConfig{Host: "h", Username: "u"}, Policy: EmailPolicyConfig{DeniedRecipientDomains: []string{" .Example.COM "}}}}}
 	cfg.ApplyDefaults()
 	got := cfg.Accounts[0].Policy
 	if got.Access != EmailAccessOrganize || got.Delivery != EmailDeliveryByTrustZone || len(got.DeniedRecipientDomains) != 1 || got.DeniedRecipientDomains[0] != "example.com" || got.AllowedRecipientDomains != nil {
@@ -288,5 +294,16 @@ func TestExampleEmailConfigMatchesDefaults(t *testing.T) {
 	}
 	if err := example.Validate(); err != nil {
 		t.Errorf("example email config does not validate: %v", err)
+	}
+}
+
+// TestEmailConfig_EmptyDomainSurvivesDefaultsToBeRefused pins the
+// fail-closed path: ApplyDefaults keeps an empty allow-list entry so
+// Validate refuses it, instead of normalizing it away into "no limit".
+func TestEmailConfig_EmptyDomainSurvivesDefaultsToBeRefused(t *testing.T) {
+	cfg := EmailConfig{Accounts: []EmailAccountConfig{{Name: "a", IMAP: EmailIMAPConfig{Host: "h", Username: "u"}, Policy: EmailPolicyConfig{AllowedRecipientDomains: []string{" "}}}}}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "allowed_recipient_domains") {
+		t.Fatalf("an empty allow-list entry must be refused after defaults, got %v", err)
 	}
 }

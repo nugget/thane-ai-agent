@@ -38,22 +38,35 @@ func TestRouteDelivery(t *testing.T) {
 }
 
 func TestAttended(t *testing.T) {
-	if attended(context.Background()) {
-		t.Error("a bare context is unattended")
+	bg := context.Background()
+	api := func(channel string) context.Context {
+		ctx := tools.WithMessageOrigin(bg, memory.OriginAPI)
+		if channel != "" {
+			ctx = tools.WithHints(ctx, map[string]string{"channel": channel})
+		}
+		return ctx
 	}
-	if !attended(tools.WithMessageOrigin(context.Background(), memory.OriginAPI)) {
-		t.Error("an API-origin turn is attended")
+	owner := &memory.ChannelBinding{Channel: "signal", Address: "+1", IsOwner: true}
+	other := &memory.ChannelBinding{Channel: "signal", Address: "+2", ContactID: "x", TrustZone: "household"}
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want bool
+	}{
+		{"bare context", bg, false},
+		{"native API", api("api"), true},
+		{"Ollama-compatible shim", api("ollama"), false},
+		{"API origin without a channel hint", api(""), false},
+		{"wake", tools.WithMessageOrigin(bg, memory.OriginWake), false},
+		{"operator's own channel message", tools.WithMessageOrigin(tools.WithChannelBinding(bg, owner), memory.OriginChannel), true},
+		{"owner-bound loop wake", tools.WithMessageOrigin(tools.WithChannelBinding(bg, owner), memory.OriginWake), false},
+		{"owner binding with no origin", tools.WithChannelBinding(bg, owner), false},
+		{"someone else's channel message", tools.WithMessageOrigin(tools.WithChannelBinding(bg, other), memory.OriginChannel), false},
 	}
-	if attended(tools.WithMessageOrigin(context.Background(), memory.OriginWake)) {
-		t.Error("a wake is unattended")
-	}
-	owner := tools.WithChannelBinding(context.Background(), &memory.ChannelBinding{Channel: "signal", Address: "+1", IsOwner: true})
-	if !attended(owner) {
-		t.Error("a conversation bound to the operator is attended")
-	}
-	other := tools.WithChannelBinding(context.Background(), &memory.ChannelBinding{Channel: "signal", Address: "+2", ContactID: "x", TrustZone: "trusted"})
-	if attended(other) {
-		t.Error("a conversation with anyone else is unattended")
+	for _, tt := range tests {
+		if got := attended(tt.ctx); got != tt.want {
+			t.Errorf("%s: attended = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 
@@ -94,7 +107,22 @@ func TestApplyDomainRules(t *testing.T) {
 		check(t, PolicyConfig{AllowedRecipientDomains: []string{".example.com"}}, []string{"alice@example.com", "bob@sub.example.com"}, "limits recipients to")
 	})
 	t.Run("denied wins inside the allow list", func(t *testing.T) {
-		check(t, PolicyConfig{AllowedRecipientDomains: []string{"example.com", "blocked.example"}, DeniedRecipientDomains: []string{"blocked.example"}}, []string{"alice@example.com", "bob@sub.example.com"}, "")
+		policy := PolicyConfig{AllowedRecipientDomains: []string{"example.com", "blocked.example"}, DeniedRecipientDomains: []string{"blocked.example"}}
+		check(t, policy, []string{"alice@example.com", "bob@sub.example.com"}, "")
+		result := CheckRecipientTrust(context.Background(), resolver, all)
+		applyDomainRules(&result, policy)
+		for _, a := range result.Assessments {
+			if strings.HasSuffix(a.Address, "blocked.example") && !strings.Contains(a.Reason, "denies recipients at") {
+				t.Errorf("%s is inside the allow list but must be refused by the deny rule, got %q", a.Address, a.Reason)
+			}
+		}
+	})
+	t.Run("rules apply without a contact resolver", func(t *testing.T) {
+		result := CheckRecipientTrust(context.Background(), nil, []string{"x@blocked.example", "ok@example.com"})
+		applyDomainRules(&result, PolicyConfig{DeniedRecipientDomains: []string{"blocked.example"}})
+		if !result.HasIssues() || strings.Join(result.Allowed, ",") != "ok@example.com" {
+			t.Errorf("denied domain with no resolver = allowed %v, blocked %v", result.Allowed, result.Blocked)
+		}
 	})
 	t.Run("no rules change nothing", func(t *testing.T) {
 		check(t, PolicyConfig{}, all, "")

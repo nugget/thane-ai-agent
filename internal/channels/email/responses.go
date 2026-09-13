@@ -233,7 +233,9 @@ type moveResponse struct {
 }
 
 // sendResponse is the result of email_send and email_reply. The
-// disposition says what happened; the decision says why.
+// disposition says what happened; the decision says why, and carries
+// the one per-recipient assessment list, the same place a refusal
+// carries it.
 type sendResponse struct {
 	Disposition Disposition `json:"disposition"`
 	Account     string      `json:"account"`
@@ -250,12 +252,11 @@ type sendResponse struct {
 	SentFolder     string `json:"sent_folder,omitempty"`
 	SentFolderCopy string `json:"sent_folder_copy,omitempty"`
 
-	DraftsFolder string                `json:"drafts_folder,omitempty"`
-	DraftUID     uint32                `json:"draft_uid,omitempty"`
-	Signed       bool                  `json:"signed"`
-	Recipients   []RecipientAssessment `json:"recipients"`
-	Note         string                `json:"note,omitempty"`
-	Decision     Decision              `json:"decision"`
+	DraftsFolder string   `json:"drafts_folder,omitempty"`
+	DraftUID     uint32   `json:"draft_uid,omitempty"`
+	Signed       bool     `json:"signed"`
+	Note         string   `json:"note,omitempty"`
+	Decision     Decision `json:"decision"`
 }
 
 // newSendResponse renders a delivered or drafted outcome.
@@ -274,7 +275,6 @@ func newSendResponse(outcome SendOutcome, subject, inReplyTo string) sendRespons
 		DraftsFolder:   outcome.DraftsFolder,
 		DraftUID:       outcome.DraftUID,
 		Signed:         outcome.Signed,
-		Recipients:     outcome.Decision.Recipients,
 		Decision:       outcome.Decision,
 	}
 	if resp.Disposition == DispositionDrafted {

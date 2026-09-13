@@ -171,7 +171,7 @@ the account's access level, adds the operator's audit copy outside the
 gate, assesses every recipient against the contact directory and the
 account's domain lists, routes on the most restrictive recipient's trust
 zone under the account's delivery policy, applies an unattended floor so a
-turn no human is attending drafts rather than sends unless the operator
+turn the operator is not present for drafts rather than sends unless the operator
 chose direct delivery, offers the composed message to a refuse-only
 inspector, signs, and only then delivers. The model's tool call cannot
 skip a stage, a refusal names each recipient at issue with its recovery,
@@ -221,9 +221,12 @@ possible are operator custody: `contact_save` refuses and `contact_import_vcf`
 drops `KEY` and `X-THANE-KEY-*` properties, so a message cannot install the key that
 verifies its own sender. The attended/unattended distinction the egress
 gate reads comes from the same place: a turn counts as attended only when
-the message entered through an operator-facing API or the conversation is
-bound to the operator's own contact, never because a message claimed to
-be from the operator.
+it is the operator's own message, sent through Thane's native API or
+written in a conversation bound to their own contact, never because a
+message claimed to be from the operator. Loop wakes are never attended,
+even in a loop the operator launched from their own conversation, and
+neither is a call through the Ollama-compatible shim that Home Assistant
+automations and voice satellites use.
 
 ## Known Behavioral Gaps
 

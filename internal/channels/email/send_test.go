@@ -11,9 +11,11 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// attendedCtx is a turn the operator is present for.
+// attendedCtx is a turn the operator is present for: their own message
+// through Thane's native API.
 func attendedCtx() context.Context {
-	return tools.WithMessageOrigin(context.Background(), memory.OriginAPI)
+	ctx := tools.WithMessageOrigin(context.Background(), memory.OriginAPI)
+	return tools.WithHints(ctx, map[string]string{"channel": "api"})
 }
 
 // policyService is identityService with the account's policy adjusted.
@@ -310,4 +312,10 @@ func TestContextBlockCarriesPolicyAndRouting(t *testing.T) {
 
 	got, _ = provider.TagContext(context.Background(), agentctxRequest())
 	mustContain(t, got, `"attended":false`, `"sends_directly_to":[]`, `"drafts_for":["admin","household","trusted"]`)
+
+	ruled, _, _ := policyService(t, ServiceDependencies{Contacts: identityStub()}, func(cfg *Config) {
+		cfg.Accounts[0].Policy.DeniedRecipientDomains = []string{"example.org"}
+	})
+	got, _ = ruled.ContextProvider().TagContext(attendedCtx(), agentctxRequest())
+	mustContain(t, got, `"denied_recipient_domains":["example.org"]`)
 }

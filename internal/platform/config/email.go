@@ -28,7 +28,7 @@ const (
 // has passed the trust gate.
 const (
 	// EmailDeliveryByTrustZone sends directly to admin and household
-	// recipients when a human is attending the turn, holds mail for
+	// recipients when the operator is present for the turn, holds mail for
 	// trusted recipients in Drafts, refuses known and unknown ones,
 	// and holds everything an unattended loop writes.
 	EmailDeliveryByTrustZone = "by_trust_zone"
@@ -120,21 +120,25 @@ type EmailPolicyConfig struct {
 	// and draft). Default: "send" when smtp is configured, "organize"
 	// otherwise. An account with smtp configured may still be held at
 	// "organize", which keeps its credentials for the operator's own
-	// use; "send" without smtp can only draft and requires
-	// delivery: drafts.
+	// use; "send" without smtp can only draft and requires the
+	// drafts delivery mode.
 	Access string `yaml:"access"`
 
 	// Delivery decides where outbound mail goes once every recipient
 	// has passed the trust gate. "by_trust_zone" (default) sends
-	// directly to admin and household recipients when a human is
-	// attending the turn, holds mail for trusted recipients in the
+	// directly to admin and household recipients when the operator is
+	// present for the turn, holds mail for trusted recipients in the
 	// Drafts folder for the operator to send, and refuses known and
-	// unknown recipients; a turn no human is attending (a poller wake
-	// or a scheduled loop rather than a conversation with the operator)
-	// holds everything in Drafts, so an autonomous loop never sends on
-	// its own. "drafts" holds every message in Drafts. "direct" sends
-	// everything the gate allows, including to trusted recipients and
-	// from unattended loops; choose it deliberately.
+	// unknown recipients. The operator is present only for their own
+	// message, sent through Thane's native API or written in a
+	// conversation bound to their contact; every other turn (a poller
+	// wake, a scheduled loop, a loop launched from the operator's
+	// conversation, a call through the Ollama-compatible shim that Home
+	// Assistant automations use) holds everything in Drafts, so an
+	// autonomous loop never sends on its own. "drafts" holds every
+	// message in Drafts. "direct" sends everything the gate allows,
+	// including to trusted recipients and from unattended turns; choose
+	// it deliberately.
 	Delivery string `yaml:"delivery"`
 
 	// DeniedRecipientDomains lists domains this account never writes
@@ -285,20 +289,41 @@ var validEmailAccess = map[string]bool{EmailAccessRead: true, EmailAccessOrganiz
 // validEmailDelivery is the set of delivery modes an operator may write.
 var validEmailDelivery = map[string]bool{EmailDeliveryByTrustZone: true, EmailDeliveryDrafts: true, EmailDeliveryDirect: true}
 
-// normalizeDomains lowercases, trims, and strips a leading dot from
-// each domain, dropping empties.
+// normalizeDomains lowercases, trims, and strips a leading dot from each
+// domain. It keeps empty entries so Validate can reject them: dropping
+// one would turn allowed_recipient_domains: [""] into no limit at all.
 func normalizeDomains(domains []string) []string {
 	if len(domains) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(domains))
 	for _, d := range domains {
-		d = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d), "."))
-		if d != "" {
-			out = append(out, d)
-		}
+		out = append(out, strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d), ".")))
 	}
 	return out
+}
+
+// validRecipientDomain reports whether d is a DNS name: dot-separated
+// labels of letters, digits, and inner hyphens, each 1 to 63 bytes, with
+// an optional leading dot. A wildcard, list separator, port, or empty
+// label would match nothing, which in a deny list silently disables the
+// restriction, so it is refused at load.
+func validRecipientDomain(d string) bool {
+	d = strings.TrimPrefix(strings.TrimSpace(d), ".")
+	if d == "" || len(d) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ApplyDefaults fills unset fields with their documented defaults.
@@ -413,9 +438,8 @@ func (a EmailAccountConfig) validatePolicy(i int) error {
 		domains []string
 	}{{"denied_recipient_domains", a.Policy.DeniedRecipientDomains}, {"allowed_recipient_domains", a.Policy.AllowedRecipientDomains}} {
 		for _, d := range list.domains {
-			d = strings.TrimSpace(d)
-			if d == "" || strings.ContainsAny(d, "@ /") {
-				return fmt.Errorf("email.accounts[%d] (%s): policy.%s entry %q is not a domain", i, a.Name, list.key, d)
+			if !validRecipientDomain(d) {
+				return fmt.Errorf("email.accounts[%d] (%s): policy.%s entry %q is not a domain; list one DNS name per entry, such as example.com, which also covers its subdomains", i, a.Name, list.key, d)
 			}
 		}
 	}

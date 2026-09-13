@@ -296,8 +296,12 @@ instead of being reimplemented in each loop prompt.
 Every email tool takes an `account`; in a loop bound with
 `email_account` an omitted account resolves to the binding and other
 accounts are refused. The `email` tag also injects an **Email Accounts**
-context block listing each account, whether it can send, and its cached
-folder names with roles.
+context block listing each account with its policy (`access`,
+`delivery`, recipient-domain rules, the drafts folder), whether it may
+hand mail to SMTP itself, whether this turn is `attended`, which trust
+zones it sends directly to, drafts for, and refuses this turn, and its
+cached folder names with roles. An account whose `access` is `read`
+reads without marking messages seen and refuses flags and moves.
 
 ## `contacts` — directory and vCard administration
 

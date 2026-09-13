@@ -140,12 +140,17 @@ reply, and draft); it defaults to `send` when `smtp` is configured and
 `organize` to keep its credentials for the operator's own use. `delivery`
 decides what happens once every recipient has passed the trust gate:
 `by_trust_zone` (the default) sends directly to `admin` and `household`
-recipients when a human is attending the turn, holds mail for `trusted`
+recipients when the operator is present for the turn, holds mail for `trusted`
 recipients in the Drafts folder for the operator to send from their own
 client, refuses `known` and unknown recipients, and holds everything an
 unattended loop writes, so a poller-woken handler never sends on its own;
 `drafts` holds every message; `direct` sends everything the gate allows,
-including from unattended loops, and should be chosen deliberately. A
+including from unattended turns, and should be chosen deliberately. The
+operator is present only for their own message: one sent through Thane's
+native API, or one they wrote in a conversation bound to their own contact.
+A poller wake, a scheduled loop, a loop launched from the operator's
+conversation, and a call through the Ollama-compatible shim that Home
+Assistant automations and voice satellites use are all unattended. A
 drafted message carries the `bcc_owner` audit copy in its `Bcc` header so
 the operator's client sends it too. `drafts_folder` names where drafts go
 and defaults to the folder the server marks as drafts, else `Drafts`.

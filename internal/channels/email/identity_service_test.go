@@ -37,7 +37,9 @@ func identityServiceWith(t *testing.T, deps ServiceDependencies, tweak func(*Con
 	}
 	deps.State = testOpstate(t)
 	deps.MessageBus = messages.NewBus(nil)
-	deps.Logger = quietSlog()
+	if deps.Logger == nil {
+		deps.Logger = quietSlog()
+	}
 	svc, err := NewService(cfg, deps)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -217,7 +219,7 @@ func TestSendAppliesSignerAndReportsRecipients(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		t.Fatalf("send result is not JSON: %v\n%s", err, out)
 	}
-	if !resp.Signed || resp.Disposition != DispositionSent || len(resp.Recipients) != 1 || !resp.Recipients[0].Allowed || (resp.Recipients[0].Contact == nil || resp.Recipients[0].Contact.ID != "id-operator") || resp.Recipients[0].TrustZone != "admin" {
+	if !resp.Signed || resp.Disposition != DispositionSent || len(resp.Decision.Recipients) != 1 || !resp.Decision.Recipients[0].Allowed || (resp.Decision.Recipients[0].Contact == nil || resp.Decision.Recipients[0].Contact.ID != "id-operator") || resp.Decision.Recipients[0].TrustZone != "admin" {
 		t.Errorf("send response = %+v", resp)
 	}
 
