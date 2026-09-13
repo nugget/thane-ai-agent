@@ -358,38 +358,44 @@ func ComputeDetailedCostForIdentity(identity ModelIdentity, inputTokens, cacheCr
 // charged at the 5m rate to avoid retroactive price spikes on legacy
 // records.
 func ComputeDetailedCostForIdentityWithTTL(identity ModelIdentity, inputTokens, cacheCreationTotal, cacheCreation5m, cacheCreation1h, cacheReadInputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
-	if len(pricing) == 0 {
+	entry, ok := PricingFor(identity, pricing)
+	if !ok {
 		return 0
 	}
+	cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
 
-	keys := []string{identity.Model}
+	// Breakdown-aware cache-write pricing. Anything in
+	// cacheCreationTotal not attributed to 5m or 1h is charged at
+	// the 5m rate (conservative default, matches legacy records
+	// written before the breakdown columns existed).
+	attributed := cacheCreation5m + cacheCreation1h
+	unattributed := cacheCreationTotal - attributed
+	if unattributed < 0 {
+		unattributed = 0
+	}
+	cost += float64(cacheCreation5m+unattributed) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWrite5mMultiplier)
+	cost += float64(cacheCreation1h) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWrite1hMultiplier)
+
+	cost += float64(cacheReadInputTokens) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheReadMultiplier)
+	cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
+	return cost
+}
+
+// PricingFor returns the pricing entry for identity: the
+// deployment-qualified model first, then the upstream model. ok is
+// false when neither is in the table. The cost functions read that as
+// $0, which is right for a local model and wrong for a paid one, so
+// callers recording paid usage should check it.
+func PricingFor(identity ModelIdentity, pricing map[string]config.PricingEntry) (config.PricingEntry, bool) {
+	if entry, ok := pricing[identity.Model]; ok {
+		return entry, true
+	}
 	if identity.UpstreamModel != "" && identity.UpstreamModel != identity.Model {
-		keys = append(keys, identity.UpstreamModel)
-	}
-	for _, key := range keys {
-		entry, ok := pricing[key]
-		if !ok {
-			continue
+		if entry, ok := pricing[identity.UpstreamModel]; ok {
+			return entry, true
 		}
-		cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
-
-		// Breakdown-aware cache-write pricing. Anything in
-		// cacheCreationTotal not attributed to 5m or 1h is charged at
-		// the 5m rate (conservative default, matches legacy records
-		// written before the breakdown columns existed).
-		attributed := cacheCreation5m + cacheCreation1h
-		unattributed := cacheCreationTotal - attributed
-		if unattributed < 0 {
-			unattributed = 0
-		}
-		cost += float64(cacheCreation5m+unattributed) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWrite5mMultiplier)
-		cost += float64(cacheCreation1h) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWrite1hMultiplier)
-
-		cost += float64(cacheReadInputTokens) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheReadMultiplier)
-		cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
-		return cost
 	}
-	return 0
+	return config.PricingEntry{}, false
 }
 
 // ComputeCostForIdentity calculates USD cost for a resolved model
