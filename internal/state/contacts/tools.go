@@ -46,12 +46,17 @@ type Tools struct {
 	selfContactName   string
 	operatorContactID uuid.UUID
 	ownerContactName  string
-	ownerActivity     func() []OwnerChannelActivity
-	dossiersEnabled   bool
-	dossiersWritable  bool
-	dossierRead       func(context.Context, documents.RefArgs) (string, error)
-	dossierWrite      func(context.Context, documents.FacetedWriteArgs) (string, error)
-	mutationSink      func(context.Context, ContactMutation) error
+	// legacyOperatorID is the record the legacy owner name resolved to
+	// when the app pinned it; legacyOperatorPinned says it was pinned,
+	// since uuid.Nil is a valid pinned answer.
+	legacyOperatorID     uuid.UUID
+	legacyOperatorPinned bool
+	ownerActivity        func() []OwnerChannelActivity
+	dossiersEnabled      bool
+	dossiersWritable     bool
+	dossierRead          func(context.Context, documents.RefArgs) (string, error)
+	dossierWrite         func(context.Context, documents.FacetedWriteArgs) (string, error)
+	mutationSink         func(context.Context, ContactMutation) error
 }
 
 // ContactMutation describes one committed contact_save change for downstream
@@ -107,6 +112,17 @@ func (t *Tools) ConfigureDossierRoot(enabled, writable bool) {
 // primary human operator contact for legacy configurations.
 func (t *Tools) SetOwnerContactName(name string) {
 	t.ownerContactName = name
+}
+
+// ConfigureLegacyOperatorContactID pins, for identity custody, the record
+// the legacy owner name resolved to (uuid.Nil when it resolved to none).
+// The app passes the channel resolver's cached answer, so custody and
+// IsOwner agree on the operator for the life of the process even if a
+// later record comes to match the name. Unpinned, custody resolves the
+// name on every check.
+func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID) {
+	t.legacyOperatorID = id
+	t.legacyOperatorPinned = true
 }
 
 // SetOwnerActivitySource configures a source of active owner-scoped
@@ -260,14 +276,25 @@ var saveContactKnownFields = map[string]bool{
 // Top-level string fields that don't match known SaveContactArgs keys
 // (e.g., "email", "phone") are automatically rescued into the Facts
 // map or contact_properties, since models frequently flatten them.
+//
+// Identity custody applies as it does to an unattended model turn: no
+// address or number is added to a contact above known or to the
+// operator's own contact, nor when a contact with authority already
+// holds it.
 func (t *Tools) SaveContact(argsJSON string) (string, error) {
-	return t.saveContact(context.Background(), argsJSON, nil, false)
+	return t.saveContact(context.Background(), argsJSON, nil, false, false)
 }
 
 // SaveContactFromModel applies contact_save with the current model turn's
 // provenance and emits the configured post-commit mutation signal.
-func (t *Tools) SaveContactFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance) (string, error) {
-	return t.saveContact(ctx, argsJSON, provenance, true)
+//
+// operatorAttended reports that the turn is the operator's own message,
+// as tools.OperatorAttended decides it. It lifts only the rule that keeps
+// addresses and numbers off contacts above known and off the operator's
+// own contact; the rule against a second holder of a value a contact with
+// authority already holds still applies.
+func (t *Tools) SaveContactFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance, operatorAttended bool) (string, error) {
+	return t.saveContact(ctx, argsJSON, provenance, true, operatorAttended)
 }
 
 func (t *Tools) saveContact(
@@ -275,6 +302,7 @@ func (t *Tools) saveContact(
 	argsJSON string,
 	provenance *PropertyProvenance,
 	notify bool,
+	operatorAttended bool,
 ) (string, error) {
 	var args SaveContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -320,11 +348,15 @@ func (t *Tools) saveContact(
 		return "", fmt.Errorf("trust_zone cannot be set through contact_save: zones are operator-custodied and confer device authority (#1450); ask the operator to assign the zone, then retry without trust_zone")
 	}
 	// Keys are custody in the same sense: the key that verifies a
-	// contact's messages must not be installable by a message.
-	for key := range args.Facts {
-		if isReservedKeyProperty(key) {
-			return "", fmt.Errorf("fact %q cannot be set through contact_save: KEY and X-THANE-KEY-* properties hold the keys that authenticate a contact's messages and are operator-custodied; ask the operator to install the key, then retry without it", key)
-		}
+	// contact's messages must not be installable by a message, and
+	// neither may Thane's own X-THANE-* headers. Every fact key becomes
+	// a vCard property name on the operator's next CardDAV read, so it
+	// must also be a plain name that cannot decode as another property.
+	if err := factRefusals(args.Facts); err != nil {
+		return "", err
+	}
+	if err := argumentRefusals(args); err != nil {
+		return "", err
 	}
 
 	// Look for existing contact by name.
@@ -353,6 +385,10 @@ func (t *Tools) saveContact(
 		if err != nil {
 			return "", fmt.Errorf("load contact for update: %w", err)
 		}
+	}
+
+	if err := t.ownerNameClaimRefusal(args, contact, created); err != nil {
+		return "", err
 	}
 
 	changedFields := make(map[string]struct{})
@@ -386,8 +422,30 @@ func (t *Tools) saveContact(
 	collectReplacement(PropertyOriginTag, args.OriginTags)
 	collectReplacement(PropertyOriginContextRef, args.OriginContextRefs)
 
-	saved, changed, err := t.store.applyContactSave(contact, contactChanged, additions, replacements)
+	guard := identityGuard{snapshotZone: contact.TrustZone, liftTargetCustody: operatorAttended}
+	if hasIdentityProperty(additions) {
+		guard.operatorID, err = t.custodyOperatorID()
+		if err != nil {
+			return "", err
+		}
+	}
+	saved, changed, err := t.store.applyContactSave(contact, contactChanged, additions, replacements, guard)
 	if err != nil {
+		var custody *IdentityCustodyError
+		if errors.As(err, &custody) {
+			for i := range custody.Violations {
+				custody.Violations[i].Key = factKeyFor(args.Facts, custody.Violations[i].Property, custody.Violations[i].Value)
+			}
+			zone := contact.TrustZone
+			if zone == "" {
+				zone = ZoneKnown
+			}
+			logIdentityRefusal("contact_save", contact.ID, zone, custody.Violations, provenance, false)
+			return "", identityRefusal(contact.FormattedName, contact.TrustZone, custody.Violations)
+		}
+		if errors.Is(err, errContactChangedConcurrently) {
+			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
+		}
 		if created {
 			return "", fmt.Errorf("create contact: %w", err)
 		}
@@ -469,24 +527,47 @@ func additiveProperties(facts map[string]string, existing []Property, provenance
 	sort.Strings(keys)
 	properties := make([]Property, 0, len(keys))
 	for _, key := range keys {
-		property := propertyKeys[key]
-		if property == "" {
-			property = key
-		}
-		value := facts[key]
-		if property == "IMPP" && !strings.HasPrefix(value, key+":") {
-			value = key + ":" + value
-		}
-		if hasProperty(existing, property, value) {
+		property := factProperty(key, facts[key])
+		if hasProperty(existing, property.Property, property.Value) {
 			continue
 		}
-		properties = append(properties, Property{
-			Property:   property,
-			Value:      value,
-			Provenance: provenance,
-		})
+		property.Provenance = provenance
+		properties = append(properties, property)
 	}
 	return properties
+}
+
+// factProperty maps one fact to the property row it is stored as.
+// Identity keys (email, phone, signal and matrix, or EMAIL, TEL and IMPP
+// in any case) land on their canonical vCard property, and the signal
+// and matrix aliases prefix the value with their URI scheme unless it
+// already carries it. Every other key is stored as written.
+func factProperty(key, value string) Property {
+	property, identity := identityPropertyFor(key)
+	if !identity {
+		return Property{Property: key, Value: value}
+	}
+	if scheme := imppSchemeFor(key); scheme != "" && !strings.HasPrefix(strings.ToLower(value), scheme+":") {
+		value = scheme + ":" + value
+	}
+	return Property{Property: property, Value: value}
+}
+
+// factKeyFor returns the fact key that produced a property row, so a
+// refusal names the key the model wrote.
+func factKeyFor(facts map[string]string, property, value string) string {
+	keys := make([]string, 0, len(facts))
+	for key := range facts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		p := factProperty(key, facts[key])
+		if p.Property == property && strings.EqualFold(p.Value, value) {
+			return key
+		}
+	}
+	return property
 }
 
 func hasProperty(properties []Property, property, value string) bool {
@@ -658,8 +739,21 @@ type ForgetContactArgs struct {
 	Name string `json:"name"`
 }
 
-// ForgetContact soft-deletes a contact by name.
+// ForgetContact soft-deletes one known contact, resolved by name once
+// with the same cascade contact_lookup uses, and names the record it
+// removed. Contacts above known, the operator's own contact and
+// contacts bound to a Home Assistant person are operator custody and
+// are refused, because forgetting one turns that person's email and
+// Signal traffic into a stranger's. No turn lifts this, not even the
+// operator's own.
 func (t *Tools) ForgetContact(argsJSON string) (string, error) {
+	return t.ForgetContactFromModel(context.Background(), argsJSON, nil)
+}
+
+// ForgetContactFromModel applies contact_forget for the current model
+// turn, with the rules of [Tools.ForgetContact]. The provenance keys a
+// custody refusal's log line to the turn that asked for the removal.
+func (t *Tools) ForgetContactFromModel(_ context.Context, argsJSON string, provenance *PropertyProvenance) (string, error) {
 	var args ForgetContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
@@ -669,11 +763,111 @@ func (t *Tools) ForgetContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("name is required")
 	}
 
-	if err := t.store.DeleteByName(args.Name); err != nil {
-		return "", fmt.Errorf("delete contact: %w", err)
+	c, err := t.store.ResolveContact(args.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("no contact matches %q; nothing was removed. Check the name with contact_lookup", args.Name)
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve contact: %w; nothing was removed", err)
 	}
 
-	return fmt.Sprintf("Forgot contact: %s", args.Name), nil
+	reasons, err := t.forgetCustodyReasons(c)
+	if err != nil {
+		return "", err
+	}
+	if len(reasons) > 0 {
+		rules := make([]string, 0, len(reasons))
+		texts := make([]string, 0, len(reasons))
+		for _, reason := range reasons {
+			rules = append(rules, reason.rule)
+			texts = append(texts, reason.text)
+		}
+		if provenance == nil {
+			provenance = &PropertyProvenance{}
+		}
+		slog.Warn("contact identity custody refused",
+			"tool", "contact_forget",
+			"contact_id", c.ID.String(),
+			"zone", c.TrustZone,
+			"rule", strings.Join(rules, ","),
+			"request_id", provenance.RequestID,
+			"conversation_id", provenance.ConversationID,
+			"loop_id", provenance.LoopID)
+		return "", fmt.Errorf("contact_forget refused %s (%s, %s): %s. Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied, because forgetting one turns that person's email and Signal traffic into a stranger's. Nothing was removed. %s",
+			c.FormattedName, c.TrustZone, c.ID, strings.Join(texts, "; "), forgetRecovery(reasons, c.ID))
+	}
+
+	deleted, err := t.store.deleteIfUncustodied(c.ID)
+	if err != nil {
+		return "", err
+	}
+	if !deleted {
+		return "", fmt.Errorf("%s (%s) changed while this contact_forget was in flight: the operator reassigned its trust zone, bound it to a Home Assistant person, or deleted it. Nothing was removed. Re-read it with contact_lookup", c.FormattedName, c.ID)
+	}
+	return fmt.Sprintf("Forgot contact: %s (%s, %s)", c.FormattedName, c.TrustZone, c.ID), nil
+}
+
+// forgetRecovery is the operator's recovery for a refused forget. Only
+// deletion clears the operator's own contact; a zone above known clears
+// by demotion, and a Home Assistant person binding by removing it.
+func forgetRecovery(reasons []forgetCustodyReason, id uuid.UUID) string {
+	var operator, zone, bound bool
+	for _, reason := range reasons {
+		switch reason.rule {
+		case IdentityReasonOperator:
+			operator = true
+		case IdentityReasonZone:
+			zone = true
+		case forgetReasonHAPerson:
+			bound = true
+		}
+	}
+	remedy := ""
+	switch {
+	case operator:
+	case zone && bound:
+		remedy = ", or demote it to known and remove its Home Assistant person binding"
+	case zone:
+		remedy = ", or demote it to known"
+	case bound:
+		remedy = ", or remove its Home Assistant person binding"
+	}
+	return fmt.Sprintf("Ask the operator to delete it through CardDAV or DELETE /v1/contacts/%s%s", id, remedy)
+}
+
+// forgetReasonHAPerson is the forget rule for a contact bound to a Home
+// Assistant person.
+const forgetReasonHAPerson = "ha_person"
+
+// forgetCustodyReason is one reason contact_forget refuses a record: a
+// rule name for the log and a clause for the model.
+type forgetCustodyReason struct {
+	rule string
+	text string
+}
+
+// forgetCustodyReasons lists every reason the record is operator custody
+// for removal, or none when contact_forget may remove it.
+func (t *Tools) forgetCustodyReasons(c *Contact) ([]forgetCustodyReason, error) {
+	var reasons []forgetCustodyReason
+	if c.TrustZone != ZoneKnown {
+		reasons = append(reasons, forgetCustodyReason{rule: IdentityReasonZone, text: fmt.Sprintf("it is %s", c.TrustZone)})
+	}
+	operatorID, err := t.custodyOperatorID()
+	if err != nil {
+		return nil, err
+	}
+	if operatorID != uuid.Nil && c.ID == operatorID {
+		reasons = append(reasons, forgetCustodyReason{rule: IdentityReasonOperator, text: "it is the operator's own contact"})
+	}
+	entity, _, err := t.store.HAPersonEntity(c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("check identity custody: %w", err)
+	}
+	if entity != "" {
+		reasons = append(reasons, forgetCustodyReason{rule: forgetReasonHAPerson, text: fmt.Sprintf("it is bound to Home Assistant person %s", entity)})
+	}
+	return reasons, nil
 }
 
 // ListContactsArgs are arguments for the contact_list tool.
@@ -941,11 +1135,32 @@ type ImportVCFArgs struct {
 	DryRun bool   `json:"dry_run,omitempty"`
 }
 
+// importVCFSource is the provenance source stamped on every property a
+// vCard import writes.
+const importVCFSource = "contact_import_vcf"
+
 // ImportVCF imports contacts from a vCard file or text. When merge is
 // true (default), existing contacts are matched by EMAIL then by name,
 // and only empty fields are filled. TrustZone and AISummary are never
-// overwritten during merge. Properties are additive.
+// overwritten during merge. Properties are additive and carry Source
+// contact_import_vcf. Identity custody applies exactly as it does to
+// [Tools.ImportVCFFromModel].
 func (t *Tools) ImportVCF(argsJSON string) (string, error) {
+	return t.importVCF(argsJSON, &PropertyProvenance{Source: importVCFSource})
+}
+
+// ImportVCFFromModel applies contact_import_vcf with the current model
+// turn's provenance, stamped on every imported property and on the
+// custody log. A vCard is content, not the operator's word, so no turn
+// lifts identity custody here: addresses and numbers are dropped from a
+// merge into a contact above known or the operator's own, and wherever
+// an admin, household, trusted or operator contact already holds them.
+// The rest of the card still imports and the result counts the drops.
+func (t *Tools) ImportVCFFromModel(_ context.Context, argsJSON string, provenance *PropertyProvenance) (string, error) {
+	return t.importVCF(argsJSON, provenance)
+}
+
+func (t *Tools) importVCF(argsJSON string, provenance *PropertyProvenance) (string, error) {
 	var args ImportVCFArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
@@ -972,8 +1187,10 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		return "", fmt.Errorf("decode vcards: %w", err)
 	}
 
-	var created, updated, skipped, keysDropped int
+	var created, updated, skipped int
+	var drops importDrops
 	var summary strings.Builder
+	operator := t.lazyCustodyOperatorID()
 
 	for i, incoming := range decoded {
 		// Key properties are operator custody, like trust zones: a vCard
@@ -981,7 +1198,17 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		// that message's sender. The CardDAV backend, the operator's
 		// authenticated surface, decodes vCards on its own path.
 		props, dropped := withoutReservedKeys(allProps[i])
-		keysDropped += dropped
+		drops.keys += dropped
+		// A name carrying vCard syntax (a nested group decodes as
+		// "B.EMAIL") would become a different property on the next
+		// CardDAV round trip.
+		props, dropped = withoutMalformedNames(props)
+		drops.names += dropped
+		// go-vcard escapes only LF on output, so a decoded CR or other
+		// control character in a value would split the line in the
+		// operator's contacts client on the next CardDAV read.
+		props, dropped = withoutUnescapedControls(incoming, props)
+		drops.values += dropped
 
 		// Trust zone is operator custody, not importable data (#1450):
 		// a zone confers inherited authority on bound companion devices,
@@ -996,6 +1223,34 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		var existing *Contact
 		if merge {
 			existing = t.findExistingForMerge(incoming, props)
+		}
+
+		// Under the legacy owner-name selector a record that carries
+		// the owner name as its name or nickname could become the
+		// operator the next time the name resolves.
+		skip, err := t.withoutOwnerNameClaim(existing, incoming, operator)
+		if err != nil {
+			return "", err
+		}
+		if skip {
+			drops.ownerName++
+			continue
+		}
+
+		props, refused, err := t.withoutCustodiedIdentity(existing, props, operator)
+		if err != nil {
+			return "", err
+		}
+		if len(refused) > 0 {
+			drops.identity += len(refused)
+			target, zone := uuid.Nil, ZoneKnown
+			if existing != nil {
+				target, zone = existing.ID, existing.TrustZone
+			}
+			logIdentityRefusal("contact_import_vcf", target, zone, refused, provenance, args.DryRun)
+		}
+		for j := range props {
+			props[j].Provenance = provenance
 		}
 
 		if args.DryRun {
@@ -1017,9 +1272,7 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 				continue
 			}
 			// Add properties additively.
-			for _, p := range props {
-				_ = t.store.AddProperty(existing.ID, &p)
-			}
+			drops.writeFailures += t.addImportedProperties(existing.ID, props)
 			t.generateEmbedding(existing)
 			updated++
 		} else {
@@ -1033,25 +1286,194 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 				skipped++
 				continue
 			}
-			for _, p := range props {
-				_ = t.store.AddProperty(c.ID, &p)
-			}
+			drops.writeFailures += t.addImportedProperties(c.ID, props)
 			t.generateEmbedding(c)
 			created++
 		}
 	}
 
-	keyNote := ""
-	if keysDropped > 0 {
-		keyNote = fmt.Sprintf(" %d key propert(ies) were not imported: KEY and X-THANE-KEY-* are operator custody and never come in through a model tool.", keysDropped)
-	}
+	notes := drops.notes()
 	if args.DryRun {
 		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:%s\n\n%s",
-			created, updated, keyNote, summary.String()), nil
+			created, updated, notes, summary.String()), nil
 	}
 
 	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped.%s",
-		created+updated, created, updated, skipped, keyNote), nil
+		created+updated, created, updated, skipped, notes), nil
+}
+
+// importDrops counts what one vCard import left out, by reason.
+type importDrops struct {
+	keys          int
+	names         int
+	values        int
+	ownerName     int
+	identity      int
+	writeFailures int
+}
+
+// notes renders the drop counts as the sentences an import result ends
+// with, each in the shape of the key note.
+func (d importDrops) notes() string {
+	var b strings.Builder
+	if d.keys > 0 {
+		fmt.Fprintf(&b, " %d key propert(ies) were not imported: KEY and X-THANE-KEY-* are operator custody and never come in through a model tool.", d.keys)
+	}
+	if d.names > 0 {
+		fmt.Fprintf(&b, " %d propert(ies) were not imported: their names are not plain vCard property names (a nested group such as a.b.EMAIL, a space, or more than 64 characters) and would become a different property on the next CardDAV round trip.", d.names)
+	}
+	if d.values > 0 {
+		fmt.Fprintf(&b, " %d value(s) were not imported: they carry a carriage return or other control character, which a contacts client would read as the start of another property.", d.values)
+	}
+	if d.ownerName > 0 {
+		fmt.Fprintf(&b, " %d name(s) were not imported: a card that would create a contact, or give an existing one a nickname, under the name Thane recognizes the operator by was left out, because that contact could take the operator's identity; ask the operator to add it through CardDAV or the contacts API.", d.ownerName)
+	}
+	if d.identity > 0 {
+		fmt.Fprintf(&b, " %d address(es)/number(s) were not imported: EMAIL, TEL and IMPP values are operator custody on an admin, household, trusted or operator contact, and a value one of those already holds keeps its single holder; ask the operator to add them through CardDAV or the contacts API.", d.identity)
+	}
+	if d.writeFailures > 0 {
+		fmt.Fprintf(&b, " %d propert(ies) failed to write and were not imported; the log names each one.", d.writeFailures)
+	}
+	return b.String()
+}
+
+// withoutMalformedNames drops decoded properties whose names fail the
+// fact-key grammar and reports how many it dropped.
+func withoutMalformedNames(props []Property) ([]Property, int) {
+	kept := make([]Property, 0, len(props))
+	for _, p := range props {
+		if validFactKey.MatchString(p.Property) {
+			kept = append(kept, p)
+		}
+	}
+	return kept, len(props) - len(kept)
+}
+
+// withoutUnescapedControls clears scalar fields and drops properties
+// whose values carry a control character the vCard encoder emits raw,
+// and reports how many values it left out.
+func withoutUnescapedControls(c *Contact, props []Property) ([]Property, int) {
+	dropped := 0
+	for _, field := range []*string{
+		&c.FormattedName, &c.Kind, &c.GivenName, &c.FamilyName, &c.AdditionalNames,
+		&c.NamePrefix, &c.NameSuffix, &c.Nickname, &c.Birthday, &c.Anniversary,
+		&c.Gender, &c.Org, &c.Title, &c.Role, &c.Note, &c.PhotoURI, &c.AISummary,
+	} {
+		if hasUnescapedControl(*field) {
+			*field = ""
+			dropped++
+		}
+	}
+	kept := make([]Property, 0, len(props))
+	for _, p := range props {
+		if hasUnescapedControl(p.Value) || hasUnescapedControl(p.Type) || hasUnescapedControl(p.Label) || hasUnescapedControl(p.MediaType) {
+			dropped++
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept, dropped
+}
+
+// withoutOwnerNameClaim keeps a vCard import from giving the legacy
+// owner name to a record other than the operator's own. A card that
+// would create such a record is skipped (true); a merge that would fill
+// an existing record's empty nickname with it leaves the nickname out.
+func (t *Tools) withoutOwnerNameClaim(existing, incoming *Contact, operator func() (uuid.UUID, error)) (bool, error) {
+	owner := t.legacyOwnerName()
+	if owner == "" {
+		return false, nil
+	}
+	if existing == nil {
+		return claimsOwnerName(owner, incoming.FormattedName, incoming.Nickname), nil
+	}
+	if existing.Nickname != "" || !claimsOwnerName(owner, incoming.Nickname) {
+		return false, nil
+	}
+	operatorID, err := operator()
+	if err != nil {
+		return false, err
+	}
+	if operatorID == uuid.Nil || existing.ID != operatorID {
+		incoming.Nickname = ""
+	}
+	return false, nil
+}
+
+// lazyCustodyOperatorID resolves the operator's record at most once per
+// import, and only when a card carries identity.
+func (t *Tools) lazyCustodyOperatorID() func() (uuid.UUID, error) {
+	var (
+		resolved bool
+		id       uuid.UUID
+		err      error
+	)
+	return func() (uuid.UUID, error) {
+		if !resolved {
+			id, err = t.custodyOperatorID()
+			resolved = true
+		}
+		return id, err
+	}
+}
+
+// withoutCustodiedIdentity drops the identity properties a model-facing
+// import may not write to its target (existing, or a record about to be
+// created when nil) and returns the kept properties with the refused
+// values.
+func (t *Tools) withoutCustodiedIdentity(existing *Contact, props []Property, operator func() (uuid.UUID, error)) ([]Property, []IdentityViolation, error) {
+	if !hasIdentityProperty(props) {
+		return props, nil, nil
+	}
+	operatorID, err := operator()
+	if err != nil {
+		return nil, nil, err
+	}
+	target, guard := uuid.Nil, identityGuard{operatorID: operatorID, snapshotZone: ZoneKnown}
+	if existing != nil {
+		target, guard.snapshotZone = existing.ID, existing.TrustZone
+	}
+	violations, err := identityViolations(t.store.db.Query, target, guard, props)
+	if err != nil {
+		return nil, nil, fmt.Errorf("check identity custody: %w", err)
+	}
+	if len(violations) == 0 {
+		return props, nil, nil
+	}
+	kept := make([]Property, 0, len(props))
+	for _, p := range props {
+		if !refusedIdentity(p, violations) {
+			kept = append(kept, p)
+		}
+	}
+	return kept, violations, nil
+}
+
+// refusedIdentity reports whether p is one of the refused values.
+func refusedIdentity(p Property, violations []IdentityViolation) bool {
+	for _, v := range violations {
+		if strings.EqualFold(strings.TrimSpace(p.Property), v.Property) && p.Value == v.Value {
+			return true
+		}
+	}
+	return false
+}
+
+// addImportedProperties writes imported properties one at a time and
+// returns how many failed, logging each failure rather than dropping it
+// silently.
+func (t *Tools) addImportedProperties(contactID uuid.UUID, props []Property) int {
+	failures := 0
+	for _, p := range props {
+		if err := t.store.AddProperty(contactID, &p); err != nil {
+			failures++
+			slog.Warn("contact_import_vcf property write failed",
+				"contact_id", contactID.String(),
+				"property", p.Property,
+				"error", err)
+		}
+	}
+	return failures
 }
 
 // findExistingForMerge looks for an existing contact that matches the

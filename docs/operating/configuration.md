@@ -246,7 +246,12 @@ contact's devices, and inherit authority from the contact's trust zone
 at read time, so a zone change reaches every bound device immediately.
 Configuration is deliberately the only place this binding can be made:
 bindings confer inherited trust, and neither they nor trust zones are
-writable through model-facing contact tools. A malformed (non-UUID)
+writable through model-facing contact tools. The addresses and numbers on
+contacts above `known` and on the operator's contact are custody too: the
+operator adds them through CardDAV or `/v1/contacts`, and `contact_save`
+adds one only in the operator's own message (see
+[Contact Identity Custody](../understanding/trust-architecture.md#contact-identity-custody)).
+A malformed (non-UUID)
 value is rejected at config load; a UUID that matches no contact fails
 closed at render time — the devices degrade to account-only
 attribution and a warning names the unresolved binding.
@@ -266,7 +271,11 @@ person:
 ```
 
 `identity.operator_contact_id` says which stable contact is the human
-operator; it does not infer that authority from presence. The legacy
+operator; it does not infer that authority from presence. Because that
+contact's addresses carry the operator's authority, model-facing contact
+tools never forget it, `contact_import_vcf` never adds an address or number
+to it, and `contact_save` does so only in the operator's own message, at any
+zone. The legacy
 `identity.owner_contact_name` selector remains accepted for existing
 installations, but it is mutually exclusive with the UUID selector.
 When neither is configured, Thane falls back to the sole `admin`

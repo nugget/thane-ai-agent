@@ -307,17 +307,17 @@ reads without marking messages seen and refuses flags and moves.
 
 | Tool | Description |
 |------|-------------|
-| `contact_save` | Create or update a contact with vCard properties. Model-authored property rows retain turn provenance. When an archivist refresh consumer is enabled, a committed change coalesces one canonical contact refresh; identical no-ops never enqueue one. |
+| `contact_save` | Create or update a contact with vCard properties. Model-authored property rows retain turn provenance. Refuses `trust_zone`, `KEY` and `X-THANE-*` fact keys, fact keys that are not plain names or that name a field the record owns, and control characters in argument values. Outside the operator's own message, refuses to add an address or number to a contact above `known` or to the operator's contact; in every turn, refuses a value an elevated or operator contact already holds. When an archivist refresh consumer is enabled, a committed change coalesces one canonical contact refresh; identical no-ops never enqueue one. |
 | `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured `contact_dossier_read` trailhead. |
 | `contact_dossier_read` | Read or probe the canonical dossier for an active contact UUID. Go derives the ref and tracks revision state. Every success exposes `dossier.exists`, `dossier.ref`, and `dossier.document`; an absent dossier is a successful result with a null document and the exact create action. |
 | `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Available only for a managed-writable `contacts` root. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
-| `contact_forget` | Delete a contact. |
+| `contact_forget` | Soft-delete one `known` contact resolved by name, and name the record removed. Refuses contacts above `known`, the operator's contact, and contacts bound to a Home Assistant person. |
 | `contact_list` | List and filter contacts. |
 | `contact_export_vcf` | Export one contact as a vCard. |
 | `contact_export_vcf_qr` | Export one contact as a vCard QR code. |
 | `contact_export_all_vcf` | Bulk vCard export. |
-| `contact_import_vcf` | Import one or more vCards. |
+| `contact_import_vcf` | Import one or more vCards. Drops `KEY`, `X-THANE-KEY-*`, malformed property names, and values carrying control characters, and drops addresses or numbers merged into an elevated or operator contact or already held by one; rows carry turn provenance and the result counts every drop. |
 
 ## `owner` — trusted operator context
 

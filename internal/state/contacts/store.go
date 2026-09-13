@@ -598,6 +598,11 @@ func (s *Store) DeleteAllProperties(contactID uuid.UUID) error {
 // Unlike [Upsert], a non-nil ID that does not yet exist in the
 // database is INSERT-ed (enabling CardDAV clients to create contacts
 // by PUTing to a new URL).
+//
+// The store applies no identity custody here: CardDAV and /v1/contacts
+// are operator writers with full power over which contact holds an
+// address or number. A model-facing writer must never call it; model
+// identity writes go through identityViolations.
 func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, error) {
 	return s.upsertWithPropertiesBinding(c, props, nil)
 }
@@ -612,8 +617,9 @@ func (s *Store) UpsertWithPropertiesAndHAPerson(c *Contact, props []Property, ha
 }
 
 func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPersonEntity *string) (*Contact, error) {
-	// Full-record writers (CardDAV, vCard import, and the native contacts API)
-	// do not execute inside a model turn. Ignore any caller-supplied JSON here
+	// Full-record writers (CardDAV and the native contacts API) do not
+	// execute inside a model turn; the model-facing vCard import is not a
+	// full-record writer. Ignore any caller-supplied JSON here
 	// so those surfaces cannot fabricate model provenance; their authored rows
 	// deliberately retain the nil/unknown posture.
 	props = append([]Property(nil), props...)
@@ -758,11 +764,22 @@ func insertPropertyTx(tx *sql.Tx, contactID uuid.UUID, p Property, now time.Time
 // inside the transaction so a concurrent identical insert remains a true
 // no-op. The returned changed bit is therefore safe to use as the archivist
 // refresh gate.
+//
+// This is also where contact_save's identity custody is enforced, because
+// the target rule is only as good as the zone it reads. For an existing
+// record the transaction first re-reads trust_zone and deleted_at and
+// returns errContactChangedConcurrently when either moved since
+// guard.snapshotZone was read; that also keeps the snapshot re-upsert
+// below from reverting a concurrent operator zone change or resurrecting
+// a deleted contact. It then runs identityViolations over the additions
+// and returns an *IdentityCustodyError on any refusal. Either way nothing
+// is written. The store's other writers apply no identity custody.
 func (s *Store) applyContactSave(
 	c *Contact,
 	contactChanged bool,
 	additions []Property,
 	replacements map[string][]Property,
+	guard identityGuard,
 ) (*Contact, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -772,6 +789,18 @@ func (s *Store) applyContactSave(
 
 	now := time.Now().UTC()
 	isNew := c.ID == uuid.Nil
+	if !isNew {
+		if err := checkSaveSnapshot(tx, c.ID, guard.snapshotZone); err != nil {
+			return nil, false, err
+		}
+	}
+	violations, err := identityViolations(tx.Query, c.ID, guard, additions)
+	if err != nil {
+		return nil, false, fmt.Errorf("check identity custody: %w", err)
+	}
+	if len(violations) > 0 {
+		return nil, false, &IdentityCustodyError{Violations: violations}
+	}
 	if isNew {
 		if err := upsertContactTx(tx, c, now); err != nil {
 			return nil, false, err
@@ -974,6 +1003,10 @@ func (s *Store) RecordInteractionIfNewer(ctx context.Context, contactID uuid.UUI
 // AddProperty adds a vCard property to a contact. If the exact
 // (contact_id, property, value) triple already exists (case-insensitive
 // on value), this is a no-op. Multiple values per property are supported.
+//
+// The store applies no identity custody: operator writers call it with
+// full power, and a model-facing writer (contact_import_vcf) must first
+// drop every identity value identityViolations refuses.
 func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 	var exists int
 	err := s.db.QueryRow(

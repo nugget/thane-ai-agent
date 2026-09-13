@@ -50,9 +50,28 @@ var skipProperties = map[string]bool{
 	"PRODID":    true, // vCard generator identifier, not contact data
 }
 
+// EmittablePropertyName reports whether a contact_properties row may be
+// emitted as a vCard property under its stored name. A name containing
+// '.', ';', ':', CR or LF is vCard syntax: the encoder writes it raw and
+// the decoder reads it back as a different property (a group-prefixed
+// EMAIL, a PREF-promoted X-THANE-TRUST-ZONE). A name the codec owns as a
+// core field (FN, X-THANE-TRUST-ZONE, X-THANE-HA-PERSON and the rest)
+// would shadow the record's own value. CardToContact stores neither as a
+// row, so such a row never came from a vCard and ContactToCard withholds
+// it; FilterCardForTrustZone still reads zone-tagged PHOTO rows from the
+// property list it is given.
+func EmittablePropertyName(name string) bool {
+	if name == "" || strings.ContainsAny(name, ".;:\r\n") {
+		return false
+	}
+	return !coreProperties[strings.ToUpper(name)]
+}
+
 // ContactToCard converts a Contact with its Properties into a
 // vcard.Card.  The contact must have Properties populated (via
-// GetWithProperties).
+// GetWithProperties). Rows whose names fail [EmittablePropertyName]
+// are withheld, and every value is scrubbed of line breaks the encoder
+// would emit raw.
 func ContactToCard(c *Contact) vcard.Card {
 	card := make(vcard.Card)
 
@@ -115,6 +134,9 @@ func ContactToCard(c *Contact) vcard.Card {
 
 	// Multi-value properties from contact_properties.
 	for _, p := range c.Properties {
+		if !EmittablePropertyName(p.Property) {
+			continue
+		}
 		field := &vcard.Field{
 			Value:  p.Value,
 			Params: make(vcard.Params),
@@ -138,7 +160,43 @@ func ContactToCard(c *Contact) vcard.Card {
 		card.Add(p.Property, field)
 	}
 
+	scrubUnescapedLineBreaks(card)
 	return card
+}
+
+// unescapedLineBreaks maps every line break the go-vcard encoder does
+// not escape to the LF it does. The encoder escapes only LF, so a stored
+// CR (or a vertical tab, form feed, file/group/record separator, NEL,
+// or Unicode line or paragraph separator) would reach the wire raw, and
+// a client whose parser treats it as a line ending would start a new
+// property mid-value: a NOTE carrying "\rEMAIL:..." would come back on
+// the operator's next PUT as a live address.
+var unescapedLineBreaks = strings.NewReplacer(
+	"\r\n", "\n",
+	"\r", "\n",
+	"\v", "\n",
+	"\f", "\n",
+	"\x1c", "\n",
+	"\x1d", "\n",
+	"\x1e", "\n",
+	"\u0085", "\n",
+	"\u2028", "\n",
+	"\u2029", "\n",
+)
+
+// scrubUnescapedLineBreaks rewrites every value and parameter value in
+// the card so the only line breaks left are the LFs the encoder escapes.
+func scrubUnescapedLineBreaks(card vcard.Card) {
+	for _, fields := range card {
+		for _, f := range fields {
+			f.Value = unescapedLineBreaks.Replace(f.Value)
+			for _, values := range f.Params {
+				for i, v := range values {
+					values[i] = unescapedLineBreaks.Replace(v)
+				}
+			}
+		}
+	}
 }
 
 // CardToContact converts a vcard.Card into a Contact and its
