@@ -146,6 +146,7 @@ func (a *App) initInspector() {
 			}}
 		}
 	}
+	src.DirectoryFindings = contactDirectoryFindingsSource(a.cfg, a.contactStore)
 	if a.indexHandler != nil {
 		src.IndexStats = a.indexHandler.Stats
 		src.LogSeverity = a.indexHandler.SeveritySnapshot

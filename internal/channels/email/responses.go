@@ -34,8 +34,13 @@ type addressView struct {
 	Address string `json:"address"`
 
 	// TrustZone is the effective zone: the contact's when matched, the
-	// least privileged candidate's when ambiguous, "unknown" otherwise.
+	// least privileged candidate's when ambiguous, "unknown" otherwise,
+	// and known at most for an automated address.
 	TrustZone string `json:"trust_zone"`
+
+	// Automated is true only on a no-reply, notification, or bounce
+	// address; absent means the mailbox name marks nothing.
+	Automated bool `json:"automated,omitempty"`
 
 	// Contact is the matched record, or null when the status is
 	// anything but matched.
@@ -57,6 +62,7 @@ func viewAddress(a Address, lookup *identityLookup) *addressView {
 	if lookup != nil {
 		match := lookup.resolve(a)
 		view.TrustZone = match.TrustZone
+		view.Automated = match.Automated
 		view.ContactStatus = match.Status
 		view.Candidates = match.Candidates
 		view.CandidatesTotal = match.CandidatesTotal

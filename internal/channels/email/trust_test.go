@@ -58,6 +58,23 @@ func TestCheckRecipientTrust_NilResolver(t *testing.T) {
 	if len(result.Assessments) != 3 || result.Assessments[1].Address != "b@example.com" || result.Assessments[1].ContactStatus != ContactUnmatched || !result.Assessments[1].Allowed || result.Assessments[1].Contact != nil {
 		t.Errorf("nil resolver must still assess every recipient: %+v", result.Assessments)
 	}
+
+	// A nil resolver turns off contact gating, not the automated
+	// refusal: the mailbox's own name decides it, as list and read
+	// results under a nil resolver already mark it.
+	mixed := CheckRecipientTrust(context.Background(), nil, []string{"alice@example.com", "noreply@example.com"})
+	if len(mixed.Assessments) != 2 {
+		t.Fatalf("nil resolver assessments = %+v, want 2", mixed.Assessments)
+	}
+	if len(mixed.Allowed) != 1 || mixed.Allowed[0] != "alice@example.com" || len(mixed.Blocked) != 1 {
+		t.Errorf("nil resolver must allow the person and refuse the automated mailbox, got %+v", mixed)
+	}
+	if a := mixed.Assessments[0]; a.Automated || !a.Allowed {
+		t.Errorf("a person's address under a nil resolver = %+v, want allowed and not automated", a)
+	}
+	if a := mixed.Assessments[1]; !a.Automated || a.Allowed || a.Gating != GatingBlocked || a.TrustZone != ZoneUnknown || !strings.Contains(a.Reason, "automated mailbox") {
+		t.Errorf("an automated address under a nil resolver = %+v, want refused, automated, at unknown", a)
+	}
 }
 
 func TestCheckRecipientTrust(t *testing.T) {
@@ -67,12 +84,17 @@ func TestCheckRecipientTrust(t *testing.T) {
 			"household@example.com": "household",
 			"trusted@example.com":   "trusted",
 			"known@example.com":     "known",
+			"noreply@example.com":   "admin",
 		},
 		ambiguous: map[string][]ContactCandidate{
-			"twins@example.com":  {{ID: "t1", Name: "Twin One", TrustZone: "trusted"}, {ID: "t2", Name: "Twin Two", TrustZone: "known"}},
-			"triple@example.com": {{ID: "a", Name: "A", TrustZone: "admin"}, {ID: "b", Name: "B", TrustZone: "household"}},
+			"twins@example.com":           {{ID: "t1", Name: "Twin One", TrustZone: "trusted"}, {ID: "t2", Name: "Twin Two", TrustZone: "known"}},
+			"triple@example.com":          {{ID: "a", Name: "A", TrustZone: "admin"}, {ID: "b", Name: "B", TrustZone: "household"}},
+			"notifications@twins.example": {{ID: "a", Name: "A", TrustZone: "admin"}, {ID: "b", Name: "B", TrustZone: "household"}},
 		},
-		failing: map[string]error{"broken@example.com": errors.New("database is locked")},
+		failing: map[string]error{
+			"broken@example.com":     errors.New("database is locked"),
+			"noreply@broken.example": errors.New("database is locked"),
+		},
 	}
 
 	tests := []struct {
@@ -82,8 +104,14 @@ func TestCheckRecipientTrust(t *testing.T) {
 		wantBlocked int
 		wantReason  string
 		wantStatus  ContactStatus
+		// wantZone, when set, is the first assessment's effective zone;
+		// wantAutomated is checked on every row, so each row without it
+		// is a negative control for the automated mark.
+		wantZone      string
+		wantAutomated bool
+		notReason     string
 	}{
-		{name: "admin allowed", addresses: []string{"admin@example.com"}, wantAllowed: 1, wantStatus: ContactMatched},
+		{name: "admin allowed", addresses: []string{"admin@example.com"}, wantAllowed: 1, wantStatus: ContactMatched, wantZone: "admin"},
 		{name: "household allowed", addresses: []string{"household@example.com"}, wantAllowed: 1, wantStatus: ContactMatched},
 		{name: "trusted allowed", addresses: []string{"trusted@example.com"}, wantAllowed: 1, wantStatus: ContactMatched},
 		{name: "known blocked", addresses: []string{"known@example.com"}, wantBlocked: 1, wantReason: "known trust zone", wantStatus: ContactMatched},
@@ -93,6 +121,10 @@ func TestCheckRecipientTrust(t *testing.T) {
 		{name: "lookup failure is not a stranger", addresses: []string{"broken@example.com"}, wantBlocked: 1, wantReason: "could not be consulted (database is locked)", wantStatus: ContactLookupFailed},
 		{name: "unparseable address blocked", addresses: []string{"not an address"}, wantBlocked: 1, wantReason: "not a valid email address"},
 		{name: "mixed recipients", addresses: []string{"admin@example.com", "known@example.com", "stranger@example.com"}, wantAllowed: 1, wantBlocked: 2},
+		{name: "automated address on an admin record is refused at known", addresses: []string{"noreply@example.com"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "ask them", wantStatus: ContactMatched, wantZone: "known", wantAutomated: true},
+		{name: "unmatched automated address gets the automated reason", addresses: []string{"no-reply@stranger.example"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "no contact record", wantStatus: ContactUnmatched, wantZone: ZoneUnknown, wantAutomated: true},
+		{name: "automated refusal precedes a failed lookup", addresses: []string{"noreply@broken.example"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "retry later", wantStatus: ContactLookupFailed, wantZone: ZoneUnknown, wantAutomated: true},
+		{name: "ambiguous automated address is refused though every candidate is eligible", addresses: []string{"notifications@twins.example"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "least privileged zone", wantStatus: ContactAmbiguous, wantZone: "known", wantAutomated: true},
 	}
 
 	for _, tt := range tests {
@@ -112,6 +144,19 @@ func TestCheckRecipientTrust(t *testing.T) {
 			}
 			if tt.wantStatus != "" && result.Assessments[0].ContactStatus != tt.wantStatus {
 				t.Errorf("contact_status = %q, want %q", result.Assessments[0].ContactStatus, tt.wantStatus)
+			}
+			first := result.Assessments[0]
+			if tt.wantZone != "" && first.TrustZone != tt.wantZone {
+				t.Errorf("trust_zone = %q, want %q", first.TrustZone, tt.wantZone)
+			}
+			if first.Automated != tt.wantAutomated {
+				t.Errorf("automated = %v, want %v", first.Automated, tt.wantAutomated)
+			}
+			if tt.notReason != "" && strings.Contains(first.Reason, tt.notReason) {
+				t.Errorf("reason = %q, must not teach %q", first.Reason, tt.notReason)
+			}
+			if tt.wantAutomated && (first.Allowed || first.Gating != GatingBlocked || !strings.Contains(first.Reason, "drop the recipient")) {
+				t.Errorf("an automated recipient is blocked with a reason that says to drop it: %+v", first)
 			}
 		})
 	}

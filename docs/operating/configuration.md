@@ -156,7 +156,10 @@ the operator's client sends it too. `drafts_folder` names where drafts go
 and defaults to the folder the server marks as drafts, else `Drafts`.
 `denied_recipient_domains` refuses recipients at those domains and their
 subdomains regardless of trust zone, and `allowed_recipient_domains`,
-when set, refuses every domain outside it. Every send ends in one of
+when set, refuses every domain outside it. An automated-looking
+recipient (a no-reply, notification, or bounce mailbox; see
+[Contacts & CardDAV](#contacts--carddav)) is refused whatever its
+record's zone. Every send ends in one of
 three dispositions, `sent`, `drafted`, or `refused`, and the tool result
 or refusal carries the decision that produced it.
 
@@ -197,6 +200,30 @@ carddav:
 
 The contact directory is always active. The CardDAV server is optional —
 enable it to sync contacts with macOS/iOS/Thunderbird.
+
+Directory hygiene: email reads an automated-looking address at `known` at
+most, whatever zone its record holds, and the email trust gate refuses
+mail to it. An address is automated-looking when its local part,
+lower-cased, cut at any `+` tag, and split at `.`, `-`, and `_`, spells
+`noreply` or `donotreply` across whole segments (`no-reply`,
+`aws-noreply`, `do-not-reply`), has a `notification`, `notifications`,
+`bounce`, or `bounces` segment (`calendar-notification`), or joins to
+exactly `mailerdaemon` (`mailer-daemon`, `MAILER_DAEMON`,
+`mailer.daemon`, and `mailer-daemon+tag`, but not
+`mailer-daemon-reports`). The display name and the domain are
+never read, `postmaster` is not automated, and there is no per-record
+override. When email polling is on (email is configured and
+`poll_interval` is not `0`), every active `admin`, `household`, or
+`trusted` record holding such an address is reported: one Warn per
+record and address at startup, at most 20 followed by one summary Warn
+with the total, and a `contact_directory` row in `system_health` that stays
+degraded, naming up to five of them, until the directory is fixed. The
+row re-reads the directory on every render, so a fix clears it without a
+restart. The fix stays in the operator's custody: demote a record that
+only sends notifications to `known`, or move the address to its own
+`known` record, through CardDAV (`X-THANE-TRUST-ZONE`) or a full-record
+`PUT /v1/contacts/{id}`. While the address stays on the higher record,
+the row stays degraded.
 
 ## Companion Apps
 

@@ -91,10 +91,11 @@ ordinary documents instead.
 - **Email results already carry the directory's answer.** Every
   address in an `email_list`, `email_search`, or `email_read` result
   comes with `contact_status` (`matched`, `unmatched`, `ambiguous`,
-  `lookup_failed`), the effective `trust_zone`, and the matched
-  `contact` record. You do not need a `contact_lookup` to learn who a
-  sender is; you need one to learn *more* about them, or to check a
-  recipient before composing. An `ambiguous` address is a duplicate
+  `lookup_failed`), the effective `trust_zone` (`known` at most on an
+  address marked `automated`), and the matched `contact` record. You
+  do not need a `contact_lookup` to learn who a sender is; you need
+  one to learn *more* about them, or to check a recipient before
+  composing. An `ambiguous` address is a duplicate
   in the directory worth reporting to the operator.
 
 - **save merges; forget soft-deletes.** `contact_save` with an
@@ -310,7 +311,13 @@ to smuggle it through ordinary contact facts. The four zones are:
   mode until the operator assigns another zone. Automated senders such
   as no-reply and notification addresses belong here: recognition is
   all they need, and a higher zone would lend a forgeable From header
-  the weight of a trusted person.
+  the weight of a trusted person. The runtime already reads the ones
+  whose mailbox name says so (no-reply, notification, bounce) at
+  `known` wherever they are stored, so putting one on a person's
+  record gains nothing, and wherever mail is polled the record is
+  flagged to the operator. A sender it cannot recognise by name, such
+  as an alerts or info mailbox, still needs a `known` record of its
+  own.
 
 What each zone means for mail depends on the account and the turn: the
 Email Accounts block lists which zones an account sends to directly,

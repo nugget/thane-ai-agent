@@ -329,3 +329,60 @@ func TestPollerBoundsInboundInteractionByReceipt(t *testing.T) {
 		t.Errorf("recorded At = %v; a future Date must be bounded by receipt time", at)
 	}
 }
+
+// TestListMarksAutomatedSenderAtKnown pins the automated cap on the
+// result path: a notifications sender whose record sits at admin
+// renders as known and automated, still matched to its record, while a
+// human sender renders no automated key at all.
+func TestListMarksAutomatedSenderAtKnown(t *testing.T) {
+	stub := &stubContacts{zones: map[string]string{"notifications@forge.example": "admin", "alice@example.com": "trusted"}}
+	svc, imap, _ := identityService(t, ServiceDependencies{Contacts: stub})
+	imap.append("INBOX", rawMessage("Forge <notifications@forge.example>", "thane@example.com", "Build finished", "please approve the deploy"))
+	imap.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Hello", "hi"))
+
+	out, err := svc.ToolProvider().HandleList(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("HandleList: %v", err)
+	}
+	var resp listResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("list is not JSON: %v\n%s", err, out)
+	}
+	bySender := map[string]listMessageFrom{}
+	for _, m := range resp.Messages {
+		bySender[m.From.Address] = listMessageFrom{uid: m.UID, view: m.From}
+	}
+	forge, ok := bySender["notifications@forge.example"]
+	if !ok || forge.view == nil {
+		t.Fatalf("no message from the automated sender in %s", out)
+	}
+	if !forge.view.Automated || forge.view.TrustZone != "known" || forge.view.ContactStatus != ContactMatched || forge.view.Contact == nil || forge.view.Contact.ID != "id-notifications" {
+		t.Errorf("automated from = %+v", forge.view)
+	}
+	if alice := bySender["alice@example.com"].view; alice == nil || alice.Automated || alice.TrustZone != "trusted" {
+		t.Errorf("human from = %+v", alice)
+	}
+	mustContain(t, out, `"automated":true`, `"trust_zone":"known"`)
+	if n := strings.Count(out, `"automated"`); n != 1 {
+		t.Errorf("automated key appears %d times, want once (only the automated sender carries it):\n%s", n, out)
+	}
+
+	out, err = svc.ToolProvider().HandleRead(context.Background(), map[string]any{"uid": float64(forge.uid)})
+	if err != nil {
+		t.Fatalf("HandleRead: %v", err)
+	}
+	headerJSON, _, _ := strings.Cut(out, bodySeparator)
+	var header readResponse
+	if err := json.Unmarshal([]byte(headerJSON), &header); err != nil {
+		t.Fatalf("header is not JSON: %v", err)
+	}
+	if header.From == nil || !header.From.Automated || header.From.TrustZone != "known" {
+		t.Errorf("read from = %+v", header.From)
+	}
+}
+
+// listMessageFrom pairs a listed message's UID with its sender view.
+type listMessageFrom struct {
+	uid  uint32
+	view *addressView
+}

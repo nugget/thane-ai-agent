@@ -193,6 +193,9 @@ func (a *App) initChannels(s *newState) error {
 	}).ActiveOwnerChannels
 	contactTools.SetOwnerActivitySource(ownerActivity)
 	a.logger.Info("contact store initialized", "path", a.cfg.DataDir+"/contacts.db")
+	if emailServicesEnabled(a.cfg) {
+		logContactDirectoryFindings(s.ctx, contactStore, a.logger)
+	}
 
 	// --- Notifications ---
 	// Push notifications via HA companion app. Requires both the HA client

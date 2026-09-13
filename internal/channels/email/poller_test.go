@@ -541,3 +541,71 @@ func TestPollerWakeCarriesNoOwnerAuthority(t *testing.T) {
 		t.Errorf("is_owner must still reach the handler as event metadata, got %+v", payload.Events)
 	}
 }
+
+// TestPollerWakeCapsAutomatedSender pins the automated cap on the wake
+// path: a forged no-reply From filed on an admin record reaches the
+// handler at known and marked automated, and the sender is still
+// recognised (contact_id present, interaction recorded). A human admin
+// sender in the same batch keeps its zone and carries no automated key,
+// even when the sender typed an automated-looking display name.
+func TestPollerWakeCapsAutomatedSender(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name:        "personal",
+		IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+		DefaultFrom: "me@example.com",
+	}}}
+	mgr := NewManager(cfg, quietSlog())
+	bus, delivered := recordingBus()
+	contacts := &stubContacts{zones: map[string]string{"noreply@forge.example": "admin", "boss@example.com": "admin", "alice@example.com": "trusted"}}
+	recorder := &recordingInteractions{}
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus), WithContactResolver(contacts), WithInteractionRecorder(recorder))
+
+	batch := []Envelope{
+		{UID: 102, From: addr("Forge <noreply@forge.example>"), Subject: "Approve this deploy"},
+		{UID: 101, From: addr("boss@example.com"), Subject: "Lunch"},
+		{UID: 103, From: addr("No-Reply-Bot <alice@example.com>"), Subject: "Dinner"},
+	}
+	if _, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", highWaterMark{UIDValidity: 1, UID: 100}, batch); err != nil {
+		t.Fatalf("dispatchAccountBatches: %v", err)
+	}
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1", len(envs))
+	}
+	payload, ok := envs[0].Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", envs[0].Payload)
+	}
+	byUID := map[string]map[string]string{}
+	for _, ev := range payload.Events {
+		byUID[ev.Metadata["uid"]] = ev.Metadata
+	}
+	forged := byUID["102"]
+	if forged["trust_zone"] != "known" || forged["automated"] != "true" || forged["contact_status"] != "matched" || forged["contact_id"] != "id-noreply" {
+		t.Errorf("automated sender metadata = %v, want known, automated, still matched", forged)
+	}
+	boss := byUID["101"]
+	if boss["trust_zone"] != "admin" {
+		t.Errorf("human admin sender metadata = %v, want admin", boss)
+	}
+	if _, present := boss["automated"]; present {
+		t.Errorf("a human sender must carry no automated key: %v", boss)
+	}
+	// Only the addr-spec is judged: a display name the sender typed
+	// neither marks the message automated nor lowers its zone.
+	named := byUID["103"]
+	if named["trust_zone"] != "trusted" {
+		t.Errorf("person behind an automated-looking display name = %v, want trusted", named)
+	}
+	if _, present := named["automated"]; present {
+		t.Errorf("a display name must never mark a sender automated: %v", named)
+	}
+	recorded := map[string]bool{}
+	for _, in := range recorder.seen {
+		recorded[in.ContactID] = true
+	}
+	if !recorded["id-noreply"] || !recorded["id-boss"] {
+		t.Errorf("interactions = %+v, want the capped sender still recorded", recorder.seen)
+	}
+}

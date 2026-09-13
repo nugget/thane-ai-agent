@@ -55,7 +55,8 @@ func WithMessageBus(bus *messages.Bus) PollerOption {
 
 // WithContactResolver lets the poller resolve each sender against the
 // contact directory, stamping the match (contact_id, contact_name,
-// is_owner, contact_status) and its trust_zone on every wake event.
+// is_owner, contact_status), its trust_zone, and automated for a
+// no-reply, notification, or bounce sender on every wake event.
 // Without a resolver every sender reads as unmatched — wakes still
 // fire, the model just won't see who is writing.
 func WithContactResolver(c ContactResolver) PollerOption {
@@ -450,7 +451,10 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 // directory's answer about the sender — contact_id, contact_name,
 // is_owner, contact_status, and the effective trust_zone ("unknown"
 // for a stranger). is_owner says the record is the operator's, not that
-// the operator wrote the message; a From header is a claim.
+// the operator wrote the message; a From header is a claim. automated
+// is present, as "true", only for a no-reply, notification, or bounce
+// sender, whose trust_zone is capped at known; the sender is still
+// recognised through contact_id.
 func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope, lookup *identityLookup) ([]messages.LoopEventPayload, uint32) {
 	events := make([]messages.LoopEventPayload, 0, len(chunk))
 	var maxUID uint32
@@ -474,6 +478,9 @@ func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope, lookup *
 		}
 		if env.MessageID != "" {
 			metadata["message_id"] = env.MessageID
+		}
+		if match.Automated {
+			metadata["automated"] = "true"
 		}
 		if match.Binding != nil {
 			metadata["contact_id"] = match.Binding.ContactID

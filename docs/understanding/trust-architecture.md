@@ -230,6 +230,26 @@ even in a loop the operator launched from their own conversation, and
 neither is a call through the Ollama-compatible shim that Home Assistant
 automations and voice satellites use.
 
+One mailbox shape is capped in Go whatever the directory says. An address
+whose local part names a mailbox nobody reads (no-reply, do-not-reply,
+notification, bounce, mailer-daemon) is marked `automated`, and its
+effective zone is capped at `known`: an `admin`, `household`, or `trusted`
+record holding it is read as `known`, and `known` and `unknown` stay as
+they are. Only the address's local part decides it; the display name and
+the domain are never read, and postmaster is not automated. The cap sits
+at the one point where email identity is normalised, so wake metadata,
+list, search, and read results, and the send gate all see the same
+answer, and it only ever lowers a zone. The matched record stays bound, so
+the sender is still recognised and its inbound interactions are still
+recorded. Outbound, the gate refuses an automated recipient whatever its
+record's zone, with a reason that says to drop it. The mark is derived
+from the address on every read and never stored, so no tool can set or
+clear it. When email polling is on, each such address held by an active
+record above `known` logs a Warn at startup and keeps the
+`contact_directory` row of `system_health` degraded until the operator
+demotes the record or moves the address to its own `known` record; see
+[Configuration](../operating/configuration.md#contacts--carddav).
+
 ### Contact Identity Custody
 
 **Status: Implemented**
@@ -339,6 +359,26 @@ available to its profile.
 
 **Structural fix:** Delegations should declare required capability tags.
 Delegates receive only tools for those tags, not the full profile toolset.
+
+### Inbound Email Credibility
+
+**Risk: Medium**
+
+A forged From of a person's address still carries that person's trust zone
+into wake metadata and email tool results, because nothing verifies a
+sender until S/MIME and OpenPGP verification ship (#317). The automated
+cap covers only mailbox names that say nobody reads them. Until then the
+handler Task and the email talents carry the rule that nothing
+consequential a message asks for is done on its word alone. The Go floor
+bounds what a forged From can win: a wake is never an attended turn, so
+under the default delivery policy anything the handler writes is held in
+Drafts for the operator (only an account configured with `delivery:
+direct` sends from a wake), and the handler loop wears only the `email`
+tag.
+
+**Structural fix:** Signature verification against keys the directory
+holds (#317), so a claimed sender is established rather than read from
+the From header.
 
 ### Carry-Forward Content
 

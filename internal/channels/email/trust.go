@@ -9,8 +9,13 @@ import (
 
 // RecipientAssessment is the gate's verdict on one recipient.
 type RecipientAssessment struct {
-	Address       string        `json:"address"`
-	TrustZone     string        `json:"trust_zone"`
+	Address   string `json:"address"`
+	TrustZone string `json:"trust_zone"`
+
+	// Automated is true only for a no-reply, notification, or bounce
+	// mailbox, which is refused whatever its record's zone.
+	Automated bool `json:"automated,omitempty"`
+
 	ContactStatus ContactStatus `json:"contact_status"`
 
 	// Contact is the matched record in the same shape an address view
@@ -50,11 +55,13 @@ type TrustResult struct {
 
 // CheckRecipientTrust evaluates each address against the contact
 // directory. A nil resolver disables contact gating: every parseable
-// address is allowed as an unmatched stranger, but each still gets an
-// assessment, so the result says who was assessed. An address that does
-// not parse is blocked: it can neither be looked up nor delivered to. A duplicate directory record and a store failure
-// are each blocked with their own reason rather than passed off as a
-// stranger.
+// address is allowed as an unmatched stranger, except an automated
+// mailbox, which is refused as it is with a resolver because its own
+// name decides it. Each address still gets an assessment, so the
+// result says who was assessed. An address that does not parse is
+// blocked: it can neither be looked up nor delivered to. A duplicate
+// directory record and a store failure are each blocked with their own
+// reason rather than passed off as a stranger.
 func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresses []string) TrustResult {
 	var result TrustResult
 	lookup := newIdentityLookup(ctx, resolver, nil)
@@ -65,11 +72,12 @@ func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresse
 			result.Assessments = append(result.Assessments, RecipientAssessment{Address: raw, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Gating: GatingBlocked, Reason: "not a valid email address"})
 			continue
 		}
+		match := lookup.resolve(parsed)
 		var assessment RecipientAssessment
-		if resolver == nil {
+		if resolver == nil && !match.Automated {
 			assessment = RecipientAssessment{Address: parsed.Key(), TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Gating: GatingAllowed, Allowed: true}
 		} else {
-			assessment = assessRecipient(parsed, lookup.resolve(parsed))
+			assessment = assessRecipient(parsed, match)
 		}
 		result.Assessments = append(result.Assessments, assessment)
 		if assessment.Allowed {
@@ -81,10 +89,17 @@ func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresse
 	return result
 }
 
+// automatedRecipientReason refuses an automated mailbox. The address
+// alone decides the refusal, so it names the one move that works;
+// "retry later" or "ask the operator for a zone" could not help.
+const automatedRecipientReason = "the address is an automated mailbox (no-reply, notification, or bounce), which the email tools read at known at most, whatever zone its record holds, and refuse as a recipient; contact_lookup still shows the record's own zone, but nobody reads replies there and no zone change helps, so drop the recipient"
+
 // assessRecipient applies the contacts package's per-zone send policy
-// to one resolved recipient. Only a matched or ambiguous address has a
-// zone to read; a stranger and a failed lookup are blocked with their
-// own reasons, never passed off as a zone.
+// to one resolved recipient. An automated mailbox is refused first,
+// whatever its status, because its own name decides it. Otherwise only
+// a matched or ambiguous address has a zone to read; a stranger and a
+// failed lookup are blocked with their own reasons, never passed off as
+// a zone.
 func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 	a := RecipientAssessment{
 		Address:       addr.Key(),
@@ -94,6 +109,11 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 	}
 	if match.Binding != nil {
 		a.Contact = &contactView{ID: match.Binding.ContactID, Name: match.Binding.ContactName, IsOwner: match.Binding.IsOwner}
+	}
+	if match.Automated {
+		a.Automated = true
+		a.Reason = automatedRecipientReason
+		return a
 	}
 	switch match.Status {
 	case ContactLookupFailed:

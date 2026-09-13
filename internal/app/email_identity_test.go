@@ -172,3 +172,32 @@ func TestResolveEmailContactCountsEveryDuplicate(t *testing.T) {
 		t.Errorf("match = status %s, %d candidates, total %d, zone %s", got.Status, len(got.Candidates), got.CandidatesTotal, got.TrustZone)
 	}
 }
+
+// TestAutomatedAddressCappedThroughRealStore runs the send gate over the
+// real directory: a notifications address filed on an admin record is
+// refused at known, while the directory itself still answers admin, so
+// the cap lives in the email normaliser and not in the store.
+func TestAutomatedAddressCappedThroughRealStore(t *testing.T) {
+	store := newEmailIdentityStore(t)
+	forge := seedContact(t, store, "Forge Notices", "notifications@forge.example", contacts.ZoneAdmin)
+	seedContact(t, store, "Bob Admin", "bob@example.com", contacts.ZoneAdmin)
+	resolver := &contactChannelBindingResolver{store: store}
+	ctx := context.Background()
+
+	raw, err := resolver.ResolveEmailContact(ctx, "notifications@forge.example")
+	if err != nil || raw.TrustZone != contacts.ZoneAdmin || raw.Automated {
+		t.Fatalf("the raw directory answer = %+v, %v; want admin, unmarked", raw, err)
+	}
+
+	result := email.CheckRecipientTrust(ctx, resolver, []string{"notifications@forge.example", "bob@example.com"})
+	if len(result.Assessments) != 2 {
+		t.Fatalf("assessments = %+v", result.Assessments)
+	}
+	automated := result.Assessments[0]
+	if automated.Allowed || !automated.Automated || automated.TrustZone != contacts.ZoneKnown || automated.Contact == nil || automated.Contact.ID != forge.ID.String() {
+		t.Errorf("automated recipient = %+v", automated)
+	}
+	if human := result.Assessments[1]; !human.Allowed || human.Automated || human.TrustZone != contacts.ZoneAdmin {
+		t.Errorf("human admin recipient = %+v", human)
+	}
+}

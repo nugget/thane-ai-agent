@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -284,6 +285,53 @@ func snapshotPayload(snap HealthSnapshot) map[string]any {
 	return payload
 }
 
+// maxDirectoryFindingsShown bounds how many records the
+// contact_directory row names; its count still covers every finding.
+const maxDirectoryFindingsShown = 5
+
+// maxDirectoryFindingBytes bounds each named record in the
+// contact_directory detail. Record names and addresses are free text
+// from the directory, so without it five oversized records could make
+// the model-facing detail arbitrarily large. The source clips each
+// field first, so this is a backstop for a source that does not.
+const maxDirectoryFindingBytes = 256
+
+// directoryFindingsDetail renders the contact_directory row's detail:
+// how many addresses the runtime reads below their record's zone, the
+// first few of them, and the operator's remedy. total counts every
+// finding; shown is the prefix the source returned.
+func directoryFindingsDetail(shown []string, total int) string {
+	shown = shown[:min(len(shown), maxDirectoryFindingsShown)]
+	clipped := make([]string, 0, len(shown))
+	for _, line := range shown {
+		clipped = append(clipped, clipUTF8(line, maxDirectoryFindingBytes))
+	}
+	list := strings.Join(clipped, "; ")
+	if extra := total - len(shown); extra > 0 {
+		list += fmt.Sprintf(" (+%d more)", extra)
+	}
+	plural := "es"
+	if total == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("contact records above known hold %d automated-looking email address%s, which the runtime reads at known whatever the record's zone: %s. The operator should demote each record to known, or move the address to its own known record, through CardDAV or PUT /v1/contacts/{id}.",
+		total, plural, list)
+}
+
+// clipUTF8 cuts s to at most maxBytes on a rune boundary, ending a cut
+// with "…" so the reader can tell the text was shortened.
+func clipUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const mark = "…"
+	end := max(maxBytes-len(mark), 0)
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + mark
+}
+
 // HealthSources are the live feeds the Inspector reads. Every field is
 // optional (nil-safe): an unwired source simply contributes no rows, so
 // the Inspector works identically in production, tests, and reduced
@@ -313,6 +361,12 @@ type HealthSources struct {
 	// over billing state — persistent, operator-actionable, and not
 	// fixable by any retry. Nil-safe; an empty slice means healthy.
 	ProviderBilling func() []ProviderBillingState
+	// DirectoryFindings reports contact records whose stored zone the
+	// runtime does not honour in full: one formatted line each for at
+	// most limit of them, and the total count including those past the
+	// limit. A zero total means clean. It is a live query, so a
+	// directory fix clears the row on the next render.
+	DirectoryFindings func(ctx context.Context, limit int) (shown []string, total int, err error)
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
@@ -469,6 +523,25 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 					b.Provider, promptfmt.FormatDeltaOnly(b.Since, now), strings.TrimSpace(b.Detail)),
 			})
 		}
+	}
+
+	// Contact directory: records above known holding an address the
+	// runtime reads at known. Persistent and operator-actionable; no
+	// retry changes it, only a directory edit does.
+	if i.src.DirectoryFindings != nil {
+		row := HealthRow{Name: "contact_directory", Status: HealthOK}
+		directoryDone := phasetrace.Phase(ctx, "health:directory_findings")
+		shown, total, err := i.src.DirectoryFindings(ctx, maxDirectoryFindingsShown)
+		directoryDone()
+		switch {
+		case err != nil:
+			row.Status = HealthDegraded
+			row.Detail = fmt.Sprintf("contact directory audit failed: %v", err)
+		case total > 0:
+			row.Status = HealthDegraded
+			row.Detail = directoryFindingsDetail(shown, total)
+		}
+		snap.Annunciator = append(snap.Annunciator, row)
 	}
 
 	// Work queue backlog: a partition whose oldest pending item has aged
