@@ -3344,10 +3344,15 @@ func (c *Config) applyDefaults() {
 
 	if c.Pricing == nil {
 		c.Pricing = map[string]PricingEntry{
-			// Current models (per-million USD, input/output).
+			// Current models (per-million USD, input/output). Sonnet 5
+			// is $2/$10, below Sonnet 4.6's $3/$15.
+			"claude-opus-5":    {InputPerMillion: 5.0, OutputPerMillion: 25.0},
+			"claude-sonnet-5":  {InputPerMillion: 2.0, OutputPerMillion: 10.0},
+			"claude-haiku-4-5": {InputPerMillion: 1.0, OutputPerMillion: 5.0},
+			// Previous generation, still served and still present in
+			// usage history.
 			"claude-opus-4-8":   {InputPerMillion: 5.0, OutputPerMillion: 25.0},
 			"claude-sonnet-4-6": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
-			"claude-haiku-4-5":  {InputPerMillion: 1.0, OutputPerMillion: 5.0},
 			// Deprecated models kept for pricing historical usage records
 			// (retire 2026-06-15 / 2026-04-19); note Opus 4 was $15/$75,
 			// far above Opus 4.8's $5/$25.

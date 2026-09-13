@@ -561,12 +561,14 @@ func TestContentMaxLength_Default(t *testing.T) {
 }
 
 // TestApplyDefaults_PricingHasCurrentModels locks in cost-tracking
-// pricing for the current model fleet. Opus 4.8 is $5/$25 — far below
-// the retired Opus 4's $15/$75 — so a missing entry would silently
-// mis-price usage rather than error.
+// pricing for the current model fleet. A model missing from the table
+// records every call at $0 rather than erroring, so a fleet move that
+// outruns this table is invisible in cost reports.
 func TestApplyDefaults_PricingHasCurrentModels(t *testing.T) {
 	cfg := Default()
 	want := map[string]PricingEntry{
+		"claude-opus-5":     {InputPerMillion: 5.0, OutputPerMillion: 25.0},
+		"claude-sonnet-5":   {InputPerMillion: 2.0, OutputPerMillion: 10.0},
 		"claude-opus-4-8":   {InputPerMillion: 5.0, OutputPerMillion: 25.0},
 		"claude-sonnet-4-6": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
 		"claude-haiku-4-5":  {InputPerMillion: 1.0, OutputPerMillion: 5.0},
