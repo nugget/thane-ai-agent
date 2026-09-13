@@ -24,7 +24,9 @@ func viewAddress(a Address) *addressView {
 	if a.IsZero() {
 		return nil
 	}
-	view := addressView(a)
+	// A display name is whatever the sender typed; bound it so one
+	// header cannot fill a result.
+	view := addressView{Name: truncateUTF8(a.Name, maxNameOutput), Address: a.Address}
 	return &view
 }
 
@@ -37,7 +39,7 @@ func viewAddresses(list []Address) []addressView {
 		if a.IsZero() {
 			continue
 		}
-		out = append(out, addressView(a))
+		out = append(out, *viewAddress(a))
 	}
 	return out
 }
@@ -51,6 +53,8 @@ const (
 	maxSubjectOutput    = 1024
 	maxSummaryAddresses = 10
 	maxHeaderAddresses  = 25
+	maxNameOutput       = 256
+	maxMessageIDOutput  = 512
 )
 
 // capAddresses returns at most n addresses and how many were left out.
@@ -108,7 +112,7 @@ func newListResponse(account string, listed ListResult, now time.Time) listRespo
 			AddressesOmitted: toOmitted + ccOmitted,
 			Subject:          truncateUTF8(env.Subject, maxSubjectOutput),
 			Date:             deltaOrEmpty(env.Date, now),
-			MessageID:        env.MessageID,
+			MessageID:        truncateUTF8(env.MessageID, maxMessageIDOutput),
 			Flags:            env.Flags,
 			Size:             env.Size,
 		})

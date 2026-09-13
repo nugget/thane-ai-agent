@@ -180,7 +180,10 @@ func (s *Service) ResolveAccount(ctx context.Context, requested string) (Resolve
 // boundAccount returns the email account this caller is scoped to, or
 // an empty string when the caller is unbound.
 func boundAccount(ctx context.Context) string {
-	return looppkg.BindingFromContext(ctx, looppkg.BindingEmailAccount)
+	// Trimmed here because validation and hydration trim the name too:
+	// a binding written with stray whitespace must resolve at runtime
+	// to the account it validated against.
+	return strings.TrimSpace(looppkg.BindingFromContext(ctx, looppkg.BindingEmailAccount))
 }
 
 // AccountsInConfigOrder returns the account configurations in
