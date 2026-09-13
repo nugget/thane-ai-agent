@@ -544,6 +544,34 @@ func TestComputeCost_NilPricing(t *testing.T) {
 	}
 }
 
+func TestPricingFor(t *testing.T) {
+	pricing := map[string]config.PricingEntry{
+		"claude-sonnet-5": {InputPerMillion: 2.0, OutputPerMillion: 10.0},
+	}
+	tests := []struct {
+		name     string
+		identity ModelIdentity
+		pricing  map[string]config.PricingEntry
+		wantOK   bool
+	}{
+		{"model priced directly", ModelIdentity{Model: "claude-sonnet-5", UpstreamModel: "claude-sonnet-5"}, pricing, true},
+		{"deployment falls back to upstream", ModelIdentity{Model: "anthropic/claude-sonnet-5", UpstreamModel: "claude-sonnet-5"}, pricing, true},
+		{"model missing from table", ModelIdentity{Model: "claude-opus-5", UpstreamModel: "claude-opus-5"}, pricing, false},
+		{"nil table", ModelIdentity{Model: "claude-sonnet-5", UpstreamModel: "claude-sonnet-5"}, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, ok := PricingFor(tt.identity, tt.pricing)
+			if ok != tt.wantOK {
+				t.Fatalf("PricingFor ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && entry != pricing["claude-sonnet-5"] {
+				t.Errorf("PricingFor entry = %+v, want %+v", entry, pricing["claude-sonnet-5"])
+			}
+		})
+	}
+}
+
 func TestRecord_AutoID(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

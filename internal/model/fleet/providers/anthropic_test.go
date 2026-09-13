@@ -346,7 +346,47 @@ func TestAnthropicPromptCacheControl_NotSuppressedByToolCacheBreakpoints(t *test
 	}
 }
 
-func TestAnthropicPromptCacheControl_SuppressedBySectionCacheBreakpoints(t *testing.T) {
+func TestApplyCacheBreakpointGuards_ReservedSlot(t *testing.T) {
+	body := strings.Repeat("x", 4100)
+	tests := []struct {
+		name       string
+		systemRuns int
+		wantSystem int
+		wantTool   bool
+	}{
+		{"production shape fits beside the reserved slot", 2, 2, true},
+		{"reserved slot displaces the tool breakpoint", 3, 3, false},
+		{"reserved slot displaces trailing system breakpoints", 4, 3, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocks := make([]anthropicContent, tt.systemRuns)
+			for i := range blocks {
+				blocks[i] = textBlock(body, "1h")
+			}
+			tools := []anthropicTool{
+				{Name: "t", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+			}
+
+			applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+			surviving := 0
+			for _, b := range blocks {
+				if b.CacheControl != nil {
+					surviving++
+				}
+			}
+			if surviving != tt.wantSystem {
+				t.Errorf("surviving system breakpoints = %d, want %d", surviving, tt.wantSystem)
+			}
+			if gotTool := tools[0].CacheControl != nil; gotTool != tt.wantTool {
+				t.Errorf("tool breakpoint kept = %v, want %v", gotTool, tt.wantTool)
+			}
+		})
+	}
+}
+
+func TestAnthropicPromptCacheControl_ComposesWithSectionCacheBreakpoints(t *testing.T) {
 	systemPayload := anthropicSystemPayload([]llm.Message{
 		{
 			Role:    "system",
@@ -363,8 +403,11 @@ func TestAnthropicPromptCacheControl_SuppressedBySectionCacheBreakpoints(t *test
 	}
 
 	ctrl := anthropicPromptCacheControl("fallback", []anthropicMessage{{Role: "user", Content: "check"}}, nil, explicit)
-	if ctrl != nil {
-		t.Fatalf("request-level cache_control = %+v, want nil when explicit system block caching is present", ctrl)
+	if ctrl == nil || ctrl.Type != "ephemeral" {
+		t.Fatalf("request-level cache_control = %+v, want ephemeral alongside explicit system block caching", ctrl)
+	}
+	if ctrl.TTL != "" {
+		t.Errorf("request-level TTL = %q, want default 5m: it lands after the 5m system run", ctrl.TTL)
 	}
 }
 
@@ -406,7 +449,7 @@ func TestApplyCacheBreakpointGuards_UnderMinimumRunsAreDropped(t *testing.T) {
 		textBlock(strings.Repeat("a", 400), "1h"),  // prefix ≈ 100 tokens — below min
 		textBlock(strings.Repeat("b", 4000), "1h"), // prefix ≈ 1100 tokens — above min
 	}
-	applyCacheBreakpointGuards(blocks, nil, "claude-sonnet-4-5", slog.Default())
+	applyCacheBreakpointGuards(blocks, nil, "claude-sonnet-4-5", 0, slog.Default())
 
 	if blocks[0].CacheControl != nil {
 		t.Error("under-minimum run should have cache_control stripped")
@@ -430,7 +473,7 @@ func TestApplyCacheBreakpointGuards_CapsAtFourBreakpointsDroppingTool(t *testing
 		{Name: "t", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
 	}
 
-	applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", slog.Default())
+	applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", 0, slog.Default())
 
 	if tools[0].CacheControl != nil {
 		t.Error("tool cache should be dropped when system fills the 4-breakpoint budget")
@@ -458,7 +501,7 @@ func TestApplyCacheBreakpointGuards_DropsTrailingSystemWhenAboveCap(t *testing.T
 		textBlock(body, "1h"),
 	}
 
-	applyCacheBreakpointGuards(blocks, nil, "claude-sonnet-4-5", slog.Default())
+	applyCacheBreakpointGuards(blocks, nil, "claude-sonnet-4-5", 0, slog.Default())
 
 	if blocks[4].CacheControl != nil {
 		t.Error("trailing system breakpoint should drop when budget exhausted")
@@ -482,7 +525,7 @@ func TestApplyCacheBreakpointGuards_AllowsTypicalThreeBreakpointConfig(t *testin
 		{Name: "t", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
 	}
 
-	applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", slog.Default())
+	applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", 0, slog.Default())
 
 	for i, b := range blocks {
 		if b.CacheControl == nil {
@@ -795,7 +838,7 @@ func TestApplyCacheBreakpointGuards_ReturnsUnderMinimumDrops(t *testing.T) {
 	}
 	tools := []anthropicTool{}
 
-	drops := applyCacheBreakpointGuards(blocks, tools, "claude-opus-4-20250514", logger)
+	drops := applyCacheBreakpointGuards(blocks, tools, "claude-opus-4-20250514", 0, logger)
 
 	if len(drops) != 2 {
 		t.Fatalf("drops = %d, want 2", len(drops))
@@ -832,7 +875,7 @@ func TestApplyCacheBreakpointGuards_ReturnsToolCapDrop(t *testing.T) {
 		{Name: "last", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
 	}
 
-	drops := applyCacheBreakpointGuards(blocks, tools, "claude-opus-4-20250514", logger)
+	drops := applyCacheBreakpointGuards(blocks, tools, "claude-opus-4-20250514", 0, logger)
 
 	if len(drops) < 1 {
 		t.Fatalf("drops = %d, want at least 1", len(drops))
