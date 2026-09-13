@@ -284,6 +284,27 @@ func snapshotPayload(snap HealthSnapshot) map[string]any {
 	return payload
 }
 
+// maxDirectoryFindingsShown bounds how many records the
+// contact_directory row names; its count still covers every finding.
+const maxDirectoryFindingsShown = 5
+
+// directoryFindingsDetail renders the contact_directory row's detail:
+// how many addresses the runtime reads below their record's zone, the
+// first few of them, and the operator's remedy.
+func directoryFindingsDetail(findings []string) string {
+	shown := findings[:min(len(findings), maxDirectoryFindingsShown)]
+	list := strings.Join(shown, "; ")
+	if extra := len(findings) - len(shown); extra > 0 {
+		list += fmt.Sprintf(" (+%d more)", extra)
+	}
+	plural := "es"
+	if len(findings) == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("contact records above known hold %d automated-looking email address%s, which the runtime reads at known whatever the record's zone: %s. The operator should demote each record to known, or move the address to its own known record, through CardDAV or PUT /v1/contacts/{id}.",
+		len(findings), plural, list)
+}
+
 // HealthSources are the live feeds the Inspector reads. Every field is
 // optional (nil-safe): an unwired source simply contributes no rows, so
 // the Inspector works identically in production, tests, and reduced
@@ -313,6 +334,11 @@ type HealthSources struct {
 	// over billing state — persistent, operator-actionable, and not
 	// fixable by any retry. Nil-safe; an empty slice means healthy.
 	ProviderBilling func() []ProviderBillingState
+	// DirectoryFindings reports contact records whose stored zone the
+	// runtime does not honour in full, one formatted line each; empty
+	// means clean. It is a live query, so a directory fix clears the
+	// row on the next render.
+	DirectoryFindings func(ctx context.Context) ([]string, error)
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
@@ -469,6 +495,25 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 					b.Provider, promptfmt.FormatDeltaOnly(b.Since, now), strings.TrimSpace(b.Detail)),
 			})
 		}
+	}
+
+	// Contact directory: records above known holding an address the
+	// runtime reads at known. Persistent and operator-actionable; no
+	// retry changes it, only a directory edit does.
+	if i.src.DirectoryFindings != nil {
+		row := HealthRow{Name: "contact_directory", Status: HealthOK}
+		directoryDone := phasetrace.Phase(ctx, "health:directory_findings")
+		findings, err := i.src.DirectoryFindings(ctx)
+		directoryDone()
+		switch {
+		case err != nil:
+			row.Status = HealthDegraded
+			row.Detail = fmt.Sprintf("contact directory audit failed: %v", err)
+		case len(findings) > 0:
+			row.Status = HealthDegraded
+			row.Detail = directoryFindingsDetail(findings)
+		}
+		snap.Annunciator = append(snap.Annunciator, row)
 	}
 
 	// Work queue backlog: a partition whose oldest pending item has aged

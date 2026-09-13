@@ -69,8 +69,16 @@ type ContactMatch struct {
 
 	// TrustZone is the effective zone the gate and the wake metadata
 	// use: the contact's zone when matched, the least privileged
-	// candidate's when ambiguous, and [ZoneUnknown] otherwise.
+	// candidate's when ambiguous, and [ZoneUnknown] otherwise, and
+	// capped at known for an automated address.
 	TrustZone string `json:"-"`
+
+	// Automated means the address's own mailbox name marks it as one
+	// nobody reads (no-reply, notification, bounce), per
+	// [contacts.AutomatedAddress]. TrustZone is then capped at known
+	// whatever the record holds, and Binding still names the matched
+	// record, so the sender stays recognised.
+	Automated bool `json:"-"`
 
 	// Candidates lists records sharing the address when Status is
 	// [ContactAmbiguous], at most as many as the resolver renders.
@@ -167,10 +175,25 @@ func (l *identityLookup) resolve(a Address) ContactMatch {
 	return match
 }
 
-// resolveContact normalizes a resolver's answer: a nil resolver is
+// resolveContact is the one place email identity is normalised: the
+// directory's answer, then the automated cap. An address whose mailbox
+// name says nobody reads it is marked Automated and its effective zone
+// is capped at known, for every status (lookup_failed and the nil
+// resolver included) because the address alone decides it. The cap
+// only ever lowers a zone and leaves Binding alone.
+func resolveContact(ctx context.Context, resolver ContactResolver, address string) ContactMatch {
+	match := directoryAnswer(ctx, resolver, address)
+	if _, automated := contacts.AutomatedAddress(address); automated {
+		match.Automated = true
+		match.TrustZone = contacts.CapAtKnown(match.TrustZone)
+	}
+	return match
+}
+
+// directoryAnswer normalizes a resolver's answer: a nil resolver is
 // "unmatched", an error is "lookup_failed", and the effective zone is
 // always populated so callers never branch on an empty string.
-func resolveContact(ctx context.Context, resolver ContactResolver, address string) ContactMatch {
+func directoryAnswer(ctx context.Context, resolver ContactResolver, address string) ContactMatch {
 	if resolver == nil {
 		return ContactMatch{Status: ContactUnmatched, TrustZone: ZoneUnknown}
 	}

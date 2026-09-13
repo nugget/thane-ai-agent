@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
@@ -37,6 +38,13 @@ func TestEmailDefaultHandlerCarriesNoOwnerAuthority(t *testing.T) {
 	}
 	if handlerSpec == nil {
 		t.Fatalf("no %s spec when email is configured", email.DefaultHandlerLoopName)
+	}
+	// The Go-shipped Task must keep naming the automated key the poller
+	// emits, and the move it forbids.
+	for _, want := range []string{"automated (present, and true, only for", "Never reply to an event carrying automated."} {
+		if !strings.Contains(handlerSpec.Task, want) {
+			t.Errorf("handler Task must contain %q", want)
+		}
 	}
 	for _, spec := range builtInContainerDefinitionSpecs(cfg, nil) {
 		if spec.Name == handlerSpec.ParentName {

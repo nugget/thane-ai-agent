@@ -3,6 +3,7 @@ package introspection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -606,6 +607,90 @@ func TestDiskUsedPct(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := diskUsedPct(tt.free, tt.total); got != tt.want {
 				t.Errorf("diskUsedPct(%d, %d) = %d, want %d", tt.free, tt.total, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHealthContactDirectoryRow pins the contact_directory lamp: clean
+// is ok, findings degrade it with a bounded list and the operator's
+// remedy, a failed audit is itself a finding, and an unwired source
+// contributes no row.
+func TestHealthContactDirectoryRow(t *testing.T) {
+	findings := func(n int) []string {
+		out := make([]string, 0, n)
+		for i := 1; i <= n; i++ {
+			out = append(out, fmt.Sprintf("Record %d (admin, noreply@r%d.example: no-reply)", i, i))
+		}
+		return out
+	}
+	source := func(lines []string, err error) func(context.Context) ([]string, error) {
+		return func(context.Context) ([]string, error) { return lines, err }
+	}
+	tests := []struct {
+		name       string
+		source     func(context.Context) ([]string, error)
+		wantRow    bool
+		wantStatus string
+		wantDetail []string
+		notDetail  []string
+	}{
+		{
+			name: "two findings degrade and name both with the remedy", source: source(findings(2), nil),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"2 automated-looking email addresses", "Record 1 (admin, noreply@r1.example: no-reply)", "Record 2 (", "reads at known", "demote each record to known", "CardDAV"},
+			notDetail:  []string{"more)"},
+		},
+		{
+			name: "one finding reads singular", source: source(findings(1), nil),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"1 automated-looking email address,"},
+		},
+		{
+			name: "seven findings name five and count the rest", source: source(findings(7), nil),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"7 automated-looking email addresses", "Record 5 (", "(+2 more)"},
+			notDetail:  []string{"Record 6 (", "Record 7 ("},
+		},
+		{
+			name: "a failed audit degrades with the error text", source: source(nil, errors.New("database is locked")),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"database is locked"},
+		},
+		{name: "an empty result is ok", source: source(nil, nil), wantRow: true, wantStatus: HealthOK},
+		{name: "an unwired source contributes no row", source: nil, wantRow: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap := NewInspector(HealthSources{DirectoryFindings: tt.source}).Health(context.Background())
+			var row *HealthRow
+			for i := range snap.Annunciator {
+				if snap.Annunciator[i].Name == "contact_directory" {
+					row = &snap.Annunciator[i]
+				}
+			}
+			if (row != nil) != tt.wantRow {
+				t.Fatalf("contact_directory row present = %v, want %v: %+v", row != nil, tt.wantRow, snap.Annunciator)
+			}
+			if row == nil {
+				return
+			}
+			if row.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q (detail %q)", row.Status, tt.wantStatus, row.Detail)
+			}
+			for _, want := range tt.wantDetail {
+				if !strings.Contains(row.Detail, want) {
+					t.Errorf("detail = %q, want it to contain %q", row.Detail, want)
+				}
+			}
+			for _, not := range tt.notDetail {
+				if strings.Contains(row.Detail, not) {
+					t.Errorf("detail = %q, must not contain %q", row.Detail, not)
+				}
+			}
+			summary, _ := snapshotPayload(snap)["summary"].(string)
+			if degraded := tt.wantStatus != HealthOK; degraded != strings.Contains(summary, "contact_directory") {
+				t.Errorf("summary = %q, want contact_directory named only when degraded", summary)
 			}
 		})
 	}
