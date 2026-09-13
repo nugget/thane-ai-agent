@@ -265,8 +265,9 @@ func (b *Backend) addressBook() carddav.AddressBook {
 func (b *Backend) contactToObject(c *contacts.Contact) (*carddav.AddressObject, error) {
 	card := contacts.ContactToCard(c)
 	// ContactToCard withholds rows whose names are vCard syntax or a
-	// codec-owned header; such a row did not come from a vCard. Say so,
-	// because the operator's next PUT of this card removes it.
+	// codec-owned header, whether an older writer stored one or the
+	// operator's own PUT carried one. Say so, because the operator's next
+	// PUT of this card removes it.
 	var withheld []string
 	for _, p := range c.Properties {
 		if !contacts.EmittablePropertyName(p.Property) {

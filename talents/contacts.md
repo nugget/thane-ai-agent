@@ -360,8 +360,8 @@ On an older configuration the operator is found by name rather than by
 UUID. There, `contact_save` also refuses, in every turn, to create a
 contact or set a nickname that carries the name Thane recognizes the
 operator by on anyone but the operator, and `contact_import_vcf` leaves
-such a card out, because a second contact with that name could take the
-operator's identity. If the refused contact is the operator, save to
+such a card out, or leaves the nickname off a card it merges, because a
+second contact with that name could take the operator's identity. If the refused contact is the operator, save to
 their existing contact, which `contact_owner` returns; if it is someone
 else, use a fuller name.
 

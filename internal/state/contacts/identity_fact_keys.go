@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/emersion/go-vcard"
 )
@@ -28,23 +29,67 @@ const thaneHeaderPrefix = "X-THANE-"
 // factRefusal returns why contact_save refuses one fact, or "" when the
 // fact may be saved. Keys are checked before values, and the KEY
 // refusal keeps its original wording.
+//
+// The key is quoted back through [echoForRefusal], so a refusal stays
+// bounded however long the key is.
 func factRefusal(key, value string) string {
+	quoted := echoForRefusal(key)
 	if isReservedKeyProperty(key) {
-		return fmt.Sprintf("fact %q cannot be set through contact_save: KEY and X-THANE-KEY-* properties hold the keys that authenticate a contact's messages and are operator-custodied; ask the operator to install the key, then retry without it", key)
+		return fmt.Sprintf("fact %q cannot be set through contact_save: KEY and X-THANE-KEY-* properties hold the keys that authenticate a contact's messages and are operator-custodied; ask the operator to install the key, then retry without it", quoted)
 	}
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(key)), thaneHeaderPrefix) {
-		return fmt.Sprintf("fact %q cannot be set through contact_save: X-THANE-* headers carry Thane's trust zone, Home Assistant person binding, AI summary and origin policy and are operator-custodied; use ai_summary, origin_tags or origin_context_refs for those, or ask the operator, then retry without it", key)
+		return fmt.Sprintf("fact %q cannot be set through contact_save: X-THANE-* headers carry Thane's trust zone, Home Assistant person binding, AI summary and origin policy and are operator-custodied; use ai_summary, origin_tags or origin_context_refs for those, or ask the operator, then retry without it", quoted)
 	}
 	if !validFactKey.MatchString(key) {
-		return fmt.Sprintf("fact %q cannot be set through contact_save: a fact key is a plain name of letters, digits, '-' and '_' that starts with a letter, at most 64 characters, because '.', ';', ':', spaces and line breaks are vCard syntax a contacts client would read as a different property; retry with a key like %q, and use email, phone, signal or matrix for addresses and numbers", key, suggestedFactKey(key))
+		return fmt.Sprintf("fact %q cannot be set through contact_save: a fact key is a plain name of letters, digits, '-' and '_' that starts with a letter, at most 64 characters, because '.', ';', ':', spaces and line breaks are vCard syntax a contacts client would read as a different property; retry with a key like %q, and use email, phone, signal or matrix for addresses and numbers", quoted, suggestedFactKey(key))
 	}
 	if coreProperties[strings.ToUpper(key)] {
 		return codecOwnedFactRefusal(key)
 	}
 	if hasControl(value) {
-		return fmt.Sprintf("fact %q cannot be set through contact_save: its value contains a control character such as a line break, which a vCard would read as the start of another property; retry with the value on one line", key)
+		return fmt.Sprintf("fact %q cannot be set through contact_save: its value contains a control character such as a line break, which a vCard would read as the start of another property; retry with the value on one line", quoted)
 	}
 	return ""
+}
+
+// refusalEchoMaxBytes caps each caller-supplied key or value a refusal
+// quotes back: enough to recognize it, never enough to flood the reply.
+const refusalEchoMaxBytes = 96
+
+// refusalListMaxBytes caps the itemized part of one refusal. A single
+// contact_save can carry any number of refused facts, and the whole
+// error reaches the model as the tool result, so the list stops well
+// inside the tool-result cap and counts what it left out.
+const refusalListMaxBytes = 4 << 10
+
+// echoForRefusal clips s to refusalEchoMaxBytes on a rune boundary and
+// marks the cut, for quoting a caller-supplied key or value in a
+// refusal.
+func echoForRefusal(s string) string {
+	if len(s) <= refusalEchoMaxBytes {
+		return s
+	}
+	cut := refusalEchoMaxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s... (%d bytes)", s[:cut], len(s))
+}
+
+// boundedRefusalList renders items as "\n- item" lines. Once the next
+// line would pass refusalListMaxBytes it stops, says how many items it
+// did not list, and how to see them; the first item is always listed.
+func boundedRefusalList(items []string) string {
+	var b strings.Builder
+	for i, item := range items {
+		if i > 0 && b.Len()+len("\n- ")+len(item) > refusalListMaxBytes {
+			fmt.Fprintf(&b, "\n- ...and %d more refused, not listed here; fix or drop the listed ones and retry to see the rest", len(items)-i)
+			break
+		}
+		b.WriteString("\n- ")
+		b.WriteString(item)
+	}
+	return b.String()
 }
 
 // codecOwnedFactArguments names the contact_save argument that writes
@@ -147,7 +192,7 @@ func factRefusals(facts map[string]string) error {
 	if len(refusals) == 0 {
 		return nil
 	}
-	return fmt.Errorf("contact_save refused %d fact(s); nothing was saved:\n- %s", len(refusals), strings.Join(refusals, "\n- "))
+	return fmt.Errorf("contact_save refused %d fact(s); nothing was saved:%s", len(refusals), boundedRefusalList(refusals))
 }
 
 // argumentRefusals checks contact_save's scalar and origin arguments
@@ -188,5 +233,5 @@ func argumentRefusals(args SaveContactArgs) error {
 	if len(refusals) == 0 {
 		return nil
 	}
-	return fmt.Errorf("contact_save refused %d argument value(s); nothing was saved:\n- %s", len(refusals), strings.Join(refusals, "\n- "))
+	return fmt.Errorf("contact_save refused %d argument value(s); nothing was saved:%s", len(refusals), boundedRefusalList(refusals))
 }

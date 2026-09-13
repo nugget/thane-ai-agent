@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -18,8 +19,9 @@ import (
 // that carries IsOwner. Unpinned, the legacy name is resolved here with
 // the same ResolveContact the resolver uses. uuid.Nil means no operator
 // is configured; the sole-admin fallback is already custodied by its
-// zone. A resolution failure other than not-found fails closed.
-func (t *Tools) custodyOperatorID() (uuid.UUID, error) {
+// zone. A resolution failure other than not-found, an ended ctx
+// included, fails closed.
+func (t *Tools) custodyOperatorID(ctx context.Context) (uuid.UUID, error) {
 	if t.operatorContactID != uuid.Nil {
 		return t.operatorContactID, nil
 	}
@@ -30,7 +32,7 @@ func (t *Tools) custodyOperatorID() (uuid.UUID, error) {
 	if name == "" {
 		return uuid.Nil, nil
 	}
-	operator, err := t.store.ResolveContact(name)
+	operator, err := t.store.resolveContact(ctx, name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, nil
 	}
@@ -71,7 +73,7 @@ func claimsOwnerName(owner string, names ...string) bool {
 // resolved, and every address on it would carry the operator's
 // authority. This holds in every turn, the operator's own included; the
 // operator adds such a record through CardDAV or the contacts API.
-func (t *Tools) ownerNameClaimRefusal(args SaveContactArgs, contact *Contact, created bool) error {
+func (t *Tools) ownerNameClaimRefusal(ctx context.Context, args SaveContactArgs, contact *Contact, created bool) error {
 	owner := t.legacyOwnerName()
 	if owner == "" {
 		return nil
@@ -86,7 +88,7 @@ func (t *Tools) ownerNameClaimRefusal(args SaveContactArgs, contact *Contact, cr
 	if !claimsOwnerName(owner, args.Nickname) || claimsOwnerName(owner, contact.Nickname) {
 		return nil
 	}
-	operatorID, err := t.custodyOperatorID()
+	operatorID, err := t.custodyOperatorID(ctx)
 	if err != nil {
 		return err
 	}
@@ -108,20 +110,22 @@ func hasIdentityProperty(props []Property) bool {
 }
 
 // identityRefusal renders a contact_save identity refusal as teaching:
-// every refused fact with its reason, that nothing was saved, and the
-// recovery that fits the turn.
+// every refused fact with its reason, within the refusal list budget,
+// that nothing was saved, and the recovery that fits the turn.
 func identityRefusal(targetName, targetZone string, violations []IdentityViolation) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "contact_save refused %d fact(s); nothing was saved. Addresses and numbers are how email and Signal recognize a contact and what the send gate trusts, so they are operator-custodied where adding one would move authority:", len(violations))
 	targetRefused, holderRefused := false, false
+	items := make([]string, 0, len(violations))
 	for _, v := range violations {
-		fmt.Fprintf(&b, "\n- %q=%q (%s): %s", v.Key, v.Value, v.Property, violationReason(v, targetName, targetZone))
+		items = append(items, fmt.Sprintf("%q=%q (%s): %s", echoForRefusal(v.Key), echoForRefusal(v.Value), v.Property, violationReason(v, targetName, targetZone)))
 		if v.Reason == IdentityReasonHolder {
 			holderRefused = true
 		} else {
 			targetRefused = true
 		}
 	}
+	b.WriteString(boundedRefusalList(items))
 	b.WriteString("\n\n")
 	if targetRefused {
 		b.WriteString("This turn is not the operator's own message, so ask the operator to add these through CardDAV or the contacts API. If a value belongs to someone else, save it on that person's own contact. ")
@@ -133,14 +137,17 @@ func identityRefusal(targetName, targetZone string, violations []IdentityViolati
 	return errors.New(b.String())
 }
 
-// violationReason is the one-clause reason for a refused value.
+// violationReason is the one-clause reason for a refused value. Stored
+// names and values are clipped the way caller-supplied ones are, so
+// each clause stays bounded.
 func violationReason(v IdentityViolation, targetName, targetZone string) string {
+	targetName = echoForRefusal(targetName)
 	switch v.Reason {
 	case IdentityReasonOperator:
 		return fmt.Sprintf("%s is the operator's own contact", targetName)
 	case IdentityReasonZone:
 		if !ValidTrustZones[targetZone] {
-			return fmt.Sprintf("%s has trust zone %q, which is not known", targetName, targetZone)
+			return fmt.Sprintf("%s has trust zone %q, which is not known", targetName, echoForRefusal(targetZone))
 		}
 		return fmt.Sprintf("%s is %s", targetName, targetZone)
 	}
@@ -152,8 +159,9 @@ func violationReason(v IdentityViolation, targetName, targetZone string) string 
 	if h.Operator {
 		operator = ", the operator's own contact"
 	}
+	name := echoForRefusal(h.Name)
 	return fmt.Sprintf("already held by %s (%s, %s%s) as %s %s; a second holder would unmatch %s on %s",
-		h.Name, h.Zone, h.ID, operator, h.Property, h.Value, h.Name, identityChannel(v.Property, v.Value))
+		name, echoForRefusal(h.Zone), h.ID, operator, echoForRefusal(h.Property), echoForRefusal(h.Value), name, identityChannel(v.Property, v.Value))
 }
 
 // identityChannel names the channel an identity value is recognized on.

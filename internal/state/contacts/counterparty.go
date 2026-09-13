@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -184,8 +185,13 @@ func applyHAPersonEntity(run sqlRunner, id uuid.UUID, entity string) error {
 // entity; empty when unbound. A missing contact is not an error — the
 // boolean reports existence.
 func (s *Store) HAPersonEntity(id uuid.UUID) (string, bool, error) {
+	return s.haPersonEntity(context.Background(), id)
+}
+
+// haPersonEntity is [Store.HAPersonEntity] bound to ctx.
+func (s *Store) haPersonEntity(ctx context.Context, id uuid.UUID) (string, bool, error) {
 	var entity sql.NullString
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT ha_person_entity FROM contacts WHERE id = ? AND deleted_at IS NULL`,
 		id.String(),
 	).Scan(&entity)

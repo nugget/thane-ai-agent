@@ -236,6 +236,11 @@ func (s *Store) tryEnableFTS() {
 // UUIDv7 is assigned. Soft-deleted contacts with the same ID are
 // resurrected. Rev is automatically set to the current timestamp.
 func (s *Store) Upsert(c *Contact) (*Contact, error) {
+	return s.upsert(context.Background(), c)
+}
+
+// upsert is [Store.Upsert] bound to ctx.
+func (s *Store) upsert(ctx context.Context, c *Contact) (*Contact, error) {
 	now := time.Now().UTC()
 
 	if c.Kind == "" {
@@ -263,7 +268,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 		c.CreatedAt = now
 		c.UpdatedAt = now
 
-		_, err = s.db.Exec(`
+		_, err = s.db.ExecContext(ctx, `
 			INSERT INTO contacts (id, kind, formatted_name, family_name, given_name,
 				additional_names, name_prefix, name_suffix, nickname,
 				birthday, anniversary, gender, org, title, role,
@@ -288,7 +293,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 
 	// Update existing (resurrect if soft-deleted).
 	c.UpdatedAt = now
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		UPDATE contacts SET kind = ?, formatted_name = ?, family_name = ?, given_name = ?,
 			additional_names = ?, name_prefix = ?, name_suffix = ?, nickname = ?,
 			birthday = ?, anniversary = ?, gender = ?, org = ?, title = ?, role = ?,
@@ -315,7 +320,12 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 // FindByName returns the first active contact with a case-insensitive
 // formatted name match. Returns sql.ErrNoRows if not found.
 func (s *Store) FindByName(name string) (*Contact, error) {
-	return s.scanContact(s.db.QueryRow(
+	return s.findByName(context.Background(), name)
+}
+
+// findByName is [Store.FindByName] bound to ctx.
+func (s *Store) findByName(ctx context.Context, name string) (*Contact, error) {
+	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(formatted_name) = LOWER(?)`,
 		name))
 }
@@ -323,7 +333,12 @@ func (s *Store) FindByName(name string) (*Contact, error) {
 // FindByNickname returns the first active contact with a case-insensitive
 // nickname match. Returns sql.ErrNoRows if not found.
 func (s *Store) FindByNickname(name string) (*Contact, error) {
-	return s.scanContact(s.db.QueryRow(
+	return s.findByNickname(context.Background(), name)
+}
+
+// findByNickname is [Store.FindByNickname] bound to ctx.
+func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, error) {
+	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)`,
 		name))
 }
@@ -333,8 +348,13 @@ func (s *Store) FindByNickname(name string) (*Contact, error) {
 // Returns [sql.ErrNoRows] if no match is found, or an error listing
 // ambiguous matches if search returns multiple results.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
+	return s.resolveContact(context.Background(), name)
+}
+
+// resolveContact is [Store.ResolveContact] bound to ctx.
+func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, error) {
 	// 1. Exact formatted name match (fast, indexed).
-	c, err := s.FindByName(name)
+	c, err := s.findByName(ctx, name)
 	if err == nil {
 		return c, nil
 	}
@@ -343,7 +363,7 @@ func (s *Store) ResolveContact(name string) (*Contact, error) {
 	}
 
 	// 2. Nickname match (direct column query).
-	c, err = s.FindByNickname(name)
+	c, err = s.findByNickname(ctx, name)
 	if err == nil {
 		return c, nil
 	}
@@ -352,7 +372,7 @@ func (s *Store) ResolveContact(name string) (*Contact, error) {
 	}
 
 	// 3. Search fallback (FTS or LIKE).
-	results, err := s.Search(name)
+	results, err := s.search(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("search fallback for %q: %w", name, err)
 	}
@@ -372,7 +392,12 @@ func (s *Store) ResolveContact(name string) (*Contact, error) {
 
 // Get retrieves a contact by ID.
 func (s *Store) Get(id uuid.UUID) (*Contact, error) {
-	return s.scanContact(s.db.QueryRow(
+	return s.get(context.Background(), id)
+}
+
+// get is [Store.Get] bound to ctx.
+func (s *Store) get(ctx context.Context, id uuid.UUID) (*Contact, error) {
+	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND id = ?`,
 		id.String()))
 }
@@ -380,11 +405,16 @@ func (s *Store) Get(id uuid.UUID) (*Contact, error) {
 // GetWithProperties retrieves a contact by ID and populates its
 // Properties slice.
 func (s *Store) GetWithProperties(id uuid.UUID) (*Contact, error) {
-	c, err := s.Get(id)
+	return s.getWithProperties(context.Background(), id)
+}
+
+// getWithProperties is [Store.GetWithProperties] bound to ctx.
+func (s *Store) getWithProperties(ctx context.Context, id uuid.UUID) (*Contact, error) {
+	c, err := s.get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	c.Properties, err = s.GetProperties(id)
+	c.Properties, err = s.getProperties(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get properties: %w", err)
 	}
@@ -393,19 +423,24 @@ func (s *Store) GetWithProperties(id uuid.UUID) (*Contact, error) {
 
 // Search finds contacts matching the query using FTS5 or LIKE fallback.
 func (s *Store) Search(query string) ([]*Contact, error) {
-	if s.ftsEnabled {
-		return s.searchFTS(query)
-	}
-	return s.searchLIKE(query)
+	return s.search(context.Background(), query)
 }
 
-func (s *Store) searchFTS(query string) ([]*Contact, error) {
+// search is [Store.Search] bound to ctx.
+func (s *Store) search(ctx context.Context, query string) ([]*Contact, error) {
+	if s.ftsEnabled {
+		return s.searchFTS(ctx, query)
+	}
+	return s.searchLIKE(ctx, query)
+}
+
+func (s *Store) searchFTS(ctx context.Context, query string) ([]*Contact, error) {
 	sanitized := sanitizeFTS5Query(query)
 	if sanitized == "" {
 		return nil, nil
 	}
 
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+qualifiedContactColumns+`
 		FROM contacts_fts
 		JOIN contacts ON contacts_fts.rowid = contacts.rowid
@@ -415,16 +450,16 @@ func (s *Store) searchFTS(query string) ([]*Contact, error) {
 	`, sanitized)
 	if err != nil {
 		s.logger.Warn("FTS5 search failed, falling back to LIKE", "error", err, "query", query)
-		return s.searchLIKE(query)
+		return s.searchLIKE(ctx, query)
 	}
 	defer rows.Close()
 
 	return s.scanContacts(rows)
 }
 
-func (s *Store) searchLIKE(query string) ([]*Contact, error) {
+func (s *Store) searchLIKE(ctx context.Context, query string) ([]*Contact, error) {
 	pattern := "%" + query + "%"
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+
 			` AND (formatted_name LIKE ? OR nickname LIKE ? OR note LIKE ? OR ai_summary LIKE ? OR org LIKE ?) ORDER BY updated_at DESC LIMIT 50`,
 		pattern, pattern, pattern, pattern, pattern)
@@ -1008,8 +1043,13 @@ func (s *Store) RecordInteractionIfNewer(ctx context.Context, contactID uuid.UUI
 // full power, and a model-facing writer (contact_import_vcf) must first
 // drop every identity value identityViolations refuses.
 func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
+	return s.addProperty(context.Background(), contactID, p)
+}
+
+// addProperty is [Store.AddProperty] bound to ctx.
+func (s *Store) addProperty(ctx context.Context, contactID uuid.UUID, p *Property) error {
 	var exists int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM contact_properties WHERE contact_id = ? AND property = ? AND LOWER(value) = LOWER(?)`,
 		contactID.String(), p.Property, p.Value).Scan(&exists)
 	if err != nil {
@@ -1025,7 +1065,7 @@ func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 	if err != nil {
 		return fmt.Errorf("encode property provenance: %w", err)
 	}
-	result, err := s.db.Exec(`
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, provenance, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, contactID.String(), p.Property, p.Value,
@@ -1044,7 +1084,12 @@ func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 // GetProperties returns all properties for a contact, ordered by
 // property name then preference.
 func (s *Store) GetProperties(contactID uuid.UUID) ([]Property, error) {
-	rows, err := s.db.Query(`
+	return s.getProperties(context.Background(), contactID)
+}
+
+// getProperties is [Store.GetProperties] bound to ctx.
+func (s *Store) getProperties(ctx context.Context, contactID uuid.UUID) ([]Property, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+propertyColumns+`
 		FROM contact_properties
 		WHERE contact_id = ?
@@ -1249,8 +1294,13 @@ func (s *Store) FindByTrustZoneLimit(zone string, limit int) ([]*Contact, error)
 
 // SetEmbedding updates a contact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
+	return s.setEmbedding(context.Background(), id, embedding)
+}
+
+// setEmbedding is [Store.SetEmbedding] bound to ctx.
+func (s *Store) setEmbedding(ctx context.Context, id uuid.UUID, embedding []float32) error {
 	blob := knowledge.EncodeEmbedding(embedding)
-	_, err := s.db.Exec(`UPDATE contacts SET embedding = ? WHERE id = ?`, blob, id.String())
+	_, err := s.db.ExecContext(ctx, `UPDATE contacts SET embedding = ? WHERE id = ?`, blob, id.String())
 	return err
 }
 

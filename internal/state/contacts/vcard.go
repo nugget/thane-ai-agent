@@ -52,16 +52,22 @@ var skipProperties = map[string]bool{
 
 // EmittablePropertyName reports whether a contact_properties row may be
 // emitted as a vCard property under its stored name. A name containing
-// '.', ';', ':', CR or LF is vCard syntax: the encoder writes it raw and
-// the decoder reads it back as a different property (a group-prefixed
+// '.', ';', ':', or any control character or Unicode line or paragraph
+// separator is vCard syntax: the encoder writes the name raw, and
+// scrubUnescapedLineBreaks rewrites only values and parameters, so the
+// decoder, or a client that reads a vertical tab or U+2028 as a line
+// ending, reads it back as a different property (a group-prefixed
 // EMAIL, a PREF-promoted X-THANE-TRUST-ZONE). A name the codec owns as a
 // core field (FN, X-THANE-TRUST-ZONE, X-THANE-HA-PERSON and the rest)
-// would shadow the record's own value. CardToContact stores neither as a
-// row, so such a row never came from a vCard and ContactToCard withholds
-// it; FilterCardForTrustZone still reads zone-tagged PHOTO rows from the
-// property list it is given.
+// would shadow the record's own value. ContactToCard withholds either
+// kind of row on every read. CardToContact never stores a core field as
+// a row, but it keeps a syntax-bearing name, so the operator's own
+// CardDAV PUT can store one: a nested group decodes as B.EMAIL, and a
+// vertical tab or U+2028 inside a name survives decoding. Import drops
+// such names before they are stored. FilterCardForTrustZone still reads
+// zone-tagged PHOTO rows from the property list it is given.
 func EmittablePropertyName(name string) bool {
-	if name == "" || strings.ContainsAny(name, ".;:\r\n") {
+	if name == "" || strings.ContainsAny(name, ".;:") || strings.IndexFunc(name, isLineBreakOrControl) >= 0 {
 		return false
 	}
 	return !coreProperties[strings.ToUpper(name)]
