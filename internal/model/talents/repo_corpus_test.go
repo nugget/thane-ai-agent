@@ -169,6 +169,22 @@ var nonToolTokens = map[string]struct{}{
 	// but `request_id` is a field name, not a tool.
 	"request_id": {},
 
+	// Email tool result and context-block field names (#1551). `can_send`
+	// is the per-account capability flag in the Email Accounts block and
+	// `in_reply_to` is the threading header echoed in read and send
+	// results; both are backticked in the email talent when it describes
+	// result shapes. The matcher flags them because `can_` and
+	// `in_` are not tool prefixes but their second segments match real
+	// tools' shapes. They are field names, not tools.
+	"can_send":    {},
+	"in_reply_to": {},
+
+	// Loop binding key (#1386, #1551): `bindings: {email_account: ...}`
+	// scopes a loop's email tools to one configured mailbox. Appears in
+	// talent prose about loop authoring. The matcher flags it because
+	// `email_` is a real tool prefix, but it is a spec key, not a tool.
+	"email_account": {},
+
 	// LoopWakeTarget field name (exact live loop ID to signal,
 	// preferred when known from loop_status). Appears in talent prose
 	// describing the wake_loop target shape. The matcher flags it

@@ -212,47 +212,38 @@ func (a *App) initChannels(s *newState) error {
 	}
 
 	// --- Email ---
-	// Native IMAP/SMTP email. Replaces the MCP email server approach
-	// with direct IMAP connections for reading and SMTP for sending,
-	// supporting multiple accounts with trust zone gating.
+	// Native IMAP/SMTP email. The email service owns account routing,
+	// the model-facing tools and context block, and the poller that
+	// turns new mail into handler wakes.
 	if a.cfg.Email.Configured() {
-		emailMgr := email.NewManager(a.cfg.Email, a.logger)
-		a.emailMgr = emailMgr
-		a.onClose("email", emailMgr.Close)
-
-		emailTools := email.NewTools(emailMgr, &emailContactResolver{store: contactStore})
-		a.loop.Tools().SetEmailTools(emailTools)
+		svc, err := email.NewService(a.cfg.Email, email.ServiceDependencies{
+			State:      a.opStore,
+			MessageBus: a.messageBus,
+			Contacts:   &emailContactResolver{store: contactStore},
+			Logger:     a.logger,
+		})
+		if err != nil {
+			return fmt.Errorf("create email service: %w", err)
+		}
+		a.emailService = svc
+		a.onClose("email", svc.Close)
+		a.loop.Tools().RegisterProvider(svc.ToolProvider())
 
 		// Register each account with connwatch for health monitoring.
-		for _, name := range emailMgr.AccountNames() {
-			acctName := name // capture for closure
-			acct, _ := emailMgr.Account(acctName)
+		for _, probe := range svc.HealthProbes() {
 			a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-				Name:    "email-" + acctName,
-				Probe:   func(pCtx context.Context) error { return acct.Ping(pCtx) },
+				Name:    "email-" + probe.Account,
+				Probe:   probe.Probe,
 				Backoff: connwatch.DefaultBackoffConfig(),
 				Logger:  a.logger,
 			})
 		}
 
-		// --- Email polling ---
-		// Periodic IMAP check for new mail. The poller advances the
-		// per-account high-water mark and dispatches an event-source
-		// envelope (one per account-poll cycle, one event per message)
-		// to the configured wake_loop target (default:
-		// email-default-handler). The contact resolver translates the
-		// sender's email into a trust zone so each event ships with an
-		// owner/trusted/household/known/stranger tag, letting the
-		// handler loop adapt depth without forking the route.
-		if a.cfg.Email.PollIntervalSec > 0 {
-			poller := email.NewPoller(emailMgr, a.opStore, a.logger,
-				email.WithMessageBus(a.messageBus),
-				email.WithContactResolver(&emailContactResolver{store: contactStore}),
-			)
-			a.emailPoller = poller
-		}
-
-		a.logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", a.cfg.Email.PollIntervalSec)
+		a.logger.Info("email enabled",
+			"accounts", svc.AccountNames(),
+			"poll_interval", a.cfg.Email.PollingInterval(),
+			"polling", svc.PollingEnabled(),
+		)
 	} else {
 		a.logger.Info("email disabled (not configured)")
 	}

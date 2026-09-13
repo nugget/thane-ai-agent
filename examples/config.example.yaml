@@ -1338,25 +1338,131 @@ compaction:
 #   MaxSubscriptions limits runtime-managed repository event subscriptions.
 #   max_subscriptions: 50
 #
-# (optional) Email configures native IMAP email access. When configured, Thane
+# (optional) Email configures native IMAP and SMTP mailboxes. When configured,
 # email:
-#   bcc_owner: ""
-#   poll_interval: 0
+#   BccOwner is an address that receives a blind copy of every message
+#   the agent sends, unless it is already a recipient. It is an audit
+#   copy for the operator, not a recipient the agent chose, and it
+#   does not need a contact record. Leave empty to disable.
+#   bcc_owner: Operator <operator@example.com>
+#   PollInterval is how often, in seconds, every account's INBOX is
+#   checked for new mail. Default: 300 when at least one account is
+#   configured. Set to 0 to disable polling; the built-in email-poller
+#   and email-default-handler loops are then not created, and mail is
+#   only ever read when a tool asks for it. Negative values are
+#   rejected.
+#   poll_interval: 300
+#   Accounts lists the mailboxes Thane connects to. The first account is
+#   the primary: tools use it when no account is named and no loop
+#   binding selects one.
 #   accounts:
-#     - name: primary
+#     - # Name is the short identifier tools and loop bindings use for this
+#       account (for example "personal" or "packages"). Required and unique.
+#       name: primary
+#       Description is an operator-authored note about what this mailbox is
+#       for, shown to the model beside the account name so it learns the
+#       account's purpose and limits before acting rather than by being
+#       refused. For example: "parcel and delivery notifications; never
+#       sends".
+#       description: Thane's own mailbox. Correspondence with the household and trusted contacts.
+#       IMAP configures the connection used to read and organize mail.
 #       imap:
+#         Host is the IMAP server hostname, for example "imap.example.com".
 #         host: imap.example.com
+#         Port is the IMAP server port. Default: 993.
 #         port: 993
+#         Username is the IMAP login, typically the mailbox address.
 #         username: thane@example.com
+#         Password is the IMAP login password. Environment variable
+#         expansion such as ${IMAP_PASSWORD} is available.
 #         password: your-email-password
+#         TLS controls whether the connection is TLS from the first byte.
+#         Default: true on every port except 143. When false, the connection
+#         starts in plaintext and is upgraded with STARTTLS before the login;
+#         a server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
 #         tls: true
+#       SMTP configures the connection used to send mail. Omit to make the
+#       account read-and-organize only.
 #       smtp:
+#         Host is the SMTP submission server hostname, for example
+#         "smtp.example.com". Setting it enables sending from the account.
 #         host: smtp.example.com
+#         Port is the SMTP server port. Default: 587.
 #         port: 587
+#         Username is the SMTP login, typically the mailbox address.
 #         username: thane@example.com
+#         Password is the SMTP login password. Environment variable
+#         expansion such as ${SMTP_PASSWORD} is available.
 #         password: your-email-password
-#         starttls: false
+#         StartTLS controls whether the connection starts in plaintext and is
+#         upgraded with STARTTLS (submission on 587) rather than being TLS
+#         from the first byte (465). Default: true on every port except 465.
+#         A server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
+#         starttls: true
+#       DefaultFrom is the From address for mail sent from this account,
+#       for example "Thane <thane@example.com>". Required when smtp is
+#       configured. It is also how the poller recognises the account's own
+#       outbound copies in INBOX and skips them.
 #       default_from: Thane <thane@example.com>
+#       SentFolder is the IMAP folder that receives a copy of every message
+#       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
+#       Leave empty to keep no server-side copy.
+#       sent_folder: Sent
+#     - # Name is the short identifier tools and loop bindings use for this
+#       account (for example "personal" or "packages"). Required and unique.
+#       name: packages
+#       Description is an operator-authored note about what this mailbox is
+#       for, shown to the model beside the account name so it learns the
+#       account's purpose and limits before acting rather than by being
+#       refused. For example: "parcel and delivery notifications; never
+#       sends".
+#       description: Parcel and delivery notifications. Read and file only; never sends.
+#       IMAP configures the connection used to read and organize mail.
+#       imap:
+#         Host is the IMAP server hostname, for example "imap.example.com".
+#         host: imap.example.com
+#         Port is the IMAP server port. Default: 993.
+#         port: 993
+#         Username is the IMAP login, typically the mailbox address.
+#         username: packages@example.com
+#         Password is the IMAP login password. Environment variable
+#         expansion such as ${IMAP_PASSWORD} is available.
+#         password: your-email-password
+#         TLS controls whether the connection is TLS from the first byte.
+#         Default: true on every port except 143. When false, the connection
+#         starts in plaintext and is upgraded with STARTTLS before the login;
+#         a server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
+#         tls: true
+#       SMTP configures the connection used to send mail. Omit to make the
+#       account read-and-organize only.
+#       smtp:
+#         Host is the SMTP submission server hostname, for example
+#         "smtp.example.com". Setting it enables sending from the account.
+#         host: ""
+#         Port is the SMTP server port. Default: 587.
+#         port: 0
+#         Username is the SMTP login, typically the mailbox address.
+#         username: ""
+#         Password is the SMTP login password. Environment variable
+#         expansion such as ${SMTP_PASSWORD} is available.
+#         password: ""
+#         StartTLS controls whether the connection starts in plaintext and is
+#         upgraded with STARTTLS (submission on 587) rather than being TLS
+#         from the first byte (465). Default: true on every port except 465.
+#         A server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
+#         starttls: false
+#       DefaultFrom is the From address for mail sent from this account,
+#       for example "Thane <thane@example.com>". Required when smtp is
+#       configured. It is also how the poller recognises the account's own
+#       outbound copies in INBOX and skips them.
+#       default_from: ""
+#       SentFolder is the IMAP folder that receives a copy of every message
+#       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
+#       Leave empty to keep no server-side copy.
 #       sent_folder: ""
 #
 # (optional) Identity configures contact identities for the agent and human operator.

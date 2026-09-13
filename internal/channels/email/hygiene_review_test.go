@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// enabled is a shared true for the pointer-valued TLS settings.
+var enabled = true
+
 // TestImplicitTLSHandshakeIsBoundWithoutADeadline pins the fallback
 // bound on the implicit-TLS path: a peer that accepts TCP and never
 // speaks TLS cannot hold the account past dialTimeout.
@@ -18,7 +21,7 @@ func TestImplicitTLSHandshakeIsBoundWithoutADeadline(t *testing.T) {
 	t.Cleanup(func() { dialTimeout = saved })
 
 	host, port := hungListener(t)
-	c := NewClient("primary", IMAPConfig{Host: host, Port: port, Username: "a", Password: "b", TLS: true}, nil)
+	c := NewClient("primary", IMAPConfig{Host: host, Port: port, Username: "a", Password: "b", TLS: &enabled}, nil)
 	t.Cleanup(func() { _ = c.Close() })
 	start := time.Now()
 	if err := c.Ping(context.Background()); err == nil {
@@ -40,7 +43,7 @@ func TestReconnectClearsAStaleWatchdogFlag(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 
-	c := NewClient("primary", IMAPConfig{Host: "127.0.0.1", Port: port, Username: "a", Password: "b", TLS: true}, nil)
+	c := NewClient("primary", IMAPConfig{Host: "127.0.0.1", Port: port, Username: "a", Password: "b", TLS: &enabled}, nil)
 	t.Cleanup(func() { _ = c.Close() })
 	c.mu.Lock()
 	c.watchdogFired = true
@@ -139,34 +142,6 @@ func TestAttachmentsAreCappedAndCounted(t *testing.T) {
 	if len(msg.Attachments) != maxAttachments || msg.AttachmentsOmitted != 10 {
 		t.Errorf("attachments = %d listed, %d omitted", len(msg.Attachments), msg.AttachmentsOmitted)
 	}
-	mustContain(t, formatMessage(msg), "and 10 more part(s) not listed")
-}
-
-// TestProseResultsAreCapped pins the AGENTS.md output caps on the list
-// and read formatters, with explicit markers, and the raw-cut notice.
-func TestProseResultsAreCapped(t *testing.T) {
-	envs := make([]Envelope, 0, 100)
-	for i := 0; i < 100; i++ {
-		envs = append(envs, Envelope{UID: uint32(i + 1), From: Address{Name: strings.Repeat("N", 200), Address: "a@example.com"}, Subject: strings.Repeat("s", 4000), Date: time.Now()})
-	}
-	list := formatEnvelopeList(ListResult{Folder: "INBOX", TotalMatched: 100, Envelopes: envs})
-	if len(list) > maxListOutput {
-		t.Errorf("list output = %d bytes, cap %d", len(list), maxListOutput)
-	}
-	mustContain(t, list, "more message(s) not shown", "capped at 16 KB")
-
-	to := make([]Address, 0, 3000)
-	for i := 0; i < 3000; i++ {
-		to = append(to, Address{Address: fmt.Sprintf("r%04d@example.com", i)})
-	}
-	msg := &Message{Envelope: Envelope{UID: 1, From: Address{Address: "a@example.com"}, To: to}, TextBody: strings.Repeat("b", 30*1024), BodySource: "text", RawTruncated: true}
-	read := formatMessage(msg)
-	if len(read) > maxReadOutput {
-		t.Errorf("read output = %d bytes, cap %d", len(read), maxReadOutput)
-	}
-	mustContain(t, read, "[output capped at 32 KB]")
-	short := formatMessage(&Message{Envelope: Envelope{UID: 2, From: Address{Address: "a@example.com"}}, TextBody: "hi", BodySource: "text", RawTruncated: true})
-	mustContain(t, short, "parts past the cut were not parsed")
 }
 
 // TestSendMailHonorsCancellationWithoutDeadline pins that cancelling a
@@ -177,7 +152,7 @@ func TestSendMailHonorsCancellationWithoutDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(200*time.Millisecond, cancel)
 	start := time.Now()
-	err := sendMail(ctx, "primary", SMTPConfig{Host: host, Port: port, StartTLS: true}, "a@example.com", []string{"b@example.com"}, []byte("x"))
+	err := sendMail(ctx, "primary", SMTPConfig{Host: host, Port: port, StartTLS: &enabled}, "a@example.com", []string{"b@example.com"}, []byte("x"))
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("a cancelled send took %v", elapsed)
 	}

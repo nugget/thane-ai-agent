@@ -3,7 +3,6 @@ package config
 import (
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
@@ -40,6 +39,9 @@ func ExampleConfig() *Config {
 	delegatesEnabled := true
 	envelopesEnabled := true
 	docRootIndexing := true
+	emailPollInterval := 300
+	imapTLS := true
+	smtpStartTLS := true
 
 	return &Config{
 		// ── Required / always-shown sections ──────────────────────────────
@@ -384,24 +386,40 @@ func ExampleConfig() *Config {
 			},
 		},
 
-		Email: email.Config{
-			Accounts: []email.AccountConfig{
+		Email: EmailConfig{
+			BccOwner:     "Operator <operator@example.com>",
+			PollInterval: &emailPollInterval,
+			Accounts: []EmailAccountConfig{
 				{
-					Name: "primary",
-					IMAP: email.IMAPConfig{
+					Name:        "primary",
+					Description: "Thane's own mailbox. Correspondence with the household and trusted contacts.",
+					IMAP: EmailIMAPConfig{
 						Host:     "imap.example.com",
 						Port:     993,
 						Username: "thane@example.com",
 						Password: "your-email-password",
-						TLS:      true,
+						TLS:      &imapTLS,
 					},
-					SMTP: email.SMTPConfig{
+					SMTP: EmailSMTPConfig{
 						Host:     "smtp.example.com",
 						Port:     587,
 						Username: "thane@example.com",
 						Password: "your-email-password",
+						StartTLS: &smtpStartTLS,
 					},
 					DefaultFrom: "Thane <thane@example.com>",
+					SentFolder:  "Sent",
+				},
+				{
+					Name:        "packages",
+					Description: "Parcel and delivery notifications. Read and file only; never sends.",
+					IMAP: EmailIMAPConfig{
+						Host:     "imap.example.com",
+						Port:     993,
+						Username: "packages@example.com",
+						Password: "your-email-password",
+						TLS:      &imapTLS,
+					},
 				},
 			},
 		},

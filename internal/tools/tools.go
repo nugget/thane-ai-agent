@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -65,7 +64,6 @@ type Registry struct {
 	logger       *slog.Logger
 	factTools    *knowledge.Tools
 	contactTools *contacts.Tools
-	emailTools   *email.Tools
 
 	// policy is shared by pointer with every registry derived from this
 	// one, so a scoped copy cannot regain what the parent withheld.

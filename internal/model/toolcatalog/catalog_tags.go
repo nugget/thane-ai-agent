@@ -80,7 +80,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"knowledge"},
 	},
 	"email": {
-		Description: "Email inbox reading, search, and sending tools.",
+		Description: "Email inbox reading, search, filing, and sending across the configured accounts; results are JSON that names the account and folder beside every UID, and sends are gated by the contact directory.",
 		Parents:     []string{"people"},
 	},
 	"feeds": {

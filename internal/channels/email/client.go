@@ -114,7 +114,7 @@ func (c *Client) connectLocked(ctx context.Context) error {
 	c.watchdogFired = false
 
 	addr := net.JoinHostPort(c.cfg.Host, strconv.Itoa(c.cfg.Port))
-	c.logger.Debug("connecting to IMAP server", "host", c.cfg.Host, "port", c.cfg.Port, "tls", c.cfg.TLS)
+	c.logger.Debug("connecting to IMAP server", "host", c.cfg.Host, "port", c.cfg.Port, "tls", c.cfg.TLSEnabled())
 
 	dialer := &net.Dialer{Timeout: dialTimeout}
 	raw, err := dialer.DialContext(ctx, "tcp", addr)
@@ -127,7 +127,7 @@ func (c *Client) connectLocked(ctx context.Context) error {
 		TLSConfig:   tlsConfigFor(c.cfg.Host, "imap"),
 	}
 	var client *imapclient.Client
-	if c.cfg.TLS {
+	if c.cfg.TLSEnabled() {
 		tlsConn := tls.Client(raw, opts.TLSConfig)
 		// The dialer's timeout covers only the TCP connect; bound the
 		// handshake the way the STARTTLS path is bounded, so a peer that

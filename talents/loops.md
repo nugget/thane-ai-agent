@@ -272,7 +272,10 @@ muddle them and the loop drifts.
   "<name>"}`. An omitted `account` argument then resolves to the bound
   account instead of the primary, any other account is refused by
   name, and the account block in context narrows to the one account
-  you can actually use. Bindings inherit from container parents, and
+  you can actually use. Email accounts work the same way with
+  `email_account` — a triage loop that should only ever see one
+  mailbox binds it, and the Email Accounts block narrows to match.
+  Bindings inherit from container parents, and
   on collision the *ancestor* wins — a container's binding is a
   boundary its children cannot declare their way out of, which is the
   opposite of how `routing_factors` resolve. Binding to an account

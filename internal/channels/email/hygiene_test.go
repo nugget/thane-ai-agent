@@ -22,7 +22,8 @@ func TestClientWatchdogBoundsADeadlinelessOperation(t *testing.T) {
 	t.Cleanup(func() { defaultOpTimeout = saved })
 
 	host, port := stallingIMAP(t)
-	c := NewClient("primary", IMAPConfig{Host: host, Port: port, Username: "a", Password: "b", TLS: true}, nil)
+	implicit := true
+	c := NewClient("primary", IMAPConfig{Host: host, Port: port, Username: "a", Password: "b", TLS: &implicit}, nil)
 	t.Cleanup(func() { _ = c.Close() })
 
 	if err := c.Ping(context.Background()); err != nil {

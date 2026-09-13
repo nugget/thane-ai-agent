@@ -196,7 +196,6 @@ type App struct {
 	// Service loop runtimes hydrated into built-in loop definitions.
 	unifiPoller        *unifi.Poller
 	haStateWatcher     *homeassistant.StateWatcher
-	emailPoller        *email.Poller
 	mediaFeedPoller    *media.FeedPoller
 	telemetryPublisher *telemetry.Publisher
 	telCollector       *telemetry.Collector // shared; see App.telemetryCollector
@@ -254,7 +253,7 @@ type App struct {
 	messageBus *messages.Bus
 
 	// Email manager (for Close on shutdown)
-	emailMgr *email.Manager
+	emailService *email.Service
 
 	// Signal bridge
 	signalClient *sigcli.Client

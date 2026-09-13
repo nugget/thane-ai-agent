@@ -139,6 +139,7 @@ a checkout request from the caller's binding.
 |---|---|
 | `forge_account` | Forge account name (from `forge.accounts`) that this loop's forge tools resolve to. The account must exist at hydration, or the definition refuses |
 | `repo_root` | Named repository root registered by `forge_repo_follow` that file and `repo_git_*` tools resolve to. The root must exist at hydration, or the definition refuses |
+| `email_account` | Email account name (from `email.accounts`) that this loop's email tools resolve to, and the account the Email Accounts context block narrows to. The account must exist at hydration, or the definition refuses. The built-in `email-default-handler` is deliberately unbound: it triages every configured mailbox and reads the account from each wake event |
 
 Bindings cascade from container ancestors, and on a key collision the
 **ancestor wins** — the inverse of `routing_factors`. A routing factor is
