@@ -109,7 +109,11 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 		for _, c := range match.Candidates {
 			names = append(names, fmt.Sprintf("%s (%s, %s)", c.Name, c.ID, c.TrustZone))
 		}
-		a.Reason = fmt.Sprintf("the address belongs to %d contact records [%s]; the least privileged zone (%s) governs until the duplicates are merged", len(match.Candidates), strings.Join(names, "; "), match.TrustZone)
+		total := max(match.CandidatesTotal, len(match.Candidates))
+		if more := total - len(match.Candidates); more > 0 {
+			names = append(names, fmt.Sprintf("and %d more", more))
+		}
+		a.Reason = fmt.Sprintf("the address belongs to %d contact records [%s]; the least privileged zone (%s) governs until the duplicates are merged", total, strings.Join(names, "; "), match.TrustZone)
 		return a
 	}
 

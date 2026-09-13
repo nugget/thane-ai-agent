@@ -106,19 +106,20 @@ func (a Authentication) normalize() Authentication {
 // preserved, and the address the trust decision is about.
 type InboundMessage struct {
 	// Account is the receiving account.
-	Account string
+	Account string `json:"-"`
 
 	// Raw is the RFC 5322 message as received, at most
-	// [maxRawMessageSize] bytes.
-	Raw []byte
+	// [maxRawMessageSize] bytes. It is never serialized: it is the
+	// whole message.
+	Raw []byte `json:"-"`
 
 	// Truncated is true when Raw hit the cap; a signature over the
 	// whole message is then uncheckable and the result should be
 	// [AuthUnavailable], never [AuthFailed].
-	Truncated bool
+	Truncated bool `json:"-"`
 
 	// From is the RFC 5322 From mailbox the signature must bind to.
-	From Address
+	From Address `json:"-"`
 }
 
 // Authenticator checks an inbound message's signature. Implementations
@@ -133,13 +134,14 @@ type Authenticator interface {
 // OutboundMessage is what a [Signer] receives after composition.
 type OutboundMessage struct {
 	// Account is the sending account.
-	Account string
+	Account string `json:"-"`
 
 	// From is the mailbox the signature must bind to.
-	From Address
+	From Address `json:"-"`
 
-	// Message is the complete RFC 5322 message to sign.
-	Message []byte
+	// Message is the complete RFC 5322 message to sign. It is never
+	// serialized: it is the whole message.
+	Message []byte `json:"-"`
 }
 
 // Signer signs an outbound message and returns the complete message

@@ -139,3 +139,16 @@ func TestHandleFoldersCapsTheResult(t *testing.T) {
 		t.Errorf("the cache must keep the full listing, got %d", len(snap.Folders))
 	}
 }
+
+// TestBoundAccountWithWhitespaceResolves pins that a binding written
+// with stray whitespace resolves at runtime, as it did at hydration.
+func TestBoundAccountWithWhitespaceResolves(t *testing.T) {
+	svc, _, _ := twoAccountService(t)
+	acct, err := svc.ResolveAccount(boundEmailCtx(" packages "), "")
+	if err != nil || acct.Name != "packages" {
+		t.Fatalf("omitted account under a padded binding = %+v, %v", acct, err)
+	}
+	if _, err := svc.ResolveAccount(boundEmailCtx(" packages "), "packages"); err != nil {
+		t.Errorf("naming the bound account under a padded binding must be allowed: %v", err)
+	}
+}

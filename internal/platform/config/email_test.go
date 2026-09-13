@@ -181,6 +181,7 @@ func TestEmailConfig_Validate(t *testing.T) {
 		{"invalid port", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: EmailIMAPConfig{Host: "h", Port: 0, Username: "u"}}}}, "imap.port"},
 		{"valid with smtp", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: smtp, DefaultFrom: "Alice <alice@example.com>"}}}, ""},
 		{"smtp missing password", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: EmailSMTPConfig{Host: "h", Port: 587, Username: "u"}, DefaultFrom: "alice@example.com"}}}, "smtp.password"},
+		{"smtp fields without a host", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: EmailSMTPConfig{Port: 587, Username: "u", Password: "p"}, DefaultFrom: "alice@example.com"}}}, "smtp.host is required"},
 		{"smtp missing username", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: EmailSMTPConfig{Host: "h", Port: 587}, DefaultFrom: "alice@example.com"}}}, "smtp.username"},
 		{"smtp missing default_from", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: smtp}}}, "default_from is required"},
 		{"smtp invalid port", EmailConfig{Accounts: []EmailAccountConfig{{Name: "t", IMAP: imap, SMTP: EmailSMTPConfig{Host: "h", Port: 0, Username: "u", Password: "p"}, DefaultFrom: "alice@example.com"}}}, "smtp.port"},

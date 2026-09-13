@@ -121,11 +121,11 @@ func (s *signalChannelSender) SendMessage(ctx context.Context, recipient, messag
 // governing and no candidate treated as the operator; and a store
 // failure is returned as an error, which the email package renders as
 // lookup_failed rather than as a stranger.
-func (r *contactChannelBindingResolver) ResolveEmailContact(_ context.Context, address string) (email.ContactMatch, error) {
+func (r *contactChannelBindingResolver) ResolveEmailContact(ctx context.Context, address string) (email.ContactMatch, error) {
 	if r == nil || r.store == nil {
 		return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
 	}
-	matches, err := r.store.FindAllByPropertyExact("EMAIL", address)
+	matches, err := r.store.FindAllByPropertyExact(ctx, "EMAIL", address)
 	if err != nil {
 		return email.ContactMatch{}, err
 	}
@@ -147,9 +147,10 @@ func (r *contactChannelBindingResolver) ResolveEmailContact(_ context.Context, a
 		candidates = append(candidates, email.ContactCandidate{ID: c.ID.String(), Name: c.FormattedName, TrustZone: c.TrustZone})
 	}
 	return email.ContactMatch{
-		Status:     email.ContactAmbiguous,
-		TrustZone:  leastPrivilegedZone(matches),
-		Candidates: candidates,
+		Status:          email.ContactAmbiguous,
+		TrustZone:       leastPrivilegedZone(matches),
+		Candidates:      candidates,
+		CandidatesTotal: len(matches),
 	}, nil
 }
 
@@ -193,7 +194,7 @@ type emailInteractionRecorder struct {
 }
 
 // RecordEmailInteraction records one exchange on the named contact.
-func (r *emailInteractionRecorder) RecordEmailInteraction(_ context.Context, in email.Interaction) error {
+func (r *emailInteractionRecorder) RecordEmailInteraction(ctx context.Context, in email.Interaction) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -207,7 +208,7 @@ func (r *emailInteractionRecorder) RecordEmailInteraction(_ context.Context, in 
 		Account:   in.Account,
 		MessageID: in.MessageID,
 	}
-	return r.store.RecordInteractionIfNewer(id, in.At, meta)
+	return r.store.RecordInteractionIfNewer(ctx, id, in.At, meta)
 }
 
 // contactPhoneResolver resolves phone numbers to contact names via the
