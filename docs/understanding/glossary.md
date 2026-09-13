@@ -105,12 +105,15 @@ orchestrator (cloud or large local) plans and reasons. The delegate (small
 local) executes tool calls. The smart model thinks; the cheap model does.
 See [Delegation](delegation.md).
 
-### Egress Gate *(planned)*
+### Egress Gate
 
-A single enforcement point for all outbound messages (email, eventually
-Signal and other channels). Will provide rate limiting by trust zone,
-dedup, and content scanning. The most critical planned structural safety
-control.
+The single enforcement point for outbound messages. It is implemented
+for email: every message passes one Go path that checks the account's
+access, each recipient's trust zone, and the account's recipient-domain
+rules, and ends sent, held in Drafts for the operator, or refused, with
+a logged decision. Sender identity on inbound mail is still a From-header
+claim until signature verification ships. Signal and other channels, and
+per-recipient rate limiting and reply deduplication, remain planned.
 See [Trust Architecture](trust-architecture.md).
 
 ### Episodic Summary

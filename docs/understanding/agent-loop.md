@@ -165,15 +165,18 @@ domain.
 capability_tags:
   ha:
     description: "Home Assistant device control and monitoring"
-    tools: [ha_control_device, ha_find_entity, ha_get_state, ha_list_entities, ha_call_service]
   email:
     description: "Email reading, sending, and management"
-    tools: [email_list, email_read, email_search, email_send, email_reply]
+    exclude: [email_send]
   memory:
     description: "Fact storage and recall"
-    tools: [remember_fact, recall_fact, forget_fact]
     core: true
 ```
+
+A tag's tools come from the subsystems that register them, so the
+configuration names only what a site changes: `include` adds tools to a
+tag and `exclude` removes them. The `tools:` list older configs used is
+refused at load with a message saying how to migrate.
 
 ### Delegation Pressure
 

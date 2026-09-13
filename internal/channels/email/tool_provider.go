@@ -212,7 +212,9 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
 				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, signed, note, decision:{disposition, route, attended, gating, reason, drafts_folder, recipients:[{address, trust_zone, gating, contact_status, contact, allowed, reason}]}}; " +
 				"sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder, and signed says whether an outbound signature was applied. " +
-				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted.",
+				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted. " +
+				"You can clear a refusal yourself only by changing the message: drop or correct a recipient, or pass draft: true when the account has no SMTP. " +
+				"Only the operator can change a contact's trust zone or the account's access, recipient-domain rules, or SMTP; contact_save cannot clear a trust refusal, because it cannot set a zone and a contact it creates starts at known.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
