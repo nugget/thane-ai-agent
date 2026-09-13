@@ -148,8 +148,11 @@ type IMAPConfig struct {
 	// expansion via the config loader (e.g., ${IMAP_PASSWORD}).
 	Password string `yaml:"password"`
 
-	// TLS controls whether to use TLS for the connection. Default: true.
-	// Set to false only for port 143 plaintext connections (not recommended).
+	// TLS controls whether the connection is TLS from the first byte.
+	// Default: true on every port except 143. When false, the
+	// connection starts in plaintext and is upgraded with STARTTLS
+	// before the login; a server that does not offer STARTTLS is
+	// refused rather than sent credentials in the clear.
 	TLS bool `yaml:"tls"`
 }
 

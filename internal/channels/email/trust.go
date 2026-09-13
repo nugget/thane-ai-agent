@@ -1,6 +1,9 @@
 package email
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ContactResolver resolves email addresses to trust zone levels.
 // Implementations wrap a contact store without requiring the email
@@ -30,7 +33,9 @@ type TrustResult struct {
 
 // CheckRecipientTrust evaluates each address against the contact store
 // and categorizes them by trust zone. If cr is nil, all addresses are
-// allowed (trust gating is disabled).
+// allowed (trust gating is disabled). Addresses that do not parse are
+// blocked: an unparseable recipient can neither be looked up nor
+// delivered to.
 func CheckRecipientTrust(cr ContactResolver, addresses []string) TrustResult {
 	var result TrustResult
 
@@ -40,7 +45,13 @@ func CheckRecipientTrust(cr ContactResolver, addresses []string) TrustResult {
 	}
 
 	for _, addr := range addresses {
-		bare := extractAddress(addr)
+		parsed, err := parseAddress(addr)
+		if err != nil {
+			result.Blocked = append(result.Blocked,
+				fmt.Sprintf("Cannot send to %q: not a valid email address.", addr))
+			continue
+		}
+		bare := parsed.Key()
 		zone, found, err := cr.ResolveTrustZone(bare)
 		if err != nil {
 			result.Blocked = append(result.Blocked,
@@ -77,24 +88,12 @@ func (tr TrustResult) HasIssues() bool {
 
 // FormatIssues returns a human-readable summary of all trust issues.
 func (tr TrustResult) FormatIssues() string {
-	var parts []string
+	parts := make([]string, 0, len(tr.Warnings)+len(tr.Blocked))
 	for _, w := range tr.Warnings {
 		parts = append(parts, "⚠ "+w)
 	}
 	for _, b := range tr.Blocked {
 		parts = append(parts, "✗ "+b)
 	}
-	return fmt.Sprintf("Email not sent — trust zone issues:\n\n%s", joinLines(parts))
-}
-
-// joinLines joins strings with newlines.
-func joinLines(parts []string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += "\n"
-		}
-		result += p
-	}
-	return result
+	return fmt.Sprintf("Email not sent — trust zone issues:\n\n%s", strings.Join(parts, "\n"))
 }
