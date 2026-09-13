@@ -276,24 +276,34 @@ or change it through the authenticated CardDAV field
 zone, ask the operator to make that policy decision rather than trying
 to smuggle it through ordinary contact facts. The four zones are:
 
-- **`admin`** — full access. The host's primary user(s). Mail sends
-  through, channels resolve, owner-scoped tools work. Almost always
-  exactly one contact in this zone (the owner).
-- **`household`** — family-level. Mail sends through. Routine
-  conversational access. Spouse, kids, anyone in the household.
-- **`trusted`** — established external relationship. Mail sends
-  through; some scoped tool gates may add friction. Colleagues,
-  long-time collaborators, vetted vendors.
-- **`known`** — *send-blocked* zone for someone you've encountered
-  but not vetted. The contact record exists (so signal/email can
-  recognize incoming traffic from them), but outbound mail to a
-  `known` recipient is **rejected** by the trust gate until
-  explicitly promoted or authorized.
+- **`admin`** — full access. The host's primary user(s): channels
+  resolve and owner-scoped tools work. Almost always exactly one
+  contact in this zone (the owner).
+- **`household`** — family-level. Routine conversational access.
+  Spouse, kids, anyone in the household.
+- **`trusted`** — established external relationship; some scoped tool
+  gates may add friction. Colleagues, long-time collaborators, vetted
+  vendors.
+- **`known`** — someone you've encountered but not vetted. The record
+  exists so Signal and email recognise incoming traffic from them, and
+  outbound mail to a `known` recipient is refused in every delivery
+  mode until the operator assigns another zone. Automated senders such
+  as no-reply and notification addresses belong here: recognition is
+  all they need, and a higher zone would lend a forgeable From header
+  the weight of a trusted person.
 
-New contacts default to **`known`**: the record exists and the contact
-is recognized inbound, but no outbound action goes through without a
-deliberate operator decision. The operator can promote it later through
-the custody path.
+What each zone means for mail depends on the account and the turn: the
+Email Accounts block lists which zones an account sends to directly,
+drafts for, and refuses. New contacts default to **`known`**: the record
+exists and the contact is recognized inbound, but no outbound action
+goes through without a deliberate operator decision. The operator can
+promote it later through the custody path.
+
+Addresses and numbers carry a zone too. The gates trust the record an
+address or phone number belongs to, so adding one to an existing
+contact lends that contact's zone to whoever holds it. Add one only
+when you know it belongs to that person, and never to get a send
+through.
 
 ## Create or update a person
 

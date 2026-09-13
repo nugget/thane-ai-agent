@@ -100,7 +100,7 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 		a.Reason = fmt.Sprintf("the contact directory could not be consulted (%v); this is not a judgement about the recipient, retry later", match.Err)
 		return a
 	case ContactUnmatched:
-		a.Reason = "no contact record; add one deliberately with contact_save or drop the recipient"
+		a.Reason = "no contact record, and only the operator can add one at a zone that allows mail; ask them or drop the recipient"
 		return a
 	case ContactAmbiguous:
 		a.Gating = gatingForZone(match.TrustZone)
@@ -120,7 +120,7 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 	a.Gating = gatingForZone(match.TrustZone)
 	a.Allowed = a.Gating != GatingBlocked
 	if !a.Allowed {
-		a.Reason = fmt.Sprintf("the contact is at the %s trust zone, whose send policy is blocked; promote the contact deliberately (with the operator's authorization) or drop the recipient", match.TrustZone)
+		a.Reason = fmt.Sprintf("the contact is at the %s trust zone, whose send policy is blocked; only the operator can change a contact's zone, so ask them or drop the recipient", match.TrustZone)
 	}
 	return a
 }
