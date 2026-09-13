@@ -49,7 +49,7 @@ func viewAddress(a Address, lookup *identityLookup) *addressView {
 	if a.IsZero() {
 		return nil
 	}
-	view := addressView{Name: a.Name, Address: a.Address, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched}
+	view := addressView{Name: truncateUTF8(a.Name, maxNameOutput), Address: a.Address, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched}
 	if lookup != nil {
 		match := lookup.resolve(a)
 		view.TrustZone = match.TrustZone
@@ -84,6 +84,8 @@ const (
 	maxSubjectOutput    = 1024
 	maxSummaryAddresses = 10
 	maxHeaderAddresses  = 25
+	maxNameOutput       = 256
+	maxMessageIDOutput  = 512
 )
 
 // capAddresses returns at most n addresses and how many were left out.
@@ -141,7 +143,7 @@ func newListResponse(account string, listed ListResult, lookup *identityLookup, 
 			AddressesOmitted: toOmitted + ccOmitted,
 			Subject:          truncateUTF8(env.Subject, maxSubjectOutput),
 			Date:             deltaOrEmpty(env.Date, now),
-			MessageID:        env.MessageID,
+			MessageID:        truncateUTF8(env.MessageID, maxMessageIDOutput),
 			Flags:            env.Flags,
 			Size:             env.Size,
 		})

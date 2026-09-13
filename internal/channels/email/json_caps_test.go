@@ -99,3 +99,13 @@ func TestMoveReportsUIDsNotFound(t *testing.T) {
 		t.Errorf("move result = %+v", resp)
 	}
 }
+
+// TestSummaryCutsOversizedNamesAndMessageIDs pins the per-field bounds a
+// list summary applies before the byte budget runs.
+func TestSummaryCutsOversizedNamesAndMessageIDs(t *testing.T) {
+	env := Envelope{UID: 1, From: Address{Name: strings.Repeat("N", 5000), Address: "a@example.com"}, MessageID: strings.Repeat("m", 5000) + "@example.com", Date: time.Now()}
+	resp := newListResponse("primary", ListResult{Folder: "INBOX", TotalMatched: 1, Envelopes: []Envelope{env}}, nil, time.Now())
+	if got := resp.Messages[0]; len(got.From.Name) > maxNameOutput || len(got.MessageID) > maxMessageIDOutput || got.From.Address != "a@example.com" {
+		t.Errorf("summary = name %d bytes, message_id %d bytes, address %q", len(got.From.Name), len(got.MessageID), got.From.Address)
+	}
+}

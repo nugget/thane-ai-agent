@@ -229,6 +229,9 @@ func (c EmailConfig) Validate() error {
 			return fmt.Errorf("email.accounts[%d] (%s): imap.port %d out of range (1-65535)", i, a.Name, a.IMAP.Port)
 		}
 
+		if a.SMTP.Host == "" && (a.SMTP.Username != "" || a.SMTP.Password != "" || a.SMTP.Port != 0 || a.SMTP.StartTLS != nil) {
+			return fmt.Errorf("email.accounts[%d] (%s): smtp.host is required when any other smtp field is set; without it the account silently cannot send", i, a.Name)
+		}
 		if a.SMTP.Host != "" {
 			if a.SMTP.Username == "" {
 				return fmt.Errorf("email.accounts[%d] (%s): smtp.username is required when smtp.host is set", i, a.Name)
