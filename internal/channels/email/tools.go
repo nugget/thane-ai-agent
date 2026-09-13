@@ -49,7 +49,7 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
-	return marshalResponse(newListResponse(acct.Name, listed, time.Now()))
+	return marshalListResponse(newListResponse(acct.Name, listed, time.Now()))
 }
 
 // HandleRead reads a single message by UID.
@@ -179,7 +179,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
-	return marshalResponse(newListResponse(acct.Name, found, now))
+	return marshalListResponse(newListResponse(acct.Name, found, now))
 }
 
 // parseSearchDate accepts the shapes a model plausibly sends for a
