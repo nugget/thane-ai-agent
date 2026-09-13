@@ -272,7 +272,9 @@ A classification assigned to every contact: `admin`, `household`,
 `trusted`, `known`, or `unknown` (implicit). Trust zones are the
 universal router for permissions across the system — gating email send,
 compute allocation, notification priority, and proactive behavior.
-Validated in Go, not prompts.
+Validated in Go, not prompts. An automated-looking email address (a
+no-reply, notification, or bounce mailbox) is read at `known` at most,
+whatever its record's zone.
 See [Trust Architecture](trust-architecture.md).
 
 ### Virtual Model

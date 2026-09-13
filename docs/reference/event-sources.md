@@ -54,10 +54,14 @@ contact directory's answer about the sender: `contact_status`
 (`matched`, `unmatched`, `ambiguous`, or `lookup_failed`), the effective
 `trust_zone` (`unknown` for a stranger, the least privileged candidate's
 zone when several records share the address), `is_owner` (always
-present, `true` only when the matched record is the operator's), and,
-for a match, `contact_id` and `contact_name`. `trust_zone`, `is_owner`,
-`contact_id`, and `contact_name` are the names the Signal bridge uses in
-its loop metadata; `contact_status` is email-only. `is_owner` says the
+present, `true` only when the matched record is the operator's), for a
+match `contact_id` and `contact_name`, and `automated`. `automated` is
+present, as `"true"`, only when the sender's mailbox name marks a
+no-reply, notification, or bounce address; its `trust_zone` is then
+capped at `known`, and a matched sender keeps its `contact_id`.
+`trust_zone`, `is_owner`, `contact_id`, and `contact_name` are the names
+the Signal bridge uses in its loop metadata; `contact_status` and
+`automated` are email-only. `is_owner` says the
 matched record is the operator's; it does not say the operator wrote
 the message, because a From header is a claim until a signature
 verifies it. The poller stamps no per-wake tags; identity rides in the
