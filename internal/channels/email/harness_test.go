@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -315,6 +316,10 @@ type smtpFake struct {
 	rejectRcpt map[string]int // address -> reply code
 	rejectAuth bool
 
+	// starttlsReply, when set, answers STARTTLS with this reply instead
+	// of upgrading the connection.
+	starttlsReply string
+
 	mu         sync.Mutex
 	deliveries []smtpDelivery
 }
@@ -393,6 +398,10 @@ func (f *smtpFake) handle(conn net.Conn) {
 			}
 			_ = w.Flush()
 		case verb == "STARTTLS":
+			if f.starttlsReply != "" {
+				reply(f.starttlsReply)
+				continue
+			}
 			reply("220 go ahead")
 			tlsConn := tls.Server(conn, f.tlsCfg)
 			if err := tlsConn.Handshake(); err != nil {
@@ -625,9 +634,12 @@ func stallingIMAP(t *testing.T) (host string, port int) {
 						return
 					default:
 						// One response, then silence: the read deadline a
-						// caller might have set is reset by this line.
+						// caller might have set is reset by this line. The
+						// read returns once the client or cleanup closes the
+						// connection, so the handler does not outlive it.
 						_, _ = fmt.Fprint(conn, "* 1 EXISTS\r\n")
-						select {} //nolint:staticcheck // held open until the test closes the conn
+						_, _ = io.Copy(io.Discard, conn)
+						return
 					}
 				}
 			}()

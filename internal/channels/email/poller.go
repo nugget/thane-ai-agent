@@ -288,8 +288,14 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 		return 0, 0, p.setHighWaterMark(stateKey, current)
 	}
 	if stored.UIDValidity == 0 {
-		// Legacy bare-UID mark: adopt the validity we can now see.
+		// Legacy bare-UID mark: adopt the validity we can now see, and
+		// persist it now. Kept only in memory, an idle mailbox would
+		// hold the bare mark, and a rebuild before the next new message
+		// would go undetected.
 		stored.UIDValidity = current.UIDValidity
+		if err := p.setHighWaterMark(stateKey, stored); err != nil {
+			return 0, 0, err
+		}
 	}
 
 	p.logger.Debug("email poll querying IMAP",

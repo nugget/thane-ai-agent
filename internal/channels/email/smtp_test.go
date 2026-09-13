@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"errors"
+	"net"
 	"net/textproto"
 	"strings"
 	"testing"
@@ -38,8 +39,8 @@ func TestSendMailOverSTARTTLS(t *testing.T) {
 	if !strings.Contains(d.Data, "Subject: hello") {
 		t.Errorf("DATA = %q", d.Data)
 	}
-	if d.Helo != "example.com" {
-		t.Errorf("EHLO name = %q; must announce the sender's domain, not the machine", d.Helo)
+	if d.Helo != "[127.0.0.1]" {
+		t.Errorf("EHLO name = %q; must be the address literal of the local end, not a host or sender name", d.Helo)
 	}
 }
 
@@ -151,15 +152,19 @@ func TestClassifySMTPError(t *testing.T) {
 	}
 }
 
-func TestHeloNameAnnouncesTheSenderDomain(t *testing.T) {
-	for in, want := range map[string]string{
-		"example.com": "example.com",
-		"":            "[127.0.0.1]",
-		"bad host":    "[127.0.0.1]",
-		"localhost":   "[127.0.0.1]",
+func TestHeloNameIsTheLocalAddressLiteral(t *testing.T) {
+	for _, tc := range []struct {
+		addr net.Addr
+		want string
+	}{
+		{&net.TCPAddr{IP: net.ParseIP("127.0.0.1")}, "[127.0.0.1]"},
+		{&net.TCPAddr{IP: net.ParseIP("192.168.1.5")}, "[192.168.1.5]"},
+		{&net.TCPAddr{IP: net.ParseIP("::1")}, "[IPv6:::1]"},
+		{&net.TCPAddr{IP: net.IPv4zero}, "[127.0.0.1]"},
+		{nil, "[127.0.0.1]"},
 	} {
-		if got := heloName(in); got != want {
-			t.Errorf("heloName(%q) = %q, want %q", in, got, want)
+		if got := heloName(tc.addr); got != tc.want {
+			t.Errorf("heloName(%v) = %q, want %q", tc.addr, got, tc.want)
 		}
 	}
 }

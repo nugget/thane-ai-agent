@@ -49,7 +49,7 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
-	return marshalResponse(newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()))
+	return marshalListResponse(newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()))
 }
 
 // HandleRead reads a single message by UID.
@@ -189,7 +189,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
-	return marshalResponse(newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now))
+	return marshalListResponse(newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now))
 }
 
 // parseSearchDate accepts the shapes a model plausibly sends for a
@@ -346,9 +346,14 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 		UIDs:                 nonNilUIDs(result.UIDs),
 		DestinationUIDs:      nonNilUIDs(result.DestUIDs),
 		DestinationUIDsKnown: result.DestUIDsKnown,
+		UIDsNotFound:         []uint32{},
 	}
-	if !result.DestUIDsKnown {
-		resp.Note = "the server did not report the messages' new UIDs; list " + result.Destination + " to find them"
+	if result.DestUIDsKnown {
+		// COPYUID named what moved; a requested UID absent from it was
+		// not in the folder.
+		resp.UIDsNotFound = nonNilUIDs(missingUIDs(opts.UIDs, result.UIDs))
+	} else {
+		resp.Note = "the server did not confirm which UIDs moved or their new UIDs; list " + result.Destination + " to check"
 	}
 	t.service.recordOp("email_move", acct.Name, result.SourceFolder, fmt.Sprintf("%d to %s", len(result.UIDs), result.Destination))
 	return marshalResponse(resp)

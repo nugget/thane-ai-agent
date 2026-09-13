@@ -18,6 +18,11 @@ import (
 // are cut on a rune boundary and [Message.BodyTruncated] is set.
 const maxBodySize = 32 * 1024
 
+// maxAttachments is the most non-text parts a read lists; the rest are
+// counted in [Message.AttachmentsOmitted] so a message with thousands of
+// parts cannot inflate a result.
+const maxAttachments = 50
+
 // maxRawMessageSize is the most of a raw RFC 5322 message that is
 // buffered from the IMAP literal. The remainder is drained so the
 // stream stays in sync, [Message.RawTruncated] is set, and parts past
@@ -173,17 +178,19 @@ func (c *Client) parseBody(msg *Message, r io.Reader) error {
 			case contentType == "text/plain" && msg.TextBody == "":
 				body, truncated := readBounded(part.Body, maxBodySize)
 				msg.TextBody = strings.TrimSpace(body)
+				msg.textTruncated = truncated
 				msg.BodyTruncated = msg.BodyTruncated || truncated
 			case contentType == "text/html" && msg.HTMLBody == "":
 				body, truncated := readBounded(part.Body, maxBodySize)
 				msg.HTMLBody = strings.TrimSpace(body)
+				msg.htmlTruncated = truncated
 				msg.BodyTruncated = msg.BodyTruncated || truncated
 			case strings.HasPrefix(contentType, "text/"):
 				// A further text part (a second alternative, a quoted
 				// original) is not the body; count it as inline content.
-				msg.Attachments = append(msg.Attachments, describePart(h.Header, contentType, part.Body, true))
+				msg.addAttachment(describePart(h.Header, contentType, part.Body, true))
 			default:
-				msg.Attachments = append(msg.Attachments, describePart(h.Header, contentType, part.Body, true))
+				msg.addAttachment(describePart(h.Header, contentType, part.Body, true))
 			}
 		case *mail.AttachmentHeader:
 			contentType, _, _ := h.ContentType()
@@ -191,7 +198,7 @@ func (c *Client) parseBody(msg *Message, r io.Reader) error {
 			if name, err := h.Filename(); err == nil {
 				att.Filename = name
 			}
-			msg.Attachments = append(msg.Attachments, att)
+			msg.addAttachment(att)
 		default:
 			_, _ = io.Copy(io.Discard, part.Body)
 		}
@@ -245,13 +252,17 @@ func truncateUTF8(s string, maxBytes int) string {
 }
 
 // finishBody settles the readable body: a text part wins, an HTML-only
-// message is rendered to text, and BodySource records which happened.
+// message is rendered to text, BodySource records which happened, and
+// BodyTruncated is set from that part alone, so an oversized HTML
+// alternative does not mark a complete plain body as cut.
 func finishBody(msg *Message) {
 	switch {
 	case msg.TextBody != "":
 		msg.BodySource = "text"
+		msg.BodyTruncated = msg.textTruncated
 	case msg.HTMLBody != "":
 		msg.TextBody = htmlToText(msg.HTMLBody)
 		msg.BodySource = "html"
+		msg.BodyTruncated = msg.htmlTruncated
 	}
 }

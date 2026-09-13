@@ -135,8 +135,8 @@ type Message struct {
 	// the message has no readable body.
 	BodySource string `json:"body_source,omitempty"`
 
-	// BodyTruncated is true when the body part exceeded [maxBodySize]
-	// and TextBody holds only its head.
+	// BodyTruncated is true when the part the body was taken from
+	// exceeded [maxBodySize] and TextBody holds only its head.
 	BodyTruncated bool `json:"body_truncated,omitempty"`
 
 	// RawTruncated is true when the whole message exceeded
@@ -144,12 +144,31 @@ type Message struct {
 	// so Attachments may be incomplete.
 	RawTruncated bool `json:"raw_truncated,omitempty"`
 
-	// Attachments lists the non-text parts found while parsing.
+	// Attachments lists the non-text parts found while parsing, at most
+	// maxAttachments of them.
 	Attachments []Attachment `json:"attachments,omitempty"`
 
 	// raw is the message as fetched, kept for an [Authenticator] to
 	// inspect. It is bounded by maxRawMessageSize and never rendered.
 	raw []byte
+
+	// AttachmentsOmitted counts the non-text parts past maxAttachments
+	// that were measured but not listed.
+	AttachmentsOmitted int `json:"attachments_omitted,omitempty"`
+
+	// textTruncated and htmlTruncated record which part hit
+	// maxBodySize, so BodyTruncated can describe the part the body was
+	// taken from rather than any part.
+	textTruncated, htmlTruncated bool
+}
+
+// addAttachment lists a part up to maxAttachments and counts the rest.
+func (m *Message) addAttachment(att Attachment) {
+	if len(m.Attachments) >= maxAttachments {
+		m.AttachmentsOmitted++
+		return
+	}
+	m.Attachments = append(m.Attachments, att)
 }
 
 // FolderRole names the special-use purpose of a mailbox (RFC 6154),
@@ -413,10 +432,12 @@ type MoveOptions struct {
 	Account string
 }
 
-// MoveResult reports a completed move. DestUIDs are the messages' new
-// UIDs in the destination when the server returned COPYUID (UIDPLUS);
-// DestUIDsKnown is false otherwise and the caller must list the
-// destination to find them.
+// MoveResult reports a move. When DestUIDsKnown is true the server
+// returned COPYUID: UIDs lists the source UIDs it confirmed moving and
+// DestUIDs their new UIDs in the same order, so a requested UID missing
+// from UIDs was not in the folder and did not move. When it is false
+// the server reported nothing, UIDs is the requested set, and which of
+// them moved is unknown.
 type MoveResult struct {
 	SourceFolder    string   `json:"source_folder"`
 	Destination     string   `json:"destination"`
