@@ -114,12 +114,12 @@ func (t *Tools) SetOwnerContactName(name string) {
 	t.ownerContactName = name
 }
 
-// ConfigureLegacyOperatorContactID pins, for identity custody, the record
-// the legacy owner name resolved to (uuid.Nil when it resolved to none).
-// The app passes the channel resolver's cached answer, so custody and
-// IsOwner agree on the operator for the life of the process even if a
-// later record comes to match the name. Unpinned, custody resolves the
-// name on every check.
+// ConfigureLegacyOperatorContactID pins, for identity custody and
+// contact_owner, the record the legacy owner name resolved to (uuid.Nil
+// when it resolved to none). The app passes the channel resolver's
+// cached answer, so custody, contact_owner and IsOwner agree on the
+// operator for the life of the process even if a later record comes to
+// match the name. Unpinned, both resolve the name on every call.
 func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID) {
 	t.legacyOperatorID = id
 	t.legacyOperatorPinned = true
@@ -160,6 +160,22 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 	}
 
 	name := strings.TrimSpace(t.ownerContactName)
+	if name != "" && t.legacyOperatorPinned {
+		// The pinned record is the one IsOwner and custody treat as the
+		// operator, so contact_owner names it even after another record
+		// comes to match the name, and names none when none was pinned.
+		if t.legacyOperatorID == uuid.Nil {
+			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
+		}
+		full, err := t.store.GetWithProperties(t.legacyOperatorID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get configured operator contact details: %w", err)
+		}
+		return full, nil
+	}
 	if name != "" {
 		c, err := t.store.ResolveContact(name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -433,9 +449,7 @@ func (t *Tools) saveContact(
 	if err != nil {
 		var custody *IdentityCustodyError
 		if errors.As(err, &custody) {
-			for i := range custody.Violations {
-				custody.Violations[i].Key = factKeyFor(args.Facts, custody.Violations[i].Property, custody.Violations[i].Value)
-			}
+			labelViolationKeys(args.Facts, custody.Violations)
 			zone := contact.TrustZone
 			if zone == "" {
 				zone = ZoneKnown
@@ -553,21 +567,31 @@ func factProperty(key, value string) Property {
 	return Property{Property: property, Value: value}
 }
 
-// factKeyFor returns the fact key that produced a property row, so a
-// refusal names the key the model wrote.
-func factKeyFor(facts map[string]string, property, value string) string {
+// labelViolationKeys sets each violation's Key to the fact key that
+// produced its row, so a refusal names the keys the model wrote. Two
+// keys can produce the same row (email and EMAIL with one value), so
+// each key labels at most one violation.
+func labelViolationKeys(facts map[string]string, violations []IdentityViolation) {
 	keys := make([]string, 0, len(facts))
 	for key := range facts {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		p := factProperty(key, facts[key])
-		if p.Property == property && strings.EqualFold(p.Value, value) {
-			return key
+	used := make(map[string]bool, len(violations))
+	for i := range violations {
+		v := &violations[i]
+		v.Key = v.Property
+		for _, key := range keys {
+			if used[key] {
+				continue
+			}
+			if p := factProperty(key, facts[key]); p.Property == v.Property && p.Value == v.Value {
+				v.Key = key
+				used[key] = true
+				break
+			}
 		}
 	}
-	return property
 }
 
 func hasProperty(properties []Property, property, value string) bool {
@@ -1167,9 +1191,11 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 // an admin, household, trusted or operator contact already holds them.
 // The rest of the card still imports and the result counts the drops.
 // The import runs under ctx: once the turn ends it stops reading the
-// vCard and starts writing no further card. A card whose writes had
-// started is written whole, so the stop report's counts, drops
-// included, match what the store holds.
+// vCard and starts writing no further card. Each card is written whole
+// in one transaction that rechecks custody, so the stop report's
+// counts, drops included, match what the store holds, and no operator
+// write between the check and the write can give a value a second
+// holder.
 func (t *Tools) ImportVCFFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance) (string, error) {
 	return t.importVCF(ctx, argsJSON, provenance)
 }
@@ -1282,17 +1308,17 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 			continue
 		}
 
-		props, refused, err := t.withoutCustodiedIdentity(ctx, existing, props, operator)
+		target, guard, err := importCustody(existing, props, operator)
+		if err != nil {
+			return "", stop(i, err)
+		}
+		props, refused, err := t.withoutCustodiedIdentity(ctx, target, guard, props)
 		if err != nil {
 			return "", stop(i, err)
 		}
 		if len(refused) > 0 {
 			drops.identity += len(refused)
-			target, zone := uuid.Nil, ZoneKnown
-			if existing != nil {
-				target, zone = existing.ID, existing.TrustZone
-			}
-			logIdentityRefusal("contact_import_vcf", target, zone, refused, provenance, args.DryRun)
+			logIdentityRefusal("contact_import_vcf", target, guard.snapshotZone, refused, provenance, args.DryRun)
 		}
 		// findExistingForMerge reads a failed lookup as no match, so a
 		// turn that ended during the reads above stops here rather than
@@ -1302,6 +1328,20 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 		}
 		for j := range props {
 			props[j].Provenance = provenance
+		}
+
+		// A card that would create a contact needs a name, which a
+		// control character in FN may have cleared above. The dry run
+		// skips it too, so it never promises a contact the import
+		// would not create.
+		if existing == nil && incoming.FormattedName == "" {
+			skipped++
+			if args.DryRun {
+				fmt.Fprintf(&summary, "Would skip card %d: it has no usable name (FN)\n", i+1)
+			} else {
+				drops.nameless = append(drops.nameless, i+1)
+			}
+			continue
 		}
 
 		if args.DryRun {
@@ -1315,82 +1355,59 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 			continue
 		}
 
-		// A card whose reads have passed is written whole: its writes run
-		// to completion even if the turn ends meanwhile, so the counts
-		// this import reports match what the store holds. The embedding
-		// is optional maintenance and still stops with the turn.
-		writeCtx := context.WithoutCancel(ctx)
+		// A card whose reads have passed is written whole, in one
+		// transaction that rechecks custody against what the store holds
+		// then: its writes run to completion even if the turn ends
+		// meanwhile, so the counts this import reports match the store.
+		// A card the recheck refuses whole (its merge target's zone
+		// moved, or it was deleted) writes nothing and is skipped, as is
+		// a card whose transaction fails: the transaction begins
+		// deferred, so an operator write that commits between its first
+		// read and its first write fails it with SQLITE_BUSY_SNAPSHOT.
+		// The result names each skipped card with its cause. The
+		// embedding is optional maintenance and still stops with the
+		// turn.
+		c := incoming
 		if existing != nil {
 			// Merge: fill empty scalar fields only.
 			t.mergeContact(existing, incoming)
-			if _, err := t.store.upsert(writeCtx, existing); err != nil {
-				skipped++
-				continue
+			c = existing
+		}
+		raced, failures, err := t.store.applyContactImport(context.WithoutCancel(ctx), c, props, guard)
+		if err != nil {
+			skipped++
+			if errors.Is(err, errContactChangedConcurrently) {
+				drops.changed = append(drops.changed, i+1)
+			} else {
+				drops.unwritten = append(drops.unwritten, i+1)
 			}
-			// Add properties additively.
-			drops.writeFailures += t.addImportedProperties(writeCtx, existing.ID, props)
-			t.generateEmbedding(ctx, existing)
+			slog.Warn("contact_import_vcf card not written",
+				"card", i+1,
+				"contact_id", target.String(),
+				"error", err)
+			continue
+		}
+		if len(raced) > 0 {
+			drops.identity += len(raced)
+			logIdentityRefusal("contact_import_vcf", c.ID, guard.snapshotZone, raced, provenance, false)
+		}
+		drops.writeFailures += failures
+		t.generateEmbedding(ctx, c)
+		if existing != nil {
 			updated++
 		} else {
-			// Create new contact.
-			if incoming.FormattedName == "" {
-				skipped++
-				continue
-			}
-			c, err := t.store.upsert(writeCtx, incoming)
-			if err != nil {
-				skipped++
-				continue
-			}
-			drops.writeFailures += t.addImportedProperties(writeCtx, c.ID, props)
-			t.generateEmbedding(ctx, c)
 			created++
 		}
 	}
 
 	notes := drops.notes()
 	if args.DryRun {
-		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:%s\n\n%s",
-			created, updated, notes, summary.String()), nil
+		return fmt.Sprintf("Dry run — %d would be created, %d would be merged, %d would be skipped:%s\n\n%s",
+			created, updated, skipped, notes, summary.String()), nil
 	}
 
 	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped.%s",
 		created+updated, created, updated, skipped, notes), nil
-}
-
-// importDrops counts what one vCard import left out, by reason.
-type importDrops struct {
-	keys          int
-	names         int
-	values        int
-	ownerName     int
-	identity      int
-	writeFailures int
-}
-
-// notes renders the drop counts as the sentences an import result ends
-// with, each in the shape of the key note.
-func (d importDrops) notes() string {
-	var b strings.Builder
-	if d.keys > 0 {
-		fmt.Fprintf(&b, " %d key propert(ies) were not imported: KEY and X-THANE-KEY-* are operator custody and never come in through a model tool.", d.keys)
-	}
-	if d.names > 0 {
-		fmt.Fprintf(&b, " %d propert(ies) were not imported: their names are not plain vCard property names (a nested group such as a.b.EMAIL, a space, or more than 64 characters) and would become a different property on the next CardDAV round trip.", d.names)
-	}
-	if d.values > 0 {
-		fmt.Fprintf(&b, " %d value(s) were not imported: they carry a carriage return or other control character, which a contacts client would read as the start of another property.", d.values)
-	}
-	if d.ownerName > 0 {
-		fmt.Fprintf(&b, " %d name(s) were not imported: a card that would create a contact, or give an existing one a nickname, under the name Thane recognizes the operator by was left out, because that contact could take the operator's identity; ask the operator to add it through CardDAV or the contacts API.", d.ownerName)
-	}
-	if d.identity > 0 {
-		fmt.Fprintf(&b, " %d address(es)/number(s) were not imported: EMAIL, TEL and IMPP values are operator custody on an admin, household, trusted or operator contact, and a value one of those already holds keeps its single holder; ask the operator to add them through CardDAV or the contacts API.", d.identity)
-	}
-	if d.writeFailures > 0 {
-		fmt.Fprintf(&b, " %d propert(ies) failed to write and were not imported; the log names each one.", d.writeFailures)
-	}
-	return b.String()
 }
 
 // withoutMalformedNames drops decoded properties whose names fail the
@@ -1475,21 +1492,33 @@ func (t *Tools) lazyCustodyOperatorID(ctx context.Context) func() (uuid.UUID, er
 	}
 }
 
-// withoutCustodiedIdentity drops the identity properties a model-facing
-// import may not write to its target (existing, or a record about to be
-// created when nil) and returns the kept properties with the refused
-// values.
-func (t *Tools) withoutCustodiedIdentity(ctx context.Context, existing *Contact, props []Property, operator func() (uuid.UUID, error)) ([]Property, []IdentityViolation, error) {
+// importCustody returns the record a card writes to (existing's ID, or
+// uuid.Nil for a record about to be created) and the guard both of the
+// card's custody checks judge it by: the import's own, and the recheck
+// inside its write transaction. The operator is resolved only when the
+// card carries an identity value.
+func importCustody(existing *Contact, props []Property, operator func() (uuid.UUID, error)) (uuid.UUID, identityGuard, error) {
+	target, guard := uuid.Nil, identityGuard{snapshotZone: ZoneKnown}
+	if existing != nil {
+		target, guard.snapshotZone = existing.ID, existing.TrustZone
+	}
 	if !hasIdentityProperty(props) {
-		return props, nil, nil
+		return target, guard, nil
 	}
 	operatorID, err := operator()
 	if err != nil {
-		return nil, nil, err
+		return uuid.Nil, identityGuard{}, err
 	}
-	target, guard := uuid.Nil, identityGuard{operatorID: operatorID, snapshotZone: ZoneKnown}
-	if existing != nil {
-		target, guard.snapshotZone = existing.ID, existing.TrustZone
+	guard.operatorID = operatorID
+	return target, guard, nil
+}
+
+// withoutCustodiedIdentity drops the identity properties a model-facing
+// import may not write to target under guard and returns the kept
+// properties with the refused values.
+func (t *Tools) withoutCustodiedIdentity(ctx context.Context, target uuid.UUID, guard identityGuard, props []Property) ([]Property, []IdentityViolation, error) {
+	if !hasIdentityProperty(props) {
+		return props, nil, nil
 	}
 	query := func(query string, args ...any) (*sql.Rows, error) {
 		return t.store.db.QueryContext(ctx, query, args...)
@@ -1518,23 +1547,6 @@ func refusedIdentity(p Property, violations []IdentityViolation) bool {
 		}
 	}
 	return false
-}
-
-// addImportedProperties writes imported properties one at a time and
-// returns how many failed, logging each failure rather than dropping it
-// silently.
-func (t *Tools) addImportedProperties(ctx context.Context, contactID uuid.UUID, props []Property) int {
-	failures := 0
-	for _, p := range props {
-		if err := t.store.addProperty(ctx, contactID, &p); err != nil {
-			failures++
-			slog.Warn("contact_import_vcf property write failed",
-				"contact_id", contactID.String(),
-				"property", p.Property,
-				"error", err)
-		}
-	}
-	return failures
 }
 
 // findExistingForMerge looks for an existing contact that matches the

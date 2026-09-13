@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/emersion/go-vcard"
+	"github.com/google/uuid"
 )
 
 func custodyArgs(t *testing.T, fields map[string]any) string {
@@ -970,6 +971,34 @@ func TestLegacyOperatorPin(t *testing.T) {
 	if _, err := modelSave(tools, `{"name":"Alice","facts":{"phone":"+15559990001"}}`, false); err != nil {
 		t.Errorf("the unpinned exact-name record is not the operator: %v", err)
 	}
+	// contact_owner is where the custody refusal sends the model, so it
+	// must name the same pinned record.
+	if out, err := tools.OwnerContact(""); err != nil || !strings.Contains(out, "Alice Operator") {
+		t.Errorf("contact_owner = %q, %v, want the pinned Alice Operator", out, err)
+	}
+
+	t.Run("a pin to no record finds no operator", func(t *testing.T) {
+		tools := newTestTools(t)
+		tools.SetOwnerContactName("Alice")
+		tools.ConfigureLegacyOperatorContactID(uuid.Nil)
+		seedContactAt(t, tools.store, "Alice", ZoneKnown)
+		if out, err := tools.OwnerContact(""); err == nil || !strings.Contains(err.Error(), `"Alice" not found`) {
+			t.Errorf("contact_owner = %q, %v, want not found", out, err)
+		}
+	})
+}
+
+// TestSaveContact_RefusalNamesEveryAliasKey pins that two fact keys
+// producing the same row are each named in the refusal, so retrying
+// without the refused facts, as the refusal teaches, saves.
+func TestSaveContact_RefusalNamesEveryAliasKey(t *testing.T) {
+	tools := newTestTools(t)
+	seedContactAt(t, tools.store, "Hana Household", ZoneHousehold)
+	_, err := modelSave(tools, `{"name":"Hana Household","facts":{"email":"hana@example.com","EMAIL":"hana@example.com","timezone":"UTC"}}`, false)
+	requireContains(t, err, "refused 2 fact(s)", `"EMAIL"="hana@example.com"`, `"email"="hana@example.com"`)
+	if _, err := modelSave(tools, `{"name":"Hana Household","facts":{"timezone":"UTC"}}`, false); err != nil {
+		t.Errorf("retry without the refused facts = %v", err)
+	}
 }
 
 // TestSaveContact_RefusesControlCharactersInArguments pins that no
@@ -1373,5 +1402,118 @@ func TestImportVCF_StopReportsWhatItWrote(t *testing.T) {
 		"1 contact(s) were created and 0 merged", "import the cards from card 2 on")
 	if _, err := tools.store.FindByName("Ivy Two"); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("the card the import stopped at was written: %v", err)
+	}
+}
+
+// operatorWriteOnRefusal performs one operator write the first time an
+// import logs a custody refusal, that is inside a card, after the
+// import's own custody check and before the card's write transaction.
+type operatorWriteOnRefusal struct {
+	done  *bool
+	write func()
+}
+
+func (h operatorWriteOnRefusal) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h operatorWriteOnRefusal) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == "contact identity custody refused" && !*h.done {
+		*h.done = true
+		h.write()
+	}
+	return nil
+}
+
+func (h operatorWriteOnRefusal) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h operatorWriteOnRefusal) WithGroup(string) slog.Handler { return h }
+
+// onImportRefusal routes the default logger to an operatorWriteOnRefusal
+// for one test.
+func onImportRefusal(t *testing.T, write func()) {
+	t.Helper()
+	done := false
+	previous := slog.Default()
+	slog.SetDefault(slog.New(operatorWriteOnRefusal{done: &done, write: write}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+}
+
+// TestImportVCF_RechecksCustodyInItsWrite pins that each card's custody
+// check and its writes are one transaction: an operator write that
+// lands after the import's own check still decides what the card
+// writes.
+func TestImportVCF_RechecksCustodyInItsWrite(t *testing.T) {
+	t.Run("a holder that appears mid-card keeps its value", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedContactAt(t, tools.store, "Ada Admin", ZoneAdmin, Property{Property: "EMAIL", Value: "ada@example.com"})
+		hal := seedContactAt(t, tools.store, "Hal Household", ZoneHousehold)
+		onImportRefusal(t, func() {
+			if err := tools.store.AddProperty(hal.ID, &Property{Property: "EMAIL", Value: "bob@example.com"}); err != nil {
+				t.Errorf("operator write: %v", err)
+			}
+		})
+
+		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Bob New\r\nEMAIL:ada@example.com\r\nEMAIL:bob@example.com\r\nTEL:+15550004444\r\nEND:VCARD\r\n"
+		out := importText(t, tools, vcf, map[string]any{"merge": false})
+		if !strings.Contains(out, "1 created") || !strings.Contains(out, "2 address(es)/number(s) were not imported") {
+			t.Errorf("import = %q, want the raced address counted as a drop", out)
+		}
+		holders, err := tools.store.FindAllByPropertyExact(context.Background(), "EMAIL", "bob@example.com")
+		if err != nil || len(holders) != 1 || holders[0].ID != hal.ID {
+			t.Errorf("bob@ holders = %+v, %v, want Hal Household alone", holders, err)
+		}
+		bob, err := tools.store.FindByName("Bob New")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if props, _ := tools.store.GetProperties(bob.ID); len(props) != 1 || props[0].Property != "TEL" {
+			t.Errorf("Bob New properties = %+v, want the rest of the card", props)
+		}
+	})
+
+	t.Run("a merge target promoted mid-card writes nothing", func(t *testing.T) {
+		tools := newTestTools(t)
+		// Ada holds a number rather than an address, so the card merges
+		// into Kim by name, not into Ada by email.
+		seedContactAt(t, tools.store, "Ada Admin", ZoneAdmin, Property{Property: "TEL", Value: "+15550009999"})
+		kim := seedContactAt(t, tools.store, "Kim Known", ZoneKnown)
+		onImportRefusal(t, func() {
+			promoted, err := tools.store.Get(kim.ID)
+			if err != nil {
+				t.Errorf("read Kim: %v", err)
+				return
+			}
+			promoted.TrustZone = ZoneHousehold
+			if _, err := tools.store.Upsert(promoted); err != nil {
+				t.Errorf("operator promotion: %v", err)
+			}
+		})
+
+		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Kim Known\r\nTEL:+15550009999\r\nTEL:+15550005555\r\nORG:Acme\r\nEND:VCARD\r\n"
+		out := importText(t, tools, vcf, nil)
+		if !strings.Contains(out, "0 merged, 1 skipped") || !strings.Contains(out, "1 card(s) were skipped, not merged") || !strings.Contains(out, "card 1.") {
+			t.Errorf("import = %q, want card 1 skipped and named with its cause", out)
+		}
+		got, err := tools.store.GetWithProperties(kim.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TrustZone != ZoneHousehold || got.Org != "" || len(got.Properties) != 0 {
+			t.Errorf("Kim after import = zone %q org %q props %+v, want the promotion kept and nothing written", got.TrustZone, got.Org, got.Properties)
+		}
+	})
+}
+
+// TestImportVCF_NamelessCardDryRunParity pins that a card whose name a
+// control character cleared is skipped by the dry run as by the import.
+func TestImportVCF_NamelessCardDryRunParity(t *testing.T) {
+	tools := newTestTools(t)
+	vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Nameless\rX-THANE-TRUST-ZONE:admin\r\nTEL:+15550008888\r\nEND:VCARD\r\n"
+	dry := importText(t, tools, vcf, map[string]any{"dry_run": true, "merge": false})
+	if !strings.Contains(dry, "0 would be created, 0 would be merged, 1 would be skipped") || !strings.Contains(dry, "Would skip card 1") || strings.Contains(dry, "card(s) were skipped") {
+		t.Errorf("dry run = %q, want the nameless card skipped and named once", dry)
+	}
+	out := importText(t, tools, vcf, map[string]any{"merge": false})
+	if !strings.Contains(out, "0 created, 0 merged, 1 skipped") || !strings.Contains(out, "no usable name (FN): card 1.") {
+		t.Errorf("import = %q, want card 1 skipped and named with its cause", out)
 	}
 }

@@ -133,7 +133,7 @@ func identityRefusal(targetName, targetZone string, violations []IdentityViolati
 	if holderRefused {
 		b.WriteString("A value an admin, household, trusted or operator contact already holds stays with that contact; if it now belongs to someone else, ask the operator to move it through CardDAV or the contacts API. ")
 	}
-	b.WriteString("Retry without the refused facts to save the rest.")
+	b.WriteString("Retry without the refused facts to save the rest")
 	return errors.New(b.String())
 }
 
