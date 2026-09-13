@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -159,7 +160,8 @@ func TestLogContactDirectoryFindings(t *testing.T) {
 // TestContactDirectoryFindingsSource pins the health wiring: the row
 // exists only with a contact store and email polling on (it follows the
 // poller, though the send gate caps whenever email is configured), and
-// when wired it formats one line per finding.
+// when wired it formats one line per finding up to the limit the row
+// asks for while counting every finding.
 func TestContactDirectoryFindingsSource(t *testing.T) {
 	emailCfg := &config.Config{Email: config.EmailConfig{Accounts: []config.EmailAccountConfig{{
 		Name: "primary",
@@ -181,11 +183,84 @@ func TestContactDirectoryFindingsSource(t *testing.T) {
 	if src == nil {
 		t.Fatal("with email and a store the source must be wired")
 	}
-	lines, err := src(context.Background())
+	lines, total, err := src(context.Background(), 5)
 	if err != nil {
 		t.Fatalf("source: %v", err)
 	}
-	if len(lines) != 1 || lines[0] != "Forge Notices (admin, noreply@forge.example: no-reply)" {
-		t.Errorf("lines = %q", lines)
+	if total != 1 || len(lines) != 1 || lines[0] != "Forge Notices (admin, noreply@forge.example: no-reply)" {
+		t.Errorf("lines = %q, total = %d", lines, total)
+	}
+
+	for i := range 6 {
+		seedDirectoryRecord(t, store, fmt.Sprintf("Notices %02d", i), contacts.ZoneTrusted, fmt.Sprintf("noreply@n%02d.example", i))
+	}
+	lines, total, err = src(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("source: %v", err)
+	}
+	if total != 7 || len(lines) != 2 || lines[0] != "Forge Notices (admin, noreply@forge.example: no-reply)" {
+		t.Errorf("limit 2: lines = %q, total = %d; want two lines and a total of 7", lines, total)
+	}
+}
+
+// TestContactDirectoryFindingsClipPerField pins that an oversized name
+// or address is clipped field by field, so each line still carries the
+// zone, the pattern, and (for a long name) the whole address, which is
+// what the operator's remedy needs to pick out the automated EMAIL
+// value on a record holding several.
+func TestContactDirectoryFindingsClipPerField(t *testing.T) {
+	// 300 bytes of a two- and a three-byte rune, so a byte cut that
+	// ignored rune boundaries would leave invalid UTF-8.
+	hugeName := strings.Repeat("é€", 60)
+	hugeAddress := "noreply+" + strings.Repeat("x", 300) + "@forge.example"
+	tests := []struct {
+		name, record, address string
+		want                  []string
+	}{
+		{
+			name:    "long name keeps zone, address and pattern",
+			record:  hugeName,
+			address: "noreply@forge.example",
+			want:    []string{"(admin, noreply@forge.example: no-reply)", "…"},
+		},
+		{
+			name:    "long address keeps name, zone and pattern",
+			record:  "Forge Notices",
+			address: hugeAddress,
+			want:    []string{"Forge Notices (admin, noreply+x", "…: no-reply)"},
+		},
+		{
+			name:    "short fields are not clipped",
+			record:  "Forge Notices",
+			address: "noreply@forge.example",
+			want:    []string{"Forge Notices (admin, noreply@forge.example: no-reply)"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newEmailIdentityStore(t)
+			seedDirectoryRecord(t, store, tt.record, contacts.ZoneAdmin, tt.address)
+			lines, total, err := contactDirectoryFindings(context.Background(), store, 5)
+			if err != nil {
+				t.Fatalf("contactDirectoryFindings: %v", err)
+			}
+			if total != 1 || len(lines) != 1 {
+				t.Fatalf("lines = %q, total = %d; want one", lines, total)
+			}
+			line := lines[0]
+			for _, w := range tt.want {
+				if !strings.Contains(line, w) {
+					t.Errorf("line = %q, want it to contain %q", line, w)
+				}
+			}
+			if !utf8.ValidString(line) {
+				t.Errorf("line = %q is not valid UTF-8", line)
+			}
+			// Both clipped fields plus the longest zone and pattern
+			// stay under the health row's 256-byte backstop.
+			if len(line) > 2*maxDirectoryFieldBytes+len(" (household, : notifications)") {
+				t.Errorf("line is %d bytes: %q", len(line), line)
+			}
+		})
 	}
 }

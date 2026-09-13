@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -288,21 +289,47 @@ func snapshotPayload(snap HealthSnapshot) map[string]any {
 // contact_directory row names; its count still covers every finding.
 const maxDirectoryFindingsShown = 5
 
+// maxDirectoryFindingBytes bounds each named record in the
+// contact_directory detail. Record names and addresses are free text
+// from the directory, so without it five oversized records could make
+// the model-facing detail arbitrarily large. The source clips each
+// field first, so this is a backstop for a source that does not.
+const maxDirectoryFindingBytes = 256
+
 // directoryFindingsDetail renders the contact_directory row's detail:
 // how many addresses the runtime reads below their record's zone, the
-// first few of them, and the operator's remedy.
-func directoryFindingsDetail(findings []string) string {
-	shown := findings[:min(len(findings), maxDirectoryFindingsShown)]
-	list := strings.Join(shown, "; ")
-	if extra := len(findings) - len(shown); extra > 0 {
+// first few of them, and the operator's remedy. total counts every
+// finding; shown is the prefix the source returned.
+func directoryFindingsDetail(shown []string, total int) string {
+	shown = shown[:min(len(shown), maxDirectoryFindingsShown)]
+	clipped := make([]string, 0, len(shown))
+	for _, line := range shown {
+		clipped = append(clipped, clipUTF8(line, maxDirectoryFindingBytes))
+	}
+	list := strings.Join(clipped, "; ")
+	if extra := total - len(shown); extra > 0 {
 		list += fmt.Sprintf(" (+%d more)", extra)
 	}
 	plural := "es"
-	if len(findings) == 1 {
+	if total == 1 {
 		plural = ""
 	}
 	return fmt.Sprintf("contact records above known hold %d automated-looking email address%s, which the runtime reads at known whatever the record's zone: %s. The operator should demote each record to known, or move the address to its own known record, through CardDAV or PUT /v1/contacts/{id}.",
-		len(findings), plural, list)
+		total, plural, list)
+}
+
+// clipUTF8 cuts s to at most maxBytes on a rune boundary, ending a cut
+// with "…" so the reader can tell the text was shortened.
+func clipUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const mark = "…"
+	end := max(maxBytes-len(mark), 0)
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + mark
 }
 
 // HealthSources are the live feeds the Inspector reads. Every field is
@@ -335,10 +362,11 @@ type HealthSources struct {
 	// fixable by any retry. Nil-safe; an empty slice means healthy.
 	ProviderBilling func() []ProviderBillingState
 	// DirectoryFindings reports contact records whose stored zone the
-	// runtime does not honour in full, one formatted line each; empty
-	// means clean. It is a live query, so a directory fix clears the
-	// row on the next render.
-	DirectoryFindings func(ctx context.Context) ([]string, error)
+	// runtime does not honour in full: one formatted line each for at
+	// most limit of them, and the total count including those past the
+	// limit. A zero total means clean. It is a live query, so a
+	// directory fix clears the row on the next render.
+	DirectoryFindings func(ctx context.Context, limit int) (shown []string, total int, err error)
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
@@ -503,15 +531,15 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	if i.src.DirectoryFindings != nil {
 		row := HealthRow{Name: "contact_directory", Status: HealthOK}
 		directoryDone := phasetrace.Phase(ctx, "health:directory_findings")
-		findings, err := i.src.DirectoryFindings(ctx)
+		shown, total, err := i.src.DirectoryFindings(ctx, maxDirectoryFindingsShown)
 		directoryDone()
 		switch {
 		case err != nil:
 			row.Status = HealthDegraded
 			row.Detail = fmt.Sprintf("contact directory audit failed: %v", err)
-		case len(findings) > 0:
+		case total > 0:
 			row.Status = HealthDegraded
-			row.Detail = directoryFindingsDetail(findings)
+			row.Detail = directoryFindingsDetail(shown, total)
 		}
 		snap.Annunciator = append(snap.Annunciator, row)
 	}

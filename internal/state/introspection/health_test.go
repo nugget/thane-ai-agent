@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
@@ -624,12 +625,16 @@ func TestHealthContactDirectoryRow(t *testing.T) {
 		}
 		return out
 	}
-	source := func(lines []string, err error) func(context.Context) ([]string, error) {
-		return func(context.Context) ([]string, error) { return lines, err }
+	// source behaves like the real audit: it keeps at most limit lines
+	// and counts them all.
+	source := func(lines []string, err error) func(context.Context, int) ([]string, int, error) {
+		return func(_ context.Context, limit int) ([]string, int, error) {
+			return lines[:min(len(lines), limit)], len(lines), err
+		}
 	}
 	tests := []struct {
 		name       string
-		source     func(context.Context) ([]string, error)
+		source     func(context.Context, int) ([]string, int, error)
 		wantRow    bool
 		wantStatus string
 		wantDetail []string
@@ -693,5 +698,46 @@ func TestHealthContactDirectoryRow(t *testing.T) {
 				t.Errorf("summary = %q, want contact_directory named only when degraded", summary)
 			}
 		})
+	}
+}
+
+// TestHealthContactDirectoryRowBounded pins the row's bounds against a
+// directory it cannot trust: it asks the source for no more than five
+// records, and oversized record text is clipped on a rune boundary, so
+// the model-facing detail stays small whatever the directory holds.
+func TestHealthContactDirectoryRowBounded(t *testing.T) {
+	var gotLimit int
+	// Each name is 100 KiB of a three-byte rune, so a byte cut that
+	// ignored rune boundaries would leave invalid UTF-8.
+	huge := strings.Repeat("é€", 100*1024/5)
+	src := func(_ context.Context, limit int) ([]string, int, error) {
+		gotLimit = limit
+		lines := make([]string, 0, limit)
+		for i := range limit {
+			lines = append(lines, fmt.Sprintf("%s%d (admin, noreply@r%d.example: no-reply)", huge, i, i))
+		}
+		return lines, 9, nil
+	}
+	snap := NewInspector(HealthSources{DirectoryFindings: src}).Health(context.Background())
+	var detail string
+	for _, row := range snap.Annunciator {
+		if row.Name == "contact_directory" {
+			detail = row.Detail
+		}
+	}
+	if gotLimit != maxDirectoryFindingsShown {
+		t.Errorf("source limit = %d, want %d", gotLimit, maxDirectoryFindingsShown)
+	}
+	if !strings.Contains(detail, "9 automated-looking email addresses") || !strings.Contains(detail, "(+4 more)") {
+		t.Errorf("detail = %.300q, want the total of 9 and (+4 more)", detail)
+	}
+	if !utf8.ValidString(detail) {
+		t.Error("detail is not valid UTF-8")
+	}
+	if limit := maxDirectoryFindingsShown*(maxDirectoryFindingBytes+2) + 512; len(detail) > limit {
+		t.Errorf("detail is %d bytes, want at most %d", len(detail), limit)
+	}
+	if got := strings.Count(detail, "…"); got != maxDirectoryFindingsShown {
+		t.Errorf("detail marks %d clipped records, want %d", got, maxDirectoryFindingsShown)
 	}
 }

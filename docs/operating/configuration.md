@@ -208,7 +208,9 @@ lower-cased, cut at any `+` tag, and split at `.`, `-`, and `_`, spells
 `noreply` or `donotreply` across whole segments (`no-reply`,
 `aws-noreply`, `do-not-reply`), has a `notification`, `notifications`,
 `bounce`, or `bounces` segment (`calendar-notification`), or joins to
-`mailerdaemon` (`mailer-daemon`). The display name and the domain are
+exactly `mailerdaemon` (`mailer-daemon`, `MAILER_DAEMON`,
+`mailer.daemon`, and `mailer-daemon+tag`, but not
+`mailer-daemon-reports`). The display name and the domain are
 never read, `postmaster` is not automated, and there is no per-record
 override. When email polling is on (email is configured and
 `poll_interval` is not `0`), every active `admin`, `household`, or

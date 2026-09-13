@@ -31,7 +31,9 @@ const (
 // of whole segments spells noreply or donotreply (no-reply,
 // aws-noreply, do-not-reply), when any single segment is
 // notification(s) or bounce(s) (calendar-notification), or when the
-// whole local part squeezes to mailerdaemon.
+// whole local part squeezes to mailerdaemon, so mailer-daemon,
+// MAILER_DAEMON, mailer.daemon, mailerdaemon, and mailer-daemon+tag
+// all match while mailer-daemon-reports does not.
 //
 // The answer only ever lowers a zone ([CapAtKnown]), so a false
 // positive lands a sender at the default for new contacts, and a false
@@ -103,20 +105,35 @@ func CapAtKnown(zone string) string {
 // address at known whatever the record says, so the record's stored
 // zone is not honoured in full.
 type AutomatedAddressFinding struct {
-	ContactID uuid.UUID
-	Name      string
-	TrustZone string
-	Address   string
+	ContactID uuid.UUID `json:"contact_id"`
+	Name      string    `json:"contact_name"`
+	TrustZone string    `json:"trust_zone"`
+	Address   string    `json:"address"`
 	// Pattern is the [AutomatedAddress] pattern the address matched.
-	Pattern string
+	Pattern string `json:"pattern"`
 }
 
-// AutomatedAddressesAboveKnown lists every EMAIL property on an active
+// AutomatedAddressAudit is what [Store.AutomatedAddressesAboveKnown]
+// reports: a count of every finding and a bounded prefix of them, so a
+// caller can name a few records and still count them all without
+// holding the whole directory in memory.
+type AutomatedAddressAudit struct {
+	// Total counts every finding in the directory, including those
+	// past the limit.
+	Total int `json:"total"`
+	// Findings holds the first findings in record name then address
+	// order, never more than the limit the caller passed.
+	Findings []AutomatedAddressFinding `json:"findings"`
+}
+
+// AutomatedAddressesAboveKnown audits every EMAIL property on an active
 // admin, household or trusted record whose address [AutomatedAddress]
-// recognises, ordered by record name then address. It uses the same
-// active filter and property name as [Store.FindAllByPropertyExact], so
-// the audit and the email resolver agree about which rows count.
-func (s *Store) AutomatedAddressesAboveKnown(ctx context.Context) ([]AutomatedAddressFinding, error) {
+// recognises, ordered by record name then address. It keeps at most
+// limit findings (none when limit is zero or negative) and counts the
+// rest. It uses the same active filter and property name as
+// [Store.FindAllByPropertyExact], so the audit and the email resolver
+// agree about which rows count.
+func (s *Store) AutomatedAddressesAboveKnown(ctx context.Context, limit int) (AutomatedAddressAudit, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT contacts.id, contacts.formatted_name, contacts.trust_zone, contact_properties.value
 		FROM contacts
@@ -127,25 +144,29 @@ func (s *Store) AutomatedAddressesAboveKnown(ctx context.Context) ([]AutomatedAd
 		ORDER BY contacts.formatted_name, contact_properties.value
 	`, ZoneAdmin, ZoneHousehold, ZoneTrusted)
 	if err != nil {
-		return nil, fmt.Errorf("query automated addresses: %w", err)
+		return AutomatedAddressAudit{}, fmt.Errorf("query automated addresses: %w", err)
 	}
 	defer rows.Close()
 
-	var findings []AutomatedAddressFinding
+	var audit AutomatedAddressAudit
 	for rows.Next() {
 		var id, name, zone, address string
 		if err := rows.Scan(&id, &name, &zone, &address); err != nil {
-			return nil, fmt.Errorf("scan automated address: %w", err)
+			return AutomatedAddressAudit{}, fmt.Errorf("scan automated address: %w", err)
 		}
 		pattern, ok := AutomatedAddress(address)
 		if !ok {
 			continue
 		}
+		audit.Total++
+		if len(audit.Findings) >= limit {
+			continue
+		}
 		contactID, err := uuid.Parse(id)
 		if err != nil {
-			return nil, fmt.Errorf("parse contact id %q: %w", id, err)
+			return AutomatedAddressAudit{}, fmt.Errorf("parse contact id %q: %w", id, err)
 		}
-		findings = append(findings, AutomatedAddressFinding{
+		audit.Findings = append(audit.Findings, AutomatedAddressFinding{
 			ContactID: contactID,
 			Name:      name,
 			TrustZone: zone,
@@ -154,7 +175,7 @@ func (s *Store) AutomatedAddressesAboveKnown(ctx context.Context) ([]AutomatedAd
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate automated addresses: %w", err)
+		return AutomatedAddressAudit{}, fmt.Errorf("iterate automated addresses: %w", err)
 	}
-	return findings, nil
+	return audit, nil
 }

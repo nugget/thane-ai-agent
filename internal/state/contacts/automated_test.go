@@ -2,7 +2,10 @@ package contacts
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestAutomatedAddress(t *testing.T) {
@@ -30,6 +33,9 @@ func TestAutomatedAddress(t *testing.T) {
 		{"billing-notifications@example.com", AutomatedNotifications},
 		{"mailer-daemon@example.com", AutomatedMailerDaemon},
 		{"MAILER_DAEMON@example.com", AutomatedMailerDaemon},
+		{"mailer.daemon@example.com", AutomatedMailerDaemon},
+		{"mailerdaemon@example.com", AutomatedMailerDaemon},
+		{"mailer-daemon+bounce-123@example.com", AutomatedMailerDaemon},
 		{"bounces@example.com", AutomatedBounces},
 		{"bounces+123@example.com", AutomatedBounces},
 		{"bounce@example.com", AutomatedBounces},
@@ -156,21 +162,50 @@ func TestAutomatedAddressesAboveKnown(t *testing.T) {
 	seed("Phone Tree", ZoneTrusted, Property{Property: "TEL", Value: "noreply@phone.example"})
 	seed("Bob", ZoneTrusted, email("bob@example.com"))
 
-	findings, err := store.AutomatedAddressesAboveKnown(ctx)
-	if err != nil {
-		t.Fatalf("AutomatedAddressesAboveKnown: %v", err)
-	}
 	want := []AutomatedAddressFinding{
 		{ContactID: alice.ID, Name: "Alice", TrustZone: ZoneHousehold, Address: "noreply@alice.example", Pattern: AutomatedNoReply},
 		{ContactID: forge.ID, Name: "Forge Notices", TrustZone: ZoneAdmin, Address: "notifications@forge.example", Pattern: AutomatedNotifications},
 	}
-	if len(findings) != len(want) {
-		t.Fatalf("findings = %+v, want %+v", findings, want)
-	}
-	for i := range want {
-		if findings[i] != want[i] {
-			t.Errorf("finding %d = %+v, want %+v", i, findings[i], want[i])
+	// The limit bounds the findings kept, never the count: every limit
+	// reports both findings in Total and keeps the first min(limit, 2).
+	for _, limit := range []int{-1, 0, 1, 2, 10} {
+		audit, err := store.AutomatedAddressesAboveKnown(ctx, limit)
+		if err != nil {
+			t.Fatalf("AutomatedAddressesAboveKnown(%d): %v", limit, err)
 		}
+		if audit.Total != len(want) {
+			t.Errorf("limit %d: Total = %d, want %d", limit, audit.Total, len(want))
+		}
+		kept := want[:min(max(limit, 0), len(want))]
+		if len(audit.Findings) != len(kept) {
+			t.Fatalf("limit %d: findings = %+v, want %+v", limit, audit.Findings, kept)
+		}
+		for i := range kept {
+			if audit.Findings[i] != kept[i] {
+				t.Errorf("limit %d: finding %d = %+v, want %+v", limit, i, audit.Findings[i], kept[i])
+			}
+		}
+	}
+}
+
+// TestAutomatedAddressAuditJSON pins the snake_case contract the audit
+// types carry across packages.
+func TestAutomatedAddressAuditJSON(t *testing.T) {
+	id := uuid.MustParse("7d2c6a4e-1111-4222-8333-944455556666")
+	audit := AutomatedAddressAudit{
+		Total: 3,
+		Findings: []AutomatedAddressFinding{{
+			ContactID: id, Name: "Forge Notices", TrustZone: ZoneAdmin,
+			Address: "noreply@forge.example", Pattern: AutomatedNoReply,
+		}},
+	}
+	data, err := json.Marshal(audit)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"total":3,"findings":[{"contact_id":"7d2c6a4e-1111-4222-8333-944455556666","contact_name":"Forge Notices","trust_zone":"admin","address":"noreply@forge.example","pattern":"no-reply"}]}`
+	if string(data) != want {
+		t.Errorf("JSON = %s\nwant   %s", data, want)
 	}
 }
 
@@ -183,8 +218,8 @@ func TestAutomatedAddressesAboveKnownCleanDirectory(t *testing.T) {
 	if err := store.AddProperty(c.ID, &Property{Property: "EMAIL", Value: "bob@example.com"}); err != nil {
 		t.Fatalf("AddProperty: %v", err)
 	}
-	findings, err := store.AutomatedAddressesAboveKnown(context.Background())
-	if err != nil || len(findings) != 0 {
-		t.Errorf("clean directory = %+v, %v; want no findings", findings, err)
+	audit, err := store.AutomatedAddressesAboveKnown(context.Background(), 5)
+	if err != nil || audit.Total != 0 || len(audit.Findings) != 0 {
+		t.Errorf("clean directory = %+v, %v; want no findings", audit, err)
 	}
 }
