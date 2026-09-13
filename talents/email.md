@@ -301,7 +301,8 @@ allowed ones and skip the others." Three result categories:
   reply's `in_reply_to` will carry; `signed` says whether an outbound
   signature was applied (false until a signing scheme is configured);
   `recipients` lists each address with its `trust_zone`,
-  `contact_status`, and matched contact, so the record of who you
+  `contact_status`, and `contact` (the shape an address carries in a
+  read result), so the record of who you
   wrote to is in the result.
 - **Rejected, known-zone recipient** — at least one recipient is at
   the `known` trust zone. Result names the offender; nothing is

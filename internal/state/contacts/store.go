@@ -920,8 +920,9 @@ func (s *Store) UpdateLastInteraction(contactID uuid.UUID, t time.Time, meta *In
 // t is later than what is already recorded, and leaves updated_at
 // alone: an observed exchange is not an edit to the record. It exists
 // for channel pollers that may replay or reorder a batch, so a stale
-// timestamp is a silent no-op rather than a regression. A missing or
-// deleted contact is an error.
+// timestamp is a silent no-op rather than a regression, and a future
+// timestamp is recorded as now. A missing or deleted contact is an
+// error.
 func (s *Store) RecordInteractionIfNewer(contactID uuid.UUID, t time.Time, meta *InteractionMeta) error {
 	var metaJSON sql.NullString
 	if meta != nil {
@@ -932,11 +933,21 @@ func (s *Store) RecordInteractionIfNewer(contactID uuid.UUID, t time.Time, meta 
 		metaJSON = sql.NullString{String: string(b), Valid: true}
 	}
 
+	// A future instant is recorded as now: it can only come from a
+	// clock or a claim that is wrong, and storing it would make every
+	// genuine exchange after it look older.
+	if now := time.Now(); t.After(now) {
+		t = now
+	}
+	// Stored values may carry any offset (nullTime preserves the one the
+	// time had), so compare instants with julianday rather than strings.
 	stamp := t.UTC().Format(time.RFC3339)
 	result, err := s.db.Exec(`
 		UPDATE contacts SET last_interaction = ?, last_interaction_meta = ?
 		WHERE id = ? AND `+activeFilter+`
-		  AND (last_interaction IS NULL OR last_interaction = '' OR last_interaction < ?)`,
+		  AND (last_interaction IS NULL OR last_interaction = ''
+		       OR julianday(last_interaction) IS NULL
+		       OR julianday(last_interaction) < julianday(?))`,
 		stamp, metaJSON, contactID.String(), stamp)
 	if err != nil {
 		return fmt.Errorf("record interaction: %w", err)
@@ -1092,6 +1103,28 @@ func (s *Store) FindByPropertyExact(property, value string) ([]*Contact, error) 
 		  AND LOWER(contact_properties.value) = LOWER(?)
 		ORDER BY contacts.formatted_name
 		LIMIT 50
+	`, property, value)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
+}
+
+// FindAllByPropertyExact is [Store.FindByPropertyExact] without the
+// result cap, for decisions that must see every record sharing a value:
+// the email send gate computes the least privileged zone across all of
+// them, and a capped list could drop the one that should govern.
+func (s *Store) FindAllByPropertyExact(property, value string) ([]*Contact, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT `+qualifiedContactColumns+`
+		FROM contacts
+		JOIN contact_properties ON contacts.id = contact_properties.contact_id
+		WHERE contacts.`+activeFilter+`
+		  AND contact_properties.property = ?
+		  AND LOWER(contact_properties.value) = LOWER(?)
+		ORDER BY contacts.formatted_name
 	`, property, value)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)

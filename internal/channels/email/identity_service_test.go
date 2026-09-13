@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 )
 
 // identityService builds a Service over one in-memory IMAP server and
@@ -206,7 +207,7 @@ func TestSendAppliesSignerAndReportsRecipients(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		t.Fatalf("send result is not JSON: %v\n%s", err, out)
 	}
-	if !resp.Signed || resp.Disposition != "sent" || len(resp.Recipients) != 1 || !resp.Recipients[0].Allowed || resp.Recipients[0].ContactID != "id-alice" || resp.Recipients[0].TrustZone != "trusted" {
+	if !resp.Signed || resp.Disposition != "sent" || len(resp.Recipients) != 1 || !resp.Recipients[0].Allowed || (resp.Recipients[0].Contact == nil || resp.Recipients[0].Contact.ID != "id-alice") || resp.Recipients[0].TrustZone != "trusted" {
 		t.Errorf("send response = %+v", resp)
 	}
 
@@ -286,5 +287,33 @@ func TestPollerRecordsOneInboundInteractionPerContact(t *testing.T) {
 	recorder.err = errors.New("store closed")
 	if _, err := p.dispatchAccountBatches(context.Background(), "primary", "primary:INBOX", highWaterMark{UIDValidity: 1, UID: 104}, batch[2:3]); err != nil {
 		t.Errorf("a recorder failure must not fail the poll: %v", err)
+	}
+}
+
+// TestPollerBoundsInboundInteractionByReceipt pins the Date clamp: a
+// sender-controlled future Date is recorded as the receipt time, so it
+// cannot pin a contact's last interaction ahead of genuine exchanges.
+func TestPollerBoundsInboundInteractionByReceipt(t *testing.T) {
+	cfg := Config{Accounts: []AccountConfig{{
+		Name:        "primary",
+		IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+		DefaultFrom: "me@example.com",
+	}}}
+	bus, _ := recordingBus()
+	recorder := &recordingInteractions{}
+	p := NewPoller(NewManager(cfg, quietSlog()), testOpstate(t), quietSlog(),
+		WithMessageBus(bus), WithContactResolver(identityStub()), WithInteractionRecorder(recorder))
+
+	before := time.Now()
+	future := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := p.dispatchAccountBatches(context.Background(), "primary", "primary:INBOX", highWaterMark{UIDValidity: 1, UID: 1},
+		[]Envelope{{UID: 2, From: addr("alice@example.com"), Subject: "from the future", Date: future}}); err != nil {
+		t.Fatalf("dispatchAccountBatches: %v", err)
+	}
+	if len(recorder.seen) != 1 {
+		t.Fatalf("interactions = %+v", recorder.seen)
+	}
+	if at := recorder.seen[0].At; at.After(time.Now()) || at.Before(before) {
+		t.Errorf("recorded At = %v; a future Date must be bounded by receipt time", at)
 	}
 }

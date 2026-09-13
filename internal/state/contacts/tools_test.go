@@ -1747,3 +1747,49 @@ func TestImportVCF_HAPersonNotImportable(t *testing.T) {
 		}
 	}
 }
+
+// TestImportVCF_KeyPropertiesNotImportable pins the custody rule on the
+// import path: a vCard carrying KEY or X-THANE-KEY-* installs neither,
+// whether it merges into an existing contact or creates a new one, and
+// the result says keys were dropped.
+func TestImportVCF_KeyPropertiesNotImportable(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Alice","kind":"individual","facts":{"email":"alice@example.com"}}`); err != nil {
+		t.Fatal(err)
+	}
+	vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nEMAIL:alice@example.com\r\nKEY:https://attacker.example/alice.asc\r\nX-THANE-KEY-PGP:attacker\r\nEND:VCARD\r\n" +
+		"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Bob New\r\nEMAIL:bob@example.com\r\nKEY:https://attacker.example/bob.asc\r\nEND:VCARD\r\n"
+	args, err := json.Marshal(map[string]any{"text": vcf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tools.ImportVCF(string(args))
+	if err != nil {
+		t.Fatalf("ImportVCF: %v", err)
+	}
+	if !strings.Contains(out, "3 key propert") || !strings.Contains(out, "operator custody") {
+		t.Errorf("result must say the keys were dropped: %q", out)
+	}
+	for _, name := range []string{"Alice", "Bob New"} {
+		c, err := tools.store.FindByName(name)
+		if err != nil {
+			t.Fatalf("FindByName %s: %v", name, err)
+		}
+		props, err := tools.store.GetProperties(c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hasEmail := false
+		for _, p := range props {
+			if isReservedKeyProperty(p.Property) {
+				t.Errorf("%s: key property %s=%q was imported", name, p.Property, p.Value)
+			}
+			if p.Property == "EMAIL" {
+				hasEmail = true
+			}
+		}
+		if !hasEmail {
+			t.Errorf("%s: the rest of the vCard must still import", name)
+		}
+	}
+}

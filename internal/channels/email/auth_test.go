@@ -18,6 +18,7 @@ func TestAuthenticationNormalizeEnforcesVerifiedInvariant(t *testing.T) {
 		{name: "pgp verified stays verified", in: Authentication{Method: AuthMethodPGP, Status: AuthVerified}, verified: true, status: AuthVerified, method: AuthMethodPGP},
 		{name: "smime verified stays verified", in: Authentication{Method: AuthMethodSMIME, Status: AuthVerified, Verified: false}, verified: true, status: AuthVerified, method: AuthMethodSMIME},
 		{name: "dkim cannot verify a person", in: Authentication{Method: AuthMethodDKIM, Status: AuthVerified, Verified: true}, status: AuthFailed, method: AuthMethodDKIM},
+		{name: "an unknown method cannot verify", in: Authentication{Method: "custom", Status: AuthVerified, Verified: true}, status: AuthFailed, method: "custom"},
 		{name: "none cannot verify", in: Authentication{Method: AuthMethodNone, Status: AuthVerified, Verified: true}, status: AuthFailed, method: AuthMethodNone},
 		{name: "verified flag without status is dropped", in: Authentication{Method: AuthMethodPGP, Status: AuthUnavailable, Verified: true}, status: AuthUnavailable, method: AuthMethodPGP},
 	}

@@ -51,9 +51,12 @@ func (s *stubContacts) ResolveEmailContact(_ context.Context, addr string) (Cont
 }
 
 func TestCheckRecipientTrust_NilResolver(t *testing.T) {
-	result := CheckRecipientTrust(context.Background(), nil, []string{"a@example.com", "b@example.com"})
-	if len(result.Allowed) != 2 || result.HasIssues() {
-		t.Errorf("nil resolver should allow all without issues, got %+v", result)
+	result := CheckRecipientTrust(context.Background(), nil, []string{"a@example.com", "B@Example.com", "not an address"})
+	if len(result.Allowed) != 2 || len(result.Blocked) != 1 {
+		t.Errorf("nil resolver should allow every parseable address and block the rest, got %+v", result)
+	}
+	if len(result.Assessments) != 3 || result.Assessments[1].Address != "b@example.com" || result.Assessments[1].ContactStatus != ContactUnmatched || !result.Assessments[1].Allowed || result.Assessments[1].Contact != nil {
+		t.Errorf("nil resolver must still assess every recipient: %+v", result.Assessments)
 	}
 }
 
@@ -123,7 +126,7 @@ func TestCheckRecipientTrust_ExtractsAddressAndMemoizes(t *testing.T) {
 	if resolver.calls != 1 {
 		t.Errorf("resolver calls = %d, want 1 (memoized by address key)", resolver.calls)
 	}
-	if result.Assessments[0].ContactID != "id-user" || result.Assessments[0].ContactName != "User" {
+	if c := result.Assessments[0].Contact; c == nil || c.ID != "id-user" || c.Name != "User" {
 		t.Errorf("assessment should carry the matched contact: %+v", result.Assessments[0])
 	}
 }

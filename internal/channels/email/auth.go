@@ -88,7 +88,10 @@ func (a Authentication) normalize() Authentication {
 	if a.Status == "" {
 		a.Status = AuthAbsent
 	}
-	a.Verified = a.Status == AuthVerified && a.Method != AuthMethodNone && a.Method != AuthMethodDKIM
+	// Only a method that binds a message to a person can verify it. The
+	// check is an allowlist: a method this package does not know is
+	// treated like DKIM, never trusted by default.
+	a.Verified = a.Status == AuthVerified && (a.Method == AuthMethodSMIME || a.Method == AuthMethodPGP)
 	if !a.Verified && a.Status == AuthVerified {
 		a.Status = AuthFailed
 		if a.Reason == "" {

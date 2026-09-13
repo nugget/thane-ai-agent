@@ -23,7 +23,7 @@ type contactView struct {
 	// IsOwner means this contact record is the operator's. It says
 	// nothing about whether the operator wrote a given message; a From
 	// header is a claim until an Authentication verifies it.
-	IsOwner bool `json:"is_owner,omitempty"`
+	IsOwner bool `json:"is_owner"`
 }
 
 // addressView is one mailbox as rendered to the model, with the

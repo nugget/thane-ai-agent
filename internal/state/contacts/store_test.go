@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
@@ -1571,5 +1572,69 @@ func TestPropertyProvenanceMigrationKeepsLegacyRowsUnknown(t *testing.T) {
 	}
 	if properties[0].Provenance != nil {
 		t.Fatalf("legacy row fabricated provenance: %#v", properties[0].Provenance)
+	}
+}
+
+// TestRecordInteractionIfNewer_ComparesInstants pins the instant
+// comparison: a stored value with a non-UTC offset is compared by the
+// moment it names, not by its text, and a future timestamp is recorded
+// as now.
+func TestRecordInteractionIfNewer_ComparesInstants(t *testing.T) {
+	store := newTestStore(t)
+	cdt := time.FixedZone("CDT", -5*3600)
+	stored := time.Date(2026, 9, 1, 10, 0, 0, 0, cdt) // 15:00Z
+	created, err := store.Upsert(&Contact{FormattedName: "Offset Test", Kind: "individual", LastInteraction: stored})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	older := time.Date(2026, 9, 1, 14, 0, 0, 0, time.UTC) // sorts after the stored text, but is an hour earlier
+	if err := store.RecordInteractionIfNewer(created.ID, older, &InteractionMeta{Channel: "email"}); err != nil {
+		t.Fatalf("older record: %v", err)
+	}
+	got, _ := store.Get(created.ID)
+	if !got.LastInteraction.Equal(stored) {
+		t.Errorf("an earlier instant overwrote a later one: %v", got.LastInteraction)
+	}
+
+	newer := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	if err := store.RecordInteractionIfNewer(created.ID, newer, &InteractionMeta{Channel: "email"}); err != nil {
+		t.Fatalf("newer record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if !got.LastInteraction.Equal(newer) {
+		t.Errorf("a later instant must land: %v", got.LastInteraction)
+	}
+
+	if err := store.RecordInteractionIfNewer(created.ID, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil); err != nil {
+		t.Fatalf("future record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if got.LastInteraction.After(time.Now()) {
+		t.Errorf("a future timestamp must be recorded as now, got %v", got.LastInteraction)
+	}
+}
+
+// TestFindAllByPropertyExactIsUncapped pins that the lookup the send
+// gate uses sees every record sharing a value, past the cap the
+// display-oriented lookup applies.
+func TestFindAllByPropertyExactIsUncapped(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 55; i++ {
+		c, err := store.Upsert(&Contact{FormattedName: fmt.Sprintf("Dup %02d", i), Kind: "individual"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AddProperty(c.ID, &Property{Property: "EMAIL", Value: "shared@example.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capped, err := store.FindByPropertyExact("EMAIL", "shared@example.com")
+	if err != nil || len(capped) != 50 {
+		t.Fatalf("capped lookup = %d, %v", len(capped), err)
+	}
+	all, err := store.FindAllByPropertyExact("EMAIL", "SHARED@example.com")
+	if err != nil || len(all) != 55 {
+		t.Errorf("uncapped lookup = %d, %v; want every record", len(all), err)
 	}
 }

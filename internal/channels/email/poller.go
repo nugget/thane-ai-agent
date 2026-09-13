@@ -489,13 +489,17 @@ func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope, lookup *
 
 // recordInboundInteractions notes, once per matched contact in a
 // delivered batch, that mail arrived from them: the newest message's
-// date wins, and the recorder ignores anything older than what it
-// already holds. Failures are logged and do not fail the poll — the
+// date wins, bounded by the time the batch was received, and the
+// recorder ignores anything older than what it already holds. Failures are logged and do not fail the poll — the
 // wake has already been delivered.
 func (p *Poller) recordInboundInteractions(ctx context.Context, accountName string, chunk []Envelope, lookup *identityLookup) {
 	if p.interactions == nil {
 		return
 	}
+	// The Date header is the sender's claim, so the recorded instant is
+	// bounded by receipt: a forged future Date would otherwise pin the
+	// contact's last interaction ahead of every genuine exchange.
+	now := time.Now()
 	latest := make(map[string]Interaction)
 	for _, env := range chunk {
 		match := lookup.resolve(env.From)
@@ -503,8 +507,8 @@ func (p *Poller) recordInboundInteractions(ctx context.Context, accountName stri
 			continue
 		}
 		at := env.Date
-		if at.IsZero() {
-			at = time.Now()
+		if at.IsZero() || at.After(now) {
+			at = now
 		}
 		in, seen := latest[match.Binding.ContactID]
 		if !seen || at.After(in.At) {

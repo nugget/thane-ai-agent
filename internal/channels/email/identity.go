@@ -99,7 +99,8 @@ type Interaction struct {
 	ContactID string
 
 	// At is when the exchange happened: the message's Date for inbound
-	// mail, the send time for outbound.
+	// mail, bounded by the time it was received, and the send time for
+	// outbound.
 	At time.Time
 
 	// Direction is [DirectionInbound] or [DirectionOutbound].

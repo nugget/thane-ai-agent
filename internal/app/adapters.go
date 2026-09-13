@@ -125,7 +125,7 @@ func (r *contactChannelBindingResolver) ResolveEmailContact(_ context.Context, a
 	if r == nil || r.store == nil {
 		return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
 	}
-	matches, err := r.store.FindByPropertyExact("EMAIL", address)
+	matches, err := r.store.FindAllByPropertyExact("EMAIL", address)
 	if err != nil {
 		return email.ContactMatch{}, err
 	}
@@ -141,8 +141,9 @@ func (r *contactChannelBindingResolver) ResolveEmailContact(_ context.Context, a
 		}
 		return email.ContactMatch{Status: email.ContactMatched, Binding: binding, TrustZone: binding.TrustZone}, nil
 	}
-	candidates := make([]email.ContactCandidate, 0, len(matches))
-	for _, c := range matches {
+	shown := matches[:min(len(matches), maxAmbiguousCandidates)]
+	candidates := make([]email.ContactCandidate, 0, len(shown))
+	for _, c := range shown {
 		candidates = append(candidates, email.ContactCandidate{ID: c.ID.String(), Name: c.FormattedName, TrustZone: c.TrustZone})
 	}
 	return email.ContactMatch{
@@ -151,6 +152,11 @@ func (r *contactChannelBindingResolver) ResolveEmailContact(_ context.Context, a
 		Candidates: candidates,
 	}, nil
 }
+
+// maxAmbiguousCandidates bounds the candidates one ambiguous address
+// reports to the model. The effective zone is still computed over every
+// record that shares the address.
+const maxAmbiguousCandidates = 10
 
 // leastPrivilegedZone returns the lowest zone among the contacts, in
 // the hierarchy contacts.Policies declares. A zone the hierarchy does

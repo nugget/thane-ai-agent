@@ -221,6 +221,19 @@ const reservedKeyProperty = "KEY"
 // KEY.
 const reservedKeyPrefix = "X-THANE-KEY-"
 
+// withoutReservedKeys drops key-custody properties from a decoded vCard
+// and reports how many it dropped.
+func withoutReservedKeys(props []Property) ([]Property, int) {
+	kept := make([]Property, 0, len(props))
+	for _, p := range props {
+		if isReservedKeyProperty(p.Property) {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept, len(props) - len(kept)
+}
+
 // isReservedKeyProperty reports whether a fact key, as the model wrote
 // it, would land on a key-custody property.
 func isReservedKeyProperty(key string) bool {
@@ -959,11 +972,16 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		return "", fmt.Errorf("decode vcards: %w", err)
 	}
 
-	var created, updated, skipped int
+	var created, updated, skipped, keysDropped int
 	var summary strings.Builder
 
 	for i, incoming := range decoded {
-		props := allProps[i]
+		// Key properties are operator custody, like trust zones: a vCard
+		// a message carried must not install the key that would verify
+		// that message's sender. The CardDAV backend, the operator's
+		// authenticated surface, decodes vCards on its own path.
+		props, dropped := withoutReservedKeys(allProps[i])
+		keysDropped += dropped
 
 		// Trust zone is operator custody, not importable data (#1450):
 		// a zone confers inherited authority on bound companion devices,
@@ -1023,13 +1041,17 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		}
 	}
 
+	keyNote := ""
+	if keysDropped > 0 {
+		keyNote = fmt.Sprintf(" %d key propert(ies) were not imported: KEY and X-THANE-KEY-* are operator custody and never come in through a model tool.", keysDropped)
+	}
 	if args.DryRun {
-		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:\n\n%s",
-			created, updated, summary.String()), nil
+		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:%s\n\n%s",
+			created, updated, keyNote, summary.String()), nil
 	}
 
-	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped",
-		created+updated, created, updated, skipped), nil
+	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped.%s",
+		created+updated, created, updated, skipped, keyNote), nil
 }
 
 // findExistingForMerge looks for an existing contact that matches the

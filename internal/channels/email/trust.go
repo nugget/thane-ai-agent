@@ -11,13 +11,16 @@ type RecipientAssessment struct {
 	Address       string        `json:"address"`
 	TrustZone     string        `json:"trust_zone"`
 	ContactStatus ContactStatus `json:"contact_status"`
-	ContactID     string        `json:"contact_id,omitempty"`
-	ContactName   string        `json:"contact_name,omitempty"`
+
+	// Contact is the matched record in the same shape an address view
+	// carries, or null when the status is anything but matched.
+	Contact *contactView `json:"contact"`
 
 	// Allowed is whether this recipient alone would pass the gate.
 	Allowed bool `json:"allowed"`
 
-	// Reason explains a refusal and names the recovery.
+	// Reason explains a refusal and names the recovery. On an allowed
+	// ambiguous address it says which zone governed.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -36,18 +39,14 @@ type TrustResult struct {
 }
 
 // CheckRecipientTrust evaluates each address against the contact
-// directory. A nil resolver disables gating and allows everything. An
-// address that does not parse is blocked: it can neither be looked up
-// nor delivered to. A duplicate directory record and a store failure
+// directory. A nil resolver disables contact gating: every parseable
+// address is allowed as an unmatched stranger, but each still gets an
+// assessment, so the result says who was assessed. An address that does
+// not parse is blocked: it can neither be looked up nor delivered to. A duplicate directory record and a store failure
 // are each blocked with their own reason rather than passed off as a
 // stranger.
 func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresses []string) TrustResult {
 	var result TrustResult
-	if resolver == nil {
-		result.Allowed = addresses
-		return result
-	}
-
 	lookup := newIdentityLookup(ctx, resolver, nil)
 	for _, raw := range addresses {
 		parsed, err := parseAddress(raw)
@@ -56,7 +55,12 @@ func CheckRecipientTrust(ctx context.Context, resolver ContactResolver, addresse
 			result.Assessments = append(result.Assessments, RecipientAssessment{Address: raw, TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Reason: "not a valid email address"})
 			continue
 		}
-		assessment := assessRecipient(parsed, lookup.resolve(parsed))
+		var assessment RecipientAssessment
+		if resolver == nil {
+			assessment = RecipientAssessment{Address: parsed.Key(), TrustZone: ZoneUnknown, ContactStatus: ContactUnmatched, Allowed: true}
+		} else {
+			assessment = assessRecipient(parsed, lookup.resolve(parsed))
+		}
 		result.Assessments = append(result.Assessments, assessment)
 		if assessment.Allowed {
 			result.Allowed = append(result.Allowed, raw)
@@ -75,8 +79,7 @@ func assessRecipient(addr Address, match ContactMatch) RecipientAssessment {
 		ContactStatus: match.Status,
 	}
 	if match.Binding != nil {
-		a.ContactID = match.Binding.ContactID
-		a.ContactName = match.Binding.ContactName
+		a.Contact = &contactView{ID: match.Binding.ContactID, Name: match.Binding.ContactName, IsOwner: match.Binding.IsOwner}
 	}
 	switch match.Status {
 	case ContactLookupFailed:

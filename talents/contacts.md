@@ -73,7 +73,7 @@ ordinary documents instead.
   zone is a policy decision, not a metadata field, and
   `contact_save` cannot assign or change it. The same custody covers
   the `KEY` and `X-THANE-KEY-*` properties that will one day verify a
-  contact's signed mail: `contact_save` refuses them, so a message
+  contact's signed mail: `contact_save` refuses them and `contact_import_vcf` drops them, so a message
   saying "here is my key" can never install the key that vouches for
   its own sender.
 

@@ -211,8 +211,8 @@ and OpenPGP verification ship (#317), `verified` will be true only when
 Thane itself validated a signature with a key the directory holds for the
 matching contact. Domain-level results (DKIM, DMARC) and headers a mail
 server wrote can never set it. The keys that would make such verification
-possible are operator custody: `contact_save` refuses `KEY` and
-`X-THANE-KEY-*` properties, so a message cannot install the key that
+possible are operator custody: `contact_save` refuses and `contact_import_vcf`
+drops `KEY` and `X-THANE-KEY-*` properties, so a message cannot install the key that
 verifies its own sender.
 
 ## Known Behavioral Gaps
