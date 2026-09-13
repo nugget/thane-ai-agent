@@ -65,6 +65,13 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
+	var accessNote string
+	if acct.Config.AccessLevel() == AccessRead && markSeen {
+		// A read-level account is never mutated, not even by the seen
+		// flag a read would ordinarily set.
+		markSeen = false
+		accessNote = "policy.access is read for this account, so the message was not marked seen"
+	}
 
 	msg, err := acct.Client.ReadMessage(ctx, ReadOptions{Folder: folder, UID: uid, Peek: !markSeen})
 	if err != nil {
@@ -72,7 +79,9 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 	}
 	auth := t.service.authenticate(ctx, acct.Name, msg)
 	t.service.recordOp("email_read", acct.Name, folder, strconv.FormatUint(uint64(uid), 10))
-	return renderRead(newReadResponse(acct.Name, folder, msg, markSeen, auth, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()), msg)
+	header := newReadResponse(acct.Name, folder, msg, markSeen, auth, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
+	header.AccessNote = accessNote
+	return renderRead(header, msg)
 }
 
 // HandleFolders lists all folders with roles and counts.
@@ -214,6 +223,9 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
+	if err := t.service.requireOrganize(acct, "email_mark"); err != nil {
+		return "", err
+	}
 
 	result, err := acct.Client.MarkMessages(ctx, action)
 	if err != nil {
@@ -313,6 +325,12 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	acct, err := t.service.ResolveAccount(ctx, opts.Account)
 	if err != nil {
 		return "", err
+	}
+	if err := t.service.requireOrganize(acct, "email_move"); err != nil {
+		return "", err
+	}
+	if opts.Destination == t.service.draftsFolder(ctx, acct) {
+		return "", fmt.Errorf("email_move cannot file mail into %q: it is account %q's drafts folder, which holds only messages Thane composed for the operator to send, and a moved message there would look like one of them. Pick another destination, or report the need", opts.Destination, acct.Name)
 	}
 
 	result, err := acct.Client.MoveMessages(ctx, opts)

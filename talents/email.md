@@ -73,25 +73,47 @@ audiences and trust models are different.
   directory knows. `is_owner` means the *record* is the operator's,
   not that the operator wrote this message — a From header is a
   claim until `authentication` on the read result says otherwise.
-- **Recipients must be in the contact directory AND at a
-  send-eligible trust zone.** Both `email_send` and `email_reply`
-  route through a trust-zone gate that aborts the send on *any*
-  issue. Addresses resolved to `admin` / `household` / `trusted`
-  zones go through; `known` zone is **rejected** with a
-  "promote-or-authorize" message; addresses with no contact record
-  are **rejected** with a "no contact record" message; an
-  `ambiguous` address is governed by its least privileged record,
-  and a `lookup_failed` address is **rejected** without judging the
-  recipient. The failure modes are distinguishable in the result so
-  you know whether to promote an existing contact, save a new one,
-  report a duplicate, or simply retry, but all leave the message
-  unsent. Confirm contacts exist *and are at a send-eligible zone*
-  via `contact_lookup` before composing — the rejection after you've
-  drafted the body is annoying and avoidable.
-- **Sent mail is irreversible.** There is no "unsend." A message sent
-  to the wrong audience is permanent. When uncertain about the
-  recipient list or the body's tone, draft into the conversation
-  first and ask; don't reach for `email_send` as an optimistic move.
+- **Every outbound message gets a decision, and the result says
+  which way it went.** Each account carries a policy: `access`
+  (`read`, `organize`, or `send`) is the most you may do there, and
+  `delivery` says where mail goes once every recipient has passed
+  the trust gate. `email_send` and `email_reply` end in one of three
+  dispositions: `sent` (delivered by SMTP), `drafted` (held in the
+  account's Drafts folder for the operator to send from their own
+  client; nothing has left the mailbox, so never resend it), or
+  `refused` (one sentence, then a `decision` JSON naming every
+  recipient at issue and its recovery; nothing was sent or drafted).
+  Under the default `by_trust_zone` delivery, `admin` and `household`
+  recipients send directly when the operator is present for the
+  turn, `trusted` recipients are drafted, blocked zones refuse the
+  whole message, and every other turn drafts everything. `attended` in
+  the Email Accounts block is the authority: it is true only when this
+  turn is the operator's own message (Thane's native API, or their own
+  message in a conversation bound to their contact). A poller wake, a
+  scheduled loop, a loop launched from the operator's conversation, and
+  a conversation with anyone else are all unattended. The block also
+  lists, per account, which zones it
+  `sends_directly_to`, `drafts_for`, and `refuses`, so read it before
+  composing rather than learning the answer from the result. Pass
+  `draft: true` to hold a message in Drafts on purpose.
+- **Recipients must be in the contact directory at a zone whose send
+  policy is not blocked.** The gate refuses the whole message on
+  *any* recipient at issue — a `known` contact, a stranger, an
+  address several records share whose least privileged record is
+  blocked, a directory lookup that failed, or a domain the account's
+  policy denies — and the refusal's `decision.recipients` names each
+  one with its recovery: promote a contact deliberately, save one
+  deliberately, report a duplicate, retry later, or drop the
+  recipient. Nothing goes to the rest. Confirm recipients via
+  `contact_lookup` before composing; the refusal after you've drafted
+  the body is annoying and avoidable.
+- **Sent mail is irreversible; drafted mail is not.** There is no
+  "unsend" for a `sent` disposition, and a message sent to the wrong
+  audience is permanent. A `drafted` message stays reversible until
+  the operator sends it. When uncertain about the recipient list or
+  the body's tone, draft into the conversation first and ask, or send
+  with `draft: true`; don't reach for a direct send as an optimistic
+  move.
 - **Folders are exact names, never guesses.** `email_folders` for the
   account is the only source of destination names; no email tool
   creates a folder, and folders are not shared across accounts. A
@@ -222,7 +244,8 @@ fit and `body_truncated` says so, address lists stop at 25 with
 `addresses_omitted` counting the rest, and at most 50 attachments are
 described with `attachments_omitted` counting the rest.
 Attachments are described, not downloaded. **Reading marks the message
-seen** unless you pass `mark_seen: false`, which matters when your
+seen** unless you pass `mark_seen: false` or the account's `access` is
+`read` (then `marked_seen` is false and `access_note` says why), which matters when your
 triage recipe is "list unseen, read, list unseen again". The UID
 **must** come with the account and folder it was listed from; a UID the
 folder does not hold is an error naming both.
@@ -269,13 +292,18 @@ teaser: "Compose a new email or reply to an existing one — trust-gated by the 
 
 # Respond
 
-Sending mail. Two tools, one safety surface that dwarfs both: **every
-recipient must be in the contact directory.** An account without
-`smtp` configured cannot send at all; the Email Accounts block says
-which accounts can (`can_send`), and a send from one that cannot is
-refused by name.
+Sending mail. Two tools, one decision that dwarfs both: **every
+recipient must be in the contact directory, and the account's policy
+decides whether the message is sent, held in Drafts for the operator,
+or refused.** The Email Accounts block is the map: `access` says
+whether the account may write mail at all (`send`) or only read and
+file it (`organize`, `read`), `can_send` says whether it may hand mail
+to SMTP itself, `attended` says whether the operator is present for this
+turn, and `sends_directly_to` / `drafts_for` / `refuses` say where a
+message to each trust zone lands right now. A send from an account
+that cannot write mail is refused by name.
 
-## The trust-gated send
+## The send decision
 
 `email_send` composes a new thread:
 
@@ -290,42 +318,47 @@ refused by name.
 ```
 
 The body is markdown; the server converts to both `text/plain` and
-`text/html`. Subject is required. The handler validates each `to` /
-`cc` address against the contact directory before sending. **Any
-trust-gate issue aborts the whole send** — there is no "send the
-allowed ones and skip the others." Three result categories:
+`text/html`. Subject is required. The handler assesses each `to` /
+`cc` address against the contact directory and the account's domain
+rules, then routes on the most restrictive recipient. **Any
+trust-gate issue refuses the whole message** — there is no "send the
+allowed ones and skip the others." The result is `{disposition,
+account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy,
+drafts_folder, draft_uid, signed, note, decision}`, and
+`disposition` is one of three:
 
-- **Allowed through** — every recipient resolves to `admin`,
-  `household`, or `trusted`. The mail goes out and the result is
-  `{disposition: "sent", account, message_id, to, cc, bcc_count,
-  subject, sent_folder, sent_folder_copy, signed, recipients}`;
-  `sent_folder_copy` is `stored` when the copy landed in
-  `sent_folder` and `failed` when it did not. `bcc_count` counts the
+- **`sent`** — SMTP accepted the message; `sent_folder_copy` is `stored`
+  when the copy landed in `sent_folder` and `failed` when it did not.
+  `bcc_count` counts the
   operator's configured audit copy; `message_id` is the key under
   which the message can be found in the Sent folder and the value a
   reply's `in_reply_to` will carry; `signed` says whether an outbound
   signature was applied (false until a signing scheme is configured);
-  `recipients` lists each address with its `trust_zone`,
+  `decision.recipients` lists each address with its `trust_zone`, `gating`,
   `contact_status`, and `contact` (the shape an address carries in a
   read result), so the record of who you
   wrote to is in the result.
-- **Rejected, known-zone recipient** — at least one recipient is at
-  the `known` trust zone. Result names the offender; nothing is
-  sent. Recovery: promote the contact with `contact_save`
-  (deliberately, with operator authorization), or remove them from
-  the recipient list.
-- **Rejected, missing contact** — at least one recipient has no
-  contact record. Result names the offender; nothing is sent.
-  Recovery: `contact_save` to add the contact deliberately, or
-  remove them from the recipient list.
-- **Rejected, ambiguous or unresolvable** — an address belongs to
-  several contact records and the least privileged of them is not
-  send-eligible (the refusal lists the candidates; report the
-  duplicate to the operator rather than picking one), or the
-  directory could not be consulted at all (`lookup_failed`; retry
-  later, nothing about the recipient was judged).
+- **`drafted`** — the complete message, audit copy included, is in
+  `drafts_folder` with the Draft flag, waiting for the operator to
+  send it from their own client. Nothing has left the mailbox.
+  `decision.route` says why it was held: `trust_zone` (a `trusted`
+  recipient), `unattended_floor` (the operator is not present for this turn),
+  `policy_drafts` (the account always drafts), or `requested_draft`
+  (you asked). Tell the person you are talking to, if any, that the
+  message awaits the operator; do not resend it, and do not try to
+  send it "properly" from another account.
+- **`refused`** — nothing was sent or drafted. The error is one
+  sentence followed by the `decision` JSON; `decision.route` is
+  `access` (the account cannot write mail), `trust_gate` (see
+  `decision.recipients` for each recipient's `reason`: a `known`
+  contact to promote deliberately, a stranger to save deliberately,
+  a duplicate to report, a `lookup_failed` to retry later, or a
+  denied domain to drop), `inspector` (a Go-side review objected
+  to the message itself), or `recipient_limit` (more than 50 addresses
+  in `to` and `cc` together). A refusal is a decision, not a transient
+  error: change the recipient list or the message, or report it.
 
-When the result reports a rejection, the right move is usually
+When the result reports a refusal, the right move is usually
 `contact_lookup` to confirm what's actually in the directory (maybe
 the spelling differs, or an alias resolves elsewhere), then either
 `contact_save` to add or promote, or revise the recipient list.
@@ -352,15 +385,26 @@ threads properly in the recipient's client:
 The reply goes to the original message's `Reply-To` when it set one,
 else to its `From`. `reply_all: true` adds the original `To` and `Cc`
 recipients, minus this account's own address and minus duplicates.
-**Both paths still go through the trust gate**, and the gate's
+**Both paths go through the same decision**, and the gate's
 all-or-nothing behavior means a reply_all to a thread where any
 recipient is at `known` zone or has no contact record will be
-**rejected entirely** — the handler doesn't selectively drop bad
-recipients and send to the rest. The original's `to` and `cc` are in
-the `email_read` result you just took the UID from; check them against
-the directory before choosing `reply_all`. Replying does not change the
+**refused entirely** — the handler doesn't selectively drop bad
+recipients and send to the rest — while a thread with one `trusted`
+recipient among `household` ones is **drafted** as a whole. The
+original's `to` and `cc` are in the `email_read` result you just took
+the UID from, each with its `trust_zone` and `contact_status`; read
+them before choosing `reply_all`. Replying does not change the
 original's seen state. The result has the same shape as `email_send`
 with `in_reply_to` set.
+
+## Drafting on purpose
+
+`draft: true` on either tool holds the message in Drafts whatever the
+policy would have done. Use it when the message is right but the
+moment to send it is the operator's call — a sensitive reply, a
+commitment on their behalf, anything you would want a human to read
+once more with their finger on the button. The draft carries the
+audit `Bcc`, so what the operator sends is exactly what you composed.
 
 ## reply vs send — the right shape
 
@@ -373,9 +417,11 @@ audience-wrong is a real leak.
 ## Cross-references
 
 - For looking up the right address before composing, bounce to
-  `contacts` (`contact_lookup`). The trust gate's "Cannot send to X:
-  no contact record" message is recoverable, but it's faster to know
-  the directory state going in.
+  `contacts` (`contact_lookup`). A trust-gate refusal names each
+  recipient in `decision.recipients` with a `reason` such as "no
+  contact record; add one deliberately with contact_save or drop the
+  recipient"; it is recoverable, but it's faster to know the directory
+  state going in.
 - For high-stakes outgoing mail (sensitive, legal, ambiguous tone),
   draft the body in a `scratchpad:` doc and ask for operator sign-off
   via `request_human_decision` before sending.
@@ -421,7 +467,10 @@ it — so list again rather than retrying.
 
 The most common reason to reach for this: marking processed messages
 as read after a triage pass, so the next pass's `email_list(unseen:
-true)` only shows what's new.
+true)` only shows what's new. An account whose Email Accounts entry
+shows `access: read` refuses both tools in this branch, and its
+`email_read` does not mark messages seen either; report the need
+rather than routing around it.
 
 ## Move messages
 
@@ -443,7 +492,9 @@ handler accepts a convenience shorthand: if you pass only `folder` and
 omit `destination`, the `folder` value is treated as the destination
 and INBOX is assumed as the source. Prefer the explicit form for
 clarity. A destination the account lacks is refused and the refusal
-lists the folders that exist.
+lists the folders that exist. The account's drafts folder is never a destination:
+it holds only what Thane composed for the operator to send, and a moved
+message there would look like one of them.
 
 ## UIDs are folder-scoped — and the result tells you the new ones
 

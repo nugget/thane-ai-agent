@@ -41,6 +41,11 @@ func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
 
 // emailContextJSON is the block's payload.
 type emailContextJSON struct {
+	// Attended is whether the operator is present for this turn. It decides
+	// where by_trust_zone delivery lands, so the per-account routing
+	// lists below are computed for this value.
+	Attended bool `json:"attended"`
+
 	Accounts []accountView `json:"accounts"`
 
 	// BindingError explains an empty account list that is a
@@ -58,10 +63,33 @@ type accountView struct {
 	Address     string `json:"address,omitempty"`
 	Description string `json:"description,omitempty"`
 
-	// CanSend is whether the account has SMTP configured.
+	// Access and Delivery are the account's policy.
+	Access   string `json:"access"`
+	Delivery string `json:"delivery"`
+
+	// CanSend is whether the account may hand mail to SMTP itself:
+	// access is send and smtp is configured.
 	CanSend bool `json:"can_send"`
 
 	SentFolder string `json:"sent_folder,omitempty"`
+
+	// DraftsFolder is where a drafted message lands, resolved the way
+	// the send path resolves it: the configured folder, else the one
+	// the cached listing marks as drafts. It is omitted until one of
+	// those is known, and for an account that cannot draft.
+	DraftsFolder string `json:"drafts_folder,omitempty"`
+
+	// DeniedRecipientDomains and AllowedRecipientDomains are the
+	// account's recipient-domain rules, shown so a refusal is never the
+	// first place the model learns them.
+	DeniedRecipientDomains  []string `json:"denied_recipient_domains,omitempty"`
+	AllowedRecipientDomains []string `json:"allowed_recipient_domains,omitempty"`
+
+	// SendsDirectlyTo, DraftsFor, and Refuses list the trust zones by
+	// where a message to a recipient at that zone lands in this turn.
+	SendsDirectlyTo []string `json:"sends_directly_to"`
+	DraftsFor       []string `json:"drafts_for"`
+	Refuses         []string `json:"refuses"`
 
 	// Bound marks the account as the one this caller is restricted to,
 	// so the narrowed list reads as a boundary rather than as the
@@ -92,10 +120,10 @@ type recentOpJSON struct {
 // TagContext renders the block, narrowed to the bound account when the
 // caller carries an email_account binding.
 func (p *ContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
-	return p.buildContext(boundAccount(ctx))
+	return p.buildContext(boundAccount(ctx), attended(ctx))
 }
 
-func (p *ContextProvider) buildContext(bound string) (string, error) {
+func (p *ContextProvider) buildContext(bound string, isAttended bool) (string, error) {
 	if p == nil || p.service == nil {
 		return "", nil
 	}
@@ -110,14 +138,25 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 		if bound != "" && cfg.Name != bound {
 			continue
 		}
+		routing := routingByZone(cfg, isAttended)
 		view := accountView{
-			Account:     cfg.Name,
-			Description: cfg.Description,
-			CanSend:     cfg.SMTPConfigured(),
-			SentFolder:  cfg.SentFolder,
-			Bound:       bound != "",
+			Account:                 cfg.Name,
+			Description:             cfg.Description,
+			Access:                  cfg.AccessLevel(),
+			Delivery:                cfg.DeliveryMode(),
+			CanSend:                 cfg.CanDeliver(),
+			SentFolder:              cfg.SentFolder,
+			DeniedRecipientDomains:  cfg.Policy.DeniedRecipientDomains,
+			AllowedRecipientDomains: cfg.Policy.AllowedRecipientDomains,
+			SendsDirectlyTo:         routing.SendsDirectlyTo,
+			DraftsFor:               routing.DraftsFor,
+			Refuses:                 routing.Refuses,
+			Bound:                   bound != "",
 		}
 		view.Address = accountAddress(cfg)
+		if cfg.CanDraft() {
+			view.DraftsFolder = p.service.knownDraftsFolder(cfg)
+		}
 		if snap, ok := p.service.cachedFolders(cfg.Name); ok {
 			view.Folders, view.FoldersTruncated = folderViews(snap.Folders)
 			view.FoldersAsOf = promptfmt.FormatDeltaOnly(snap.At, now)
@@ -125,7 +164,7 @@ func (p *ContextProvider) buildContext(bound string) (string, error) {
 		views = append(views, view)
 	}
 
-	output := emailContextJSON{Accounts: views}
+	output := emailContextJSON{Attended: isAttended, Accounts: views}
 	if len(views) == 0 && bound != "" {
 		output.BindingError = "This loop is bound to email account " + bound +
 			", which is not configured at this site. No email operation can succeed until the operator restores the account or changes the binding."

@@ -43,6 +43,15 @@ func folderParameter(role string) map[string]any {
 	}
 }
 
+// draftParameter is the shared draft argument of email_send and
+// email_reply.
+func draftParameter() map[string]any {
+	return map[string]any{
+		"type":        "boolean",
+		"description": "Hold the message in the account's Drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says what happened and decision.route says which rule decided.",
+	}
+}
+
 func uidsParameters() (map[string]any, map[string]any) {
 	return map[string]any{
 		"type":        "array",
@@ -87,12 +96,12 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, access_note} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
 				"The whole result stays within 32 KB: a long body is cut to fit and body_truncated is true, to, cc, and reply_to list at most 25 addresses each with addresses_omitted counting the rest, and at most 50 attachments are described with attachments_omitted counting the rest; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
 				addressShapeDescription +
 				"authentication.verified is true only when Thane validated a signature with a key the directory holds for the sender; status absent means nothing was checked and carries no suspicion, failed means a signature did not validate, unavailable means a check could not complete. " +
-				"Reading marks the message seen unless mark_seen is false. " +
+				"Reading marks the message seen unless mark_seen is false or the account's access is read, in which case marked_seen is false and access_note says why. " +
 				"The UID must be given with the account and folder it was listed from; a UID the folder does not hold is an error naming both.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -172,7 +181,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Add or remove a flag on messages in one folder: seen, flagged, or answered. Provide uids (array of integers) or uid (single integer) " +
 				"from an email_list or email_search result in the same account and folder; add defaults to true. Returns JSON " +
 				"{action: flag_added|flag_removed, account, folder, flag, uids_affected, uids_not_found}. " +
-				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying.",
+				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying. An account whose access is read refuses this tool.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -196,10 +205,14 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		},
 		{
 			Name: "email_send",
-			Description: "Compose and send a new message from one account. body is markdown and is rendered to both text and HTML. " +
-				"Every recipient in to and cc must be in the contact directory at a send-eligible trust zone; an address several contact records share is governed by the least privileged of them, and one the directory could not be checked for is refused rather than treated as a stranger; a refusal names each recipient at issue and how to recover, and nothing is sent. " +
+			Description: "Compose a new message from one account and hand it to the send decision. body is markdown and is rendered to both text and HTML. " +
+				"Every recipient in to and cc (at most 50 together) must be in the contact directory at a trust zone whose send policy is not blocked and pass the account's recipient-domain rules, which the Email Accounts block lists; an address several contact records share is governed by the least privileged of them, and one the directory could not be checked for is refused rather than treated as a stranger. " +
+				"The account's policy then decides the disposition: sent (delivered by SMTP; cannot be recalled), drafted (held in the account's Drafts folder for the operator to send; nothing has left the mailbox), or refused. " +
+				"The Email Accounts block lists, per account and for this turn, which zones it sends_directly_to, drafts_for, and refuses. " +
 				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
-				"{disposition: sent, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, signed, recipients:[{address, trust_zone, contact_status, contact, allowed, reason}]}. sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder; signed says whether an outbound signature was applied. Sent mail cannot be recalled.",
+				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, signed, note, decision:{disposition, route, attended, gating, reason, drafts_folder, recipients:[{address, trust_zone, gating, contact_status, contact, allowed, reason}]}}; " +
+				"sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder, and signed says whether an outbound signature was applied. " +
+				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -218,6 +231,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 						"type":        "string",
 						"description": "Body in markdown; converted to text/plain and text/html. Supports temp:LABEL references.",
 					},
+					"draft":   draftParameter(),
 					"account": accountParameter(),
 				},
 				"required": []string{"to", "subject", "body"},
@@ -229,7 +243,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Name: "email_reply",
 			Description: "Reply to a message by UID, preserving In-Reply-To and References so the reply threads in the recipient's client. " +
 				"The reply goes to the original Reply-To (else From); reply_all adds the original To and Cc minus this account's own address. " +
-				"Recipients pass through the same contact-directory trust gate as email_send, including its handling of ambiguous and unresolvable addresses, and any refused recipient refuses the whole reply. body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
+				"Recipients pass through the same trust gate and send decision as email_send, including its handling of ambiguous and unresolvable addresses: any refused recipient refuses the whole reply, and the account's policy decides whether the reply is sent or held in Drafts for the operator. " +
+				"body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -246,6 +261,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 						"type":        "boolean",
 						"description": "Also reply to the original To and Cc recipients (default: false).",
 					},
+					"draft":   draftParameter(),
 					"account": accountParameter(),
 				},
 				"required": []string{"uid", "body"},
@@ -261,7 +277,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"{action: moved, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known, uids_not_found}; " +
 				"when destination_uids_known is true, uids are the source UIDs the server confirmed moving, paired with destination_uids, and uids_not_found are requested UIDs the folder no longer held; " +
 				"when it is false the server confirmed nothing, and the destination must be listed to find the messages. " +
-				"A destination the account lacks is refused with the account's real folder list.",
+				"A destination the account lacks is refused with the account's real folder list, the account's drafts folder is never a destination, and an account whose access is read refuses this tool.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

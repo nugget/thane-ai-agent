@@ -26,6 +26,7 @@ func TestAuditCopyIsExemptFromTheTrustGate(t *testing.T) {
 			SMTP:        smtp.config("thane", "pw"),
 			DefaultFrom: "Thane <thane@example.com>",
 			SentFolder:  "Sent",
+			Policy:      PolicyConfig{Delivery: DeliveryDirect},
 		}},
 	}
 	resolver := &stubContacts{zones: map[string]string{"alice@example.com": "trusted"}}

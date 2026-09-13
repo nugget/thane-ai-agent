@@ -16,12 +16,16 @@ const (
 	// ZoneTrusted is for close friends, extended family, and
 	// professional contacts with an established relationship.
 	// Frontier model access, safe tool subset, limited proactive
-	// outreach, sends require confirmation.
+	// outreach. Its SendGating is "confirmation": under an email
+	// account's default by_trust_zone delivery, mail to a trusted
+	// recipient is held in Drafts for the operator, while an account the
+	// operator configured for direct delivery sends it.
 	ZoneTrusted = "trusted"
 
 	// ZoneKnown is the default zone for contacts with a record but
 	// no elevated trust. Local models only, read-only tool access,
-	// no proactive outreach, sends blocked without explicit approval.
+	// no proactive outreach; outbound mail is refused (SendGating
+	// "blocked") until the operator promotes the contact.
 	ZoneKnown = "known"
 
 	// ZoneUnknown represents unrecognized senders with no contact

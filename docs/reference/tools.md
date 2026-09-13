@@ -289,15 +289,19 @@ instead of being reimplemented in each loop prompt.
 | `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
 | `email_folders` | List an account's mailboxes with special-use roles and counts. |
 | `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. |
-| `email_send` | Compose and send (markdown → MIME) through the contact-directory trust gate. |
-| `email_reply` | Reply with threading headers through the same gate. |
+| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in Drafts for the operator, or refused with a decision record. |
+| `email_reply` | Reply with threading headers through the same gate and decision. |
 | `email_move` | Move messages within an account; reports the new UIDs when the server returns them. |
 
 Every email tool takes an `account`; in a loop bound with
 `email_account` an omitted account resolves to the binding and other
 accounts are refused. The `email` tag also injects an **Email Accounts**
-context block listing each account, whether it can send, and its cached
-folder names with roles.
+context block listing each account with its policy (`access`,
+`delivery`, recipient-domain rules, the drafts folder), whether it may
+hand mail to SMTP itself, whether this turn is `attended`, which trust
+zones it sends directly to, drafts for, and refuses this turn, and its
+cached folder names with roles. An account whose `access` is `read`
+reads without marking messages seen and refuses flags and moves.
 
 ## `contacts` — directory and vCard administration
 

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -38,7 +39,7 @@ const (
 // ZoneUnknown is the trust zone rendered for an address the directory
 // holds no record of. It is the contacts package's implicit zone for a
 // stranger and never appears on a stored record.
-const ZoneUnknown = "unknown"
+const ZoneUnknown = contacts.ZoneUnknown
 
 // Interaction directions recorded on a contact.
 const (
@@ -85,10 +86,11 @@ type ContactMatch struct {
 }
 
 // ContactResolver resolves an email address against the contact
-// directory. Implementations live in the application layer so the
-// email package does not import the contacts store; the one in
-// internal/app is shared with the Signal channel so both speak the
-// same identity.
+// directory. Implementations live in the application layer, which owns
+// the contact store and its persistence; this package reads only the
+// contacts package's zone policy table. The implementation in
+// internal/app is shared with the Signal channel so both speak the same
+// identity.
 //
 // A returned error is a lookup failure and is reported as such; an
 // address nobody holds is a successful [ContactUnmatched] result, not
