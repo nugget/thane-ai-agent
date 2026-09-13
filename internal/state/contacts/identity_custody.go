@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -360,9 +361,12 @@ func checkSaveSnapshot(tx *sql.Tx, id uuid.UUID, snapshotZone string) error {
 // deleteIfUncustodied soft-deletes a contact only while it is still at
 // known and bound to no Home Assistant person, so an operator promotion
 // or binding that lands between contact_forget's check and its write is
-// never undone by the model. It reports whether a record was deleted.
-func (s *Store) deleteIfUncustodied(id uuid.UUID) (bool, error) {
-	result, err := s.db.Exec(`
+// never undone by the model. It reports whether a record was deleted. A
+// ctx that has already ended deletes nothing, but a ctx that ends
+// mid-statement can come back as its error after the delete committed,
+// so a caller that reports the outcome passes a ctx that cannot end.
+func (s *Store) deleteIfUncustodied(ctx context.Context, id uuid.UUID) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE contacts SET deleted_at = ?
 		WHERE id = ? AND deleted_at IS NULL AND trust_zone = ? AND COALESCE(ha_person_entity, '') = ''
 	`, time.Now().UTC().Format(time.RFC3339), id.String(), ZoneKnown)

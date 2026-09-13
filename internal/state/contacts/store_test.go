@@ -356,7 +356,7 @@ func TestSearch_LIKEFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := store.searchLIKE("handyman")
+	results, err := store.searchLIKE(context.Background(), "handyman")
 	if err != nil {
 		t.Fatal(err)
 	}

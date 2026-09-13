@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/emersion/go-vcard"
 )
@@ -678,6 +679,14 @@ func TestEmittablePropertyName(t *testing.T) {
 		"EMAIL;TYPE=work":           false,
 		"NOTE:x":                    false,
 		"a\r\nEMAIL":                false,
+		"a\vEMAIL":                  false,
+		"a\fEMAIL":                  false,
+		"a\x00EMAIL":                false,
+		"a\x1eEMAIL":                false,
+		"a\u0085EMAIL":              false,
+		"a\u2028EMAIL":              false,
+		"a\u2029EMAIL":              false,
+		"a\tEMAIL":                  false,
 		"X-THANE-TRUST-ZONE":        false,
 		"x-thane-ha-person":         false,
 		"X-THANE-TRUST-ZONE;PREF=1": false,
@@ -696,10 +705,24 @@ func TestEmittablePropertyName(t *testing.T) {
 			{Property: "EMAIL", Value: "bob@example.com"},
 			{Property: "item1.EMAIL", Value: "mallory@example.net"},
 			{Property: "X-THANE-TRUST-ZONE", Value: "admin"},
+			{Property: "X-LEGACY\u2028EMAIL", Value: "mallory@example.net"},
+			{Property: "X-LEGACY\vEMAIL", Value: "mallory@example.net"},
 		},
 	})
 	if got := card.Values(vcard.FieldEmail); !reflect.DeepEqual(got, []string{"bob@example.com"}) {
 		t.Errorf("EMAIL = %v", got)
+	}
+	for name := range card {
+		if strings.IndexFunc(name, isLineBreakOrControl) >= 0 {
+			t.Errorf("a row named %q, which a client can read as a new line, was emitted", name)
+		}
+	}
+	var encoded bytes.Buffer
+	if err := vcard.NewEncoder(&encoded).Encode(card); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(encoded.String(), "mallory@example.net") {
+		t.Errorf("a planted row reached the wire:\n%s", encoded.String())
 	}
 	if got := card.Values("X-THANE-TRUST-ZONE"); !reflect.DeepEqual(got, []string{ZoneHousehold}) {
 		t.Errorf("X-THANE-TRUST-ZONE = %v", got)
@@ -760,7 +783,7 @@ func TestDeleteIfUncustodied(t *testing.T) {
 			if tc.change != nil {
 				tc.change(t, store, c)
 			}
-			deleted, err := store.deleteIfUncustodied(c.ID)
+			deleted, err := store.deleteIfUncustodied(context.Background(), c.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -894,11 +917,11 @@ func TestLegacyOwnerName_NoSecondRecordClaimsIt(t *testing.T) {
 		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nEMAIL:mallory@example.net\r\nEND:VCARD\r\n" +
 			"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Bob Known\r\nNICKNAME:Alice\r\nORG:Acme\r\nEND:VCARD\r\n"
 		dry := importText(t, tools, vcf, map[string]any{"dry_run": true})
-		if !strings.Contains(dry, "0 would be created, 1 would be merged") || !strings.Contains(dry, "1 name(s) were not imported") {
+		if !strings.Contains(dry, "0 would be created, 1 would be merged") || !strings.Contains(dry, "2 name(s) were not imported") {
 			t.Errorf("dry run = %q", dry)
 		}
 		out := importText(t, tools, vcf, nil)
-		if !strings.Contains(out, "0 created, 1 merged") || !strings.Contains(out, "1 name(s) were not imported") {
+		if !strings.Contains(out, "0 created, 1 merged") || !strings.Contains(out, "2 name(s) were not imported") {
 			t.Errorf("import = %q", out)
 		}
 		if _, err := tools.store.FindByName("Alice"); !errors.Is(err, sql.ErrNoRows) {
@@ -906,6 +929,21 @@ func TestLegacyOwnerName_NoSecondRecordClaimsIt(t *testing.T) {
 		}
 		if matches, err := tools.store.FindByPropertyExact("EMAIL", "mallory@example.net"); err != nil || len(matches) != 0 {
 			t.Errorf("mallory@ holders = %+v, %v", matches, err)
+		}
+		got, err := tools.store.Get(bob.ID)
+		if err != nil || got.Nickname != "" || got.Org != "Acme" {
+			t.Errorf("bob after merge = %+v, %v", got, err)
+		}
+	})
+
+	t.Run("import counts an owner-name nickname it leaves off a merge", func(t *testing.T) {
+		tools, _, _ := setup(t)
+		bob := seedContactAt(t, tools.store, "Bob Known", ZoneKnown)
+		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Bob Known\r\nNICKNAME:Alice\r\nORG:Acme\r\nEND:VCARD\r\n"
+		for _, extra := range []map[string]any{{"dry_run": true}, nil} {
+			if out := importText(t, tools, vcf, extra); !strings.Contains(out, "1 name(s) were not imported") {
+				t.Errorf("import %v = %q, want the dropped nickname counted", extra, out)
+			}
 		}
 		got, err := tools.store.Get(bob.ID)
 		if err != nil || got.Nickname != "" || got.Org != "Acme" {
@@ -1123,4 +1161,217 @@ func TestIdentityCustodyRefusalLogs(t *testing.T) {
 		requireLogged(t, logs, "tool=contact_forget", "contact_id="+hal.ID.String(), "rule=zone",
 			"request_id=r_forget", "conversation_id=conv-1", "loop_id=loop-1")
 	})
+}
+
+// TestCustodyRefusalsStayBounded pins that a contact_save refusal stays
+// inside the tool-result budget however many facts or values arrive and
+// however long they are: each caller-supplied key and value is quoted
+// clipped, and the list stops at its budget and counts the rest.
+func TestCustodyRefusalsStayBounded(t *testing.T) {
+	const maxRefusalBytes = refusalListMaxBytes + 2<<10
+	long := strings.Repeat("\u00e9", 4<<10)
+
+	check := func(t *testing.T, err error, header string, total int) {
+		t.Helper()
+		requireContains(t, err, header, "nothing was saved", "more refused, not listed here", "retry to see the rest")
+		if err == nil {
+			return
+		}
+		msg := err.Error()
+		if len(msg) > maxRefusalBytes {
+			t.Errorf("refusal is %d bytes, want at most %d", len(msg), maxRefusalBytes)
+		}
+		if !utf8.ValidString(msg) {
+			t.Error("refusal is not valid UTF-8")
+		}
+		// Every item and the omission marker is one "\n- " line.
+		listed := strings.Count(msg, "\n- ") - 1
+		var omitted int
+		marker := strings.Index(msg, "...and ")
+		if marker < 0 {
+			t.Fatalf("no omission count in:\n%s", msg)
+		}
+		if _, err := fmt.Sscanf(msg[marker:], "...and %d more refused", &omitted); err != nil {
+			t.Fatalf("parse the omission count: %v", err)
+		}
+		if listed < 1 || listed+omitted != total {
+			t.Errorf("listed %d and counted %d more, want %d in all", listed, omitted, total)
+		}
+	}
+
+	t.Run("fact key grammar", func(t *testing.T) {
+		tools := newTestTools(t)
+		facts := map[string]string{}
+		for i := range 50 {
+			facts[fmt.Sprintf("bad key %d %s", i, long)] = "x"
+		}
+		_, err := modelSave(tools, custodyArgs(t, map[string]any{"name": "Bob Known", "facts": facts}), false)
+		check(t, err, "contact_save refused 50 fact(s)", 50)
+		requireContains(t, err, fmt.Sprintf("(%d bytes)", len("bad key 0 ")+len(long)))
+	})
+
+	t.Run("argument values", func(t *testing.T) {
+		tools := newTestTools(t)
+		tags := make([]string, 0, 500)
+		for i := range 500 {
+			tags = append(tags, fmt.Sprintf("tag %d\nEMAIL:mallory@example.net", i))
+		}
+		_, err := modelSave(tools, custodyArgs(t, map[string]any{"name": "Bob Known", "origin_tags": tags}), false)
+		check(t, err, "contact_save refused 500 argument value(s)", 500)
+	})
+
+	t.Run("identity custody", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedContactAt(t, tools.store, "Hana Household", ZoneHousehold)
+		facts := map[string]string{}
+		// Every case spelling of "email" is its own fact key.
+		for mask := range 32 {
+			key := []byte("email")
+			for i := range key {
+				if mask&(1<<i) != 0 {
+					key[i] -= 'a' - 'A'
+				}
+			}
+			facts[string(key)] = fmt.Sprintf("%d%s@example.com", mask, long)
+		}
+		_, err := modelSave(tools, custodyArgs(t, map[string]any{"name": "Hana Household", "facts": facts}), false)
+		check(t, err, "contact_save refused 32 fact(s)", 32)
+		requireContains(t, err, "Hana Household is household", "ask the operator to add these")
+	})
+}
+
+// TestForgetContact_HonorsContext pins that contact_forget removes
+// nothing once the turn's context has ended, down to the guarded delete.
+func TestForgetContact_HonorsContext(t *testing.T) {
+	tools := newTestTools(t)
+	c := seedContactAt(t, tools.store, "Grace Known", ZoneKnown)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := tools.ForgetContactFromModel(ctx, `{"name":"Grace Known"}`, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("forget under an ended context = %v, want context.Canceled", err)
+	}
+	deleted, err := tools.store.deleteIfUncustodied(ctx, c.ID)
+	if deleted || !errors.Is(err, context.Canceled) {
+		t.Fatalf("guarded delete under an ended context = %v, %v", deleted, err)
+	}
+	if _, err := tools.store.Get(c.ID); err != nil {
+		t.Errorf("an ended turn removed the contact: %v", err)
+	}
+}
+
+// cancelOnEmbed ends the import's context the first time a contact is
+// embedded, that is right after the first card is written.
+type cancelOnEmbed struct{ cancel context.CancelFunc }
+
+func (e cancelOnEmbed) Generate(ctx context.Context, _ string) ([]float32, error) {
+	e.cancel()
+	return nil, ctx.Err()
+}
+
+// TestImportVCF_HonorsContext pins that contact_import_vcf writes
+// nothing once the turn's context has ended, and that a turn ending
+// mid-import stops it before the next card and reports what it wrote.
+func TestImportVCF_HonorsContext(t *testing.T) {
+	vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ivy One\r\nEND:VCARD\r\n" +
+		"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ivy Two\r\nEND:VCARD\r\n"
+	args := custodyArgs(t, map[string]any{"text": vcf})
+
+	t.Run("an ended turn imports nothing", func(t *testing.T) {
+		tools := newTestTools(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := tools.ImportVCFFromModel(ctx, args, &PropertyProvenance{Source: importVCFSource}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("import under an ended context = %v, want context.Canceled", err)
+		}
+		for _, name := range []string{"Ivy One", "Ivy Two"} {
+			if _, err := tools.store.FindByName(name); !errors.Is(err, sql.ErrNoRows) {
+				t.Errorf("%s was imported by an ended turn: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("a turn ending mid-import stops before the next card", func(t *testing.T) {
+		tools := newTestTools(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		tools.SetEmbeddingClient(cancelOnEmbed{cancel: cancel})
+		_, err := tools.ImportVCFFromModel(ctx, args, &PropertyProvenance{Source: importVCFSource})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("import = %v, want context.Canceled", err)
+		}
+		requireContains(t, err, "stopped before card 2 of 2", "1 contact(s) were created and 0 merged")
+		if _, err := tools.store.FindByName("Ivy One"); err != nil {
+			t.Errorf("the card written before the turn ended is missing: %v", err)
+		}
+		if _, err := tools.store.FindByName("Ivy Two"); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("a card was written after the turn ended: %v", err)
+		}
+	})
+
+	t.Run("a turn ending inside a card stops before writing it", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedContactAt(t, tools.store, "Hana Household", ZoneHousehold, Property{Property: "EMAIL", Value: "hana@example.com"})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		previous := slog.Default()
+		slog.SetDefault(slog.New(cancelOnRefusal{cancel: cancel}))
+		t.Cleanup(func() { slog.SetDefault(previous) })
+
+		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ivy One\r\nKEY:https://example.com/ivy.asc\r\nEND:VCARD\r\n" +
+			"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ivy Two\r\nEMAIL:hana@example.com\r\nEND:VCARD\r\n"
+		_, err := tools.ImportVCFFromModel(ctx, custodyArgs(t, map[string]any{"text": vcf, "merge": false}), &PropertyProvenance{Source: importVCFSource})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("import = %v, want context.Canceled", err)
+		}
+		requireContains(t, err, "stopped before card 2 of 2", "1 contact(s) were created and 0 merged",
+			"1 key propert(ies) were not imported", "import the cards from card 2 on")
+		if strings.Contains(err.Error(), "address(es)/number(s)") {
+			t.Errorf("the stop report counted a drop from the card it did not write:\n%v", err)
+		}
+		if _, err := tools.store.FindByName("Ivy One"); err != nil {
+			t.Errorf("the card written before the turn ended is missing: %v", err)
+		}
+		if _, err := tools.store.FindByName("Ivy Two"); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("the card the turn ended inside was written: %v", err)
+		}
+	})
+}
+
+// cancelOnRefusal ends a context when the import logs a custody
+// refusal, that is inside a card, after its reads and before its
+// writes.
+type cancelOnRefusal struct{ cancel context.CancelFunc }
+
+func (h cancelOnRefusal) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h cancelOnRefusal) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == "contact identity custody refused" {
+		h.cancel()
+	}
+	return nil
+}
+
+func (h cancelOnRefusal) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h cancelOnRefusal) WithGroup(string) slog.Handler { return h }
+
+// TestImportVCF_StopReportsWhatItWrote pins that an error inside a card
+// still tells the model what the cards before it wrote.
+func TestImportVCF_StopReportsWhatItWrote(t *testing.T) {
+	tools := newTestTools(t)
+	// The legacy owner name matches two records, so resolving the
+	// operator for the identity check fails closed.
+	seedContactAt(t, tools.store, "Alice Smith", ZoneKnown)
+	seedContactAt(t, tools.store, "Alice Jones", ZoneKnown)
+	tools.SetOwnerContactName("Alice")
+
+	vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ivy One\r\nEND:VCARD\r\n" +
+		"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ivy Two\r\nEMAIL:ivy@example.com\r\nEND:VCARD\r\n"
+	_, err := tools.ImportVCF(custodyArgs(t, map[string]any{"text": vcf, "merge": false}))
+	requireContains(t, err, "stopped before card 2 of 2", "check identity custody", "ambiguous contact",
+		"1 contact(s) were created and 0 merged", "import the cards from card 2 on")
+	if _, err := tools.store.FindByName("Ivy Two"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("the card the import stopped at was written: %v", err)
+	}
 }

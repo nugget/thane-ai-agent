@@ -322,10 +322,12 @@ transaction and aborts if either changed since the tool read the record, so
 a model save can no longer revert an operator's concurrent zone change or
 resurrect a deleted contact.
 
-As a backstop for rows written before these rules, `ContactToCard`
-withholds any stored property whose name carries vCard syntax or is a field
-the codec owns (`FN`, `PHOTO`, `X-THANE-TRUST-ZONE`, `X-THANE-HA-PERSON`,
-and the rest), including a `PHOTO` row stored through `/v1/contacts`.
+`ContactToCard` withholds any stored property whose name carries vCard
+syntax, a control character or U+2028 included, or is a field the codec
+owns (`FN`, `PHOTO`, `X-THANE-TRUST-ZONE`, `X-THANE-HA-PERSON`, and the
+rest). Such a row can predate these rules, be a `PHOTO` row stored through
+`/v1/contacts`, or arrive in the operator's own CardDAV PUT, because the
+decoder keeps a nested group as `B.EMAIL` and a vertical tab inside a name.
 CardDAV logs `contact properties withheld from CardDAV` with the contact ID
 and property names on every read of such a card, and the operator's next
 PUT of that card removes the rows. `ContactToCard` also rewrites every CR,
