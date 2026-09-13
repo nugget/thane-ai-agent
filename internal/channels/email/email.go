@@ -148,6 +148,10 @@ type Message struct {
 	// maxAttachments of them.
 	Attachments []Attachment `json:"attachments,omitempty"`
 
+	// raw is the message as fetched, kept for an [Authenticator] to
+	// inspect. It is bounded by maxRawMessageSize and never rendered.
+	raw []byte
+
 	// AttachmentsOmitted counts the non-text parts past maxAttachments
 	// that were measured but not listed.
 	AttachmentsOmitted int `json:"attachments_omitted,omitempty"`

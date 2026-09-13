@@ -91,6 +91,31 @@ func TestSaveContact_Update(t *testing.T) {
 	}
 }
 
+// TestSaveContact_RefusesKeyCustodyFacts pins the custody boundary the
+// email authentication seam depends on: the key that verifies a
+// contact's messages cannot be installed through contact_save, in any
+// spelling, and the refusal leaves nothing behind.
+func TestSaveContact_RefusesKeyCustodyFacts(t *testing.T) {
+	tools := newTestTools(t)
+	for _, key := range []string{"KEY", "key", "Key", "X-THANE-KEY-PGP", "x-thane-key-smime"} {
+		_, err := tools.SaveContact(`{"name":"Key Holder","kind":"individual","facts":{"email":"holder@example.com","` + key + `":"-----BEGIN PGP PUBLIC KEY BLOCK-----"}}`)
+		if err == nil {
+			t.Fatalf("fact %q must be refused", key)
+		}
+		if !strings.Contains(err.Error(), "operator-custodied") || !strings.Contains(err.Error(), key) {
+			t.Errorf("refusal for %q must name the key and the custody rule: %v", key, err)
+		}
+	}
+	if _, err := tools.store.FindByName("Key Holder"); err == nil {
+		t.Error("a refused save must not create the contact")
+	}
+
+	// The same key at top level is rescued into facts and refused there too.
+	if _, err := tools.SaveContact(`{"name":"Key Holder","kind":"individual","KEY":"x"}`); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+		t.Errorf("top-level KEY must be refused after rescue: %v", err)
+	}
+}
+
 func TestSaveContact_WithFacts(t *testing.T) {
 	tools := newTestTools(t)
 
@@ -1719,6 +1744,52 @@ func TestImportVCF_HAPersonNotImportable(t *testing.T) {
 	for k := range props {
 		if strings.Contains(strings.ToLower(k), "ha-person") || strings.Contains(strings.ToLower(k), "ha_person") {
 			t.Errorf("header rescued as property %q", k)
+		}
+	}
+}
+
+// TestImportVCF_KeyPropertiesNotImportable pins the custody rule on the
+// import path: a vCard carrying KEY or X-THANE-KEY-* installs neither,
+// whether it merges into an existing contact or creates a new one, and
+// the result says keys were dropped.
+func TestImportVCF_KeyPropertiesNotImportable(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Alice","kind":"individual","facts":{"email":"alice@example.com"}}`); err != nil {
+		t.Fatal(err)
+	}
+	vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nEMAIL:alice@example.com\r\nKEY:https://attacker.example/alice.asc\r\nX-THANE-KEY-PGP:attacker\r\nEND:VCARD\r\n" +
+		"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Bob New\r\nEMAIL:bob@example.com\r\nKEY:https://attacker.example/bob.asc\r\nEND:VCARD\r\n"
+	args, err := json.Marshal(map[string]any{"text": vcf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tools.ImportVCF(string(args))
+	if err != nil {
+		t.Fatalf("ImportVCF: %v", err)
+	}
+	if !strings.Contains(out, "3 key propert") || !strings.Contains(out, "operator custody") {
+		t.Errorf("result must say the keys were dropped: %q", out)
+	}
+	for _, name := range []string{"Alice", "Bob New"} {
+		c, err := tools.store.FindByName(name)
+		if err != nil {
+			t.Fatalf("FindByName %s: %v", name, err)
+		}
+		props, err := tools.store.GetProperties(c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hasEmail := false
+		for _, p := range props {
+			if isReservedKeyProperty(p.Property) {
+				t.Errorf("%s: key property %s=%q was imported", name, p.Property, p.Value)
+			}
+			if p.Property == "EMAIL" {
+				hasEmail = true
+			}
+		}
+		if !hasEmail {
+			t.Errorf("%s: the rest of the vCard must still import", name)
 		}
 	}
 }

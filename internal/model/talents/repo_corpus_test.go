@@ -179,6 +179,21 @@ var nonToolTokens = map[string]struct{}{
 	"can_send":    {},
 	"in_reply_to": {},
 
+	// Contact identity fields stamped on every email address in tool
+	// results and on every new-mail wake event (#1551): the directory's
+	// answer about who an address is. The matcher flags them because
+	// `contact_` is a real tool prefix, but they are field names, not
+	// tools.
+	"contact_id":     {},
+	"contact_name":   {},
+	"contact_status": {},
+
+	// Owner flag on a matched contact in email results and wake metadata
+	// (#1551), also the Signal bridge's metadata key. The matcher flags
+	// it because `owner` is the second segment of a real tool; it is a
+	// field name, not a tool.
+	"is_owner": {},
+
 	// Loop binding key (#1386, #1551): `bindings: {email_account: ...}`
 	// scopes a loop's email tools to one configured mailbox. Appears in
 	// talent prose about loop authoring. The matcher flags it because

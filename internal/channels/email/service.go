@@ -32,9 +32,21 @@ type ServiceDependencies struct {
 	// wake must not advance past the mail it saw.
 	MessageBus *messages.Bus `json:"-"`
 
-	// Contacts resolves addresses to trust zones for the send gate and
-	// the wake metadata. Nil disables trust gating.
+	// Contacts resolves addresses against the contact directory for
+	// result tagging, the send gate, and wake metadata. Nil disables
+	// trust gating and renders every address as unmatched.
 	Contacts ContactResolver `json:"-"`
+
+	// Interactions records inbound exchanges on matched contacts. Nil
+	// records nothing.
+	Interactions InteractionRecorder `json:"-"`
+
+	// Authenticator checks inbound signatures. Nil means every message
+	// reads as [AuthAbsent].
+	Authenticator Authenticator `json:"-"`
+
+	// Signers picks a per-account outbound signer. Nil sends unsigned.
+	Signers SignerResolver `json:"-"`
 
 	// WakeTarget overrides the loop that receives new-mail wakes. Nil
 	// means [DefaultHandlerLoopName].
@@ -58,6 +70,9 @@ type Service struct {
 	contextProvider *ContextProvider
 	poller          *Poller
 	opLog           *OperationLog
+	contacts        ContactResolver
+	authenticator   Authenticator
+	signers         SignerResolver
 
 	foldersMu sync.Mutex
 	folders   map[string]folderSnapshot
@@ -102,10 +117,13 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 	}
 
 	s := &Service{
-		manager: NewManager(cfg, deps.Logger),
-		logger:  deps.Logger,
-		opLog:   NewOperationLog(),
-		folders: make(map[string]folderSnapshot),
+		manager:       NewManager(cfg, deps.Logger),
+		logger:        deps.Logger,
+		opLog:         NewOperationLog(),
+		folders:       make(map[string]folderSnapshot),
+		contacts:      deps.Contacts,
+		authenticator: deps.Authenticator,
+		signers:       deps.Signers,
 	}
 	s.tools = newTools(s, deps.Contacts, deps.Logger)
 	s.contextProvider = newContextProvider(s)
@@ -117,7 +135,7 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 		if deps.MessageBus == nil {
 			return nil, fmt.Errorf("email polling is enabled but no message bus was provided: new mail could not wake a handler. Provide a bus, or set email.poll_interval: 0 to disable polling")
 		}
-		opts := []PollerOption{WithContactResolver(deps.Contacts), WithMessageBus(deps.MessageBus)}
+		opts := []PollerOption{WithContactResolver(deps.Contacts), WithInteractionRecorder(deps.Interactions), WithMessageBus(deps.MessageBus)}
 		if deps.WakeTarget != nil {
 			opts = append(opts, WithDefaultWakeLoop(*deps.WakeTarget))
 		}
@@ -249,6 +267,35 @@ func (s *Service) Close() {
 		return
 	}
 	s.manager.Close()
+}
+
+// authenticate runs the configured authenticator over a fetched message
+// and normalizes its answer. No authenticator means nothing was checked;
+// an implementation error means the check was unavailable, never that
+// it failed.
+func (s *Service) authenticate(ctx context.Context, account string, msg *Message) Authentication {
+	if s == nil || s.authenticator == nil || msg == nil {
+		return AbsentAuthentication()
+	}
+	result, err := s.authenticator.Authenticate(ctx, InboundMessage{
+		Account:   account,
+		Raw:       msg.raw,
+		Truncated: msg.RawTruncated,
+		From:      msg.From,
+	})
+	if err != nil {
+		s.logger.Warn("email authenticator failed", "account", account, "uid", msg.UID, "error", err)
+		return Authentication{Method: AuthMethodNone, Status: AuthUnavailable, Reason: "authenticator error: " + err.Error()}
+	}
+	return result.normalize()
+}
+
+// signerFor returns the outbound signer for an account, or nil.
+func (s *Service) signerFor(account string) Signer {
+	if s == nil || s.signers == nil {
+		return nil
+	}
+	return s.signers.SignerFor(account)
 }
 
 // recordOp appends a successful operation to the recent-operations log.

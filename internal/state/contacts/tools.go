@@ -209,6 +209,38 @@ var propertyKeys = map[string]string{
 	"matrix": "IMPP",
 }
 
+// reservedKeyProperty is the vCard KEY property (RFC 6350 §6.8.1) and
+// the X-THANE-KEY-* family: public keys and certificates that
+// authenticate a contact's messages. Like trust zones, they are
+// operator custody. A model tool that could write them would let a
+// message that says "here is my key" install the key that verifies
+// its own sender, so contact_save refuses them by name.
+const reservedKeyProperty = "KEY"
+
+// reservedKeyPrefix is the Thane-specific key family reserved alongside
+// KEY.
+const reservedKeyPrefix = "X-THANE-KEY-"
+
+// withoutReservedKeys drops key-custody properties from a decoded vCard
+// and reports how many it dropped.
+func withoutReservedKeys(props []Property) ([]Property, int) {
+	kept := make([]Property, 0, len(props))
+	for _, p := range props {
+		if isReservedKeyProperty(p.Property) {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept, len(props) - len(kept)
+}
+
+// isReservedKeyProperty reports whether a fact key, as the model wrote
+// it, would land on a key-custody property.
+func isReservedKeyProperty(key string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(key))
+	return upper == reservedKeyProperty || strings.HasPrefix(upper, reservedKeyPrefix)
+}
+
 // saveContactKnownFields lists the top-level JSON keys that SaveContactArgs
 // recognizes. Any other top-level string values are rescued into the Facts map
 // so models that flatten email, phone, etc. don't lose data silently.
@@ -286,6 +318,13 @@ func (t *Tools) saveContact(
 	// (X-THANE-TRUST-ZONE) or direct curation.
 	if args.TrustZone != "" {
 		return "", fmt.Errorf("trust_zone cannot be set through contact_save: zones are operator-custodied and confer device authority (#1450); ask the operator to assign the zone, then retry without trust_zone")
+	}
+	// Keys are custody in the same sense: the key that verifies a
+	// contact's messages must not be installable by a message.
+	for key := range args.Facts {
+		if isReservedKeyProperty(key) {
+			return "", fmt.Errorf("fact %q cannot be set through contact_save: KEY and X-THANE-KEY-* properties hold the keys that authenticate a contact's messages and are operator-custodied; ask the operator to install the key, then retry without it", key)
+		}
 	}
 
 	// Look for existing contact by name.
@@ -933,11 +972,16 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		return "", fmt.Errorf("decode vcards: %w", err)
 	}
 
-	var created, updated, skipped int
+	var created, updated, skipped, keysDropped int
 	var summary strings.Builder
 
 	for i, incoming := range decoded {
-		props := allProps[i]
+		// Key properties are operator custody, like trust zones: a vCard
+		// a message carried must not install the key that would verify
+		// that message's sender. The CardDAV backend, the operator's
+		// authenticated surface, decodes vCards on its own path.
+		props, dropped := withoutReservedKeys(allProps[i])
+		keysDropped += dropped
 
 		// Trust zone is operator custody, not importable data (#1450):
 		// a zone confers inherited authority on bound companion devices,
@@ -997,13 +1041,17 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 		}
 	}
 
+	keyNote := ""
+	if keysDropped > 0 {
+		keyNote = fmt.Sprintf(" %d key propert(ies) were not imported: KEY and X-THANE-KEY-* are operator custody and never come in through a model tool.", keysDropped)
+	}
 	if args.DryRun {
-		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:\n\n%s",
-			created, updated, summary.String()), nil
+		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:%s\n\n%s",
+			created, updated, keyNote, summary.String()), nil
 	}
 
-	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped",
-		created+updated, created, updated, skipped), nil
+	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped.%s",
+		created+updated, created, updated, skipped, keyNote), nil
 }
 
 // findExistingForMerge looks for an existing contact that matches the

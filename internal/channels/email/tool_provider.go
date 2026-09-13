@@ -9,6 +9,11 @@ import (
 // bare primary-account default: a bound loop reads both this and its
 // spec, and of the two it is likelier to act on the one attached to
 // the tool it is about to call.
+// addressShapeDescription is the model-facing contract for every
+// address in a list, search, or read result, stated once so the three
+// descriptions cannot drift apart.
+const addressShapeDescription = "Every address (from, to, cc, reply_to) is {name, address, trust_zone, contact:{id, name, is_owner} or null, contact_status: matched | unmatched | ambiguous | lookup_failed, candidates, candidates_total}: the contact directory's answer about who the address is; an ambiguous address lists at most ten candidates and candidates_total counts every record sharing it. Never infer a person from the display name; is_owner says the matched record is the operator's, not that the operator wrote the message. "
+
 const emailAccountDescription = "Email account name (from email.accounts). Omit to use this loop's bound account, or the primary account when unbound; naming a different account than the one you are bound to is refused."
 
 // Name implements [tools.Provider].
@@ -55,7 +60,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_list",
 			Description: "List messages in one folder of one account, newest first. Returns JSON " +
-				"{account, folder, count, total_matched, truncated, messages:[{uid, from:{name,address}, to, cc, subject, date, message_id, flags, size}]}; " +
+				"{account, folder, count, total_matched, truncated, messages:[{uid, from, to, cc, subject, date, message_id, flags, size}]}; " +
+				addressShapeDescription +
 				"date is a delta such as -2h13m. An empty folder returns count 0 with an empty array. " +
 				"UIDs are scoped to the account and folder they were listed from — pass both back to email_read, email_mark, and email_move. " +
 				"limit defaults to 20 and caps at 100; total_matched says how many messages matched before the cap. " +
@@ -81,9 +87,11 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
 				"The whole result stays within 32 KB: a long body is cut to fit and body_truncated is true, to, cc, and reply_to list at most 25 addresses each with addresses_omitted counting the rest, and at most 50 attachments are described with attachments_omitted counting the rest; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
+				addressShapeDescription +
+				"authentication.verified is true only when Thane validated a signature with a key the directory holds for the sender; status absent means nothing was checked and carries no suspicion, failed means a signature did not validate, unavailable means a check could not complete. " +
 				"Reading marks the message seen unless mark_seen is false. " +
 				"The UID must be given with the account and folder it was listed from; a UID the folder does not hold is an error naming both.",
 			Parameters: map[string]any{
@@ -123,7 +131,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Server-side search in one folder of one account. Every criterion is optional and they combine with AND: " +
 				"query (text anywhere in the message), from, to, subject (header substrings), since and before (YYYY-MM-DD, RFC 3339, or a delta such as -7d; IMAP compares dates, not times), " +
 				"unseen, flagged, and message_id or in_reply_to (an exact Message-ID without angle brackets — how to find an original message or an existing reply to it). " +
-				"Returns the same JSON shape as email_list, newest first; limit defaults to 20 and caps at 100.",
+				"Returns the same JSON shape as email_list, newest first, with every address carrying the directory's answer; limit defaults to 20 and caps at 100.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -189,9 +197,9 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_send",
 			Description: "Compose and send a new message from one account. body is markdown and is rendered to both text and HTML. " +
-				"Every recipient in to and cc must be in the contact directory at a send-eligible trust zone; a refusal names each recipient at issue and how to recover, and nothing is sent. " +
+				"Every recipient in to and cc must be in the contact directory at a send-eligible trust zone; an address several contact records share is governed by the least privileged of them, and one the directory could not be checked for is refused rather than treated as a stranger; a refusal names each recipient at issue and how to recover, and nothing is sent. " +
 				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
-				"{disposition: sent, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy}. sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder. Sent mail cannot be recalled.",
+				"{disposition: sent, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, signed, recipients:[{address, trust_zone, contact_status, contact, allowed, reason}]}. sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder; signed says whether an outbound signature was applied. Sent mail cannot be recalled.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -221,7 +229,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Name: "email_reply",
 			Description: "Reply to a message by UID, preserving In-Reply-To and References so the reply threads in the recipient's client. " +
 				"The reply goes to the original Reply-To (else From); reply_all adds the original To and Cc minus this account's own address. " +
-				"Recipients pass through the same contact-directory trust gate as email_send, and any refused recipient refuses the whole reply. body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
+				"Recipients pass through the same contact-directory trust gate as email_send, including its handling of ambiguous and unresolvable addresses, and any refused recipient refuses the whole reply. body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -168,7 +168,7 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 	// Trust gating covers the recipients the model chose. The audit copy
 	// is the operator's configured sink, validated when the config
 	// loads, and by contract needs no contact record.
-	trust := CheckRecipientTrust(t.contacts, slices.Concat(to, cc))
+	trust := CheckRecipientTrust(ctx, t.contacts, slices.Concat(to, cc))
 	if trust.HasIssues() {
 		return "", fmt.Errorf("recipient trust issues: %s", trust.FormatIssues())
 	}
@@ -193,7 +193,17 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 	}
 	smtpRecipients := collectRecipients(composed.To, composed.Cc, bccAddrs)
 
-	if err := sendMail(ctx, acctCfg.Name, acctCfg.SMTP, composed.From.Address, smtpRecipients, composed.Bytes); err != nil {
+	wire := composed.Bytes
+	signed := false
+	if signer := t.service.signerFor(acctCfg.Name); signer != nil {
+		wire, err = signer.Sign(ctx, OutboundMessage{Account: acctCfg.Name, From: composed.From, Message: composed.Bytes})
+		if err != nil {
+			return "", fmt.Errorf("sign message for account %q: %w", acctCfg.Name, err)
+		}
+		signed = true
+	}
+
+	if err := sendMail(ctx, acctCfg.Name, acctCfg.SMTP, composed.From.Address, smtpRecipients, wire); err != nil {
 		return "", err
 	}
 
@@ -205,6 +215,10 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 		"in_reply_to", inReplyTo,
 	)
 
+	recipients := trust.Assessments
+	if recipients == nil {
+		recipients = []RecipientAssessment{}
+	}
 	resp := sendResponse{
 		Disposition: "sent",
 		Account:     acctCfg.Name,
@@ -214,12 +228,14 @@ func (t *Tools) sendEmail(ctx context.Context, tool string, acct ResolvedAccount
 		BccCount:    len(bccAddrs),
 		Subject:     subject,
 		InReplyTo:   inReplyTo,
+		Signed:      signed,
+		Recipients:  recipients,
 	}
 
 	// Store a copy in the configured Sent folder via IMAP APPEND.
 	if acctCfg.SentFolder != "" {
 		resp.SentFolder = acctCfg.SentFolder
-		if _, appendErr := acct.Client.AppendMessage(ctx, acctCfg.SentFolder, composed.Bytes, []imap.Flag{imap.FlagSeen}); appendErr != nil {
+		if _, appendErr := acct.Client.AppendMessage(ctx, acctCfg.SentFolder, wire, []imap.Flag{imap.FlagSeen}); appendErr != nil {
 			t.logger.Warn("failed to store sent message in IMAP folder",
 				"folder", acctCfg.SentFolder,
 				"account", acctCfg.Name,

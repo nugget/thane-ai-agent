@@ -21,7 +21,7 @@ func TestListResultIsHeldTo16KB(t *testing.T) {
 		}
 		envs = append(envs, Envelope{UID: uint32(i + 1), From: Address{Address: "a@example.com"}, To: to, Subject: strings.Repeat("s", 4000), Date: time.Now()})
 	}
-	out, err := marshalListResponse(newListResponse("primary", ListResult{Folder: "INBOX", TotalMatched: 100, Envelopes: envs}, time.Now()))
+	out, err := marshalListResponse(newListResponse("primary", ListResult{Folder: "INBOX", TotalMatched: 100, Envelopes: envs}, nil, time.Now()))
 	if err != nil {
 		t.Fatalf("marshalListResponse: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestReadResultIsHeldTo32KB(t *testing.T) {
 		Attachments:        make([]Attachment, maxAttachments),
 		AttachmentsOmitted: 10,
 	}
-	out, err := renderRead(newReadResponse("primary", "INBOX", msg, false, time.Now()), msg)
+	out, err := renderRead(newReadResponse("primary", "INBOX", msg, false, AbsentAuthentication(), nil, time.Now()), msg)
 	if err != nil {
 		t.Fatalf("renderRead: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestReadResultIsHeldTo32KB(t *testing.T) {
 	mustContain(t, body, "[body cut to keep this result within 32 KB]")
 
 	short := &Message{Envelope: Envelope{UID: 2, From: Address{Address: "a@example.com"}}, TextBody: "hi", BodySource: "text"}
-	out, _ = renderRead(newReadResponse("primary", "INBOX", short, false, time.Now()), short)
+	out, _ = renderRead(newReadResponse("primary", "INBOX", short, false, AbsentAuthentication(), nil, time.Now()), short)
 	if strings.Contains(out, "body cut") || strings.Contains(out, `"body_truncated":true`) {
 		t.Errorf("a small read must not be marked cut: %s", out)
 	}
@@ -104,7 +104,7 @@ func TestMoveReportsUIDsNotFound(t *testing.T) {
 // list summary applies before the byte budget runs.
 func TestSummaryCutsOversizedNamesAndMessageIDs(t *testing.T) {
 	env := Envelope{UID: 1, From: Address{Name: strings.Repeat("N", 5000), Address: "a@example.com"}, MessageID: strings.Repeat("m", 5000) + "@example.com", Date: time.Now()}
-	resp := newListResponse("primary", ListResult{Folder: "INBOX", TotalMatched: 1, Envelopes: []Envelope{env}}, time.Now())
+	resp := newListResponse("primary", ListResult{Folder: "INBOX", TotalMatched: 1, Envelopes: []Envelope{env}}, nil, time.Now())
 	if got := resp.Messages[0]; len(got.From.Name) > maxNameOutput || len(got.MessageID) > maxMessageIDOutput || got.From.Address != "a@example.com" {
 		t.Errorf("summary = name %d bytes, message_id %d bytes, address %q", len(got.From.Name), len(got.MessageID), got.From.Address)
 	}

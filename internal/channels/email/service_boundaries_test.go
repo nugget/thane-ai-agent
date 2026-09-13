@@ -28,7 +28,7 @@ func TestAuditCopyIsExemptFromTheTrustGate(t *testing.T) {
 			SentFolder:  "Sent",
 		}},
 	}
-	resolver := &mockResolver{zones: map[string]string{"alice@example.com": "trusted"}}
+	resolver := &stubContacts{zones: map[string]string{"alice@example.com": "trusted"}}
 	svc, err := NewService(cfg, ServiceDependencies{Contacts: resolver, Logger: quietSlog()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
