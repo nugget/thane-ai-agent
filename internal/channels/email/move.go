@@ -58,12 +58,21 @@ func (c *Client) MoveMessages(ctx context.Context, opts MoveOptions) (MoveResult
 		return result, c.folderError(ctx, "move messages to folder", opts.Destination, err)
 	}
 
+	// COPYUID pairs the source UIDs the server actually moved with their
+	// new UIDs, so a requested UID the folder no longer held is absent
+	// from both. Without it, which UIDs moved is unknown.
 	if data != nil {
-		if dest, ok := data.DestUIDs.(imap.UIDSet); ok {
-			if nums, complete := dest.Nums(); complete && len(nums) > 0 {
-				result.DestUIDs = make([]uint32, len(nums))
-				for i, uid := range nums {
-					result.DestUIDs[i] = uint32(uid)
+		src, srcOK := data.SourceUIDs.(imap.UIDSet)
+		dest, destOK := data.DestUIDs.(imap.UIDSet)
+		if srcOK && destOK {
+			srcNums, srcComplete := src.Nums()
+			destNums, destComplete := dest.Nums()
+			if srcComplete && destComplete && len(destNums) > 0 && len(srcNums) == len(destNums) {
+				result.UIDs = make([]uint32, len(srcNums))
+				result.DestUIDs = make([]uint32, len(destNums))
+				for i := range srcNums {
+					result.UIDs[i] = uint32(srcNums[i])
+					result.DestUIDs[i] = uint32(destNums[i])
 				}
 				result.DestUIDValidity = data.UIDValidity
 				result.DestUIDsKnown = true

@@ -190,7 +190,13 @@ type moveResponse struct {
 	UIDs                 []uint32 `json:"uids"`
 	DestinationUIDs      []uint32 `json:"destination_uids"`
 	DestinationUIDsKnown bool     `json:"destination_uids_known"`
-	Note                 string   `json:"note,omitempty"`
+
+	// UIDsNotFound lists requested UIDs the server's COPYUID did not
+	// include: they were not in the source folder and did not move. It
+	// is empty when destination_uids_known is false, because the server
+	// then confirmed nothing.
+	UIDsNotFound []uint32 `json:"uids_not_found"`
+	Note         string   `json:"note,omitempty"`
 }
 
 // sendResponse is the result of email_send and email_reply.
