@@ -139,3 +139,14 @@ func TestTrustResultFormatIssuesNamesEveryRecipient(t *testing.T) {
 	}
 	mustContain(t, result.FormatIssues(), "Cannot send to known@example.com", "Cannot send to nobody@example.com", "contact_save")
 }
+
+// TestAmbiguousRefusalCountsEveryRecord pins that the refusal reason
+// names the full number of records, not only the rendered candidates.
+func TestAmbiguousRefusalCountsEveryRecord(t *testing.T) {
+	resolver := resolverFunc(func(context.Context, string) (ContactMatch, error) {
+		return ContactMatch{Status: ContactAmbiguous, TrustZone: "known", CandidatesTotal: 55,
+			Candidates: []ContactCandidate{{ID: "a", Name: "A", TrustZone: "trusted"}, {ID: "b", Name: "B", TrustZone: "known"}}}, nil
+	})
+	result := CheckRecipientTrust(context.Background(), resolver, []string{"shared@example.com"})
+	mustContain(t, result.Assessments[0].Reason, "belongs to 55 contact records", "and 53 more")
+}

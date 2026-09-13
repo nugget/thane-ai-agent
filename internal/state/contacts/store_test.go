@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -1414,7 +1415,7 @@ func TestRecordInteractionIfNewer(t *testing.T) {
 	}
 
 	first := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
-	if err := store.RecordInteractionIfNewer(created.ID, first, &InteractionMeta{Channel: "email", Direction: "inbound", Account: "primary", MessageID: "a@example.com"}); err != nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, first, &InteractionMeta{Channel: "email", Direction: "inbound", Account: "primary", MessageID: "a@example.com"}); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
 	got, err := store.Get(created.ID)
@@ -1429,7 +1430,7 @@ func TestRecordInteractionIfNewer(t *testing.T) {
 	}
 
 	// Older: no-op, and the newer meta survives.
-	if err := store.RecordInteractionIfNewer(created.ID, first.Add(-time.Hour), &InteractionMeta{Channel: "email", Direction: "inbound", MessageID: "old@example.com"}); err != nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, first.Add(-time.Hour), &InteractionMeta{Channel: "email", Direction: "inbound", MessageID: "old@example.com"}); err != nil {
 		t.Fatalf("older record: %v", err)
 	}
 	got, _ = store.Get(created.ID)
@@ -1439,7 +1440,7 @@ func TestRecordInteractionIfNewer(t *testing.T) {
 
 	// Newer: lands.
 	later := first.Add(time.Hour)
-	if err := store.RecordInteractionIfNewer(created.ID, later, &InteractionMeta{Channel: "email", Direction: "outbound"}); err != nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, later, &InteractionMeta{Channel: "email", Direction: "outbound"}); err != nil {
 		t.Fatalf("later record: %v", err)
 	}
 	got, _ = store.Get(created.ID)
@@ -1447,7 +1448,7 @@ func TestRecordInteractionIfNewer(t *testing.T) {
 		t.Errorf("newer timestamp must land: %v %+v", got.LastInteraction, got.LastInteractionMeta)
 	}
 
-	if err := store.RecordInteractionIfNewer(uuid.New(), later, nil); err == nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), uuid.New(), later, nil); err == nil {
 		t.Error("a missing contact must be an error")
 	}
 }
@@ -1589,7 +1590,7 @@ func TestRecordInteractionIfNewer_ComparesInstants(t *testing.T) {
 	}
 
 	older := time.Date(2026, 9, 1, 14, 0, 0, 0, time.UTC) // sorts after the stored text, but is an hour earlier
-	if err := store.RecordInteractionIfNewer(created.ID, older, &InteractionMeta{Channel: "email"}); err != nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, older, &InteractionMeta{Channel: "email"}); err != nil {
 		t.Fatalf("older record: %v", err)
 	}
 	got, _ := store.Get(created.ID)
@@ -1598,7 +1599,7 @@ func TestRecordInteractionIfNewer_ComparesInstants(t *testing.T) {
 	}
 
 	newer := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
-	if err := store.RecordInteractionIfNewer(created.ID, newer, &InteractionMeta{Channel: "email"}); err != nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, newer, &InteractionMeta{Channel: "email"}); err != nil {
 		t.Fatalf("newer record: %v", err)
 	}
 	got, _ = store.Get(created.ID)
@@ -1606,7 +1607,7 @@ func TestRecordInteractionIfNewer_ComparesInstants(t *testing.T) {
 		t.Errorf("a later instant must land: %v", got.LastInteraction)
 	}
 
-	if err := store.RecordInteractionIfNewer(created.ID, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil); err != nil {
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil); err != nil {
 		t.Fatalf("future record: %v", err)
 	}
 	got, _ = store.Get(created.ID)
@@ -1633,8 +1634,27 @@ func TestFindAllByPropertyExactIsUncapped(t *testing.T) {
 	if err != nil || len(capped) != 50 {
 		t.Fatalf("capped lookup = %d, %v", len(capped), err)
 	}
-	all, err := store.FindAllByPropertyExact("EMAIL", "SHARED@example.com")
+	all, err := store.FindAllByPropertyExact(context.Background(), "EMAIL", "SHARED@example.com")
 	if err != nil || len(all) != 55 {
 		t.Errorf("uncapped lookup = %d, %v; want every record", len(all), err)
+	}
+}
+
+// TestContactLookupsHonorCancellation pins the context propagation the
+// email resolver and recorder rely on: a cancelled context fails the
+// query instead of running it.
+func TestContactLookupsHonorCancellation(t *testing.T) {
+	store := newTestStore(t)
+	created, err := store.Upsert(&Contact{FormattedName: "Cancel Test", Kind: "individual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.FindAllByPropertyExact(ctx, "EMAIL", "x@example.com"); err == nil {
+		t.Error("a cancelled lookup must fail")
+	}
+	if err := store.RecordInteractionIfNewer(ctx, created.ID, time.Now(), nil); err == nil {
+		t.Error("a cancelled interaction write must fail")
 	}
 }

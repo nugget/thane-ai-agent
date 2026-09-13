@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -145,5 +146,27 @@ func TestEmailInteractionRecorderWritesNewerOnly(t *testing.T) {
 	}
 	if err := recorder.RecordEmailInteraction(ctx, email.Interaction{ContactID: uuid.New().String(), At: at}); err == nil {
 		t.Error("an unknown contact must be an error")
+	}
+}
+
+// TestResolveEmailContactCountsEveryDuplicate pins that the candidate
+// cap is not silent: past ten records the match still carries the full
+// count, and the least privileged zone is computed over all of them.
+func TestResolveEmailContactCountsEveryDuplicate(t *testing.T) {
+	store := newEmailIdentityStore(t)
+	for i := 0; i < 55; i++ {
+		zone := contacts.ZoneTrusted
+		if i == 54 {
+			zone = contacts.ZoneKnown // sorts last, past the rendered cap
+		}
+		seedContact(t, store, fmt.Sprintf("Dup %02d", i), "shared@example.com", zone)
+	}
+	resolver := &contactChannelBindingResolver{store: store}
+	got, err := resolver.ResolveEmailContact(context.Background(), "shared@example.com")
+	if err != nil {
+		t.Fatalf("ResolveEmailContact: %v", err)
+	}
+	if got.Status != email.ContactAmbiguous || len(got.Candidates) != maxAmbiguousCandidates || got.CandidatesTotal != 55 || got.TrustZone != contacts.ZoneKnown {
+		t.Errorf("match = status %s, %d candidates, total %d, zone %s", got.Status, len(got.Candidates), got.CandidatesTotal, got.TrustZone)
 	}
 }

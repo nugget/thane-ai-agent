@@ -43,6 +43,10 @@ type addressView struct {
 
 	ContactStatus ContactStatus      `json:"contact_status"`
 	Candidates    []ContactCandidate `json:"candidates,omitempty"`
+
+	// CandidatesTotal counts every record sharing an ambiguous address;
+	// candidates lists at most ten of them.
+	CandidatesTotal int `json:"candidates_total,omitempty"`
 }
 
 func viewAddress(a Address, lookup *identityLookup) *addressView {
@@ -55,6 +59,7 @@ func viewAddress(a Address, lookup *identityLookup) *addressView {
 		view.TrustZone = match.TrustZone
 		view.ContactStatus = match.Status
 		view.Candidates = match.Candidates
+		view.CandidatesTotal = match.CandidatesTotal
 		if match.Binding != nil {
 			view.Contact = &contactView{ID: match.Binding.ContactID, Name: match.Binding.ContactName, IsOwner: match.Binding.IsOwner}
 		}

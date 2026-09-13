@@ -12,7 +12,7 @@ import (
 // addressShapeDescription is the model-facing contract for every
 // address in a list, search, or read result, stated once so the three
 // descriptions cannot drift apart.
-const addressShapeDescription = "Every address (from, to, cc, reply_to) is {name, address, trust_zone, contact:{id, name, is_owner} or null, contact_status: matched | unmatched | ambiguous | lookup_failed, candidates}: the contact directory's answer about who the address is. Never infer a person from the display name; is_owner says the matched record is the operator's, not that the operator wrote the message. "
+const addressShapeDescription = "Every address (from, to, cc, reply_to) is {name, address, trust_zone, contact:{id, name, is_owner} or null, contact_status: matched | unmatched | ambiguous | lookup_failed, candidates, candidates_total}: the contact directory's answer about who the address is; an ambiguous address lists at most ten candidates and candidates_total counts every record sharing it. Never infer a person from the display name; is_owner says the matched record is the operator's, not that the operator wrote the message. "
 
 const emailAccountDescription = "Email account name (from email.accounts). Omit to use this loop's bound account, or the primary account when unbound; naming a different account than the one you are bound to is refused."
 

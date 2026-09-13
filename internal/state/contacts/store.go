@@ -3,6 +3,7 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -923,7 +924,7 @@ func (s *Store) UpdateLastInteraction(contactID uuid.UUID, t time.Time, meta *In
 // timestamp is a silent no-op rather than a regression, and a future
 // timestamp is recorded as now. A missing or deleted contact is an
 // error.
-func (s *Store) RecordInteractionIfNewer(contactID uuid.UUID, t time.Time, meta *InteractionMeta) error {
+func (s *Store) RecordInteractionIfNewer(ctx context.Context, contactID uuid.UUID, t time.Time, meta *InteractionMeta) error {
 	var metaJSON sql.NullString
 	if meta != nil {
 		b, err := json.Marshal(meta)
@@ -942,7 +943,7 @@ func (s *Store) RecordInteractionIfNewer(contactID uuid.UUID, t time.Time, meta 
 	// Stored values may carry any offset (nullTime preserves the one the
 	// time had), so compare instants with julianday rather than strings.
 	stamp := t.UTC().Format(time.RFC3339)
-	result, err := s.db.Exec(`
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE contacts SET last_interaction = ?, last_interaction_meta = ?
 		WHERE id = ? AND `+activeFilter+`
 		  AND (last_interaction IS NULL OR last_interaction = ''
@@ -959,7 +960,7 @@ func (s *Store) RecordInteractionIfNewer(contactID uuid.UUID, t time.Time, meta 
 	// Nothing changed: either the contact is gone or the stored
 	// interaction is already at least this new. Tell those apart.
 	var exists int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM contacts WHERE id = ? AND `+activeFilter, contactID.String()).Scan(&exists); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM contacts WHERE id = ? AND `+activeFilter, contactID.String()).Scan(&exists); err != nil {
 		return fmt.Errorf("record interaction: %w", err)
 	}
 	if exists == 0 {
@@ -1116,8 +1117,8 @@ func (s *Store) FindByPropertyExact(property, value string) ([]*Contact, error) 
 // result cap, for decisions that must see every record sharing a value:
 // the email send gate computes the least privileged zone across all of
 // them, and a capped list could drop the one that should govern.
-func (s *Store) FindAllByPropertyExact(property, value string) ([]*Contact, error) {
-	rows, err := s.db.Query(`
+func (s *Store) FindAllByPropertyExact(ctx context.Context, property, value string) ([]*Contact, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT `+qualifiedContactColumns+`
 		FROM contacts
 		JOIN contact_properties ON contacts.id = contact_properties.contact_id

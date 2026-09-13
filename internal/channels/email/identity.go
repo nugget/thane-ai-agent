@@ -57,26 +57,31 @@ type ContactCandidate struct {
 // ContactMatch is the directory's answer for one address.
 type ContactMatch struct {
 	// Status says how the address resolved.
-	Status ContactStatus
+	Status ContactStatus `json:"-"`
 
 	// Binding is the matched contact as a channel binding, set only
 	// when Status is [ContactMatched]. It carries the contact UUID,
 	// display name, trust zone, and whether the record is the
 	// operator's. It is an identity claim about the address, not proof
 	// that the contact wrote a given message.
-	Binding *memory.ChannelBinding
+	Binding *memory.ChannelBinding `json:"-"`
 
 	// TrustZone is the effective zone the gate and the wake metadata
 	// use: the contact's zone when matched, the least privileged
 	// candidate's when ambiguous, and [ZoneUnknown] otherwise.
-	TrustZone string
+	TrustZone string `json:"-"`
 
-	// Candidates lists the records sharing the address when Status is
-	// [ContactAmbiguous].
-	Candidates []ContactCandidate
+	// Candidates lists records sharing the address when Status is
+	// [ContactAmbiguous], at most as many as the resolver renders.
+	Candidates []ContactCandidate `json:"-"`
+
+	// CandidatesTotal counts every record sharing the address when
+	// Status is [ContactAmbiguous]; it exceeds len(Candidates) when the
+	// list was capped. The effective zone is computed over all of them.
+	CandidatesTotal int `json:"-"`
 
 	// Err is the store failure when Status is [ContactLookupFailed].
-	Err error
+	Err error `json:"-"`
 }
 
 // ContactResolver resolves an email address against the contact
@@ -96,21 +101,21 @@ type ContactResolver interface {
 // the contact so a dossier can say when the person was last in touch.
 type Interaction struct {
 	// ContactID is the contact's UUID.
-	ContactID string
+	ContactID string `json:"-"`
 
 	// At is when the exchange happened: the message's Date for inbound
 	// mail, bounded by the time it was received, and the send time for
 	// outbound.
-	At time.Time
+	At time.Time `json:"-"`
 
 	// Direction is [DirectionInbound] or [DirectionOutbound].
-	Direction string
+	Direction string `json:"-"`
 
 	// Account is the mailbox the exchange went through.
-	Account string
+	Account string `json:"-"`
 
 	// MessageID identifies the message, when known.
-	MessageID string
+	MessageID string `json:"-"`
 }
 
 // InteractionRecorder persists an [Interaction] on a contact. The
@@ -183,6 +188,9 @@ func resolveContact(ctx context.Context, resolver ContactResolver, address strin
 	}
 	if match.Status != ContactMatched {
 		match.Binding = nil
+	}
+	if match.Status == ContactAmbiguous && match.CandidatesTotal < len(match.Candidates) {
+		match.CandidatesTotal = len(match.Candidates)
 	}
 	return match
 }
