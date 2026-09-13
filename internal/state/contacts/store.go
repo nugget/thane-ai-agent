@@ -1040,8 +1040,8 @@ func (s *Store) RecordInteractionIfNewer(ctx context.Context, contactID uuid.UUI
 // on value), this is a no-op. Multiple values per property are supported.
 //
 // The store applies no identity custody: operator writers call it with
-// full power, and a model-facing writer (contact_import_vcf) must first
-// drop every identity value identityViolations refuses.
+// full power, and model-facing writers go through applyContactSave and
+// applyContactImport, which check custody inside their transactions.
 func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 	return s.addProperty(context.Background(), contactID, p)
 }

@@ -383,3 +383,63 @@ func (s *Store) deleteIfUncustodied(ctx context.Context, id uuid.UUID) (bool, er
 	s.rebuildFTS()
 	return true, nil
 }
+
+// applyContactImport writes one contact_import_vcf card in a single
+// transaction. c is the merged snapshot of the record the card merges
+// into, or a new record when c.ID is uuid.Nil; props are the card's
+// properties, less the values the import's own check refused. Identity
+// custody is rechecked inside the transaction, as applyContactSave does
+// it, so no operator write can land between the check and the writes:
+// a merge target whose trust zone moved, or that was deleted, since the
+// import read it returns errContactChangedConcurrently and writes
+// nothing; an identity value identityViolations now refuses (a holder
+// with authority that appeared since the import's check) is left out
+// and returned, keeping the import's drop-and-report contract. A
+// property whose insert fails is logged and counted, and the rest of
+// the card still commits.
+func (s *Store) applyContactImport(ctx context.Context, c *Contact, props []Property, guard identityGuard) ([]IdentityViolation, int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin contact import: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on defer
+
+	if c.ID != uuid.Nil {
+		if err := checkSaveSnapshot(tx, c.ID, guard.snapshotZone); err != nil {
+			return nil, 0, err
+		}
+	}
+	query := func(query string, args ...any) (*sql.Rows, error) {
+		return tx.QueryContext(ctx, query, args...)
+	}
+	refused, err := identityViolations(query, c.ID, guard, props)
+	if err != nil {
+		return nil, 0, fmt.Errorf("check identity custody: %w", err)
+	}
+	now := time.Now().UTC()
+	if err := upsertContactTx(tx, c, now); err != nil {
+		return nil, 0, err
+	}
+	failures := 0
+	for _, p := range props {
+		if refusedIdentity(p, refused) {
+			continue
+		}
+		exists, err := propertyExistsTx(tx, c.ID, p.Property, p.Value)
+		if err == nil && !exists {
+			err = insertPropertyTx(tx, c.ID, p, now)
+		}
+		if err != nil {
+			failures++
+			s.logger.Warn("contact_import_vcf property write failed",
+				"contact_id", c.ID.String(),
+				"property", p.Property,
+				"error", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, fmt.Errorf("commit contact import: %w", err)
+	}
+	s.rebuildFTS()
+	return refused, failures, nil
+}

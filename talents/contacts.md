@@ -578,6 +578,16 @@ item1.EMAIL imports as EMAIL under the address rules above. The rest
 of the card still imports. The result counts each kind of drop, not
 the values themselves, and a dry run reports the same counts, so a
 preview shows how many values the operator will have to add by hand.
+Each card's addresses and numbers, and its merge target's zone, are
+checked again inside the write that stores it, so a value the operator
+gives such a contact while the import runs is dropped too, and a card
+whose merge target the operator re-zones (promotes or demotes) or
+deletes meanwhile is skipped, not merged. A card is also skipped when
+its write fails, as it can when an operator change to the contacts
+collides with it, and when it is left with no usable name; a dry run
+skips a nameless card too. The result names each skipped card with its
+cause: import a re-zoned or failed card again with merge on (the
+default), and give a nameless card a plain FN first.
 
 ## Export one contact as a vCard
 

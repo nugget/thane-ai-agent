@@ -256,10 +256,11 @@ operator power.
 - **Legacy operator name.** Under `identity.owner_contact_name` the
   operator is whichever contact the name resolves to, so the app resolves
   it once at startup through the channel resolver's cache and pins that
-  contact for custody; custody and `IsOwner` then agree for the life of the
-  process. In every turn, `contact_save` refuses to create a contact, or set
-  a nickname, that carries the owner name on any contact but the operator's,
-  and `contact_import_vcf` leaves such a card or nickname out, because the
+  contact for custody and `contact_owner`; custody, `contact_owner` and
+  `IsOwner` then agree for the life of the process. In every turn,
+  `contact_save` refuses to create a contact, or set a nickname, that
+  carries the owner name on any contact but the operator's, and
+  `contact_import_vcf` leaves such a card or nickname out, because the
   next resolution could pick the model's contact as the operator.
 - **Authority holders.** In every turn, no model writer adds a value that
   another active contact already holds when that contact is above `known`
@@ -300,7 +301,12 @@ contact ID, zone, rule, and the turn's request, conversation, and loop IDs. The 
 also re-reads the contact's trust zone and deleted state inside its
 transaction and aborts if either changed since the tool read the record, so
 a model save can no longer revert an operator's concurrent zone change or
-resurrect a deleted contact.
+resurrect a deleted contact. Import writes each card in one transaction
+that repeats the same re-read and the holder and target checks, so an
+operator write that lands between the import's check and its write cannot
+give a value a second holder: a newly refused value is dropped and counted,
+and a card whose merge target changed zone or was deleted writes nothing
+and is counted as skipped.
 
 `ContactToCard` withholds any stored property whose name carries vCard
 syntax, a control character or U+2028 included, or is a field the codec
