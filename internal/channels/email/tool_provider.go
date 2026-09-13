@@ -214,7 +214,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder, and signed says whether an outbound signature was applied. " +
 				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted. " +
 				"You can clear a refusal yourself only by changing the message: drop or correct a recipient, or pass draft: true when the account has no SMTP. " +
-				"Only the operator can change a contact's trust zone or the account's access, recipient-domain rules, or SMTP; contact_save cannot clear a trust refusal, because it cannot set a zone and a contact it creates starts at known.",
+				"The only legitimate recovery for a trust refusal is the operator assigning the recipient a zone, and only the operator can change the account's access, recipient-domain rules, or SMTP. " +
+				"Saving a new contact does not help, because it starts at known; never add a refused address to an existing contact, which would pass the gate today by lending that contact's zone to whoever holds the address.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

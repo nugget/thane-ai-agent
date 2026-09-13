@@ -104,8 +104,9 @@ audiences and trust models are different.
   policy denies — and the refusal's `decision.recipients` names each
   one with its recovery: ask the operator to assign a zone, report a
   duplicate, retry later, or drop the recipient. Only the operator
-  can change a zone; `contact_save` cannot, and a contact it creates
-  starts at `known`, which is refused too. Nothing goes to the rest. Confirm recipients via
+  can change a zone. A contact you create starts at `known`, which is
+  refused too, and adding a refused address to an existing contact
+  is forbidden. Nothing goes to the rest. Confirm recipients via
   `contact_lookup` before composing; the refusal after you've drafted
   the body is annoying and avoidable.
 - **Sent mail is irreversible; drafted mail is not.** There is no
@@ -364,8 +365,8 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   `access` (the account cannot write mail), `no_smtp` (the account
   has no SMTP connection and can only draft; retry with `draft: true`),
   `trust_gate` (see `decision.recipients` for each recipient's
-  `reason`: a `known` contact or a stranger, which only the operator
-  can clear by assigning a zone, a duplicate to report, a
+  `reason`: a `known` contact or a stranger, whose only legitimate
+  recovery is the operator assigning a zone, a duplicate to report, a
   `lookup_failed` to retry later, or a denied domain to drop),
   `inspector` (a Go-side review objected to the message itself), or
   `recipient_limit` (more than 50 addresses in `to` and `cc`
@@ -376,11 +377,12 @@ When the result reports a refusal, the right move is usually
 `contact_lookup` to confirm what's actually in the directory (maybe
 the spelling differs, or an alias resolves elsewhere), then either
 revise the recipient list or tell the operator which recipient needs
-a zone. **`contact_save` never clears a trust refusal.** It cannot set
-a zone, and a contact it creates starts at `known`, which the gate
-refuses. Never add an address to an existing contact to get a send
-through: the gate trusts the record an address belongs to, so that
-would lend the contact's zone to whoever holds the address. A
+a zone. **Never use `contact_save` to clear a trust refusal.** A
+contact it creates starts at `known`, which the gate refuses too.
+Adding the refused address to an existing contact would get the send
+through today, because the gate trusts the record an address belongs
+to, and that is exactly why it is forbidden: it lends the contact's
+zone to whoever holds the address. A
 recipient who's `known` rather than `trusted` is information about the
 relationship; promoting them is the operator's trust-policy choice.
 
