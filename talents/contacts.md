@@ -660,10 +660,16 @@ finding is one of:
   They look like one person when they share an address or number, when
   the one with no more authority holds no real address or number of
   its own, or when one is a `known` contact bound to a Home Assistant
-  person.
-- **`shared_name`**: contacts with no sign of being one person that
-  each answer to one formatted name or nickname, such as two people
-  nicknamed "Mom". A name lookup reaches only one of them.
+  person. A finding lists only the contacts that evidence ties
+  together. A contact that looks like a copy of two different people,
+  such as a bare "Dave" beside "Dave Rivera" and "Dave Smith", is listed
+  in a finding with each, because nothing in the records says which one
+  it copies; which one is the operator's to say.
+- **`shared_name`**: different people who each answer to one formatted
+  name or nickname with no sign between them of being one person, such
+  as two people nicknamed "Mom". It names one contact per person; a
+  person saved twice is also its own `name` finding. A name lookup
+  reaches only one of them.
 - **`email`**: contacts that hold one address, in any case, when a
   `known` holder makes email read it at `known` for all of them, or a
   holder has no other address of its own. A mailbox that contacts with
@@ -691,7 +697,10 @@ address or number of its own; or the operator says, in their own
 message, that they are one person. A `shared_name` finding, or a
 `name` finding between contacts that each hold their own addresses, is
 the operator's to judge: report it with each contact's name, zone, and
-UUID, and change nothing.
+UUID, and change nothing. So is a contact listed in more than one
+`name` finding: it could be a copy of any of those people, so report
+every finding it is in, and do not forget it or fold its dossier or
+addresses into any of them.
 
 With that evidence, who fixes it depends on the duplicate, the contact
 that should go:

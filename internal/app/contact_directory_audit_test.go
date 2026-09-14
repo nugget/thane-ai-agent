@@ -203,6 +203,42 @@ func TestContactDirectoryFindingsSource(t *testing.T) {
 	}
 }
 
+// TestContactDirectorySourcesAtLimitZero pins what the contact_directory
+// row relies on when fork findings take all of its names: both real
+// sources, asked for no lines, return none and still count every
+// finding, so the row can report the total.
+func TestContactDirectorySourcesAtLimitZero(t *testing.T) {
+	ctx := context.Background()
+	store := newEmailIdentityStore(t)
+	// An admin record at a reserved domain is a placeholder fork
+	// finding; a no-reply address on one is an automated finding too.
+	seedDirectoryRecord(t, store, "Alice", contacts.ZoneAdmin, "alice@example.com")
+	seedDirectoryRecord(t, store, "Forge Notices", contacts.ZoneAdmin, "noreply@forge.example")
+	for _, tc := range []struct {
+		name   string
+		source func(context.Context, *contacts.Store, int) ([]string, int, error)
+	}{
+		{name: "automated addresses", source: contactDirectoryFindings},
+		{name: "forks", source: contactForkFindings},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, want, err := tc.source(ctx, store, maxContactDirectoryWarnings)
+			if err != nil {
+				t.Fatalf("source: %v", err)
+			}
+			if want == 0 {
+				t.Fatal("the seeded directory must hold a finding for this source")
+			}
+			for _, limit := range []int{0, -1} {
+				lines, total, err := tc.source(ctx, store, limit)
+				if err != nil || len(lines) != 0 || total != want {
+					t.Errorf("limit %d: lines = %q, total = %d, err = %v; want no lines and a total of %d", limit, lines, total, err, want)
+				}
+			}
+		})
+	}
+}
+
 // TestContactDirectoryFindingsClipPerField pins that an oversized name
 // or address is clipped field by field, so each line still carries the
 // zone, the pattern, and (for a long name) the whole address, which is

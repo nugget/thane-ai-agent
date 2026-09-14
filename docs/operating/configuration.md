@@ -223,9 +223,10 @@ override. When email polling is on (email is configured and
 `trusted` record holding such an address is reported: one Warn per
 record and address at startup, at most 20 followed by one summary Warn
 with the total, and a `contact_directory` row in `system_health` that stays
-degraded, naming up to five of them, until the directory is fixed. The
-row re-reads the directory on every render, so a fix clears it without a
-restart. The fix stays in the operator's custody: demote a record that
+degraded until the directory is fixed, counting every such record and naming
+those that fit in the row's five named findings after any fork findings
+(described below), which can be none. The row re-reads the directory on
+every render, so a fix clears it without a restart. The fix stays in the operator's custody: demote a record that
 only sends notifications to `known`, or move the address to its own
 `known` record, through CardDAV (`X-THANE-TRUST-ZONE`) or a full-record
 `PUT /v1/contacts/{id}`. While the address stays on the higher record,
@@ -239,9 +240,13 @@ or one record's whole formatted name that is another's given name or the
 first word of its formatted name) are a `name` finding when they look
 like one person: they share an address or number, the one with no more
 authority holds no real address or number of its own, or one is a
-`known` record bound to a Home Assistant person. Records with no such
-sign that each answer to one formatted name or nickname are a
-`shared_name` finding, since a lookup reaches only one of them. An email
+`known` record bound to a Home Assistant person. A `name` finding lists
+only the records that evidence ties together, and a copy (a `known`
+record, or one with no real address or number of its own) that could be
+either of two people is listed with each. Different
+people who each answer to one formatted name or nickname, with no such
+sign between them, are one `shared_name` finding that names one record
+per person, since a lookup reaches only one of them. An email
 address held by several records is a finding when a `known` record holds
 it or a holder has no other address of its own; a mailbox that records
 with authority share while each holds its own addresses is not. A phone
@@ -254,8 +259,9 @@ or the `example`, `test`, `invalid`, and `localhost` top-level domains) on
 a record above `known` or the operator's own is a finding too, since no
 mailbox exists there. Each finding names its records with zone and UUID
 and marks the operator's own and any bound to a Home Assistant person.
-The row names up to five findings, and startup logs one Warn per finding,
-at most 20 followed by one summary Warn.
+The row names up to five findings in all, fork findings first and
+automated-address findings in what remains, and startup logs one Warn per
+finding, at most 20 followed by one summary Warn.
 
 The fixes are the operator's, through CardDAV or `/v1/contacts`: merge a
 duplicate into the record that should keep the name or address, rename

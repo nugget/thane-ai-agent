@@ -10,14 +10,19 @@ import (
 
 // Contact fork kinds, as [ContactForkFinding.Kind] reports them.
 const (
-	// ForkKindName is a name key (see name_keys.go) that records likely
-	// to be one person saved twice answer to: they share the key, and
-	// the records carry the evidence fork_evidence.go describes.
+	// ForkKindName is one person saved as two or more records that
+	// answer to a name key (see name_keys.go), as name_groups.go reads
+	// people: the records with authority that share an address or
+	// number or are each other's thin copy, and each copy that the
+	// evidence fork_evidence.go describes ties to them. A copy tied to
+	// two people is in each one's finding.
 	ForkKindName = "name"
-	// ForkKindSharedName is a formatted name or nickname that records
-	// with no sign of being one person each answer to, such as two
-	// people both nicknamed "Mom". A name lookup reaches only one of
-	// them.
+	// ForkKindSharedName is a formatted name or nickname that different
+	// people each answer to, one of them with authority, with no sign
+	// of being one person, such as two people both nicknamed "Mom". It
+	// names one record per person; a copy that could be any of several
+	// people stands for itself only while one of them is not named. A
+	// name lookup reaches only one of them.
 	ForkKindSharedName = "shared_name"
 	// ForkKindEmail is an email address two or more records hold, in a
 	// shape that misroutes mail (see [emailGroupMisroutes]).
@@ -71,11 +76,13 @@ type ContactForkFinding struct {
 	// Key is the shared name key, email address or phone number (digits
 	// as stored, without a leading '+'), or the placeholder address.
 	Key string `json:"key"`
-	// Members are the records that share Key, the operator's first, then
+	// Members are the finding's records, the operator's first, then
 	// those above known, then by name and id; at most [maxForkMembers].
-	// A reserved-domain finding has exactly one.
+	// A shared-name finding names one record per person, and a
+	// reserved-domain finding has exactly one.
 	Members []ContactForkMember `json:"members"`
-	// MemberCount counts every record that shares Key.
+	// MemberCount counts all of the finding's records, including those
+	// past the bound.
 	MemberCount int `json:"member_count"`
 }
 
@@ -95,11 +102,18 @@ type ContactForkAudit struct {
 // includes a record above known (a malformed zone counts) or the
 // operator's own, so ordinary known contacts never raise it.
 //
-//   - Name: records that share a name key (see name_keys.go) are a
-//     [ForkKindName] finding when a pair of them, one with authority, is
-//     likely one person (see fork_evidence.go). Otherwise records that
-//     each answer to one formatted name or nickname are a
-//     [ForkKindSharedName] finding, since a lookup reaches only one; a
+//   - Name: records that share a name key (see name_keys.go) are read
+//     as people (see name_groups.go). Records with authority that share
+//     an address or number, or are each other's thin copy, are one
+//     person. A record that the evidence
+//     fork_evidence.go describes ties to a person any other way, one
+//     without authority or a thin one with it, is a copy: it joins
+//     every person it is tied to but never ties two into one. Each
+//     person with two or more records
+//     is a [ForkKindName] finding. Records that answer to the key as a
+//     formatted name or nickname, one with authority, that no person
+//     holds together are the key's one [ForkKindSharedName] finding,
+//     naming a record per person, since a lookup reaches only one; a
 //     short form alone between different people is not reported,
 //     because name resolution reads no short forms.
 //   - Email: an address held by two or more records, when
@@ -136,93 +150,6 @@ func (s *Store) ContactForks(ctx context.Context, limit int) (ContactForkAudit, 
 		audit.Findings = append([]ContactForkFinding(nil), findings[:n]...)
 	}
 	return audit, nil
-}
-
-// nameEntry is one record that answers to a name key: exactly, as its
-// formatted name or nickname, or by a short form.
-type nameEntry struct {
-	record int
-	exact  bool
-}
-
-// nameFindings groups records by exact name key, adds a record by its
-// short form only to a key that is some record's whole formatted name,
-// and judges each group of two or more with [nameGroupKind].
-func nameFindings(records []directoryRecord) []ContactForkFinding {
-	formatted := make(map[string]bool, len(records))
-	groups := make(map[string][]nameEntry)
-	for i, r := range records {
-		if r.keys.formatted != "" {
-			formatted[r.keys.formatted] = true
-		}
-		for _, k := range r.keys.exact {
-			groups[k] = append(groups[k], nameEntry{record: i, exact: true})
-		}
-	}
-	for i, r := range records {
-		for _, k := range r.keys.short {
-			if formatted[k] && !containsNameKey(r.keys.exact, k) {
-				groups[k] = append(groups[k], nameEntry{record: i})
-			}
-		}
-	}
-	var out []ContactForkFinding
-	for key, entries := range groups {
-		if len(entries) < 2 {
-			continue
-		}
-		kind, ok := nameGroupKind(records, key, entries)
-		if !ok {
-			continue
-		}
-		members := make([]ContactForkMember, 0, len(entries))
-		for _, e := range entries {
-			members = append(members, records[e.record].member)
-		}
-		out = append(out, newForkFinding(kind, key, members))
-	}
-	return out
-}
-
-// nameGroupKind judges one name group by the pairs in it that match on
-// key and include a record with authority. It returns [ForkKindName]
-// when such a pair is likely one person, [ForkKindSharedName] when such
-// a pair both answer to key as a formatted name or nickname, and false
-// otherwise.
-func nameGroupKind(records []directoryRecord, key string, entries []nameEntry) (string, bool) {
-	shared := false
-	for i := range entries {
-		for j := i + 1; j < len(entries); j++ {
-			a, b := entries[i], entries[j]
-			ra, rb := records[a.record], records[b.record]
-			if !ra.member.hasAuthority() && !rb.member.hasAuthority() {
-				continue
-			}
-			if !namePairMatches(ra, a.exact, rb, b.exact, key) {
-				continue
-			}
-			if onePersonEvidence(ra, rb) != "" {
-				return ForkKindName, true
-			}
-			shared = shared || (a.exact && b.exact)
-		}
-	}
-	return ForkKindSharedName, shared
-}
-
-// namePairMatches reports whether two records in one name group share
-// key as [sharedNameKey] counts it: both hold it exactly, or one holds it
-// as its whole formatted name and the other as a short form.
-func namePairMatches(a directoryRecord, aExact bool, b directoryRecord, bExact bool, key string) bool {
-	switch {
-	case aExact && bExact:
-		return true
-	case aExact:
-		return a.keys.formatted == key
-	case bExact:
-		return b.keys.formatted == key
-	}
-	return false
 }
 
 // addressHolders is the records that hold one address or number.

@@ -19,8 +19,9 @@ const contactDirectoryRemedy = "demote the record to known, or move the address 
 // a badly misfiled directory cannot flood the log; one summary line
 // then carries the total. The audit itself keeps no more findings than
 // this. The contact_directory health row counts every finding too but
-// names only the first five, so a record past both bounds is counted,
-// not named, until earlier ones are fixed.
+// names at most five findings across this audit and the fork audit,
+// fork findings first, so a record past both bounds is counted, not
+// named, until earlier ones are fixed.
 const maxContactDirectoryWarnings = 20
 
 // maxDirectoryFieldBytes bounds the record name and the address in
@@ -33,8 +34,10 @@ const maxDirectoryFieldBytes = 100
 // contactDirectoryFindings formats the first limit records the
 // automated-address cap overrides as "<name> (<zone>, <address>:
 // <pattern>)", for the contact_directory health row, and returns the
-// count of every such record alongside. The name and address are each
-// clipped to [maxDirectoryFieldBytes].
+// count of every such record alongside. A limit of zero formats none,
+// which the row asks for when fork findings took all its names, and
+// still counts them all. The name and address are each clipped to
+// [maxDirectoryFieldBytes].
 func contactDirectoryFindings(ctx context.Context, store *contacts.Store, limit int) ([]string, int, error) {
 	audit, err := store.AutomatedAddressesAboveKnown(ctx, limit)
 	if err != nil {
@@ -110,7 +113,7 @@ func logContactDirectoryFindings(ctx context.Context, store *contacts.Store, log
 		)
 	}
 	if audit.Total > len(audit.Findings) {
-		logger.Warn("more contact records above known hold automated-looking email addresses than were logged; the contact_directory health row counts them all and names the first five",
+		logger.Warn("more contact records above known hold automated-looking email addresses than were logged; the contact_directory health row counts them all and names up to five findings, duplicate, shared-name and placeholder findings first",
 			"total", audit.Total,
 			"logged", len(audit.Findings),
 			"read_as", contacts.ZoneKnown,

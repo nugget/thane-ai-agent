@@ -157,3 +157,171 @@ func TestHealthContactDirectoryRow_ForksBounded(t *testing.T) {
 		t.Errorf("detail marks %d clipped findings, want %d", got, maxDirectoryFindingsShown)
 	}
 }
+
+func automatedLines(n int) []string {
+	out := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		out = append(out, fmt.Sprintf("Record %d (admin, noreply@r%d.example: no-reply)", i, i))
+	}
+	return out
+}
+
+// recordLimit wraps a directory source so a test can see the limit the
+// row gave it; got stays -1 until the source is called.
+func recordLimit(src func(context.Context, int) ([]string, int, error), got *int) func(context.Context, int) ([]string, int, error) {
+	*got = -1
+	return func(ctx context.Context, limit int) ([]string, int, error) {
+		*got = limit
+		return src(ctx, limit)
+	}
+}
+
+// ignoreLimit is a directory source that returns every line whatever
+// limit it is given.
+func ignoreLimit(lines []string) func(context.Context, int) ([]string, int, error) {
+	return func(context.Context, int) ([]string, int, error) {
+		return lines, len(lines), nil
+	}
+}
+
+func contactDirectoryDetail(t *testing.T, src HealthSources) string {
+	t.Helper()
+	for _, row := range NewInspector(src).Health(context.Background()).Annunciator {
+		if row.Name == "contact_directory" {
+			return row.Detail
+		}
+	}
+	t.Fatal("no contact_directory row")
+	return ""
+}
+
+// TestHealthContactDirectoryRow_SharedBudget pins the row's one budget
+// of five named findings across both audits: fork findings are named
+// first, in the part rendered first, and the automated-address audit is
+// asked for what they leave, down to none, while its total still
+// appears; a fork audit that finds nothing or fails leaves the whole
+// budget.
+func TestHealthContactDirectoryRow_SharedBudget(t *testing.T) {
+	tests := []struct {
+		name                         string
+		forks                        func(context.Context, int) ([]string, int, error)
+		automated                    int
+		wantForkLimit, wantAutoLimit int
+		forkPart, automatedPart      []string
+		notDetail                    []string
+	}{
+		{
+			name: "four forks leave one name for three automated addresses", forks: directorySource(forkLines(4), nil), automated: 3,
+			wantForkLimit: 5, wantAutoLimit: 1,
+			forkPart:      []string{"4 duplicate, shared-name or placeholder contact findings", `name "p1"`, `name "p4"`},
+			automatedPart: []string{"3 automated-looking email addresses", "Record 1 (admin, noreply@r1.example: no-reply) (+2 more)."},
+			notDetail:     []string{"Record 2 (", "none is named"},
+		},
+		{
+			name: "seven forks leave no name for two automated addresses", forks: directorySource(forkLines(7), nil), automated: 2,
+			wantForkLimit: 5, wantAutoLimit: 0,
+			forkPart: []string{"7 duplicate, shared-name or placeholder contact findings", `name "p5"`, "(+2 more)"},
+			automatedPart: []string{
+				"hold 2 automated-looking email addresses, which the runtime reads at known whatever the record's zone; none is named here, since the contact_directory row names at most 5 findings in all and names duplicate, shared-name or placeholder findings first.",
+				"The operator should demote each record to known",
+			},
+			notDetail: []string{`name "p6"`, "Record 1 (", ": (+"},
+		},
+		{
+			name: "five forks leave no name for the one automated address", forks: directorySource(forkLines(5), nil), automated: 1,
+			wantForkLimit: 5, wantAutoLimit: 0,
+			forkPart:      []string{`name "p5"`, "removes no address. "},
+			automatedPart: []string{"Contact records above known hold 1 automated-looking email address, which the runtime reads at known whatever the record's zone; it is not named here, since the contact_directory row names at most 5 findings in all"},
+			notDetail:     []string{"none is named", "Record 1 ("},
+		},
+		{
+			name: "a clean fork audit leaves the whole budget", forks: directorySource(nil, nil), automated: 7,
+			wantForkLimit: 5, wantAutoLimit: 5,
+			automatedPart: []string{"Record 5 (", "(+2 more)"},
+			notDetail:     []string{"Record 6 (", "duplicate"},
+		},
+		{
+			name: "a failed fork audit leaves the whole budget", forks: directorySource(nil, errors.New("database is locked")), automated: 7,
+			wantForkLimit: 5, wantAutoLimit: 5,
+			forkPart:      []string{"The contact fork audit failed: database is locked. "},
+			automatedPart: []string{"Record 5 (", "(+2 more)"},
+			notDetail:     []string{"Record 6 ("},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var forkLimit, autoLimit int
+			detail := contactDirectoryDetail(t, HealthSources{
+				DirectoryForks:    recordLimit(tt.forks, &forkLimit),
+				DirectoryFindings: recordLimit(directorySource(automatedLines(tt.automated), nil), &autoLimit),
+			})
+			if forkLimit != tt.wantForkLimit || autoLimit != tt.wantAutoLimit {
+				t.Errorf("source limits: forks %d, automated %d; want %d, %d", forkLimit, autoLimit, tt.wantForkLimit, tt.wantAutoLimit)
+			}
+			split := strings.Index(detail, "Contact records above known hold")
+			if split < 0 {
+				t.Fatalf("detail = %q, want an automated-address part", detail)
+			}
+			forkPart, automatedPart := detail[:split], detail[split:]
+			for _, want := range tt.forkPart {
+				if !strings.Contains(forkPart, want) {
+					t.Errorf("fork part = %q, want it to contain %q", forkPart, want)
+				}
+			}
+			for _, want := range tt.automatedPart {
+				if !strings.Contains(automatedPart, want) {
+					t.Errorf("automated part = %q, want it to contain %q", automatedPart, want)
+				}
+			}
+			for _, not := range tt.notDetail {
+				if strings.Contains(detail, not) {
+					t.Errorf("detail = %q, must not contain %q", detail, not)
+				}
+			}
+		})
+	}
+}
+
+// TestHealthContactDirectoryRow_NamesAtMostFiveInAll pins the row-wide
+// bound in every combination of fork and automated-address findings,
+// with sources that honour the limit and sources that ignore it: forks
+// are named first, automated addresses fill what is left, no more than
+// five are named in all, both totals appear, and no part ends in a bare
+// count.
+func TestHealthContactDirectoryRow_NamesAtMostFiveInAll(t *testing.T) {
+	for _, careless := range []bool{false, true} {
+		for forks := range 8 {
+			for automated := range 8 {
+				t.Run(fmt.Sprintf("careless=%v/forks=%d/automated=%d", careless, forks, automated), func(t *testing.T) {
+					src := HealthSources{
+						DirectoryForks:    directorySource(forkLines(forks), nil),
+						DirectoryFindings: directorySource(automatedLines(automated), nil),
+					}
+					if careless {
+						src = HealthSources{DirectoryForks: ignoreLimit(forkLines(forks)), DirectoryFindings: ignoreLimit(automatedLines(automated))}
+					}
+					detail := contactDirectoryDetail(t, src)
+					forksNamed := strings.Count(detail, `name "p`)
+					automatedNamed := strings.Count(detail, "(admin, noreply@r")
+					if named := forksNamed + automatedNamed; named > maxDirectoryFindingsShown {
+						t.Errorf("detail names %d findings, want at most %d: %q", named, maxDirectoryFindingsShown, detail)
+					}
+					wantForks := min(forks, maxDirectoryFindingsShown)
+					wantAutomated := min(automated, maxDirectoryFindingsShown-wantForks)
+					if forksNamed != wantForks || automatedNamed != wantAutomated {
+						t.Errorf("named %d forks and %d automated addresses, want %d and %d: %q", forksNamed, automatedNamed, wantForks, wantAutomated, detail)
+					}
+					if forks > 0 && !strings.Contains(detail, fmt.Sprintf("%d duplicate, shared-name or placeholder contact finding", forks)) {
+						t.Errorf("detail = %q, want the fork total of %d", detail, forks)
+					}
+					if automated > 0 && !strings.Contains(detail, fmt.Sprintf("hold %d automated-looking email address", automated)) {
+						t.Errorf("detail = %q, want the automated total of %d", detail, automated)
+					}
+					if strings.Contains(detail, ": (+") {
+						t.Errorf("detail = %q, a part ends in a bare count", detail)
+					}
+				})
+			}
+		}
+	}
+}

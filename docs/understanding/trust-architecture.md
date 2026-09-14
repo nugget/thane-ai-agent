@@ -420,11 +420,18 @@ contact with authority and is still reported.
   or number; the one that is not the operator's and carries no more
   authority than the other holds no real address or number of its own (a
   placeholder does not count); or one is a `known` record, not the
-  operator's, bound to a Home Assistant person. A name group with such a
-  pair is a `name` finding. A group whose pairs show no evidence is a
-  `shared_name` finding only when two of its records answer to the key as
-  a formatted name or nickname, since a lookup then reaches only one of
-  them; short forms alone between different people are not reported,
+  operator's, bound to a Home Assistant person. Records with authority
+  that share an address or number are one person. Any other record that
+  such evidence ties to a person is a copy of it, whether a `known` record
+  other than the operator's or one above `known` with no real address or
+  number of its own; a copy joins every person it is tied to but never
+  ties two people into one, so a thin copy that could be either of two
+  people is listed with each. Each person with two or more records is a
+  `name` finding listing exactly those records. Records that answer to the key
+  as a formatted name or nickname, one with authority, that no person
+  holds together are different people: the key's one `shared_name`
+  finding names one record per person, since a lookup reaches only one of
+  them. Short forms alone between different people are not reported,
   because resolution reads no short forms. An email address held by
   several records, compared case-insensitively, is an `email` finding when
   a holder is a `known` record other than the operator's, so the send
@@ -448,7 +455,8 @@ contact with authority and is still reported.
   counting them all. At startup Thane logs one Warn per finding, at most
   20 followed by one summary Warn with the total, and the
   `contact_directory` row of `system_health` stays degraded, naming up to
-  five findings with three records each, until the directory is fixed; the
+  five findings with three records each, ahead of the automated-address
+  findings that share those five, until the directory is fixed; the
   row re-reads the directory on every render. Unlike the automated-address
   findings, which follow email polling, these run whenever the contact
   store exists. The fixes are the operator's, through CardDAV or

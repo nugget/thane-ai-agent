@@ -285,8 +285,12 @@ func snapshotPayload(snap HealthSnapshot) map[string]any {
 	return payload
 }
 
-// maxDirectoryFindingsShown bounds how many records the
-// contact_directory row names; its count still covers every finding.
+// maxDirectoryFindingsShown bounds how many findings the
+// contact_directory row names across both of its audits together; each
+// audit's count still covers every finding. Fork findings are named
+// first, because a fork can send a person's messages to the wrong
+// record, while an automated address only fails closed at known; the
+// automated-address audit names what remains.
 const maxDirectoryFindingsShown = 5
 
 // maxDirectoryFindingBytes bounds each named record in the
@@ -296,26 +300,19 @@ const maxDirectoryFindingsShown = 5
 // field first, so this is a backstop for a source that does not.
 const maxDirectoryFindingBytes = 256
 
-// directoryFindingsDetail renders the contact_directory row's detail:
-// how many addresses the runtime reads below their record's zone, the
-// first few of them, and the operator's remedy. total counts every
-// finding; shown is the prefix the source returned.
+// directoryFindingsDetail renders the automated-address part of the
+// contact_directory detail: how many addresses the runtime reads below
+// their record's zone, the ones the row names, and the operator's
+// remedy. total counts every finding; shown is what the row names,
+// already within its budget, and may be empty when fork findings took
+// the whole budget.
 func directoryFindingsDetail(shown []string, total int) string {
-	shown = shown[:min(len(shown), maxDirectoryFindingsShown)]
-	clipped := make([]string, 0, len(shown))
-	for _, line := range shown {
-		clipped = append(clipped, clipUTF8(line, maxDirectoryFindingBytes))
-	}
-	list := strings.Join(clipped, "; ")
-	if extra := total - len(shown); extra > 0 {
-		list += fmt.Sprintf(" (+%d more)", extra)
-	}
 	plural := "es"
 	if total == 1 {
 		plural = ""
 	}
-	return fmt.Sprintf("contact records above known hold %d automated-looking email address%s, which the runtime reads at known whatever the record's zone: %s. The operator should demote each record to known, or move the address to its own known record, through CardDAV or PUT /v1/contacts/{id}.",
-		total, plural, list)
+	return fmt.Sprintf("Contact records above known hold %d automated-looking email address%s, which the runtime reads at known whatever the record's zone%s. The operator should demote each record to known, or move the address to its own known record, through CardDAV or PUT /v1/contacts/{id}.",
+		total, plural, directoryFindingList(shown, total, maxDirectoryFindingBytes))
 }
 
 // clipUTF8 cuts s to at most maxBytes on a rune boundary, ending a cut
@@ -363,14 +360,17 @@ type HealthSources struct {
 	ProviderBilling func() []ProviderBillingState
 	// DirectoryFindings reports contact records whose stored zone the
 	// runtime does not honour in full: one formatted line each for at
-	// most limit of them, and the total count including those past the
-	// limit. A zero total means clean. It is a live query, so a
-	// directory fix clears the row on the next render.
+	// most limit of them (none when limit is zero), and the total count
+	// including those past the limit. A zero total means clean. It is a
+	// live query, so a directory fix clears the row on the next render.
+	// The contact_directory row asks it for what DirectoryForks left of
+	// the row's five named findings.
 	DirectoryFindings func(ctx context.Context, limit int) (shown []string, total int, err error)
 	// DirectoryForks reports records that split one person, names
 	// different people answer to, and placeholder addresses, each
 	// involving a record above known or the operator's own. It has the
-	// shape of DirectoryFindings and shares its contact_directory row.
+	// shape of DirectoryFindings and shares its contact_directory row,
+	// where it is asked first, for all five of the row's named findings.
 	DirectoryForks func(ctx context.Context, limit int) (shown []string, total int, err error)
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
