@@ -77,6 +77,19 @@ audiences and trust models are different.
   bounce address, judged from its mailbox name alone, and its
   `trust_zone` is then `known` at most, whatever its record holds; on
   every other address the key is absent.
+- **A message can say how it was sent.** `email_read` shows
+  `auto_submitted` (`auto-replied`, `auto-generated`, `auto-notified`,
+  or `other`) and `bulk: true` when the message's own headers claim
+  it: an Auto-Submitted header, a mailing-list header such as List-Id,
+  or a Precedence of bulk, list, or junk. They are per message, where
+  `automated` is per address, and only a full read shows them: list
+  and search results and wake events do not. They never change
+  `trust_zone`, so a household member's list post keeps their zone,
+  and a sender who wants an answer just leaves them out, so they never
+  raise trust either. In Go they do one thing: `email_reply` refuses to
+  answer such a message in any turn the operator is not present for
+  (`automatic_response`), even with `draft: true`. File it, and bring
+  it to the operator if it needs an answer.
 - **Every outbound message gets a decision, and the result says
   which way it went.** Each account carries a policy: `access`
   (`read`, `organize`, or `send`) is the most you may do there, and
@@ -247,13 +260,16 @@ The result is a JSON header object — `{account, folder, uid,
 message_id, in_reply_to, references, from, to, cc, reply_to, subject,
 date, flags, size, marked_seen, body_source, body_truncated,
 attachments:[{filename, content_type, size, inline}],
-authentication:{method, status, verified}}` — followed by a line
+authentication:{method, status, verified}, auto_submitted, bulk}` — followed by a line
 containing only `---` and then the readable body. The body is the
 text part, or the HTML part rendered to text when `body_source` is
 `html`; the whole result stays within 32 KB, so a long body is cut to
 fit and `body_truncated` says so, address lists stop at 25 with
 `addresses_omitted` counting the rest, and at most 50 attachments are
 described with `attachments_omitted` counting the rest.
+`auto_submitted` and `bulk` appear only when the message's own headers
+claim it was sent automatically or to a list, as the `email` trailhead
+describes; ordinary mail carries neither.
 Attachments are described, not downloaded. **Reading marks the message
 seen** unless you pass `mark_seen: false` or the account's `access` is
 `read` (then `marked_seen` is false and `access_note` says why), which matters when your
@@ -297,7 +313,9 @@ cap holds whatever the record says, and wherever mail is polled the
 runtime already flags such a record to the operator. The cap reads
 only the mailbox name, so a forged From of a person's address still
 inherits that person's zone, and the confirmation rule above still
-applies.
+applies. A message's own `auto_submitted` or `bulk` moves no zone in
+either direction, because only an honest sender sets those headers;
+all they do is stop a reply written while the operator is not present.
 
 ## Cross-references
 
@@ -377,7 +395,11 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   send it "properly" from another account.
 - **`refused`** — nothing was sent or drafted. The error is one
   sentence followed by the `decision` JSON; `decision.route` is
-  `access` (the account cannot write mail), `no_smtp` (the account
+  `access` (the account cannot write mail), `automatic_response` (an
+  `email_reply` to a message whose own headers mark it
+  `auto_submitted` or `bulk`, in a turn the operator is not present
+  for; nothing to fix, so file the message and bring it to the
+  operator if it needs an answer), `no_smtp` (the account
   has no SMTP connection and can only draft; retry with `draft: true`),
   `trust_gate` (see `decision.recipients` for each recipient's
   `reason`: a `known` contact or a stranger, whose only legitimate
@@ -395,7 +417,10 @@ the spelling differs, or an alias resolves elsewhere), then either
 revise the recipient list or tell the operator which recipient needs
 a zone. A recipient marked `automated` is the exception: it is refused
 whatever its record says, no zone changes that, and nobody reads
-replies there, so drop it instead of asking for a zone. **Never use
+replies there, so drop it instead of asking for a zone. An
+`automatic_response` refusal is the other exception: it is keyed to
+the original message's headers, so no change to the reply clears it;
+file the message and bring it to the operator. **Never use
 `contact_save` to clear a trust refusal.** The
 gate trusts the record an address belongs to, so an address added to
 a contact lends that contact's zone to whoever holds it, and Go
@@ -437,7 +462,13 @@ recipient is at `known` zone or has no contact record will be
 recipients and send to the rest — while a thread with one `trusted`
 recipient among `household` ones is **drafted** as a whole. Replying
 to an `automated` sender is refused as well whenever the reply goes to
-that address, which it does unless the message set a Reply-To. The
+that address, which it does unless the message set a Reply-To. A
+reply to a message whose own headers mark it `auto_submitted` or
+`bulk` is refused with `automatic_response` in any turn the operator
+is not present for, whatever the sender's zone and even with
+`draft: true`, because it would be an automatic response; in the
+operator's own turn it goes through the usual decision, and
+`decision.original` records the marks either way. The
 original's `to` and `cc` are in the `email_read` result you just took
 the UID from, each with its `trust_zone` and `contact_status`; read
 them before choosing `reply_all`. Replying does not change the

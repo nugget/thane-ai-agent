@@ -250,6 +250,32 @@ record above `known` logs a Warn at startup and keeps the
 demotes the record or moves the address to its own `known` record; see
 [Configuration](../operating/configuration.md#contacts--carddav).
 
+A message can also mark itself, and that mark is kept apart from the
+zone. When a message is read in full, by `email_read` or by the read
+`email_reply` makes of the message it answers, Go reads the message's
+own top-level headers: an `Auto-Submitted` value other than `no`
+becomes `auto_submitted` (`auto-replied`, `auto-generated`,
+`auto-notified`, or `other`, so no sender text is echoed), and a
+`List-Id` (RFC 2919), any RFC 2369 `List-*` field, or a `Precedence`
+of `bulk`, `list`, or `junk` sets `bulk`. RFC 3834 §2 tells an
+automatic responder not to answer `Auto-Submitted` mail and lets it
+decline list traffic; `Precedence` values `bulk` and `junk` are
+convention (RFC 2076). The marks are per message, where `automated` is
+per address, and they never change a zone: only an honest sender sets
+them and a forger leaves them out, so they carry no credibility in
+either direction. Their one effect is outbound. A reply to a marked
+message, written in a turn the operator is not present for, would be
+an automatic response, so the send decision refuses it with route
+`automatic_response` in every delivery mode, a requested draft
+included, before any recipient is assessed; nothing is sent or
+drafted. The operator's own turn replies as usual. Every reply to
+marked mail records the marks as `original` in its decision, and the
+decision log line carries them as `original_auto_submitted` and
+`original_bulk`. The poller, `email_list`, and `email_search` do not
+read these headers, so their IMAP fetch is unchanged and a wake event
+carries no marks; a handler learns of them from `email_read` or from
+the refusal.
+
 ### Contact Identity Custody
 
 **Status: Implemented**
@@ -374,7 +400,13 @@ bounds what a forged From can win: a wake is never an attended turn, so
 under the default delivery policy anything the handler writes is held in
 Drafts for the operator (only an account configured with `delivery:
 direct` sends from a wake), and the handler loop wears only the `email`
-tag.
+tag. A message's own `auto_submitted` and `bulk` marks move no zone at
+all, because a forger simply leaves those headers out; they only stop
+an unattended reply. `email_send` does not consult them, so a wake
+refused on such a reply can still write fresh mail to the same
+address: the handler Task and the refusal forbid that, and under the
+default delivery policy it would be held in Drafts like any other wake
+mail.
 
 **Structural fix:** Signature verification against keys the directory
 holds (#317), so a claimed sender is established rather than read from
