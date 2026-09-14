@@ -328,11 +328,16 @@ operator power.
   such a nickname off a merge, and never fills a nickname into a
   custodied target; an import card that carries only names and cannot
   resolve the operator counts every holder as one with authority. When
-  several active contacts share a nickname, `FindByNickname` returns one
-  above `known` first, then orders by ID. A string that reaches a contact
-  only through the search (its note, org, or AI summary) is not
-  protected, so the handle the operator is notified by belongs in their
-  formatted name or nickname.
+  several active contacts share a nickname, `FindByNickname` returns the
+  operator's own record first at any zone, then one above `known`, then
+  orders by ID. When `operator_contact_id` or the legacy owner name is
+  configured, the contact store learns the operator from the same pinned
+  record custody and `IsOwner` use, so notifications, lookups and context
+  all resolve a shared nickname alike. Under the sole-admin fallback
+  nothing is pinned, so a shared nickname orders by zone, then ID. A
+  string that reaches a contact only through the search (its note, org,
+  or AI summary) is not protected, so the handle the operator is notified
+  by belongs in their formatted name or nickname.
 - **Kind.** `kind` stays model-writable, so nothing may gate on it: no
   custody rule, notification route, or `IsOwner` decision reads it, and a
   test pins that changing it on the operator's contact moves neither.

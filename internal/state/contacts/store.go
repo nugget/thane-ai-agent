@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -148,6 +149,10 @@ type Store struct {
 	db         *sql.DB
 	ftsEnabled bool
 	logger     *slog.Logger
+
+	// operatorID is the operator's own record, which a shared nickname
+	// resolves to first (see operator_order.go).
+	operatorID atomic.Pointer[uuid.UUID]
 }
 
 // Open creates a contact store at path and owns the resulting database
@@ -331,11 +336,11 @@ func (s *Store) findByName(ctx context.Context, name string) (*Contact, error) {
 }
 
 // FindByNickname returns the first active contact with a case-insensitive
-// nickname match. When several active contacts share the nickname, one
-// above known (or with a malformed zone) wins over one at known, then
-// the oldest id, so a collision resolves to the contact with authority
-// rather than to whichever row the database returns first. Returns
-// sql.ErrNoRows if not found.
+// nickname match. When several active contacts share the nickname, the
+// operator's own record wins at any zone, then one above known (or with
+// a malformed zone), then the oldest id, so a collision resolves to the
+// contact with authority rather than to whichever row the database
+// returns first. Returns sql.ErrNoRows if not found.
 func (s *Store) FindByNickname(name string) (*Contact, error) {
 	return s.findByNickname(context.Background(), name)
 }
@@ -344,8 +349,8 @@ func (s *Store) FindByNickname(name string) (*Contact, error) {
 func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, error) {
 	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)
-		ORDER BY CASE WHEN COALESCE(trust_zone, '') = ? THEN 1 ELSE 0 END, id`,
-		name, ZoneKnown))
+		ORDER BY CASE WHEN id = ? THEN 0 WHEN COALESCE(trust_zone, '') = ? THEN 2 ELSE 1 END, id`,
+		name, s.operatorOrderID(), ZoneKnown))
 }
 
 // ResolveContact finds a contact by name using cascading resolution
@@ -815,16 +820,21 @@ func insertPropertyTx(tx *sql.Tx, contactID uuid.UUID, p Property, now time.Time
 // identityViolations over the additions and returns an
 // *IdentityCustodyError on any refusal. Either way nothing is written.
 // The store's other writers apply no identity custody.
+//
+// The outcome's routing note is judged from the target's properties as
+// this transaction reads them after its inserts, so a routing value
+// another writer committed after the caller's snapshot is the one it
+// names as still in use.
 func (s *Store) applyContactSave(
 	c *Contact,
 	contactChanged bool,
 	additions []Property,
 	replacements map[string][]Property,
 	guard identityGuard,
-) (*Contact, bool, error) {
+) (*Contact, contactSaveOutcome, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, false, fmt.Errorf("begin contact save: %w", err)
+		return nil, contactSaveOutcome{}, fmt.Errorf("begin contact save: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on defer
 
@@ -832,19 +842,19 @@ func (s *Store) applyContactSave(
 	isNew := c.ID == uuid.Nil
 	if !isNew {
 		if err := checkSaveSnapshot(tx, c.ID, guard); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 	}
 	violations, err := identityViolations(tx.Query, c.ID, guard, additions)
 	if err != nil {
-		return nil, false, fmt.Errorf("check identity custody: %w", err)
+		return nil, contactSaveOutcome{}, fmt.Errorf("check identity custody: %w", err)
 	}
 	if len(violations) > 0 {
-		return nil, false, &IdentityCustodyError{Violations: violations}
+		return nil, contactSaveOutcome{}, &IdentityCustodyError{Violations: violations}
 	}
 	if isNew {
 		if err := upsertContactTx(tx, c, now); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 	}
 
@@ -858,46 +868,57 @@ func (s *Store) applyContactSave(
 		if _, err := tx.Exec(
 			`DELETE FROM contact_properties WHERE contact_id = ? AND property = ?`,
 			c.ID.String(), property); err != nil {
-			return nil, false, fmt.Errorf("replace contact property %s: %w", property, err)
+			return nil, contactSaveOutcome{}, fmt.Errorf("replace contact property %s: %w", property, err)
 		}
 		for _, p := range replacements[property] {
 			if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
-				return nil, false, err
+				return nil, contactSaveOutcome{}, err
 			}
 		}
 		propertyChanged = true
 	}
 
+	var insertedRouting []Property
 	for _, p := range additions {
 		exists, err := propertyExistsTx(tx, c.ID, p.Property, p.Value)
 		if err != nil {
-			return nil, false, fmt.Errorf("check existing property %s: %w", p.Property, err)
+			return nil, contactSaveOutcome{}, fmt.Errorf("check existing property %s: %w", p.Property, err)
 		}
 		if exists {
 			continue
 		}
 		if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 		propertyChanged = true
+		if _, ok := routingPropertyFor(p.Property); ok {
+			insertedRouting = append(insertedRouting, p)
+		}
 	}
 
-	changed := isNew || contactChanged || propertyChanged
-	if !changed {
-		return c, false, nil
+	outcome := contactSaveOutcome{changed: isNew || contactChanged || propertyChanged}
+	if !outcome.changed {
+		return c, outcome, nil
+	}
+	if len(insertedRouting) > 0 {
+		props, err := readPropertiesMap(tx.Query, c.ID)
+		if err != nil {
+			return nil, contactSaveOutcome{}, fmt.Errorf("read routing facts after save: %w", err)
+		}
+		outcome.routingNote = routingShadowNotes(props, insertedRouting)
 	}
 	if !isNew {
 		// A property mutation advances the parent contact revision and CTag
 		// just as the pre-provenance contact_save path did.
 		if err := upsertContactTx(tx, c, now); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("commit contact save: %w", err)
+		return nil, contactSaveOutcome{}, fmt.Errorf("commit contact save: %w", err)
 	}
 	s.rebuildFTS()
-	return c, true, nil
+	return c, outcome, nil
 }
 
 // propertyExistsTx reports whether the contact already carries value
@@ -1153,23 +1174,7 @@ func (s *Store) GetPropertiesForContacts(contactIDs []uuid.UUID) (map[uuid.UUID]
 // property name as a map of name→values. This is a convenience view
 // for callers that don't need the full Property metadata.
 func (s *Store) GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error) {
-	rows, err := s.db.Query(
-		`SELECT property, value FROM contact_properties WHERE contact_id = ? ORDER BY property, pref NULLS LAST, id`,
-		contactID.String())
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	m := make(map[string][]string)
-	for rows.Next() {
-		var prop, val string
-		if err := rows.Scan(&prop, &val); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		m[prop] = append(m[prop], val)
-	}
-	return m, rows.Err()
+	return readPropertiesMap(s.db.Query, contactID)
 }
 
 // FindByPropertyExact returns contacts with an exact property-value

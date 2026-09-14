@@ -439,8 +439,8 @@ func TestApplyContactSave_ConcurrentChangeAborts(t *testing.T) {
 		t.Fatal(err)
 	}
 	current.Note = "fresh note"
-	if _, changed, err := store.applyContactSave(current, true, note, nil, identityGuard{snapshotZone: ZoneHousehold}); err != nil || !changed {
-		t.Fatalf("current snapshot save = changed %v, %v", changed, err)
+	if _, outcome, err := store.applyContactSave(current, true, note, nil, identityGuard{snapshotZone: ZoneHousehold}); err != nil || !outcome.changed {
+		t.Fatalf("current snapshot save = changed %v, %v", outcome.changed, err)
 	}
 	got, err = store.Get(promoted.ID)
 	if err != nil {
@@ -480,8 +480,8 @@ func TestApplyContactSave_ConcurrentChangeAborts(t *testing.T) {
 		t.Fatal(err)
 	}
 	freshNamed.Note = "fresh note"
-	if _, changed, err := store.applyContactSave(freshNamed, true, nil, nil, identityGuard{snapshotZone: ZoneKnown, snapshotNickname: freshNamed.Nickname}); err != nil || !changed {
-		t.Fatalf("current nickname snapshot save = changed %v, %v", changed, err)
+	if _, outcome, err := store.applyContactSave(freshNamed, true, nil, nil, identityGuard{snapshotZone: ZoneKnown, snapshotNickname: freshNamed.Nickname}); err != nil || !outcome.changed {
+		t.Fatalf("current nickname snapshot save = changed %v, %v", outcome.changed, err)
 	}
 	if got, err := store.Get(named.ID); err != nil || got.Nickname != "Nico" || got.Note != "fresh note" {
 		t.Errorf("current save = %+v, %v", got, err)

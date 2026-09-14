@@ -305,29 +305,63 @@ func routingHeld(query queryFunc, target uuid.UUID, key, value string) (bool, er
 	return count > 0, nil
 }
 
-// routingShadowNotes explains each routing fact a save recorded that
-// delivery will not use. existing is the contact's rows as the save
-// read them, in [Store.GetProperties] order; additions are the rows the
-// save inserted, which land last within their spelling. The first value
-// is computed with [FactValues], exactly as delivery computes it, so a
-// note never disagrees with where a notification goes.
-func routingShadowNotes(existing, additions []Property) string {
-	props := make(map[string][]string)
-	for _, p := range existing {
-		props[p.Property] = append(props[p.Property], p.Value)
+// contactSaveOutcome is what one applyContactSave committed.
+type contactSaveOutcome struct {
+	// changed reports that the save wrote anything. It gates the dossier
+	// refresh.
+	changed bool
+
+	// routingNote explains each routing value the save inserted that
+	// delivery will not use (see routingShadowNotes), or is "".
+	routingNote string
+}
+
+// readPropertiesMap reads a contact's properties as a property name to
+// values map, by name, then pref, then insertion. It is
+// [Store.GetPropertiesMap], which delivery reads through, and the read
+// a save's shadow note runs inside its own transaction, so the note and
+// delivery always order values alike.
+func readPropertiesMap(query queryFunc, contactID uuid.UUID) (map[string][]string, error) {
+	rows, err := query(
+		`SELECT property, value FROM contact_properties WHERE contact_id = ? ORDER BY property, pref NULLS LAST, id`,
+		contactID.String())
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
 	}
-	added := make(map[string][]string)
-	for _, p := range additions {
-		key, ok := routingPropertyFor(p.Property)
-		if !ok {
-			continue
+	defer rows.Close()
+
+	m := make(map[string][]string)
+	for rows.Next() {
+		var prop, val string
+		if err := rows.Scan(&prop, &val); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
 		}
-		props[p.Property] = append(props[p.Property], p.Value)
-		added[key] = append(added[key], p.Value)
+		m[prop] = append(m[prop], val)
+	}
+	return m, rows.Err()
+}
+
+// routingShadowNotes explains each routing value a save inserted that
+// delivery will not use. props is the contact's properties as the
+// save's own transaction read them after its inserts (see
+// readPropertiesMap), so a value another writer committed after the
+// save's snapshot, and before its transaction, is in it; inserted are
+// the routing rows the save itself added. The first value is computed
+// with [FactValues], exactly as delivery computes it, so a note never
+// disagrees with where a notification goes.
+func routingShadowNotes(props map[string][]string, inserted []Property) string {
+	added := make(map[string][]string)
+	for _, p := range inserted {
+		if key, ok := routingPropertyFor(p.Property); ok {
+			added[key] = append(added[key], p.Value)
+		}
 	}
 	var b strings.Builder
 	for _, key := range []string{PropertyHACompanionApp, PropertyNotificationPreference} {
 		first := FactValues(props, key)
+		if len(first) == 0 {
+			continue
+		}
 		var shadowed []string
 		for _, value := range added[key] {
 			if value != first[0] {

@@ -118,3 +118,64 @@ func TestNotificationRoutingStaysWithTheOperator(t *testing.T) {
 		t.Errorf("send to Bob = %v, HA calls %v", err, ha.services)
 	}
 }
+
+// TestSharedNicknameReachesTheOperator pins operator-first nickname
+// resolution through the app's own wiring. An ordinary known contact
+// that already shares the operator's nickname, with the lower id, must
+// not take the operator's notifications or conversation context, under
+// either operator selector.
+func TestSharedNicknameReachesTheOperator(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity func(operator *contacts.Contact) contactIdentityConfig
+	}{
+		{"operator_contact_id", func(operator *contacts.Contact) contactIdentityConfig {
+			return contactIdentityConfig{operatorContactID: operator.ID}
+		}},
+		{"legacy owner name", func(operator *contacts.Contact) contactIdentityConfig {
+			return contactIdentityConfig{legacyOwnerContactName: operator.FormattedName}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newEmailIdentityStore(t)
+			seed := func(name, device string) *contacts.Contact {
+				t.Helper()
+				c, err := store.UpsertWithProperties(&contacts.Contact{
+					FormattedName: name,
+					Nickname:      "nugget",
+					Kind:          "individual",
+					TrustZone:     contacts.ZoneKnown,
+				}, []contacts.Property{{Property: contacts.PropertyHACompanionApp, Value: device}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return c
+			}
+			kim := seed("Kim Known", "mobile_app_kim")
+			alice := seed("Alice Operator", "mobile_app_alice")
+			if kim.ID.String() > alice.ID.String() {
+				t.Fatal("seed order must give the ordinary contact the lower id")
+			}
+
+			identity := tc.identity(alice)
+			resolver := &contactChannelBindingResolver{
+				store:                  store,
+				operatorContactID:      identity.operatorContactID,
+				legacyOwnerContactName: identity.legacyOwnerContactName,
+			}
+			configureContactToolsOperator(contacts.NewTools(store, nil), resolver, identity)
+
+			ha := &routingCustodyHA{}
+			router := notifications.NewNotificationRouter(store, nil, slog.Default())
+			router.RegisterProvider(notifications.NewHAPushProvider(notifications.NewSender(ha, store, nil, "thane", slog.Default())))
+			ctx := context.Background()
+			if err := router.Send(ctx, notifications.Notification{Recipient: "nugget", Message: "door left open"}); err != nil || len(ha.services) != 1 || ha.services[0] != "notify.mobile_app_alice" {
+				t.Errorf("send to nugget = %v, HA calls %v, want notify.mobile_app_alice", err, ha.services)
+			}
+			lookup := &contactNameLookup{store: store, logger: slog.Default()}
+			if cc := lookup.LookupContact(ctx, "nugget", "signal"); cc == nil || cc.ID != alice.ID.String() {
+				t.Errorf("context for nugget = %+v, want Alice Operator", cc)
+			}
+		})
+	}
+}

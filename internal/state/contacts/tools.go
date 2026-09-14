@@ -95,9 +95,11 @@ func (t *Tools) SetSelfContactName(name string) {
 }
 
 // ConfigureOperatorContactID sets the stable contact UUID used to resolve the
-// primary human operator.
+// primary human operator. The store learns it too, so a nickname the
+// operator shares resolves to the operator on every path.
 func (t *Tools) ConfigureOperatorContactID(id uuid.UUID) {
 	t.operatorContactID = id
+	t.pinStoreOperator()
 }
 
 // ConfigureDossierRoot controls whether rich contact results expose the
@@ -119,10 +121,13 @@ func (t *Tools) SetOwnerContactName(name string) {
 // when it resolved to none). The app passes the channel resolver's
 // cached answer, so custody, contact_owner and IsOwner agree on the
 // operator for the life of the process even if a later record comes to
-// match the name. Unpinned, both resolve the name on every call.
+// match the name. Unpinned, both resolve the name on every call. A
+// configured operator_contact_id still takes precedence, for custody
+// and for the store's nickname ordering alike.
 func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID) {
 	t.legacyOperatorID = id
 	t.legacyOperatorPinned = true
+	t.pinStoreOperator()
 }
 
 // SetOwnerActivitySource configures a source of active owner-scoped
@@ -284,19 +289,44 @@ var saveContactKnownFields = map[string]bool{
 	"origin_context_refs": true, "facts": true,
 }
 
-// SaveContact creates or updates a contact. When a contact with the
-// given name already exists, only non-empty fields are overwritten.
-// Facts are additive. Email and phone values are stored as vCard
-// properties (EMAIL, TEL) in contact_properties.
+// SaveContact creates or updates a contact with the checks
+// [Tools.SaveContactFromModel] applies in an unattended turn, with no
+// turn provenance and no lift for the operator's own message, and emits
+// no dossier refresh. The name and nickname are trimmed of edge space
+// first. When a contact with the given name already exists, only
+// non-empty fields are overwritten. Facts are additive. Email and phone
+// values are stored as vCard properties (EMAIL, TEL) in
+// contact_properties.
 //
 // Top-level string fields that don't match known SaveContactArgs keys
 // (e.g., "email", "phone") are automatically rescued into the Facts
 // map or contact_properties, since models frequently flatten them.
 //
-// Identity custody applies as it does to an unattended model turn: no
-// address or number is added to a contact above known or to the
-// operator's own contact, nor when a contact with authority already
-// holds it.
+// The whole save is refused, and nothing is written, when it would:
+//   - set trust_zone, or a KEY or X-THANE-* fact, on any contact;
+//   - use a fact key that is not a plain name or that names a field the
+//     record owns, or put a control character in any argument or fact
+//     value (note and ai_summary keep plain line breaks);
+//   - add an address or number (EMAIL, TEL or IMPP, under any alias or
+//     case), or a notification routing fact (ha_companion_app or
+//     notification_preference, in any case), to a contact above known
+//     or to the operator's own contact;
+//   - change the nickname of a contact above known or of the operator's
+//     own contact, where a change in ASCII case alone is no change;
+//   - add an address or number that a contact above known, or the
+//     operator's own, already holds;
+//   - give a new contact a formatted name, or any contact a nickname,
+//     that an active contact above known or the operator's own already
+//     goes by. This rule holds in every turn, the operator's own message
+//     included;
+//   - under the legacy owner-name selector, give a contact other than
+//     the operator's own the owner name.
+//
+// Re-saving a value the contact already holds, a routing value under
+// another spelling of its key included, is a no-op. Delivery uses only
+// the first value of each routing fact, reading the lowercase key first.
+// When a new routing value lands behind an existing one, the result
+// names the value delivery still uses.
 func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	return t.saveContact(context.Background(), argsJSON, nil, false, false)
 }
@@ -464,7 +494,7 @@ func (t *Tools) saveContact(
 			return "", err
 		}
 	}
-	saved, changed, err := t.store.applyContactSave(contact, contactChanged, additions, replacements, guard)
+	saved, outcome, err := t.store.applyContactSave(contact, contactChanged, additions, replacements, guard)
 	if err != nil {
 		var custody *IdentityCustodyError
 		if errors.As(err, &custody) {
@@ -484,7 +514,7 @@ func (t *Tools) saveContact(
 		}
 		return "", fmt.Errorf("update contact: %w", err)
 	}
-	if !changed {
+	if !outcome.changed {
 		return fmt.Sprintf("Contact unchanged: **%s** (%s); no dossier refresh was queued", saved.FormattedName, saved.Kind), nil
 	}
 
@@ -506,8 +536,11 @@ func (t *Tools) saveContact(
 	t.generateEmbedding(ctx, saved)
 
 	// A routing fact recorded behind an existing value does not switch
-	// delivery; say so, so the next turn cannot report a switch.
-	shadow := routingShadowNotes(contact.Properties, additions)
+	// delivery; say so, so the next turn cannot report a switch. The
+	// note is judged from the rows the save's own transaction read, not
+	// from the snapshot above, so a value another writer committed first
+	// is the one it names.
+	shadow := outcome.routingNote
 	if created {
 		return fmt.Sprintf("Saved new contact: **%s** (%s)", saved.FormattedName, saved.Kind) + shadow, nil
 	}

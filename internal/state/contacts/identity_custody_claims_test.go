@@ -1,12 +1,15 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // seedNicknameAt seeds a contact with a nickname through the operator
@@ -240,6 +243,36 @@ func TestSaveContact_RoutingShadowNote(t *testing.T) {
 			t.Errorf("delivery uses %q, the note says signal", got)
 		}
 	})
+
+	t.Run("a value another writer committed first is the one noted", func(t *testing.T) {
+		tools, _ := newCountingTools(t)
+		bob := seedContactAt(t, tools.store, "Bob Smith", ZoneHousehold)
+		// The save reads Bob with no device. This trigger stands in for
+		// a writer whose lowercase device commits after that read and
+		// before the save's own insert, so only the save's transaction
+		// sees it.
+		if _, err := tools.store.db.Exec(`
+			CREATE TRIGGER concurrent_first_device BEFORE INSERT ON contact_properties
+			WHEN NEW.value = 'mobile_app_new'
+			BEGIN
+				INSERT INTO contact_properties (contact_id, property, value, created_at, updated_at)
+				VALUES (NEW.contact_id, 'ha_companion_app', 'mobile_app_first', NEW.created_at, NEW.updated_at);
+			END`); err != nil {
+			t.Fatal(err)
+		}
+		result, err := modelSave(tools, `{"name":"Bob Smith","facts":{"ha_companion_app":"mobile_app_new"}}`, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := first(t, tools.store, bob, PropertyHACompanionApp); got != "mobile_app_first" {
+			t.Fatalf("delivery uses %q, want the concurrent writer's mobile_app_first", got)
+		}
+		for _, want := range []string{`ha_companion_app "mobile_app_new" was recorded`, `Home Assistant push still goes to "mobile_app_first"`} {
+			if !strings.Contains(result, want) {
+				t.Errorf("result = %q, want %q", result, want)
+			}
+		}
+	})
 }
 
 // TestSaveContact_NicknameCustody pins the nickname target rule: a
@@ -423,6 +456,74 @@ func TestFindByNickname_AuthorityFirst(t *testing.T) {
 		got, err := store.FindByNickname("twin")
 		if err != nil || got.ID != want {
 			t.Errorf("FindByNickname = %+v, %v, want %s", got, err, want)
+		}
+	})
+}
+
+// TestFindByNickname_OperatorFirst pins the operator's claim on a
+// nickname several records already share: the operator's own record
+// wins at any zone, over an ordinary known record with a lower id and
+// over a household record, under either operator selector. The store
+// learns the operator from the tools' own selector, so custody and
+// resolution agree on who it is.
+func TestFindByNickname_OperatorFirst(t *testing.T) {
+	selectors := []struct {
+		name string
+		pin  func(*Tools, *Contact)
+	}{
+		{"operator_contact_id", func(tools *Tools, operator *Contact) { tools.ConfigureOperatorContactID(operator.ID) }},
+		{"pinned legacy owner", func(tools *Tools, operator *Contact) {
+			tools.SetOwnerContactName(operator.FormattedName)
+			tools.ConfigureLegacyOperatorContactID(operator.ID)
+		}},
+	}
+	for _, sel := range selectors {
+		for _, rival := range []string{ZoneKnown, ZoneHousehold} {
+			t.Run(sel.name+"/operator at known over a "+rival+" record", func(t *testing.T) {
+				tools := newTestTools(t)
+				a := seedNicknameAt(t, tools.store, "Alice Operator", "boss", ZoneKnown)
+				b := seedNicknameAt(t, tools.store, "Kim Rival", "Boss", rival)
+				operator, other := a, b
+				if rival == ZoneKnown && a.ID.String() < b.ID.String() {
+					// A known rival must hold the lower id, so id order
+					// alone would pick it.
+					operator, other = b, a
+				}
+				if got, err := tools.store.ResolveContact("BOSS"); err != nil || got.ID != other.ID {
+					t.Fatalf("control: before the pin ResolveContact = %+v, %v, want %s", got, err, other.FormattedName)
+				}
+				sel.pin(tools, operator)
+				for _, lookup := range []func(string) (*Contact, error){tools.store.FindByNickname, tools.store.ResolveContact} {
+					if got, err := lookup("BOSS"); err != nil || got.ID != operator.ID {
+						t.Errorf("lookup = %+v, %v, want the operator %s", got, err, operator.FormattedName)
+					}
+				}
+				if id, err := tools.custodyOperatorID(context.Background()); err != nil || id != operator.ID {
+					t.Errorf("custody operator = %s, %v, want %s", id, err, operator.ID)
+				}
+			})
+		}
+	}
+
+	t.Run("operator_contact_id outranks a legacy pin, as in custody", func(t *testing.T) {
+		tools := newTestTools(t)
+		household := seedNicknameAt(t, tools.store, "Hana Household", "boss", ZoneHousehold)
+		operator := seedNicknameAt(t, tools.store, "Alice Operator", "boss", ZoneKnown)
+		tools.ConfigureOperatorContactID(operator.ID)
+		tools.ConfigureLegacyOperatorContactID(household.ID)
+		if got, err := tools.store.ResolveContact("boss"); err != nil || got.ID != operator.ID {
+			t.Errorf("ResolveContact = %+v, %v, want Alice Operator", got, err)
+		}
+	})
+
+	t.Run("a legacy name that resolved to no one keeps authority first", func(t *testing.T) {
+		tools := newTestTools(t)
+		household := seedNicknameAt(t, tools.store, "Hana Household", "boss", ZoneHousehold)
+		seedNicknameAt(t, tools.store, "Kim Known", "boss", ZoneKnown)
+		tools.SetOwnerContactName("Nobody")
+		tools.ConfigureLegacyOperatorContactID(uuid.Nil)
+		if got, err := tools.store.ResolveContact("boss"); err != nil || got.ID != household.ID {
+			t.Errorf("ResolveContact = %+v, %v, want Hana Household", got, err)
 		}
 	})
 }
