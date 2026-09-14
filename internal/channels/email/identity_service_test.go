@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // identityService builds a Service over one in-memory IMAP server and
@@ -385,4 +387,77 @@ func TestListMarksAutomatedSenderAtKnown(t *testing.T) {
 type listMessageFrom struct {
 	uid  uint32
 	view *addressView
+}
+
+// TestReadRendersHeaderMarks pins the model-facing half of the header
+// marks: email_read renders auto_submitted and bulk flat, and only for
+// a message whose own headers claim them, while the sender's trust_zone
+// and the per-address automated key are unchanged. Two controls pin
+// what the change leaves alone: email_list renders neither key, and the
+// read email_reply makes of its original is a peek, so a refused reply
+// leaves the original unseen.
+func TestReadRendersHeaderMarks(t *testing.T) {
+	svc, mem, _ := identityService(t, ServiceDependencies{Contacts: identityStub()})
+	marked := mem.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Away", "back monday",
+		"Auto-Submitted: auto-replied", "List-Id: Family <family.lists.example.com>"))
+	plain := mem.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Hello", "hi"))
+	provider := svc.ToolProvider()
+	ctx := context.Background()
+
+	out, err := provider.HandleList(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("HandleList: %v", err)
+	}
+	for _, key := range []string{`"auto_submitted"`, `"bulk"`, `"header_marks"`} {
+		if n := strings.Count(out, key); n != 0 {
+			t.Errorf("list renders %s %d times; the list is unchanged:\n%s", key, n, out)
+		}
+	}
+
+	wake := tools.WithMessageOrigin(ctx, memory.OriginWake)
+	_, err = provider.HandleReply(wake, map[string]any{"uid": float64(marked), "body": "thanks"})
+	if refusal := refusalOf(t, err); refusal.Decision.Route != RouteAutomaticResponse {
+		t.Errorf("wake reply to the marked message = %+v", refusal.Decision)
+	}
+	acct, _ := svc.ResolveAccount(ctx, "primary")
+	unseen, err := acct.Client.ListMessages(ctx, ListOptions{Folder: "INBOX", Unseen: true})
+	if err != nil {
+		t.Fatalf("list unseen: %v", err)
+	}
+	if len(unseen.Envelopes) != 2 {
+		t.Errorf("unseen = %d, want 2: the reply path must read its original with a peek", len(unseen.Envelopes))
+	}
+
+	out, err = provider.HandleRead(ctx, map[string]any{"uid": float64(marked)})
+	if err != nil {
+		t.Fatalf("HandleRead marked: %v", err)
+	}
+	headerJSON, _, _ := strings.Cut(out, bodySeparator)
+	mustContain(t, headerJSON, `"auto_submitted":"auto-replied"`, `"bulk":true`)
+	var header readResponse
+	if err := json.Unmarshal([]byte(headerJSON), &header); err != nil {
+		t.Fatalf("header is not JSON: %v", err)
+	}
+	if want := (HeaderMarks{AutoSubmitted: AutoSubmittedReplied, Bulk: true}); header.HeaderMarks != want {
+		t.Errorf("header marks = %+v, want %+v", header.HeaderMarks, want)
+	}
+	if header.From == nil || header.From.TrustZone != "trusted" || header.From.Automated {
+		t.Errorf("from = %+v; the marks must not move the sender's zone or set automated", header.From)
+	}
+	for _, key := range []string{`"automated"`, `"header_marks"`} {
+		if strings.Contains(headerJSON, key) {
+			t.Errorf("read header renders %s:\n%s", key, headerJSON)
+		}
+	}
+
+	out, err = provider.HandleRead(ctx, map[string]any{"uid": float64(plain)})
+	if err != nil {
+		t.Fatalf("HandleRead plain: %v", err)
+	}
+	headerJSON, _, _ = strings.Cut(out, bodySeparator)
+	for _, key := range []string{`"auto_submitted"`, `"bulk"`} {
+		if n := strings.Count(headerJSON, key); n != 0 {
+			t.Errorf("an unmarked message renders %s %d times:\n%s", key, n, headerJSON)
+		}
+	}
 }

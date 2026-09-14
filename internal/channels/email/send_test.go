@@ -1,9 +1,13 @@
 package email
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -320,4 +324,155 @@ func TestContextBlockCarriesPolicyAndRouting(t *testing.T) {
 	})
 	got, _ = ruled.ContextProvider().TagContext(attendedCtx(), agentctxRequest())
 	mustContain(t, got, `"denied_recipient_domains":["example.org"]`)
+}
+
+// TestReplyToMarkedOriginalRefusedUnattended pins the automatic-response
+// rule: an unattended reply to a message whose own headers mark it
+// auto-submitted or bulk is refused with route automatic_response in
+// every delivery mode, draft: true included, whatever the sender's zone,
+// and nothing reaches SMTP or Drafts. A stranger, a known contact, an
+// automated mailbox, and a reply_all over the recipient limit are
+// refused by this rule and not by the trust gate or the recipient
+// limit, which pins that it runs before both. The controls pin what the rule
+// does not touch: the operator's own turn replies as before with the
+// marks recorded, an unmarked message from the same household sender in
+// a wake takes the unattended floor, and email_send to that sender is
+// not refused by this rule, which is the known gap.
+func TestReplyToMarkedOriginalRefusedUnattended(t *testing.T) {
+	wake := func() context.Context {
+		return tools.WithMessageOrigin(context.Background(), memory.OriginWake)
+	}
+	ownerWake := func() context.Context {
+		ctx := tools.WithChannelBinding(context.Background(), &memory.ChannelBinding{Channel: "signal", Address: "+1", IsOwner: true})
+		return tools.WithMessageOrigin(ctx, memory.OriginWake)
+	}
+	autoReplied := []string{"Auto-Submitted: auto-replied"}
+	listMail := []string{"List-Id: Family <family.lists.example.com>", "Precedence: list"}
+	crowd := []string{"thane@example.com"}
+	for i := range maxRecipients + 5 {
+		crowd = append(crowd, fmt.Sprintf("member%d@example.org", i))
+	}
+
+	tests := []struct {
+		name            string
+		delivery        string
+		ctx             func() context.Context
+		from            string // original's From; Hannah, a household contact, when empty
+		to              string // original's To; the account's own address when empty
+		headers         []string
+		draft           bool
+		replyAll        bool
+		send            bool
+		wantDisposition Disposition
+		wantRoute       string
+		wantOriginal    HeaderMarks
+		wantAttended    bool
+	}{
+		// Each of these senders or audiences would be refused later, by
+		// the trust gate or the recipient limit, so these rows pin that
+		// the rule runs first and holds whatever the sender's zone.
+		{name: "stranger sender wake", delivery: DeliveryDirect, ctx: wake, from: "Stranger <stranger@example.org>", headers: autoReplied,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}},
+		{name: "known-zone sender wake", ctx: wake, from: "Kim <kim@example.com>", headers: listMail,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{Bulk: true}},
+		{name: "automated mailbox sender wake", ctx: wake, from: "Alerts <noreply@example.com>", headers: autoReplied,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}},
+		{name: "reply_all over the recipient limit wake", ctx: wake, to: strings.Join(crowd, ", "), headers: listMail, replyAll: true,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{Bulk: true}},
+
+		{name: "auto-replied direct wake", delivery: DeliveryDirect, ctx: wake, headers: autoReplied,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}},
+		{name: "list mail by_trust_zone wake", ctx: wake, headers: listMail,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{Bulk: true}},
+		{name: "auto-replied draft requested", delivery: DeliveryDirect, ctx: wake, headers: autoReplied, draft: true,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}},
+		{name: "auto-replied drafts mode wake", delivery: DeliveryDrafts, ctx: wake, headers: autoReplied,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}},
+		{name: "owner-bound wake", delivery: DeliveryDirect, ctx: ownerWake, headers: autoReplied,
+			wantDisposition: DispositionRefused, wantRoute: RouteAutomaticResponse, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}},
+
+		{name: "control: attended direct replies with the marks recorded", delivery: DeliveryDirect, ctx: attendedCtx, headers: autoReplied,
+			wantDisposition: DispositionSent, wantRoute: RoutePolicyDirect, wantOriginal: HeaderMarks{AutoSubmitted: AutoSubmittedReplied}, wantAttended: true},
+		{name: "control: attended by_trust_zone replies with the marks recorded", ctx: attendedCtx, headers: listMail,
+			wantDisposition: DispositionSent, wantRoute: RouteTrustZone, wantOriginal: HeaderMarks{Bulk: true}, wantAttended: true},
+		{name: "control: unmarked wake takes the unattended floor", ctx: wake,
+			wantDisposition: DispositionDrafted, wantRoute: RouteUnattendedFloor},
+		{name: "control: email_send in a wake is not this rule", ctx: wake, send: true,
+			wantDisposition: DispositionDrafted, wantRoute: RouteUnattendedFloor},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			deps := ServiceDependencies{
+				Contacts: &stubContacts{zones: map[string]string{
+					"hannah@example.com":  "household",
+					"kim@example.com":     "known",
+					"noreply@example.com": "household",
+				}},
+				Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+			}
+			svc, mem, smtp := policyService(t, deps, func(cfg *Config) {
+				cfg.Accounts[0].Policy.Delivery = tt.delivery
+			})
+			from, to := cmp.Or(tt.from, "Hannah <hannah@example.com>"), cmp.Or(tt.to, "thane@example.com")
+			uid := mem.append("INBOX", rawMessage(from, to, "Away", "back monday", tt.headers...))
+
+			var out string
+			var err error
+			if tt.send {
+				out, err = svc.ToolProvider().HandleSend(tt.ctx(), sendArgs("hannah@example.com"))
+			} else {
+				args := map[string]any{"uid": float64(uid), "body": "thanks"}
+				if tt.draft {
+					args["draft"] = true
+				}
+				if tt.replyAll {
+					args["reply_all"] = true
+				}
+				out, err = svc.ToolProvider().HandleReply(tt.ctx(), args)
+			}
+
+			var decision Decision
+			if tt.wantDisposition == DispositionRefused {
+				refusal := refusalOf(t, err)
+				decision = refusal.Decision
+				mustContain(t, err.Error(), "own headers mark it as", "neither sent nor drafted", "email_send", "request_core_attention",
+					`"route":"automatic_response"`, `"original":{`)
+				mustContain(t, logs.String(), "email outbound refused", "route=automatic_response", "original_auto_submitted=", "original_bulk=")
+			} else {
+				if err != nil {
+					t.Fatalf("not refused by this rule, got %v", err)
+				}
+				decision = decodeSend(t, out).Decision
+				if tt.wantOriginal.Marked() {
+					mustContain(t, out, `"original":{`)
+					mustContain(t, logs.String(), "email outbound decision", "original_auto_submitted=", "original_bulk=")
+				} else if strings.Contains(out, `"original"`) || strings.Contains(logs.String(), "original_") {
+					t.Errorf("an unmarked original must record no marks:\n%s\n%s", out, logs.String())
+				}
+			}
+			if decision.Disposition != tt.wantDisposition || decision.Route != tt.wantRoute || decision.Original != tt.wantOriginal || decision.Attended != tt.wantAttended {
+				t.Errorf("decision = %+v, want disposition %s route %s original %+v attended %v", decision, tt.wantDisposition, tt.wantRoute, tt.wantOriginal, tt.wantAttended)
+			}
+
+			wantSMTP, wantDrafts := 0, 0
+			switch tt.wantDisposition {
+			case DispositionSent:
+				wantSMTP = 1
+			case DispositionDrafted:
+				wantDrafts = 1
+			}
+			if got := len(smtp.received()); got != wantSMTP {
+				t.Errorf("SMTP deliveries = %d, want %d", got, wantSMTP)
+			}
+			acct, _ := svc.ResolveAccount(context.Background(), "primary")
+			drafts, err := acct.Client.ListMessages(context.Background(), ListOptions{Folder: "Drafts"})
+			if err != nil {
+				t.Fatalf("list drafts: %v", err)
+			}
+			if got := len(drafts.Envelopes); got != wantDrafts {
+				t.Errorf("drafts = %d, want %d", got, wantDrafts)
+			}
+		})
+	}
 }

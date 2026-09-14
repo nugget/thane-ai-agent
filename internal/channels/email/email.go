@@ -120,6 +120,10 @@ type Message struct {
 	// References is the References header chain, oldest first.
 	References []string `json:"references,omitempty"`
 
+	// HeaderMarks is what the message's own headers claim about how it
+	// was sent; only a full read sets it.
+	HeaderMarks HeaderMarks `json:"header_marks,omitzero"`
+
 	// TextBody is the readable body. It is the message's text/plain
 	// part when one exists and a plain-text rendering of the HTML
 	// part otherwise; BodySource says which.

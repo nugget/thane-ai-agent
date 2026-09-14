@@ -122,6 +122,7 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 		InReplyTo:  original.MessageID,
 		References: refs,
 		Draft:      toolargs.Bool(args, "draft"),
+		Original:   original.HeaderMarks,
 	})
 	if err != nil {
 		return "", err
