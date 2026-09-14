@@ -236,7 +236,12 @@ func validateFacetedDocumentBody(body string, frontmatter map[string][]string) e
 	payload := manifest.Contract.Parse(body)
 	var validationErrors []error
 	if err := manifest.Contract.Validate(payload); err != nil {
-		validationErrors = append(validationErrors, err)
+		// The contract marks each violation with its projection key, but
+		// here every projection arrived inside one whole body, so those
+		// keys are not arguments of the call that sent it. Keep the text
+		// and drop the marks: a structured writer that does take the keys
+		// as arguments has already validated them with the marks intact.
+		validationErrors = append(validationErrors, errors.New(err.Error()))
 	}
 	if got, want := strings.TrimSpace(body), manifest.Contract.Render(payload); got != want {
 		validationErrors = append(validationErrors, fmt.Errorf("body does not match the canonical faceted document codec; write logical projections through %s", manifest.ManagedBy))

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // ToolOutcome tallies one tool's calls within a single [Engine.Run]. A
@@ -81,10 +81,11 @@ type toolLedger struct {
 }
 
 // failedCall is what the unchanged-arguments note compares against: the
-// canonical JSON of each top-level argument, and the error text.
+// canonical JSON of each top-level argument, and the arguments the call's
+// error marked as refused ([toolargs.RejectedArguments]), sorted.
 type failedCall struct {
-	args    map[string]string
-	errText string
+	args     map[string]string
+	rejected []string
 }
 
 func newToolLedger() *toolLedger {
@@ -114,10 +115,13 @@ func (t *toolLedger) blocked(tool, target string) {
 // observe records one call that passed the repeat guard and returns the
 // tool result the model should see. That is result unchanged, except
 // when the call failed and resent a value the previous failure for the
-// same target also carried, with both errors naming that argument: then
-// the unchanged-arguments note is appended, naming those arguments. A
-// call refused as unavailable is tallied but never annotated — its
-// arguments were not what was refused. The call is tallied under target,
+// same target also carried, with both errors marking that argument as
+// refused: then the unchanged-arguments note is appended, naming those
+// arguments. Only the typed marks count ([toolargs.RejectedArguments]);
+// the error text is never searched for argument names, because a store
+// or network failure can mention an argument it did not refuse. A call
+// refused as unavailable is tallied but never annotated — its arguments
+// were not what was refused. The call is tallied under target,
 // the document it wrote, unless the tool refused that document itself
 // ([tools.ErrTargetRefused]): then it wrote no document of its own and is
 // tallied under the empty target.
@@ -132,8 +136,7 @@ func (t *toolLedger) observe(tool, target string, args map[string]any, toolErr e
 		delete(t.refused, key)
 		return result
 	}
-	errText := toolErr.Error()
-	clipped := clipRunes(errText, maxToolOutcomeErrorRunes)
+	clipped := clipRunes(toolErr.Error(), maxToolOutcomeErrorRunes)
 	charged := target
 	if isTargetRefusal(toolErr) {
 		t.refused[key] = true
@@ -152,8 +155,8 @@ func (t *toolLedger) observe(tool, target string, args map[string]any, toolErr e
 	if errors.As(toolErr, &unavailable) {
 		return result
 	}
-	current := failedCall{args: canonicalArgs(args), errText: errText}
-	unchanged := unchangedNamedKeys(t.lastFailed[key], current)
+	current := failedCall{args: canonicalArgs(args), rejected: toolargs.RejectedArguments(toolErr)}
+	unchanged := unchangedRejectedKeys(t.lastFailed[key], current)
 	t.lastFailed[key] = current
 	if len(unchanged) == 0 {
 		return result
@@ -190,55 +193,27 @@ func canonicalArgs(args map[string]any) map[string]string {
 	return out
 }
 
-// unchangedNamedKeys returns, sorted, the keys the two failed calls sent
-// with identical canonical values and that both calls' errors name. An
-// unchanged key neither error mentions is a value the tool accepted — a
-// valid projection resent beside the one being fixed — and an error that
-// names no argument at all (an unreachable backend, a timeout) is not
-// about the values, so neither is worth a note.
-func unchangedNamedKeys(previous, current failedCall) []string {
-	if len(previous.args) == 0 {
-		return nil
-	}
+// unchangedRejectedKeys returns, sorted, the keys both failed calls'
+// errors marked as refused and both calls sent with identical canonical
+// values. An unchanged key neither error marks is a value the tool
+// accepted — a valid projection resent beside the one being fixed — and
+// an error with no marks at all (an unreachable backend, a failed lookup)
+// is not about the values, whatever its text mentions, so neither is
+// worth a note. A key refused by only one of the two errors was not
+// refused twice, so it is not either.
+func unchangedRejectedKeys(previous, current failedCall) []string {
 	var keys []string
-	for key, value := range current.args {
-		if prev, ok := previous.args[key]; !ok || prev != value {
+	for _, key := range current.rejected {
+		if !slices.Contains(previous.rejected, key) {
 			continue
 		}
-		if namesKey(previous.errText, key) && namesKey(current.errText, key) {
+		prev, sentBefore := previous.args[key]
+		value, sentNow := current.args[key]
+		if sentBefore && sentNow && prev == value {
 			keys = append(keys, key)
 		}
 	}
-	sort.Strings(keys)
 	return keys
-}
-
-// namesKey reports whether text mentions key as a whole identifier, so
-// "full" matches "full is 98305 bytes" but not "fully" or "full_text".
-func namesKey(text, key string) bool {
-	if key == "" {
-		return false
-	}
-	for from := 0; ; {
-		idx := strings.Index(text[from:], key)
-		if idx < 0 {
-			return false
-		}
-		start := from + idx
-		end := start + len(key)
-		before, _ := utf8.DecodeLastRuneInString(text[:start])
-		after, _ := utf8.DecodeRuneInString(text[end:])
-		if !isIdentRune(before) && !isIdentRune(after) {
-			return true
-		}
-		from = start + 1
-	}
-}
-
-// isIdentRune reports whether r can continue an argument name. The
-// utf8.RuneError that decoding returns at either end of the text is not.
-func isIdentRune(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // renderKeyList joins argument names for the note, clipping each name

@@ -103,9 +103,13 @@ request) the refusal tells the model to stop calling tools and answer.
 Everywhere else it says only that the call was not run and identical
 calls stay refused, pointing the model at the earlier result or at the
 arguments its error names, so a loop wake is never told to abandon a
-write. When one tool fails twice in a row and the second call resent a
-value from the first that both errors name, the result also names those
-unchanged arguments.
+write. When a tool fails twice in a row on the same target, and both
+errors rejected an argument the second call resent unchanged, the result
+also names those unchanged arguments. An error counts as rejecting an
+argument only when the tool marked it so — an over-budget or missing
+projection, a dossier rule the value broke — never because its text
+happens to mention the argument, so a database, network or lookup
+failure never earns the note.
 
 ### 5. Response Shaping
 

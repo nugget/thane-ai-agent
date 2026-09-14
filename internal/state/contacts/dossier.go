@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // DossierRootName is the canonical managed document root for longitudinal
@@ -363,7 +364,7 @@ func validateDossierSubjectIdentity(id uuid.UUID, payload documentfacets.Payload
 	if len(redundant) == 0 {
 		return nil
 	}
-	return fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id)
+	return toolargs.Rejected(fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id), redundant...)
 }
 
 // validateDossierSubjectName keeps the compact lookup projections focused on
@@ -393,7 +394,7 @@ func validateDossierSubjectName(name string, payload documentfacets.Payload) err
 	if len(redundant) == 0 {
 		return nil
 	}
-	return fmt.Errorf("projection(s) [%s] repeat the subject contact name %q; omit the name because the structured contact and dossier title already identify the subject; digest and full may use it when standalone prose needs it", strings.Join(redundant, ", "), name)
+	return toolargs.Rejected(fmt.Errorf("projection(s) [%s] repeat the subject contact name %q; omit the name because the structured contact and dossier title already identify the subject; digest and full may use it when standalone prose needs it", strings.Join(redundant, ", "), name), redundant...)
 }
 
 func containsFoldedPhrase(text, phrase string) bool {
@@ -439,7 +440,9 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 
 	seen := make(map[string]struct{})
 	invalid := make([]string, 0)
+	var rejected []string
 	for _, field := range fields {
+		fieldRejected := false
 		for _, match := range archiveSessionCitationPattern.FindAllStringSubmatch(field.value, -1) {
 			citation := match[0]
 			rawID := match[2]
@@ -447,6 +450,7 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 			if match[1] == ":" && err == nil && id != uuid.Nil && id.String() == rawID {
 				continue
 			}
+			fieldRejected = true
 			key := field.name + "\x00" + citation
 			if _, duplicate := seen[key]; duplicate {
 				continue
@@ -454,12 +458,15 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 			seen[key] = struct{}{}
 			invalid = append(invalid, field.name+"="+citation)
 		}
+		if fieldRejected {
+			rejected = append(rejected, field.name)
+		}
 	}
 	if len(invalid) == 0 {
 		return nil
 	}
 	sort.Strings(invalid)
-	return fmt.Errorf("archive-session citation(s) [%s] do not use a full canonical UUID; replace each with archive:session:<full-session-uuid> from archive_search or archive_sessions because short prefixes can be ambiguous", strings.Join(invalid, ", "))
+	return toolargs.Rejected(fmt.Errorf("archive-session citation(s) [%s] do not use a full canonical UUID; replace each with archive:session:<full-session-uuid> from archive_search or archive_sessions because short prefixes can be ambiguous", strings.Join(invalid, ", ")), rejected...)
 }
 
 func dossierIDFromPath(relPath string) (uuid.UUID, error) {

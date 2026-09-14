@@ -28,12 +28,19 @@ func RepeatedToolCall(toolName string, repeats int) string {
 }
 
 // UnchangedArgumentsNote is appended to a failed tool result when the
-// call resent values the previous failed call to the same tool in this
-// turn also carried, and both errors name those arguments. keys is the
-// rendered list of those top-level argument names. It fires from the
+// call resent values the previous failed call to the same tool and
+// target in this turn also carried, and both errors rejected those
+// arguments — marked them as refused, not merely mentioned them. keys is
+// the rendered list of those top-level argument names. It fires from the
 // second rejection, well before the whole-argument repeat guard, because
 // a model that resends a rejected projection unchanged has usually not
 // noticed which of its arguments the error was about.
+//
+// The text says "an earlier" failed call, not "the previous" one: the
+// comparison is with the previous failure for the same target, and a
+// failure for another target (another contact's dossier) can fall in
+// between. Pointing at the tool's most recent failure would name a call
+// that sent a different value.
 func UnchangedArgumentsNote(toolName, keys string) string {
-	return fmt.Sprintf("Unchanged since the previous failed %s call in this turn, and named by both its error and this one: %s. When an error is about a value, resending that value unchanged gets the same error, so change these before calling %s again.", toolName, keys, toolName)
+	return fmt.Sprintf("Rejected twice in this turn with the same value, by an earlier failed %s call and by this one: %s. A rejected value resent unchanged is rejected the same way, so change these before calling %s again.", toolName, keys, toolName)
 }

@@ -463,15 +463,20 @@ func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.Fac
 	}
 
 	if output.HasFacets() {
+		// Both facet checks mark their violations with projection keys
+		// (toolargs.RejectedArgumentsError), which here sit nested under
+		// output.initial rather than being arguments of loop_create. Only
+		// the text is kept, so no mark names an argument this call never
+		// sent.
 		payload, err = output.FacetPayloadFromArgs(initial)
 		if err != nil {
-			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %w", err)
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %s", err.Error())
 		}
 		// The whole declared ladder or nothing: a partial seed would
 		// publish projections describing different moments, exactly what
 		// the publish tool exists to prevent.
 		if err := output.ValidateFacetPayload(payload); err != nil {
-			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %w", err)
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %s", err.Error())
 		}
 		return payload, notes, true, nil
 	}
@@ -647,7 +652,12 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 				}
 				payload, err = migrateOutputPayload(record, newContract, plan.migrationValues)
 				if err != nil {
-					return "", fmt.Errorf("output.migration: %w", err)
+					// As with output.initial, the contract marks projection
+					// keys (toolargs.RejectedArgumentsError) that sit
+					// nested under output.migration, or that were
+					// preserved from the document and never sent. Only the
+					// text is kept.
+					return "", fmt.Errorf("output.migration: %s", err.Error())
 				}
 				body = payload.Full
 				documentState = "migrated_contract"

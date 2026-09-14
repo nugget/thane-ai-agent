@@ -146,15 +146,18 @@ func TestToolOutcomesPerTarget(t *testing.T) {
 
 // TestUnchangedArgumentsNotePerTarget: the note compares a failed call
 // only with the previous failure for the same document. Another
-// target's landed write in between does not reset the comparison, and
-// another target's failure is never compared with this one.
+// target's landed write or failure in between does not reset the
+// comparison, and another target's failure is never compared with this
+// one. Because another target's failure can fall in between, the note
+// must not claim that the call it compares with was the tool's most
+// recent failure.
 func TestUnchangedArgumentsNotePerTarget(t *testing.T) {
 	const (
 		dossier   = "contact_dossier_write"
 		rejection = "status_line is 190 characters and the limit is 160"
 		long      = "an over-long status line"
 	)
-	rejected := scriptStep{err: rejection}
+	rejected := scriptStep{err: rejection, rejected: []string{"status_line"}}
 	written := scriptStep{result: "written"}
 	cases := []struct {
 		name     string
@@ -166,6 +169,12 @@ func TestUnchangedArgumentsNotePerTarget(t *testing.T) {
 			name:     "another target's success between two rejections keeps the comparison",
 			script:   []scriptStep{rejected, written, rejected},
 			calls:    []map[string]any{dossierArgs("bob", long), dossierArgs("alice", "a"), dossierArgs("bob", long)},
+			wantNote: []bool{false, false, true},
+		},
+		{
+			name:     "another target's failure between two rejections keeps the comparison",
+			script:   []scriptStep{rejected, rejected, rejected},
+			calls:    []map[string]any{dossierArgs("bob", long), dossierArgs("alice", "a different over-long line"), dossierArgs("bob", long)},
 			wantNote: []bool{false, false, true},
 		},
 		{
@@ -182,6 +191,9 @@ func TestUnchangedArgumentsNotePerTarget(t *testing.T) {
 		},
 	}
 	note := prompts.UnchangedArgumentsNote(dossier, "status_line")
+	if strings.Contains(note, "previous") {
+		t.Errorf("note %q points at the previous failed call; after Bob, Alice, Bob that call is Alice's, which sent a different status_line", note)
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseCfg(nil, nil)

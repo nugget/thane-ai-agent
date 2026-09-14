@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // scriptedExecutor answers each call from a per-tool script, in call
@@ -26,9 +27,15 @@ type scriptedExecutor struct {
 type scriptStep struct {
 	result string
 	err    string
+	// rejected marks err as a refusal of these arguments
+	// ([toolargs.Rejected]); without it err is about no argument.
+	rejected []string
 	// targetRefused returns err as a refusal of the target the call
 	// named ([tools.ErrTargetRefused]).
 	targetRefused bool
+	// failure, when set, is returned as the call's error in place of
+	// err, for a refusal shaped the way a real writer shapes one.
+	failure error
 }
 
 func (s *scriptedExecutor) Execute(_ context.Context, name, _ string) (string, error) {
@@ -46,14 +53,18 @@ func (s *scriptedExecutor) Execute(_ context.Context, name, _ string) (string, e
 	if idx >= len(steps) {
 		idx = len(steps) - 1
 	}
-	if steps[idx].err != "" {
-		err := errors.New(steps[idx].err)
-		if steps[idx].targetRefused {
+	step := steps[idx]
+	if step.failure != nil {
+		return "", step.failure
+	}
+	if step.err != "" {
+		err := toolargs.Rejected(errors.New(step.err), step.rejected...)
+		if step.targetRefused {
 			return "", &tools.ErrTargetRefused{Err: err}
 		}
 		return "", err
 	}
-	return steps[idx].result, nil
+	return step.result, nil
 }
 
 // numberedCall builds a tool call with a unique ID so each call's
@@ -172,17 +183,21 @@ func TestToolOutcomesNilWithoutTools(t *testing.T) {
 }
 
 // TestUnchangedArgumentsNote pins where the note lands: on a failing
-// call that resent a value the tool's previous failure also carried,
-// naming exactly the unchanged keys both errors name. It never names a
-// valid field resent beside the one being fixed, never fires on an error
-// that names no argument (a transient backend failure), and never fires
-// on a success, when every key changed, or across an intervening success.
+// call that resent a value the previous failure for the same target also
+// carried, naming exactly the unchanged keys both errors marked as
+// refused ([toolargs.Rejected]). Only the marks count, never the text: an
+// operational failure whose text mentions an argument, a valid field
+// resent beside the one being fixed, and a field only one of the two
+// errors refused all go unnamed, as does every call around a success.
 func TestUnchangedArgumentsNote(t *testing.T) {
-	const tool = "publish_output_trip"
-	rejected := scriptStep{err: "teaser is 400 characters and the limit is 280"}
+	const publish = "publish_output_trip"
+	teaserOver := scriptStep{err: "teaser is 400 characters and the limit is 280", rejected: []string{"teaser"}}
 	published := scriptStep{result: "published"}
+	longDigest := strings.Repeat("d", 2100)
 	cases := []struct {
-		name   string
+		name string
+		// tool is the tool called, publish when empty.
+		tool   string
 		script []scriptStep
 		calls  []map[string]any
 		// wantKeys is, per call, the key list the note must name, or ""
@@ -190,19 +205,49 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 		wantKeys []string
 	}{
 		{
-			// digest is resent unchanged too, but no error names it: it is
+			// Copilot's case on PR #1579: the lookup's error text names the
+			// name argument, but a closed database is not a refusal of a
+			// valid name, so matching the prose told the model to change it.
+			name:     "an operational error that mentions an unchanged argument gets no note",
+			tool:     "contact_lookup",
+			script:   []scriptStep{{err: `resolve contact: find by name or nickname "Alice": sql: database is closed`}},
+			calls:    []map[string]any{{"name": "Alice"}, {"name": "Alice"}},
+			wantKeys: []string{"", ""},
+		},
+		{
+			name: "two rejections of an unchanged digest name it",
+			script: []scriptStep{
+				{err: "digest is 2100 characters and the limit is 2048 (52 over)", rejected: []string{"digest"}},
+			},
+			calls:    []map[string]any{publishArgs("first", "t", longDigest), publishArgs("second", "t", longDigest)},
+			wantKeys: []string{"", "digest"},
+		},
+		{
+			// digest is resent unchanged too, but no error marks it: it is
 			// a valid projection, not part of what was refused.
-			name:     "second rejection names only the unchanged key its errors name",
-			script:   []scriptStep{rejected, rejected},
+			name:     "second rejection names only the unchanged key both errors reject",
+			script:   []scriptStep{teaserOver, teaserOver},
 			calls:    []map[string]any{publishArgs("first", "long", "d"), publishArgs("second", "long", "d")},
 			wantKeys: []string{"", "teaser"},
 		},
 		{
-			name: "every unchanged key both errors name is listed",
-			script: []scriptStep{
-				{err: "status_line is 190 characters and the limit is 120; teaser is 560 characters and the limit is 500"},
-				{err: "status_line is 190 characters and the limit is 120; teaser is 560 characters and the limit is 500"},
-			},
+			name: "every unchanged key both errors reject is listed",
+			script: []scriptStep{{
+				err:      "status_line is 190 characters and the limit is 120; teaser is 560 characters and the limit is 500",
+				rejected: []string{"status_line", "teaser"},
+			}},
+			calls:    []map[string]any{publishArgs("same", "same", "first"), publishArgs("same", "same", "second")},
+			wantKeys: []string{"", "status_line, teaser"},
+		},
+		{
+			// The shape every structured writer returns: one frame around a
+			// join of per-field violations, one of them marking nothing.
+			name: "joined violations inside a frame give the union",
+			script: []scriptStep{{failure: fmt.Errorf("projections are invalid and nothing was written: %w", errors.Join(
+				toolargs.Rejected(errors.New("status_line is 190 characters and the limit is 120"), "status_line"),
+				errors.New("dossier must carry exactly one title"),
+				toolargs.Rejected(errors.New("teaser is 560 characters and the limit is 500"), "teaser"),
+			))}},
 			calls:    []map[string]any{publishArgs("same", "same", "first"), publishArgs("same", "same", "second")},
 			wantKeys: []string{"", "status_line, teaser"},
 		},
@@ -211,8 +256,8 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 			// (still over), and the valid ones were resent unchanged.
 			name: "partial fix leaves the valid resent fields unnamed",
 			script: []scriptStep{
-				{err: "status_line is 190 characters and the limit is 120 (70 over)"},
-				{err: "status_line is 150 characters and the limit is 120 (30 over)"},
+				{err: "status_line is 190 characters and the limit is 120 (70 over)", rejected: []string{"status_line"}},
+				{err: "status_line is 150 characters and the limit is 120 (30 over)", rejected: []string{"status_line"}},
 			},
 			calls: []map[string]any{
 				publishArgs(strings.Repeat("a", 190), "valid teaser", "valid digest"),
@@ -221,48 +266,73 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 			wantKeys: []string{"", ""},
 		},
 		{
-			name: "an error that names no argument is not about the values",
+			name: "an unmarked error is not about the values",
 			script: []scriptStep{
-				{err: "home assistant is currently unreachable (reconnecting in background)"},
 				{err: "home assistant is currently unreachable (reconnecting in background)"},
 			},
 			calls:    []map[string]any{publishArgs("a", "t", "d"), publishArgs("a", "t", "d")},
 			wantKeys: []string{"", ""},
 		},
 		{
+			name: "an unchanged key no error marks gets no note",
+			script: []scriptStep{
+				{err: "digest is 2100 characters and the limit is 2048", rejected: []string{"digest"}},
+			},
+			calls:    []map[string]any{publishArgs("same", "same", "first"), publishArgs("same", "same", "second")},
+			wantKeys: []string{"", ""},
+		},
+		{
+			// The teaser was refused the first time and resent unchanged,
+			// but the second refusal was about the status line alone.
+			name: "a key only the previous error rejected gets no note",
+			script: []scriptStep{
+				teaserOver,
+				{err: "status_line is 190 characters and the limit is 120", rejected: []string{"status_line"}},
+			},
+			calls:    []map[string]any{publishArgs("a", "long", "d"), publishArgs("b", "long", "d")},
+			wantKeys: []string{"", ""},
+		},
+		{
 			// The first refusal was about a missing read, not the teaser, so
 			// the teaser was never refused before this call.
-			name: "a key only the current error names gets no note",
+			name: "a key only the current error rejects gets no note",
 			script: []scriptStep{
 				{err: "No change was made: Thane has no record of this loop reading trip.md"},
-				rejected,
+				teaserOver,
 			},
 			calls:    []map[string]any{publishArgs("a", "long", "d"), publishArgs("a", "long", "d")},
 			wantKeys: []string{"", ""},
 		},
 		{
+			// A required projection left out twice is refused twice, but
+			// no value was resent, so there is nothing unchanged to name.
+			name:     "a rejected key the call never sent gets no note",
+			script:   []scriptStep{{err: "digest is required", rejected: []string{"digest"}}},
+			calls:    []map[string]any{{"status_line": "a", "full": "f"}, {"status_line": "b", "full": "f"}},
+			wantKeys: []string{"", ""},
+		},
+		{
 			name:     "every key changed",
-			script:   []scriptStep{rejected, rejected},
+			script:   []scriptStep{teaserOver, teaserOver},
 			calls:    []map[string]any{publishArgs("a", "b", "c"), publishArgs("x", "y", "z")},
 			wantKeys: []string{"", ""},
 		},
 		{
 			name:     "success after a rejection carries no note",
-			script:   []scriptStep{rejected, published},
+			script:   []scriptStep{teaserOver, published},
 			calls:    []map[string]any{publishArgs("a", "long", "d"), publishArgs("b", "long", "d")},
 			wantKeys: []string{"", ""},
 		},
 		{
 			name:     "a success in between resets the comparison",
-			script:   []scriptStep{rejected, published, rejected},
+			script:   []scriptStep{teaserOver, published, teaserOver},
 			calls:    []map[string]any{publishArgs("a", "long", "d"), publishArgs("b", "short", "d"), publishArgs("a", "long", "d")},
 			wantKeys: []string{"", "", ""},
 		},
 		{
 			name: "nested values compare by content, not field order",
 			script: []scriptStep{
-				{err: "full is 100000 bytes and the ceiling is 98304"},
-				{err: "full is 100000 bytes and the ceiling is 98304"},
+				{err: "full is 100000 bytes and the ceiling is 98304", rejected: []string{"full"}},
 			},
 			calls: []map[string]any{
 				{"status_line": "a", "full": map[string]any{"x": 1, "y": []any{"p", "q"}}},
@@ -273,6 +343,10 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			tool := tc.tool
+			if tool == "" {
+				tool = publish
+			}
 			cfg := baseCfg(nil, nil)
 			cfg.Executor = &scriptedExecutor{scripts: map[string][]scriptStep{tool: tc.script}}
 			calls := make([]llm.ToolCall, len(tc.calls))
@@ -282,7 +356,11 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 			_, contents := runScript(t, cfg, calls)
 
 			for i, keys := range tc.wantKeys {
-				hasNote := strings.Contains(contents[i], "Unchanged since the previous failed")
+				// The note's text before its key list, taken from the
+				// prompt itself so a rewording cannot make this check
+				// pass vacuously.
+				notePrefix, _, _ := strings.Cut(prompts.UnchangedArgumentsNote(tool, "\x00"), "\x00")
+				hasNote := strings.Contains(contents[i], notePrefix)
 				if keys == "" {
 					if hasNote {
 						t.Errorf("call %d carries a note it should not: %q", i, contents[i])
@@ -293,34 +371,6 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 				if !strings.HasSuffix(contents[i], "\n\n"+want) {
 					t.Errorf("call %d result = %q, want it to end with note %q", i, contents[i], want)
 				}
-			}
-		})
-	}
-}
-
-// TestNamesKey pins the whole-identifier match that decides whether an
-// error is about an argument: a key embedded in a longer name is not it.
-func TestNamesKey(t *testing.T) {
-	cases := []struct {
-		name string
-		text string
-		key  string
-		want bool
-	}{
-		{name: "key leads a violation", text: "status_line is 190 characters", key: "status_line", want: true},
-		{name: "key inside a longer name", text: "substatus_line is 190 characters", key: "status_line"},
-		{name: "key as a prefix", text: "status_lines are invalid", key: "status_line"},
-		{name: "key before a word character", text: "fully written", key: "full"},
-		{name: "key before an underscore", text: "the full_text field", key: "full"},
-		{name: "second occurrence stands alone", text: "fully, then full.", key: "full", want: true},
-		{name: "key after punctuation", text: "digest is fine; teaser is 560 characters", key: "teaser", want: true},
-		{name: "empty text", text: "", key: "full"},
-		{name: "empty key", text: "anything", key: ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := namesKey(tc.text, tc.key); got != tc.want {
-				t.Errorf("namesKey(%q, %q) = %v, want %v", tc.text, tc.key, got, tc.want)
 			}
 		})
 	}
