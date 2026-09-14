@@ -158,7 +158,7 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		validationErrs = append(validationErrs, err)
 	}
 	if len(validationErrs) > 0 {
-		return "", fmt.Errorf("contact dossier projections are invalid; correct every listed field and retry once: %w", errors.Join(validationErrs...))
+		return "", documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)
 	}
 	return t.dossierWrite(ctx, documents.FacetedWriteArgs{
 		Ref:          DossierRef(id),
@@ -168,6 +168,11 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Payload:      payload,
 		WriteTool:    DossierWriteToolName,
 		ReceiptScope: args.ReceiptScope,
+		// A refused replacement (no read on record, or a read the dossier
+		// has moved past) must read as a failed call, not an applied:false
+		// success: the loop runtime counts a successful call as a landed
+		// dossier, so an inline refusal would hide the loss.
+		RejectionIsError: true,
 	})
 }
 
@@ -325,7 +330,7 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
 	}
 	if len(validationErrs) > 0 {
-		return fmt.Errorf("dossier %s projections are invalid; correct every listed field and retry once: %w", candidate.Path, errors.Join(validationErrs...))
+		return documentfacets.InvalidProjectionsError(fmt.Sprintf("dossier %s projections", candidate.Path), validationErrs...)
 	}
 	if got, want := strings.TrimSpace(candidate.Body), dossierOutputContract.Render(payload); got != want {
 		return fmt.Errorf("dossier %s must use the canonical facet section order with no text outside those sections", candidate.Path)

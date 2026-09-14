@@ -156,6 +156,14 @@ type Config struct {
 	// FallbackContent is the static text returned when the model fails
 	// to produce content even after nudging.
 	FallbackContent string
+
+	// ReplyAwaited reports that someone is waiting on this turn's final
+	// text — a channel message or an API response — rather than the turn
+	// being a loop wake, a delegate, or other work nobody reads as a
+	// reply. It selects the repeat guard's wording: only a turn with a
+	// reply awaited is told to stop calling tools and answer, because on
+	// any other turn that instruction reads as "abandon the work".
+	ReplyAwaited bool
 }
 
 // applyDefaults fills zero-valued fields with their defaults.

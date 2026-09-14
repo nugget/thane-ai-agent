@@ -1172,6 +1172,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, stream loopp
 		CacheReadInputTokens:     resp.CacheReadInputTokens,
 		ContextWindow:            ctxWindow,
 		ToolsUsed:                resp.ToolsUsed,
+		ToolOutcomes:             loopToolOutcomes(resp.ToolOutcomes),
 		EffectiveTools:           append([]string(nil), resp.EffectiveTools...),
 		LoadedCapabilities:       append([]toolcatalog.LoadedCapabilityEntry(nil), loadedCapabilities...),
 		RequestID:                resp.RequestID,

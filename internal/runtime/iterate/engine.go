@@ -36,6 +36,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterations         []IterationRecord
 		toolsUsed          = make(map[string]int)
 		toolCallCounts     = make(map[string]int)
+		ledger             = newToolLedger()
 		totalInput         int
 		totalOutput        int
 		totalCacheCreate   int
@@ -116,6 +117,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						CacheCreation1hInputTokens: totalCacheCreate1h,
 						CacheReadInputTokens:       totalCacheRead,
 						ToolsUsed:                  toolsUsed,
+						ToolOutcomes:               ledger.snapshot(),
 						Exhausted:                  true,
 						Iterations:                 iterations,
 						Messages:                   messages,
@@ -137,6 +139,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					CacheCreation1hInputTokens: totalCacheCreate1h,
 					CacheReadInputTokens:       totalCacheRead,
 					ToolsUsed:                  toolsUsed,
+					ToolOutcomes:               ledger.snapshot(),
 					Exhausted:                  true,
 					Iterations:                 iterations,
 					Messages:                   messages,
@@ -190,6 +193,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				CacheCreation1hInputTokens: totalCacheCreate1h,
 				CacheReadInputTokens:       totalCacheRead,
 				ToolsUsed:                  toolsUsed,
+				ToolOutcomes:               ledger.snapshot(),
 				Exhausted:                  true,
 				ExhaustReason:              ExhaustTokenBudget,
 				Iterations:                 iterations,
@@ -296,9 +300,10 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					)
 					messages = append(messages, llm.Message{
 						Role:       "tool",
-						Content:    fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
+						Content:    cfg.repeatedCallMessage(toolName, toolCallCounts[callKey]),
 						ToolCallID: tc.ID,
 					})
+					ledger.blocked(toolName)
 					toolLoopDetected = true
 					continue // skip execution; move to next tool in batch
 				}
@@ -368,6 +373,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						batchHasNonMetaTool = true
 					}
 				}
+				result = ledger.observe(toolName, tc.Function.Arguments, toolErr, result)
 
 				// --- Callback: tool call done ---
 				// Pass toolCtx so the callback can access values injected
@@ -502,6 +508,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			CacheCreation1hInputTokens: totalCacheCreate1h,
 			CacheReadInputTokens:       totalCacheRead,
 			ToolsUsed:                  toolsUsed,
+			ToolOutcomes:               ledger.snapshot(),
 			Exhausted:                  false,
 			Iterations:                 iterations,
 			Messages:                   messages,
@@ -526,6 +533,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		CacheCreation1hInputTokens: totalCacheCreate1h,
 		CacheReadInputTokens:       totalCacheRead,
 		ToolsUsed:                  toolsUsed,
+		ToolOutcomes:               ledger.snapshot(),
 		Exhausted:                  true,
 		ExhaustReason:              breakReason,
 		Iterations:                 iterations,

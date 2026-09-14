@@ -99,6 +99,12 @@ type Result struct {
 	// ToolsUsed maps tool name → invocation count.
 	ToolsUsed map[string]int
 
+	// ToolOutcomes tallies how each tool's calls in this run ended:
+	// failed, refused by the repeat guard, or succeeded, with the last
+	// error. ToolsUsed counts invocations; this is what tells a write
+	// that landed from one that never did. Nil when no tool was called.
+	ToolOutcomes map[string]ToolOutcome
+
 	// Exhausted is true when the engine stopped due to a budget
 	// (iterations, tokens, wall clock) rather than a text response.
 	Exhausted bool

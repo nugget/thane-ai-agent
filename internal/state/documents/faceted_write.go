@@ -161,7 +161,7 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		}
 	}
 	if len(validationErrors) > 0 {
-		return "", fmt.Errorf("faceted document projections are invalid; correct every listed field and retry once: %w", errors.Join(validationErrors...))
+		return "", documentfacets.InvalidProjectionsError("faceted document projections", validationErrors...)
 	}
 
 	body := args.Contract.Render(args.Payload)

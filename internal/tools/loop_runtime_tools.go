@@ -48,7 +48,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_status",
-		Description: "Inspect the live loop registry. Returns a rich canonical row per running loop — identity, parent container and ancestry, lifecycle counters (successful iterations vs attempts), schedule (next_wake_delta + current_sleep_duration), wake attribution (last wake's reason and sender, trailing-day wake count with its honest coverage window, and a by-reason histogram), token economics, state and policy, supervisor cadence, and effective tags/subscriptions with inheritance provenance — with optional filters by query text, state, operation, and a result limit. The envelope also carries a top-level health rollup (total, degraded count + names, by_state, degraded_truncated) computed over the whole registry, so you can tell at a glance whether anything is wrong even when a degraded loop falls below the limit.",
+		Description: "Inspect the live loop registry. Returns a rich canonical row per running loop — identity, parent container and ancestry, lifecycle counters (successful iterations vs attempts), schedule (next_wake_delta + current_sleep_duration), wake attribution (last wake's reason and sender, trailing-day wake count with its honest coverage window, and a by-reason histogram), token economics, state and policy, supervisor cadence, and effective tags/subscriptions with inheritance provenance — with optional filters by query text, state, operation, and a result limit. The envelope also carries a top-level health rollup (total, degraded count + names, by_state, degraded_truncated) computed over the whole registry, so you can tell at a glance whether anything is wrong even when a degraded loop falls below the limit. Each degraded name carries its reason: consecutive errors, an error state, or a wake that ended normally without landing a durable write (a declared output's tool or contact_dossier_write) — a failure no error counter shows. That loop's row lists it under unpublished_writes with the tool, rejection count, last rejection text, at_delta, and conversation_id; a later wake that lands the write clears it.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -216,7 +216,7 @@ func (r *Registry) handleLoopStatus(ctx context.Context, args map[string]any) (s
 		// Health is computed over the FULL registry, not the filtered/limited
 		// rows, so "is anything wrong" is answerable in one read even when a
 		// degraded loop falls below the result limit.
-		"health": loopStatusHealth(statuses),
+		"health": loopStatusHealth(statuses, time.Now()),
 		"tree":   tree,
 		"loops":  filtered,
 	}
@@ -232,22 +232,20 @@ func (r *Registry) handleLoopStatus(ctx context.Context, args map[string]any) (s
 const maxDegradedLoopNames = 10
 
 // loopStatusHealth summarizes the live registry: counts by state and the
-// loops that are degraded (in error, or carrying consecutive errors), so the
-// model can read "is anything wrong" without eyeballing every row. statuses
-// is already name-sorted (Registry.Statuses), so degraded_loops is
-// deterministic without an explicit sort.
-func loopStatusHealth(statuses []looppkg.Status) map[string]any {
+// loops that are degraded, each named with its reason — in error, carrying
+// consecutive errors, or holding a durable write a completed wake never
+// landed — so the model can read "is anything wrong" without eyeballing
+// every row. The reason is [looppkg.DegradedReason], the definition the
+// system_health loop census also reads. statuses is already name-sorted
+// (Registry.Statuses), so degraded_loops is deterministic without an
+// explicit sort.
+func loopStatusHealth(statuses []looppkg.Status, now time.Time) map[string]any {
 	byState := make(map[string]int)
 	degraded := make([]string, 0)
 	for _, s := range statuses {
 		byState[string(s.State)]++
-		switch {
-		case s.ConsecutiveErrors > 0:
-			degraded = append(degraded, fmt.Sprintf("%s (%d consecutive errors)", s.Name, s.ConsecutiveErrors))
-		case s.State == looppkg.StateError:
-			// Errored this cycle but the counter already reset (or never
-			// incremented) — label the state, not a misleading "0 errors".
-			degraded = append(degraded, fmt.Sprintf("%s (error)", s.Name))
+		if reason := looppkg.DegradedReason(s, now); reason != "" {
+			degraded = append(degraded, fmt.Sprintf("%s (%s)", s.Name, reason))
 		}
 	}
 	degradedCount := len(degraded)

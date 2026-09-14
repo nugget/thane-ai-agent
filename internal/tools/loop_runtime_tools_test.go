@@ -418,7 +418,7 @@ func TestLoopStatusHealth(t *testing.T) {
 		{Name: "d", State: looppkg.State("waiting"), ConsecutiveErrors: 2},
 		{Name: "e", State: looppkg.State("error")}, // error state, counter already reset
 	}
-	h := loopStatusHealth(statuses)
+	h := loopStatusHealth(statuses, time.Now())
 
 	if h["total"] != 5 {
 		t.Errorf("total = %v, want 5", h["total"])

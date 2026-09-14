@@ -157,6 +157,9 @@ type Response struct {
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
 	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
+	// ToolOutcomes is the runner's per-tool tally for the turn: how each
+	// tool's calls ended, repeat-guard refusals included. Runtime-only.
+	ToolOutcomes map[string]ToolOutcome `yaml:"-" json:"-"`
 }
 
 // RunResponse is a compatibility alias for [Response], the primary
@@ -402,6 +405,10 @@ type Loop struct {
 
 	// consecutiveErrors tracks sequential failures for backoff.
 	consecutiveErrors int
+
+	// writes records wakes that ended without landing a durable write
+	// ([UnpublishedWrite]); it never feeds consecutiveErrors.
+	writes writeOutcomeState
 
 	// wakeCh interrupts timer sleep when a signal is queued for the next
 	// iteration. Buffered size 1 coalesces multiple wake requests.
@@ -810,6 +817,8 @@ func (l *Loop) Status() Status {
 		ContextWindow:         l.contextWindow,
 		LastError:             l.lastError,
 		ConsecutiveErrors:     l.consecutiveErrors,
+		UnpublishedWrites:     l.writes.snapshot(),
+		UnpublishedWakes:      l.writes.wakes,
 		RecentConvIDs:         convIDsCopy,
 		RecentIterations:      iterCopy,
 		LLMContext:            llmCtxCopy,
@@ -1939,6 +1948,7 @@ func (l *Loop) run(ctx context.Context) {
 				}
 				snap.Number = l.iterations
 				l.mu.Unlock()
+				writeTally := l.recordWriteOutcomes(iterLog, result.ToolOutcomes, convID)
 
 				snap.Model = result.Model
 				snap.FinishReason = result.FinishReason
@@ -2004,6 +2014,10 @@ func (l *Loop) run(ctx context.Context) {
 					// for a "folded N messages" turn badge. 0 for an ordinary
 					// turn.
 					"midturn_merged": len(midTurnPulled),
+					// Durable-write outcome of the wake: rejected calls to its
+					// write tools, and how many of them it never landed.
+					"write_rejections":   writeTally.rejections,
+					"unpublished_writes": len(writeTally.unpublished),
 				}
 				if len(handlerSummary) > 0 {
 					eventData["summary"] = handlerSummary
@@ -2453,6 +2467,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 		OutputTokens:       resp.OutputTokens,
 		ContextWindow:      resp.ContextWindow,
 		ToolsUsed:          resp.ToolsUsed,
+		ToolOutcomes:       cloneToolOutcomes(resp.ToolOutcomes),
 		EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
 		ActiveTags:         append([]string(nil), resp.ActiveTags...),
 		LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
@@ -2576,6 +2591,7 @@ func cloneResponse(resp *Response) *Response {
 	if len(resp.ActiveTags) > 0 {
 		out.ActiveTags = append([]string(nil), resp.ActiveTags...)
 	}
+	out.ToolOutcomes = cloneToolOutcomes(resp.ToolOutcomes)
 	return &out
 }
 

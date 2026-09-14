@@ -66,10 +66,10 @@ var sections = []section{
 		field: Field{
 			Key:         string(Digest),
 			MaxRunes:    digestMaxRunes,
-			Guidance:    "The context payload: a standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
+			Guidance:    "The context payload: a standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests. It is bounded current state, rewritten whole on every write rather than appended to: remove an item once it is resolved or superseded instead of marking it resolved, so the budget carries only what is still live.",
 			ContextRole: agentctx.ContextRoleContext,
 		},
-		scaffoldHint: "a summary with enough substance to act on",
+		scaffoldHint: "bounded current state with enough substance to act on",
 		value:        func(p *Payload) *string { return &p.Digest },
 	},
 	{
@@ -164,7 +164,7 @@ func (c Contract) Validate(payload Payload) error {
 		}
 		if field.MaxRunes > 0 {
 			if runes := utf8.RuneCountInString(value); runes > field.MaxRunes {
-				validationErrors = append(validationErrors, fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than allowing truncation", field.Key, runes, field.MaxRunes))
+				validationErrors = append(validationErrors, overBudgetError(field.Key, runes, field.MaxRunes))
 			}
 		}
 		if heading, found := firstReservedHeading(value); found {

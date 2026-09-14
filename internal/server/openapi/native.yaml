@@ -2247,6 +2247,23 @@ components:
           description: Number of consecutive failed iterations.
           readOnly: true
           example: 0
+        unpublished_writes:
+          type: array
+          readOnly: true
+          description: Per durable write tool (a declared output's generated tool, or contact_dossier_write), the latest wake that ended without landing that write — every call rejected, none succeeded — while the turn itself completed normally, so consecutive_errors never counts it. A later completed wake in which the tool succeeds clears the entry; a wake that ends in an error is not observed. Outcomes are per tool, so for contact_dossier_write one contact's landed dossier clears the entry. Sorted by tool; omitted when empty.
+          items:
+            type: object
+            properties:
+              tool: { type: string }
+              failures: { type: integer, description: "Rejected calls in that wake, repeat-guard refusals included." }
+              last_error: { type: string }
+              at: { type: string, format: date-time }
+              conversation_id: { type: string }
+            required: [tool, failures, at]
+        unpublished_wakes:
+          type: integer
+          readOnly: true
+          description: Wakes since the loop started that ended with at least one durable write unpublished. Omitted when zero.
         recent_conv_ids:
           type: array
           items: { type: string }
@@ -2381,6 +2398,18 @@ components:
         last_error:
           type: [string, "null"]
           description: Most recent error text; null when clean.
+        unpublished_writes:
+          type: array
+          description: Durable writes a completed wake never landed, which consecutive_errors cannot show because the turn ended normally. Omitted when none.
+          items:
+            type: object
+            properties:
+              tool: { type: string }
+              failures: { type: integer, description: "Rejected calls in that wake, repeat-guard refusals included." }
+              last_error: { type: string }
+              at_delta: { type: string, description: "Signed delta to when the wake ended, e.g. \"-2h\"." }
+              conversation_id: { type: string }
+            required: [tool, failures, at_delta]
     LoopStatusWithView:
       description: A running loop's status snapshot enriched with its canonical LoopView projection under `view`.
       allOf:

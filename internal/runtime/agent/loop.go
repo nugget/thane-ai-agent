@@ -168,6 +168,11 @@ type Response struct {
 	Iterations               int                                 `json:"iterations,omitempty"`
 	Exhausted                bool                                `json:"exhausted,omitempty"`
 
+	// ToolOutcomes is the engine's per-tool tally for this Run: how
+	// each tool's calls ended, including repeat-guard refusals. The loop
+	// runtime reads it to notice a wake that never landed its write.
+	ToolOutcomes map[string]iterate.ToolOutcome `json:"-"`
+
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
 	SessionID string `json:"session_id,omitempty"`
@@ -2296,6 +2301,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		NudgeOnEmpty:    true,
 		NudgePrompt:     prompts.EmptyResponseNudge,
 		FallbackContent: firstNonEmpty(req.FallbackContent, prompts.EmptyResponseFallback),
+		ReplyAwaited:    replyAwaited(req.MessageOrigin),
 
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via tag_activate are reflected.
@@ -2700,6 +2706,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
 		ContextWindow:            usageInfo.ContextWindow,
 		ToolsUsed:                iterResult.ToolsUsed,
+		ToolOutcomes:             iterResult.ToolOutcomes,
 		EffectiveTools:           effectiveToolNames(),
 		Iterations:               iterResult.IterationCount,
 		Exhausted:                iterResult.Exhausted,
