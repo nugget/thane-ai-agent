@@ -240,11 +240,17 @@ receipt. These tools report a refusal as a tool error rather than an
 `applied: false` result: for the document's owner, a result that reads as
 success while nothing was committed is indistinguishable from a healthy
 publish. The error text carries the same message and reconciliation payload,
-and a refused publish never writes the accompanying working notes. The two
-refusals recover differently: a missing read is answered by reading and calling
-again, while a stale receipt has already advanced to the current document and
-the error carries the intervening change, so the caller reconciles before
-calling again rather than replaying the same content over it.
+and a refused publish never writes the accompanying working notes. A
+validation refusal lists every failing projection at once — an over-budget one
+with its overage and whether rewording closes it or whole items must go — so
+one corrected call recovers. The two receipt refusals recover differently: a
+missing read is answered by reading and calling again, while a stale receipt
+has already advanced to the current document and the error carries the
+intervening change, so the caller reconciles before calling again rather than
+replaying the same content over it. A wake whose every call to an output tool
+is refused still ends as a completed turn; the loop records the write as
+unpublished, and `loop_status` and `system_health` report it until a later
+wake lands it.
 
 | Tool | Description |
 |------|-------------|
@@ -310,7 +316,7 @@ reads without marking messages seen and refuses flags and moves.
 | `contact_save` | Create or update a contact with vCard properties. Model-authored property rows retain turn provenance. Refuses `trust_zone`, `KEY` and `X-THANE-*` fact keys, fact keys that are not plain names or that name a field the record owns, and control characters in argument values. Outside the operator's own message, refuses to add an address, number, or notification routing fact (`notification_preference`, `ha_companion_app`, in any case) to a contact above `known` or to the operator's contact, or to change such a contact's nickname; in every turn, refuses a value an elevated or operator contact already holds, and a new contact's name or any nickname one already goes by. Routing facts are additive and delivery reads only the first value, so the result names the value still used when a new one lands behind it. When an archivist refresh consumer is enabled, a committed change coalesces one canonical contact refresh; identical no-ops never enqueue one. |
 | `contact_lookup` | Search by name, query, kind, or property. A name matches a formatted name or nickname; when several contacts answer to it, the operator's contact wins, then one above `known`, then a formatted-name match before a nickname match, then the lowest ID, and only a name nothing answers to falls back to a search that must match one contact. When dossiers are configured, a name result includes the canonical UUID and the `contact_dossier_read` trailhead. |
 | `contact_dossier_read` | Read or probe the canonical dossier for an active contact UUID. Go derives the ref and tracks revision state. Every success exposes `dossier.exists`, `dossier.ref`, and `dossier.document`; an absent dossier is a successful result with a null document and the exact create action. |
-| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Refuses a contact's first dossier while an active contact that shares its name and looks like the same person (a shared address or number, a duplicate with no address of its own, or a `known` duplicate bound to a Home Assistant person) already has one, naming both UUIDs, the evidence, and which record keeps the dossier; people who merely share a name each keep their own, and replacing an existing dossier is never refused. Available only for a managed-writable `contacts` root. |
+| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Validates every projection together: a rejected write stores nothing and lists each violation in one error, an over-budget field with its overage and whether rewording closes it or whole items must go. A replacement with no read on record, or against a dossier that changed since that read, is refused as an error too. Refuses a contact's first dossier while an active contact that shares its name and looks like the same person (a shared address or number, a duplicate with no address of its own, or a `known` duplicate bound to a Home Assistant person) already has one, naming both UUIDs, the evidence, and which record keeps the dossier; people who merely share a name each keep their own, and replacing an existing dossier is never refused. Available only for a managed-writable `contacts` root. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
 | `contact_forget` | Soft-delete one `known` contact, selected by exactly one of a name (resolved as `contact_lookup` resolves it) or a canonical `contact_id`, and name the record removed. Refuses contacts above `known`, the operator's contact, and contacts bound to a Home Assistant person, by name or by ID; a refusal by name names up to three removable `known` contacts the name also fits, with their UUIDs. |
 | `contact_list` | List and filter contacts. |
@@ -514,7 +520,7 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 
 | Tool | Description |
 |------|-------------|
-| `loop_status` | Snapshot of currently running loops, plus a parent→child `tree` projection over the whole registry. |
+| `loop_status` | Snapshot of currently running loops, plus a parent→child `tree` projection over the whole registry and a whole-registry health rollup naming each degraded loop with its reason: consecutive errors, an error state, or a durable write a completed wake never landed (listed on the loop's row as `unpublished_writes`). |
 | `loop_containers` | Placement directory of container loops (intent, child/descendant counts, conferred tags, sample children) — the loop-graph analog of `doc_roots`. |
 | `set_next_sleep` | From inside a service loop, request the next sleep duration. |
 | `spawn_loop` | Launch an ad-hoc loop from a definition and input. |

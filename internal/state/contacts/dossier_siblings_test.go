@@ -178,6 +178,9 @@ func TestWriteDossier_SecondDossierRefusal(t *testing.T) {
 				"Nothing was written",
 			}, tt.wantAdvice(held)...)
 			requireContains(t, err, wants...)
+			if !errors.Is(err, ErrDossierTargetRefused) {
+				t.Errorf("the refusal of a second dossier does not read as a refusal of the contact named: %v", err)
+			}
 			if tt.wantHeld != tt.target && strings.Contains(err.Error(), "write what you meant into the existing dossier") &&
 				records[tt.wantHeld].TrustZone == ZoneKnown && target.TrustZone != ZoneKnown {
 				t.Errorf("a record above known was told to merge into a known duplicate's dossier: %v", err)
@@ -208,6 +211,9 @@ func TestWriteDossier_SecondDossierRefusal(t *testing.T) {
 		tools.ConfigureDossierPresence((&fakeDossierPresence{err: errors.New("document index offline")}).exists)
 		_, err := tools.WriteDossier(context.Background(), validDossierArgs(records["Carol"]))
 		requireContains(t, err, "already has a dossier", "document index offline")
+		if errors.Is(err, ErrDossierTargetRefused) {
+			t.Errorf("a failed check reads as a refusal of the contact named: %v", err)
+		}
 		if writer.calls != 0 {
 			t.Errorf("a failed check reached the writer %d times", writer.calls)
 		}

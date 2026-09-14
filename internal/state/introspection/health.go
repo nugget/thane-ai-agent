@@ -81,6 +81,15 @@ type LoopCensus struct {
 	Degraded          int            `json:"degraded"`
 	DegradedLoops     []string       `json:"degraded_loops,omitempty"`
 	DegradedTruncated bool           `json:"degraded_truncated,omitempty"`
+	// UnpublishedWrites names the loops holding a durable write a
+	// completed wake never landed, each as the line loop_status's health
+	// rollup carries: "name (wake at -2h ended without publishing <tool>
+	// [for contact <id>] after N rejections)". Such a loop is also
+	// counted in Degraded; this
+	// is the why, because the turn ended normally and no error counter
+	// moved. Capped like DegradedLoops.
+	UnpublishedWrites          []string `json:"unpublished_writes,omitempty"`
+	UnpublishedWritesTruncated bool     `json:"unpublished_writes_truncated,omitempty"`
 	// TopWakers ranks loops by trailing-window iteration starts,
 	// busiest first. An outlier here against its usual rate is the
 	// wake-storm signal; loop_activity decomposes the why. Handler-only
@@ -568,12 +577,12 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	}
 
 	// Loop fleet: the census plus one lamp that degrades when any loop
-	// is errored.
+	// is errored or holds an unpublished write.
 	if i.src.LoopStatuses != nil {
 		loopsDone := phasetrace.Phase(ctx, "health:loop_statuses")
 		statuses := i.src.LoopStatuses()
 		loopsDone()
-		snap.Loops = buildLoopCensus(statuses)
+		snap.Loops = buildLoopCensus(statuses, now)
 		// Honest window: the in-memory wake ring only spans the uptime.
 		// With no usable start time the window is unknown, and unknown
 		// is omitted — claiming "24h" there would be the same lie this
@@ -594,6 +603,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 			row.Detail = fmt.Sprintf("%d of %d loops degraded: %v", snap.Loops.Degraded, snap.Loops.Total, snap.Loops.DegradedLoops)
 			if snap.Loops.DegradedTruncated {
 				row.Detail += fmt.Sprintf(" (+%d more)", snap.Loops.Degraded-len(snap.Loops.DegradedLoops))
+			}
+			if len(snap.Loops.UnpublishedWrites) > 0 {
+				row.Detail += "; unpublished: " + strings.Join(snap.Loops.UnpublishedWrites, "; ")
 			}
 		}
 		snap.Annunciator = append(snap.Annunciator, row)
@@ -775,10 +787,11 @@ func semverParts(v string) ([3]int, bool) {
 	return parts, true
 }
 
-// buildLoopCensus rolls the registry snapshot into totals. Degraded
-// matches loop_status's own definition: consecutive errors or an error
-// state.
-func buildLoopCensus(statuses []looppkg.Status) LoopCensus {
+// buildLoopCensus rolls the registry snapshot into totals. Degraded is
+// [looppkg.DegradedReason], the definition loop_status's health rollup
+// reads — consecutive errors, an error state, or an unpublished write —
+// so the two never disagree about which loops are degraded.
+func buildLoopCensus(statuses []looppkg.Status, now time.Time) LoopCensus {
 	census := LoopCensus{Total: len(statuses)}
 	for _, st := range statuses {
 		state := string(st.State)
@@ -789,12 +802,19 @@ func buildLoopCensus(statuses []looppkg.Status) LoopCensus {
 			census.ByState = make(map[string]int)
 		}
 		census.ByState[state]++
-		if st.ConsecutiveErrors > 0 || st.State == looppkg.StateError {
+		if looppkg.DegradedReason(st, now) != "" {
 			census.Degraded++
 			if len(census.DegradedLoops) < maxCensusDegradedNames {
 				census.DegradedLoops = append(census.DegradedLoops, st.Name)
 			} else {
 				census.DegradedTruncated = true
+			}
+		}
+		if clause := looppkg.UnpublishedWriteClause(st, now); clause != "" {
+			if len(census.UnpublishedWrites) < maxCensusDegradedNames {
+				census.UnpublishedWrites = append(census.UnpublishedWrites, fmt.Sprintf("%s (%s)", st.Name, clause))
+			} else {
+				census.UnpublishedWritesTruncated = true
 			}
 		}
 		if st.WakesLast24h > 0 && !st.HandlerOnly {

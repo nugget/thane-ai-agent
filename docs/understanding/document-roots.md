@@ -476,7 +476,11 @@ projections, not headings; Go applies the shared single-line and rune budgets,
 requires every already-present projection, renders the canonical section
 order, and stamps `managed_by: doc_write`. The document store independently
 rejects malformed or over-budget facet envelopes before any filesystem or Git
-mutation, regardless of which internal caller reached it.
+mutation, regardless of which internal caller reached it. A refused write
+stores nothing and reports every violation together. An over-budget projection
+carries its overage and a fix sized to it: rewording for a gap within a tenth
+of the limit or 30 characters, whichever is larger, and removing whole items
+past that. The error names no retry count.
 
 `doc_body_write` is the narrow exception for a document intentionally kept as
 one undifferentiated Markdown body. It still uses managed-root policy,
@@ -622,7 +626,8 @@ manually transcribed refs.
 root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
 layout in Go. Projection budgets are advertised in the schema, and one failed
-call reports every independently correctable projection violation together.
+call stores nothing and reports every independently correctable projection
+violation together.
 Generic document mutators reject the dossier and name
 `contact_dossier_write`; operator recovery remains available through Git
 history and direct repository administration rather than a second model-facing

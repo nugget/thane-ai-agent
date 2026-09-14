@@ -145,6 +145,10 @@ type LoopView struct {
 	// ---- error state ----
 	ConsecutiveErrors *int    `json:"consecutive_errors"`
 	LastError         *string `json:"last_error"`
+	// UnpublishedWrites lists durable writes a completed wake never
+	// landed, which consecutive_errors cannot show: the turn ended
+	// normally. Omitted when there are none.
+	UnpublishedWrites []UnpublishedWriteView `json:"unpublished_writes,omitempty"`
 
 	// ---- supervisor cadence ----
 	Supervisor            bool     `json:"supervisor"`
@@ -579,6 +583,7 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 		lastErr := s.LastError
 		v.LastError = &lastErr
 	}
+	v.UnpublishedWrites = unpublishedWriteViews(s.UnpublishedWrites, now)
 
 	if s.LastSupervisorIter > 0 {
 		lsi := s.LastSupervisorIter

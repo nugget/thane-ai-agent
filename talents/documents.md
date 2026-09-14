@@ -386,6 +386,14 @@ either projection, every later call must supply it along with `status_line` and
 document first. `doc_write` self-migrates a legacy or body-only document at a
 deliberate ref, but if placement is undecided run `doc_intake` before writing.
 
+A refused write stores nothing and lists every violation in one error. An
+over-budget projection carries its overage and the fix sized to it: reword a
+small gap; for a large one, remove whole items — resolved, superseded, or said
+in another projection — because rewording lands still over. Correct every
+listed field in the next call; a value refused once is refused the same way
+again. The digest stays inside its budget by being bounded current state,
+rewritten whole on each write rather than appended to.
+
 ## Replace an exceptional body-only document — `doc_body_write`
 
 Use only when a document intentionally has one undifferentiated Markdown body

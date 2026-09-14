@@ -8,9 +8,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 const (
+	// fullKey is the model-facing key of the detail payload, the one
+	// projection every contract carries.
+	fullKey = "full"
+
 	statusLineMaxRunes = 120
 	teaserMaxRunes     = 500
 	digestMaxRunes     = 2048
@@ -66,16 +71,16 @@ var sections = []section{
 		field: Field{
 			Key:         string(Digest),
 			MaxRunes:    digestMaxRunes,
-			Guidance:    "The context payload: a standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
+			Guidance:    "The context payload: a standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests. It is bounded current state, rewritten whole on every write rather than appended to: remove an item once it is resolved or superseded instead of marking it resolved, so the budget carries only what is still live.",
 			ContextRole: agentctx.ContextRoleContext,
 		},
-		scaffoldHint: "a summary with enough substance to act on",
+		scaffoldHint: "bounded current state with enough substance to act on",
 		value:        func(p *Payload) *string { return &p.Digest },
 	},
 	{
 		heading: "Details",
 		field: Field{
-			Key:         "full",
+			Key:         fullKey,
 			Guidance:    "The detail payload: the complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
 			ContextRole: agentctx.ContextRoleDetail,
 		},
@@ -144,41 +149,52 @@ func (c Contract) ValidateDefinition() error {
 
 // Validate checks one complete logical document and reports all independently
 // correctable field violations together.
+//
+// Each violation is marked ([toolargs.Rejected]) with the projection key at
+// fault; the rendered-document ceiling is charged to full, the one projection
+// with no budget of its own. Every structured writer takes those keys as its
+// top-level arguments, so the marks name exactly the arguments to change. A
+// caller whose projections arrived nested inside another argument, or parsed
+// out of a body, must not pass the marks on. A contract that fails
+// [Contract.ValidateDefinition] is not about the values and is not marked.
 func (c Contract) Validate(payload Payload) error {
 	if err := c.ValidateDefinition(); err != nil {
 		return err
 	}
 	var validationErrors []error
+	reject := func(key string, err error) {
+		validationErrors = append(validationErrors, toolargs.Rejected(err, key))
+	}
 	for _, field := range c.Fields() {
 		item, _ := sectionByKey(field.Key)
 		value := strings.TrimSpace(*item.value(&payload))
 		if value == "" {
-			validationErrors = append(validationErrors, fmt.Errorf("%s is required; every declared projection is written together so they cannot describe different moments", field.Key))
+			reject(field.Key, fmt.Errorf("%s is required; every declared projection is written together so they cannot describe different moments", field.Key))
 			continue
 		}
 		if field.Format == FormatJSON && !json.Valid([]byte(value)) {
-			validationErrors = append(validationErrors, fmt.Errorf("%s declares format %q but the value is not valid JSON; a consumer that asked for json cannot read prose", field.Key, FormatJSON))
+			reject(field.Key, fmt.Errorf("%s declares format %q but the value is not valid JSON; a consumer that asked for json cannot read prose", field.Key, FormatJSON))
 		}
 		if field.SingleLine && strings.ContainsAny(value, "\r\n") {
-			validationErrors = append(validationErrors, fmt.Errorf("%s must be a single line with no line breaks", field.Key))
+			reject(field.Key, fmt.Errorf("%s must be a single line with no line breaks", field.Key))
 		}
 		if field.MaxRunes > 0 {
 			if runes := utf8.RuneCountInString(value); runes > field.MaxRunes {
-				validationErrors = append(validationErrors, fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than allowing truncation", field.Key, runes, field.MaxRunes))
+				reject(field.Key, overBudgetError(field.Key, runes, field.MaxRunes))
 			}
 		}
 		if heading, found := firstReservedHeading(value); found {
-			validationErrors = append(validationErrors, fmt.Errorf("%s contains the reserved section heading %q; facet headings are rendered automatically, so pass only projection content", field.Key, heading))
+			reject(field.Key, fmt.Errorf("%s contains the reserved section heading %q; facet headings are rendered automatically, so pass only projection content", field.Key, heading))
 		}
 	}
 	fullTooLarge := false
 	if err := ValidateBodySize(payload.Full); err != nil {
-		validationErrors = append(validationErrors, fmt.Errorf("full: %w", err))
+		reject(fullKey, fmt.Errorf("full: %w", err))
 		fullTooLarge = true
 	}
 	if !fullTooLarge {
 		if err := ValidateBodySize(c.Render(payload)); err != nil {
-			validationErrors = append(validationErrors, fmt.Errorf("the rendered document (every projection plus its headings): %w - full is the lever; compact projections are already budget-capped", err))
+			reject(fullKey, fmt.Errorf("the rendered document (every projection plus its headings): %w - full is the lever; compact projections are already budget-capped", err))
 		}
 	}
 	if len(validationErrors) > 0 {

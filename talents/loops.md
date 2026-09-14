@@ -19,14 +19,27 @@ this wake, so the output tool can replace or publish it directly. If it
 is marked `truncated` there, read the full document with `doc_read`
 before replacing it — the output tool overwrites the entire body, tail
 included.
-An output tool that refuses returns an error, commits nothing, and says
-which of two things happened. If this wake has no read of the whole
-document on record, read it with `doc_read` and make the call again. If
-the document changed since that read, the error carries the intervening
-change and Thane has already moved the comparison base to the current
-document: fold that change into revised content before calling again —
-repeating the same call now would overwrite it. Never repeat a refused
-call unchanged; the refusal is the answer.
+An output tool that refuses returns an error, commits nothing — working
+notes passed alongside included — and says what happened, usually
+one of three things. If a projection failed validation, the error lists every
+failing field at once: correct all of them in the next call, because
+validation is deterministic and a value refused once is refused again.
+If this wake has no read of the whole document on record, read it with
+`doc_read` and make the call again. If the document changed since that
+read, the error carries the intervening change and Thane has already
+moved the comparison base to the current document: fold that change
+into revised content before calling again — repeating the same call now
+would overwrite it. Never repeat a refused call unchanged; the refusal
+is the answer.
+
+A refused publish means the wake's work is not done yet. Keep correcting
+until the publish lands. A wake that ends with every call to its output
+tool refused is recorded as unpublished — `loop_status` and
+`system_health` name the loop, the tool, and the rejection count — and
+the notifies and mailbox items that woke it are not delivered again, so
+whatever they carried is lost with the unpublished write. A
+`contact_dossier_write` is judged per contact the same way: landing one
+contact's dossier does not publish another's that was refused.
 
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,
@@ -76,7 +89,15 @@ because a clipped teaser reads as a fragment with no sign that anything
 is missing. The budget is a ceiling, not a target: compose
 comfortably under it — a projection that needs every last rune is
 carrying too much, and you cannot count runes precisely enough to
-graze a ceiling safely. The document body
+graze a ceiling safely. When one is rejected anyway, the error gives its
+length, the limit, and the overage, and sizes the fix to the gap. A
+small gap closes by rewording. A large one means the projection holds
+more items than its budget has room for, and rewording lands still
+over: remove whole items, starting with anything resolved, superseded,
+or already said in another projection. The digest is where that growth
+happens. It is bounded current state, rewritten whole on every publish
+rather than appended to, so an item leaves once it is resolved instead
+of staying on marked resolved. The document body
 itself has a 96 KiB ceiling on every owner write — the guarantee that
 what you write, you can always read back whole in one call. A rejection
 at the ceiling is not a retry prompt: the document has outgrown

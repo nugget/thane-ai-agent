@@ -55,6 +55,11 @@ var detailWhitelist = map[string]bool{
 	"item_id":            true,
 	"pending_items":      true,
 	"count":              true,
+	// iteration_complete's durable-write outcome: a wake that ended
+	// without landing its write reads as a success everywhere else, so
+	// the journal is the only record that survives a restart.
+	"write_rejections":   true,
+	"unpublished_writes": true,
 }
 
 // maxDetailStringRunes bounds any single retained string value (error

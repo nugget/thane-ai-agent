@@ -456,7 +456,7 @@ func TestLoopCensusTopWakersOrderAndCap(t *testing.T) {
 		// 459 in eight minutes and metacog misread it as a storm).
 		{Name: "ha-state-watcher", WakesLast24h: 459, HandlerOnly: true},
 	}
-	census := buildLoopCensus(statuses)
+	census := buildLoopCensus(statuses, time.Now())
 
 	if len(census.TopWakers) != maxCensusTopWakers {
 		t.Fatalf("top wakers = %d entries, want the cap %d", len(census.TopWakers), maxCensusTopWakers)

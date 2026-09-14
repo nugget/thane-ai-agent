@@ -156,6 +156,23 @@ type Config struct {
 	// FallbackContent is the static text returned when the model fails
 	// to produce content even after nudging.
 	FallbackContent string
+
+	// ReplyAwaited reports that someone is waiting on this turn's final
+	// text — a channel message or an API response — rather than the turn
+	// being a loop wake, a delegate, or other work nobody reads as a
+	// reply. It selects the repeat guard's wording: only a turn with a
+	// reply awaited is told to stop calling tools and answer, because on
+	// any other turn that instruction reads as "abandon the work".
+	ReplyAwaited bool
+
+	// TargetKey names the document a tool call writes, so that each
+	// tool's outcome is also tallied per target ([ToolOutcome.Targets]).
+	// It is called for every call the model makes, including calls the
+	// repeat guard refuses. Nil gives every call the empty target. A call
+	// the tool refuses with [tools.ErrTargetRefused] is tallied under the
+	// empty target whatever TargetKey named, and so is a guard refusal of
+	// a target whose latest executed call was refused that way.
+	TargetKey func(tool string, args map[string]any) string
 }
 
 // applyDefaults fills zero-valued fields with their defaults.

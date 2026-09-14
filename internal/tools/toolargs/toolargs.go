@@ -21,6 +21,12 @@
 // All getters are nil-safe: a nil map, an absent key, or a wrong-typed
 // value yields the zero value (or the supplied fallback). The *OK
 // variants distinguish "absent / uncoercible" from "present and zero."
+//
+// The package also carries the one piece of error metadata that is about
+// arguments: [RejectedArgumentsError] marks a tool error with the
+// top-level argument keys it refused, and [RejectedArguments] reads those
+// marks back out of any error tree. A caller that needs to know which
+// arguments an error was about reads the marks, never the error text.
 package toolargs
 
 import (
