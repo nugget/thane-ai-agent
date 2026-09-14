@@ -33,11 +33,12 @@ const (
 )
 
 // HeaderMarks is what one message's own top-level headers claim about
-// how it was sent. The sender writes these headers and a forger simply
-// leaves them out, so they can mark a message but never vouch for it:
-// they never change a sender's trust_zone or the per-address automated
-// key. Their one effect in Go is that [Service.Send] refuses an
-// unattended reply to a marked message (RFC 3834 §2).
+// how it was sent. Nothing authenticates these headers and any sender
+// can set or omit them at will, so they can mark a message but never
+// vouch for it: they never change a sender's trust_zone or the
+// per-address automated key. Their one effect in Go is that
+// [Service.Send] refuses an unattended reply to a marked message
+// (RFC 3834 §2).
 type HeaderMarks struct {
 	// AutoSubmitted is the message's Auto-Submitted keyword (RFC 3834
 	// §2): one of the AutoSubmitted constants, and empty when the header

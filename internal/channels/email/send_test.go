@@ -182,10 +182,12 @@ func TestAccessLevelsGateEachTool(t *testing.T) {
 	readOnly, imap, _ := policyService(t, ServiceDependencies{Contacts: identityStub()}, func(cfg *Config) {
 		cfg.Accounts[0].Policy.Access = AccessRead
 	})
-	uid := imap.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Hello", "hi"))
+	uid := imap.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Hello", "hi", "Auto-Submitted: auto-replied"))
 	provider := readOnly.ToolProvider()
+	// A reply from an account that cannot write mail is refused before
+	// the original is fetched, so a marked original records no marks.
 	_, err = provider.HandleReply(attendedCtx(), map[string]any{"uid": float64(uid), "body": "x"})
-	if refusalOf(t, err).Decision.Route != RouteAccess {
+	if decision := refusalOf(t, err).Decision; decision.Route != RouteAccess || decision.Original.Marked() {
 		t.Errorf("read-only reply = %v", err)
 	}
 	_, err = provider.HandleMark(context.Background(), map[string]any{"uid": float64(uid), "flag": "flagged"})
@@ -438,6 +440,11 @@ func TestReplyToMarkedOriginalRefusedUnattended(t *testing.T) {
 				decision = refusal.Decision
 				mustContain(t, err.Error(), "own headers mark it as", "neither sent nor drafted", "email_send", "request_core_attention",
 					`"route":"automatic_response"`, `"original":{`)
+				// The refusal shape is one sentence, a newline, then the
+				// decision JSON.
+				if sentence, _, _ := strings.Cut(err.Error(), "\n"); !strings.HasSuffix(sentence, ".") || strings.Contains(sentence, ". ") {
+					t.Errorf("refusal reason must be one sentence: %q", sentence)
+				}
 				mustContain(t, logs.String(), "email outbound refused", "route=automatic_response", "original_auto_submitted=", "original_bulk=")
 			} else {
 				if err != nil {

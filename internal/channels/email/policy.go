@@ -112,8 +112,10 @@ type Decision struct {
 	DraftsFolder string `json:"drafts_folder,omitempty"`
 
 	// Original is the header marks of the message a reply answers, set
-	// whenever that message is marked, whether or not the turn is
-	// attended.
+	// on every reply that gets past the account's access check when
+	// that message is marked, whether or not the turn is attended. A
+	// reply from an account that cannot write mail is refused before
+	// the original is fetched, so its decision carries none.
 	Original HeaderMarks `json:"original,omitzero"`
 }
 

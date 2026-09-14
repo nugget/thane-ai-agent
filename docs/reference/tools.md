@@ -285,7 +285,7 @@ instead of being reimplemented in each loop prompt.
 | Tool | Description |
 |------|-------------|
 | `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. |
-| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body; marks seen unless `mark_seen: false`. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent, and never change the sender's trust zone. |
+| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body; marks seen unless `mark_seen: false`. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. |
 | `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
 | `email_folders` | List an account's mailboxes with special-use roles and counts. |
 | `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. |

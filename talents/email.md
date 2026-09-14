@@ -85,11 +85,12 @@ audiences and trust models are different.
   `automated` is per address, and only a full read shows them: list
   and search results and wake events do not. They never change
   `trust_zone`, so a household member's list post keeps their zone,
-  and a sender who wants an answer just leaves them out, so they never
-  raise trust either. In Go they do one thing: `email_reply` refuses to
-  answer such a message in any turn the operator is not present for
-  (`automatic_response`), even with `draft: true`. File it, and bring
-  it to the operator if it needs an answer.
+  and nothing authenticates them, so any sender can set or omit them
+  and they never raise trust either. In Go they do one thing:
+  `email_reply` refuses to answer such a message in any turn the
+  operator is not present for (`automatic_response`), even with
+  `draft: true`. File it, and bring it to the operator if it needs an
+  answer.
 - **Every outbound message gets a decision, and the result says
   which way it went.** Each account carries a policy: `access`
   (`read`, `organize`, or `send`) is the most you may do there, and
@@ -314,8 +315,9 @@ runtime already flags such a record to the operator. The cap reads
 only the mailbox name, so a forged From of a person's address still
 inherits that person's zone, and the confirmation rule above still
 applies. A message's own `auto_submitted` or `bulk` moves no zone in
-either direction, because only an honest sender sets those headers;
-all they do is stop a reply written while the operator is not present.
+either direction, because nothing authenticates those headers and any
+sender can set or omit them; all they do is stop a reply written while
+the operator is not present.
 
 ## Cross-references
 
@@ -467,13 +469,14 @@ reply to a message whose own headers mark it `auto_submitted` or
 `bulk` is refused with `automatic_response` in any turn the operator
 is not present for, whatever the sender's zone and even with
 `draft: true`, because it would be an automatic response; in the
-operator's own turn it goes through the usual decision, and
-`decision.original` records the marks either way. The
-original's `to` and `cc` are in the `email_read` result you just took
-the UID from, each with its `trust_zone` and `contact_status`; read
-them before choosing `reply_all`. Replying does not change the
-original's seen state. The result has the same shape as `email_send`
-with `in_reply_to` set.
+operator's own turn it goes through the usual decision. On an account
+that can write mail, `decision.original` records the marks either way;
+an account that cannot is refused with `access` before the original is
+read. The original's `to` and `cc` are in the `email_read` result you
+just took the UID from, each with its `trust_zone` and
+`contact_status`; read them before choosing `reply_all`. Replying does
+not change the original's seen state. The result has the same shape as
+`email_send` with `in_reply_to` set.
 
 ## Drafting on purpose
 

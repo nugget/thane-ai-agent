@@ -294,8 +294,8 @@ func originalAttrs(original HeaderMarks) []any {
 // only moves that work.
 func automaticResponseReason(original HeaderMarks) string {
 	return "Email not sent: the original message's own headers mark it as " + original.describe() +
-		", so a reply written while the operator is not present would be an automatic response, which is neither sent nor drafted (RFC 3834); do not retry it or send it fresh with email_send. " +
-		"File the message, and if it needs an answer bring it to the operator with request_core_attention; the operator can reply in their own turn."
+		", so a reply written while the operator is not present would be an automatic response, which is neither sent nor drafted (RFC 3834); do not retry it or send it fresh with email_send, " +
+		"but file the message and, if it needs an answer, bring it to the operator with request_core_attention so they can reply in their own turn."
 }
 
 // sendAccessRefusal returns the refusal a send-shaped tool gets on an

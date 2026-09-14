@@ -202,6 +202,8 @@ func TestEmailHeaderMarksDescriptionsMatchTheRule(t *testing.T) {
 				"verified}, auto_submitted, bulk, access_note}",
 				AutoSubmittedReplied, AutoSubmittedGenerated, AutoSubmittedNotified, "or " + AutoSubmittedOther + ";",
 				"a Precedence of bulk, list, or junk",
+				"Nothing authenticates these headers and any sender can set or omit them",
+				"neither their presence nor their absence vouches for who wrote the message",
 				"trust_zone and automated describe the address and do not change",
 				"never a list or search result",
 				"email_reply refuses to answer such a message unless the operator is present",
@@ -211,6 +213,7 @@ func TestEmailHeaderMarksDescriptionsMatchTheRule(t *testing.T) {
 			tool: "email_reply",
 			want: []string{
 				"decision.original {auto_submitted, bulk}",
+				"either mark (see email_read) and the account can write mail",
 				"decision.route " + RouteAutomaticResponse,
 				"even with draft: true",
 				"nothing is sent or drafted",
