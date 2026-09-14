@@ -213,6 +213,12 @@ var nonToolTokens = map[string]struct{}{
 	// because `conversation_` second segment matches conversation_reset's
 	// shape, but `conversation_id` is a field name, not a tool.
 	"conversation_id": {},
+
+	// system_health annunciator row name (#1545): the contacts talent
+	// names the `contact_directory` row the fork audit degrades, so the
+	// model can find it in the snapshot. The matcher flags it because
+	// `contact_` is a real tool prefix, but it is a row name, not a tool.
+	"contact_directory": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in

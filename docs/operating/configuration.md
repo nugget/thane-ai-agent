@@ -223,13 +223,60 @@ override. When email polling is on (email is configured and
 `trusted` record holding such an address is reported: one Warn per
 record and address at startup, at most 20 followed by one summary Warn
 with the total, and a `contact_directory` row in `system_health` that stays
-degraded, naming up to five of them, until the directory is fixed. The
-row re-reads the directory on every render, so a fix clears it without a
-restart. The fix stays in the operator's custody: demote a record that
+degraded until the directory is fixed, counting every such record and naming
+those that fit in the row's five named findings after any fork findings
+(described below), which can be none. The row re-reads the directory on
+every render, so a fix clears it without a restart. The fix stays in the operator's custody: demote a record that
 only sends notifications to `known`, or move the address to its own
 `known` record, through CardDAV (`X-THANE-TRUST-ZONE`) or a full-record
 `PUT /v1/contacts/{id}`. While the address stays on the higher record,
 the row stays degraded.
+
+The same `contact_directory` row and startup Warns also carry the fork
+audit, which is not gated on email polling: it runs whenever the contact
+store exists. Every finding involves a record above `known` or the
+operator's own. Records that share a name (a formatted name or nickname,
+or one record's whole formatted name that is another's given name or the
+first word of its formatted name) are a `name` finding when they look
+like one person: they share an address or number, the one with no more
+authority holds no real address or number of its own, or one is a
+`known` record bound to a Home Assistant person. A `name` finding lists
+only the records that evidence ties together, and a copy (a `known`
+record, or one with no real address or number of its own) that could be
+either of two people is listed with each. Different
+people who each answer to one formatted name or nickname, with no such
+sign between them, are one `shared_name` finding that names one record
+per person, since a lookup reaches only one of them. An email
+address held by several records is a finding when a `known` record holds
+it or a holder has no other address of its own; a mailbox that records
+with authority share while each holds its own addresses is not. A phone
+number is a finding when several records hold it as `IMPP` `signal:` or
+as a `TEL` whose `TYPE` is empty or names a mobile phone (`cell`,
+`mobile`, `iphone`), with or without `+`; a line typed `home`, `work`,
+`main`, or the like is not. An email address at a reserved domain
+(`example.com`, `example.net`, `example.org`, or a name under one of them,
+or the `example`, `test`, `invalid`, and `localhost` top-level domains) on
+a record above `known` or the operator's own is a finding too, since no
+mailbox exists there. Each finding names its records with zone and UUID
+and marks the operator's own and any bound to a Home Assistant person.
+The row names up to five findings in all, fork findings first and
+automated-address findings in what remains, and startup logs one Warn per
+finding, at most 20 followed by one summary Warn.
+
+The fixes are the operator's, through CardDAV or `/v1/contacts`: merge a
+duplicate into the record that should keep the name or address, rename
+one of two different people who answer to one name, move a shared address
+to the record that owns it, and replace or remove a placeholder. Thane can
+itself forget a `known` duplicate that is neither the operator's nor bound
+to a Home Assistant person, and copy a duplicate's addresses onto a record
+above `known` only in the operator's own message; no model-facing tool
+renames a contact, removes an address, or moves a person binding. Until
+the fix, a name lookup prefers the record with authority when both answer
+to the name as a formatted name or nickname, though a first name still
+reaches a `known` record whose whole name it is, and
+`contact_dossier_write` will not start a second dossier for a name sibling
+that looks like the same person and has one (see
+[Contact Identity Custody](../understanding/trust-architecture.md#contact-identity-custody)).
 
 ## Companion Apps
 

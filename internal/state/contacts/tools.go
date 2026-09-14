@@ -56,6 +56,7 @@ type Tools struct {
 	dossiersWritable     bool
 	dossierRead          func(context.Context, documents.RefArgs) (string, error)
 	dossierWrite         func(context.Context, documents.FacetedWriteArgs) (string, error)
+	dossierExists        func(context.Context, string) (bool, error)
 	mutationSink         func(context.Context, ContactMutation) error
 }
 
@@ -748,7 +749,7 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	// Name lookup (cascading: formatted name → nickname → search).
+	// Name lookup (formatted name or nickname, authority first, then search).
 	if args.Name != "" {
 		c, err := t.store.ResolveContact(args.Name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -820,12 +821,17 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 
 // ForgetContactArgs are arguments for the contact_forget tool.
 type ForgetContactArgs struct {
-	Name string `json:"name"`
+	// Name resolves the contact the way contact_lookup does.
+	Name string `json:"name,omitempty"`
+	// ContactID selects one active record by canonical UUID. Exactly
+	// one of Name and ContactID is set.
+	ContactID string `json:"contact_id,omitempty"`
 }
 
-// ForgetContact soft-deletes one known contact, resolved by name once
-// with the same cascade contact_lookup uses, and names the record it
-// removed. Contacts above known, the operator's own contact and
+// ForgetContact soft-deletes one known contact, resolved once by name
+// with the same resolution contact_lookup uses or selected by its
+// contact_id, and names the record it removed. Contacts above known,
+// the operator's own contact and
 // contacts bound to a Home Assistant person are operator custody and
 // are refused, because forgetting one turns that person's email and
 // Signal traffic into a stranger's. No turn lifts this, not even the
@@ -846,16 +852,9 @@ func (t *Tools) ForgetContactFromModel(ctx context.Context, argsJSON string, pro
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	if args.Name == "" {
-		return "", fmt.Errorf("name is required")
-	}
-
-	c, err := t.store.resolveContact(ctx, args.Name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("no contact matches %q; nothing was removed. Check the name with contact_lookup", args.Name)
-	}
+	c, byName, err := t.forgetTarget(ctx, args)
 	if err != nil {
-		return "", fmt.Errorf("resolve contact: %w; nothing was removed", err)
+		return "", err
 	}
 
 	reasons, err := t.forgetCustodyReasons(ctx, c)
@@ -880,8 +879,12 @@ func (t *Tools) ForgetContactFromModel(ctx context.Context, argsJSON string, pro
 			"request_id", provenance.RequestID,
 			"conversation_id", provenance.ConversationID,
 			"loop_id", provenance.LoopID)
-		return "", fmt.Errorf("contact_forget refused %s (%s, %s): %s. Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied, because forgetting one turns that person's email and Signal traffic into a stranger's. Nothing was removed. %s",
-			c.FormattedName, c.TrustZone, c.ID, strings.Join(texts, "; "), forgetRecovery(reasons, c.ID))
+		hint := ""
+		if byName {
+			hint = t.forgetSiblingHint(ctx, c, args.Name)
+		}
+		return "", fmt.Errorf("contact_forget refused %s (%s, %s): %s. Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied, because forgetting one turns that person's email and Signal traffic into a stranger's. Nothing was removed. %s%s",
+			c.FormattedName, c.TrustZone, c.ID, strings.Join(texts, "; "), forgetRecovery(reasons, c.ID), hint)
 	}
 
 	if err := ctx.Err(); err != nil {

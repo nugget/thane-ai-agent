@@ -134,6 +134,9 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err != nil {
 		return "", err
 	}
+	if err := t.secondDossierRefusal(ctx, contact); err != nil {
+		return "", err
+	}
 
 	payload := documentfacets.Payload{
 		StatusLine: args.StatusLine,

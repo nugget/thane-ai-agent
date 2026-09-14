@@ -188,14 +188,13 @@ func (a *App) initChannels(s *newState) error {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
 	}
 	configureContactToolsOperator(contactTools, a.contactBindingResolver, contactIdentity)
+	logLegacyOperatorResolution(a.logger, contactStore, contactIdentity, a.contactBindingResolver.resolvedOperatorContactID())
 	ownerActivity := (&ownerChannelActivityAdapter{
 		loops: &channelLoopAdapter{registry: a.loopRegistry},
 	}).ActiveOwnerChannels
 	contactTools.SetOwnerActivitySource(ownerActivity)
 	a.logger.Info("contact store initialized", "path", a.cfg.DataDir+"/contacts.db")
-	if emailServicesEnabled(a.cfg) {
-		logContactDirectoryFindings(s.ctx, contactStore, a.logger)
-	}
+	logContactDirectoryAudits(s.ctx, a.cfg, contactStore, a.logger)
 
 	// --- Notifications ---
 	// Push notifications via HA companion app. Requires both the HA client
@@ -439,9 +438,7 @@ func (a *App) initChannels(s *newState) error {
 			}
 		}
 	}
-	if a.documentTools != nil {
-		contactTools.ConfigureDossierDocuments(a.documentTools.Read, a.documentTools.WriteFaceted)
-	}
+	configureContactDossierDocuments(contactTools, a.documentTools, a.documentStore)
 	a.loop.Tools().SetContactTools(contactTools)
 
 	var talentVerifier func(context.Context, string, string) error

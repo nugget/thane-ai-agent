@@ -686,8 +686,17 @@ Contact lifecycle does not rename or silently erase this history:
   the dossier file and its signed history remain until an operator explicitly
   moves or deletes the document.
 - Merging contacts is deliberate rather than inferred. Choose the surviving
-  structured UUID, reconcile any useful claims and citations into that
-  contact's dossier through `contact_dossier_write`, then forget the duplicate.
+  structured UUID and read the duplicate's dossier with `contact_dossier_read`
+  while the duplicate is still active, since neither dossier tool reaches a
+  forgotten contact. When the survivor already has a dossier, reconcile any
+  useful claims and citations into it through `contact_dossier_write`, then
+  forget the duplicate, by `contact_id` when its name resolves to the
+  survivor. When the survivor has none, forget the duplicate first:
+  `contact_dossier_write` refuses a contact's first dossier while an active
+  record that shares its name and looks like the same person already has
+  one. A duplicate above `known`, the
+  operator's own, or bound to a Home Assistant person is forgotten only by
+  the operator.
   The duplicate dossier is retained unless the operator explicitly archives it
   with `doc_move` to another suitable managed root or removes it with
   `doc_delete`.

@@ -23,8 +23,9 @@ type HAClient interface {
 }
 
 // ContactResolver resolves a contact name to its record and properties.
-// ResolveContact uses cascading resolution (exact name → nickname →
-// search) for flexible name matching.
+// ResolveContact matches a formatted name or nickname, preferring the
+// operator's own record and then records above known, and falls back
+// to search for flexible name matching.
 type ContactResolver interface {
 	ResolveContact(name string) (*contacts.Contact, error)
 	GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error)
