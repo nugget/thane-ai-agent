@@ -52,7 +52,9 @@ func (t *Tools) legacyOwnerName() string {
 }
 
 // claimsOwnerName reports whether any of names is the legacy owner name,
-// compared the way ResolveContact compares a name or nickname.
+// ignoring edge space and Unicode case. That matches more than the
+// resolver does, which is safe only where a match refuses a claim;
+// whether a record answers to the name uses [sqliteLowerEqual].
 func claimsOwnerName(owner string, names ...string) bool {
 	if owner == "" {
 		return false
@@ -85,7 +87,14 @@ func (t *Tools) ownerNameClaimRefusal(ctx context.Context, args SaveContactArgs,
 		}
 		return fmt.Errorf("contact_save refused to create %q: %q %s If this is the operator, contact_owner returns their contact; save to it by its exact name. If it is someone else, save them under a fuller name without that nickname, or ask the operator to add the contact through CardDAV or the contacts API", args.Name, owner, why)
 	}
-	if !claimsOwnerName(owner, args.Nickname) || claimsOwnerName(owner, contact.Nickname) {
+	// Whether the record still answers to the owner name after the save
+	// is decided the way the resolver decides it, so neither edge space
+	// nor a Unicode case variant passes for the name.
+	stillAnswers := sqliteLowerEqual(args.Nickname, owner) || sqliteLowerEqual(contact.FormattedName, owner)
+	if claimsOwnerName(owner, contact.Nickname) && strings.TrimSpace(args.Nickname) != "" && !stillAnswers {
+		return t.ownerNicknameReplacementRefusal(ctx, args, contact, owner)
+	}
+	if !claimsOwnerName(owner, args.Nickname) || sqliteLowerEqual(contact.Nickname, owner) {
 		return nil
 	}
 	operatorID, err := t.custodyOperatorID(ctx)
@@ -98,42 +107,107 @@ func (t *Tools) ownerNameClaimRefusal(ctx context.Context, args SaveContactArgs,
 	return fmt.Errorf("contact_save refused nickname %q for %s: %q %s Retry without the nickname, or ask the operator to set it through CardDAV or the contacts API", args.Nickname, contact.FormattedName, owner, why)
 }
 
-// hasIdentityProperty reports whether any property is an identity
-// property, so the operator lookup runs only when custody can apply.
-func hasIdentityProperty(props []Property) bool {
-	for _, p := range props {
-		if isIdentityProperty(p.Property) {
-			return true
-		}
+// ownerNicknameReplacementRefusal refuses, in every turn, replacing the
+// nickname through which the operator's own contact answers to the
+// legacy owner name. The operator is re-resolved by that name at the
+// next start, so without the nickname nobody would be the operator.
+func (t *Tools) ownerNicknameReplacementRefusal(ctx context.Context, args SaveContactArgs, contact *Contact, owner string) error {
+	operatorID, err := t.custodyOperatorID(ctx)
+	if err != nil {
+		return err
 	}
-	return false
+	if operatorID == uuid.Nil || contact.ID != operatorID {
+		return nil
+	}
+	return fmt.Errorf("contact_save refused nickname %q for %s: its nickname %q is the name Thane recognizes the operator by, and the operator's own contact answers to it only through that nickname, so replacing it would leave Thane unable to find the operator the next time it starts. Nothing was saved. Retry without the nickname; the operator changes it through CardDAV or the contacts API",
+		echoForRefusal(args.Nickname), echoForRefusal(contact.FormattedName), owner)
 }
 
-// identityRefusal renders a contact_save identity refusal as teaching:
-// every refused fact with its reason, within the refusal list budget,
-// that nothing was saved, and the recovery that fits the turn.
-func identityRefusal(targetName, targetZone string, violations []IdentityViolation) error {
+// refusalClasses records which kinds of value a refusal lists and which
+// rules refused them, so the renderer explains and recovers only what
+// applies.
+type refusalClasses struct {
+	addresses, routing, names bool
+	target, addressHeld, name bool
+}
+
+func classifyRefusal(violations []IdentityViolation) refusalClasses {
+	var c refusalClasses
+	for _, v := range violations {
+		_, routing := routingPropertyFor(v.Property)
+		claim := isClaimProperty(v.Property)
+		switch {
+		case claim:
+			c.names = true
+		case routing:
+			c.routing = true
+		default:
+			c.addresses = true
+		}
+		switch {
+		case v.Reason != IdentityReasonHolder:
+			c.target = true
+		case claim:
+			c.name = true
+		default:
+			c.addressHeld = true
+		}
+	}
+	return c
+}
+
+// identityRefusal renders a contact_save custody refusal as teaching:
+// why each class of refused value is custody, every refused value with
+// its reason within the refusal list budget, that nothing was saved,
+// and the recovery that fits the rule each broke. A name refusal fires
+// in the operator's own message too, so its recovery never claims the
+// turn is unattended. created says whether the save would have created
+// the contact, which decides whether a fuller name is a recovery: on an
+// existing contact a different name creates a second one.
+func identityRefusal(targetName, targetZone string, created bool, violations []IdentityViolation) error {
+	c := classifyRefusal(violations)
+	noun := "fact(s)"
+	if c.names {
+		noun = "change(s)"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "contact_save refused %d fact(s); nothing was saved. Addresses and numbers are how email and Signal recognize a contact and what the send gate trusts, so they are operator-custodied where adding one would move authority:", len(violations))
-	targetRefused, holderRefused := false, false
+	fmt.Fprintf(&b, "contact_save refused %d %s; nothing was saved.", len(violations), noun)
+	if c.addresses {
+		b.WriteString(" Addresses and numbers are how email and Signal recognize a contact and what the send gate trusts.")
+	}
+	if c.routing {
+		b.WriteString(" ha_companion_app is the Home Assistant device that receives a contact's notifications and answers their decision requests, and notification_preference picks the channel they arrive on.")
+	}
+	if c.names {
+		b.WriteString(" A name or nickname is what notifications, decision requests, lookups and conversation context find a contact by.")
+	}
+	b.WriteString(" They are operator-custodied where a change would move authority:")
 	items := make([]string, 0, len(violations))
 	for _, v := range violations {
 		items = append(items, fmt.Sprintf("%q=%q (%s): %s", echoForRefusal(v.Key), echoForRefusal(v.Value), v.Property, violationReason(v, targetName, targetZone)))
-		if v.Reason == IdentityReasonHolder {
-			holderRefused = true
-		} else {
-			targetRefused = true
-		}
 	}
 	b.WriteString(boundedRefusalList(items))
 	b.WriteString("\n\n")
-	if targetRefused {
-		b.WriteString("This turn is not the operator's own message, so ask the operator to add these through CardDAV or the contacts API. If a value belongs to someone else, save it on that person's own contact. ")
+	switch {
+	case c.target && (c.addresses || c.routing):
+		b.WriteString("This turn is not the operator's own message, so ask the operator to add these through CardDAV or the contacts API, or to ask you for them in their own message. If a value belongs to someone else, save it on that person's own contact. ")
+	case c.target:
+		b.WriteString("This turn is not the operator's own message, so ask the operator to change it through CardDAV or the contacts API, or to ask you for it in their own message. ")
 	}
-	if holderRefused {
+	if c.addressHeld {
 		b.WriteString("A value an admin, household, trusted or operator contact already holds stays with that contact; if it now belongs to someone else, ask the operator to move it through CardDAV or the contacts API. ")
 	}
-	b.WriteString("Retry without the refused facts to save the rest")
+	switch {
+	case c.name && created:
+		b.WriteString("A name or nickname an admin, household, trusted or operator contact goes by stays with that contact, in every turn: save this contact under a fuller name or without the nickname, or, if you meant that person, save to their contact by its exact name. ")
+	case c.name:
+		b.WriteString("A name or nickname an admin, household, trusted or operator contact goes by stays with that contact, in every turn: retry without the nickname, or with one no admin, household, trusted or operator contact goes by. ")
+	}
+	if c.names {
+		b.WriteString("Retry without the refused values to save the rest")
+	} else {
+		b.WriteString("Retry without the refused facts to save the rest")
+	}
 	return errors.New(b.String())
 }
 
@@ -160,6 +234,10 @@ func violationReason(v IdentityViolation, targetName, targetZone string) string 
 		operator = ", the operator's own contact"
 	}
 	name := echoForRefusal(h.Name)
+	if isClaimProperty(v.Property) {
+		return fmt.Sprintf("%s already goes by %q (%s, %s%s); a second contact answering to it would take the notifications, decision requests and context meant for %s",
+			name, echoForRefusal(h.Value), echoForRefusal(h.Zone), h.ID, operator, name)
+	}
 	return fmt.Sprintf("already held by %s (%s, %s%s) as %s %s; a second holder would unmatch %s on %s",
 		name, echoForRefusal(h.Zone), h.ID, operator, echoForRefusal(h.Property), echoForRefusal(h.Value), name, identityChannel(v.Property, v.Value))
 }

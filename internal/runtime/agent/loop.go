@@ -1338,10 +1338,10 @@ func (l *Loop) originContactContext(ctx context.Context, result *SessionOriginPo
 	if source == "" {
 		source = result.Origin.Channel
 	}
+	// An origin that names its contact by ID is that contact or none: a
+	// name another contact now answers to must not stand in for it.
 	if result.Origin.ContactID != "" {
-		if contact := l.contactLookup.LookupContactByID(ctx, result.Origin.ContactID, source); contact != nil {
-			return contact
-		}
+		return l.contactLookup.LookupContactByID(ctx, result.Origin.ContactID, source)
 	}
 	if result.Origin.ContactName != "" {
 		return l.contactLookup.LookupContact(ctx, result.Origin.ContactName, source)

@@ -180,25 +180,6 @@ func TestSoftDeleteNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteByName(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Delete Me", Kind: "individual"}
-	_, err := store.Upsert(c)
-	if err != nil {
-		t.Fatalf("Upsert() error = %v", err)
-	}
-
-	if err := store.DeleteByName("delete me"); err != nil {
-		t.Fatalf("DeleteByName() error = %v", err)
-	}
-
-	_, err = store.FindByName("Delete Me")
-	if err != sql.ErrNoRows {
-		t.Errorf("FindByName() after DeleteByName: got err = %v, want sql.ErrNoRows", err)
-	}
-}
-
 func TestFindByName_CaseInsensitive(t *testing.T) {
 	store := newTestStore(t)
 

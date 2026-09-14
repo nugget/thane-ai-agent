@@ -28,7 +28,23 @@ func TestImportDrops_NamesSkippedCards(t *testing.T) {
 		{
 			name:  "re-zoned merge target",
 			drops: importDrops{changed: []int{3, 7}},
-			want:  []string{"2 card(s) were skipped, not merged", "re-zoned or deleted", "cards 3, 7.", "with merge on"},
+			want:  []string{"2 card(s) were skipped, not merged", "re-zoned or deleted", "changed its nickname", "took a card's name or nickname", "cards 3, 7.", "with merge on"},
+		},
+		{
+			name:  "routing facts and names",
+			drops: importDrops{routing: 2, naming: 1},
+			want: []string{
+				"2 notification routing fact(s) were not imported: HA_COMPANION_APP and NOTIFICATION_PREFERENCE",
+				"1 nickname(s) were not filled in on a merge",
+				"ask the operator to add it through CardDAV",
+			},
+			avoid: []string{"address(es)/number(s)", "skipped"},
+		},
+		{
+			name:  "card under an authority contact's name",
+			drops: importDrops{nameTaken: []int{1, 5}},
+			want:  []string{"2 card(s) were skipped because an admin, household, trusted or operator contact already goes by their name or nickname: cards 1, 5.", "fuller name"},
+			avoid: []string{"nickname(s) were not filled in"},
 		},
 		{
 			name:  "failed write",

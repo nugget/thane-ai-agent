@@ -419,6 +419,42 @@ func TestSend_NoActionsBackwardCompat(t *testing.T) {
 	}
 }
 
+// TestSend_FactKeyAnyCase pins that the sender reads ha_companion_app
+// the way the router does: any case, lowercase spelling first.
+func TestSend_FactKeyAnyCase(t *testing.T) {
+	tests := []struct {
+		name  string
+		props map[string][]string
+		want  string
+	}{
+		{"upper-case key", map[string][]string{"HA_COMPANION_APP": {"mobile_app_upper"}}, "mobile_app_upper"},
+		{"lowercase first", map[string][]string{"HA_COMPANION_APP": {"mobile_app_old"}, "ha_companion_app": {"mobile_app_new"}}, "mobile_app_new"},
+		{"hyphenated key does not count", map[string][]string{"ha-companion-app": {"mobile_app_hyphen"}}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ha := &mockHAClient{}
+			resolver := &mockContactResolver{
+				contact: &contacts.Contact{ID: uuid.New(), FormattedName: "Bob"},
+				props:   tt.props,
+			}
+			err := NewSender(ha, resolver, nil, "thane", slog.Default()).Send(context.Background(), Notification{Recipient: "Bob", Message: "hi"})
+			if tt.want == "" {
+				if err == nil || len(ha.calls) != 0 {
+					t.Fatalf("Send() = %v with %d calls, want no device", err, len(ha.calls))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+			if len(ha.calls) != 1 || ha.calls[0].service != tt.want {
+				t.Errorf("calls = %+v, want notify.%s", ha.calls, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildHAActions(t *testing.T) {
 	actions := []Action{
 		{ID: "approve", Label: "Approve"},

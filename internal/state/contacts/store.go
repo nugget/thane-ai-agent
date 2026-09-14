@@ -331,7 +331,11 @@ func (s *Store) findByName(ctx context.Context, name string) (*Contact, error) {
 }
 
 // FindByNickname returns the first active contact with a case-insensitive
-// nickname match. Returns sql.ErrNoRows if not found.
+// nickname match. When several active contacts share the nickname, one
+// above known (or with a malformed zone) wins over one at known, then
+// the oldest id, so a collision resolves to the contact with authority
+// rather than to whichever row the database returns first. Returns
+// sql.ErrNoRows if not found.
 func (s *Store) FindByNickname(name string) (*Contact, error) {
 	return s.findByNickname(context.Background(), name)
 }
@@ -339,8 +343,9 @@ func (s *Store) FindByNickname(name string) (*Contact, error) {
 // findByNickname is [Store.FindByNickname] bound to ctx.
 func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, error) {
 	return s.scanContact(s.db.QueryRowContext(ctx,
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)`,
-		name))
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)
+		ORDER BY CASE WHEN COALESCE(trust_zone, '') = ? THEN 1 ELSE 0 END, id`,
+		name, ZoneKnown))
 }
 
 // ResolveContact finds a contact by name using cascading resolution
@@ -802,13 +807,14 @@ func insertPropertyTx(tx *sql.Tx, contactID uuid.UUID, p Property, now time.Time
 //
 // This is also where contact_save's identity custody is enforced, because
 // the target rule is only as good as the zone it reads. For an existing
-// record the transaction first re-reads trust_zone and deleted_at and
-// returns errContactChangedConcurrently when either moved since
-// guard.snapshotZone was read; that also keeps the snapshot re-upsert
-// below from reverting a concurrent operator zone change or resurrecting
-// a deleted contact. It then runs identityViolations over the additions
-// and returns an *IdentityCustodyError on any refusal. Either way nothing
-// is written. The store's other writers apply no identity custody.
+// record the transaction first re-reads trust_zone, nickname and
+// deleted_at and returns errContactChangedConcurrently when any moved
+// since the guard's snapshot was read; that also keeps the snapshot
+// re-upsert below from reverting a concurrent operator zone or nickname
+// change or resurrecting a deleted contact. It then runs
+// identityViolations over the additions and returns an
+// *IdentityCustodyError on any refusal. Either way nothing is written.
+// The store's other writers apply no identity custody.
 func (s *Store) applyContactSave(
 	c *Contact,
 	contactChanged bool,
@@ -825,7 +831,7 @@ func (s *Store) applyContactSave(
 	now := time.Now().UTC()
 	isNew := c.ID == uuid.Nil
 	if !isNew {
-		if err := checkSaveSnapshot(tx, c.ID, guard.snapshotZone); err != nil {
+		if err := checkSaveSnapshot(tx, c.ID, guard); err != nil {
 			return nil, false, err
 		}
 	}
@@ -894,11 +900,17 @@ func (s *Store) applyContactSave(
 	return c, true, nil
 }
 
+// propertyExistsTx reports whether the contact already carries value
+// under property. A routing fact matches in any spelling of its key,
+// because delivery reads every spelling as one fact.
 func propertyExistsTx(tx *sql.Tx, contactID uuid.UUID, property, value string) (bool, error) {
+	match, name := "property = ?", property
+	if key, ok := routingPropertyFor(property); ok {
+		match, name = "LOWER(property) = ?", key
+	}
 	rows, err := tx.Query(`
 		SELECT value FROM contact_properties
-		WHERE contact_id = ? AND property = ?
-	`, contactID.String(), property)
+		WHERE contact_id = ? AND `+match, contactID.String(), name)
 	if err != nil {
 		return false, err
 	}
@@ -936,16 +948,6 @@ func (s *Store) Delete(id uuid.UUID) error {
 
 	s.rebuildFTS()
 	return nil
-}
-
-// DeleteByName soft-deletes a contact by name, using [ResolveContact]
-// for cascading name resolution.
-func (s *Store) DeleteByName(name string) error {
-	c, err := s.ResolveContact(name)
-	if err != nil {
-		return fmt.Errorf("find contact: %w", err)
-	}
-	return s.Delete(c.ID)
 }
 
 // --- Interaction tracking ---

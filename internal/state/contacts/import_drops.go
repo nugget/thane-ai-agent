@@ -19,11 +19,19 @@ type importDrops struct {
 	values        int
 	ownerName     int
 	identity      int
+	routing       int
+	naming        int // nickname fills a merge left out
 	writeFailures int
 	// nameless are the cards skipped because they had no usable name.
 	nameless []int
-	// changed are the cards skipped because the operator re-zoned or
-	// deleted their merge target between the import's read and its write.
+	// nameTaken are the cards skipped because they would have created a
+	// contact under a name or nickname an admin, household, trusted or
+	// operator contact goes by.
+	nameTaken []int
+	// changed are the cards skipped because the operator re-zoned,
+	// deleted or changed the nickname of their merge target, or a
+	// contact with authority took the card's name, between the import's
+	// read and its write.
 	changed []int
 	// unwritten are the cards skipped because their write transaction
 	// failed.
@@ -50,19 +58,39 @@ func (d importDrops) notes() string {
 	if d.identity > 0 {
 		fmt.Fprintf(&b, " %d address(es)/number(s) were not imported: EMAIL, TEL and IMPP values are operator custody on an admin, household, trusted or operator contact, and a value one of those already holds keeps its single holder; ask the operator to add them through CardDAV or the contacts API.", d.identity)
 	}
+	if d.routing > 0 {
+		fmt.Fprintf(&b, " %d notification routing fact(s) were not imported: HA_COMPANION_APP and NOTIFICATION_PREFERENCE pick the Home Assistant device and the channel that carry a contact's notifications and answer their decision requests, so they are operator custody on an admin, household, trusted or operator contact; ask the operator to add them through CardDAV or the contacts API.", d.routing)
+	}
+	if d.naming > 0 {
+		fmt.Fprintf(&b, " %d nickname(s) were not filled in on a merge: a merge does not fill in the nickname of an admin, household, trusted or operator contact, or give any contact a nickname one of them already goes by; ask the operator to add it through CardDAV or the contacts API.", d.naming)
+	}
 	if d.writeFailures > 0 {
 		fmt.Fprintf(&b, " %d propert(ies) failed to write and were not imported; the log names each one.", d.writeFailures)
 	}
 	if len(d.nameless) > 0 {
 		fmt.Fprintf(&b, " %d card(s) were skipped because they have no usable name (FN): %s. Give each a plain FN and import it again.", len(d.nameless), cardList(d.nameless))
 	}
+	if len(d.nameTaken) > 0 {
+		fmt.Fprintf(&b, " %d card(s) were skipped because an admin, household, trusted or operator contact already goes by their name or nickname: %s. Nothing from them was written; import each again under a fuller name or without that nickname, and if a card is that person, it belongs on their existing contact, which the operator updates through CardDAV or the contacts API.", len(d.nameTaken), cardList(d.nameTaken))
+	}
 	if len(d.changed) > 0 {
-		fmt.Fprintf(&b, " %d card(s) were skipped, not merged, because the operator re-zoned or deleted the contact each would merge into while the import ran: %s. Nothing from them was written; import them again, or rerun the whole import, with merge on (the default), and the rules apply to each contact as it is now.", len(d.changed), cardList(d.changed))
+		fmt.Fprintf(&b, " %d card(s) were skipped, not merged or created, because a contact changed while the import ran: the operator re-zoned or deleted the contact a card would merge into, or changed its nickname, or an admin, household, trusted or operator contact took a card's name or nickname: %s. Nothing from them was written; import them again, or rerun the whole import, with merge on (the default), and the rules apply to each contact as it is now.", len(d.changed), cardList(d.changed))
 	}
 	if len(d.unwritten) > 0 {
 		fmt.Fprintf(&b, " %d card(s) were skipped because their write failed, as it can when an operator change to the contacts collides with it: %s. Nothing from them was written and the log names each error; import them again, or rerun the whole import, with merge on (the default), which merges the cards already written rather than duplicating them.", len(d.unwritten), cardList(d.unwritten))
 	}
 	return b.String()
+}
+
+// countRefused counts each refused address or routing value by class.
+func (d *importDrops) countRefused(violations []IdentityViolation) {
+	for _, v := range violations {
+		if _, routing := routingPropertyFor(v.Property); routing {
+			d.routing++
+		} else {
+			d.identity++
+		}
+	}
 }
 
 // cardList names card numbers as "card 3" or "cards 3, 7, 9", listing

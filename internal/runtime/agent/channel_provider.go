@@ -188,10 +188,17 @@ func (p *ChannelProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 		return "", nil
 	}
 
-	// Try contact resolution when we have a sender name.
+	// Resolve the contact the channel bound, by its ID, so a name or
+	// nickname another contact shares cannot redirect the context. A
+	// sender name is looked up only when nothing was bound.
 	var contactCtx *ContactContext
-	if senderName != "" && p.contacts != nil {
-		contactCtx = p.contacts.LookupContact(ctx, senderName, source)
+	if p.contacts != nil {
+		switch {
+		case binding != nil && binding.ContactID != "":
+			contactCtx = p.contacts.LookupContactByID(ctx, binding.ContactID, source)
+		case senderName != "":
+			contactCtx = p.contacts.LookupContact(ctx, senderName, source)
+		}
 	}
 	if contactCtx == nil && binding != nil {
 		contactCtx = contactContextFromBinding(binding, source)

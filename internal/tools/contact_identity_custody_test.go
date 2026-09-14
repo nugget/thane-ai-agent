@@ -97,6 +97,44 @@ func TestContactSaveOperatorAttendedCarveOut(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "already held by Carol Holder") {
 				t.Errorf("the holder rule must hold in every turn: %v", err)
 			}
+
+			// A household contact's notification device and nickname
+			// follow the same lift.
+			bob := seeded["bob"].ID
+			_, err = save(tc.ctx, map[string]any{"name": "Bob Household", "facts": map[string]any{"ha_companion_app": "mobile_app_bob"}})
+			routing, perr := store.GetPropertiesMap(bob)
+			if perr != nil {
+				t.Fatal(perr)
+			}
+			_, nerr := save(tc.ctx, map[string]any{"name": "Bob Household", "nickname": "Bobby"})
+			got, gerr := store.Get(bob)
+			if gerr != nil {
+				t.Fatal(gerr)
+			}
+			if tc.attended {
+				if err != nil || len(routing["ha_companion_app"]) != 1 {
+					t.Errorf("attended device save = %v, properties %v", err, routing)
+				}
+				if nerr != nil || got.Nickname != "Bobby" {
+					t.Errorf("attended nickname save = %v, nickname %q", nerr, got.Nickname)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), "operator-custodied") || len(routing["ha_companion_app"]) != 0 {
+					t.Errorf("unattended device save must be refused: %v, properties %v", err, routing)
+				}
+				if nerr == nil || !strings.Contains(nerr.Error(), "operator-custodied") || got.Nickname != "" {
+					t.Errorf("unattended nickname save must be refused: %v, nickname %q", nerr, got.Nickname)
+				}
+			}
+
+			// The name-holder rule holds in every turn and never claims
+			// the turn is unattended.
+			_, err = save(tc.ctx, map[string]any{"name": "Dan Known", "nickname": "Carol Holder"})
+			if err == nil || !strings.Contains(err.Error(), `Carol Holder already goes by "Carol Holder"`) {
+				t.Errorf("the name-holder rule must hold in every turn: %v", err)
+			} else if strings.Contains(err.Error(), "not the operator's own message") {
+				t.Errorf("a name refusal must not claim the turn is unattended: %v", err)
+			}
 		})
 	}
 }
@@ -128,9 +166,15 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		{"contact_save", registry.Get("contact_save").Description, []string{
 			"KEY and X-THANE-* fact keys", "starts at known", "above known", "operator's own contact",
 			"operator's own message", "already holds", "nothing is saved", "CardDAV",
+			"notification_preference or ha_companion_app", "changing the nickname", "only the first value",
+			"already goes by", "what to do",
 		}},
 		{"contact_save facts", parameterDescription("contact_save", "facts"), []string{
 			"letters, digits", "KEY and X-THANE-* keys are refused", "control characters", "above known", "already holds",
+			"notification_preference and ha_companion_app", "only the first value",
+		}},
+		{"contact_save nickname", parameterDescription("contact_save", "nickname"), []string{
+			"exact name, then nickname", "in every turn", "already goes by", "operator's own message", "above known",
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
 			"Forgot contact:", "above known", "operator's own contact", "Home Assistant person", "in every turn", "CardDAV",
@@ -140,6 +184,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_import_vcf", registry.Get("contact_import_vcf").Description, []string{
 			"above known", "already holds", "no turn lifts", "CardDAV", "dry_run reports the same counts",
+			"NOTIFICATION_PREFERENCE and HA_COMPANION_APP", "already goes by", "changes its nickname",
 		}},
 	}
 	for _, tc := range cases {

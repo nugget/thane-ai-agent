@@ -306,9 +306,10 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 //
 // operatorAttended reports that the turn is the operator's own message,
 // as tools.OperatorAttended decides it. It lifts only the rule that keeps
-// addresses and numbers off contacts above known and off the operator's
-// own contact; the rule against a second holder of a value a contact with
-// authority already holds still applies.
+// addresses, numbers, notification routing facts and nickname changes
+// off contacts above known and off the operator's own contact; the rules
+// against a second holder of a value, or a second contact answering to
+// a name, that a contact with authority already has still apply.
 func (t *Tools) SaveContactFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance, operatorAttended bool) (string, error) {
 	return t.saveContact(ctx, argsJSON, provenance, true, operatorAttended)
 }
@@ -374,6 +375,14 @@ func (t *Tools) saveContact(
 	if err := argumentRefusals(args); err != nil {
 		return "", err
 	}
+	// Lookups compare a stored name byte for byte apart from ASCII case,
+	// so edge space would hide a name from them. Trim the name and
+	// nickname here, so the custody checks below judge the value stored.
+	args.Name = strings.TrimSpace(args.Name)
+	args.Nickname = strings.TrimSpace(args.Nickname)
+	if args.Name == "" {
+		return "", fmt.Errorf("name is required")
+	}
 
 	// Look for existing contact by name.
 	existing, err := t.store.FindByName(args.Name)
@@ -407,6 +416,11 @@ func (t *Tools) saveContact(
 		return "", err
 	}
 
+	// Name claims and the nickname snapshot are read before the scalar
+	// updates below change contact.
+	claims := saveClaims(args, contact, created)
+	snapshotNickname := contact.Nickname
+
 	changedFields := make(map[string]struct{})
 	contactChanged := created
 	if created {
@@ -438,8 +452,13 @@ func (t *Tools) saveContact(
 	collectReplacement(PropertyOriginTag, args.OriginTags)
 	collectReplacement(PropertyOriginContextRef, args.OriginContextRefs)
 
-	guard := identityGuard{snapshotZone: contact.TrustZone, liftTargetCustody: operatorAttended}
-	if hasIdentityProperty(additions) {
+	guard := identityGuard{
+		snapshotZone:      contact.TrustZone,
+		snapshotNickname:  snapshotNickname,
+		liftTargetCustody: operatorAttended,
+		claims:            claims,
+	}
+	if hasCustodiedProperty(additions) || len(claims) > 0 {
 		guard.operatorID, err = t.custodyOperatorID(ctx)
 		if err != nil {
 			return "", err
@@ -455,10 +474,10 @@ func (t *Tools) saveContact(
 				zone = ZoneKnown
 			}
 			logIdentityRefusal("contact_save", contact.ID, zone, custody.Violations, provenance, false)
-			return "", identityRefusal(contact.FormattedName, contact.TrustZone, custody.Violations)
+			return "", identityRefusal(contact.FormattedName, contact.TrustZone, created, custody.Violations)
 		}
 		if errors.Is(err, errContactChangedConcurrently) {
-			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
+			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone, changed its nickname, or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
 		}
 		if created {
 			return "", fmt.Errorf("create contact: %w", err)
@@ -486,10 +505,13 @@ func (t *Tools) saveContact(
 	// optional embedding maintenance must never delay or prevent it.
 	t.generateEmbedding(ctx, saved)
 
+	// A routing fact recorded behind an existing value does not switch
+	// delivery; say so, so the next turn cannot report a switch.
+	shadow := routingShadowNotes(contact.Properties, additions)
 	if created {
-		return fmt.Sprintf("Saved new contact: **%s** (%s)", saved.FormattedName, saved.Kind), nil
+		return fmt.Sprintf("Saved new contact: **%s** (%s)", saved.FormattedName, saved.Kind) + shadow, nil
 	}
-	return fmt.Sprintf("Updated contact: **%s** (%s)", saved.FormattedName, saved.Kind), nil
+	return fmt.Sprintf("Updated contact: **%s** (%s)", saved.FormattedName, saved.Kind) + shadow, nil
 }
 
 func markCreatedContactFields(args SaveContactArgs, changed map[string]struct{}) {
@@ -568,9 +590,10 @@ func factProperty(key, value string) Property {
 }
 
 // labelViolationKeys sets each violation's Key to the fact key that
-// produced its row, so a refusal names the keys the model wrote. Two
-// keys can produce the same row (email and EMAIL with one value), so
-// each key labels at most one violation.
+// produced its row, or to the name or nickname argument for a name
+// claim, so a refusal names what the model wrote. Two keys can produce
+// the same row (email and EMAIL with one value), so each key labels at
+// most one violation.
 func labelViolationKeys(facts map[string]string, violations []IdentityViolation) {
 	keys := make([]string, 0, len(facts))
 	for key := range facts {
@@ -580,12 +603,16 @@ func labelViolationKeys(facts map[string]string, violations []IdentityViolation)
 	used := make(map[string]bool, len(violations))
 	for i := range violations {
 		v := &violations[i]
+		if isClaimProperty(v.Property) {
+			v.Key = claimArgument(v.Property)
+			continue
+		}
 		v.Key = v.Property
 		for _, key := range keys {
 			if used[key] {
 				continue
 			}
-			if p := factProperty(key, facts[key]); p.Property == v.Property && p.Value == v.Value {
+			if p := factProperty(key, facts[key]); strings.EqualFold(p.Property, v.Property) && p.Value == v.Value {
 				v.Key = key
 				used[key] = true
 				break
@@ -596,7 +623,7 @@ func labelViolationKeys(facts map[string]string, violations []IdentityViolation)
 
 func hasProperty(properties []Property, property, value string) bool {
 	for _, candidate := range properties {
-		if candidate.Property == property && propertyValueEqual(property, candidate.Value, value) {
+		if sameFactProperty(candidate.Property, property) && propertyValueEqual(property, candidate.Value, value) {
 			return true
 		}
 	}
@@ -1308,16 +1335,40 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 			continue
 		}
 
-		target, guard, err := importCustody(existing, props, operator)
+		target, guard, err := importCustody(existing, incoming, props, operator)
 		if err != nil {
 			return "", stop(i, err)
+		}
+		query := func(query string, args ...any) (*sql.Rows, error) {
+			return t.store.db.QueryContext(ctx, query, args...)
+		}
+		// A name or nickname an admin, household, trusted or operator
+		// contact goes by stays theirs: a new card claiming one is left
+		// out, and a merge leaves the nickname fill out, as does a merge
+		// into a contact whose nickname is operator custody.
+		refusedNames, err := t.withoutAuthorityNameClaim(query, target, &guard, incoming)
+		if err != nil {
+			return "", stop(i, err)
+		}
+		if len(refusedNames) > 0 {
+			logIdentityRefusal("contact_import_vcf", target, guard.snapshotZone, refusedNames, provenance, args.DryRun)
+			if existing == nil {
+				skipped++
+				if args.DryRun {
+					fmt.Fprintf(&summary, "Would skip card %d: an admin, household, trusted or operator contact already goes by its name or nickname; import it under a fuller name or without that nickname\n", i+1)
+				} else {
+					drops.nameTaken = append(drops.nameTaken, i+1)
+				}
+				continue
+			}
+			drops.naming++
 		}
 		props, refused, err := t.withoutCustodiedIdentity(ctx, target, guard, props)
 		if err != nil {
 			return "", stop(i, err)
 		}
 		if len(refused) > 0 {
-			drops.identity += len(refused)
+			drops.countRefused(refused)
 			logIdentityRefusal("contact_import_vcf", target, guard.snapshotZone, refused, provenance, args.DryRun)
 		}
 		// findExistingForMerge reads a failed lookup as no match, so a
@@ -1388,7 +1439,7 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 			continue
 		}
 		if len(raced) > 0 {
-			drops.identity += len(raced)
+			drops.countRefused(raced)
 			logIdentityRefusal("contact_import_vcf", c.ID, guard.snapshotZone, raced, provenance, false)
 		}
 		drops.writeFailures += failures
@@ -1495,34 +1546,49 @@ func (t *Tools) lazyCustodyOperatorID(ctx context.Context) func() (uuid.UUID, er
 // importCustody returns the record a card writes to (existing's ID, or
 // uuid.Nil for a record about to be created) and the guard both of the
 // card's custody checks judge it by: the import's own, and the recheck
-// inside its write transaction. The operator is resolved only when the
-// card carries an identity value.
-func importCustody(existing *Contact, props []Property, operator func() (uuid.UUID, error)) (uuid.UUID, identityGuard, error) {
+// inside its write transaction. It is read before the merge fills the
+// snapshot. The operator is resolved only when the card carries a
+// custodied value or claims a name. A card that carries only names
+// survives a failed lookup with every holder counted as authority, so
+// the name rules fail closed without stopping the import; a custodied
+// value still stops it.
+func importCustody(existing, incoming *Contact, props []Property, operator func() (uuid.UUID, error)) (uuid.UUID, identityGuard, error) {
 	target, guard := uuid.Nil, identityGuard{snapshotZone: ZoneKnown}
 	if existing != nil {
-		target, guard.snapshotZone = existing.ID, existing.TrustZone
+		target, guard.snapshotZone, guard.snapshotNickname = existing.ID, existing.TrustZone, existing.Nickname
 	}
-	if !hasIdentityProperty(props) {
+	guard.claims = importClaims(existing, incoming)
+	custodied := hasCustodiedProperty(props)
+	if !custodied && len(guard.claims) == 0 {
 		return target, guard, nil
 	}
 	operatorID, err := operator()
-	if err != nil {
+	switch {
+	case err == nil:
+		guard.operatorID = operatorID
+	case custodied:
 		return uuid.Nil, identityGuard{}, err
+	default:
+		slog.Warn("contact_import_vcf could not resolve the operator contact; judging this card's names with every holder as authority",
+			"contact_id", target.String(),
+			"error", err)
+		guard.operatorUnresolved = true
 	}
-	guard.operatorID = operatorID
 	return target, guard, nil
 }
 
-// withoutCustodiedIdentity drops the identity properties a model-facing
-// import may not write to target under guard and returns the kept
-// properties with the refused values.
+// withoutCustodiedIdentity drops the addresses, numbers and routing
+// facts a model-facing import may not write to target under guard and
+// returns the kept properties with the refused values. The card's name
+// claims were judged already, so they are not judged again here.
 func (t *Tools) withoutCustodiedIdentity(ctx context.Context, target uuid.UUID, guard identityGuard, props []Property) ([]Property, []IdentityViolation, error) {
-	if !hasIdentityProperty(props) {
+	if !hasCustodiedProperty(props) {
 		return props, nil, nil
 	}
 	query := func(query string, args ...any) (*sql.Rows, error) {
 		return t.store.db.QueryContext(ctx, query, args...)
 	}
+	guard.claims = nil
 	violations, err := identityViolations(query, target, guard, props)
 	if err != nil {
 		return nil, nil, fmt.Errorf("check identity custody: %w", err)
