@@ -82,8 +82,11 @@ settle *how*:
 - **Recipients resolve through the contact directory.** The
   *outbound* tools (`send_notification`, `ha_notify`,
   `request_human_decision`, `request_human_escalation`) take a
-  `recipient` and find the contact by exact name, then nickname,
-  then a text search over names, notes, orgs, and summaries. Pass
+  `recipient` and find the contact whose formatted name or
+  nickname it is (when several answer to it, the operator's own
+  contact first, then one above `known`, then a formatted-name match
+  before a nickname), and only when none does, a text search over
+  names, notes, orgs, and summaries. Pass
   the person's exact contact name or nickname, not a description: a
   description reaches only the search, which fails when it matches
   more than one contact and is not protected the way names and

@@ -248,7 +248,9 @@ clear it. When email polling is on, each such address held by an active
 record above `known` logs a Warn at startup and keeps the
 `contact_directory` row of `system_health` degraded until the operator
 demotes the record or moves the address to its own `known` record; see
-[Configuration](../operating/configuration.md#contacts--carddav).
+[Configuration](../operating/configuration.md#contacts--carddav). The same
+row also carries the fork audit, which runs whether or not mail is polled;
+see [Contact Identity Custody](#contact-identity-custody).
 
 A message can also mark itself, and that mark is kept apart from the
 zone. When a message is read in full, by `email_read` or by the read
@@ -292,9 +294,12 @@ zones and keys. The facts that choose where a contact's notifications go,
 and the names the resolvers find a contact by, are authority for the same
 reason: whoever controls them receives that person's notifications and
 answers their decision requests. The model-facing contact tools (`contact_save`,
-`contact_import_vcf`, `contact_forget`) enforce the rules below. CardDAV,
-`/v1/contacts`, and `thane init` write the store directly and keep full
-operator power.
+`contact_import_vcf`, `contact_forget`, and `contact_dossier_write` for the
+second-dossier rule) enforce the rules below. CardDAV, `/v1/contacts`, and
+`thane init` write the store directly and keep full operator power. Name
+resolution and the fork audit read every record however it was written,
+so a duplicate the operator's own path created still resolves toward the
+contact with authority and is still reported.
 
 - **Custodied targets.** No model writer adds an `EMAIL`, `TEL`, or `IMPP`
   value to an existing contact above `known` (a malformed zone counts as
@@ -341,10 +346,21 @@ operator power.
   model-facing tool removes a routing value, so a save that records one
   behind an existing value says in its result which value delivery still
   uses.
-- **Names.** `ResolveContact` tries the exact formatted name, then the
-  nickname, then a text search. Notifications, decision requests, and
-  lookups use it, and so does channel context for a sender no channel
-  bound to a contact. A nickname change on a custodied target follows the
+- **Names.** `ResolveContact` finds, in one query, the active contacts
+  whose formatted name or nickname is the name, compared with `LOWER`,
+  and takes the first in this order: the pinned operator's own record at
+  any zone, then records above `known` (a malformed zone counts), then a
+  formatted-name match before a nickname match, then ID. Only when no
+  contact answers to the name does it fall back to a text search, which
+  must match exactly one contact. Notifications, decision requests,
+  `contact_lookup`, `contact_whereabouts`, vCard export, and
+  `contact_forget` by name use it, and so does channel context for a
+  sender no channel bound to a contact. A `known` record whose formatted
+  name is the nickname of a contact with authority therefore never
+  shadows that contact. Resolution reads no given name and no first
+  word, so "Bob" reaches a record whose whole formatted name is Bob, not
+  a household Bob Smith without that nickname; the fork audit below
+  reports that shape. A nickname change on a custodied target follows the
   target rule and its lift; "changed" folds ASCII letters only, as SQLite
   `LOWER` does, after trimming, so a case-only edit is not a change. In
   every turn, no model writer gives a new contact a formatted name, or any
@@ -355,14 +371,17 @@ operator power.
   the check and the write. `contact_import_vcf` skips such a card, leaves
   such a nickname off a merge, and never fills a nickname into a
   custodied target; an import card that carries only names and cannot
-  resolve the operator counts every holder as one with authority. When
-  several active contacts share a nickname, `FindByNickname` returns the
-  operator's own record first at any zone, then one above `known`, then
-  orders by ID. When `operator_contact_id` or the legacy owner name is
+  resolve the operator counts every holder as one with authority.
+  `FindByNickname` orders a shared nickname the same way, without the
+  match-kind step. When `operator_contact_id` or the legacy owner name is
   configured, the contact store learns the operator from the same pinned
   record custody and `IsOwner` use, so notifications, lookups and context
-  all resolve a shared nickname alike. Under the sole-admin fallback
-  nothing is pinned, so a shared nickname orders by zone, then ID. A
+  all resolve a shared name alike. Under the sole-admin fallback nothing
+  is pinned, so a shared name orders by zone, then match kind, then ID.
+  The legacy owner name is itself resolved at startup, before any pin
+  exists, so it orders by zone and match kind alone: a `known` record
+  cannot take it from a record above `known` that goes by it as a
+  nickname. A
   string that reaches a contact only through the search (its note, org,
   or AI summary) is not protected, so the handle the operator is notified
   by belongs in their formatted name or nickname.
@@ -377,8 +396,92 @@ operator power.
   context.
 - **Removal.** `contact_forget` refuses contacts above `known`, the
   operator's own contact, and contacts bound to a Home Assistant person, in
-  every turn. It resolves the name once, deletes by ID only while the
-  contact still qualifies, and names what it removed.
+  every turn. It takes exactly one of a name, resolved once as above, or a
+  canonical `contact_id` naming one active record, which is how a `known`
+  duplicate whose name resolves to a contact with authority is removed;
+  custody judges both alike. It deletes by ID only while the contact still
+  qualifies, and names what it removed. A refusal by name also names up to
+  three `known` records that share a name key with the refused contact,
+  that the passed name also fits as a formatted name, nickname, given
+  name, or first word, and that are neither the operator's nor bound to a
+  Home Assistant person, with their UUIDs, so the next call can pass
+  `contact_id`.
+- **Fork audit.** `Store.ContactForks` reads every active record's names,
+  email addresses, and phone numbers, writes nothing, and reports what can
+  misroute. Every group it reports includes a record above `known` (a
+  malformed zone counts) or the pinned operator's, so ordinary `known`
+  contacts never raise it. Formatted names and nicknames are name keys in
+  one key space, trimmed and folded as `LOWER` folds them; a record's short
+  forms, its given name and the first word of a formatted name of more
+  than one word, join a key only when that key is another record's whole
+  formatted name. A shared name key alone does not make two records one
+  person, since address books save many people by one first name, so a
+  pair that shares one is judged by evidence: the two share an address
+  or number; the one that is not the operator's and carries no more
+  authority than the other holds no real address or number of its own (a
+  placeholder does not count); or one is a `known` record, not the
+  operator's, bound to a Home Assistant person. A name group with such a
+  pair is a `name` finding. A group whose pairs show no evidence is a
+  `shared_name` finding only when two of its records answer to the key as
+  a formatted name or nickname, since a lookup then reaches only one of
+  them; short forms alone between different people are not reported,
+  because resolution reads no short forms. An email address held by
+  several records, compared case-insensitively, is an `email` finding when
+  a holder is a `known` record other than the operator's, so the send
+  gate reads the address at `known` for every holder, or when a holder
+  other than the operator's holds no other real address or number. A
+  mailbox that records with authority share while each holds its own
+  addresses is already read as ambiguous, so it is not reported. A phone
+  number is a `phone` finding when several records hold it as `IMPP`
+  `signal:` or as a `TEL` whose `TYPE` names no type but `pref`, or names
+  `cell`, `mobile`, or `iphone`, compared with and without a leading `+`
+  as the channel resolvers match it; once any holder has the number as
+  `signal:`, every holder counts. A line typed `home`, `work`, `main`,
+  `voice`, or the like is shared by design and not reported. Separately,
+  an `EMAIL` on a record with authority whose domain RFC 2606 or RFC 6761
+  reserves (`example.com`, `example.net`, `example.org`, or a name under
+  one of them, and the `example`, `test`, `invalid`, and `localhost`
+  top-level domains) is a `reserved_domain` finding: no mailbox exists
+  there, so the address is a placeholder that still carries the record's
+  zone. Each finding has a kind and a key, and names up to eight records
+  with zone, ID, the operator flag, and any Home Assistant person binding,
+  counting them all. At startup Thane logs one Warn per finding, at most
+  20 followed by one summary Warn with the total, and the
+  `contact_directory` row of `system_health` stays degraded, naming up to
+  five findings with three records each, until the directory is fixed; the
+  row re-reads the directory on every render. Unlike the automated-address
+  findings, which follow email polling, these run whenever the contact
+  store exists. The fixes are the operator's, through CardDAV or
+  `/v1/contacts`: merge a duplicate into the record that should keep the
+  name or address, rename one of two people who answer to one name, move
+  a shared address to the record that owns it, and replace or remove a
+  placeholder. Thane can itself forget a `known` duplicate that is neither
+  the operator's nor bound to a Home Assistant person, by `contact_id`,
+  and copy a duplicate's addresses onto a record above `known` only in the
+  operator's own message. No model-facing tool renames a record, removes
+  or replaces an address, or moves a person binding, which only the
+  operator's config sets.
+- **Second dossiers.** `contact_dossier_write` refuses the first write of a
+  contact's dossier, when `contacts:<uuid>.md` does not exist yet, if an
+  active record that shares a name key with the contact and shows the
+  audit's evidence of being the same person already has a dossier. Name
+  siblings with no such evidence, such as two people nicknamed "Mom" who
+  each hold their own number, each keep their own dossier. It checks the
+  dossiers of at most 16 such records, the operator's and those above
+  `known` first. The refusal names both records with zone and UUID, the
+  existing dossier's ref, and the evidence. Its advice follows authority.
+  When the holder carries as much authority as the contact being written,
+  it says to write into the existing dossier. When the contact being
+  written carries more and the holder is a `known`, unbound duplicate, it
+  says to read the duplicate's dossier, forget the duplicate by
+  `contact_id`, then write the first dossier. When only the operator can
+  remove the holder, it says to report it. In every case it says to write
+  nothing and report both records if they are different people. Nothing
+  is written. Replacing an existing dossier is never refused. The
+  presence check reads through the document store rather than
+  the document tools, so it records no read receipt; a failed check refuses
+  the write. The check is not atomic with the write, so two concurrent
+  first writes on name siblings can both land.
 - **Fact keys.** A `contact_save` fact key must match
   `^[A-Za-z][A-Za-z0-9_-]{0,63}$`. `KEY` and the whole `X-THANE-` namespace
   are refused, and so is a value containing a control character. A key
@@ -435,7 +538,10 @@ a value stored before these rules cannot split a line either.
 The rules are forward-only. Addresses added to elevated contacts before
 they shipped keep matching, so reviewing them is the operator's job,
 through CardDAV or `/v1/contacts`. The same holds for routing facts and
-for a name or nickname two contacts already share. One change reaches
+for a name or nickname two contacts already share, though name resolution
+now prefers the one with authority and the fork audit reports the shared
+names, addresses, and numbers involving one that can misroute. One change
+reaches
 existing rows at upgrade: delivery now reads every letter case of a
 routing key, so an upper-case routing row, as CardDAV and `/v1/contacts`
 write it, starts routing wherever no lowercase row comes first.

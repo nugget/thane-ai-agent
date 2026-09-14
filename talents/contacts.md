@@ -110,10 +110,11 @@ ordinary documents instead.
   separate from save; the save IS the update. Outside the operator's
   own message, addresses, numbers, and notification routing facts are
   additive only on a `known` contact that is not the operator's. By contrast, `contact_forget`
-  removes one `known` contact from every query and gate and names the
-  record it removed; it refuses contacts above `known`, the operator's
-  own, and ones bound to a Home Assistant person. Lookup before
-  forgetting; the cost of removing the wrong record is real.
+  removes one `known` contact, by name or by `contact_id`, from every
+  query and gate and names the record it removed; it refuses contacts
+  above `known`, the operator's own, and ones bound to a Home Assistant
+  person. Lookup before forgetting; the cost of removing the wrong
+  record is real.
 
 - **A real save queues synthesis once.** A committed model-authored change
   records turn provenance on the property rows it adds or replaces and
@@ -139,7 +140,12 @@ ordinary documents instead.
   name from the status line and teaser because the dossier title already
   supplies it; digest and full may use the name where standalone prose needs
   it. Do not encode trust, Home Assistant bindings, or companion attribution as
-  if prose changed those sources of truth.
+  if prose changed those sources of truth. A contact's first dossier is
+  refused while a contact that shares its name and looks like the same
+  person already has one. The refusal names the evidence and which
+  record keeps the dossier; if the two are different people, write
+  nothing and report both to the operator (see Duplicates in
+  `contacts_save`).
 
 ## Cross-references
 
@@ -176,8 +182,8 @@ specifically you can name what you're looking for.
 
 ## You know the name
 
-`contact_lookup` with `name` is the fastest path. Case-insensitive,
-also matches `nickname`:
+`contact_lookup` with `name` is the fastest path. It matches a
+contact's formatted name or nickname, case-insensitive:
 
 ```json
 {
@@ -185,8 +191,21 @@ also matches `nickname`:
 }
 ```
 
+When several contacts answer to the name, you get one of them: the
+operator's own contact first, then a contact above `known`, then a
+formatted-name match before a nickname match, then the lowest ID. So
+a `known` contact whose formatted name or nickname a contact above
+`known` also goes by is never what that name returns. The lookup reads
+no given name or first word, though: `Bob` returns a `known` contact
+named just Bob, not a household Bob Smith. When a first name returns a
+`known` contact, check it against the `contact_directory` row of
+`system_health` before acting on it (see Duplicates in
+`contacts_save`). Only when no contact answers to the name does the
+lookup fall back to a search, which must match exactly one contact.
+
 Returns the contact record if found, including all facts, trust
-zone, origin policy, and metadata. Missing returns a simple
+zone, origin policy, and metadata, and, when contact dossiers are
+configured, its `Contact ID` and dossier trailhead. Missing returns a simple
 not-found message — there are no structured search hints in the
 result, so on a miss the next move is yours: re-query with `query`
 or a `key`/`value` filter, or decide to `contact_save` deliberately.
@@ -412,10 +431,16 @@ own new phone), save nothing, and tell the operator what should change
 on whom.
 
 A name or nickname is how a person is found: notifications, decision
-requests, and lookups try the exact name, then the nickname, then a
-text search, and so does conversation context when a channel has not
-bound the sender to a contact. A second contact answering to a
-person's name would take their notifications and decision requests.
+requests, and lookups find the contact whose formatted name or
+nickname it is, the operator's own contact first, then one above
+`known`, then a formatted-name match before a nickname match, and
+search the text only when no contact answers to the name.
+Conversation context does the same when a channel has not bound the
+sender to a contact. A second contact answering to a person's name
+still splits them: between two `known` contacts it can take their
+notifications and decision requests, and a first name that is another
+contact's whole name ("Bob" beside "Bob Smith") reaches that contact,
+not them.
 
 - **Changing the nickname** of a contact above `known` or of the
   operator's own follows the first rule for addresses: only in the
@@ -566,7 +591,8 @@ contact would shadow the trustworthy assertion).
 
 ## Remove a contact
 
-`contact_forget` removes one `known` contact from the directory:
+`contact_forget` removes one `known` contact from the directory. Pass
+exactly one of `name` or `contact_id`:
 
 ```json
 {
@@ -574,20 +600,32 @@ contact would shadow the trustworthy assertion).
 }
 ```
 
-The name resolves once: exact name, then nickname, then a search that
-must match exactly one contact. The result names what was removed, as
+A name resolves once, the way `contact_lookup` resolves it. A
+`contact_id` is the canonical UUID of one active contact, lowercase
+with hyphens, and removes exactly that contact:
+
+```json
+{
+  "contact_id": "0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41"
+}
+```
+
+The result names what was removed, as
 `Forgot contact: Frank Smith (known, <uuid>)`; check it, because a
 nickname or search match can land on a record you did not mean.
 
-It refuses, in every turn including the operator's own message, a
-contact above `known`, the operator's own contact, and a contact bound
-to a Home Assistant person. Forgetting one turns that person's email
-and Signal traffic into a stranger's. Nothing is removed; tell the
-operator, who can delete the contact through CardDAV or
-`DELETE /v1/contacts/{id}`. The refusal names the other remedy when
-one exists: demoting a contact above `known`, or removing a Home
-Assistant person binding. The operator's own contact is only ever
-deleted by the operator.
+It refuses, in every turn including the operator's own message, and
+whether you pass a name or a `contact_id`, a contact above `known`,
+the operator's own contact, and a contact bound to a Home Assistant
+person. Forgetting one turns that person's email and Signal traffic
+into a stranger's. Nothing is removed; tell the operator, who can
+delete the contact through CardDAV or `DELETE /v1/contacts/{id}`. The
+refusal names the other remedy when one exists: demoting a contact
+above `known`, or removing a Home Assistant person binding. The
+operator's own contact is only ever deleted by the operator. When you
+passed a name, the refusal also names up to three `known` contacts
+that the name also fits and that it could remove, with their UUIDs; if
+one of them is the record you meant, its `contact_id` reaches it.
 
 The store implements this as a **soft delete** (sets `deleted_at`),
 and **there is no undo path through the model-facing tools** — once
@@ -603,6 +641,87 @@ next encounter.
 **Lookup before forgetting.** Confirm you have the right record. The
 cost of removing the wrong contact is real, and only the operator can
 reverse it.
+
+## Duplicates
+
+One person saved as two contacts is split between them: a lookup, a
+notification, Home Assistant presence, or a dossier can land on the
+record you did not mean. Go looks for the splits that can misroute.
+The `contact_directory` row of `system_health` stays degraded while
+any exists, naming up to five, and each one is logged when Thane
+starts. Every finding involves a contact above `known` or the
+operator's own; two ordinary `known` contacts never raise one. A
+finding is one of:
+
+- **`name`**: contacts that share a name and look like one person.
+  They share a name when one answers to the other's formatted name or
+  nickname, or one's whole formatted name is the other's given name or
+  the first word of its formatted name ("Bob" beside "Bob Smith").
+  They look like one person when they share an address or number, when
+  the one with no more authority holds no real address or number of
+  its own, or when one is a `known` contact bound to a Home Assistant
+  person.
+- **`shared_name`**: contacts with no sign of being one person that
+  each answer to one formatted name or nickname, such as two people
+  nicknamed "Mom". A name lookup reaches only one of them.
+- **`email`**: contacts that hold one address, in any case, when a
+  `known` holder makes email read it at `known` for all of them, or a
+  holder has no other address of its own. A mailbox that contacts with
+  authority share while each holds its own addresses is not a finding;
+  email reads it as `ambiguous`.
+- **`phone`**: contacts that hold one number as a signal fact or as a
+  mobile or untyped phone, with or without the leading '+'. A home,
+  work, or main line listed on several cards is not a finding.
+- **`reserved_domain`**: a contact above `known`, or the operator's
+  own, holds an email address at a domain reserved for examples and
+  tests: `example.com`, `example.net`, or `example.org`, a name under
+  one of them, or a name in the `example`, `test`, `invalid`, or
+  `localhost` top-level domain. No mailbox exists there, so the address
+  is a placeholder that still carries the contact's zone.
+
+Each finding names the contacts with zone and UUID, and marks the
+operator's own and any bound to a Home Assistant person. A
+`contact_dossier_write` refusal to start a second dossier and an
+`ambiguous` email address are the same problem seen from a tool.
+
+**A finding is not proof that two contacts are one person.** Before
+you save, merge, or forget anything, you need one of these: the two
+share an address or number; the contact that would go holds no
+address or number of its own; or the operator says, in their own
+message, that they are one person. A `shared_name` finding, or a
+`name` finding between contacts that each hold their own addresses, is
+the operator's to judge: report it with each contact's name, zone, and
+UUID, and change nothing.
+
+With that evidence, who fixes it depends on the duplicate, the contact
+that should go:
+
+- **A `known` duplicate that is not the operator's and not bound to a
+  Home Assistant person is yours to remove.** Save anything worth
+  keeping onto the contact that stays, with `contact_save` under that
+  contact's exact formatted name: save matches only a formatted name,
+  so the shared short name would update the duplicate. Custody still
+  applies there, so outside the operator's own message, report
+  addresses and numbers meant for a contact above `known` instead of
+  saving them. If the duplicate has a dossier, read it with
+  `contact_dossier_read` first, because no dossier tool reaches a
+  forgotten contact. Then forget the duplicate, by `contact_id` when
+  its name resolves to the contact that stays. Last, fold the
+  duplicate's dossier claims and citations into the surviving
+  contact's dossier with `contact_dossier_write`: an existing dossier
+  updates as usual, and a first one for the survivor is refused only
+  while a duplicate holding a dossier is still active.
+- **Any other duplicate is the operator's.** Report the set with each
+  contact's name, zone, and UUID. The operator merges the duplicate
+  into the contact that should keep the name, renames one, or moves an
+  address to the contact that owns it, through CardDAV or
+  `/v1/contacts`. No model-facing tool renames a contact or removes an
+  address, so a placeholder address is the operator's to replace or
+  remove, in any turn. The operator's own message lifts only the
+  rule on changing a contact above `known` or the operator's own, so
+  there you can add the duplicate's addresses to the contact that
+  stays; the forget refusal holds in every turn, and a Home Assistant
+  person binding moves only in the operator's config.
 
 ## Cross-references
 
@@ -752,21 +871,25 @@ keeps the encoded vCard small enough to scan reliably. As with
 ## Cross-references
 
 - For bulk *deduplication* after import (multiple records that should
-  collapse), first check who carries authority. When every record in
-  the set is `known` and none is the operator's, the loop is
-  `contact_lookup` → identify duplicates → `contact_save` on the
-  canonical one to absorb facts → `contact_forget` on the duplicates.
-  When any record is above `known` or is the operator's, custody
-  refuses the save of the shared addresses and the forget of that
-  record, so report the set to the operator with each record's name,
-  zone, and UUID instead. Multi-step; consider whether a service loop
-  is the better shape (`loops_examples_curate`).
+  collapse), follow Duplicates in `contacts_save`: `contact_lookup` →
+  confirm each set is one person → `contact_save` on the canonical one to absorb
+  facts → `contact_forget` on each `known`, unbound duplicate that is
+  not the operator's, by `contact_id` when its name resolves to
+  another record. Custody refuses saving shared addresses onto a
+  canonical record above `known` or the operator's outside the
+  operator's own message, and refuses forgetting a duplicate that is
+  above `known`, the operator's, or bound to a Home Assistant person;
+  report those to the operator with each record's name, zone, and UUID
+  instead. Multi-step; consider whether a service loop is the better
+  shape (`loops_examples_curate`).
 - For *sending* the exported card, bounce to `email` or `signal`
   depending on the channel.
 - For "merge two contacts" — there's no native merge tool. The
   workflow above (save absorbs, forget removes) is the supported
-  pattern for `known` records; a merge involving an elevated or
-  operator contact is the operator's.
+  pattern for removing a `known`, unbound duplicate, even one that
+  shares its name with an elevated contact; moving addresses onto an
+  elevated or operator contact outside the operator's own message, and
+  removing one, are the operator's.
 
 - Asked where a contact is, `contact_whereabouts` fuses their
   presence and device locations into one ranked, provenance-carrying
