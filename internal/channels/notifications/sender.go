@@ -94,8 +94,10 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		return fmt.Errorf("lookup properties for %q: %w", n.Recipient, err)
 	}
 
-	apps, ok := props["ha_companion_app"]
-	if !ok || len(apps) == 0 {
+	// The first value in any case, lowercase spelling first, exactly as
+	// the router reads it.
+	apps := contacts.FactValues(props, contacts.PropertyHACompanionApp)
+	if len(apps) == 0 {
 		return fmt.Errorf("contact %q has no ha_companion_app property configured", n.Recipient)
 	}
 	entity := apps[0]

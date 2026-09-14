@@ -82,8 +82,17 @@ settle *how*:
 - **Recipients resolve through the contact directory.** The
   *outbound* tools (`send_notification`, `ha_notify`,
   `request_human_decision`, `request_human_escalation`) take a
-  `recipient` (contact name) and the system looks up the channel
-  from contact facts. `resolve_actionable` is the exception — it
+  `recipient` and find the contact by exact name, then nickname,
+  then a text search over names, notes, orgs, and summaries. Pass
+  the person's exact contact name or nickname, not a description: a
+  description reaches only the search, which fails when it matches
+  more than one contact and is not protected the way names and
+  nicknames are. The channel comes from the contact's facts: a
+  `notification_preference`, else a channel the person is active on
+  now, else Home Assistant push when they have an `ha_companion_app`
+  (`ha_notify` always uses Home Assistant push). Delivery reads each
+  fact in any case and uses only its first value.
+  `resolve_actionable` is the exception — it
   closes an existing tracked notification by `request_id` /
   `action_id` and has no recipient. Get the contact lookup right
   on the outbound side and the delivery routing is automatic; pass
@@ -173,7 +182,10 @@ Reach for it when:
 - You explicitly want the HA push channel (e.g., a critical
   HA-originated alert where Signal would be the wrong feel)
 - The recipient's contact facts don't yet route through
-  `send_notification` (rare; usually a config gap worth fixing)
+  `send_notification` (rare). On an admin, household, trusted, or
+  operator contact a missing routing fact is not yours to add: tell
+  the operator which fact is missing on whom, and they add it through
+  CardDAV, the contacts API, or by asking you in their own message.
 
 When the channel doesn't matter, prefer `send_notification` — it
 keeps the routing decision in the system, not in your prose.
@@ -194,7 +206,7 @@ tracking and timeout policy loads.
   `notifications_ask`.
 - For "where's the user reading this?", that's a contact-fact
   question — `contacts` (`contact_lookup`) shows the configured
-  channels.
+  channels. Delivery uses the first value of each routing fact.
 
 ---
 name: notifications_ask

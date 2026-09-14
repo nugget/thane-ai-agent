@@ -17,7 +17,9 @@ import (
 // sender or recipient on: EMAIL for email, TEL and IMPP signal: for
 // Signal. The record that holds an address lends its trust zone, and
 // the operator's IsOwner, to whoever writes from that address, so
-// which record holds one is authority, not contact data.
+// which record holds one is authority, not contact data. The same
+// checker carries the notification routing facts and the name claims
+// described in identity_custody_claims.go.
 //
 // The store applies no identity custody. CardDAV, /v1/contacts and
 // init are operator writers and keep full power. Every model-facing
@@ -92,8 +94,9 @@ type IdentityViolation struct {
 	// vCard import path, where values arrive as decoded properties.
 	Key string
 
-	// Property is the canonical identity property (EMAIL, TEL or IMPP)
-	// the refused value would have been stored under.
+	// Property is what the refused value would have set: EMAIL, TEL or
+	// IMPP for an address or number, the lowercase key for a routing
+	// fact, or FN or NICKNAME for a name claim.
 	Property string
 
 	// Value is the refused value.
@@ -140,12 +143,13 @@ type IdentityCustodyError struct {
 
 // Error summarizes the refusal. contact_save renders the teaching form.
 func (e *IdentityCustodyError) Error() string {
-	return fmt.Sprintf("identity custody refused %d address(es)/number(s)", len(e.Violations))
+	return fmt.Sprintf("contact custody refused %d value(s)", len(e.Violations))
 }
 
 // errContactChangedConcurrently reports that the record a model-facing
-// save read had its trust zone reassigned, or was deleted, before the
-// save committed. Nothing was written.
+// save read had its trust zone or nickname changed, or was deleted,
+// before the save committed, or that an import card's name was taken by
+// a contact with authority meanwhile. Nothing was written.
 var errContactChangedConcurrently = errors.New("contact changed while the save was in flight")
 
 // identityGuard carries what a model-facing write needs to apply
@@ -161,9 +165,23 @@ type identityGuard struct {
 	// target rule always judges the zone that is committed.
 	snapshotZone string
 
+	// snapshotNickname is the target's nickname as the writer read it,
+	// rechecked the same way, so a snapshot re-upsert never reverts an
+	// operator's nickname edit.
+	snapshotNickname string
+
 	// liftTargetCustody lifts the target rule for the operator's own
 	// contact_save turn. The holder rule still applies.
 	liftTargetCustody bool
+
+	// claims are the names the write gives a record (see saveClaims),
+	// checked in the same transaction as the write.
+	claims []Property
+
+	// operatorUnresolved marks an import card whose operator lookup
+	// failed while it carried only names: every holder then counts as
+	// authority, so the name rules fail closed.
+	operatorUnresolved bool
 }
 
 // queryFunc is the shape shared by (*sql.DB).Query and (*sql.Tx).Query,
@@ -171,19 +189,33 @@ type identityGuard struct {
 // the import path.
 type queryFunc func(query string, args ...any) (*sql.Rows, error)
 
-// identityViolations returns every identity value in props that a
-// model-facing writer may not add to target (uuid.Nil for a record
-// being created). Non-identity properties and values the target
-// already holds under the same property are skipped, so re-saving a
-// held address stays a no-op.
+// identityViolations returns every name claim in guard and every
+// custodied value in props that a model-facing writer may not give
+// target (uuid.Nil for a record being created). Other properties, and
+// values the target already holds, are skipped, so re-saving a held
+// address or device stays a no-op.
 //
 // Target rule: nothing is added to an existing record whose zone is not
 // known, or to the operator's record at any zone, unless the guard
 // lifts it. Holder rule: nothing is added that another active record
-// holds when that record is above known or is the operator's.
+// holds when that record is above known or is the operator's. Routing
+// facts get the target rule only.
 func identityViolations(query queryFunc, target uuid.UUID, guard identityGuard, props []Property) ([]IdentityViolation, error) {
-	var violations []IdentityViolation
+	violations, err := claimViolations(query, target, guard)
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range props {
+		if key, ok := routingPropertyFor(p.Property); ok {
+			v, err := routingViolation(query, target, guard, key, p.Value)
+			if err != nil {
+				return nil, err
+			}
+			if v != nil {
+				violations = append(violations, *v)
+			}
+			continue
+		}
 		if !isIdentityProperty(p.Property) {
 			continue
 		}
@@ -340,19 +372,20 @@ func phoneEquivalents(number string) []Property {
 
 // checkSaveSnapshot re-reads the target inside the save transaction and
 // returns errContactChangedConcurrently when it is gone, soft-deleted,
-// or no longer at the zone the writer read. Without it the snapshot
-// re-upsert would revert a concurrent operator zone change or resurrect
-// a deleted contact.
-func checkSaveSnapshot(tx *sql.Tx, id uuid.UUID, snapshotZone string) error {
+// or no longer at the zone or nickname the writer read. Without it the
+// snapshot re-upsert would revert a concurrent operator zone or
+// nickname change or resurrect a deleted contact.
+func checkSaveSnapshot(tx *sql.Tx, id uuid.UUID, guard identityGuard) error {
 	var zone, deletedAt sql.NullString
-	err := tx.QueryRow(`SELECT trust_zone, deleted_at FROM contacts WHERE id = ?`, id.String()).Scan(&zone, &deletedAt)
+	var nickname string
+	err := tx.QueryRow(`SELECT trust_zone, deleted_at, COALESCE(nickname, '') FROM contacts WHERE id = ?`, id.String()).Scan(&zone, &deletedAt, &nickname)
 	if errors.Is(err, sql.ErrNoRows) {
 		return errContactChangedConcurrently
 	}
 	if err != nil {
 		return fmt.Errorf("re-read contact %s: %w", id, err)
 	}
-	if deletedAt.Valid || zone.String != snapshotZone {
+	if deletedAt.Valid || zone.String != guard.snapshotZone || nickname != guard.snapshotNickname {
 		return errContactChangedConcurrently
 	}
 	return nil
@@ -390,13 +423,15 @@ func (s *Store) deleteIfUncustodied(ctx context.Context, id uuid.UUID) (bool, er
 // properties, less the values the import's own check refused. Identity
 // custody is rechecked inside the transaction, as applyContactSave does
 // it, so no operator write can land between the check and the writes:
-// a merge target whose trust zone moved, or that was deleted, since the
-// import read it returns errContactChangedConcurrently and writes
-// nothing; an identity value identityViolations now refuses (a holder
-// with authority that appeared since the import's check) is left out
-// and returned, keeping the import's drop-and-report contract. A
-// property whose insert fails is logged and counted, and the rest of
-// the card still commits.
+// a merge target whose trust zone or nickname moved, or that was
+// deleted, since the import read it, or a card whose name or nickname a
+// contact with authority took meanwhile, returns
+// errContactChangedConcurrently and writes nothing; an address or
+// routing value identityViolations now refuses (a holder with authority
+// that appeared since the import's check) is left out and returned,
+// keeping the import's drop-and-report contract. A property whose
+// insert fails is logged and counted, and the rest of the card still
+// commits.
 func (s *Store) applyContactImport(ctx context.Context, c *Contact, props []Property, guard identityGuard) ([]IdentityViolation, int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -405,7 +440,7 @@ func (s *Store) applyContactImport(ctx context.Context, c *Contact, props []Prop
 	defer tx.Rollback() //nolint:errcheck // best-effort on defer
 
 	if c.ID != uuid.Nil {
-		if err := checkSaveSnapshot(tx, c.ID, guard.snapshotZone); err != nil {
+		if err := checkSaveSnapshot(tx, c.ID, guard); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -415,6 +450,9 @@ func (s *Store) applyContactImport(ctx context.Context, c *Contact, props []Prop
 	refused, err := identityViolations(query, c.ID, guard, props)
 	if err != nil {
 		return nil, 0, fmt.Errorf("check identity custody: %w", err)
+	}
+	if hasClaimViolation(refused) {
+		return nil, 0, errContactChangedConcurrently
 	}
 	now := time.Now().UTC()
 	if err := upsertContactTx(tx, c, now); err != nil {

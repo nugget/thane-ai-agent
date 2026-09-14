@@ -141,17 +141,20 @@ func TestSaveContact_IdentityCustody(t *testing.T) {
 		}
 	})
 
-	t.Run("non-identity facts on a household record", func(t *testing.T) {
+	// ha_companion_app was this subtest's example of an open fact until
+	// #1566 put routing facts under the target rule; it now sits in
+	// TestSaveContact_RoutingFactCustody's refusal matrix.
+	t.Run("uncustodied facts on a household record", func(t *testing.T) {
 		tools, _ := newCountingTools(t)
 		target := seedContactAt(t, tools.store, "Bob Smith", ZoneHousehold)
-		if _, err := modelSave(tools, `{"name":"Bob Smith","ai_summary":"Prefers Signal","facts":{"ha_companion_app":"mobile_app_bob"}}`, false); err != nil {
-			t.Fatalf("non-identity save: %v", err)
+		if _, err := modelSave(tools, `{"name":"Bob Smith","ai_summary":"Prefers Signal","facts":{"favorite_color":"green"}}`, false); err != nil {
+			t.Fatalf("uncustodied save: %v", err)
 		}
 		got, err := tools.store.GetPropertiesMap(target.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(got["ha_companion_app"], []string{"mobile_app_bob"}) {
+		if !reflect.DeepEqual(got["favorite_color"], []string{"green"}) {
 			t.Errorf("properties = %v", got)
 		}
 	})
@@ -436,8 +439,8 @@ func TestApplyContactSave_ConcurrentChangeAborts(t *testing.T) {
 		t.Fatal(err)
 	}
 	current.Note = "fresh note"
-	if _, changed, err := store.applyContactSave(current, true, note, nil, identityGuard{snapshotZone: ZoneHousehold}); err != nil || !changed {
-		t.Fatalf("current snapshot save = changed %v, %v", changed, err)
+	if _, outcome, err := store.applyContactSave(current, true, note, nil, identityGuard{snapshotZone: ZoneHousehold}); err != nil || !outcome.changed {
+		t.Fatalf("current snapshot save = changed %v, %v", outcome.changed, err)
 	}
 	got, err = store.Get(promoted.ID)
 	if err != nil {
@@ -445,6 +448,43 @@ func TestApplyContactSave_ConcurrentChangeAborts(t *testing.T) {
 	}
 	if got.Note != "fresh note" || got.TrustZone != ZoneHousehold {
 		t.Errorf("current save = note %q zone %q", got.Note, got.TrustZone)
+	}
+
+	// An operator nickname edit between the read and the save aborts the
+	// save too, so the snapshot re-upsert never reverts it.
+	named, err := store.Upsert(&Contact{FormattedName: "Nick Named", Nickname: "Nick", Kind: "individual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleNamed, err := store.GetWithProperties(named.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited, err := store.Get(named.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited.Nickname = "Nico"
+	if _, err := store.Upsert(edited); err != nil {
+		t.Fatal(err)
+	}
+	staleNamed.Note = "stale note"
+	if _, _, err := store.applyContactSave(staleNamed, true, nil, nil, identityGuard{snapshotZone: ZoneKnown, snapshotNickname: staleNamed.Nickname}); !errors.Is(err, errContactChangedConcurrently) {
+		t.Fatalf("stale nickname save error = %v, want errContactChangedConcurrently", err)
+	}
+	if got, err := store.Get(named.ID); err != nil || got.Nickname != "Nico" || got.Note != "" {
+		t.Errorf("aborted save changed the record: %+v, %v", got, err)
+	}
+	freshNamed, err := store.GetWithProperties(named.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshNamed.Note = "fresh note"
+	if _, outcome, err := store.applyContactSave(freshNamed, true, nil, nil, identityGuard{snapshotZone: ZoneKnown, snapshotNickname: freshNamed.Nickname}); err != nil || !outcome.changed {
+		t.Fatalf("current nickname snapshot save = changed %v, %v", outcome.changed, err)
+	}
+	if got, err := store.Get(named.ID); err != nil || got.Nickname != "Nico" || got.Note != "fresh note" {
+		t.Errorf("current save = %+v, %v", got, err)
 	}
 }
 
@@ -904,11 +944,25 @@ func TestLegacyOwnerName_NoSecondRecordClaimsIt(t *testing.T) {
 		}
 	})
 
-	t.Run("a configured operator_contact_id frees the name", func(t *testing.T) {
+	// Until #1566 the UUID selector freed the name; the name-holder rule
+	// now keeps the operator's nickname the operator's own there too.
+	t.Run("a configured operator_contact_id still keeps the operator's nickname its own", func(t *testing.T) {
 		tools, _, operator := setup(t)
 		tools.ConfigureOperatorContactID(operator.ID)
-		if _, err := modelSave(tools, `{"name":"Alice","kind":"individual"}`, false); err != nil {
-			t.Errorf("the UUID selector does not depend on names: %v", err)
+		_, err := modelSave(tools, `{"name":"Alice","kind":"individual"}`, false)
+		requireContains(t, err, `Alice Operator already goes by "Alice"`, "the operator's own contact", "nothing was saved")
+		if _, err := tools.store.FindByName("Alice"); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("a refused create left Alice behind: %v", err)
+		}
+		// The negative control proves the refusal does the work: the same
+		// record written through the operator path wins the exact-name
+		// lookup notifications and decision requests resolve through.
+		alice, err := tools.store.UpsertWithProperties(&Contact{FormattedName: "Alice", Kind: "individual", TrustZone: ZoneKnown}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := tools.store.ResolveContact("Alice"); err != nil || got.ID != alice.ID || got.ID == operator.ID {
+			t.Errorf("ResolveContact(Alice) = %+v, %v, want the operator-path record", got, err)
 		}
 	})
 
@@ -1190,6 +1244,24 @@ func TestIdentityCustodyRefusalLogs(t *testing.T) {
 		requireLogged(t, logs, "tool=contact_forget", "contact_id="+hal.ID.String(), "rule=zone",
 			"request_id=r_forget", "conversation_id=conv-1", "loop_id=loop-1")
 	})
+
+	t.Run("routing fact", func(t *testing.T) {
+		tools := newTestTools(t)
+		bob := seedContactAt(t, tools.store, "Bob Smith", ZoneHousehold)
+		logs := captureDefaultLog(t)
+		_, err := modelSave(tools, `{"name":"Bob Smith","facts":{"HA_COMPANION_APP":"mobile_app_mallory"}}`, false)
+		requireContains(t, err, "Bob Smith is household")
+		requireLogged(t, logs, "tool=contact_save", "contact_id="+bob.ID.String(), "rule=zone", "properties=ha_companion_app", "request_id=r_custody")
+	})
+
+	t.Run("name claim", func(t *testing.T) {
+		tools := newTestTools(t)
+		jane := seedNicknameAt(t, tools.store, "Jane Doe", "Mom", ZoneHousehold)
+		logs := captureDefaultLog(t)
+		_, err := modelSave(tools, `{"name":"Mom","kind":"individual"}`, true)
+		requireContains(t, err, "Jane Doe already goes by")
+		requireLogged(t, logs, "tool=contact_save", `contact_id=""`, "rule=holder", "properties=FN", "holder_id="+jane.ID.String())
+	})
 }
 
 // TestCustodyRefusalsStayBounded pins that a contact_save refusal stays
@@ -1266,6 +1338,37 @@ func TestCustodyRefusalsStayBounded(t *testing.T) {
 		_, err := modelSave(tools, custodyArgs(t, map[string]any{"name": "Hana Household", "facts": facts}), false)
 		check(t, err, "contact_save refused 32 fact(s)", 32)
 		requireContains(t, err, "Hana Household is household", "ask the operator to add these")
+	})
+
+	t.Run("routing custody", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedContactAt(t, tools.store, "Hana Household", ZoneHousehold)
+		facts := map[string]string{}
+		// Every case spelling of the letters in "ha_co" is its own key.
+		letters := []int{0, 1, 3, 4, 5}
+		for mask := range 32 {
+			key := []byte(PropertyHACompanionApp)
+			for bit, i := range letters {
+				if mask&(1<<bit) != 0 {
+					key[i] -= 'a' - 'A'
+				}
+			}
+			facts[string(key)] = fmt.Sprintf("%d%s", mask, long)
+		}
+		_, err := modelSave(tools, custodyArgs(t, map[string]any{"name": "Hana Household", "facts": facts}), false)
+		check(t, err, "contact_save refused 32 fact(s)", 32)
+		requireContains(t, err, "Hana Household is household", "ask the operator to add these")
+	})
+
+	t.Run("a long nickname", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedNicknameAt(t, tools.store, "Hana Household", "Hana", ZoneHousehold)
+		nickname := strings.Repeat("é", 5<<10)
+		_, err := modelSave(tools, custodyArgs(t, map[string]any{"name": "Hana Household", "nickname": nickname}), false)
+		requireContains(t, err, "contact_save refused 1 change(s)", "nothing was saved", fmt.Sprintf("(%d bytes)", len(nickname)))
+		if err != nil && (len(err.Error()) > maxRefusalBytes || !utf8.ValidString(err.Error())) {
+			t.Errorf("refusal is %d bytes (valid UTF-8 %v), want at most %d", len(err.Error()), utf8.ValidString(err.Error()), maxRefusalBytes)
+		}
 	})
 }
 
@@ -1499,6 +1602,35 @@ func TestImportVCF_RechecksCustodyInItsWrite(t *testing.T) {
 		}
 		if got.TrustZone != ZoneHousehold || got.Org != "" || len(got.Properties) != 0 {
 			t.Errorf("Kim after import = zone %q org %q props %+v, want the promotion kept and nothing written", got.TrustZone, got.Org, got.Properties)
+		}
+	})
+
+	t.Run("a name an authority contact takes mid-card writes nothing", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedContactAt(t, tools.store, "Ada Admin", ZoneAdmin, Property{Property: "EMAIL", Value: "ada@example.com"})
+		hal := seedContactAt(t, tools.store, "Hal Household", ZoneHousehold)
+		onImportRefusal(t, func() {
+			renamed, err := tools.store.Get(hal.ID)
+			if err != nil {
+				t.Errorf("read Hal: %v", err)
+				return
+			}
+			renamed.Nickname = "Newt"
+			if _, err := tools.store.Upsert(renamed); err != nil {
+				t.Errorf("operator nickname edit: %v", err)
+			}
+		})
+
+		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Nora New\r\nNICKNAME:Newt\r\nEMAIL:ada@example.com\r\nTEL:+15550004444\r\nEND:VCARD\r\n"
+		out := importText(t, tools, vcf, map[string]any{"merge": false})
+		if !strings.Contains(out, "0 created, 0 merged, 1 skipped") || !strings.Contains(out, "1 card(s) were skipped, not merged or created") || !strings.Contains(out, "card 1.") {
+			t.Errorf("import = %q, want card 1 skipped and named with its cause", out)
+		}
+		if _, err := tools.store.FindByName("Nora New"); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("the card was written: %v", err)
+		}
+		if got, err := tools.store.FindByNickname("Newt"); err != nil || got.ID != hal.ID {
+			t.Errorf("Newt = %+v, %v, want Hal Household", got, err)
 		}
 	})
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 // ChannelActivity describes a channel with recent interaction for a
@@ -99,6 +100,9 @@ func (r *NotificationRouter) RegisterProvider(p NotificationProvider) {
 // Route resolves a recipient to the appropriate provider based on
 // contact properties. It checks for an explicit notification_preference
 // property first, then falls back to checking for known delivery channels.
+// Each fact is read with [contacts.FactValues]: in any case, the
+// lowercase spelling first, and only its first value counts. A
+// hyphenated or otherwise renamed key does not route.
 func (r *NotificationRouter) Route(recipient string) (NotificationProvider, error) {
 	contact, err := r.contacts.ResolveContact(recipient)
 	if err != nil {
@@ -114,7 +118,7 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 	}
 
 	// 1. Explicit notification preference.
-	if prefs, ok := props["notification_preference"]; ok && len(prefs) > 0 {
+	if prefs := contacts.FactValues(props, contacts.PropertyNotificationPreference); len(prefs) > 0 {
 		if p, exists := r.providers[prefs[0]]; exists {
 			return p, nil
 		}
@@ -151,7 +155,7 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 	}
 
 	// 3. Static fallback — HA companion app available → ha_push.
-	if apps, ok := props["ha_companion_app"]; ok && len(apps) > 0 {
+	if apps := contacts.FactValues(props, contacts.PropertyHACompanionApp); len(apps) > 0 {
 		if p, exists := r.providers["ha_push"]; exists {
 			return p, nil
 		}
