@@ -285,12 +285,12 @@ instead of being reimplemented in each loop prompt.
 | Tool | Description |
 |------|-------------|
 | `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. |
-| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body; marks seen unless `mark_seen: false`. |
+| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body; marks seen unless `mark_seen: false`. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. |
 | `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
 | `email_folders` | List an account's mailboxes with special-use roles and counts. |
 | `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. |
 | `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in Drafts for the operator, or refused with a decision record. |
-| `email_reply` | Reply with threading headers through the same gate and decision. |
+| `email_reply` | Reply with threading headers through the same gate and decision. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not. |
 | `email_move` | Move messages within an account; reports the new UIDs when the server returns them. |
 
 Every email tool takes an `account`; in a loop bound with

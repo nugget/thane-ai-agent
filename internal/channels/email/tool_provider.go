@@ -98,11 +98,14 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, access_note} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, auto_submitted, bulk, access_note} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
 				"The whole result stays within 32 KB: a long body is cut to fit and body_truncated is true, to, cc, and reply_to list at most 25 addresses each with addresses_omitted counting the rest, and at most 50 attachments are described with attachments_omitted counting the rest; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
 				addressShapeDescription +
 				"authentication.verified is true only when Thane validated a signature with a key the directory holds for the sender; status absent means nothing was checked and carries no suspicion, failed means a signature did not validate, unavailable means a check could not complete. " +
+				"auto_submitted and bulk say what the message's own headers claim about how it was sent, and are absent when they claim nothing: auto_submitted is auto-replied (an out-of-office or other automatic reply), auto-generated (a machine notice), auto-notified, or other; bulk is true when a mailing-list header or a Precedence of bulk, list, or junk says it went to many. " +
+				"Nothing authenticates these headers and any sender can set or omit them, so neither their presence nor their absence vouches for who wrote the message. " +
+				"They describe this message, not its sender: trust_zone and automated describe the address and do not change, and only this full read shows them, never a list or search result. They stop one thing: email_reply refuses to answer such a message unless the operator is present for this turn. " +
 				"Reading marks the message seen unless mark_seen is false or the account's access is read, in which case marked_seen is false and access_note says why. " +
 				"The UID must be given with the account and folder it was listed from; a UID the folder does not hold is an error naming both.",
 			Parameters: map[string]any{
@@ -250,7 +253,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Reply to a message by UID, preserving In-Reply-To and References so the reply threads in the recipient's client. " +
 				"The reply goes to the original Reply-To (else From); reply_all adds the original To and Cc minus this account's own address. " +
 				"Recipients pass through the same trust gate and send decision as email_send, including its handling of ambiguous, unresolvable, and automated addresses: any refused recipient refuses the whole reply, and the account's policy decides whether the reply is sent or held in Drafts for the operator. " +
-				"body is markdown. Returns the same JSON shape as email_send with in_reply_to set.",
+				"body is markdown. Returns the same JSON shape as email_send with in_reply_to set, and with decision.original {auto_submitted, bulk} when the message replied to carries either mark (see email_read) and the account can write mail. " +
+				"A reply to such a message would be an automatic response, so in any turn the operator is not present for it is refused with decision.route automatic_response, whatever the sender's zone and even with draft: true, and nothing is sent or drafted: do not retry it or send it fresh with email_send; file the message and, if it needs an answer, bring it to the operator with request_core_attention.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

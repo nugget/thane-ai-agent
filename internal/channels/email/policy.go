@@ -69,6 +69,11 @@ const (
 	// RouteRecipientLimit: to and cc together name more addresses than
 	// one message may carry.
 	RouteRecipientLimit = "recipient_limit"
+
+	// RouteAutomaticResponse: a reply to a message whose own headers
+	// mark it auto-submitted or bulk, in a turn the operator is not
+	// present for. Nothing is sent or drafted (RFC 3834 §2).
+	RouteAutomaticResponse = "automatic_response"
 )
 
 // Decision is the gate's complete account of one outbound message. It
@@ -105,6 +110,13 @@ type Decision struct {
 
 	// DraftsFolder is where a drafted message was written.
 	DraftsFolder string `json:"drafts_folder,omitempty"`
+
+	// Original is the header marks of the message a reply answers, set
+	// on every reply that gets past the account's access check when
+	// that message is marked, whether or not the turn is attended. A
+	// reply from an account that cannot write mail is refused before
+	// the original is fetched, so its decision carries none.
+	Original HeaderMarks `json:"original,omitzero"`
 }
 
 // PolicyRefusal is the error form of a refused send: one sentence a

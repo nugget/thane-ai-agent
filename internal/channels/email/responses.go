@@ -186,6 +186,10 @@ type readResponse struct {
 	Attachments    []Attachment   `json:"attachments"`
 	Authentication Authentication `json:"authentication"`
 
+	// HeaderMarks renders flat as auto_submitted and bulk, each omitted
+	// when the message's headers claim nothing.
+	HeaderMarks
+
 	// AccessNote explains a read that could not mark the message seen
 	// because the account's access level is read.
 	AccessNote string `json:"access_note,omitempty"`
@@ -233,6 +237,7 @@ func newReadResponse(account, folder string, msg *Message, markedSeen bool, auth
 		RawTruncated:       msg.RawTruncated,
 		Attachments:        attachments,
 		Authentication:     auth,
+		HeaderMarks:        msg.HeaderMarks,
 	}
 }
 

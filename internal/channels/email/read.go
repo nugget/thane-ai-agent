@@ -120,6 +120,12 @@ func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, e
 
 	if rawBody != nil {
 		result.raw = rawBody
+		// Marks come from the raw header block before the MIME parse,
+		// so a body that fails to parse keeps them.
+		var marksErr error
+		if result.HeaderMarks, marksErr = headerMarks(rawBody); marksErr != nil {
+			c.logger.Debug("header marks parse error", "uid", opts.UID, "error", marksErr)
+		}
 		if err := c.parseBody(result, bytes.NewReader(rawBody)); err != nil {
 			c.logger.Debug("body parse error", "uid", opts.UID, "error", err)
 		}

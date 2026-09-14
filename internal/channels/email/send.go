@@ -29,6 +29,10 @@ type SendRequest struct {
 	// Draft asks for the message to be held in Drafts regardless of
 	// what the policy would have done.
 	Draft bool
+
+	// Original is the header marks of the message being replied to; it
+	// is zero for email_send.
+	Original HeaderMarks
 }
 
 // SendOutcome is what happened to a message that was not refused.
@@ -68,6 +72,18 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		decision.Route = RouteAccess
 		decision.Reason = accessRefusalSentence(cfg)
 		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+	}
+	// An unattended reply to mail whose own headers mark it automatic
+	// or bulk would be an automatic response (RFC 3834 §2). It is
+	// refused in every delivery mode, a requested draft included, and
+	// whatever the recipients' zones.
+	if req.Original.Marked() {
+		decision.Original = req.Original
+		if !decision.Attended {
+			decision.Route = RouteAutomaticResponse
+			decision.Reason = automaticResponseReason(req.Original)
+			return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+		}
 	}
 	if n := len(req.To) + len(req.Cc); n > maxRecipients {
 		decision.Route = RouteRecipientLimit
@@ -224,6 +240,7 @@ func (s *Service) logDecision(ctx context.Context, req SendRequest, decision Dec
 		"loop_id", tools.LoopIDFromContext(ctx),
 		"conversation_id", tools.ConversationIDFromContext(ctx),
 	}
+	attrs = append(attrs, originalAttrs(decision.Original)...)
 	if deliveryErr != nil {
 		s.logger.Warn("email outbound decision not delivered", append(attrs, "error", deliveryErr)...)
 		return
@@ -248,7 +265,7 @@ func reviewDecision(d Decision) Decision {
 // and returns it as the model-facing error.
 func (s *Service) refuse(ctx context.Context, tool string, decision Decision) error {
 	decision.Disposition = DispositionRefused
-	s.logger.Info("email outbound refused",
+	attrs := []any{
 		"tool", tool,
 		"account", decision.Account,
 		"route", decision.Route,
@@ -258,8 +275,27 @@ func (s *Service) refuse(ctx context.Context, tool string, decision Decision) er
 		"reason", decision.Reason,
 		"loop_id", tools.LoopIDFromContext(ctx),
 		"conversation_id", tools.ConversationIDFromContext(ctx),
-	)
+	}
+	s.logger.Info("email outbound refused", append(attrs, originalAttrs(decision.Original)...)...)
 	return &PolicyRefusal{Message: decision.Reason, Decision: decision}
+}
+
+// originalAttrs returns the log attributes naming a reply's marked
+// original, or none when it is unmarked or the message is not a reply.
+func originalAttrs(original HeaderMarks) []any {
+	if !original.Marked() {
+		return nil
+	}
+	return []any{"original_auto_submitted", original.AutoSubmitted, "original_bulk", original.Bulk}
+}
+
+// automaticResponseReason explains an unattended reply refused because
+// the original's own headers mark it automatic or bulk, and names the
+// only moves that work.
+func automaticResponseReason(original HeaderMarks) string {
+	return "Email not sent: the original message's own headers mark it as " + original.describe() +
+		", so a reply written while the operator is not present would be an automatic response, which is neither sent nor drafted (RFC 3834); do not retry it or send it fresh with email_send, " +
+		"but file the message and, if it needs an answer, bring it to the operator with request_core_attention so they can reply in their own turn."
 }
 
 // sendAccessRefusal returns the refusal a send-shaped tool gets on an

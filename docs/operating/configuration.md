@@ -159,7 +159,13 @@ subdomains regardless of trust zone, and `allowed_recipient_domains`,
 when set, refuses every domain outside it. An automated-looking
 recipient (a no-reply, notification, or bounce mailbox; see
 [Contacts & CardDAV](#contacts--carddav)) is refused whatever its
-record's zone. Every send ends in one of
+record's zone. A reply to a message whose own headers mark it
+automatic or bulk (an `Auto-Submitted` value other than `no`, a
+`List-Id` or any RFC 2369 `List-*` field, or a `Precedence` of
+`bulk`, `list`, or `junk`) is refused with route `automatic_response`
+in every turn the operator is not present for, whatever the
+`delivery` mode and even when a draft was requested; no key changes
+that, and the operator's own turn replies as usual. Every send ends in one of
 three dispositions, `sent`, `drafted`, or `refused`, and the tool result
 or refusal carries the decision that produced it.
 

@@ -182,6 +182,61 @@ func TestEmailSendDescriptionTeachesIdentityCustody(t *testing.T) {
 	t.Fatal("email_send is not among the email tool definitions")
 }
 
+// TestEmailHeaderMarksDescriptionsMatchTheRule pins the email_read and
+// email_reply descriptions to the header-marks vocabulary and refusal
+// route the code uses, so the model is taught the keys, values, and
+// route it will actually see, and the per-message versus per-address
+// contrast stays stated.
+func TestEmailHeaderMarksDescriptionsMatchTheRule(t *testing.T) {
+	descriptions := make(map[string]string)
+	for _, tool := range (&Tools{}).toolDefinitions() {
+		descriptions[tool.Name] = tool.Description
+	}
+	tests := []struct {
+		tool string
+		want []string
+	}{
+		{
+			tool: "email_read",
+			want: []string{
+				"verified}, auto_submitted, bulk, access_note}",
+				AutoSubmittedReplied, AutoSubmittedGenerated, AutoSubmittedNotified, "or " + AutoSubmittedOther + ";",
+				"a Precedence of bulk, list, or junk",
+				"Nothing authenticates these headers and any sender can set or omit them",
+				"neither their presence nor their absence vouches for who wrote the message",
+				"trust_zone and automated describe the address and do not change",
+				"never a list or search result",
+				"email_reply refuses to answer such a message unless the operator is present",
+			},
+		},
+		{
+			tool: "email_reply",
+			want: []string{
+				"decision.original {auto_submitted, bulk}",
+				"either mark (see email_read) and the account can write mail",
+				"decision.route " + RouteAutomaticResponse,
+				"even with draft: true",
+				"nothing is sent or drafted",
+				"do not retry it or send it fresh with email_send",
+				"request_core_attention",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			desc, ok := descriptions[tt.tool]
+			if !ok {
+				t.Fatalf("%s is not among the email tool definitions", tt.tool)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(desc, want) {
+					t.Errorf("%s description lacks %q: %q", tt.tool, want, desc)
+				}
+			}
+		})
+	}
+}
+
 func TestServiceResolveAccountHonorsBinding(t *testing.T) {
 	svc, _, _ := twoAccountService(t)
 	tests := []struct {
