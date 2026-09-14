@@ -168,17 +168,26 @@ A generated output tool that refuses returns a tool error and commits
 nothing. A validation refusal lists every failing projection at once,
 each over-budget one with its overage and a fix sized to it. Because
 the turn around a refused write can still end normally, each wake
-tallies its tool calls per tool. A wake in which every call to a
-durable write tool — a declared output's generated tool, or
-`contact_dossier_write` — failed and none succeeded is recorded as an
-unpublished write. `loop_status` names the loop in its health rollup
-and lists the tool, rejection count, last rejection text, and
-conversation on the loop's row (`unpublished_writes`). The
-`system_health` loop census carries the same line and degrades the
-loops row until a later completed wake lands that write. Outcomes are
-tallied per tool, not per document: for `contact_dossier_write`, a wake
-that lands one contact's dossier clears the record even if another
-contact's was refused on every attempt. A wake that ends in a runner
+tallies its tool calls per tool and per target, the document a call
+writes. A declared output's generated tool writes one document, so it
+has one, empty target; `contact_dossier_write` writes one dossier per
+`contact_id`, so each contact is its own target. A wake in which every
+call to a durable write tool for one target failed and none succeeded
+is recorded as an unpublished write for that tool and target.
+`loop_status` names the loop in its health rollup and lists the tool,
+target, rejection count, last rejection text, and conversation on the
+loop's row (`unpublished_writes`). The `system_health` loop census
+carries the same line and degrades the loops row until a later
+completed wake lands that write for the same target. Landing Alice's
+dossier does not clear a refused write of Bob's. A `contact_id` sent
+upper-case, braced, or without hyphens is keyed as the contact it
+spells. A dossier call whose `contact_id` spells no contact, or names
+one the tool refuses as the wrong record (not an active contact, or a
+second dossier for a person another record already holds one for),
+wrote no dossier of its own. It has no target and is judged per tool:
+it is recorded only when the wake landed no dossier, and any later
+landed dossier clears it. A loop keeps at most 16 entries and drops
+the oldest first. A wake that ends in a runner
 error is not observed, so it neither records nor clears an entry, even
 when it landed the write before failing. The record lives in
 memory; the wake's `iteration_complete` journal event keeps

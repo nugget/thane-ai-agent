@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -431,7 +432,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 				sort.Strings(unexpected)
 				return "", fmt.Errorf("contact_dossier_write accepts only contact_id, status_line, teaser, digest, and full; remove unsupported parameter(s) [%s]—Go derives document identity and structure, and tracks revisions automatically", strings.Join(unexpected, ", "))
 			}
-			return contactTools.WriteDossier(ctx, contacts.DossierWriteArgs{
+			result, err := contactTools.WriteDossier(ctx, contacts.DossierWriteArgs{
 				ContactID:    stringArg(args, "contact_id"),
 				StatusLine:   stringArg(args, "status_line"),
 				Teaser:       stringArg(args, "teaser"),
@@ -439,6 +440,12 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 				Full:         stringArg(args, "full"),
 				ReceiptScope: documentRevisionScope(ctx),
 			})
+			if errors.Is(err, contacts.ErrDossierTargetRefused) {
+				// The contact_id was refused, not the dossier: a loop must
+				// not wait for that contact_id to land.
+				return result, &ErrTargetRefused{Err: err}
+			}
+			return result, err
 		},
 	})
 }

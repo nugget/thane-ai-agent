@@ -33,6 +33,14 @@ type ToolOutcome struct {
 	// maxToolOutcomeErrorRunes. Guard refusals never overwrite it: the
 	// error that kept the model retrying is the one worth reading.
 	LastError string
+	// Targets breaks the tally down by the document each call wrote, as
+	// [Config.TargetKey] names it; the counts above are its sums. A tool
+	// that writes one document per argument — a dossier per contact —
+	// can land one target and never land another, which the sums hide.
+	// Without a TargetKey there is one entry, under the empty target. A
+	// call refused with [tools.ErrTargetRefused] wrote no document of its
+	// own, so it is also under the empty target.
+	Targets map[string]TargetOutcome
 }
 
 const (
@@ -54,11 +62,22 @@ const (
 // memory behind the unchanged-arguments note. It lives on the stack of
 // one Run like every other piece of per-run engine state.
 type toolLedger struct {
-	outcomes map[string]ToolOutcome
-	// lastFailed holds, per tool, that tool's most recent failed call. A
-	// success clears the entry, so the note only ever compares
-	// consecutive failures of one tool.
-	lastFailed map[string]failedCall
+	// targets holds each tool's tally per target; a tool's own counts
+	// are summed from it when the tally is read.
+	targets targetTally
+	// lastError holds each tool's most recent execution error, whichever
+	// target that call wrote.
+	lastError map[string]string
+	// lastFailed holds, per tool and target, the most recent failed call
+	// for that document. A success for the target clears the entry, so
+	// the note only ever compares consecutive failures of one document,
+	// however many other targets land in between.
+	lastFailed map[callTarget]failedCall
+	// refused holds the targets whose latest executed call the tool
+	// refused as a document ([tools.ErrTargetRefused]). A guard refusal
+	// of such a target repeats a refused call, so it is charged to the
+	// empty target as that call was.
+	refused map[callTarget]bool
 }
 
 // failedCall is what the unchanged-arguments note compares against: the
@@ -70,47 +89,72 @@ type failedCall struct {
 
 func newToolLedger() *toolLedger {
 	return &toolLedger{
-		outcomes:   make(map[string]ToolOutcome),
-		lastFailed: make(map[string]failedCall),
+		targets:    make(targetTally),
+		lastError:  make(map[string]string),
+		lastFailed: make(map[callTarget]failedCall),
+		refused:    make(map[callTarget]bool),
 	}
 }
 
-// blocked records a call the repeat guard refused without running.
-func (t *toolLedger) blocked(tool string) {
-	o := t.outcomes[tool]
-	o.Failures++
-	o.Blocked++
-	t.outcomes[tool] = o
+// blocked records a call the repeat guard refused without running,
+// charged to the target the call would have written, or to the empty
+// target when the tool refused that target's latest executed call as a
+// document.
+func (t *toolLedger) blocked(tool, target string) {
+	charged := target
+	if t.refused[callTarget{tool: tool, target: target}] {
+		charged = ""
+	}
+	t.targets.update(tool, charged, func(o *TargetOutcome) {
+		o.Failures++
+		o.Blocked++
+	})
 }
 
 // observe records one call that passed the repeat guard and returns the
 // tool result the model should see. That is result unchanged, except
-// when the call failed and resent a value the tool's previous failure
-// also carried, with both errors naming that argument: then the
-// unchanged-arguments note is appended, naming those arguments. A call
-// refused as unavailable is tallied but never annotated — its arguments
-// were not what was refused.
-func (t *toolLedger) observe(tool string, args map[string]any, toolErr error, result string) string {
-	o := t.outcomes[tool]
-	o.Calls++
+// when the call failed and resent a value the previous failure for the
+// same target also carried, with both errors naming that argument: then
+// the unchanged-arguments note is appended, naming those arguments. A
+// call refused as unavailable is tallied but never annotated — its
+// arguments were not what was refused. The call is tallied under target,
+// the document it wrote, unless the tool refused that document itself
+// ([tools.ErrTargetRefused]): then it wrote no document of its own and is
+// tallied under the empty target.
+func (t *toolLedger) observe(tool, target string, args map[string]any, toolErr error, result string) string {
+	key := callTarget{tool: tool, target: target}
 	if toolErr == nil {
-		o.Successes++
-		t.outcomes[tool] = o
-		delete(t.lastFailed, tool)
+		t.targets.update(tool, target, func(o *TargetOutcome) {
+			o.Calls++
+			o.Successes++
+		})
+		delete(t.lastFailed, key)
+		delete(t.refused, key)
 		return result
 	}
 	errText := toolErr.Error()
-	o.Failures++
-	o.LastError = clipRunes(errText, maxToolOutcomeErrorRunes)
-	t.outcomes[tool] = o
+	clipped := clipRunes(errText, maxToolOutcomeErrorRunes)
+	charged := target
+	if isTargetRefusal(toolErr) {
+		t.refused[key] = true
+		charged = ""
+	} else {
+		delete(t.refused, key)
+	}
+	t.targets.update(tool, charged, func(o *TargetOutcome) {
+		o.Calls++
+		o.Failures++
+		o.LastError = clipped
+	})
+	t.lastError[tool] = clipped
 
 	var unavailable *tools.ErrToolUnavailable
 	if errors.As(toolErr, &unavailable) {
 		return result
 	}
 	current := failedCall{args: canonicalArgs(args), errText: errText}
-	unchanged := unchangedNamedKeys(t.lastFailed[tool], current)
-	t.lastFailed[tool] = current
+	unchanged := unchangedNamedKeys(t.lastFailed[key], current)
+	t.lastFailed[key] = current
 	if len(unchanged) == 0 {
 		return result
 	}
@@ -119,12 +163,12 @@ func (t *toolLedger) observe(tool string, args map[string]any, toolErr error, re
 
 // snapshot returns a copy of the tally, or nil when no tool was called.
 func (t *toolLedger) snapshot() map[string]ToolOutcome {
-	if len(t.outcomes) == 0 {
+	if len(t.targets) == 0 {
 		return nil
 	}
-	out := make(map[string]ToolOutcome, len(t.outcomes))
-	for name, o := range t.outcomes {
-		out[name] = o
+	out := make(map[string]ToolOutcome, len(t.targets))
+	for name := range t.targets {
+		out[name] = t.targets.outcome(name, t.lastError[name])
 	}
 	return out
 }

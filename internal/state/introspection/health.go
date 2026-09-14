@@ -84,7 +84,8 @@ type LoopCensus struct {
 	// UnpublishedWrites names the loops holding a durable write a
 	// completed wake never landed, each as the line loop_status's health
 	// rollup carries: "name (wake at -2h ended without publishing <tool>
-	// after N rejections)". Such a loop is also counted in Degraded; this
+	// [for contact <id>] after N rejections)". Such a loop is also
+	// counted in Degraded; this
 	// is the why, because the turn ended normally and no error counter
 	// moved. Capped like DegradedLoops.
 	UnpublishedWrites          []string `json:"unpublished_writes,omitempty"`

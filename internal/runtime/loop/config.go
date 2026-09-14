@@ -672,12 +672,13 @@ type Status struct {
 	LastError string `json:"last_error,omitempty"`
 	// ConsecutiveErrors is the number of consecutive failed iterations.
 	ConsecutiveErrors int `json:"consecutive_errors"`
-	// UnpublishedWrites holds, per durable write tool, the latest wake
-	// that ended without landing that write while the turn itself
-	// completed normally — so ConsecutiveErrors and LastError never see
-	// it. A later completed wake in which the tool succeeds clears its
-	// entry; a wake ending in a runner error neither records nor clears.
-	// Sorted by tool name.
+	// UnpublishedWrites holds, per durable write tool and target, the
+	// latest wake that ended without landing that write while the turn
+	// itself completed normally — so ConsecutiveErrors and LastError
+	// never see it. A later completed wake in which the tool succeeds for
+	// the same target clears its entry; a wake ending in a runner error
+	// neither records nor clears. At most 16 entries, oldest dropped.
+	// Sorted by tool, then target.
 	UnpublishedWrites []UnpublishedWrite `json:"unpublished_writes,omitempty"`
 	// UnpublishedWakes counts the wakes since the loop started that
 	// ended with at least one durable write unpublished.

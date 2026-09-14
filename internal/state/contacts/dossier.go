@@ -184,7 +184,7 @@ func (t *Tools) resolveDossierContact(rawID string) (*Contact, uuid.UUID, error)
 	}
 	contact, err := t.store.Get(id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, uuid.Nil, fmt.Errorf("contact_id %s is not an active structured contact; call contact_lookup to resolve the intended contact instead of retrying this UUID", id)
+		return nil, uuid.Nil, targetRefusal{fmt.Errorf("contact_id %s is not an active structured contact; call contact_lookup to resolve the intended contact instead of retrying this UUID", id)}
 	}
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("load structured contact %s: %w", id, err)

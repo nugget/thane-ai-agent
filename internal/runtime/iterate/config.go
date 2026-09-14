@@ -164,6 +164,15 @@ type Config struct {
 	// reply awaited is told to stop calling tools and answer, because on
 	// any other turn that instruction reads as "abandon the work".
 	ReplyAwaited bool
+
+	// TargetKey names the document a tool call writes, so that each
+	// tool's outcome is also tallied per target ([ToolOutcome.Targets]).
+	// It is called for every call the model makes, including calls the
+	// repeat guard refuses. Nil gives every call the empty target. A call
+	// the tool refuses with [tools.ErrTargetRefused] is tallied under the
+	// empty target whatever TargetKey named, and so is a guard refusal of
+	// a target whose latest executed call was refused that way.
+	TargetKey func(tool string, args map[string]any) string
 }
 
 // applyDefaults fills zero-valued fields with their defaults.

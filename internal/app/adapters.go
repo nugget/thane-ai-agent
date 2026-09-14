@@ -1237,6 +1237,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		UsageRole:             req.UsageRole,
 		UsageTaskName:         req.UsageTaskName,
 		FallbackContent:       req.FallbackContent,
+		TargetKey:             req.TargetKey,
 		SystemPrompt:          req.SystemPrompt,
 		PromptMode:            req.PromptMode,
 		SuppressAlwaysContext: req.SuppressAlwaysContext,

@@ -279,6 +279,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
+				// Named before the repeat guard, so a refused call is
+				// charged to the document it would have written.
+				target := cfg.targetOf(toolName, tc.Function.Arguments)
 
 				// Marshal arguments to JSON.
 				argsJSON := ""
@@ -303,7 +306,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						Content:    cfg.repeatedCallMessage(toolName, toolCallCounts[callKey]),
 						ToolCallID: tc.ID,
 					})
-					ledger.blocked(toolName)
+					ledger.blocked(toolName, target)
 					toolLoopDetected = true
 					continue // skip execution; move to next tool in batch
 				}
@@ -373,7 +376,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						batchHasNonMetaTool = true
 					}
 				}
-				result = ledger.observe(toolName, tc.Function.Arguments, toolErr, result)
+				result = ledger.observe(toolName, target, tc.Function.Arguments, toolErr, result)
 
 				// --- Callback: tool call done ---
 				// Pass toolCtx so the callback can access values injected

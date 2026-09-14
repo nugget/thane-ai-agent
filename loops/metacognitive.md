@@ -97,7 +97,8 @@ The "Internal Operations Panel" block in your context is refreshed
 every iteration: the subsystem annunciator (each row ok, degraded, or
 failed, with the reason precomputed), the loop census with its busiest
 wakers and any loop whose wake ended without landing a durable write
-(its `unpublished_writes` line names the loop and the tool), work-queue
+(its `unpublished_writes` line names the loop, the tool, and for a
+dossier the contact), work-queue
 depths, flagged runaway documents, host vitals, the
 process's own recent warnings and errors with their hourly rates, and
 the day's request/error/latency rollup. Read it first. It costs you
@@ -201,9 +202,9 @@ content go — purpose-built loops own that now.
    voice, and it goes to core, which curates the service loops and can
    act. Escalate with evidence: name the subsystem or loop, the
    observed numbers against the baseline, and what you already ruled
-   out. For an unpublished write, add the tool, the rejection text, and
-   the conversation_id, so core can see what was lost and send it
-   again. You observe and judge; core decides and acts.
+   out. For an unpublished write, add the tool, its target when it has
+   one (the contact of a dossier), the rejection text, and the
+   conversation_id, so core can see what was lost and send it again. You observe and judge; core decides and acts.
 5. **Record** — Call publish_output_metacognitive_state with all three
    projections together. The `full` body is your working memory,
    exactly as before: refreshed baselines, concerns opened or closed,

@@ -85,9 +85,9 @@ func secondDossierError(self ContactForkMember, held []nameSibling) error {
 		verb = "already have one each"
 	}
 	holder := held[0]
-	return fmt.Errorf("contact_dossier_write refused to start a second dossier: %s (%s, %s) has no dossier yet, and %s %s. They share the name %q and %s, so they are likely one person saved twice, and a second dossier would split what is known about them. %s. If they are different people, write nothing and report both records to the operator, who can rename one through CardDAV or /v1/contacts. Nothing was written",
+	return targetRefusal{fmt.Errorf("contact_dossier_write refused to start a second dossier: %s (%s, %s) has no dossier yet, and %s %s. They share the name %q and %s, so they are likely one person saved twice, and a second dossier would split what is known about them. %s. If they are different people, write nothing and report both records to the operator, who can rename one through CardDAV or /v1/contacts. Nothing was written",
 		echoForRefusal(self.Name), self.TrustZone, self.ContactID, strings.Join(named, " and "), verb,
-		echoForRefusal(holder.Key), holder.Evidence, secondDossierAdvice(self, holder))
+		echoForRefusal(holder.Key), holder.Evidence, secondDossierAdvice(self, holder))}
 }
 
 // secondDossierAdvice says what to do when the two records are one

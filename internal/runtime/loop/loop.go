@@ -82,6 +82,12 @@ type Request struct {
 	// mid-turn input. Runtime-only.
 	PullInput func(ctx context.Context) []llm.Message `yaml:"-" json:"-"`
 
+	// TargetKey names the document a tool call writes, so the runner's
+	// tool tally also counts each tool per target
+	// ([ToolOutcome.Targets]). The loop sets it on every turn it
+	// prepares. Nil gives every call the empty target. Runtime-only.
+	TargetKey func(tool string, args map[string]any) string `yaml:"-" json:"-"`
+
 	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
@@ -2425,6 +2431,9 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		req.RuntimeTools = append(req.RuntimeTools, sleepTool)
 	}
 	req.FallbackContent = firstNonEmpty(l.requestOverride.FallbackContent, req.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent)
+	// The loop owns which document each durable write targets, because
+	// it judges the wake's writes per target, so no caller supplies it.
+	req.TargetKey = writeTarget
 	req.MaxIterations = firstPositiveInt(l.requestOverride.MaxIterations, req.MaxIterations)
 	req.MaxOutputTokens = firstPositiveInt(l.requestOverride.MaxOutputTokens, req.MaxOutputTokens)
 	req.ToolTimeout = firstPositiveDuration(l.requestOverride.ToolTimeout, req.ToolTimeout)

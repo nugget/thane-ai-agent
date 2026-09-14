@@ -37,7 +37,9 @@ until the publish lands. A wake that ends with every call to its output
 tool refused is recorded as unpublished — `loop_status` and
 `system_health` name the loop, the tool, and the rejection count — and
 the notifies and mailbox items that woke it are not delivered again, so
-whatever they carried is lost with the unpublished write.
+whatever they carried is lost with the unpublished write. A
+`contact_dossier_write` is judged per contact the same way: landing one
+contact's dossier does not publish another's that was refused.
 
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,

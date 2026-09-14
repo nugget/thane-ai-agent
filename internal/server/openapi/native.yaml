@@ -2250,12 +2250,13 @@ components:
         unpublished_writes:
           type: array
           readOnly: true
-          description: Per durable write tool (a declared output's generated tool, or contact_dossier_write), the latest wake that ended without landing that write — every call rejected, none succeeded — while the turn itself completed normally, so consecutive_errors never counts it. A later completed wake in which the tool succeeds clears the entry; a wake that ends in an error is not observed. Outcomes are per tool, so for contact_dossier_write one contact's landed dossier clears the entry. Sorted by tool; omitted when empty.
+          description: Per durable write tool (a declared output's generated tool, or contact_dossier_write) and target, the latest wake that ended without landing that write — every call for that target rejected, none succeeded — while the turn itself completed normally, so consecutive_errors never counts it. The target is the canonical contact_id for contact_dossier_write and empty for a declared output's tool, which writes one document. A later completed wake in which the tool succeeds for the same target clears the entry; landing another contact's dossier does not. A dossier call whose contact_id spells no contact, or names one the tool refuses as the wrong record (not an active contact, or a second dossier for one person), writes no dossier of its own, so it has no target; it is recorded only when the wake landed no dossier, and any later landed dossier clears it. A wake that ends in an error is not observed. At most 16 entries; the oldest are dropped. Sorted by tool, then target; omitted when empty.
           items:
             type: object
             properties:
               tool: { type: string }
-              failures: { type: integer, description: "Rejected calls in that wake, repeat-guard refusals included." }
+              target: { type: string, description: "The canonical contact_id for contact_dossier_write. Omitted for a declared output's tool, and for dossier calls that wrote no dossier of their own." }
+              failures: { type: integer, description: "Rejected calls for this tool and target in that wake, repeat-guard refusals included." }
               last_error: { type: string }
               at: { type: string, format: date-time }
               conversation_id: { type: string }
@@ -2400,12 +2401,13 @@ components:
           description: Most recent error text; null when clean.
         unpublished_writes:
           type: array
-          description: Durable writes a completed wake never landed, which consecutive_errors cannot show because the turn ended normally. Omitted when none.
+          description: Durable writes a completed wake never landed, one per tool and target, which consecutive_errors cannot show because the turn ended normally. Omitted when none.
           items:
             type: object
             properties:
               tool: { type: string }
-              failures: { type: integer, description: "Rejected calls in that wake, repeat-guard refusals included." }
+              target: { type: string, description: "The canonical contact_id for contact_dossier_write. Omitted for a declared output's tool, and for dossier calls that wrote no dossier of their own." }
+              failures: { type: integer, description: "Rejected calls for this tool and target in that wake, repeat-guard refusals included." }
               last_error: { type: string }
               at_delta: { type: string, description: "Signed delta to when the wake ended, e.g. \"-2h\"." }
               conversation_id: { type: string }

@@ -86,6 +86,12 @@ type Request struct {
 	FallbackContent string                              `json:"-"` // Optional static fallback text when the run yields no content
 	PromptMode      agentctx.PromptMode                 `json:"-"` // Optional system-prompt shape override.
 
+	// TargetKey names the document a tool call writes, so that
+	// Response.ToolOutcomes also tallies each tool per target (see
+	// iterate.Config.TargetKey). The loop runtime sets it on the turns it
+	// prepares. Nil gives every call the empty target.
+	TargetKey func(tool string, args map[string]any) string `json:"-"`
+
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
 	// prompt context externally.
@@ -2302,6 +2308,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		NudgePrompt:     prompts.EmptyResponseNudge,
 		FallbackContent: firstNonEmpty(req.FallbackContent, prompts.EmptyResponseFallback),
 		ReplyAwaited:    replyAwaited(req.MessageOrigin),
+		TargetKey:       req.TargetKey,
 
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via tag_activate are reflected.

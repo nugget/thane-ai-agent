@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,9 @@ type scriptedExecutor struct {
 type scriptStep struct {
 	result string
 	err    string
+	// targetRefused returns err as a refusal of the target the call
+	// named ([tools.ErrTargetRefused]).
+	targetRefused bool
 }
 
 func (s *scriptedExecutor) Execute(_ context.Context, name, _ string) (string, error) {
@@ -43,7 +47,11 @@ func (s *scriptedExecutor) Execute(_ context.Context, name, _ string) (string, e
 		idx = len(steps) - 1
 	}
 	if steps[idx].err != "" {
-		return "", errors.New(steps[idx].err)
+		err := errors.New(steps[idx].err)
+		if steps[idx].targetRefused {
+			return "", &tools.ErrTargetRefused{Err: err}
+		}
+		return "", err
 	}
 	return steps[idx].result, nil
 }
@@ -145,8 +153,9 @@ func TestToolOutcomesTally(t *testing.T) {
 			}
 			result, _ := runScript(t, cfg, calls)
 
-			if got := result.ToolOutcomes[tool]; got != tc.want {
-				t.Errorf("outcome = %+v, want %+v", got, tc.want)
+			// No TargetKey is set, so the breakdown is one empty target.
+			if got, want := result.ToolOutcomes[tool], withEmptyTarget(tc.want); !reflect.DeepEqual(got, want) {
+				t.Errorf("outcome = %+v, want %+v", got, want)
 			}
 		})
 	}
