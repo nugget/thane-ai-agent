@@ -85,8 +85,11 @@ ordinary documents instead.
   the operator's own message, `contact_save` will not add one to a
   contact above `known` or to the operator's own contact; no turn may
   give a second holder to a value such a contact already holds; and
-  `contact_forget` will not remove such a contact. `contacts_save`
-  carries the full rule and what to do when refused.
+  `contact_forget` will not remove such a contact. The first of those
+  rules also covers the device and channel that carry such a contact's
+  notifications, and its nickname, and no turn may give another contact
+  a name or nickname such a contact already goes by. `contacts_save`
+  carries the full rules and what to do when refused.
 
 - **Email results already carry the directory's answer.** Every
   address in an `email_list`, `email_search`, or `email_read` result
@@ -105,8 +108,8 @@ ordinary documents instead.
   property values; only exact-duplicate (property, value) triples
   no-op), and origin arrays replace. There's no "update" tool
   separate from save; the save IS the update. Outside the operator's
-  own message, addresses and numbers are additive only on a `known`
-  contact that is not the operator's. By contrast, `contact_forget`
+  own message, addresses, numbers, and notification routing facts are
+  additive only on a `known` contact that is not the operator's. By contrast, `contact_forget`
   removes one `known` contact from every query and gate and names the
   record it removed; it refuses contacts above `known`, the operator's
   own, and ones bound to a Home Assistant person. Lookup before
@@ -270,23 +273,25 @@ now."
 name: contacts_save
 tags: [contacts_save]
 kind: trailhead
-teaser: "Create, update, or remove ordinary contact data; zones, keys, and elevated contacts' addresses stay operator-custodied."
+teaser: "Create, update, or remove ordinary contact data; zones, keys, and elevated contacts' addresses, notification routing, and names stay operator-custodied."
 ---
 
 # Save
 
 You're mutating ordinary directory data. Two tools cover this surface:
-one writes and one deletes. Trust zones, keys, identity bindings, and
-the addresses and numbers that decide who a message is from are not
-ordinary contact data. Go refuses to change them here, and a refusal
-saves or removes nothing and says what to do instead.
+one writes and one deletes. Trust zones, keys, identity bindings, the
+addresses and numbers that decide who a message is from, the facts
+that route a person's notifications, and the names people are found
+by are not ordinary contact data. Go refuses to change them here, and
+a refusal saves or removes nothing and says what to do instead.
 
 ## Custody
 
 Each rule below keeps authority with the operator, and they share one
 recovery: tell the operator exactly what should change on which
 contact, and the operator makes the change through CardDAV or the
-contacts API.
+contacts API. Where a rule is lifted in the operator's own message,
+the operator can instead ask you for the change there.
 
 ### Trust zones
 
@@ -363,14 +368,93 @@ someone else, save it on that person's own contact instead. Retry
 without the refused facts to save the rest. Never add an address to
 get a send through; `email` explains why that cannot work.
 
+### Notification routing and names
+
+Two facts decide where a person's notifications go.
+`notification_preference` names the channel they prefer, such as
+signal. `ha_companion_app` names their Home Assistant device by its
+notify service, such as mobile_app_bob_pixel: that device receives
+Home Assistant push, a tap on its buttons answers their decision
+requests, and a decision request whose channel fails falls back to it.
+Delivery reads each fact in any letter case of its key, so an
+`HA_COMPANION_APP` the operator's contacts client wrote counts, and
+uses only the first value.
+
+On a contact above `known` or the operator's own, adding either
+follows the first rule for addresses: `contact_save` refuses it
+outside the operator's own message, and `contact_import_vcf` drops it
+from a merge into such a contact. There is no second-holder rule for
+them: a household can share a tablet, and two people can prefer the
+same channel. Re-saving a value the contact already has, under any
+letter case of the key, changes nothing.
+
+When the operator tells you in their own message that someone has a
+new device, save it on that person:
+
+```json
+{
+  "name": "Bob Smith",
+  "facts": {"ha_companion_app": "mobile_app_bob_pixel"}
+}
+```
+
+Facts are additive and delivery uses the first value, so if Bob
+already had a device, the result says the new one was recorded but
+Home Assistant push still goes to the old one. Tell the operator that,
+and which value to remove; they remove it through CardDAV or the
+contacts API. Only a result without that note means Home Assistant
+push, including `ha_notify` and a decision request whose channel
+fails, now reaches the new device; `send_notification` still tries
+Bob's `notification_preference`, then a channel he is active on,
+first. Outside the operator's own message, on a contact above `known`
+or the operator's own (a wake, a loop, or Bob telling you about his
+own new phone), save nothing, and tell the operator what should change
+on whom.
+
+A name or nickname is how a person is found: notifications, decision
+requests, and lookups try the exact name, then the nickname, then a
+text search, and so does conversation context when a channel has not
+bound the sender to a contact. A second contact answering to a
+person's name would take their notifications and decision requests.
+
+- **Changing the nickname** of a contact above `known` or of the
+  operator's own follows the first rule for addresses: only in the
+  operator's own message. A change only in the case of ASCII letters
+  is not a change.
+- **A name or nickname someone with authority goes by.** In every
+  turn, the operator's own included, `contact_save` refuses a new
+  contact's name, or any contact's nickname, that an admin,
+  household, trusted, or operator contact already goes by as its name
+  or nickname, compared as lookups compare them. `contact_import_vcf`
+  leaves such a card out and does not fill in such a nickname. Save
+  the new person under a fuller name ("Bob Jones", not "Bob") or
+  without the nickname; if you meant the existing person, save to
+  their contact by its exact name. On a contact that already exists,
+  leave the nickname off or pick one nobody with authority goes by,
+  since a fuller name there would create a second contact. Two people
+  sharing a name or nickname on purpose is a card edit the operator
+  makes.
+- **Descriptions are not names.** The text search also reaches a
+  contact through its note, org, and AI summary, which nothing
+  protects. Address a notification or decision request by the
+  person's exact name or nickname, never by a description.
+
+`kind` (individual, group, org, location) describes a contact and
+decides nothing: no gate, notification route, or operator check reads
+it.
+
 On an older configuration the operator is found by name rather than by
 UUID. There, `contact_save` also refuses, in every turn, to create a
 contact or set a nickname that carries the name Thane recognizes the
-operator by on anyone but the operator, and `contact_import_vcf` leaves
-such a card out, or leaves the nickname off a card it merges, because a
-second contact with that name could take the operator's identity. If the refused contact is the operator, save to
-their existing contact, which `contact_owner` returns; if it is someone
-else, use a fuller name.
+operator by on anyone but the operator, and to replace that nickname
+on the operator's own contact when the contact answers to the name
+only through it (a change of case is fine); `contact_import_vcf`
+leaves such a card out, or leaves the nickname off a card it merges.
+A second contact with that name could take the operator's identity,
+and an operator contact without it would not be found as the operator
+at the next start. If the refused contact is the operator, save to
+their existing contact, which `contact_owner` returns, and leave that
+nickname alone; if it is someone else, use a fuller name.
 
 ### Fact keys
 
@@ -420,13 +504,17 @@ overwrite**, **facts are additive even across duplicate keys** (a
 new value for an existing key is added as another property value
 rather than replacing the prior one — the contact ends up with
 multiple `email` / `phone` / etc. entries; only exact-duplicate
-(property, value) triples no-op), and **origin arrays are
+(property, value) triples no-op, and a routing fact's value no-ops
+under any letter case of its key), and **origin arrays are
 replaced** when provided (pass `[]` to clear). To leave a field
-alone, omit it. Addresses and numbers follow the Custody rules
-above. No model-facing tool removes or replaces a single property
-value: to replace or remove an address, number, or other multi-valued
-property, read the record, decide what should remain, and ask the
-operator to edit the card through CardDAV or the contacts API.
+alone, omit it. Addresses, numbers, routing facts, and nicknames
+follow the Custody rules above. Notifications use only the first value
+of each routing fact, so a second `ha_companion_app` is recorded
+without moving delivery, and the result says so. No model-facing tool
+removes or replaces a single property value: to replace or remove an
+address, number, device, or other multi-valued property, read the
+record, decide what should remain, and ask the operator to edit the
+card through CardDAV or the contacts API.
 
 ## Standard keys map to vCard properties automatically
 

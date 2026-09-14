@@ -260,7 +260,10 @@ from it, and on the operator's own contact it lends the operator's
 authority, because a channel conversation bound to that contact is
 attended. Which contact holds an address is therefore authority, not
 contact data, and Go keeps it with the operator the way it keeps trust
-zones and keys. The model-facing contact tools (`contact_save`,
+zones and keys. The facts that choose where a contact's notifications go,
+and the names the resolvers find a contact by, are authority for the same
+reason: whoever controls them receives that person's notifications and
+answers their decision requests. The model-facing contact tools (`contact_save`,
 `contact_import_vcf`, `contact_forget`) enforce the rules below. CardDAV,
 `/v1/contacts`, and `thane init` write the store directly and keep full
 operator power.
@@ -281,7 +284,11 @@ operator power.
   `contact_save` refuses to create a contact, or set a nickname, that
   carries the owner name on any contact but the operator's, and
   `contact_import_vcf` leaves such a card or nickname out, because the
-  next resolution could pick the model's contact as the operator.
+  next resolution could pick the model's contact as the operator. For the
+  same reason `contact_save` refuses, in every turn, to replace the
+  nickname through which the operator's own contact answers to the owner
+  name; a case change is allowed, and so is any nickname when the
+  formatted name is itself the owner name.
 - **Authority holders.** In every turn, no model writer adds a value that
   another active contact already holds when that contact is above `known`
   or is the operator's. Equivalence mirrors the resolver: email compares
@@ -289,6 +296,52 @@ operator power.
   `signal:`, with and without a leading `+`. A duplicate held only by
   `known` contacts stays allowed, because it moves recognition between low
   zones and never authority.
+- **Notification routing.** `notification_preference` picks the provider
+  that `send_notification`, `request_human_decision`, and
+  `request_human_escalation` deliver through, and `ha_companion_app` is
+  the Home Assistant notify service, used verbatim: the device that
+  receives HA push, `ha_notify` included, and whose action taps answer
+  decision requests. Both facts, in any letter case, follow the
+  custodied-target rule and its lift. There is no holder rule, because a
+  shared household device or a common channel moves no one's authority,
+  and a value the contact already carries under any case of the key is a
+  no-op. The router and the HA sender read each fact through
+  `contacts.FactValues`: the exact lowercase key first, then other
+  spellings in sorted order, and only the first value counts; a
+  hyphenated or otherwise renamed key does not route. CardDAV and
+  `/v1/contacts` upper-case property names, so their rows route too. No
+  model-facing tool removes a routing value, so a save that records one
+  behind an existing value says in its result which value delivery still
+  uses.
+- **Names.** `ResolveContact` tries the exact formatted name, then the
+  nickname, then a text search. Notifications, decision requests, and
+  lookups use it, and so does channel context for a sender no channel
+  bound to a contact. A nickname change on a custodied target follows the
+  target rule and its lift; "changed" folds ASCII letters only, as SQLite
+  `LOWER` does, after trimming, so a case-only edit is not a change. In
+  every turn, no model writer gives a new contact a formatted name, or any
+  contact a nickname, that another active contact above `known` or the
+  operator's own already uses as its formatted name or nickname, compared
+  with `LOWER` as the resolver compares them. The check runs in the
+  write's own transaction, so an operator promotion cannot land between
+  the check and the write. `contact_import_vcf` skips such a card, leaves
+  such a nickname off a merge, and never fills a nickname into a
+  custodied target; an import card that carries only names and cannot
+  resolve the operator counts every holder as one with authority. When
+  several active contacts share a nickname, `FindByNickname` returns one
+  above `known` first, then orders by ID. A string that reaches a contact
+  only through the search (its note, org, or AI summary) is not
+  protected, so the handle the operator is notified by belongs in their
+  formatted name or nickname.
+- **Kind.** `kind` stays model-writable, so nothing may gate on it: no
+  custody rule, notification route, or `IsOwner` decision reads it, and a
+  test pins that changing it on the operator's contact moves neither.
+- **Context by bound ID.** Channel context for a conversation bound to a
+  contact resolves that contact by its ID, and looks the sender's name up
+  only when nothing was bound. A session origin whose contact ID no longer
+  resolves gets no contact context rather than a name match, so a name
+  another contact now answers to cannot redirect a bound conversation's
+  context.
 - **Removal.** `contact_forget` refuses contacts above `known`, the
   operator's own contact, and contacts bound to a Home Assistant person, in
   every turn. It resolves the name once, deletes by ID only while the
@@ -312,21 +365,27 @@ operator power.
 
 A `contact_save` refusal saves nothing and emits no contact mutation. It
 logs one warning, `contact identity custody refused`, with the contact ID,
-zone, rule, properties, holder ID, and the turn's request, conversation,
-and loop IDs. Import drops the refused values, keeps the rest of the card,
-logs the same warning (marked `dry_run` for a preview), and counts the drops
-in its result; its rows carry the turn's provenance under the source
+zone, rule (`zone`, `operator`, or `holder`), properties (`EMAIL`, `TEL`,
+`IMPP`, a routing key, or `FN` or `NICKNAME` for a name), holder ID, and
+the turn's request, conversation, and loop IDs. Import drops the refused
+values, keeps the rest of the card, skips a card that would create a
+contact under a name or nickname a contact with authority goes by, leaves
+such a nickname off a merge, logs the same warning (marked `dry_run` for a
+preview), and counts the drops in its result, naming each skipped card;
+its rows carry the turn's provenance under the source
 `contact_import_vcf`. A forget refusal logs the same warning with the
-contact ID, zone, rule, and the turn's request, conversation, and loop IDs. The save
-also re-reads the contact's trust zone and deleted state inside its
-transaction and aborts if either changed since the tool read the record, so
-a model save can no longer revert an operator's concurrent zone change or
-resurrect a deleted contact. Import writes each card in one transaction
-that repeats the same re-read and the holder and target checks, so an
-operator write that lands between the import's check and its write cannot
-give a value a second holder: a newly refused value is dropped and counted,
-and a card whose merge target changed zone or was deleted writes nothing
-and is counted as skipped.
+contact ID, zone, rule, and the turn's request, conversation, and loop
+IDs. The save also re-reads the contact's trust zone, nickname, and
+deleted state inside its transaction and aborts if any changed since the
+tool read the record, so a model save can no longer revert an operator's
+concurrent zone or nickname change or resurrect a deleted contact. Import
+writes each card in one transaction that repeats the same re-read and the
+holder and target checks, so an operator write that lands between the
+import's check and its write cannot give a value a second holder: a newly
+refused value is dropped and counted, and a card whose merge target
+changed zone or nickname or was deleted, or whose name or nickname a
+contact with authority took meanwhile, writes nothing and is counted as
+skipped.
 
 `ContactToCard` withholds any stored property whose name carries vCard
 syntax, a control character or U+2028 included, or is a field the codec
@@ -342,7 +401,11 @@ a value stored before these rules cannot split a line either.
 
 The rules are forward-only. Addresses added to elevated contacts before
 they shipped keep matching, so reviewing them is the operator's job,
-through CardDAV or `/v1/contacts`.
+through CardDAV or `/v1/contacts`. The same holds for routing facts and
+for a name or nickname two contacts already share. One change reaches
+existing rows at upgrade: delivery now reads every letter case of a
+routing key, so an upper-case routing row, as CardDAV and `/v1/contacts`
+write it, starts routing wherever no lowercase row comes first.
 
 ## Known Behavioral Gaps
 
