@@ -222,6 +222,16 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 	if got, want := tool.Tags, []string{"contacts", "owner"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("tool tags = %#v, want %#v", got, want)
 	}
+	// The second-dossier refusal (#1545) is taught before the model hits
+	// it: a first write only, only for siblings that look like one
+	// person, both UUIDs, advice by authority, updates free.
+	for _, want := range []string{"first write of a contact's dossier is refused", "shares a name", "looks like the same person",
+		"merely share a name each keep their own dossier", "names both UUIDs", "forget the duplicate by contact_id",
+		"If they are different people, write nothing and report both to the operator", "never refused"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Errorf("contact_dossier_write description lacks %q: %s", want, tool.Description)
+		}
+	}
 	properties := tool.Parameters["properties"].(map[string]any)
 	for field, budget := range map[string]string{
 		"status_line": "Maximum 120 characters",

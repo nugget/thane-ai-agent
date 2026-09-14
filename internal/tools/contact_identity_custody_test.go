@@ -174,13 +174,22 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 			"notification_preference and ha_companion_app", "only the first value",
 		}},
 		{"contact_save nickname", parameterDescription("contact_save", "nickname"), []string{
-			"exact name, then nickname", "in every turn", "already goes by", "operator's own message", "above known",
+			"formatted name or nickname", "operator's own contact wins, then one above known", "in every turn", "already goes by", "operator's own message", "above known",
+		}},
+		{"contact_lookup", registry.Get("contact_lookup").Description, []string{
+			"formatted name or nickname", "operator's own contact wins, then one above known", "formatted-name match before a nickname match",
+			"search that must match exactly one contact", "known duplicate", "contact_directory",
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
-			"Forgot contact:", "above known", "operator's own contact", "Home Assistant person", "in every turn", "CardDAV",
+			"exactly one of name or contact_id", "as contact_lookup resolves it", "operator's own contact first, then one above known",
+			"Forgot contact:", "above known", "operator's own contact", "Home Assistant person", "in every turn", "by name or by contact_id", "CardDAV",
+			"known duplicate", "with their UUIDs",
 		}},
 		{"contact_forget name", parameterDescription("contact_forget", "name"), []string{
-			"exactly one contact", "contact_lookup",
+			"exactly one contact", "contact_lookup", "contact_id",
+		}},
+		{"contact_forget contact_id", parameterDescription("contact_forget", "contact_id"), []string{
+			"Canonical UUID", "exactly one of name or contact_id", "known duplicate", "contact_directory", "same contacts by contact_id as by name",
 		}},
 		{"contact_import_vcf", registry.Get("contact_import_vcf").Description, []string{
 			"above known", "already holds", "no turn lifts", "CardDAV", "dry_run reports the same counts",

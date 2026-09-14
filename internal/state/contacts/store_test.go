@@ -998,27 +998,39 @@ func TestResolveContact_NotFound(t *testing.T) {
 	}
 }
 
+// TestResolveContact_PriorityOrder pins #1545's precedence. It once
+// pinned the opposite: a record whose formatted name was the operator's
+// nickname won over the operator's own record, which is how a known
+// duplicate took the operator's name lookups, presence and dossier. A
+// record's authority now outranks the kind of match, so the operator's
+// nickname wins, whether the operator is pinned or only above known.
 func TestResolveContact_PriorityOrder(t *testing.T) {
-	store := newTestStore(t)
+	for _, pinned := range []bool{true, false} {
+		t.Run(fmt.Sprintf("operator pinned=%v", pinned), func(t *testing.T) {
+			store := newTestStore(t)
+			duplicate, err := store.Upsert(&Contact{FormattedName: "Ally", Kind: "individual"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			operator := &Contact{FormattedName: "Alice Operator", Kind: "individual", Nickname: "Ally", TrustZone: ZoneAdmin}
+			if pinned {
+				operator.TrustZone = ZoneKnown
+			}
+			if _, err := store.Upsert(operator); err != nil {
+				t.Fatal(err)
+			}
+			if pinned {
+				store.pinOperatorContactID(operator.ID)
+			}
 
-	// Create a contact named "Nugget" and a different contact with
-	// Nickname = "Nugget". The exact name match should win.
-	c1 := &Contact{FormattedName: "Nugget", Kind: "individual"}
-	if _, err := store.Upsert(c1); err != nil {
-		t.Fatal(err)
-	}
-
-	c2 := &Contact{FormattedName: "David McNett", Kind: "individual", Nickname: "Nugget"}
-	if _, err := store.Upsert(c2); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ResolveContact("Nugget")
-	if err != nil {
-		t.Fatalf("ResolveContact() error = %v", err)
-	}
-	if got.FormattedName != "Nugget" {
-		t.Errorf("FormattedName = %q, want %q (exact match should win)", got.FormattedName, "Nugget")
+			got, err := store.ResolveContact("Ally")
+			if err != nil {
+				t.Fatalf("ResolveContact() error = %v", err)
+			}
+			if got.ID != operator.ID || got.ID == duplicate.ID {
+				t.Errorf("ResolveContact(Ally) = %q, want the operator's record %q, not the duplicate", got.FormattedName, operator.FormattedName)
+			}
+		})
 	}
 }
 

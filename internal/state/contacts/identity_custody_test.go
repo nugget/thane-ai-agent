@@ -954,15 +954,19 @@ func TestLegacyOwnerName_NoSecondRecordClaimsIt(t *testing.T) {
 		if _, err := tools.store.FindByName("Alice"); !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("a refused create left Alice behind: %v", err)
 		}
-		// The negative control proves the refusal does the work: the same
-		// record written through the operator path wins the exact-name
-		// lookup notifications and decision requests resolve through.
+		// The negative control proves the refusal does the work: the store
+		// takes the same record through the operator path. Since #1545
+		// that record no longer wins the name notifications and decision
+		// requests resolve through; the pinned operator's nickname does.
 		alice, err := tools.store.UpsertWithProperties(&Contact{FormattedName: "Alice", Kind: "individual", TrustZone: ZoneKnown}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, err := tools.store.ResolveContact("Alice"); err != nil || got.ID != alice.ID || got.ID == operator.ID {
-			t.Errorf("ResolveContact(Alice) = %+v, %v, want the operator-path record", got, err)
+		if got, err := tools.store.FindByName("Alice"); err != nil || got.ID != alice.ID {
+			t.Errorf("FindByName(Alice) = %+v, %v, want the operator-path record", got, err)
+		}
+		if got, err := tools.store.ResolveContact("Alice"); err != nil || got.ID != operator.ID {
+			t.Errorf("ResolveContact(Alice) = %+v, %v, want the pinned operator", got, err)
 		}
 	})
 

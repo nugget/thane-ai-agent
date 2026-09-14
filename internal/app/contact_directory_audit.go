@@ -52,11 +52,17 @@ func contactDirectoryFindings(ctx context.Context, store *contacts.Store, limit 
 // rune boundary, ending a cut with "…" so the reader can tell the text
 // was shortened.
 func clipDirectoryField(s string) string {
-	if len(s) <= maxDirectoryFieldBytes {
+	return clipDirectoryFieldTo(s, maxDirectoryFieldBytes)
+}
+
+// clipDirectoryFieldTo cuts s to at most maxBytes on a rune boundary,
+// ending a cut with "…".
+func clipDirectoryFieldTo(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
 	const mark = "…"
-	end := maxDirectoryFieldBytes - len(mark)
+	end := max(maxBytes-len(mark), 0)
 	for end > 0 && !utf8.RuneStart(s[end]) {
 		end--
 	}

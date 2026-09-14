@@ -53,7 +53,7 @@ func (r *Registry) registerContactTools() {
 				},
 				"nickname": map[string]any{
 					"type":        "string",
-					"description": "Another name this contact answers to (vCard NICKNAME). Notifications, decision requests, lookups and conversation context find a contact by exact name, then nickname. Refused in every turn when an admin, household, trusted or operator contact already goes by it as its name or nickname. Outside the operator's own message, also refused as a change to the nickname of a contact above known or of the operator's own contact; a change only in the case of ASCII letters is not a change.",
+					"description": "Another name this contact answers to (vCard NICKNAME). Notifications, decision requests, lookups and conversation context find a contact by its formatted name or nickname; when several contacts answer to one name, the operator's own contact wins, then one above known, then a formatted-name match before a nickname match. Refused in every turn when an admin, household, trusted or operator contact already goes by it as its name or nickname. Outside the operator's own message, also refused as a change to the nickname of a contact above known or of the operator's own contact; a change only in the case of ASCII letters is not a change.",
 				},
 				"org": map[string]any{
 					"type":        "string",
@@ -107,13 +107,13 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_lookup",
-		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. An exact rich result includes the canonical contact UUID and, when configured, an exact contact_dossier_read call that safely probes the canonical dossier without constructing a document ref. Dossier prose is not structured identity authority. With no arguments, returns directory statistics.",
+		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. A name finds the contact whose formatted name or nickname it is, case-insensitive; when several contacts answer to it, the operator's own contact wins, then one above known, then a formatted-name match before a nickname match, then the lowest ID. Only when no contact answers to the name does it fall back to a search that must match exactly one contact. So a known duplicate whose formatted name or nickname a contact above known also goes by is never what that name returns. Resolution reads no given name or first word, though: \"Bob\" returns a known contact named just Bob, not a household Bob Smith, so check a first-name result against the contact_directory row of system_health, which names such pairs with their UUIDs. When contact dossiers are configured, a name result also carries the canonical contact UUID and an exact contact_dossier_read call that safely probes the canonical dossier without constructing a document ref. Dossier prose is not structured identity authority. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Exact name to look up (case-insensitive, also checks nickname)",
+					"description": "A contact's formatted name or nickname, case-insensitive. When several contacts answer to it, the one with authority wins, as the tool description orders it; with none, a search that must match exactly one contact.",
 				},
 				"query": map[string]any{
 					"type":        "string",
@@ -161,16 +161,19 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_forget",
-		Description: "Remove one known contact from the directory; a soft delete that no model-facing tool can undo. The name is resolved once (exact name, then nickname, then a search that must match exactly one contact), and the result names the record removed as \"Forgot contact: <name> (<zone>, <uuid>)\". Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied and refused in every turn, the operator's own message included, because forgetting one turns that person's email and Signal traffic into a stranger's; nothing is removed, and the operator deletes or demotes those through CardDAV or DELETE /v1/contacts/{id}.",
+		Description: "Remove one known contact from the directory; a soft delete that no model-facing tool can undo. Pass exactly one of name or contact_id. A name is resolved once, as contact_lookup resolves it: the contact whose formatted name or nickname it is, the operator's own contact first, then one above known, then a formatted-name match before a nickname match, then the lowest ID, else a search that must match exactly one contact. A contact_id removes exactly that active contact. The result names the record removed as \"Forgot contact: <name> (<zone>, <uuid>)\". Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied and refused in every turn, by name or by contact_id, the operator's own message included, because forgetting one turns that person's email and Signal traffic into a stranger's; nothing is removed, and the operator deletes or demotes those through CardDAV or DELETE /v1/contacts/{id}. A known duplicate whose formatted name or nickname a contact above known also goes by resolves to that contact, so forgetting it by name is refused; the refusal names up to three known, unbound contacts the name also fits, with their UUIDs, and contact_forget with one of those contact_id values removes it. A known contact whose whole name is another's first word (\"Bob\" beside \"Bob Smith\") is what \"Bob\" resolves to, so check that the result names the record you meant.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Name of the contact to remove: its exact name or nickname, or a search term that matches exactly one contact. Confirm the record with contact_lookup first.",
+					"description": "Name of the contact to remove, resolved as contact_lookup resolves it: a formatted name or nickname, where the contact with authority wins a name several contacts answer to, or a search term that matches exactly one contact. Confirm the record with contact_lookup first. Omit it when passing contact_id.",
+				},
+				"contact_id": map[string]any{
+					"type":        "string",
+					"description": "Canonical UUID, lowercase with hyphens, of the one active contact to remove, instead of name. Pass exactly one of name or contact_id. Use it when the name resolves to a different record than the one to remove, such as a known duplicate whose formatted name or nickname a contact above known also goes by; a refused contact_forget by name, a contact_dossier_write refusal, and the contact_directory row of system_health give such a duplicate's UUID. Custody refuses the same contacts by contact_id as by name.",
 				},
 			},
-			"required": []string{"name"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			argsJSON, err := json.Marshal(args)
@@ -410,7 +413,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 
 	r.Register(&Tool{
 		Name:               "contact_dossier_write",
-		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass the canonical contact UUID only as contact_id; do not repeat it or its derived contacts ref or contact tag in any content projection. Omit the contact's canonical name from status_line and teaser because the structured record and dossier title already identify the subject; digest and full may use it when standalone prose needs it. Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Archive-session evidence must cite the full canonical session UUID so every claim remains checkable. Every projection is validated together and every violation is returned in one error. Call contact_dossier_read first: it reads an existing dossier with revision protection or returns a successful, actionable absence result.",
+		Description:        "Create or replace one contact's canonical longitudinal dossier. Pass the canonical contact UUID only as contact_id; do not repeat it or its derived contacts ref or contact tag in any content projection. Omit the contact's canonical name from status_line and teaser because the structured record and dossier title already identify the subject; digest and full may use it when standalone prose needs it. Go verifies the structured contact and owns the document ref, private contact tag, frontmatter, section headings, and ordering. Use this for evolving relationship context, preferences, recurring themes, and evidence synthesis—not structured identity, trust, Home Assistant bindings, or companion attribution. Archive-session evidence must cite the full canonical session UUID so every claim remains checkable. Every projection is validated together and every violation is returned in one error. Call contact_dossier_read first: it reads an existing dossier with revision protection or returns a successful, actionable absence result. The first write of a contact's dossier is refused, and nothing is written, when another active contact that shares a name with it and looks like the same person already has a dossier. They share a name when one answers to the other's formatted name or nickname, or one's whole formatted name is the other's given name or the first word of its formatted name. They look like one person when they share an address or number, when the one with no more authority holds no real address or number of its own, or when one is a known contact bound to a Home Assistant person; people who merely share a name each keep their own dossier. The refusal names both UUIDs and the evidence, and says what to do if they are one person: write into the existing dossier when its contact carries as much authority, or, when this contact carries more and the holder is a known, unbound duplicate, read the duplicate's dossier, forget the duplicate by contact_id, then write this one. If they are different people, write nothing and report both to the operator. Replacing a dossier that already exists is never refused.",
 		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type":       "object",

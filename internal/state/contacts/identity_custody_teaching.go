@@ -70,7 +70,7 @@ func claimsOwnerName(owner string, names ...string) bool {
 // ownerNameClaimRefusal checks a contact_save that would give a record
 // other than the operator's own the legacy owner name. Under the legacy
 // selector the operator is whichever record ResolveContact finds for
-// that name, exact name first and then nickname, so a second record
+// that name, as a formatted name or a nickname, so a second record
 // carrying it could become the operator the next time the name is
 // resolved, and every address on it would carry the operator's
 // authority. This holds in every turn, the operator's own included; the

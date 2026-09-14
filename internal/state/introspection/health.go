@@ -367,6 +367,11 @@ type HealthSources struct {
 	// limit. A zero total means clean. It is a live query, so a
 	// directory fix clears the row on the next render.
 	DirectoryFindings func(ctx context.Context, limit int) (shown []string, total int, err error)
+	// DirectoryForks reports records that split one person, names
+	// different people answer to, and placeholder addresses, each
+	// involving a record above known or the operator's own. It has the
+	// shape of DirectoryFindings and shares its contact_directory row.
+	DirectoryForks func(ctx context.Context, limit int) (shown []string, total int, err error)
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
@@ -526,21 +531,10 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	}
 
 	// Contact directory: records above known holding an address the
-	// runtime reads at known. Persistent and operator-actionable; no
-	// retry changes it, only a directory edit does.
-	if i.src.DirectoryFindings != nil {
-		row := HealthRow{Name: "contact_directory", Status: HealthOK}
-		directoryDone := phasetrace.Phase(ctx, "health:directory_findings")
-		shown, total, err := i.src.DirectoryFindings(ctx, maxDirectoryFindingsShown)
-		directoryDone()
-		switch {
-		case err != nil:
-			row.Status = HealthDegraded
-			row.Detail = fmt.Sprintf("contact directory audit failed: %v", err)
-		case total > 0:
-			row.Status = HealthDegraded
-			row.Detail = directoryFindingsDetail(shown, total)
-		}
+	// runtime reads at known, and records that fork one person.
+	// Persistent and operator-actionable; no retry changes it, only a
+	// directory edit does.
+	if row, ok := i.directoryRow(ctx); ok {
 		snap.Annunciator = append(snap.Annunciator, row)
 	}
 

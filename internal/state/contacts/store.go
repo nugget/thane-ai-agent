@@ -347,41 +347,36 @@ func (s *Store) FindByNickname(name string) (*Contact, error) {
 
 // findByNickname is [Store.FindByNickname] bound to ctx.
 func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, error) {
+	args := append([]any{name}, s.authorityOrderArgs()...)
 	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)
-		ORDER BY CASE WHEN id = ? THEN 0 WHEN COALESCE(trust_zone, '') = ? THEN 2 ELSE 1 END, id`,
-		name, s.operatorOrderID(), ZoneKnown))
+		ORDER BY `+authorityOrderSQL+`, id`,
+		args...))
 }
 
-// ResolveContact finds a contact by name using cascading resolution
-// strategies: exact formatted name → nickname → search fallback.
-// Returns [sql.ErrNoRows] if no match is found, or an error listing
-// ambiguous matches if search returns multiple results.
+// ResolveContact finds a contact by name: first among the active
+// contacts whose formatted name or nickname is the name, ordered as
+// operator_order.go describes (the operator's own record, then records
+// above known, then a formatted-name match before a nickname match),
+// then by search fallback. Returns [sql.ErrNoRows] if no match is
+// found, or an error listing ambiguous matches if search returns
+// multiple results.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
 	return s.resolveContact(context.Background(), name)
 }
 
 // resolveContact is [Store.ResolveContact] bound to ctx.
 func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, error) {
-	// 1. Exact formatted name match (fast, indexed).
-	c, err := s.findByName(ctx, name)
+	// 1. Formatted name or nickname, authority first.
+	c, err := s.findByNameOrNickname(ctx, name)
 	if err == nil {
 		return c, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("find by name %q: %w", name, err)
+		return nil, fmt.Errorf("find by name or nickname %q: %w", name, err)
 	}
 
-	// 2. Nickname match (direct column query).
-	c, err = s.findByNickname(ctx, name)
-	if err == nil {
-		return c, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("find by nickname %q: %w", name, err)
-	}
-
-	// 3. Search fallback (FTS or LIKE).
+	// 2. Search fallback (FTS or LIKE).
 	results, err := s.search(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("search fallback for %q: %w", name, err)
