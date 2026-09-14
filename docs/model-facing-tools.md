@@ -133,6 +133,23 @@ a serial guessing game and repeatedly retransmits the largest arguments. A
 single bounded error should name every field, observed value or size, and
 constraint needed for one complete retry.
 
+Size the fix to the gap. An over-budget error that names only the limit
+teaches "shorten it", and a model shortens by rewording, which rarely
+recovers more than about a tenth of a value's length. When the gap is larger,
+the error must say that rewording alone rarely closes it, name the lever that will
+(removing whole items), and give the overage as a number. Never state a retry
+count in a correction error: a count is a stopping rule unrelated to whether
+the correction is complete, and a model obeys it as one
+([#1544](https://github.com/nugget/thane-ai-agent/issues/1544)).
+
+Guard refusals are errors too, and they must not end unfinished work. A repeat
+guard telling the model to stop calling tools and answer the user is right on a
+turn someone is waiting on. Inside a loop wake it reads as "abandon the write",
+so the refusal a loop sees says only that the identical call was not run and
+stays refused, and points at the earlier result or at the arguments its error
+names. It claims nothing about what a repeat would return, which for a read of
+changing state would be false.
+
 ### Multi-account ambiguity
 
 If a tool can target multiple accounts, clients, or tenants, ambiguity

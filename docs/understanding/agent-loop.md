@@ -96,6 +96,17 @@ the next iteration. Tool calls can be:
   document output tools
 - **Delegation** (spawning a local model to execute a multi-step task)
 
+Within one turn, the fourth call to the same tool with the same
+arguments, and every identical call after it, is refused without
+running. On a turn someone is waiting on (a channel message or an API
+request) the refusal tells the model to stop calling tools and answer.
+Everywhere else it says only that the call was not run and identical
+calls stay refused, pointing the model at the earlier result or at the
+arguments its error names, so a loop wake is never told to abandon a
+write. When one tool fails twice in a row and the second call resent a
+value from the first that both errors name, the result also names those
+unchanged arguments.
+
 ### 5. Response Shaping
 
 When the agent has enough information — or hits the iteration limit — it
@@ -152,6 +163,29 @@ reference, generated tool name, current content or recent journal tail,
 and any truncation markers. The model should use those generated tools
 instead of generic file tools; the document root owns path safety,
 indexing, provenance, and signature policy.
+
+A generated output tool that refuses returns a tool error and commits
+nothing. A validation refusal lists every failing projection at once,
+each over-budget one with its overage and a fix sized to it. Because
+the turn around a refused write can still end normally, each wake
+tallies its tool calls per tool. A wake in which every call to a
+durable write tool — a declared output's generated tool, or
+`contact_dossier_write` — failed and none succeeded is recorded as an
+unpublished write. `loop_status` names the loop in its health rollup
+and lists the tool, rejection count, last rejection text, and
+conversation on the loop's row (`unpublished_writes`). The
+`system_health` loop census carries the same line and degrades the
+loops row until a later completed wake lands that write. Outcomes are
+tallied per tool, not per document: for `contact_dossier_write`, a wake
+that lands one contact's dossier clears the record even if another
+contact's was refused on every attempt. A wake that ends in a runner
+error is not observed, so it neither records nor clears an entry, even
+when it landed the write before failing. The record lives in
+memory; the wake's `iteration_complete` journal event keeps
+`write_rejections` and `unpublished_writes` counts across restarts.
+Detection changes nothing else: the mailbox is still acknowledged, no
+backoff applies, and the notifications the wake consumed are not
+redelivered.
 
 ## Capability Tags
 

@@ -140,7 +140,16 @@ ordinary documents instead.
   name from the status line and teaser because the dossier title already
   supplies it; digest and full may use the name where standalone prose needs
   it. Do not encode trust, Home Assistant bindings, or companion attribution as
-  if prose changed those sources of truth. A contact's first dossier is
+  if prose changed those sources of truth. A write that fails validation
+  stores nothing and lists every violation at once, each over-budget
+  projection with its overage and whether rewording closes it or whole items
+  must go; fix them all in the next call. Replacing an existing dossier with
+  no read of it on record, or after it changed since that read, is also an
+  error that stores nothing: read it again with `contact_dossier_read`, fold
+  in the intervening change the error carries, and write again. The digest is
+  bounded current state
+  about the person, rewritten whole each time: drop what is resolved or
+  superseded rather than appending to it. A contact's first dossier is
   refused while a contact that shares its name and looks like the same
   person already has one. The refusal names the evidence and which
   record keeps the dossier; if the two are different people, write
