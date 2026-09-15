@@ -97,7 +97,7 @@ rules. Email, facts, and web retain their separate tools.
 | `search` | Discover evidence across available archives and searchable documents. |
 | `archive_search` | Full-text search across conversation archives. |
 | `archive_sessions` | Browse session archive metadata. |
-| `archive_session_transcript` | Retrieve a full session transcript. |
+| `archive_session_transcript` | Retrieve a full session transcript by full session ID, or by any leading part of one; a part several sessions share returns the candidates. |
 | `archive_range` | Retrieve archived messages by time range or message-count floor. |
 
 `archive_range` selects the newest messages matching inclusive time bounds and

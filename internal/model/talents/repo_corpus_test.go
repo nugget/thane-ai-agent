@@ -166,6 +166,13 @@ var nonToolTokens = map[string]struct{}{
 	"created_at": {},
 	"updated_at": {},
 
+	// Archive result field name. archive_search and archive_range hits
+	// carry the full session id in `session_id`, which is also the
+	// archive_session_transcript parameter; the archive talent names it
+	// so the model copies the full id. The matcher flags it because
+	// `session_` is a real tool prefix.
+	"session_id": {},
+
 	// Notification record field name (UUID identifying an outstanding
 	// actionable). Appears as a parameter on resolve_actionable and
 	// as an annotation in conversation history. The matcher flags it
