@@ -203,22 +203,24 @@ type readResponse struct {
 	AddressesOmitted int `json:"addresses_omitted,omitempty"`
 }
 
-// hiddenContent says that an HTML body's own markup hid text from a
-// person reading the message, through an idiom the renderer recognises
-// (see [visibility]). The read result omits it when nothing was hidden.
+// hiddenContent says that an HTML body's own markup hid something from
+// a person reading the message, through an idiom the renderer
+// recognises (see [visibility]): text, an image's description, or a
+// link's target. The read result omits it when nothing was hidden.
 type hiddenContent struct {
 	// Present is always true, so the object reads as a statement
 	// wherever it appears.
 	Present bool `json:"present"`
 
-	// Chars counts the hidden characters, whitespace aside. That text
-	// is withheld from the body.
+	// Chars counts the hidden characters of text and image
+	// descriptions, whitespace aside. That text is withheld from the
+	// body.
 	Chars int `json:"chars"`
 }
 
-// newHiddenContent returns nil when no text was hidden.
-func newHiddenContent(chars int) *hiddenContent {
-	if chars == 0 {
+// newHiddenContent returns nil when nothing was hidden.
+func newHiddenContent(hidden bool, chars int) *hiddenContent {
+	if !hidden {
 		return nil
 	}
 	return &hiddenContent{Present: true, Chars: chars}
@@ -255,7 +257,7 @@ func newReadResponse(account, folder string, msg *Message, markedSeen bool, auth
 		Size:               msg.Size,
 		MarkedSeen:         markedSeen,
 		BodySource:         msg.BodySource,
-		HiddenContent:      newHiddenContent(msg.HiddenChars),
+		HiddenContent:      newHiddenContent(msg.Hidden, msg.HiddenChars),
 		BodyTruncated:      msg.BodyTruncated,
 		RawTruncated:       msg.RawTruncated,
 		Attachments:        attachments,

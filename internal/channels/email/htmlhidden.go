@@ -108,11 +108,11 @@ var fontSizeKeywords = map[string]bool{
 	"initial": true,
 }
 
-// fontSizeUnits are the units a nonzero font-size sets a size of its
-// own in. The empty unit counts because the quirks mode most mail
-// renders in accepts a bare number. em, ex, ch and % are absent: they
-// scale the parent's size, so under a zero size they stay zero. rem
-// scales the root's size, which a sender hiding text does not zero.
+// fontSizeUnits are the units a font-size sets a size of its own in.
+// The empty unit counts because the quirks mode most mail renders in
+// accepts a bare number. em, ex, ch and % are absent: they scale the
+// parent's size, so under a zero size they stay zero. rem scales the
+// root's size, which a sender hiding text does not zero.
 var fontSizeUnits = map[string]bool{
 	"": true, "px": true, "pt": true, "pc": true,
 	"rem": true, "cm": true, "mm": true, "in": true,
@@ -120,15 +120,32 @@ var fontSizeUnits = map[string]bool{
 }
 
 // fontSizeRelativeUnits are the units a font-size scales the parent's
-// size in, so the element keeps whatever size it inherits.
+// size in, so a nonzero size keeps whatever size the element inherits.
 var fontSizeRelativeUnits = map[string]bool{"em": true, "ex": true, "ch": true, "%": true}
 
-// fontSizeEffect reads a font-size value. A size of zero in any unit
-// hides text, and a nonzero size of the element's own shows text an
-// ancestor's zero size hid. inherit, smaller, larger, and a size relative
-// to the parent's keep the inherited size. A function, a negative size,
-// or an unknown unit is not recognised; math is not either, because not
-// every engine accepts it.
+// fontSizeZeroUnits are the CSS length units outside fontSizeUnits and
+// fontSizeRelativeUnits, which not every engine accepts yet. A zero
+// size in one of them hides text in every engine that accepts the unit,
+// so it is recognised. A nonzero size in one is not: what it does under
+// a zero size depends on the unit and the engine.
+var fontSizeZeroUnits = map[string]bool{
+	"lh": true, "rlh": true, "ic": true, "ric": true,
+	"cap": true, "rcap": true, "rex": true, "rch": true,
+	"vi": true, "vb": true,
+	"svw": true, "svh": true, "svi": true, "svb": true, "svmin": true, "svmax": true,
+	"lvw": true, "lvh": true, "lvi": true, "lvb": true, "lvmin": true, "lvmax": true,
+	"dvw": true, "dvh": true, "dvi": true, "dvb": true, "dvmin": true, "dvmax": true,
+	"cqw": true, "cqh": true, "cqi": true, "cqb": true, "cqmin": true, "cqmax": true,
+}
+
+// fontSizeEffect reads a font-size value. A size of zero hides text,
+// and a nonzero size of the element's own shows text an ancestor's zero
+// size hid. inherit, smaller, larger, and a nonzero size relative to
+// the parent's keep the inherited size. A zero is recognised in any
+// CSS length unit, a nonzero size only in fontSizeUnits or
+// fontSizeRelativeUnits. An unknown unit, as in font-size:0banana, is
+// not recognised, the way a browser drops the declaration. Neither is a
+// function, a negative size, or math, which not every engine accepts.
 func fontSizeEffect(val string) (styleEffect, bool) {
 	switch {
 	case fontSizeKeywords[val]:
@@ -137,18 +154,18 @@ func fontSizeEffect(val string) (styleEffect, bool) {
 		return effectKeep, true
 	}
 	f, unit, ok := cssNumber(val)
-	if !ok {
-		return effectKeep, false
-	}
+	known := fontSizeUnits[unit] || fontSizeRelativeUnits[unit]
 	switch {
-	case f == 0 && (unit == "%" || strings.TrimLeftFunc(unit, unicode.IsLetter) == ""):
+	case !ok:
+		return effectKeep, false
+	case f == 0 && (known || fontSizeZeroUnits[unit]):
 		return effectHide, true
-	case f > 0 && fontSizeUnits[unit]:
+	case f <= 0 || !known:
+		return effectKeep, false
+	case fontSizeUnits[unit]:
 		return effectShow, true
-	case f > 0 && fontSizeRelativeUnits[unit]:
-		return effectKeep, true
 	}
-	return effectKeep, false
+	return effectKeep, true
 }
 
 // nonSpaceRunes counts the characters of s that are not whitespace,
