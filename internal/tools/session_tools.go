@@ -124,10 +124,10 @@ func (r *Registry) registerSessionClose(mgr SessionManager) {
 func (r *Registry) registerSessionCheckpoint(mgr SessionManager) {
 	r.Register(&Tool{
 		Name: "session_checkpoint",
-		Description: "Create a checkpoint of the current session state without ending it. " +
-			"Archives a snapshot of all messages as a safety net. The current session " +
-			"continues uninterrupted. Use before risky operations or when you want to " +
-			"preserve state at a known-good point.",
+		Description: "Record a labeled bookmark of the current session's messages and active context. " +
+			"The session continues with the same messages in context. Use to mark a milestone " +
+			"for later investigation. This records conversation history; it does not undo " +
+			"external actions or provide a restore operation.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -159,7 +159,8 @@ func (r *Registry) registerSessionSplit(mgr SessionManager) {
 		Name: "session_split",
 		Description: "Retroactively split the current session at a past message boundary. " +
 			"Everything before the split point is archived as a completed session; " +
-			"everything after becomes the start of the current session. " +
+			"the selected message and everything after it continue in a new session with their original IDs and timestamps. " +
+			"Choose a boundary after compacted history; archived sessions are excluded. " +
 			"Provide either at_index (negative offset from end) or at_message (substring match), not both.",
 		Parameters: map[string]any{
 			"type": "object",

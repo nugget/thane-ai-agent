@@ -750,6 +750,12 @@ func (e *Executor) finishLoopExecution(prep *preparedExecution) {
 		return
 	}
 	if e.sessionArchiver != nil && e.conversations != nil {
+		if lifecycle, ok := e.sessionArchiver.(memory.SessionLifecycle); ok {
+			if err := lifecycle.CloseConversation(prep.conversationID, "delegate"); err != nil {
+				prep.log.Warn("failed to close delegate conversation", "error", err)
+			}
+			return
+		}
 		msgs := e.conversations.GetMessages(prep.conversationID)
 		if err := e.sessionArchiver.ArchiveConversation(prep.conversationID, msgs, "delegate"); err != nil {
 			prep.log.Warn("failed to archive delegate conversation", "error", err)

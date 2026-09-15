@@ -318,7 +318,9 @@ func (s *SQLiteStore) GetConversation(id string) *Conversation {
 	return &conv
 }
 
-// Clear removes a conversation and its messages.
+// Clear empties the active conversation window while preserving its durable
+// transcript and conversation metadata. Session-aware callers should use
+// [SessionLifecycle] so the boundary and row ownership commit together.
 func (s *SQLiteStore) Clear(conversationID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -326,12 +328,15 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Exec(`DELETE FROM messages WHERE conversation_id = ?`, conversationID)
+	now := time.Now().UTC()
+	_, err = tx.Exec(`UPDATE messages SET status = 'archived', archived_at = ?, archive_reason = 'clear'
+		WHERE conversation_id = ? AND status IN ('active', 'compacted')`, now, conversationID)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec(`DELETE FROM conversations WHERE id = ?`, conversationID)
+	_, err = tx.Exec(`UPDATE tool_calls SET status = 'archived', archived_at = ?
+		WHERE conversation_id = ? AND status = 'active'`, now, conversationID)
 	if err != nil {
 		return err
 	}
@@ -344,11 +349,15 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 	// fresh unique ID per invocation and Clear on finish, so without this
 	// the map would grow one stale entry per overflowing delegate for the
 	// life of the process.
+	s.forgetClipWarning(conversationID)
+
+	return nil
+}
+
+func (s *SQLiteStore) forgetClipWarning(conversationID string) {
 	s.clipWarnMu.Lock()
 	delete(s.clipWarnAt, conversationID)
 	s.clipWarnMu.Unlock()
-
-	return nil
 }
 
 // Stats returns memory statistics.
@@ -457,14 +466,34 @@ func (s *SQLiteStore) BindConversationChannel(conversationID string, binding *Ch
 // GetAllMessages retrieves ALL messages for a conversation, including compacted ones.
 // Includes tool call data for full-fidelity archiving — never lose primary sources.
 func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
+	messages, err := s.readLifecycleMessages(conversationID, false)
+	if err != nil {
+		s.logger.Warn("failed to read conversation transcript", "conversation_id", conversationID, "error", err)
+		return nil
+	}
+	return messages
+}
+
+// CurrentSessionMessages returns the current non-archived rows, including
+// compacted source rows, in stable chronological order. Archived history is
+// excluded so a retroactive split cannot reach into a previous session.
+func (s *SQLiteStore) CurrentSessionMessages(conversationID string) ([]Message, error) {
+	return s.readLifecycleMessages(conversationID, true)
+}
+
+func (s *SQLiteStore) readLifecycleMessages(conversationID string, currentOnly bool) ([]Message, error) {
+	condition := ""
+	if currentOnly {
+		condition = " AND status IN ('active', 'compacted')"
+	}
 	rows, err := s.db.Query(`
 		SELECT id, role, content, timestamp, tool_calls, tool_call_id, COALESCE(mid_turn, 0), COALESCE(origin, '')
 		FROM messages
-		WHERE conversation_id = ?
-		ORDER BY timestamp ASC
+		WHERE conversation_id = ?`+condition+`
+		ORDER BY timestamp ASC, id ASC
 	`, conversationID)
 	if err != nil {
-		return []Message{}
+		return nil, fmt.Errorf("query conversation messages: %w", err)
 	}
 	defer rows.Close()
 
@@ -474,7 +503,7 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 		var toolCalls, toolCallID sql.NullString
 		var midTurn int
 		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID, &midTurn, &m.Origin); err != nil {
-			continue
+			return nil, fmt.Errorf("scan conversation message: %w", err)
 		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
@@ -486,7 +515,7 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 		messages = append(messages, m)
 	}
 
-	return messages
+	return messages, rows.Err()
 }
 
 // GetTokenCount returns the total token count for a conversation.
@@ -601,12 +630,20 @@ func (s *SQLiteStore) ApplyCompaction(conversationID string, compactedIDs []stri
 		for _, id := range compactedIDs {
 			args = append(args, id)
 		}
-		if _, err := tx.Exec(fmt.Sprintf(`
+		result, err := tx.Exec(fmt.Sprintf(`
 			UPDATE messages
 			SET status = 'compacted'
-			WHERE conversation_id = ? AND id IN (%s)
-		`, database.Placeholders(len(compactedIDs))), args...); err != nil {
+			WHERE conversation_id = ? AND status = 'active' AND id IN (%s)
+		`, database.Placeholders(len(compactedIDs))), args...)
+		if err != nil {
 			return fmt.Errorf("mark compacted: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count compacted messages: %w", err)
+		}
+		if affected != int64(len(compactedIDs)) {
+			return fmt.Errorf("conversation changed during compaction; preserved the current session without applying a stale summary")
 		}
 	}
 
@@ -655,12 +692,41 @@ type ToolCall struct {
 // RecordToolCall records a tool call execution.
 // messageID can be empty - it will be stored as NULL.
 func (s *SQLiteStore) RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error {
+	return s.RecordSessionToolCall(conversationID, "", messageID, toolCallID, toolName, arguments)
+}
+
+// RecordSessionToolCall records a tool call against the session that produced
+// its model iteration. A later call in the same response can arrive after an
+// earlier call closed that session; it is then inserted as archived so it
+// cannot leak into the successor's active window. A non-empty sessionID must
+// belong to conversationID. Empty sessionID retains deferred session claiming.
+func (s *SQLiteStore) RecordSessionToolCall(conversationID, sessionID, messageID, toolCallID, toolName, arguments string) error {
 	now := time.Now()
 
 	var msgID any
 	if messageID != "" {
 		msgID = messageID
 	} // else nil (NULL)
+	if sessionID != "" {
+		result, err := s.db.Exec(`INSERT INTO tool_calls
+			(id, message_id, conversation_id, session_id, tool_name, arguments, started_at, status, archived_at)
+			SELECT ?, ?, ?, id, ?, ?, ?,
+				CASE WHEN ended_at IS NULL THEN 'active' ELSE 'archived' END,
+				CASE WHEN ended_at IS NULL THEN NULL ELSE ? END
+			FROM sessions WHERE id = ? AND conversation_id = ?`,
+			toolCallID, msgID, conversationID, toolName, arguments, now, now, sessionID, conversationID)
+		if err != nil {
+			return fmt.Errorf("record session tool call: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count recorded session tool call: %w", err)
+		}
+		if affected != 1 {
+			return fmt.Errorf("tool call session %s does not belong to conversation %s", sessionID, conversationID)
+		}
+		return nil
+	}
 
 	_, err := s.db.Exec(`
 		INSERT INTO tool_calls (id, message_id, conversation_id, tool_name, arguments, started_at)
