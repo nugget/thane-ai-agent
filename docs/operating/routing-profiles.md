@@ -10,8 +10,12 @@ these "routing profiles."
 Automatic routing and explicit model selection use the same request-size
 estimate: assembled messages, images, tool-call history, and the tool
 schemas visible to that request after capability and delegation filters.
-The selected model's prompt is checked again before generation. Loading
-a local model also reserves separate room for its reply.
+The selected model's complete prompt, including its final context-usage
+section and any conversation-pin fallback explanation, is checked before
+generation. If it no longer fits, automatic routing selects another
+candidate; an incompatible explicit or default model is rejected before
+calling the provider. Loading a local model also reserves separate room
+for its reply.
 
 ## Available Virtual Models
 

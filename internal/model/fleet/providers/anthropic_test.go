@@ -1134,6 +1134,7 @@ func TestAnthropicChatStreamCompletionTelemetry(t *testing.T) {
 	const (
 		msgStart  = `{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":10,"output_tokens":0}}}`
 		msgDelta  = `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`
+		msgStop   = `{"type":"message_stop"}`
 		toolStart = `{"type":"content_block_start","content_block":{"type":"tool_use","id":"tu_1","name":"base_tool"}}`
 		toolArgs  = `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`
 		toolStop  = `{"type":"content_block_stop"}`
@@ -1149,19 +1150,19 @@ func TestAnthropicChatStreamCompletionTelemetry(t *testing.T) {
 			body: sse(msgStart,
 				`{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}`,
 				`{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}`,
-				msgDelta),
+				msgDelta, msgStop),
 			wantFirstToken: true,
 		},
 		{
 			name:           "tool-only stream reports no first token",
-			body:           sse(msgStart, toolStart, toolArgs, toolStop, msgDelta),
+			body:           sse(msgStart, toolStart, toolArgs, toolStop, msgDelta, msgStop),
 			wantFirstToken: false,
 		},
 		{
 			name: "empty text delta is not a first token",
 			body: sse(msgStart,
 				`{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}`,
-				toolStart, toolArgs, toolStop, msgDelta),
+				toolStart, toolArgs, toolStop, msgDelta, msgStop),
 			wantFirstToken: false,
 		},
 	}

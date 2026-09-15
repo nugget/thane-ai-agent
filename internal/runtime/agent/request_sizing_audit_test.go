@@ -138,3 +138,93 @@ func TestRun_RoutedPreflightIncludesSchemasAfterPromptGrowth(t *testing.T) {
 		t.Fatalf("provider model=%s, want the larger model after prompt growth", mock.calls[0].Model)
 	}
 }
+
+func TestRun_PreflightIncludesFinalContextUsage(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		for _, mode := range []string{"automatic", "explicit", "default", "pinned", "pinned without router"} {
+			name := "generated/" + mode
+			if custom {
+				name = "custom/" + mode
+			}
+			t.Run(name, func(t *testing.T) {
+				mock := &mockLLM{responses: okResponses(1)}
+				loop := buildTestLoop(mock, nil)
+				loop.tools = tools.NewEmptyRegistry()
+				req := &Request{ConversationID: "sizing", Messages: []Message{{Role: "user", Content: strings.Repeat("evidence ", 200)}}}
+				if custom {
+					req.SystemPrompt = "Inspect the evidence."
+				}
+				cfg := &config.Config{Models: config.ModelsConfig{
+					Default: "small", LocalFirst: true,
+					Resources: map[string]config.ModelServerConfig{"local": {URL: "http://localhost:11434", Provider: "ollama"}},
+					Available: []config.ModelConfig{
+						{Name: "small", Resource: "local", SupportsTools: true, ContextWindow: 100000, Speed: 10, Quality: 8},
+						{Name: "large", Resource: "local", SupportsTools: true, ContextWindow: 100000, Speed: 3, Quality: 8},
+					},
+				}}
+				loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
+				basePrompt, sections := loop.buildSystemPromptWithProfileSections(context.Background(), req.Messages[0].Content, loop.modelInteractionProfileForModel("small"))
+				if custom {
+					basePrompt = req.SystemPrompt
+					sections = nil
+				}
+				// The candidate can hold the entire base prompt, but has no
+				// room for the context-usage metadata appended before sending.
+				cfg.Models.Available[0].ContextWindow = estimateRequestContextTokens(buildInitialLLMMessages(basePrompt, sections, nil, req.Messages, req.ConversationID, time.Time{}), nil)
+				registry := testModelRegistryFromConfig(t, cfg)
+				loop.UseModelRegistry(registry)
+				loop.model = "small"
+				if mode != "default" && mode != "pinned without router" {
+					loop.router = router.NewRouter(loop.logger, registry.Catalog().RouterConfig(32))
+				}
+				if mode == "explicit" {
+					req.Model = "small"
+				}
+				if strings.HasPrefix(mode, "pinned") {
+					if _, err := loop.PinConversationModel(req.ConversationID, "small", "test window boundary"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, err := loop.Run(context.Background(), req, nil)
+				if mode == "explicit" || mode == "default" || mode == "pinned without router" {
+					var incompatible *IncompatibleModelError
+					if !errors.As(err, &incompatible) || !isContextWindowIncompatible(err) || len(mock.calls) != 0 {
+						t.Fatalf("oversized final prompt: error=%v calls=%d; want preflight rejection without a provider call", err, len(mock.calls))
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(mock.calls) != 1 || mock.calls[0].Model != "large" {
+					t.Fatalf("provider calls=%+v, want one call to the larger candidate", mock.calls)
+				}
+				call := mock.calls[0]
+				if size := estimateRequestContextTokens(call.Messages, call.Tools); size > 100000 {
+					t.Fatalf("sent request estimate=%d exceeds selected window", size)
+				}
+				prompt := call.Messages[0]
+				if strings.Count(prompt.Content, "**Context:**") != 1 {
+					t.Fatalf("context usage must appear exactly once: %s", prompt.Content)
+				}
+				var rendered strings.Builder
+				for _, section := range prompt.Sections {
+					rendered.WriteString(section.Content)
+					rendered.WriteByte('\n')
+				}
+				if strings.Join(strings.Fields(rendered.String()), " ") != strings.Join(strings.Fields(prompt.Content), " ") {
+					t.Fatal("section-rendering providers receive different final prompt content")
+				}
+				if !strings.Contains(prompt.Content, "large (") || !strings.Contains(prompt.Content, "/100,000 tokens") {
+					t.Fatalf("context usage does not describe the selected model: %s", prompt.Content)
+				}
+				if mode == "pinned" {
+					pin, ok := loop.ConversationModelPin(req.ConversationID)
+					if !ok || pin.Model != "small" || pin.LastFallback == nil || pin.LastFallback.Model != "large" || !strings.Contains(prompt.Content, "pinned small skipped this turn") {
+						t.Fatalf("fallback must retain the pin and explain the skipped turn: pin=%+v prompt=%s", pin, prompt.Content)
+					}
+				}
+			})
+		}
+	}
+}

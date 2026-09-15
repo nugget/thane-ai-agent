@@ -2020,14 +2020,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			llmMessages[0].Sections = systemSections
 		}
 	}
-	rebuildSystemPromptForModel := func(model string) {
-		if req.SystemPrompt != "" {
-			return
-		}
-		usageInfo.Model = model
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
-		updateSystemMessage()
-	}
 
 	// Request-level tool restrictions are static for the run. Apply them
 	// before model routing so tool-count-sensitive decisions see the same
@@ -2127,6 +2119,46 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		usageInfo.ModelPinAge = l.now().Sub(pin.PinnedAt)
 	}
 
+	// Finalize each candidate's complete prompt before estimating it. Start
+	// from the base every time so rerouting never duplicates usage metadata,
+	// and retain the successfully checked prompt unchanged for generation.
+	rebuildSystemPromptForModel := func(model string) {
+		usageInfo.Model = model
+		usageInfo.Routed = routerDecision != nil
+		usageInfo.ModelPinned = pinnedModel != "" && pinSkipReason == ""
+		usageInfo.ModelPinSkipped = ""
+		usageInfo.ModelPinSkipReason = ""
+		if pinnedModel != "" && pinSkipReason != "" {
+			usageInfo.ModelPinSkipped = pinnedModel
+			usageInfo.ModelPinSkipReason = pinSkipReason
+		}
+		usageInfo.ContextWindow = l.contextWindow
+		if cat := l.currentModelCatalog(); cat != nil {
+			if dep, err := cat.ResolveDeploymentRef(model); err == nil {
+				usageInfo.Model = dep.ID
+				if dep.ContextWindow > 0 {
+					usageInfo.ContextWindow = dep.ContextWindow
+				}
+			}
+		}
+		if req.SystemPrompt != "" {
+			systemPrompt = req.SystemPrompt
+			systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
+		} else {
+			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
+		}
+		updateSystemMessage()
+		usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
+		if line := awareness.FormatContextUsage(usageInfo); line != "" {
+			systemPrompt += "\n" + line
+			systemSections = appendPromptSection(systemSections, llm.PromptSection{
+				Name:    "CONTEXT USAGE",
+				Content: "\n" + line,
+			})
+		}
+		updateSystemMessage()
+	}
+
 	log.Debug("model selection start", "req_model", req.Model, "pinned_model", pinnedModel, "default_model", l.model)
 
 	if model == "" || model == "thane" {
@@ -2182,7 +2214,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 
-	for routedPromptChecks := 0; routerDecision != nil; routedPromptChecks++ {
+	for routedPromptChecks := 0; ; routedPromptChecks++ {
 		rebuildSystemPromptForModel(model)
 		actualContextSize := estimateRequestContextTokens(llmMessages, visibleToolDefs)
 		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, actualContextSize)
@@ -2190,8 +2222,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			model = resolvedModel
 			break
 		}
-		if l.router == nil || !isContextWindowIncompatible(err) || routedPromptChecks >= 2 {
+		canSkipPin := pinnedModel != "" && pinSkipReason == ""
+		if l.router == nil || routedPromptChecks >= 2 || (!canSkipPin && (routerDecision == nil || !isContextWindowIncompatible(err))) {
 			return nil, err
+		}
+		if canSkipPin {
+			pinSkipReason = explicitModelSkipReason(err)
+			log.Warn("conversation model pin skipped after final prompt context check",
+				"conversation_id", convID,
+				"pinned_model", pinnedModel,
+				"reason", pinSkipReason,
+			)
 		}
 
 		previousModel := model
@@ -2210,32 +2251,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		)
 	}
 
-	rebuildSystemPromptForModel(model)
-
-	usageInfo.Model = model
-	usageInfo.Routed = routerDecision != nil
-	switch {
-	case pinnedModel != "" && pinSkipReason != "":
-		usageInfo.ModelPinSkipped = pinnedModel
-		usageInfo.ModelPinSkipReason = pinSkipReason
+	if pinnedModel != "" && pinSkipReason != "" {
 		l.conversationPins.recordFallback(pinned, model, pinSkipReason, l.now())
-	case pinnedModel != "":
-		usageInfo.ModelPinned = true
 	}
-	if cat := l.currentModelCatalog(); cat != nil {
-		if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
-			usageInfo.ContextWindow = dep.ContextWindow
-		}
-	}
-	usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
-	if line := awareness.FormatContextUsage(usageInfo); line != "" {
-		systemPrompt += "\n" + line
-		systemSections = appendPromptSection(systemSections, llm.PromptSection{
-			Name:    "CONTEXT USAGE",
-			Content: "\n" + line,
-		})
-	}
-	updateSystemMessage()
 
 	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
 

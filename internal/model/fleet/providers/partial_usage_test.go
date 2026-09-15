@@ -53,6 +53,24 @@ func assertPartialUsage(t *testing.T, response *llm.ChatResponse, err error, wan
 	}
 }
 
+func anthropicPartialUsageClient(t *testing.T, serverURL string) *AnthropicClient {
+	t.Helper()
+	target, err := url.Parse(serverURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewAnthropicClient("test-key", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	transport := httpkit.NewTransport()
+	t.Cleanup(transport.CloseIdleConnections)
+	client.httpClient = httpkit.NewClient()
+	client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		local := req.Clone(req.Context())
+		local.URL.Scheme, local.URL.Host = target.Scheme, target.Host
+		return transport.RoundTrip(local)
+	})
+	return client
+}
+
 func TestAnthropicPartialUsageSurvivesFailure(t *testing.T) {
 	usage := `"usage":{"input_tokens":50,"output_tokens":23,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}`
 	for _, tc := range []struct {
@@ -66,19 +84,7 @@ func TestAnthropicPartialUsageSurvivesFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := partialUsageServer(t, tc.body, tc.truncated)
-			target, err := url.Parse(server.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			client := NewAnthropicClient("test-key", slog.New(slog.NewTextHandler(io.Discard, nil)))
-			transport := httpkit.NewTransport()
-			t.Cleanup(transport.CloseIdleConnections)
-			client.httpClient = httpkit.NewClient()
-			client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				local := req.Clone(req.Context())
-				local.URL.Scheme, local.URL.Host = target.Scheme, target.Host
-				return transport.RoundTrip(local)
-			})
+			client := anthropicPartialUsageClient(t, server.URL)
 			var stream llm.StreamCallback
 			if tc.stream {
 				stream = func(llm.StreamEvent) {}
@@ -87,6 +93,58 @@ func TestAnthropicPartialUsageSurvivesFailure(t *testing.T) {
 			assertPartialUsage(t, response, err, tc.want, tc.reported)
 			if tc.reported && (response.CacheCreationInputTokens != 100 || response.CacheCreation5mInputTokens != 30 || response.CacheCreation1hInputTokens != 70 || response.CacheReadInputTokens != 200) {
 				t.Fatalf("lost cache duration buckets: %+v", response)
+			}
+		})
+	}
+}
+
+func TestAnthropicStreamRequiresMessageStop(t *testing.T) {
+	const (
+		start     = `{"type":"message_start","message":{"model":"wire-model","usage":{"input_tokens":50,"output_tokens":0,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}}}`
+		text      = `{"type":"content_block_delta","delta":{"type":"text_delta","text":"partial answer"}}`
+		toolStart = `{"type":"content_block_start","content_block":{"type":"tool_use","id":"tool-1","name":"inspect"}}`
+		toolArgs  = `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`
+		toolStop  = `{"type":"content_block_stop"}`
+		textDelta = `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":23}}`
+		toolDelta = `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":23}}`
+		stop      = `{"type":"message_stop"}`
+	)
+	for _, tc := range []struct {
+		name, body, stopReason   string
+		complete, reported, tool bool
+	}{
+		{"text EOF after stop reason", sse(start, text, textDelta), "end_turn", false, true, false},
+		{"tool EOF after stop reason", sse(start, toolStart, toolArgs, toolStop, toolDelta), "tool_use", false, true, true},
+		{"unfinished tool EOF", sse(start, toolStart, toolArgs, toolDelta), "tool_use", false, true, true},
+		{"foreign completion marker", sse(start, text, textDelta, "[DONE]"), "end_turn", false, true, false},
+		{"text EOF without usage", sse(text), "", false, false, false},
+		{"empty EOF", "", "", false, false, false},
+		{"complete text", sse(start, text, textDelta, stop), "end_turn", true, true, false},
+		{"complete tool", sse(start, toolStart, toolArgs, toolStop, toolDelta, stop), "tool_use", true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := partialUsageServer(t, tc.body, false)
+			client := anthropicPartialUsageClient(t, server.URL)
+			response, err := client.ChatStream(context.Background(), "requested-model", []llm.Message{{Role: "user", Content: "source"}}, nil, func(llm.StreamEvent) {})
+			if !tc.complete {
+				assertPartialUsage(t, response, err, "message_stop", tc.reported)
+			} else {
+				if err != nil || response == nil || !response.Done {
+					t.Fatalf("completed stream: response=%+v, error=%v", response, err)
+				}
+				if tc.tool {
+					if len(response.Message.ToolCalls) != 1 || response.Message.ToolCalls[0].ID != "tool-1" || response.Message.ToolCalls[0].Function.Name != "inspect" {
+						t.Fatalf("lost completed tool call: %+v", response.Message)
+					}
+				} else if response.Message.Content != "partial answer" {
+					t.Fatalf("lost completed text: %+v", response.Message)
+				}
+				if response.InputTokens != 50 || response.OutputTokens != 23 || response.Model != "wire-model" || response.UpstreamRequestID != "header-request" {
+					t.Fatalf("lost completed usage/provenance: %+v", response)
+				}
+			}
+			if tc.reported && (response.CacheCreationInputTokens != 100 || response.CacheCreation5mInputTokens != 30 || response.CacheCreation1hInputTokens != 70 || response.CacheReadInputTokens != 200 || response.StopReason != tc.stopReason) {
+				t.Fatalf("lost reported cache usage or stop reason: %+v", response)
 			}
 		})
 	}

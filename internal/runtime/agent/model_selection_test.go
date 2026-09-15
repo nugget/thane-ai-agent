@@ -1441,8 +1441,9 @@ func TestRun_ExplicitModelPreflightDoesNotRequireOutputHeadroom(t *testing.T) {
 		loop.tools.List(),
 	)
 
-	// A window that fits the request exactly, and cannot fit the headroom.
-	cfg.Models.Available[0].ContextWindow = required
+	// Leave room for the final context-usage metadata, but not the output
+	// headroom. Verify those bounds against the actual provider request.
+	cfg.Models.Available[0].ContextWindow = required + 256
 	loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
 
 	_, err := loop.Run(context.Background(), &Request{
@@ -1454,6 +1455,11 @@ func TestRun_ExplicitModelPreflightDoesNotRequireOutputHeadroom(t *testing.T) {
 	}
 	if len(mock.calls) == 0 {
 		t.Fatal("llm calls = 0, want the provider reached rather than preflight-rejected")
+	}
+	actual := estimateRequestContextTokens(mock.calls[0].Messages, mock.calls[0].Tools)
+	window := cfg.Models.Available[0].ContextWindow
+	if actual > window || actual+reservedOutputContextTokens <= window {
+		t.Fatalf("actual request=%d window=%d; want the final prompt to fit without full output headroom", actual, window)
 	}
 }
 
