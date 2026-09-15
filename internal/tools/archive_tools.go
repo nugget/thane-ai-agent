@@ -89,6 +89,7 @@ func (r *Registry) composeArchiveSearch() {
 		return
 	}
 	r.registerArchiveSearch(memory.NewMemorySearch(r.archiveStore, r.workingMemoryStore, nil))
+	r.registerKnowledgeSearch()
 }
 
 func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
@@ -118,7 +119,7 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 				},
 				"conversation_id": map[string]any{
 					"type":        "string",
-					"description": "Optional: scope the raw-message search to one conversation. Distilled surfaces are unscoped. Omit to search across everything.",
+					"description": "Optional: scope messages, session summaries, and working memory to one conversation. Omit to search across conversations.",
 				},
 				"min_time": map[string]any{
 					"type": "string",
@@ -144,7 +145,7 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			},
 			"required": []string{"query"},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			query, _ := args["query"].(string)
 			if query == "" {
 				return "", fmt.Errorf("query is required")
@@ -182,7 +183,7 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 				opts.To = t
 			}
 
-			bundle, err := searcher.Search(opts)
+			bundle, err := searcher.SearchContext(ctx, opts)
 			if err != nil {
 				return "", fmt.Errorf("archive search: %w", err)
 			}
@@ -203,11 +204,12 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			//      pass at the end.
 			render := func(msgs, sess, wm int) []byte {
 				clipped := &memory.SearchBundle{
-					Messages:      bundle.Messages[:msgs],
-					Sessions:      bundle.Sessions[:sess],
-					WorkingMemory: bundle.WorkingMemory[:wm],
-					Truncated:     bundle.Truncated,
-					TotalMessages: bundle.TotalMessages,
+					Messages:            bundle.Messages[:msgs],
+					Sessions:            bundle.Sessions[:sess],
+					WorkingMemory:       bundle.WorkingMemory[:wm],
+					Truncated:           bundle.Truncated,
+					TotalMessages:       bundle.TotalMessages,
+					UnavailableSurfaces: bundle.UnavailableSurfaces,
 				}
 				truncated := bundle.Truncated ||
 					msgs < len(bundle.Messages) ||

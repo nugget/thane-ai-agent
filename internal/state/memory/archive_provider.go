@@ -84,7 +84,7 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 	)
 
 	start := time.Now()
-	bundle, err := p.searcher.Search(SearchOptions{
+	bundle, err := p.searcher.SearchContext(ctx, SearchOptions{
 		Query: query,
 		Limit: p.maxResults,
 	})
@@ -99,7 +99,7 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 		return "", nil
 	}
 
-	// MemorySearcher.Search MUST return a non-nil bundle on a nil error
+	// MemorySearcher.SearchContext MUST return a non-nil bundle on a nil error
 	// (see the interface contract). Treat a nil bundle here as a soft
 	// fault rather than panicking — log and return empty.
 	if bundle == nil {

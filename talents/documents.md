@@ -247,9 +247,21 @@ committing to a search query.
 
 ## Step 3 — search to narrow
 
+Use `search` for discovery across document metadata, opted-in document bodies,
+and conversation archives. For example, `{"query":"MQTT decision"}` can find
+the original discussion and a maintained dossier together when both source
+capabilities are active. `{"query":"MQTT","root":"dossiers"}` selects just
+that root. Find the entry with `source: "documents"` in `coverage[]`, then
+check its `roots[]` array: `body: false` means only metadata was
+searched; `on_request` requires naming the root. Body coverage is enabled by
+the operator's `context.search_body` policy, separately from injection and
+advertisement. `hits[].excerpt` contains matching text; `hits[].authored_summary` is a
+compact authored projection. Read the source and its citations before treating
+it as primary evidence.
+
 `doc_search` is the right tool once you can constrain by root, tags,
 frontmatter shape, or modified-time window. Free-text-only searches
-against the whole corpus are usually too broad to be useful:
+against metadata alone may miss a term that appears only in the body:
 
 ```json
 {

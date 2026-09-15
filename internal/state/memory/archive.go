@@ -260,9 +260,9 @@ type SearchOptions struct {
 
 	// From / To optionally scope the raw-message search to a time
 	// window (inclusive). Zero values mean unbounded on that edge.
-	// Only the raw-message FTS path honors these; the distilled
-	// session/working-memory surfaces stay unscoped, matching how
-	// ConversationID already behaves.
+	// Only raw-message search honors these; distilled session and
+	// working-memory surfaces stay unscoped in time. ConversationID
+	// scopes every surface.
 	From time.Time
 	To   time.Time
 
@@ -971,7 +971,19 @@ func (s *ArchiveStore) LinkPendingIterationToolCalls(sessionID string) error {
 }
 
 // Search performs a full-text search with gap-aware context expansion.
+// Callers with a request context should use [ArchiveStore.SearchContext].
 func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
+	return s.SearchContext(context.Background(), opts)
+}
+
+// SearchContext performs a cancellable full-text search with gap-aware context
+// expansion. Context windows exclude the matching timestamp and stop at silence,
+// duration, and message-count boundaries. Query, decoding, and context-expansion
+// failures return an error without partial results.
+func (s *ArchiveStore) SearchContext(ctx context.Context, opts SearchOptions) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(opts.Query) == "" {
 		return nil, fmt.Errorf("query is required")
 	}
@@ -995,9 +1007,9 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	var matches []matchWithHighlight
 	var err error
 	if s.ftsEnabled {
-		matches, err = s.searchFTS(opts)
+		matches, err = s.searchFTS(ctx, opts)
 	} else {
-		matches, err = s.searchLIKE(opts)
+		matches, err = s.searchLIKE(ctx, opts)
 	}
 	if err != nil {
 		return nil, err
@@ -1008,8 +1020,14 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	for _, mh := range matches {
 		var before, after []Message
 		if !opts.NoContext {
-			before = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
-			after = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
+			before, err = s.expandContext(ctx, mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
+			if err != nil {
+				return nil, fmt.Errorf("expand context before message %s: %w", mh.msg.ID, err)
+			}
+			after, err = s.expandContext(ctx, mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
+			if err != nil {
+				return nil, fmt.Errorf("expand context after message %s: %w", mh.msg.ID, err)
+			}
 		}
 
 		results = append(results, SearchResult{
@@ -1049,13 +1067,13 @@ type matchWithHighlight struct {
 // Single-word queries skip the backfill entirely: the OR form
 // `"word"` is identical to the phrase form, so a second query
 // would only produce duplicates.
-func (s *ArchiveStore) searchFTS(opts SearchOptions) ([]matchWithHighlight, error) {
+func (s *ArchiveStore) searchFTS(ctx context.Context, opts SearchOptions) ([]matchWithHighlight, error) {
 	phrase := phraseFTS5Query(opts.Query)
 	if phrase == "" {
 		return nil, fmt.Errorf("query is required")
 	}
 
-	phraseHits, err := s.runFTSQuery(phrase, opts, opts.Limit)
+	phraseHits, err := s.runFTSQuery(ctx, phrase, opts, opts.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1072,7 +1090,7 @@ func (s *ArchiveStore) searchFTS(opts SearchOptions) ([]matchWithHighlight, erro
 		// Single-word query — backfill would be identical, skip it.
 		return phraseHits, nil
 	}
-	backfill, err := s.runFTSQuery(orExpr, opts, opts.Limit*2)
+	backfill, err := s.runFTSQuery(ctx, orExpr, opts, opts.Limit*2)
 	if err != nil {
 		return nil, err
 	}
@@ -1094,7 +1112,7 @@ func tagMatchType(matches []matchWithHighlight, kind string) {
 // (conversation_id, anticipation exclusion) live in the SQL WHERE
 // clause so they participate in BM25 scoring rather than being
 // applied post-hoc.
-func (s *ArchiveStore) runFTSQuery(ftsExpr string, opts SearchOptions, limit int) ([]matchWithHighlight, error) {
+func (s *ArchiveStore) runFTSQuery(ctx context.Context, ftsExpr string, opts SearchOptions, limit int) ([]matchWithHighlight, error) {
 
 	query := fmt.Sprintf(`
 		SELECT %s,
@@ -1109,7 +1127,7 @@ func (s *ArchiveStore) runFTSQuery(ftsExpr string, opts SearchOptions, limit int
 	query += " ORDER BY rank LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -1164,7 +1182,7 @@ func (s *ArchiveStore) ftsConditions(ftsExpr string, opts SearchOptions) ([]stri
 // countMatches returns how many archived messages match ftsExpr under
 // the same filters runFTSQuery applies, before the result limit. It
 // powers the envelope's total_estimated overflow gauge.
-func (s *ArchiveStore) countMatches(ftsExpr string, opts SearchOptions) (int, error) {
+func (s *ArchiveStore) countMatches(ctx context.Context, ftsExpr string, opts SearchOptions) (int, error) {
 	conditions, args := s.ftsConditions(ftsExpr, opts)
 	query := fmt.Sprintf(`
 		SELECT COUNT(*)
@@ -1173,7 +1191,7 @@ func (s *ArchiveStore) countMatches(ftsExpr string, opts SearchOptions) (int, er
 		WHERE %s
 	`, strings.Join(conditions, " AND "))
 	var n int
-	if err := s.db.QueryRow(query, args...).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count matches: %w", err)
 	}
 	return n, nil
@@ -1186,6 +1204,14 @@ func (s *ArchiveStore) countMatches(ftsExpr string, opts SearchOptions) (int, er
 // unavailable (the LIKE fallback path skips the estimate). Used by
 // [MemorySearch.Search] to populate the envelope's total_estimated.
 func (s *ArchiveStore) CountMatches(opts SearchOptions) (int, error) {
+	return s.CountMatchesContext(context.Background(), opts)
+}
+
+// CountMatchesContext is [ArchiveStore.CountMatches] with caller cancellation.
+func (s *ArchiveStore) CountMatchesContext(ctx context.Context, opts SearchOptions) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if !s.ftsEnabled {
 		return 0, nil
 	}
@@ -1193,14 +1219,14 @@ func (s *ArchiveStore) CountMatches(opts SearchOptions) (int, error) {
 	if expr == "" {
 		return 0, nil
 	}
-	return s.countMatches(expr, opts)
+	return s.countMatches(ctx, expr, opts)
 }
 
 // searchLIKE runs the FTS5-unavailable fallback path. Less
 // precise (substring match, no BM25 ranking) but functional. The
 // anticipation filter applies here too — same rationale as the
 // FTS path, just enforced with a NOT LIKE clause.
-func (s *ArchiveStore) searchLIKE(opts SearchOptions) ([]matchWithHighlight, error) {
+func (s *ArchiveStore) searchLIKE(ctx context.Context, opts SearchOptions) ([]matchWithHighlight, error) {
 	cols := s.msgSelectCols()
 
 	query := fmt.Sprintf(`
@@ -1236,7 +1262,7 @@ func (s *ArchiveStore) searchLIKE(opts SearchOptions) ([]matchWithHighlight, err
 	query += " ORDER BY timestamp DESC LIMIT ?"
 	args = append(args, opts.Limit)
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -1317,111 +1343,52 @@ func mergeFTSMatches(phrase, backfill []matchWithHighlight, limit int) []matchWi
 	return out
 }
 
-// expandContext walks messages outward from a timestamp, stopping at silence gaps.
+// expandContext walks messages outward from a timestamp, stopping at silence
+// gaps. It shares exact timestamp normalization and error handling with range
+// retrieval so imported and native rows produce the same context window.
 func (s *ArchiveStore) expandContext(
+	ctx context.Context,
 	conversationID string,
 	from time.Time,
 	backward bool,
 	opts SearchOptions,
-) []Message {
-	var query string
-	var boundary time.Time
-
-	cols := s.msgSelectCols()
-
+) ([]Message, error) {
+	boundary := from.Add(opts.MaxDuration)
+	q := messageRangeQuery{
+		from: &from, to: &boundary,
+		fromExclusive: true, toExclusive: true,
+		conversationID: conversationID,
+		limit:          opts.MaxMessages,
+		newest:         backward,
+	}
 	if backward {
 		boundary = from.Add(-opts.MaxDuration)
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM messages
-			WHERE conversation_id = ? AND timestamp < ? AND timestamp > ?
-			ORDER BY timestamp DESC
-			LIMIT ?
-		`, cols)
-	} else {
-		boundary = from.Add(opts.MaxDuration)
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM messages
-			WHERE conversation_id = ? AND timestamp > ? AND timestamp < ?
-			ORDER BY timestamp ASC
-			LIMIT ?
-		`, cols)
+		q.from, q.to = &boundary, &from
 	}
-
-	fromStr := from.Format(time.RFC3339Nano)
-	boundaryStr := boundary.Format(time.RFC3339Nano)
-
-	rows, err := s.db.Query(query, conversationID, fromStr, boundaryStr, opts.MaxMessages)
+	candidates, err := s.queryMessagesRange(ctx, q)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer rows.Close()
 
 	var messages []Message
 	prevTime := from
-
-	for rows.Next() {
-		var m Message
-		var tsStr, archivedStr string
-		var toolCalls, toolCallID sql.NullString
-
-		err := rows.Scan(
-			&m.ID, &m.ConversationID, &m.SessionID, &m.Role, &m.Content,
-			&tsStr, &m.TokenCount, &toolCalls, &toolCallID,
-			&archivedStr, &m.ArchiveReason, &m.Origin,
-		)
-		if err != nil {
-			continue
-		}
-
-		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("expandContext: invalid message timestamp",
-					"message_id", m.ID, "timestamp", tsStr, "error", err)
-			}
-			continue // Timestamp is required for gap calculation.
-		}
-		if archivedStr != "" {
-			if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
-				if s.logger != nil {
-					s.logger.Warn("expandContext: invalid archived_at timestamp",
-						"message_id", m.ID, "archived_at", archivedStr, "error", err)
-				}
-				// Keep the message — ArchivedAt is not used for gap logic.
-			}
-		}
-		if toolCalls.Valid {
-			m.ToolCalls = toolCalls.String
-		}
-		if toolCallID.Valid {
-			m.ToolCallID = toolCallID.String
-		}
-
-		// Check silence gap
-		var gap time.Duration
+	for _, m := range candidates {
+		gap := m.Timestamp.Sub(prevTime)
 		if backward {
 			gap = prevTime.Sub(m.Timestamp)
-		} else {
-			gap = m.Timestamp.Sub(prevTime)
 		}
-
 		if gap > opts.SilenceThreshold {
-			break // Hit a silence boundary
+			break
 		}
-
 		messages = append(messages, m)
 		prevTime = m.Timestamp
 	}
-
-	// If we expanded backward, reverse so messages are chronological
 	if backward {
 		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 			messages[i], messages[j] = messages[j], messages[i]
 		}
 	}
-
-	return messages
+	return messages, nil
 }
 
 // StartSession creates a new session record with the current time.
@@ -2215,16 +2182,18 @@ func (s *ArchiveStore) RecentContactTimes(conversationID string, limit int) ([]t
 // instant accepted by the HTTP and tool range contracts.
 type messageRangeQuery struct {
 	from, to         *time.Time
+	fromExclusive    bool
+	toExclusive      bool
 	conversationID   string
 	excludeSessionID string
 	limit            int
 	newest           bool
 }
 
-// queryMessagesRange owns range filtering and deterministic selection for both
-// archive readers. Normalizing on read preserves historical timestamp bytes and
-// exact sub-millisecond boundaries. This expression requires scanning candidate
-// rows; QueryContext makes that work cancellable. Do not replace it with SQLite
+// queryMessagesRange owns range filtering and deterministic selection for
+// archive range readers and search context windows. Normalizing on read preserves
+// historical timestamp bytes and exact sub-millisecond boundaries. This requires
+// scanning candidate rows; QueryContext makes that work cancellable. Do not replace it with SQLite
 // strftime: its millisecond rounding changes inclusive boundaries.
 func (s *ArchiveStore) queryMessagesRange(ctx context.Context, q messageRangeQuery) ([]Message, error) {
 	if q.from != nil && q.to != nil && q.from.After(*q.to) {
@@ -2249,11 +2218,19 @@ func (s *ArchiveStore) queryMessagesRange(ctx context.Context, q messageRangeQue
 		key = "CASE WHEN " + strings.Join(clauses, " AND ") + " THEN " + key + " END"
 	}
 	if q.from != nil {
-		clauses = append(clauses, key+" >= @from_time")
+		op := " >= "
+		if q.fromExclusive {
+			op = " > "
+		}
+		clauses = append(clauses, key+op+"@from_time")
 		args = append(args, sql.Named("from_time", database.TimestampKey(*q.from)))
 	}
 	if q.to != nil {
-		clauses = append(clauses, key+" <= @to_time")
+		op := " <= "
+		if q.toExclusive {
+			op = " < "
+		}
+		clauses = append(clauses, key+op+"@to_time")
 		args = append(args, sql.Named("to_time", database.TimestampKey(*q.to)))
 	}
 	order := "ASC"

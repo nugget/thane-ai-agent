@@ -296,11 +296,9 @@ type WorkingMemoryMatchView struct {
 // hits, and working-memory hits, all in one document.
 //
 // Every kind is always present in the JSON (as an array, possibly
-// empty) so the model sees a consistent shape — an empty list is the
-// explicit signal "no hits on this surface," distinguishable from
-// "this surface wasn't queried." Truncated propagates from the
-// raw-message search (distilled surfaces don't truncate within a
-// single call).
+// empty) so the model sees a consistent shape. Unavailable surfaces are
+// named separately, distinguishing "no hits" from "not searched."
+// Truncated reports overflow on any surface or clipping by the caller.
 func FormatMultiKindResults(b *SearchBundle, now time.Time, truncated bool) []byte {
 	if b == nil {
 		b = &SearchBundle{}
@@ -339,17 +337,19 @@ func FormatMultiKindResults(b *SearchBundle, now time.Time, truncated bool) []by
 	}
 
 	out := struct {
-		Messages       []SearchResultView       `json:"messages"`
-		Sessions       []SessionMatchView       `json:"sessions"`
-		WorkingMemory  []WorkingMemoryMatchView `json:"working_memory"`
-		Truncated      bool                     `json:"truncated"`
-		TotalEstimated int                      `json:"total_estimated,omitempty"`
+		Messages            []SearchResultView       `json:"messages"`
+		Sessions            []SessionMatchView       `json:"sessions"`
+		WorkingMemory       []WorkingMemoryMatchView `json:"working_memory"`
+		Truncated           bool                     `json:"truncated"`
+		TotalEstimated      int                      `json:"total_estimated,omitempty"`
+		UnavailableSurfaces []string                 `json:"unavailable_surfaces,omitempty"`
 	}{
-		Messages:       msgViews,
-		Sessions:       sessViews,
-		WorkingMemory:  wmViews,
-		Truncated:      truncated || b.Truncated,
-		TotalEstimated: b.TotalMessages,
+		Messages:            msgViews,
+		Sessions:            sessViews,
+		WorkingMemory:       wmViews,
+		Truncated:           truncated || b.Truncated,
+		TotalEstimated:      b.TotalMessages,
+		UnavailableSurfaces: append([]string(nil), b.UnavailableSurfaces...),
 	}
 	data, _ := json.Marshal(out)
 	return data

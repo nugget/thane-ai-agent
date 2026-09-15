@@ -140,6 +140,18 @@ The current policy fields are:
 - `git.sign_commits`: signs and commits each managed write/delete.
 - `git.verify_signatures`: sets the consumer policy: `none`, `warn`,
   or `required`.
+- `context.search`: controls explicit search visibility: `default` includes
+  the root in unscoped queries, `on_request` requires naming it, and `never`
+  excludes it even when named.
+- `context.search_body`: explicitly opts logical full document bodies into
+  the general `search` tool. Default `false` preserves metadata-only discovery;
+  `doc_search` continues to search metadata. Authored teasers remain summaries,
+  while matching passages are returned separately as excerpts. For example,
+  set `roots.dossiers.context.search_body: true` to search dossier bodies.
+  Indexing must also be enabled, and `context.search` still governs visibility.
+  This derived SQLite index refreshes with the document index: upgrades backfill
+  unchanged files, edits replace indexed text, and deletion or opting out removes
+  the corresponding body text. Source documents remain authoritative.
 - `context.advertise`: controls bounded document offers: `never`,
   capability-`tagged`, `always` ambient, or `exact_subject`. The last mode
   offers a document only when one of its tags exactly matches a canonical

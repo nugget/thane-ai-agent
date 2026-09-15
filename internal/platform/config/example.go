@@ -150,8 +150,9 @@ func ExampleConfig() *Config {
 				// root stays out unless it says otherwise, so a corpus
 				// can only inject because policy allows it.
 				Context: RootContextPolicy{
-					Inject: RootInjectTagged,
-					Search: RootSearchDefault,
+					Inject:     RootInjectTagged,
+					Search:     RootSearchDefault,
+					SearchBody: true,
 				},
 				Authoring: "managed",
 				Git: DocumentRootGitConfig{

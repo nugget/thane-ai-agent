@@ -33,11 +33,12 @@ func makeRef(root, relPath string) string {
 	return root + ":" + relPath
 }
 
-func scanDocument(rows *sql.Rows, doc *DocumentSummary) error {
+func scanDocument(rows *sql.Rows, doc *DocumentSummary, extra ...any) error {
 	var tagsJSON string
 	var metaJSON string
 	var facetsJSON string
-	if err := rows.Scan(&doc.Root, &doc.Path, &doc.Title, &doc.Summary, &facetsJSON, &tagsJSON, &metaJSON, &doc.ModifiedAt, &doc.WordCount); err != nil {
+	dest := []any{&doc.Root, &doc.Path, &doc.Title, &doc.Summary, &facetsJSON, &tagsJSON, &metaJSON, &doc.ModifiedAt, &doc.WordCount}
+	if err := rows.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}
 	if err := json.Unmarshal([]byte(facetsJSON), &doc.Facets); err != nil || len(doc.Facets) == 0 {

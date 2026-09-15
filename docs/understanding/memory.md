@@ -58,13 +58,24 @@ Complete, immutable transcripts of all conversations with full-text search.
 - **Storage:** Unified `messages` table in thane.db with lifecycle `status`
   column (`active` -> `compacted` -> `archived`). FTS5 index for fast text
   search.
-- **Tool:** `archive_search` — search across all historical conversations
+- **Tools:** `search` — discover conversation evidence alongside indexed documents;
+  `archive_search` — archive-specific discovery with time/conversation filters
+  and surrounding context
 - **Use:** "What did we discuss about MQTT last week?" searches across all sessions
 
 Session transitions update lifecycle status and session ownership in one
 transaction. Message content, IDs, timestamps, provenance, and tool-call
 links stay intact; resetting a conversation clears its active context
 while preserving its searchable history and channel binding.
+
+Explicit discovery and automatic prompt context are separate. The general
+`search` tool coordinates source-owned archive and document indexes; adding a
+searchable document root does not inject its contents into a loop's prompt.
+Document bodies participate only when the root opts into `context.search_body`.
+Root visibility (`default`, `on_request`, `never`), audience restrictions, and
+the calling run's available source tools still apply. Results preserve original
+messages versus synthesized memory, document references, and search coverage.
+Read promising source artifacts before treating a summary as evidence.
 
 ### Episodic Summaries
 

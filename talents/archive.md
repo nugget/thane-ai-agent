@@ -12,6 +12,15 @@ Archive is your long-term memory of conversations — the words spoken
 by you, the user, and the tool I/O captured alongside. Four tools,
 three ways the model usually asks the question.
 
+For a question that may span conversation evidence and maintained documents,
+start with `search`. Activate both `archive` and `documents` for both sources;
+the tool's presence alone grants no additional source access. Read `coverage`
+before drawing conclusions from missing hits. Search keeps original artifacts
+and synthesis distinct; matching a message and a summary of that message is
+not independent corroboration. Follow a promising hit's `read` tool/arguments.
+Use `archive_search` when you need its archive-specific filters or surrounding
+context. A quick lookup is synchronous; it does not create a background loop.
+
 ## The single most important disambiguation
 
 **Archive holds the *words said*. Logs hold the *events produced*.
@@ -42,7 +51,7 @@ conversation*? The split is clean once named.
 ## Choose by the shape of your question
 
 - **You have a topic or phrase in mind** — activate `archive_text`.
-  Semantic search across every past session; returns matches with
+  Lexical search across past sessions; returns matches with
   the surrounding context window so you see a moment, not a line.
 
 - **You have a time window in mind** — activate `archive_time`.
@@ -77,7 +86,7 @@ yours.
 name: archive_text
 tags: [archive_text]
 kind: trailhead
-teaser: "Semantic search across past sessions — phrasing matters less than concept."
+teaser: "Lexical search across past sessions — search known phrases and aliases."
 ---
 
 # Search by text
