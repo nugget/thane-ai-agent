@@ -489,8 +489,16 @@ func TestFindByNickname_OperatorFirst(t *testing.T) {
 					// alone would pick it.
 					operator, other = b, a
 				}
-				if got, err := tools.store.ResolveContact("BOSS"); err != nil || got.ID != other.ID {
+				// Control: before the pin a household rival wins outright and a
+				// known rival ties with the operator's record, which stands at
+				// known too, so only the pin makes the operator the answer.
+				got, err := tools.store.ResolveContact("BOSS")
+				var tie *AmbiguousNameError
+				switch {
+				case rival == ZoneHousehold && (err != nil || got.ID != other.ID):
 					t.Fatalf("control: before the pin ResolveContact = %+v, %v, want %s", got, err, other.FormattedName)
+				case rival == ZoneKnown && (!errors.As(err, &tie) || !tie.ExactTie || tie.Total != 2):
+					t.Fatalf("control: before the pin ResolveContact = %+v, %v, want an exact tie between the two known records", got, err)
 				}
 				sel.pin(tools, operator)
 				for _, lookup := range []func(string) (*Contact, error){tools.store.FindByNickname, tools.store.ResolveContact} {

@@ -16,8 +16,9 @@ type wantCandidate struct{ name, field string }
 
 // TestResolveContact_AuthorityOrder pins the order a name resolves in
 // when several active records answer to it as a formatted name or a
-// nickname: the pinned operator, then records above known, then a
-// formatted-name match before a nickname match, then id. Each case
+// nickname in different bands of standing: the pinned operator, then
+// records above known, then records at known. Two holders in one band
+// are a tie, which TestResolveContact_ExactTies pins. Each case
 // resolves three times so the answer is shown to be stable.
 func TestResolveContact_AuthorityOrder(t *testing.T) {
 	type seed struct{ name, nickname, zone string }
@@ -47,16 +48,6 @@ func TestResolveContact_AuthorityOrder(t *testing.T) {
 			name:   "an admin nickname beats a known formatted name with no operator pinned",
 			seeds:  []seed{{"Boss", "", ZoneKnown}, {"Alice Admin", "boss", ZoneAdmin}},
 			lookup: "BOSS", want: "Alice Admin",
-		},
-		{
-			name:   "within the rank above known a formatted name beats a nickname",
-			seeds:  []seed{{"Robert Trusted", "Bob", ZoneTrusted}, {"Bob", "", ZoneHousehold}},
-			lookup: "bob", want: "Bob",
-		},
-		{
-			name:   "within known a formatted name beats a nickname",
-			seeds:  []seed{{"Robert Known", "Bob", ZoneKnown}, {"Bob", "", ZoneKnown}},
-			lookup: "Bob", want: "Bob",
 		},
 		{
 			// A first name alone is not a name the resolver knows, so this
@@ -92,21 +83,288 @@ func TestResolveContact_AuthorityOrder(t *testing.T) {
 	}
 }
 
-// TestResolveContact_KnownOnlyCollisionsAreDeterministic pins that a
-// nickname two known records share resolves to the lower id every time,
-// whichever was written first.
-func TestResolveContact_KnownOnlyCollisionsAreDeterministic(t *testing.T) {
-	store := newTestStore(t)
-	a := seedNicknameAt(t, store, "Kim One", "twin", ZoneKnown)
-	b := seedNicknameAt(t, store, "Kim Two", "Twin", ZoneKnown)
-	want := a.ID
-	if b.ID.String() < a.ID.String() {
-		want = b.ID
+// TestResolveContact_ExactTies pins what a name resolves to when
+// several active records hold it exactly, as a formatted name or a
+// nickname. A holder in a strictly higher band of standing wins
+// outright: the pinned operator, then records above known, then
+// records at known. Two or more distinct holders in the highest band
+// any holder reaches are an exact tie, an AmbiguousNameError listing
+// them with the field each holds the name by, and never a pick: a
+// formatted name does not beat a nickname, and a lower id does not beat
+// a higher one. It replaces the within-band cases of
+// TestResolveContact_AuthorityOrder and
+// TestResolveContact_KnownOnlyCollisionsAreDeterministic, which pinned
+// those picks on purpose. Every case runs with and without FTS5.
+func TestResolveContact_ExactTies(t *testing.T) {
+	type seed struct{ name, nickname, given, zone string }
+	tests := []struct {
+		name   string
+		seeds  []seed
+		pin    string // the record pinned as the operator, or ""
+		lookup string
+		// want is the formatted name the lookup resolves to; otherwise the
+		// lookup must be an exact tie between wantTie, in listing order, at
+		// standing.
+		want     string
+		wantTie  []wantCandidate
+		standing string
+	}{
+		{
+			name:     "two known records sharing a nickname are a tie",
+			seeds:    []seed{{name: "Alice Baker", nickname: "Ally", zone: ZoneKnown}, {name: "Alice Adams", nickname: "ally", zone: ZoneKnown}},
+			lookup:   "ALLY",
+			wantTie:  []wantCandidate{{"Alice Adams", NameFieldNickname}, {"Alice Baker", NameFieldNickname}},
+			standing: "known",
+		},
+		{
+			name:     "two household records sharing a nickname are a tie",
+			seeds:    []seed{{name: "Carol Adams", nickname: "Cee", zone: ZoneHousehold}, {name: "Carol Baker", nickname: "cee", zone: ZoneHousehold}},
+			lookup:   "Cee",
+			wantTie:  []wantCandidate{{"Carol Adams", NameFieldNickname}, {"Carol Baker", NameFieldNickname}},
+			standing: "above known",
+		},
+		{
+			name:     "a known formatted name does not beat a known nickname",
+			seeds:    []seed{{name: "Alice Adams", nickname: "Alice", zone: ZoneKnown}, {name: "Alice", zone: ZoneKnown}},
+			lookup:   "alice",
+			wantTie:  []wantCandidate{{"Alice", NameFieldFormatted}, {"Alice Adams", NameFieldNickname}},
+			standing: "known",
+		},
+		{
+			name:     "a household formatted name does not beat a trusted nickname, both being above known",
+			seeds:    []seed{{name: "Robert Trusted", nickname: "Bob", zone: ZoneTrusted}, {name: "Bob", zone: ZoneHousehold}},
+			lookup:   "bob",
+			wantTie:  []wantCandidate{{"Bob", NameFieldFormatted}, {"Robert Trusted", NameFieldNickname}},
+			standing: "above known",
+		},
+		{
+			name:     "with no operator pinned an admin stands with a household record",
+			seeds:    []seed{{name: "Alice Admin", nickname: "Boss", zone: ZoneAdmin}, {name: "Hana Household", nickname: "boss", zone: ZoneHousehold}},
+			lookup:   "BOSS",
+			wantTie:  []wantCandidate{{"Alice Admin", NameFieldNickname}, {"Hana Household", NameFieldNickname}},
+			standing: "above known",
+		},
+		{
+			name: "a household holder beats known holders outright",
+			seeds: []seed{
+				{name: "Alice", zone: ZoneKnown},
+				{name: "Alice Adams", nickname: "Alice", zone: ZoneHousehold},
+				{name: "Alice Baker", nickname: "Alice", zone: ZoneKnown},
+			},
+			lookup: "Alice", want: "Alice Adams",
+		},
+		{
+			name: "the pinned operator beats household holders outright",
+			seeds: []seed{
+				{name: "Alice Operator", nickname: "Alice", zone: ZoneKnown},
+				{name: "Alice Adams", nickname: "Alice", zone: ZoneHousehold},
+				{name: "Alice Baker", nickname: "Alice", zone: ZoneHousehold},
+			},
+			pin:    "Alice Operator",
+			lookup: "alice", want: "Alice Operator",
+		},
+		{
+			name: "a lower-standing exact holder is not part of the tie",
+			seeds: []seed{
+				{name: "Alice", zone: ZoneKnown},
+				{name: "Alice Baker", nickname: "Alice", zone: ZoneTrusted},
+				{name: "Alice Adams", nickname: "Alice", zone: ZoneHousehold},
+			},
+			lookup:   "Alice",
+			wantTie:  []wantCandidate{{"Alice Adams", NameFieldNickname}, {"Alice Baker", NameFieldNickname}},
+			standing: "above known",
+		},
+		{
+			name: "one record holding the name as its formatted name and nickname is one holder",
+			seeds: []seed{
+				{name: "Alice", nickname: "alice", zone: ZoneKnown},
+				{name: "Alice Smith", given: "Alice", zone: ZoneHousehold},
+			},
+			lookup: "ALICE", want: "Alice",
+		},
+		{
+			name: "an exact tie takes precedence over short-form holders and is reported alone",
+			seeds: []seed{
+				{name: "Alice Adams", nickname: "Alice", zone: ZoneKnown},
+				{name: "Alice Baker", nickname: "Alice", zone: ZoneKnown},
+				{name: "Alice Smith", given: "Alice", zone: ZoneHousehold},
+				{name: "Dr. A. Jones", given: "Alice", zone: ZoneTrusted},
+			},
+			lookup:   "Alice",
+			wantTie:  []wantCandidate{{"Alice Adams", NameFieldNickname}, {"Alice Baker", NameFieldNickname}},
+			standing: "known",
+		},
+		{
+			name: "padded names fold as before",
+			seeds: []seed{
+				{name: "Alice Adams", nickname: " Alice\t", zone: ZoneKnown},
+				{name: "Alice\u3000", zone: ZoneKnown},
+				{name: "Alice Baker", given: "Alice", zone: ZoneHousehold},
+			},
+			lookup:   "  alice\n",
+			wantTie:  []wantCandidate{{"Alice Adams", NameFieldNickname}, {"Alice\u3000", NameFieldFormatted}},
+			standing: "known",
+		},
 	}
-	for range 3 {
-		if got, err := store.ResolveContact("TWIN"); err != nil || got.ID != want {
-			t.Fatalf("ResolveContact(TWIN) = %+v, %v, want %s", got, err, want)
+	for _, fts := range []bool{true, false} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s/fts=%v", tt.name, fts), func(t *testing.T) {
+				store := newTestStore(t)
+				store.ftsEnabled = fts
+				byName := make(map[string]*Contact, len(tt.seeds))
+				for _, s := range tt.seeds {
+					c, err := store.UpsertWithProperties(&Contact{
+						FormattedName: s.name, Nickname: s.nickname, GivenName: s.given, Kind: "individual", TrustZone: s.zone,
+					}, nil)
+					if err != nil {
+						t.Fatalf("seed %s: %v", s.name, err)
+					}
+					byName[s.name] = c
+				}
+				if tt.pin != "" {
+					store.pinOperatorContactID(byName[tt.pin].ID)
+				}
+				for range 3 {
+					got, err := store.ResolveContact(tt.lookup)
+					if tt.want != "" {
+						if err != nil || got.ID != byName[tt.want].ID {
+							t.Fatalf("ResolveContact(%q) = %+v, %v, want %s", tt.lookup, got, err, tt.want)
+						}
+						continue
+					}
+					requireExactTie(t, err, tt.lookup, tt.standing, tt.wantTie, byName)
+				}
+			})
 		}
+	}
+}
+
+// TestResolveContact_ExactTieContinuation pins that an exact tie too
+// large to list whole points at a query that lists the tied holders
+// first, ahead of every other contact that answers to the name. Seven
+// household records hold the nickname "Eve". Three known records also
+// hold it, below the tie, and three household records answer to it by
+// the first word of their formatted names; each was saved more
+// recently than any tied holder, and each mentions Eve in its note
+// often enough to outrank one, so a search that put every contact
+// answering to the name in one group, ordered by rank or recency within
+// it, would list them among the tied holders. The fixture checks that
+// it does before it checks the search that lists the tie first.
+func TestResolveContact_ExactTieContinuation(t *testing.T) {
+	for _, fts := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fts=%v", fts), func(t *testing.T) {
+			tools := newTestTools(t)
+			tools.store.ftsEnabled = fts
+			seed := func(c Contact) *Contact {
+				t.Helper()
+				c.Kind = "individual"
+				saved, err := tools.store.UpsertWithProperties(&c, nil)
+				if err != nil {
+					t.Fatalf("seed %q: %v", c.FormattedName, err)
+				}
+				return saved
+			}
+			var tied, others []*Contact
+			for i := range maxAmbiguousNamed + 2 {
+				tied = append(tied, seed(Contact{FormattedName: fmt.Sprintf("Tied %d", i+1), Nickname: "Eve", TrustZone: ZoneHousehold}))
+			}
+			for i := range 3 {
+				others = append(others,
+					seed(Contact{FormattedName: fmt.Sprintf("Known %d", i+1), Nickname: "Eve", TrustZone: ZoneKnown, Note: "Eve Eve Eve"}),
+					seed(Contact{FormattedName: fmt.Sprintf("Eve Short %d", i+1), TrustZone: ZoneHousehold, Note: "Eve Eve Eve"}))
+			}
+			for _, set := range []struct {
+				at string
+				cs []*Contact
+			}{{"2026-01-01T00:00:00Z", tied}, {"2026-06-01T00:00:00Z", others}} {
+				for _, c := range set.cs {
+					if _, err := tools.store.db.Exec(`UPDATE contacts SET updated_at = ? WHERE id = ?`, set.at, c.ID.String()); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			_, err := tools.store.ResolveContact("Eve")
+			var tie *AmbiguousNameError
+			if !errors.As(err, &tie) || !tie.ExactTie || tie.Total != len(tied) || len(tie.Candidates) != maxAmbiguousNamed {
+				t.Fatalf("ResolveContact(Eve) = %v, want an exact tie listing %d of %d", err, maxAmbiguousNamed, len(tied))
+			}
+			for i, c := range tie.Candidates {
+				if c.ContactID != tied[i].ID || c.Field != NameFieldNickname {
+					t.Errorf("candidate %d = %+v, want %s by nickname", i, c, tied[i].FormattedName)
+				}
+			}
+			requireContains(t, err, fmt.Sprintf(`and 2 more not listed: contact_lookup with query set to "Eve" lists all %d of them first`, len(tied)))
+
+			isTied := func(c *Contact) bool { return slices.ContainsFunc(tied, func(h *Contact) bool { return h.ID == c.ID }) }
+			search := tools.store.searchLIKE
+			if fts {
+				search = tools.store.searchFTS
+			}
+			// Control: every contact answering to Eve in one group, as the
+			// search once ordered them, lists another among the tied.
+			var ids []any
+			for _, c := range append(append([]*Contact{}, tied...), others...) {
+				ids = append(ids, c.ID.String())
+			}
+			grouped, err := search(t.Context(), "Eve", searchOrder{
+				sql:  `CASE WHEN contacts.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `) THEN 0 ELSE 1 END`,
+				args: ids,
+			})
+			if err != nil {
+				t.Fatalf("grouped search: %v", err)
+			}
+			if !slices.ContainsFunc(grouped[:len(tied)], func(c *Contact) bool { return !isTied(c) }) {
+				t.Fatalf("a search grouping every holder lists the tie first anyway; the fixture no longer shows the ordering is needed")
+			}
+
+			found, _, err := tools.store.search(t.Context(), "Eve")
+			if err != nil {
+				t.Fatalf("search(Eve): %v", err)
+			}
+			for i, c := range found[:len(tied)] {
+				if c.ID != tied[i].ID {
+					t.Errorf("search(Eve) row %d = %q, want the tied holder %q", i, c.FormattedName, tied[i].FormattedName)
+				}
+			}
+
+			got, err := tools.LookupContact(`{"query":"Eve"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, h := range tied {
+				if row := fmt.Sprintf("contact_id %s | trust zone %s | answers to %q by %s", h.ID, h.TrustZone, "Eve", NameFieldNickname); !strings.Contains(got, row) {
+					t.Errorf("contact_lookup query Eve does not list %q as %q:\n%s", h.FormattedName, row, got)
+				}
+			}
+		})
+	}
+}
+
+// TestAmbiguousNameError_ExactTieWording pins how an exact tie names
+// the standing its candidates share, and that its text never borrows the
+// short-form ambiguity's claim that no contact holds the name exactly.
+func TestAmbiguousNameError_ExactTieWording(t *testing.T) {
+	tests := []struct {
+		zone, standing string
+	}{
+		{ZoneKnown, "known"},
+		{ZoneHousehold, "above known"},
+		{ZoneAdmin, "above known"},
+		{"bogus", "above known"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.zone, func(t *testing.T) {
+			e := &AmbiguousNameError{Name: "Eve", ExactTie: true, Total: 2, Candidates: []NameCandidate{
+				{Name: "Eve", TrustZone: tt.zone, Field: NameFieldFormatted},
+				{Name: "Eve Adams", TrustZone: tt.zone, Field: NameFieldNickname},
+			}}
+			got := e.Error()
+			want := fmt.Sprintf("2 active contacts at the same standing (%s) hold it exactly as a formatted name or nickname", tt.standing)
+			if !strings.Contains(got, want) || strings.Contains(got, "is exactly that") || !strings.Contains(got, "only its contact_id tells it apart") {
+				t.Errorf("error = %s\nwant it to contain %q and the contact_id retry, and not the short-form wording", got, want)
+			}
+		})
 	}
 }
 
@@ -318,12 +576,48 @@ func requireSearchFinds(t *testing.T, store *Store, query string, want []string,
 	}
 }
 
-// requireAmbiguous fails unless err is an [AmbiguousNameError] listing
-// exactly want, in order, each with its contact_id, zone and field in
-// the text, and echoing the lookup as trimmed.
+// requireAmbiguous fails unless err is a short-form [AmbiguousNameError]
+// listing exactly want, in order, each with its contact_id, zone and
+// field in the text, and echoing the lookup as trimmed.
 func requireAmbiguous(t *testing.T, err error, lookup string, want []wantCandidate, byName map[string]*Contact) {
-	lookup = strings.TrimSpace(lookup)
 	t.Helper()
+	if ambiguous := requireCandidates(t, err, lookup, want, byName); ambiguous.ExactTie {
+		t.Errorf("ambiguity is an exact tie, want a short-form one:\n%v", err)
+	}
+	for _, s := range []string{"answer to it by a given name or the first word of a formatted name", "resolves to none of them", "Retry with the contact_id", "full formatted name"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("error missing %q:\n%v", s, err)
+		}
+	}
+}
+
+// requireExactTie fails unless err is an exact-tie [AmbiguousNameError]
+// at standing, listing exactly want as requireAmbiguous checks it, with
+// no word of the short-form ambiguity.
+func requireExactTie(t *testing.T, err error, lookup, standing string, want []wantCandidate, byName map[string]*Contact) {
+	t.Helper()
+	if ambiguous := requireCandidates(t, err, lookup, want, byName); !ambiguous.ExactTie {
+		t.Errorf("ambiguity is a short-form one, want an exact tie:\n%v", err)
+	}
+	for _, s := range []string{
+		fmt.Sprintf("%d active contacts at the same standing (%s) hold it exactly as a formatted name or nickname", len(want), standing),
+		"no contact with more authority holds it", "resolves to none of them", "Retry with the contact_id", "only its contact_id tells it apart",
+	} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("error missing %q:\n%v", s, err)
+		}
+	}
+	if strings.Contains(err.Error(), "given name or the first word") {
+		t.Errorf("an exact tie speaks of short forms:\n%v", err)
+	}
+}
+
+// requireCandidates fails unless err is an [AmbiguousNameError] listing
+// exactly want, in order, each with its contact_id, zone and field in
+// the text, and echoing the lookup as trimmed, and returns it.
+func requireCandidates(t *testing.T, err error, lookup string, want []wantCandidate, byName map[string]*Contact) *AmbiguousNameError {
+	t.Helper()
+	lookup = strings.TrimSpace(lookup)
 	var ambiguous *AmbiguousNameError
 	if !errors.As(err, &ambiguous) {
 		t.Fatalf("ResolveContact(%q) error = %v, want an AmbiguousNameError", lookup, err)
@@ -341,11 +635,10 @@ func requireAmbiguous(t *testing.T, err error, lookup string, want []wantCandida
 			t.Errorf("error does not list %s:\n%v", entry, err)
 		}
 	}
-	for _, s := range []string{fmt.Sprintf("ambiguous contact %q", lookup), "answer to it by a given name or the first word of a formatted name", "resolves to none of them", "Retry with the contact_id", "full formatted name"} {
-		if !strings.Contains(err.Error(), s) {
-			t.Errorf("error missing %q:\n%v", s, err)
-		}
+	if echo := fmt.Sprintf("ambiguous contact %q", lookup); !strings.Contains(err.Error(), echo) {
+		t.Errorf("error missing %q:\n%v", echo, err)
 	}
+	return ambiguous
 }
 
 // TestResolveContact_AmbiguityIsBounded pins that an ambiguous name

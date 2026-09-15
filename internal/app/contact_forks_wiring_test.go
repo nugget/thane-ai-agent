@@ -187,6 +187,30 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 		}
 	})
 
+	t.Run("an exact tie at the same standing pins no operator and warns with both", func(t *testing.T) {
+		tied := newEmailIdentityStore(t)
+		var ids []string
+		for _, name := range []string{"Alice Adams", "Alice Baker"} {
+			c, err := tied.Upsert(&contacts.Contact{FormattedName: name, Nickname: "Boss", TrustZone: contacts.ZoneHousehold})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, c.ID.String())
+		}
+		resolver := &contactChannelBindingResolver{store: tied, legacyOwnerContactName: "Boss"}
+		operatorID := resolver.resolvedOperatorContactID()
+		if operatorID != uuid.Nil {
+			t.Fatalf("resolvedOperatorContactID = %s, want none: a tie must not pick an operator", operatorID)
+		}
+		capture := &auditLogCapture{}
+		logLegacyOperatorResolution(slog.New(capture), tied, contactIdentityConfig{legacyOwnerContactName: "Boss"}, operatorID)
+		warns := capture.warns()
+		if len(warns) != 1 || !strings.Contains(warns[0].attrs["error"], "at the same standing (above known) hold it exactly") ||
+			!strings.Contains(warns[0].attrs["error"], ids[0]) || !strings.Contains(warns[0].attrs["error"], ids[1]) {
+			t.Errorf("warns = %+v, want one Warn carrying the exact tie and both ids", warns)
+		}
+	})
+
 	t.Run("a first word names the field it matched", func(t *testing.T) {
 		single := newEmailIdentityStore(t)
 		bob, err := single.Upsert(&contacts.Contact{FormattedName: "Bob Stone", TrustZone: contacts.ZoneKnown})

@@ -23,9 +23,10 @@ const legacyOperatorRemedy = "set identity.operator_contact_id to the operator's
 // as the operator's for the life of the process. The line names the
 // record and the name field the name matched, as [contacts.NameMatchField]
 // names it. When no record was chosen it warns, with the resolver's
-// error when the name fits several records and names none of them. It
-// logs nothing when identity.operator_contact_id is configured or no
-// legacy name is.
+// error when the name fits several records and names none of them: two
+// that hold it exactly at the same standing, or several that share it
+// as a first name. It logs nothing when identity.operator_contact_id is
+// configured or no legacy name is.
 func logLegacyOperatorResolution(logger *slog.Logger, store *contacts.Store, identity contactIdentityConfig, operatorID uuid.UUID) {
 	name := strings.TrimSpace(identity.legacyOwnerContactName)
 	if logger == nil || store == nil || identity.operatorContactID != uuid.Nil || name == "" {
@@ -34,8 +35,8 @@ func logLegacyOperatorResolution(logger *slog.Logger, store *contacts.Store, ide
 	clippedName := clipDirectoryFieldTo(name, maxForkFieldBytes)
 	if operatorID == uuid.Nil {
 		attrs := []any{"owner_contact_name", clippedName, "remedy", legacyOperatorRemedy}
-		// A first name several records share is a different fix from a
-		// name no record holds, so say which it was.
+		// A name several records share, exactly or as a first name, is a
+		// different fix from a name no record holds, so say which it was.
 		if _, err := store.ResolveContact(name); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			attrs = append(attrs, "error", err)
 		}

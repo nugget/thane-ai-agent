@@ -377,9 +377,11 @@ func (s *Store) findByName(ctx context.Context, name string) (*Contact, error) {
 // FindByNickname returns the first active contact with a case-insensitive
 // nickname match. When several active contacts share the nickname, the
 // operator's own record wins at any zone, then one above known (or with
-// a malformed zone), then the oldest id, so a collision resolves to the
-// contact with authority rather than to whichever row the database
-// returns first. Returns sql.ErrNoRows if not found.
+// a malformed zone), then the lowest id. It is not how a name resolves:
+// no notification, lookup or context path calls it, and
+// [Store.ResolveContact], which they all call, reports two holders at
+// the same standing as an ambiguity instead of taking the lower id.
+// Returns sql.ErrNoRows if not found.
 func (s *Store) FindByNickname(name string) (*Contact, error) {
 	return s.findByNickname(context.Background(), name)
 }
@@ -394,18 +396,19 @@ func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, erro
 }
 
 // ResolveContact finds the active contact a name identifies, reading
-// name fields only: first the contacts whose formatted name or nickname
-// is the name, ordered as operator_order.go describes (the operator's
-// own record, then records above known, then a formatted-name match
-// before a nickname match), then the one contact that answers to it by
-// a given name or the first word of its formatted name, as
-// name_resolve.go describes. Notes, AI summaries and organizations are
-// never read; [Store.Search] reads them. Both steps compare the name
-// and each stored name trimmed of edge space and folded with LOWER, as
-// the fork audit folds them, so a blank name answers to no one. Returns
-// [sql.ErrNoRows] when no contact answers to the name, and an
-// [*AmbiguousNameError] when none holds it exactly and two or more
-// answer to it by a given name or first word.
+// name fields only: first the one contact whose formatted name or
+// nickname is the name in the highest band of standing any such
+// contact reaches, as operator_order.go describes (the operator's own
+// record, then records above known, then records at known), then the
+// one contact that answers to it by a given name or the first word of
+// its formatted name, as name_resolve.go describes. Notes, AI summaries
+// and organizations are never read; [Store.Search] reads them. Both
+// steps compare the name and each stored name trimmed of edge space and
+// folded with LOWER, as the fork audit folds them, so a blank name
+// answers to no one. Returns [sql.ErrNoRows] when no contact answers to
+// the name, and an [*AmbiguousNameError] when two or more hold it
+// exactly in that band (ExactTie), or when none holds it exactly and
+// two or more answer to it by a given name or first word.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
 	return s.resolveContact(context.Background(), name)
 }
@@ -416,10 +419,17 @@ func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, erro
 	// the name the lookup was made by.
 	name = strings.TrimSpace(name)
 
-	// 1. Formatted name or nickname, authority first.
+	// 1. Formatted name or nickname, the highest band of standing, where
+	// two holders are a tie and not a pick.
 	c, err := s.findByNameOrNickname(ctx, name)
 	if err == nil {
 		return c, nil
+	}
+	var ambiguous *AmbiguousNameError
+	if errors.As(err, &ambiguous) {
+		// An exact tie is reported as itself; a short form cannot settle
+		// what a formatted name or nickname left open.
+		return nil, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("find by name or nickname %q: %w", name, err)
@@ -428,7 +438,6 @@ func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, erro
 	// 2. The fork audit's other name keys, with no tie-break.
 	c, err = s.resolveByNameKeys(ctx, name)
 	if err != nil {
-		var ambiguous *AmbiguousNameError
 		if errors.Is(err, sql.ErrNoRows) || errors.As(err, &ambiguous) {
 			return nil, err
 		}
@@ -524,9 +533,14 @@ func (o searchOrder) then(rest string) string {
 // nameHoldersFirst builds the ORDER BY term that puts first the active
 // contacts answering to query as a name, as [nameKeys.answersTo] reads
 // their name keys, so a search lists them ahead of contacts it matches
-// only by other text. It names at most SearchLimit+1 of them, the
-// operator's first, then those above known, then by name and id, as an
-// ambiguous name lists them, since a search returns no more than that.
+// only by other text. It orders them among themselves as an ambiguous
+// name lists them: the contacts holding the query exactly, as a
+// formatted name or nickname, before those answering by a short form,
+// and within each the operator's first, then those above known, then by
+// name and id. So the contacts an exact tie is between come first, and
+// no lower-standing holder or short form is listed among them. It names
+// at most SearchLimit+1 of them, since a search returns no more than
+// that.
 func (s *Store) nameHoldersFirst(ctx context.Context, query string) (searchOrder, error) {
 	key := nameKey(query)
 	if key == "" {
@@ -536,25 +550,35 @@ func (s *Store) nameHoldersFirst(ctx context.Context, query string) (searchOrder
 	if err != nil {
 		return searchOrder{}, fmt.Errorf("find contacts answering to %q: %w", query, err)
 	}
-	var holders []ContactForkMember
+	type holder struct {
+		member ContactForkMember
+		exact  bool
+	}
+	var holders []holder
 	for _, r := range records {
 		if r.keys.answersTo(key) {
-			holders = append(holders, r.member)
+			holders = append(holders, holder{r.member, containsNameKey(r.keys.exact, key)})
 		}
 	}
 	if len(holders) == 0 {
 		return searchOrder{}, nil
 	}
-	sort.SliceStable(holders, func(i, j int) bool { return forkMemberLess(holders[i], holders[j]) })
+	sort.SliceStable(holders, func(i, j int) bool {
+		if holders[i].exact != holders[j].exact {
+			return holders[i].exact
+		}
+		return forkMemberLess(holders[i].member, holders[j].member)
+	})
 	holders = holders[:min(len(holders), SearchLimit+1)]
-	args := make([]any, len(holders))
+	var b strings.Builder
+	b.WriteString("CASE contacts.id")
+	args := make([]any, 0, 2*len(holders))
 	for i, h := range holders {
-		args[i] = h.ContactID.String()
+		b.WriteString(" WHEN ? THEN ?")
+		args = append(args, h.member.ContactID.String(), i)
 	}
-	return searchOrder{
-		sql:  `CASE WHEN contacts.id IN (` + database.Placeholders(len(args)) + `) THEN 0 ELSE 1 END`,
-		args: args,
-	}, nil
+	fmt.Fprintf(&b, " ELSE %d END", len(holders))
+	return searchOrder{sql: b.String(), args: args}, nil
 }
 
 func (s *Store) searchFTS(ctx context.Context, query string, first searchOrder) ([]*Contact, error) {
