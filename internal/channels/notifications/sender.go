@@ -26,9 +26,9 @@ type HAClient interface {
 // ResolveContact matches a formatted name or nickname, preferring the
 // operator's own record and then records above known, then the one
 // contact whose given name or first word the name is. It never matches
-// notes, and a first name two contacts share is an error that lists
-// both rather than a guess, so a notification is never routed to a
-// contact the name only mentions.
+// notes, and a first name several contacts share is an error that
+// lists up to five of them rather than a guess, so a notification is
+// never routed to a contact the name only mentions.
 type ContactResolver interface {
 	ResolveContact(name string) (*contacts.Contact, error)
 	GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error)

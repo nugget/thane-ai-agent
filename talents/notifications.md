@@ -87,9 +87,11 @@ settle *how*:
   first, then one above `known`, then a formatted-name match before a
   nickname). Only when none does, they take the one contact whose
   given name or first word it is; a first name two contacts share
-  reaches neither, and the error lists each with its full formatted
-  name, zone, and `contact_id`, so send again with the full formatted
-  name of the one you mean. Notes, orgs, and AI summaries never
+  reaches neither. The error lists up to five of the contacts that
+  share it, each with its full formatted name, zone, and `contact_id`,
+  and counts the rest, which `contact_lookup` with that first name as
+  `query` lists ahead of any other match; send again with the full
+  formatted name of the one you mean. Notes, orgs, and AI summaries never
   resolve a recipient, so pass the person's exact contact name or
   nickname, not a description: a description reaches no one. The
   channel comes from the contact's facts: a

@@ -19,7 +19,8 @@ func TestContactNameRuleTeachesResolution(t *testing.T) {
 		"formatted name or nickname", "operator's own contact wins, then one above known",
 		"given name or the first word of its formatted name", "exactly one contact must fit",
 		"Notes, AI summaries and organizations are never used to resolve a name",
-		"none is chosen", "full formatted name, trust zone and contact_id",
+		"none is chosen", "lists up to five of them", "full formatted name, trust zone and contact_id",
+		"counts the rest, which contact_lookup with the name as query lists ahead of any other match",
 	} {
 		if !strings.Contains(contactNameRule, want) {
 			t.Errorf("contactNameRule lacks %q: %s", want, contactNameRule)

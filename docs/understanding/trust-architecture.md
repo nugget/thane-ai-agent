@@ -408,10 +408,16 @@ contact with authority and is still reported.
   five with formatted name, zone, `contact_id` and the field matched,
   counting the rest and pointing at `contact_lookup`'s `query` to find
   them, because authority breaks ties among exact holders only.
-  Notes, AI summaries, and organizations are never read: a word in one
-  contact's note does not make that contact the person it names, and
-  `Store.Search`, behind `contact_lookup`'s `query` and the contacts API,
-  is the only path that reads them. Notifications, decision requests,
+  `Store.Search` lists every contact that answers to a name by these
+  keys ahead of any other match, so that query reaches the rest while
+  no more than 50 (`SearchLimit`) share the name; past that the error
+  says no lookup lists them all. Notes, AI summaries, and organizations
+  are never read: a word in one contact's note does not make that
+  contact the person it names, and `Store.Search`, behind
+  `contact_lookup`'s `query` and the contacts API, is the only path
+  that reads them, together with formatted names, nicknames, and given
+  names. Search reads one row past its limit, so it says it stopped
+  only when more contacts match than it lists. Notifications, decision requests,
   `contact_lookup`, `contact_whereabouts`, vCard export, and
   `contact_forget` by name use it, and so does channel context for a
   sender no channel bound to a contact. A `known` record whose formatted

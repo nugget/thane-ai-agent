@@ -216,12 +216,14 @@ then exactly one contact must fit: `Alice` returns Alice Jones when no
 other contact's given name or first word is Alice. When two or more
 fit, such as a household Dave Rivera and a `known` Dave Smith, the
 lookup returns neither, whatever their zones, because a first name two
-people share does not say which one is meant. The error lists each
-with its formatted name, trust zone, `contact_id`, and the field it
-matched. It lists at most five; when more fit, it counts the rest and
-points you at `query` to find the one you mean among them. Retry with the full formatted name of the one you mean, or
-pass its `contact_id` to a tool that takes one; if the conversation
-does not settle which, ask rather than guess.
+people share does not say which one is meant. The error lists up to
+five of them, each with its formatted name, trust zone, `contact_id`,
+and the field it matched, and counts the rest; `query` set to that
+name lists every contact that fits ahead of any other match, so it
+reaches the ones the error left out while no more than 50 share the
+name. Retry with the full formatted name of the one you mean, or pass
+its `contact_id` to a tool that takes one; if the conversation does
+not settle which, ask rather than guess.
 
 A whole name still beats a first name: `Bob` returns a `known` contact
 named just Bob, not a household Bob Smith. When a first name returns a
@@ -245,8 +247,9 @@ or a `key`/`value` filter, or decide to `contact_save` deliberately.
 ## You have partial information
 
 `contact_lookup` with `query` runs a full-text/LIKE search across
-the contact's text fields — `formatted_name`, `nickname`, `note`,
-`ai_summary`, `org`. **It does not search properties/facts** —
+the contact's text fields — `formatted_name`, `nickname`,
+`given_name`, `note`, `ai_summary`, `org`. **It does not search
+properties/facts** —
 the property store is keyed and queried separately. To match on a
 specific property value (e.g., "find the contact with this email"),
 use the `key` + `value` filter below instead of `query`:
@@ -257,9 +260,10 @@ use the `key` + `value` filter below instead of `query`:
 }
 ```
 
-Returns up to 50 matching contacts, and says so when it stops at 50,
-because other contacts may match too. Useful when the name in the input is
-the person's company, their title, or a partial spelling. It is the
+Returns up to 50 matching contacts, those whose formatted name,
+nickname, given name, or first word the query is listed first, and
+says so when more match than it lists. Useful when the name in the
+input is the person's company, their title, or a partial spelling. It is the
 only lookup that reads those text fields, and it returns a list to
 choose from, never an answer to who a name is.
 
@@ -642,7 +646,8 @@ exactly one of `name` or `contact_id`:
 
 A name resolves once, the way `contact_lookup` resolves it; a first
 name two contacts share resolves to neither and removes nothing, and
-the error lists each `contact_id`. A `contact_id` is the canonical
+the error lists up to five of their `contact_id` values. A
+`contact_id` is the canonical
 UUID of one active contact, lowercase with hyphens, and removes
 exactly that contact:
 
