@@ -47,7 +47,8 @@ func newMailboxView(cfg AccountConfig) mailboxView {
 }
 
 // filingView is the part of an account's entry that says where
-// email_move may file its mail. move_into renders only when it is
+// email_move may file its mail in a turn the operator is not present
+// for. move_into renders only when it is
 // limited. junk_folder renders beside it, and on every operator mailbox
 // even when the operator allowed every folder, because the undo of a
 // spam move starts from it. filing_note renders whenever the operator
@@ -58,8 +59,11 @@ type filingView struct {
 	// or the cached listing, omitted until one of those is known.
 	JunkFolder string `json:"junk_folder,omitempty"`
 
-	// MoveInto lists the folders email_move may file into, resolved to
-	// names; a role no folder is known to hold yet shows as role:<role>.
+	// MoveInto lists the folders email_move may file into in a turn the
+	// operator is not present for, resolved to names; a role no folder
+	// is known to hold yet shows as role:<role>. It renders in the
+	// operator's own conversation too, where it does not bind, because
+	// it still says what the account's loops may file.
 	MoveInto []string `json:"move_into,omitempty"`
 
 	// FilingNote is the operator's sentence on how the mailbox is filed.

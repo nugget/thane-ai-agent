@@ -39,15 +39,19 @@ type EmailMailboxConfig struct {
 	// the model in the account's Email Accounts entry.
 	Voice string `yaml:"voice"`
 
-	// MoveInto lists where email_move may file this account's mail. An
-	// entry is role:<role>, the folder holding that special-use role
-	// (inbox, sent, trash, junk, archive, all, flagged or important;
-	// junk_folder and trash_folder answer for their roles first), or an
-	// exact folder name; "*" alone allows every folder. Moving mail back
-	// to INBOX out of a listed folder is always allowed, so a move can be
-	// undone. The drafts folder can never be listed. Default: [role:junk]
-	// when owner is operator, so only spam leaves the operator's INBOX,
-	// and ["*"] otherwise.
+	// MoveInto lists where email_move may file this account's mail in a
+	// turn the operator is not present for, such as a new-mail wake or a
+	// scheduled loop. An entry is role:<role>, the folder holding that
+	// special-use role (inbox, sent, trash, junk, archive, all, flagged
+	// or important; junk_folder and trash_folder answer for their roles
+	// first), or an exact folder name; "*" alone allows every folder.
+	// Moving mail back to INBOX out of a listed folder is always allowed,
+	// so a move can be undone. The drafts folder can never be listed. It
+	// binds only those turns: in the operator's own conversation
+	// email_move may file into any folder but the drafts folder.
+	// Default: [role:junk] when owner is operator, so a turn the operator
+	// is not present for moves only spam out of their INBOX, and ["*"]
+	// otherwise.
 	MoveInto []string `yaml:"move_into"`
 
 	// FilingNote is an optional operator-authored sentence, at most 300

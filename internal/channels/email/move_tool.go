@@ -8,9 +8,10 @@ import (
 
 // move runs one validated email_move. Before anything moves it resolves
 // the drafts folder once and the destination, applies the drafts
-// protections and the account's filing policy, reads each message's
-// sender, and lets the junk guard hold back what it must; then it moves
-// the rest and reports every moved message with its sender.
+// protections, applies the account's filing policy in a turn the
+// operator is not present for, reads each message's sender, and lets
+// the junk guard hold back what it must; then it moves the rest and
+// reports every moved message with its sender.
 func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest) (moveResponse, error) {
 	s := t.service
 	r := s.newFolderResolver(acct)
@@ -36,7 +37,12 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 	if r.err != nil {
 		return moveResponse{}, r.err
 	}
-	if err := s.refuseFiling(ctx, acct, policy, opts.Folder, dest); err != nil {
+	// move_into binds only turns the operator is not present for. In
+	// theirs the move goes ahead and the log records that it went
+	// outside the rule; the drafts protections above hold in both.
+	if attended(ctx) {
+		s.logMoveOutsideMoveInto(ctx, acct, policy, opts.Folder, dest)
+	} else if err := s.refuseFiling(ctx, acct, policy, opts.Folder, dest); err != nil {
 		return moveResponse{}, err
 	}
 

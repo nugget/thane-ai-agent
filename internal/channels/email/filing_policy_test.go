@@ -81,10 +81,11 @@ func decodeMove(t *testing.T, out string) moveResponse {
 	return resp
 }
 
-// TestMoveIntoAllowsAndRefusesPerOwner pins mailbox.move_into: an
-// operator mailbox files only into what the list resolves to, by role
-// or by name, and back to INBOX out of those; an assistant mailbox
-// files anywhere unless its list says otherwise.
+// TestMoveIntoAllowsAndRefusesPerOwner pins mailbox.move_into in a turn
+// the operator is not present for, the only turns it binds: an operator
+// mailbox files only into what the list resolves to, by role or by
+// name, and back to INBOX out of those; an assistant mailbox files
+// anywhere unless its list says otherwise.
 func TestMoveIntoAllowsAndRefusesPerOwner(t *testing.T) {
 	byRole := func(role string) map[string]any { return map[string]any{"destination_role": role} }
 	byName := func(name string) map[string]any { return map[string]any{"destination": name} }
@@ -125,7 +126,7 @@ func TestMoveIntoAllowsAndRefusesPerOwner(t *testing.T) {
 			for k, v := range tt.target {
 				args[k] = v
 			}
-			out, err := svc.ToolProvider().HandleMove(attendedCtx(), args)
+			out, err := svc.ToolProvider().HandleMove(context.Background(), args)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatalf("move = %s, want a refusal", out)
@@ -153,7 +154,9 @@ func TestMoveIntoAllowsAndRefusesPerOwner(t *testing.T) {
 // TestFilingRefusalTeachesWhatInboxIs pins the refusal text word for
 // word: on an operator mailbox it says what INBOX is to the operator and
 // where mail may go instead, naming a role no folder holds as a gap;
-// elsewhere it names the limit.
+// elsewhere it names the limit. Only a turn the operator is not present
+// for is refused, so every refusal says so and names their own
+// conversation as the way the move can still happen.
 func TestFilingRefusalTeachesWhatInboxIs(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -162,10 +165,10 @@ func TestFilingRefusalTeachesWhatInboxIs(t *testing.T) {
 		source string // "" is INBOX, moving into Receipts; otherwise a return to INBOX
 		want   string
 	}{
-		{"operator mailbox", "operator", false, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree; mail may move only into ["Bulk Mail"], and back to INBOX from there. Flag it instead; nothing was moved`},
-		{"operator mailbox without a junk folder", "operator", true, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree; mail may move only into [the junk role, which no folder here has], and back to INBOX from there. Flag it instead; nothing was moved`},
-		{"limited assistant mailbox", "assistant", false, "", `email_move cannot file into "Receipts" on account "primary": its mailbox.move_into allows only ["Bulk Mail"], and back to INBOX from there. Choose one of those or report the need; nothing was moved`},
-		{"a return to INBOX names the unlisted source", "operator", false, "Receipts", `email_move cannot return mail to INBOX from "Receipts" on account "primary": mail goes back to INBOX only out of a folder its mailbox.move_into lists, ["Bulk Mail"], and "Receipts" is not one of them. Leave the mail where it is, and if the operator asked for the move, tell them it is theirs to make; nothing was moved`},
+		{"operator mailbox", "operator", false, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree, so in a turn the operator is not present for, mail may move only into ["Bulk Mail"], and back to INBOX from there. Flag it instead; if it needs filing, the operator can make the move themselves or ask for it in their own conversation, where move_into does not apply; nothing was moved`},
+		{"operator mailbox without a junk folder", "operator", true, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree, so in a turn the operator is not present for, mail may move only into [the junk role, which no folder here has], and back to INBOX from there. Flag it instead; if it needs filing, the operator can make the move themselves or ask for it in their own conversation, where move_into does not apply; nothing was moved`},
+		{"limited assistant mailbox", "assistant", false, "", `email_move cannot file into "Receipts" on account "primary": in a turn the operator is not present for, its mailbox.move_into allows only ["Bulk Mail"], and back to INBOX from there. Choose one of those, or leave the mail and report the need: the operator can make the move themselves or ask for it in their own conversation, where move_into does not apply; nothing was moved`},
+		{"a return to INBOX names the unlisted source", "operator", false, "Receipts", `email_move cannot return mail to INBOX from "Receipts" on account "primary": in a turn the operator is not present for, mail goes back to INBOX only out of a folder its mailbox.move_into lists, ["Bulk Mail"], and "Receipts" is not one of them. Leave the mail where it is: the operator can make the move themselves or ask for it in their own conversation, where move_into does not apply; nothing was moved`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
