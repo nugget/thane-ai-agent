@@ -38,7 +38,8 @@ const (
 // vouch for it: they never change a sender's trust_zone or the
 // per-address automated key. Their one effect in Go is that
 // [Service.Send] refuses an unattended reply to a marked message
-// (RFC 3834 §2).
+// (RFC 3834 §2), except bulk mail a person sent that names a relaxed
+// drafts-only account in its own To or Cc, which is drafted instead.
 type HeaderMarks struct {
 	// AutoSubmitted is the message's Auto-Submitted keyword (RFC 3834
 	// §2): one of the AutoSubmitted constants, and empty when the header
@@ -50,7 +51,25 @@ type HeaderMarks struct {
 	// bulk, list, or junk. RFC 3834 §2 names only Precedence "list", as
 	// a heuristic; bulk and junk are de facto convention (RFC 2076).
 	Bulk bool `json:"bulk,omitempty"`
+
+	// listReplyBar names why bulk mail cannot take the list-mail rule,
+	// or is empty when it can or the message is not bulk. The rule is
+	// for mail a list distributed, which List-Id or a Precedence of bulk
+	// or list marks. A Precedence of junk bars it whatever else the
+	// message carries, because classic vacation-style autoresponders
+	// mark their replies that way and set no Auto-Submitted. The RFC 2369
+	// List-* fields alone bar it too, because a sender adds
+	// List-Unsubscribe and its kin to its own mailings. It is never
+	// rendered.
+	listReplyBar string
 }
+
+// Reasons bulk mail cannot take the list-mail rule, for
+// [HeaderMarks.listReplyBar].
+const (
+	listReplyBarJunk       = "precedence_junk"
+	listReplyBarListFields = "list_fields_only"
+)
 
 // Marked reports whether the message carries either mark.
 func (m HeaderMarks) Marked() bool {
@@ -106,16 +125,29 @@ func headerMarks(raw []byte) (HeaderMarks, error) {
 			break
 		}
 	}
+	// distributed is a List-Id or a Precedence of bulk or list, the
+	// marks of mail a list sent out; listFields is any other RFC 2369
+	// List-* field, which a sender may add to its own mailings.
+	distributed, listFields, junk := h.Has("List-Id"), false, false
 	for _, field := range listHeaderFields {
-		if h.Has(field) {
-			marks.Bulk = true
+		if field != "List-Id" && h.Has(field) {
+			listFields = true
 		}
 	}
 	for _, v := range h.Values("Precedence") {
 		switch headerKeyword(v) {
-		case "bulk", "list", "junk":
-			marks.Bulk = true
+		case "bulk", "list":
+			distributed = true
+		case "junk":
+			junk = true
 		}
+	}
+	marks.Bulk = distributed || listFields || junk
+	switch {
+	case junk:
+		marks.listReplyBar = listReplyBarJunk
+	case listFields && !distributed:
+		marks.listReplyBar = listReplyBarListFields
 	}
 	return marks, err
 }

@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
@@ -12,8 +13,8 @@ import (
 // they share one path, [Service.Send], which is where every policy
 // decision about outbound mail is made: access, the audit copy, the
 // trust gate, delivery routing, inspection, signing, and the SMTP or
-// Drafts hand-off. The handlers only assemble the request and render
-// the outcome.
+// drafts-folder hand-off. The handlers only assemble the request and
+// render the outcome.
 
 // HandleSend composes a new message and hands it to the send pipeline.
 func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, error) {
@@ -113,16 +114,19 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 	}
 
 	outcome, err := t.service.Send(ctx, SendRequest{
-		Tool:       "email_reply",
-		Account:    acct,
-		To:         addressStrings(to),
-		Cc:         addressStrings(cc),
-		Subject:    subject,
-		Body:       opts.Body,
-		InReplyTo:  original.MessageID,
-		References: refs,
-		Draft:      toolargs.Bool(args, "draft"),
-		Original:   original.HeaderMarks,
+		Tool:               "email_reply",
+		Account:            acct,
+		To:                 addressStrings(to),
+		Cc:                 addressStrings(cc),
+		Subject:            subject,
+		Body:               opts.Body,
+		InReplyTo:          original.MessageID,
+		References:         refs,
+		Draft:              toolargs.Bool(args, "draft"),
+		Original:           original.HeaderMarks,
+		OriginalRecipients: slices.Concat(original.To, original.Cc),
+		OriginalEnvelope:   &original.Envelope,
+		OriginalFolder:     opts.Folder,
 	})
 	if err != nil {
 		return "", err

@@ -413,9 +413,16 @@ func ExampleConfig() *Config {
 					Policy: EmailPolicyConfig{
 						Access:                 EmailAccessSend,
 						Delivery:               EmailDeliveryByTrustZone,
+						DraftGate:              EmailDraftGateStrict,
 						DeniedRecipientDomains: []string{"example.org"},
 					},
-					Mailbox: EmailMailboxConfig{Owner: EmailMailboxOwnerAssistant},
+					Mailbox: EmailMailboxConfig{
+						Owner:         EmailMailboxOwnerAssistant,
+						WakeLoop:      EmailWakeLoopDefaultHandler,
+						ReviewDelay:   defaultEmailReviewDelay,
+						ReviewMaxWait: defaultEmailReviewMaxWait,
+						Labels:        []string{"contact"},
+					},
 				},
 				{
 					Name:        "packages",
@@ -427,8 +434,21 @@ func ExampleConfig() *Config {
 						Password: "your-email-password",
 						TLS:      &imapTLS,
 					},
-					Policy:  EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone},
-					Mailbox: EmailMailboxConfig{Owner: EmailMailboxOwnerAssistant},
+					Policy: EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone, DraftGate: EmailDraftGateStrict},
+					Mailbox: EmailMailboxConfig{
+						Owner:         EmailMailboxOwnerAssistant,
+						WakeLoop:      EmailWakeLoopDefaultHandler,
+						ReviewDelay:   defaultEmailReviewDelay,
+						ReviewMaxWait: defaultEmailReviewMaxWait,
+					},
+				},
+			},
+			Labels: map[string]EmailLabelConfig{
+				"contact": {
+					Meaning: "The sender matches a contact record",
+					Keyword: "thane-contact",
+					Color:   "blue",
+					Apply:   EmailLabelApplyContactMatched,
 				},
 			},
 		},

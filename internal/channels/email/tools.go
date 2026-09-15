@@ -49,7 +49,10 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
-	return marshalListResponse(newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()))
+	resp := newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
+	t.service.draftIndexFor(ctx, acct, listed.Folder).annotate(&resp)
+	t.service.labelRows(acct.Name, listed, &resp)
+	return marshalListResponse(resp)
 }
 
 // HandleRead reads a single message by UID.
@@ -89,6 +92,8 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 	t.service.recordOp("email_read", acct.Name, folder, strconv.FormatUint(uint64(uid), 10))
 	header := newReadResponse(acct.Name, folder, msg, markSeen, auth, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
 	header.AccessNote = accessNote
+	header.ThaneDraft = t.service.draftIndexFor(ctx, acct, folder).refRow(msg.UID, msg.MessageID, msg.Flags)
+	header.Labels, header.FlagLabel = t.service.labelsFor(acct.Name, newMessageCopy(folder, msg.UIDValidity, msg.UID), msg.MessageID, msg.Flags)
 	return renderRead(header, msg)
 }
 
@@ -154,6 +159,9 @@ func (t *Tools) refreshOnFolderMiss(ctx context.Context, acct ResolvedAccount, e
 
 // HandleSearch searches for messages matching the given criteria.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
+	if props := t.searchProperties(); len(undeclaredArguments(args, props)) > 0 {
+		return "", undeclaredRefusal("email_search", "nothing was searched", undeclaredArguments(args, props), props)
+	}
 	opts := SearchOptions{
 		Folder:    toolargs.TrimmedString(args, "folder"),
 		Query:     toolargs.TrimmedString(args, "query"),
@@ -162,13 +170,14 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		Subject:   toolargs.TrimmedString(args, "subject"),
 		Unseen:    toolargs.Bool(args, "unseen"),
 		Flagged:   toolargs.Bool(args, "flagged"),
+		Unflagged: toolargs.Bool(args, "unflagged"),
 		MessageID: toolargs.TrimmedString(args, "message_id"),
 		InReplyTo: toolargs.TrimmedString(args, "in_reply_to"),
 		Limit:     toolargs.IntOr(args, "limit", DefaultListLimit),
 	}
 
 	now := time.Now()
-	var problems []string
+	problems := t.searchLabelProblems(args, &opts)
 	if s := toolargs.TrimmedString(args, "since"); s != "" {
 		since, err := parseSearchDate(s, now)
 		if err != nil {
@@ -191,13 +200,19 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 	if err != nil {
 		return "", err
 	}
+	if err := t.searchLabelCarried(acct, args); err != nil {
+		return "", err
+	}
 
 	found, err := acct.Client.SearchMessages(ctx, opts)
 	if err != nil {
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
-	return marshalListResponse(newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now))
+	resp := newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now)
+	t.service.draftIndexFor(ctx, acct, found.Folder).annotate(&resp)
+	t.service.labelRows(acct.Name, found, &resp)
+	return marshalListResponse(resp)
 }
 
 // parseSearchDate accepts the shapes a model plausibly sends for a
@@ -210,19 +225,12 @@ func parseSearchDate(s string, now time.Time) (time.Time, error) {
 	return promptfmt.ParseTimeOrDelta(s, now)
 }
 
-// HandleMark adds or removes a flag on messages.
+// HandleMark adds or removes a flag, or a label (labels_mark.go), on
+// messages.
 func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, error) {
 	action := parseMarkAction(args)
-
-	var problems []string
-	if len(action.UIDs) == 0 {
-		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
-	}
-	if action.Flag == "" {
-		problems = append(problems, fmt.Sprintf("flag is required (one of %s)", strings.Join(ValidFlagNames(), ", ")))
-	} else if _, ok := ValidFlag(action.Flag); !ok {
-		problems = append(problems, fmt.Sprintf("flag %q is not supported (one of %s)", action.Flag, strings.Join(ValidFlagNames(), ", ")))
-	}
+	labelName := toolargs.TrimmedString(args, "label")
+	label, problems := t.markProblems(action, labelName)
 	if len(problems) > 0 {
 		return "", fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
@@ -234,9 +242,32 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if err := t.service.requireOrganize(acct, "email_mark"); err != nil {
 		return "", err
 	}
+	drafts, err := t.service.protectedDrafts(ctx, "email_mark", acct, t.service.newFolderResolver(acct), "nothing was changed")
+	if err != nil {
+		return "", err
+	}
+	if err := t.service.refuseDraftsSource(ctx, "email_mark", acct, drafts, action.Folder, "nothing was changed"); err != nil {
+		return "", err
+	}
+	if labelName != "" {
+		return t.markLabel(ctx, acct, action, label)
+	}
+	if action.Flag == "answered" && acct.Config.DeliveryMode() == DeliveryDrafts {
+		return "", t.service.answeredRefusal(ctx, acct)
+	}
 	if action.Add && action.Flag == "seen" {
 		if err := t.service.refuseUnattendedSeen(ctx, "email_mark", acct, "nothing was changed, and a message that needs the operator gets flag \"flagged\" instead"); err != nil {
 			return "", err
+		}
+	}
+
+	var released []uint32
+	if action.Flag == "flagged" && !action.Add {
+		// A flag Thane wrote for a label goes with its colour keywords,
+		// before \Flagged itself, so none is left behind (labels_mark.go).
+		var err error
+		if released, err = t.service.releaseThaneFlags(ctx, acct, action.Folder, action.UIDs, false); err != nil {
+			return "", t.refreshOnFolderMiss(ctx, acct, unflagStopped(acct.Name, normalizeFolder(action.Folder), released, err))
 		}
 	}
 
@@ -250,14 +281,24 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 		verb = "flag_removed"
 	}
 	t.service.recordOp("email_mark", acct.Name, result.Folder, fmt.Sprintf("%s %s on %d", verb, action.Flag, len(result.Affected)))
-	return marshalResponse(markResponse{
+	resp := markResponse{
 		Action:       verb,
 		Account:      acct.Name,
 		Folder:       result.Folder,
 		Flag:         action.Flag,
 		UIDsAffected: nonNilUIDs(result.Affected),
 		UIDsNotFound: nonNilUIDs(missingUIDs(result.Requested, result.Affected)),
-	})
+	}
+	resp.ThaneColorCleared = released
+	if action.Flag == "flagged" && action.Add {
+		cleared, err := t.service.releaseThaneFlags(ctx, acct, result.Folder, result.Affected, true)
+		resp.ThaneColorCleared = cleared
+		if err != nil {
+			t.logger.Warn("email label colour not cleared after flagging", "account", acct.Name, "folder", result.Folder, "error", err)
+			resp.Note = flaggedClearNote(err)
+		}
+	}
+	return marshalResponse(resp)
 }
 
 // missingUIDs returns the requested UIDs the server did not report back.
@@ -298,68 +339,25 @@ func parseMarkAction(args map[string]any) MarkAction {
 	return action
 }
 
-// HandleMove moves messages between folders of one account.
+// HandleMove moves messages between folders of one account. What may
+// move is decided before anything does: the destination and filing
+// policy in filing_policy.go, the junk guard in junk_guard.go.
 func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, error) {
-	opts := MoveOptions{
-		Folder:      toolargs.TrimmedString(args, "folder"),
-		Destination: toolargs.TrimmedString(args, "destination"),
-		Account:     toolargs.TrimmedString(args, "account"),
-	}
-
-	// folder is always the source. A call that names only folder is
-	// refused rather than read as a destination: guessing which folder
-	// the model meant is how mail lands somewhere nobody chose.
-	opts.UIDs = toolargs.Uint32Slice(args, "uids")
-	if len(opts.UIDs) == 0 {
-		if uid := toolargs.Uint32(args, "uid"); uid != 0 {
-			opts.UIDs = []uint32{uid}
-		}
-	}
-
-	var problems []string
-	if len(opts.UIDs) == 0 {
-		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
-	}
-	if opts.Destination == "" {
-		problems = append(problems, "destination is required; folder is the source: pass destination as a folder name exactly as email_folders or the Email Accounts block lists it for this account, and nothing was moved")
-	}
+	req, problems := parseMoveRequest(args)
 	if len(problems) > 0 {
 		return "", fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 
-	acct, err := t.service.ResolveAccount(ctx, opts.Account)
+	acct, err := t.service.ResolveAccount(ctx, req.opts.Account)
 	if err != nil {
 		return "", err
 	}
 	if err := t.service.requireOrganize(acct, "email_move"); err != nil {
 		return "", err
 	}
-	if opts.Destination == t.service.draftsFolder(ctx, acct) {
-		return "", fmt.Errorf("email_move cannot file mail into %q: it is account %q's drafts folder, which holds only messages Thane composed for the operator to send, and a moved message there would look like one of them. Pick another destination, or report the need", opts.Destination, acct.Name)
-	}
-
-	result, err := acct.Client.MoveMessages(ctx, opts)
+	resp, err := t.move(ctx, acct, req)
 	if err != nil {
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
-
-	resp := moveResponse{
-		Action:               "moved",
-		Account:              acct.Name,
-		SourceFolder:         result.SourceFolder,
-		DestinationFolder:    result.Destination,
-		UIDs:                 nonNilUIDs(result.UIDs),
-		DestinationUIDs:      nonNilUIDs(result.DestUIDs),
-		DestinationUIDsKnown: result.DestUIDsKnown,
-		UIDsNotFound:         []uint32{},
-	}
-	if result.DestUIDsKnown {
-		// COPYUID named what moved; a requested UID absent from it was
-		// not in the folder.
-		resp.UIDsNotFound = nonNilUIDs(missingUIDs(opts.UIDs, result.UIDs))
-	} else {
-		resp.Note = "the server did not confirm which UIDs moved or their new UIDs; list " + result.Destination + " to check"
-	}
-	t.service.recordOp("email_move", acct.Name, result.SourceFolder, moveOperationRef(result))
-	return marshalResponse(resp)
+	return marshalMoveResponse(resp)
 }

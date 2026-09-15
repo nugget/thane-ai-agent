@@ -41,8 +41,9 @@ func TestEmailDefaultHandlerCarriesNoOwnerAuthority(t *testing.T) {
 	}
 	// The Go-shipped Task must keep naming the automated key the poller
 	// emits, the move it forbids, and the refusal a reply to mail whose
-	// own headers mark it automatic or bulk gets.
-	for _, want := range []string{"automated (present, and true, only for", "Never reply to an event carrying automated.", "email_reply also refuses, with route automatic_response"} {
+	// own headers mark it automatic or bulk gets, with the one exception
+	// a relaxed drafts-only account drafts.
+	for _, want := range []string{"automated (present, and true, only for", "Never reply to an event carrying automated.", "email_reply also refuses, with route automatic_response", "is drafted, with route personally_addressed_list_reply"} {
 		if !strings.Contains(handlerSpec.Task, want) {
 			t.Errorf("handler Task must contain %q", want)
 		}

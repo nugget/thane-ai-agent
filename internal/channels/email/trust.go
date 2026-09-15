@@ -23,8 +23,9 @@ type RecipientAssessment struct {
 	Contact *contactView `json:"contact"`
 
 	// Gating is the send policy of the effective zone: allowed,
-	// confirmation (held in Drafts under by_trust_zone delivery), or
-	// blocked.
+	// confirmation (held in the drafts folder under by_trust_zone
+	// delivery), or blocked; or draft_only, when an account whose draft
+	// gate is relaxed drafts a recipient that zone would refuse.
 	Gating string `json:"gating"`
 
 	// Allowed is whether this recipient alone would pass the gate: its
@@ -33,7 +34,8 @@ type RecipientAssessment struct {
 	Allowed bool `json:"allowed"`
 
 	// Reason explains a refusal and names the recovery. On an allowed
-	// ambiguous address it says which zone governed.
+	// ambiguous address it says which zone governed, and on a draft_only
+	// recipient why it was drafted rather than refused.
 	Reason string `json:"reason,omitempty"`
 }
 

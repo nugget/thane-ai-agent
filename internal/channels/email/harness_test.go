@@ -50,6 +50,43 @@ type memIMAP struct {
 	attrs   map[string][]imap.MailboxAttr
 	tls     bool // implicit TLS listener
 
+	// lists counts the LIST commands the special-use session answered,
+	// so a test can tell a cached answer from a fresh round trip.
+	lists int
+
+	// listFailures is how many of the next LIST commands answer NO.
+	listFailures int
+
+	// appendHook, when set, runs once after the next APPEND a session
+	// answers, before the client sees the reply (draft_harness_test.go).
+	appendHook func(folder string, uid imap.UID)
+
+	// fetchHook, when set, runs once after the next FETCH a session
+	// answers, before the client sees the command complete
+	// (draft_harness_test.go).
+	fetchHook func()
+
+	// storeHook, when set, runs before every STORE a session answers and
+	// refuses the STORE when it returns an error (labels_harness_test.go).
+	storeHook func(*imap.StoreFlags) error
+
+	// permanentFlags replaces the PERMANENTFLAGS every SELECT answers
+	// when overridePermanent is set (labels_harness_test.go).
+	permanentFlags    []imap.Flag
+	overridePermanent bool
+
+	// moveHook, when set, runs once in place of the next MOVE a session
+	// receives, which then answers a bare OK (draft_harness_test.go).
+	moveHook func() error
+
+	// nextStoreHook, when set, runs once before the next STORE a session
+	// receives, ahead of storeHook; an error it returns is the server's
+	// answer instead of the store (draft_harness_test.go).
+	nextStoreHook func() error
+
+	// expungeHook, when set, runs once before the next EXPUNGE a session
+	// receives (draft_harness_test.go).
+	expungeHook func()
 }
 
 type memIMAPOptions struct {
@@ -219,6 +256,16 @@ func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns 
 	if options == nil {
 		options = &imap.ListOptions{}
 	}
+	s.mem.mu.Lock()
+	s.mem.lists++
+	fail := s.mem.listFailures > 0
+	if fail {
+		s.mem.listFailures--
+	}
+	s.mem.mu.Unlock()
+	if fail {
+		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "LIST unavailable"}
+	}
 	for _, name := range s.mem.folderNames() {
 		matched := false
 		for _, p := range patterns {
@@ -251,6 +298,9 @@ func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns 
 }
 
 func (s *specialUseSession) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string) error {
+	if diverted, err := s.divertMove(numSet, dest); diverted {
+		return err
+	}
 	return s.Session.(imapserver.SessionMove).Move(w, numSet, dest)
 }
 

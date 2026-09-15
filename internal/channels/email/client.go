@@ -74,6 +74,12 @@ type Client struct {
 	// wrap can classify the resulting connection error as a timeout.
 	// Guarded by mu like everything else on the connection.
 	watchdogFired bool
+
+	// verdictMu guards verdicts, each folder's keyword verdict from its
+	// last read-write SELECT (labels_client.go). It is separate from mu
+	// so the context block can read a verdict without waiting on IMAP.
+	verdictMu sync.Mutex
+	verdicts  map[string]folderVerdict
 }
 
 // NewClient creates an IMAP client for the named account. The
@@ -237,7 +243,8 @@ func (c *Client) closeLocked() {
 // selectFolder selects (or, when readOnly, examines) a mailbox. Caller
 // must hold c.mu and have called ensureConnected. A folder the account
 // lacks becomes [FailureFolderNotFound] with the real folder list
-// attached.
+// attached. A read-write SELECT records the folder's keyword verdict
+// from its PERMANENTFLAGS; an EXAMINE reports none worth keeping.
 func (c *Client) selectFolder(ctx context.Context, folder string, readOnly bool) (*imap.SelectData, error) {
 	folder = normalizeFolder(folder)
 	var opts *imap.SelectOptions
@@ -249,6 +256,9 @@ func (c *Client) selectFolder(ctx context.Context, folder string, readOnly bool)
 	release()
 	if err != nil {
 		return nil, c.folderError(ctx, "select folder", folder, err)
+	}
+	if !readOnly {
+		c.noteKeywordVerdict(folder, data.PermanentFlags)
 	}
 	c.logger.Debug("IMAP folder selected",
 		"folder", folder,
@@ -376,6 +386,13 @@ func (c *Client) AppendMessage(ctx context.Context, folder string, msg []byte, f
 	if err := c.ensureConnected(ctx); err != nil {
 		return AppendResult{}, err
 	}
+	return c.appendLocked(ctx, folder, msg, flags)
+}
+
+// appendLocked is [Client.AppendMessage] for a caller that already
+// holds c.mu and has called ensureConnected, which is how a draft
+// revision appends its new version without letting go of the lock.
+func (c *Client) appendLocked(ctx context.Context, folder string, msg []byte, flags []imap.Flag) (AppendResult, error) {
 	folder = normalizeFolder(folder)
 
 	opts := &imap.AppendOptions{

@@ -48,7 +48,8 @@ func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, e
 	}
 	folder := normalizeFolder(opts.Folder)
 
-	if _, err := c.selectFolder(ctx, folder, opts.Peek); err != nil {
+	selected, err := c.selectFolder(ctx, folder, opts.Peek)
+	if err != nil {
 		return nil, err
 	}
 
@@ -75,7 +76,7 @@ func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, e
 		return nil, &ClientError{Account: c.name, Op: "fetch message", Folder: folder, UID: opts.UID, Kind: FailureMessageNotFound}
 	}
 
-	result := &Message{}
+	result := &Message{UIDValidity: selected.UIDValidity}
 	var rawBody []byte
 	for {
 		item := msg.Next()
@@ -258,16 +259,18 @@ func truncateUTF8(s string, maxBytes int) string {
 }
 
 // finishBody settles the readable body: a text part wins, an HTML-only
-// message is rendered to text, BodySource records which happened, and
-// BodyTruncated is set from that part alone, so an oversized HTML
-// alternative does not mark a complete plain body as cut.
+// message is rendered to text with what its markup hid withheld and
+// reported in Hidden and HiddenChars, BodySource records which
+// happened, and BodyTruncated is set from that part alone, so an
+// oversized HTML alternative does not mark a complete plain body as
+// cut.
 func finishBody(msg *Message) {
 	switch {
 	case msg.TextBody != "":
 		msg.BodySource = "text"
 		msg.BodyTruncated = msg.textTruncated
 	case msg.HTMLBody != "":
-		msg.TextBody = htmlToText(msg.HTMLBody)
+		msg.TextBody, msg.Hidden, msg.HiddenChars = htmlToText(msg.HTMLBody)
 		msg.BodySource = "html"
 		msg.BodyTruncated = msg.htmlTruncated
 	}

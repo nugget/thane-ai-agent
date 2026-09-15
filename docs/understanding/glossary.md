@@ -110,7 +110,8 @@ See [Delegation](delegation.md).
 The single enforcement point for outbound messages. It is implemented
 for email: every message passes one Go path that checks the account's
 access, each recipient's trust zone, and the account's recipient-domain
-rules, and ends sent, held in Drafts for the operator, or refused, with
+rules, and ends sent, held in the account's drafts folder for the
+operator, or refused, with
 a logged decision. Sender identity on inbound mail is still a From-header
 claim until signature verification ships. Signal and other channels, and
 per-recipient rate limiting and reply deduplication, remain planned.

@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Mailbox owners: whose mailbox an account is.
 const (
@@ -35,6 +38,60 @@ type EmailMailboxConfig struct {
 	// as Alice; brief; sign with her first name only". It is shown to
 	// the model in the account's Email Accounts entry.
 	Voice string `yaml:"voice"`
+
+	// MoveInto lists where email_move may file this account's mail. An
+	// entry is role:<role>, the folder holding that special-use role
+	// (inbox, sent, trash, junk, archive, all, flagged or important;
+	// junk_folder and trash_folder answer for their roles first), or an
+	// exact folder name; "*" alone allows every folder. Moving mail back
+	// to INBOX out of a listed folder is always allowed, so a move can be
+	// undone. The drafts folder can never be listed. Default: [role:junk]
+	// when owner is operator, so only spam leaves the operator's INBOX,
+	// and ["*"] otherwise.
+	MoveInto []string `yaml:"move_into"`
+
+	// FilingNote is an optional operator-authored sentence, at most 300
+	// bytes, on how this mailbox is filed, shown to the model in the
+	// account's Email Accounts entry.
+	FilingNote string `yaml:"filing_note"`
+
+	// WakeLoop names the loop that receives this account's new-mail
+	// wakes. Default: "email-owner-triage" when owner is operator, a
+	// built-in pass that prefers local models, files only obvious spam,
+	// flags what needs the operator, drafts plain answers where the
+	// account can draft, and hands the rest to review_loop; and
+	// "email-default-handler" otherwise. The loop must be an
+	// event_driven definition, or startup refuses the config.
+	WakeLoop string `yaml:"wake_loop"`
+
+	// ReviewLoop names a loop that looks at this account's mail after
+	// wake_loop: every draft a turn the operator is not present for
+	// writes here, and every message email_escalate hands over, is queued
+	// for it, and it is woken only while that queue holds work. Empty
+	// (the default) means no review pass, and email_escalate then
+	// refuses and says to flag the message instead. The built-in
+	// "email-draft-review" may use cloud models and asks for a higher
+	// quality floor than the wake loop. The loop must be an event_driven
+	// definition other than wake_loop, or startup refuses the config.
+	ReviewLoop string `yaml:"review_loop"`
+
+	// ReviewDelay is how long review work waits for more to arrive
+	// before review_loop is woken, so a burst of mail becomes one
+	// review. Default: 15m.
+	ReviewDelay time.Duration `yaml:"review_delay"`
+
+	// ReviewMaxWait bounds how long a steady stream of new review work
+	// can postpone that wake. Default: 2h. It may not be shorter than
+	// review_delay.
+	ReviewMaxWait time.Duration `yaml:"review_max_wait"`
+
+	// Labels names the email.labels this mailbox's mail carries, for
+	// example [contact]. Only these are written here, listed in the
+	// account's Email Accounts entry, and taken by email_mark and
+	// email_search on it. Empty (the default) means none, whatever
+	// email.labels declares. An account whose access is read is never
+	// written, so naming a label there is refused.
+	Labels []string `yaml:"labels"`
 }
 
 // MailboxOwner returns the effective owner, applying the default.
@@ -67,5 +124,8 @@ func (a EmailAccountConfig) validateMailbox(i int) error {
 	if n := len(a.Mailbox.Voice); n > maxEmailMailboxVoiceBytes {
 		return fmt.Errorf("email.accounts[%d] (%s): mailbox.voice is %d bytes, over the %d-byte limit; keep it to a short note on how mail from this account should sound", i, a.Name, n, maxEmailMailboxVoiceBytes)
 	}
-	return nil
+	if err := a.validateFiling(i); err != nil {
+		return err
+	}
+	return a.validateRouting(i)
 }

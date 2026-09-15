@@ -290,26 +290,131 @@ instead of being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. |
-| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body. Whether it marks the message seen follows `mark_seen`, which defaults to false on an account with `mailbox.owner: operator` and true elsewhere; on an operator mailbox, `mark_seen: true` is refused in a turn the operator is not present for. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. |
-| `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
-| `email_folders` | List an account's mailboxes with their special-use role (`inbox`, `drafts`, `sent`, `trash`, `junk`, `archive`, `all`, `flagged`, `important`, or none), raw attributes, and counts. |
-| `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. On an operator mailbox, adding `seen` is refused in a turn the operator is not present for. |
-| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in Drafts for the operator, or refused with a decision record. The `bcc_owner` audit copy rides only sent mail. An account whose access is not `send` is refused, and the refusal says the message must not be written from another account. |
-| `email_reply` | Reply with threading headers through the same gate and decision, including the access refusal. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not. |
-| `email_move` | Move messages within an account. `destination` is required and `folder` is always the source; reports the new UIDs when the server returns them, and records both UID lists in the Email Accounts block's recent operations. |
+| `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. In the drafts folder, a row that is one of Thane's open drafts carries `thane_draft {draft_id}`, matched on its UID and Message-ID together; a row without it is not Thane's. On an account whose `mailbox.labels` names labels, each row adds `labels`, the account's labels whose keyword the message carries, and `flag_label`, the label whose flag the message shows, present only when Thane's label record says Thane wrote that flag and the message still carries it as written; the raw `flags` stay beside them. |
+| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body. Whether it marks the message seen follows `mark_seen`, which defaults to false on an account with `mailbox.owner: operator` and true elsewhere; on an operator mailbox, `mark_seen: true` is refused in a turn the operator is not present for. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. When an HTML body's own markup hides text from a person reading it (the `hidden` attribute, `aria-hidden="true"`, or an inline `display:none`, `visibility:hidden`, zero font-size, or zero opacity), that text is withheld from the rendered body and `hidden_content` `{present, chars}` reports it beside `body_source`. A hidden link's target is withheld with it, so `chars` is 0 when the markup hid only a link with no text. Only those inline idioms are recognised: text a stylesheet, a colour, or positioning hides stays in the body with no `hidden_content`. `labels` and `flag_label` are as in `email_list`, and a message read from the drafts folder carries `thane_draft` as in `email_list`. |
+| `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), Message-ID, and label. `flagged` and `unflagged` test `\Flagged` whoever set it, so a label's flag counts; `label`, offered only when a declared label has a keyword, searches for that keyword, and is refused on an account whose `mailbox.labels` does not name it. An argument the schema does not declare is refused, naming it and listing the accepted ones, and nothing is searched. Rows carry `labels`, `flag_label`, and, in the drafts folder, `thane_draft` as in `email_list`. |
+| `email_folders` | List an account's mailboxes with their special-use role (`inbox`, `drafts`, `sent`, `trash`, `junk`, `archive`, `all`, `flagged`, `important`, or none), raw attributes, and counts. Names are used verbatim as an `email_move` `destination`; `destination_role` finds a folder by its role instead. |
+| `email_mark` | Add or remove a flag, or a label the account carries; reports the UIDs affected and the UIDs not found. On an operator mailbox, adding `seen` is refused in a turn the operator is not present for. On an account whose `policy.delivery` is `drafts`, `answered` is refused, added or removed, because a draft is not an answer and Thane cannot know when the operator sends one. Adding `flagged` to a message whose flag is still the one Thane wrote for a label removes that colour's keywords, so it reads as a plain flag; removing `flagged` from such a message removes the colour's keywords with the flag; either way the message is listed under `thane_color_cleared`, and if the colour cannot be removed first, the removal is refused and the flag stays. `label`, offered only when a label without `apply` is declared, takes the place of `flag`: it is refused on an account whose `mailbox.labels` does not name it; it writes the label's keyword, and its colour only on a message without `\Flagged`; it refuses a colour label on a message carrying any flag but that label's own, listing it under `refused`; removing it takes away only what Thane recorded setting; a label with `apply` is refused; and in a folder whose `PERMANENTFLAGS` lack `\*`, a label that needs keywords refuses the whole call. The account's drafts folder is refused as the folder to act in. |
+| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in the account's drafts folder for the operator, or refused with a decision record. On an account with `policy.draft_gate: relaxed` (delivery `drafts`), a recipient refused only for its zone is drafted with gating `draft_only`, named in the draft by bare address; automated, unresolvable, and unparseable recipients, and those the recipient-domain rules refuse, are refused there too. A draft needs a folder with the drafts role (`drafts_folder`, else the server's `\Drafts` mark); without one it is refused with route `no_drafts_folder` and nothing is sent in its place. The `bcc_owner` audit copy rides only sent mail. An account whose access is not `send` is refused, and the refusal says the message must not be written from another account. A drafted result carries `draft_id`, the draft's key in the draft ledger that the `email_drafts` tools take. |
+| `email_reply` | Reply with threading headers through the same gate and decision, including the access refusal. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not, except on an account with a relaxed `draft_gate`, which drafts a reply to `bulk` mail that is not `auto_submitted` and names the account's own address in its To or Cc, with route `personally_addressed_list_reply`; a lone `Precedence: junk`, the classic autoresponder mark, does not qualify. A reply that would be drafted is refused with route `draft_open` while an open Thane draft already answers the same message (the refusal names its `draft_id`, for `email_draft_revise`), and, on an account with `mailbox.owner: operator`, with route `operator_reply_started` when one `UID SEARCH HEADER In-Reply-To` of the drafts folder finds a reply to the same message that the draft ledger does not hold. Any message that would be drafted is refused with route `draft_limit` while the account already has 200 open Thane drafts. A reply sent directly while an open Thane draft answers the same message carries a `note` naming that `draft_id`, so it can be withdrawn. |
+| `email_escalate` | Hand one message to the account's review pass, the loop its `mailbox.review_loop` names: queues `message:<account>:<message_id>` in that loop's work queue (a repeat coalesces, replacing the reason) and returns `{queued, subject, pending_for_review}`, with `pending_for_review` null when the queue could not be counted. Changes nothing in the mailbox. Refused, with nothing queued and the `email_mark` call to flag the message instead, on an account without a `review_loop`, for a message without a Message-ID, and from the review loop itself. |
+| `email_move` | Move messages within an account. `folder` is always the source, and the target is exactly one of `destination` (an exact folder name) or `destination_role` (a special-use role Go resolves, taking `junk_folder` or `trash_folder` first); neither or both is refused, and so is a role no folder holds. Only folders in the account's `mailbox.move_into` are accepted, plus INBOX out of one of them; the drafts folder is neither source nor destination. In a turn the operator is not present for, a move into the junk folder refuses each message from the operator's own record or a contact at `admin`, `household`, or `trusted` (or an address several contacts share when one of them is or may be at such a zone, or one the directory could not look up) and moves the rest. The result lists `moved` `{uid, destination_uid, message_id, from, trust_zone}` and `refused` `{uid, from, trust_zone, reason, recovery}`, reports the new UIDs when the server returns them, and records both UID lists in the Email Accounts block's recent operations. |
 
 Every email tool takes an `account`; in a loop bound with
 `email_account` an omitted account resolves to the binding and other
 accounts are refused. The `email` tag also injects an **Email Accounts**
 context block listing each account with its policy (`access`,
-`delivery`, recipient-domain rules, the drafts folder), whose mailbox it
+`delivery`, `draft_gate` when it is relaxed, recipient-domain rules,
+the drafts folder), whose mailbox it
 is when the operator marked it (`owner`, `writes_as`, `voice`,
-`reads_mark_seen`), whether it may
+`reads_mark_seen`), where it may file mail when it limits that
+(`junk_folder`, `move_into`, and any `filing_note`), whether it may
 hand mail to SMTP itself, whether this turn is `attended`, which trust
 zones it sends directly to, drafts for, and refuses this turn, and its
-cached folder names with roles. An account whose `access` is `read`
+cached folder names with roles. An account whose new mail wakes a loop
+other than its owner's default shows `wake_loop`, and one with a review
+pass shows `review_loop`, `pending_review` (the account's queued review
+work, counted by the poller and on each enqueue, never at render), and
+`pending_review_as_of`. An account whose `mailbox.labels` names labels
+shows them as `labels` `[{label, meaning, shows_as, apply}]`, and
+INBOX's `PERMANENTFLAGS` verdict as
+`keywords` (`permanent`, `session_only`, or `unsupported`) once a
+read-write SELECT of INBOX has reported it; rendering never asks the
+server. An account whose `access` is `read`
 reads without marking messages seen and refuses flags and moves.
+
+**Review queue.** An account with `mailbox.review_loop` feeds that loop
+through the loopqueue store, in the partition named after the loop. A
+draft written on the account in a turn the operator is not present
+for, by any loop but the review loop, queues `draft:<account>:<draft_id>`, and
+`email_escalate` queues `message:<account>:<message_id>`; queueing a
+subject again coalesces with the waiting item. Each item's `source` is
+`email_review` and its summary is compact JSON: `{account, draft_id,
+message_subject, drafted_by}` for a draft, `{account, folder,
+message_id, from, message_subject, reason}` for a message, where
+`message_subject` is the message's Subject header and the item's own
+`subject` is its queue key. The review loop is woken with one
+`email_review` event of type `review_pending`, whose metadata counts
+`drafts`, `messages`, and `pending`. It carries three loop-private
+tools, attached at hydration to whatever definition an account names
+as `review_loop`, scoped to that loop's own partition, and never
+registered globally or listed in the tool catalog:
+
+| Tool | Description |
+|------|-------------|
+| `queue_pull` | Pull one batch per iteration (default 5, at most 25), highest priority first, then oldest. Each item gives `subject`, `source`, `summary`, `priority`, and `age`; the result adds `remaining`, the depth behind the batch (null when it could not be measured), and `oldest_wait`. A second pull in the same iteration is refused. |
+| `queue_ack` | Remove the exact item `queue_pull` returned, by subject, using a hidden one-shot receipt. Answers `ok`, `already_acknowledged`, or `retained_newer` when the subject was queued again while the item was worked; the newer item then stays queued. |
+| `queue_defer` | Keep a pulled item pending, moved behind every item currently queued, for a later wake. |
+
+The review loop has no `queue_enqueue`: its work comes only from drafts
+and escalations, and `email_escalate` refuses a call from the review
+loop itself.
+
+**Labels.** A label declared in `email.labels` and named in an
+account's `mailbox.labels` is written there as its IMAP keyword, its
+flag colour (`\Flagged` plus `$MailFlagBit0` to `$MailFlagBit2`), or
+both, always with `+FLAGS` and `-FLAGS`, never a replacing `STORE`, and
+never marking mail seen. The poller applies each label with `apply:
+contact_matched` to every new INBOX message whose sender matches exactly
+one contact record, once per message, before the message's wake is
+dispatched; the wake's `flags` metadata never includes a mark Thane
+still claims, even when a failed dispatch lists the message again or
+the account no longer carries the label, and a failed `STORE` is logged
+and costs only that message's label. What Thane set on each message
+(the keywords, the colour and its keywords, whether it set `\Flagged`,
+the derived labels applied, and the copy marked, by folder,
+UIDVALIDITY, and UID) is recorded in the operational state store,
+namespace `email_labels`, key the hex SHA-256 of the account name's
+byte length, `:`, the account name, and the bare Message-ID, for 90
+days after the last change; a record whose own account and Message-ID
+differ from the pair asked for is refused. Removing a label and handing
+a flag to the operator touch only what that record claims, on the one
+copy it describes, and a flag counts as Thane's only while it still
+carries exactly the recorded colour; `flag_label` on a row is read from
+the same record, under the message's whole Message-ID. A second copy
+of the message, and the message once someone else moves it, is not
+that copy, so its marks are the operator's; `email_move` carries the
+record to the new copy when the server returns COPYUID and the call
+moved no other copy under the same Message-ID, since go-imap keeps the
+COPYUID sets sorted rather than paired. Keywords,
+colour keywords included, are written only in a folder whose
+`PERMANENTFLAGS` include `\*`. See
+[Configuration](../operating/configuration.md#labels).
+
+## `email_drafts` — Thane's drafts in flight
+
+| Tool | Description |
+|------|-------------|
+| `email_drafts` | List the drafts Thane wrote, from the draft ledger, after checking each open one against its account's drafts folder: `draft_id`, account, `stage` (`open`, `gone`, or `withdrawn`), `closed_reason`, subject, recipients, the original it answers, the revision count, and `last_revised {by, at}`. Closed entries are listed only with `include_closed`. An account whose drafts folder could not be checked is listed under `errors`. |
+| `email_draft_get` | Read one draft by `draft_id` beside the message it answers: a JSON header (recipients, version history, and the account's `owner`, `writes_as`, and `voice`), a `---` line, the draft's text/plain part, another `---` line, and the original's body, found by Message-ID in the folder it was read from. Both are read with PEEK. |
+| `email_draft_revise` | Replace an open draft's body; recipients, subject, and threading headers never change. Holding the client lock throughout, it requires UIDPLUS or IMAP4rev2, proves the draft is still Thane's, writes a write-ahead record with a fresh Message-ID, appends the new version with `\Draft` and `\Seen`, records its UID in the write-ahead record, checks the old UID is still there and not already marked `\Deleted`, stores `\Deleted` on it (with `UNCHANGEDSINCE` when the server has CONDSTORE), reads the flag back, and expunges that UID alone. A draft the operator touched mid-revision stays theirs and the new copy is removed. The outbound inspector reviews the new body. Refusal reasons: `gone`, `held`, `withdrawn`, `no_uidplus`, `access`, `inspector`. |
+| `email_draft_withdraw` | Move an open draft to the account's trash folder (`trash_folder`, else the server's `\Trash` mark; `mailbox.move_into` does not apply) and mark its entry `withdrawn`. With no trash folder known it refuses with `no_trash_folder` and leaves the draft in place. Refused on an account whose access is `read`. |
+
+Every draft `email_send` or `email_reply` writes is recorded in a draft
+ledger in the operational state store (namespace `email_drafts`, key
+`<account>/<draft_id>`, where `draft_id` is a UUIDv7 the drafted result
+returns). An entry holds the draft's UIDVALIDITY, UID, and Message-ID,
+the original's Message-ID and folder when it is a reply, its recipients
+and subject, its stage, a revision history of `{by, at, note}`, and the
+previous body one level deep. A draft is Thane's only while the drafts
+folder still holds it at the recorded UIDVALIDITY, UID, and Message-ID,
+not marked `\Deleted`;
+an edit in the operator's client stores a new copy under another UID,
+and that draft becomes the operator's. The ledger records no review or
+approval state: its stages are only `open`, `gone`, and `withdrawn`.
+The draft tools reconcile the ledger when they are called, by examining
+the drafts folder and fetching only the recorded UIDs. They settle any
+revision a crash interrupted, adopting the new version only when the
+operator did not touch the draft meanwhile, and any draft whose UID the
+server never reported, which is found again by its Message-ID and the
+digest of its bytes, or closed once nothing carries its Message-ID.
+Each account keeps at most 200 entries: closed ones are forgotten
+oldest first and an open one never, so a new draft is refused with
+route `draft_limit` while 200 are open. Closed entries expire 14 days
+after they close. Every draft tool
+refuses a `draft_id` the ledger does not hold. The tag is separate from
+`email` so that a loop that only triages or writes first drafts never
+sees these tools; a loop that edits drafts carries both.
 
 ## `contacts` — directory and vCard administration
 

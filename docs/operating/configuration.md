@@ -141,10 +141,12 @@ reply, and draft); it defaults to `send` when `smtp` is configured and
 decides what happens once every recipient has passed the trust gate:
 `by_trust_zone` (the default) sends directly to `admin` and `household`
 recipients when the operator is present for the turn, holds mail for `trusted`
-recipients in the Drafts folder for the operator to send from their own
+recipients in the drafts folder for the operator to send from their own
 client, refuses `known` and unknown recipients, and holds everything an
 unattended loop writes, so a poller-woken handler never sends on its own;
-`drafts` holds every message; `direct` sends everything the gate allows,
+`drafts` holds every message, and by default drafts for more recipients
+than the gate allows elsewhere (see `draft_gate` below); `direct` sends
+everything the gate allows,
 including from unattended turns, and should be chosen deliberately. The
 operator is present only for their own message: one sent through Thane's
 native API, or one they wrote in a conversation bound to their own contact.
@@ -153,8 +155,73 @@ conversation, and a call through the Ollama-compatible shim that Home
 Assistant automations and voice satellites use are all unattended. A
 drafted message carries no `bcc_owner` audit copy, on any account: the
 operator sends it from their own client, under the account's
-`default_from`, and nothing Thane adds rides along. `drafts_folder` names where drafts go
-and defaults to the folder the server marks as drafts, else `Drafts`.
+`default_from`, and nothing Thane adds rides along.
+
+`draft_gate` says how the trust gate treats recipients on an account
+whose `delivery` is `drafts`, where the operator reads and sends every
+message by hand. `relaxed`, the default with `delivery: drafts`, drafts
+for anyone a person could answer: a recipient the gate would refuse
+only for its trust zone (an address with no contact record, a `known`
+contact, or an address several records share whose least privileged
+record is at a blocked zone) is drafted instead, and the decision
+records it with gating `draft_only`. An automated mailbox, an address
+the directory could not be consulted for, the recipient-domain rules
+below, and the 50-recipient limit still refuse there, and one refused
+recipient still refuses the whole message. A relaxed account also
+drafts one kind of reply that would otherwise be refused as an
+automatic response (see below). `strict`, the default with every other
+delivery mode, applies the full gate. `relaxed` beside any `delivery`
+other than `drafts` is refused at startup, because a recipient the gate
+relaxed could then be sent to, and so is any value other than those
+two. The model sees `draft_gate: relaxed` in the account's Email
+Accounts entry, whose `drafts_for` then lists every zone and whose
+`refuses` lists none. **Upgrading:** an account already configured with
+`delivery: drafts` becomes relaxed without any change to its file; set
+`draft_gate: strict` to keep the gate it had.
+
+`drafts_folder` names, exactly, the folder drafts go to, for a server
+that marks none with the `\Drafts` special-use attribute; leave it
+empty to use the folder the server marks, found in the cached folder
+listing or, when the cache names none, by one fresh listing. Thane
+never guesses a drafts folder by name. When neither the key nor the
+server names one, a message that would have been drafted, for whatever
+reason, is refused with route `no_drafts_folder`, and nothing is sent
+in its place, on every delivery mode; the model is told to ask the
+operator to configure `drafts_folder`, and, when it asked for the draft
+itself, not to resend the message without `draft: true`. A listing that fails is reported
+as an error rather than as that refusal. `email_mark` and `email_move`
+refuse to act in the drafts folder only once one is known, so on a
+server without special-use attributes set `drafts_folder` to keep those
+guards in force.
+
+Thane records each draft it writes in a draft ledger in the operational
+state store; nothing configures it. An entry holds the draft's
+UIDVALIDITY, UID, and Message-ID, the message it answers, and a short
+revision history. The `email_drafts` tools use it to revise or withdraw
+a draft while it is still Thane's, meaning the drafts folder still
+holds it at that UID with that Message-ID, not marked `\Deleted`. An edit in the operator's
+own client stores the draft anew under another UID, and from then on it
+is the operator's: no tool touches it again. Revising needs a server
+that advertises UIDPLUS or IMAP4rev2; without either, revision is
+refused. Thane keeps one draft per message: a second draft answering a
+message while Thane's first is still open is refused, and on an
+operator mailbox so is a draft answering a message when the drafts
+folder already holds a reply to it that is not one of Thane's open
+drafts, most likely the operator's own. Each account keeps at most 200
+entries, forgetting closed ones first and never an open one, so a new
+draft is refused while 200 are open; an entry that has closed is
+forgotten 14 days later.
+
+`junk_folder` and `trash_folder` name, exactly, the folders that hold
+spam and deleted mail, for a server that marks no folder with the
+`\Junk` or `\Trash` special-use attribute; leave them empty to use the
+folder the server marks. They are what `email_move`'s
+`destination_role: junk` and `destination_role: trash` resolve to
+first, and a role that neither a key nor the server answers is refused
+by name rather than guessed. The trash folder is also where
+`email_draft_withdraw` moves a draft Thane withdraws, whatever
+`move_into` lists; with no trash folder known, the withdrawal is
+refused and the draft stays where it is.
 `denied_recipient_domains` refuses recipients at those domains and their
 subdomains regardless of trust zone, and `allowed_recipient_domains`,
 when set, refuses every domain outside it. An automated-looking
@@ -165,8 +232,20 @@ automatic or bulk (an `Auto-Submitted` value other than `no`, a
 `List-Id` or any RFC 2369 `List-*` field, or a `Precedence` of
 `bulk`, `list`, or `junk`) is refused with route `automatic_response`
 in every turn the operator is not present for, whatever the
-`delivery` mode and even when a draft was requested; no key changes
-that, and the operator's own turn replies as usual. Every send ends in one of
+`delivery` mode and even when a draft was requested, and the
+operator's own turn replies as usual. The one exception is on an
+account with a relaxed `draft_gate`: an unattended reply to list mail, marked by a
+`List-Id` or a `Precedence` of `bulk` or `list` and not `Auto-Submitted`, whose own `To` or `Cc` holds the
+account's address (its `default_from`, else its IMAP username when that
+is an address, compared without regard to case), is drafted with route
+`personally_addressed_list_reply`, because a person on a list answers
+mail addressed to them. List mail that reached the account only through
+the list's address stays refused, and so does anything
+`Auto-Submitted` (automatic replies, bounces, notifications), mail
+marked `Precedence: junk`, which classic autoresponders set without
+`Auto-Submitted`, and mail whose only list marks are `List-*` fields
+such as `List-Unsubscribe`; an alias
+or plus address of the account does not count as its address. Every send ends in one of
 three dispositions, `sent`, `drafted`, or `refused`, and the tool result
 or refusal carries the decision that produced it.
 
@@ -192,45 +271,367 @@ the trust gate.
       mailbox:
         owner: operator
         voice: "First person as Alice; brief; sign with her first name only."
+        move_into: [role:junk]   # the default for an operator mailbox
+        filing_note: "Server rules file lists and receipts; INBOX is what is left for Alice."
+        review_loop: email-draft-review   # optional second pass; unset means none
 ```
 
-Each account's `mailbox` block says whose mailbox it is and how mail
-written from it should sound. It changes nothing about what the model
-may do there or where its mail goes; that is `policy`. `owner` is
+Each account's `mailbox` block says whose mailbox it is, how mail
+written from it should sound, and where `email_move` may file its
+mail. Whether the model may compose or move at all, and where its mail
+goes, is `policy`. `owner` is
 `assistant` (the default), a mailbox Thane keeps for itself or for a
 purpose the operator gave it, or `operator`, the operator's own inbox,
 which Thane helps with but does not own. Any other value is refused at
 startup. On an operator mailbox `email_read` leaves mail unread unless
 the call asks otherwise, and a turn the operator is not present for
 cannot mark mail seen, whether by reading it or with `email_mark`; the
-operator's own turn can. The built-in `email-default-handler` leaves
-operator mail in INBOX, moves only obvious spam from an unmatched sender
-to the folder the server marks with the junk role (a server that marks
-none keeps the spam where it is), flags what needs the operator, and
-neither replies nor drafts. `voice` is a note of at most 500 bytes on
-how mail from the account should sound; a longer one is refused.
+operator's own turn can. New mail on an operator mailbox wakes the
+built-in `email-owner-triage` unless `wake_loop` names another loop (see
+"Passes" below). `voice` is a
+note of at most 500 bytes on how mail from the account should sound; a
+longer one is refused.
+
+`move_into` lists the only folders `email_move` may file this
+account's mail into. An entry is `role:<role>`, the folder holding that
+special-use role (`inbox`, `sent`, `trash`, `junk`, `archive`, `all`,
+`flagged`, or `important`, resolved through `junk_folder` and
+`trash_folder` first, then the server's own marks), or an exact folder
+name; `"*"` on its own allows every folder and cannot be combined with
+other entries. The default is `[role:junk]` on an operator mailbox,
+where the server keeps its own filing tree and only spam leaves INBOX,
+and `["*"]` on every other account, which is how accounts behaved
+before the key existed. Moving mail back to INBOX out of a listed
+folder is always allowed, so a move can be undone and mail rescued from
+junk. The drafts folder can never be listed, by role or by name, and
+`email_move` refuses it as a source too, as `email_mark` does. The
+limit applies in every turn, the operator's own included: it is
+configuration, not a judgment about who asked. An unknown role, an
+empty entry, or `"*"` beside other entries is refused at startup.
+`filing_note` is an optional sentence of at most 300 bytes on how the
+mailbox is filed, shown to the model as written.
+
+In a turn the operator is not present for, a move into the junk folder,
+by role or by name, is also checked message by message: a message whose
+sender is the operator's own contact record, is held by a contact at
+`admin`, `household`, or `trusted`, shares its address with such a
+contact (or with more contacts than the directory could name, any of
+whom might be one), or could not be looked up in the directory stays
+where it is,
+and the rest of the batch moves. The result lists each refused message
+with its sender, zone, reason, and recovery (flag it, and bring it to
+the operator if it cannot wait), and each refusal is logged with the
+loop and conversation that asked. The operator's own turn is not
+checked. No key changes this guard.
 
 The model sees these in the account's Email Accounts entry: `owner`
 (only when it is `operator`), `writes_as` (the full `default_from`,
 display name included), `voice`, and on an operator mailbox
-`reads_mark_seen: false`. An account left at the defaults renders as it
+`reads_mark_seen: false`. On any account whose `move_into` is not
+`["*"]` it also sees `move_into` resolved to folder names, with
+`role:<role>` standing in for a role no folder is known to hold yet.
+Those accounts and every operator mailbox also show `junk_folder`
+(once configuration or the server's folder listing names one);
+`filing_note`
+appears whenever it is set. An account left at the defaults renders as it
 did before the block existed. The example above is one shape for an
 operator's inbox: with `delivery: drafts` and no `smtp`, nothing the
-model writes there is sent. A message the trust gate allows waits in
-the operator's drafts folder, under their `default_from` and in their
-voice, for them to send; a recipient the gate refuses, such as a
-`known` or unmatched address, is still refused. The built-in handler
-only flags on this mailbox and neither replies nor drafts, so drafts
-there come from turns the operator asks for.
+model writes there is sent. Its draft gate is relaxed by default, so a
+draft may go to anyone a person could answer, a `known` or unmatched
+address included, and waits in the operator's drafts folder, under
+their `default_from` and in their voice, for them to review and send;
+an automated mailbox, a failed lookup, and a denied domain are still
+refused. Add `draft_gate: strict` under `policy` to keep the full trust
+gate there.
+
+### Passes: wake_loop and review_loop
+
+```yaml
+      mailbox:
+        owner: operator
+        wake_loop: email-owner-triage     # the default for an operator mailbox
+        review_loop: email-draft-review   # unset (the default) means no review pass
+        review_delay: 15m                 # the default
+        review_max_wait: 2h               # the default
+```
+
+Each account's new mail wakes one loop, its `wake_loop`, with one event
+per message, and an account may also name a `review_loop` that looks
+at its mail afterwards. Both must name an event-driven loop definition:
+a built-in, a core `loops/` document, or a `loops.definitions` entry.
+Startup refuses a name with no definition or with a definition of
+another operation, and the error names the account and the key;
+`wake_loop` is checked only when polling is on, because nothing else
+wakes it. `review_loop` must also differ from `wake_loop`,
+which is checked when the config loads.
+[Loop Definitions](../reference/loop-definitions.md#built-in-email-loops)
+lists the built-ins' specs and how to override one.
+
+`wake_loop` defaults to the built-in `email-owner-triage` on an
+operator mailbox and to `email-default-handler` everywhere else.
+`email-owner-triage` prefers local models (`local_only: "true"`, a
+routing preference, so a cloud model can still take the turn when no
+local one can) and does one thing per message: it files obvious spam
+from an unmatched sender with `destination_role: junk` (an account
+where neither `junk_folder` nor the server names a junk folder keeps
+the spam where it is), flags what needs the operator, drafts a plain
+answer as the operator where the account has `access: send` and a
+drafts folder, always with `draft: true`, hands a message it cannot
+judge to the review pass with `email_escalate`, or leaves the message
+alone. It reads with `mark_seen: false`, never moves mail anywhere but
+junk, and cannot use `email_send`.
+
+Before `wake_loop` existed, operator mailboxes woke
+`email-default-handler`. To keep that hands-off behaviour, which only
+flags and files spam and neither replies nor drafts, set
+`wake_loop: email-default-handler` on the account before upgrading.
+Otherwise an operator mailbox with `access: send` and a drafts folder
+starts receiving drafts from the triage pass.
+
+`review_loop` is empty by default, which means no second pass, and
+`email_escalate` is then refused with the flag to set instead. When it
+is set, every draft written on the account in a turn the operator is
+not present for, by any loop but the review loop itself, is queued for
+the review loop as `draft:<account>:<draft_id>`, and `email_escalate` queues a
+message as `message:<account>:<message_id>`. Queueing the same subject
+again replaces the item already waiting. Nothing about review is
+written to the mailbox or the draft ledger, and there is no review or
+approval stage: the queue is the only record that work waits. The
+review loop gets `queue_pull`, `queue_ack`, and `queue_defer` over its
+own queue when it starts, whether it is the built-in or a loop of your
+own. The built-in `email-draft-review` may use cloud models, asks for a
+higher quality floor than the triage pass, revises or withdraws queued
+drafts for accuracy and tone, and handles escalated messages the way
+the triage pass would, with more care. Like the triage pass, it cannot
+use `email_send` and drafts every reply.
+
+The review loop is woken only while its queue holds work, never for an
+empty one. `review_delay` (default `15m`) is how long work gathers after
+it arrives, so a burst becomes one review. `review_max_wait` (default
+`2h`) bounds how long a steady stream can put that wake off, and may
+not be shorter than `review_delay`. Both are Go durations, and a
+negative one is refused. The loop is also woken at startup for work
+queued before a restart, and again when work its last wake announced,
+such as a batch larger than one pull or an item it deferred, is still
+queued `review_delay` after that wake, though never sooner than a
+minute after it. That recheck runs on its own timer, whether or not
+mail is polled. Work queued since the last wake is left to its own
+`review_delay` and `review_max_wait`, so a recheck never cuts a burst
+short. A wake that cannot read the queue within 30 seconds is logged
+and tried again a minute later, whatever the `review_delay`. Accounts
+sharing a review loop share one wake, shaped by the shortest delay and
+wait among them.
+
+After every poll the poller also reconciles the draft ledger of each
+account with an open Thane draft whose poll succeeded, bounded to 10
+seconds per account, so a draft the operator sent, edited, or
+discarded closes within one poll, and it recounts the review queues.
+The ledger is locked per account, so a slow drafts folder holds
+drafting on its own account only.
+
+The built-in passes are registered only when an account routes to
+them, and a core `loops/` document or `loops.definitions` entry of the
+same name replaces one. The model sees `wake_loop` in the account's
+Email Accounts entry only when it differs from the owner's default.
+Whenever a review loop is set, it sees `review_loop` with
+`pending_review`, the count of the account's queued review work, and
+`pending_review_as_of`, when that was counted at the last poll or
+enqueue. Rendering the entry never counts the queue.
 
 `poll_interval` is how often, in seconds, every account's INBOX is checked
 for new mail; it defaults to 300 when email is configured and `0` disables
-polling, which also removes the built-in `email-poller` and
-`email-default-handler` loops. See
+polling, which also removes the built-in `email-poller`,
+`email-default-handler`, and `email-owner-triage` loops. With polling
+off, no new mail is routed and `wake_loop` is not checked. An
+account's `review_loop` still receives drafts and escalations and is
+still woken for them, so it is still checked at startup, and the
+built-in `email-draft-review` is still added when an account names
+it. Its recheck does not depend on polling, so work a wake left queued
+still wakes it again. See
 [Event Sources](../reference/event-sources.md) for what a new-mail wake
 carries. A loop that should only ever see one mailbox binds it with
 `bindings: {email_account: <name>}`; see
 [Loop Definitions](../reference/loop-definitions.md).
+
+### Labels
+
+```yaml
+email:
+  labels:
+    contact:
+      meaning: "The sender matches a contact record"
+      keyword: thane-contact
+      color: blue
+      apply: contact_matched
+```
+
+`labels` is a small vocabulary of marks the operator reads in their
+own mail client, declared once for the site and carried by the accounts
+whose `mailbox.labels` names them (below). A label is a meaning first.
+Its key is the name the model uses (lowercase letters, digits, `-`, and
+`_`, starting with a letter, at most 32 bytes), and `meaning`, which is
+required, is one sentence of at most 200 bytes that the model reads
+beside it. How a label shows on a message is presentation, and each
+label needs at least one of two:
+
+- `keyword` is an IMAP keyword such as `thane-contact`: printable ASCII
+  without spaces or any of `( ) { % * " \ ]`, at most 64 bytes, and
+  unique among the labels regardless of case. System flags (anything
+  beginning with `\`), anything beginning with `$`, which marks the
+  keywords clients and servers already give meaning to (`$Junk`,
+  `$Forwarded`, and the colour keywords `$MailFlagBit0` to
+  `$MailFlagBit2` among them), and the junk-filter keywords `Junk`,
+  `NonJunk`, and `NotJunk` are refused, so a label never tells a client
+  something it did not mean. Any client can search for a keyword;
+  whether it displays one depends on the client.
+- `color` is a flag colour, one of `red`, `orange`, `yellow`, `green`,
+  `blue`, `purple`, or `grey`, and each colour may belong to only one
+  label, because a message shows one. It is written as `\Flagged` plus
+  the colour keywords in the table below. A client that colours flags
+  shows the colour; every other client shows a plain flag.
+
+`apply` names a rule under which Thane applies the label itself, so the
+model never applies or removes it. The only rule is `contact_matched`:
+when the poller finds new mail in an account's INBOX whose sender
+matches exactly one contact record, at any trust zone, it applies the
+label before dispatching the message's wake. The contact directory
+decides, not the model. A label without `apply` is one the model may
+apply and remove with `email_mark`'s `label` argument. At most 8 labels
+may be declared, because every one is shown in every turn that carries
+the `email` tag. A missing meaning, a label with neither keyword nor
+colour, an invalid keyword, an unknown colour or rule, and a colour or
+keyword two labels share are refused at startup. Without `labels`, the
+default, Thane writes no label anywhere.
+
+An account carries only the labels its `mailbox.labels` names, whatever
+its `owner`:
+
+```yaml
+email:
+  accounts:
+    - name: personal
+      mailbox:
+        owner: operator
+        labels: [contact]
+```
+
+An account without `mailbox.labels`, the default, carries none: Thane
+writes no label there, its entry lists none, and `email_mark` and
+`email_search` refuse a label on it. Every name must be declared under
+`email.labels`, and an account whose `access` is `read`, which Thane
+never writes, may name none. Both are refused at startup.
+
+Every write adds or removes named flags (`+FLAGS` or `-FLAGS`) and
+never replaces a message's flags, and nothing marks mail seen. A colour
+is written only on a message without `\Flagged`: Thane adds `\Flagged`
+with the colour's keywords and removes any other colour keyword the
+message carries. A message already flagged, by the operator or for
+another label, keeps its flag and colour: a derived label still adds
+its keyword there, and `email_mark` refuses a label with a colour on
+it. The poller reads each message's flags just before writing it, and
+applies a derived label to a message at most once, so a mark the
+operator takes off stays off if the message is listed again. A failed
+write is logged and costs that message its label, never the poll or its
+wakes.
+
+Thane records what it set on each message (the keywords, the colour and
+its keywords, whether it set `\Flagged`, the derived labels the poller
+has applied, and the copy it marked: the folder, the folder's
+UIDVALIDITY, and the UID) in the operational state store, namespace
+`email_labels`, one record per account and Message-ID under a SHA-256
+key of the two, for 90 days after the last change. The record repeats
+the account and Message-ID, and one naming another message is never
+read as this one's. That record is the only thing that tells Thane's
+marks from the operator's. Removing a label touches only what it
+records, and a flag counts as Thane's only while it still carries
+exactly the colour Thane wrote, so a flag the operator recoloured or
+took off is theirs from then on; whenever Thane reads a message beside
+its record, it drops what the operator has taken back.
+
+What the record claims holds only on the copy Thane marked. Every other
+copy is the operator's: a second copy under the same Message-ID, such
+as a mailing list's copy beside a direct one or a byte-identical
+duplicate, and the same message once someone else moves it, since a
+move gives it a new UID. Thane writes no label on such a copy, claims
+nothing there, and never removes its marks, so a message the operator
+moves keeps Thane's marks as the operator's own. When `email_move`
+moves a message Thane marked and the server reports the new UIDs
+(COPYUID), the record follows the message to its new copy; without
+COPYUID the claim lapses the same way, and so it does when the same
+call moves another copy under the same Message-ID, because the IMAP
+library sorts the COPYUID sets and loses which new UID belongs to which
+copy. The wake's `flags` leave out
+what the record claims whether or not the account still carries the
+label, so taking a label off an account does not make the marks Thane
+already set read as someone's flag.
+
+When the model flags a message for the operator
+(`email_mark` flag `flagged`) and its flag is still the one Thane wrote,
+Thane removes that colour's keywords, so the flag loses the label's
+colour and reads as the operator's attention flag; the keyword stays.
+When the model removes `flagged` from such a message, the colour's
+keywords go with the flag. Once a record expires, Thane treats the
+marks as the operator's and leaves them in place. A message without a
+Message-ID gets no label.
+
+Thane knows only what it reads. A flag the operator takes off and later
+sets again in the same colour, with no read by Thane in between, still
+counts as Thane's, and a flag the operator sets in the moment between
+Thane reading a message and writing its colour takes Thane's colour.
+Closing both gaps would need the server's change sequence numbers
+(CONDSTORE), which Thane does not use.
+
+`email_search` finds a label by `label` when the label has a keyword
+and the account carries it, and its `flagged` and `unflagged` see a
+label's flag like any other. On an account whose labels include a
+colour, `flagged: true` therefore returns label flags beside attention
+flags. The model tells them apart by each row's `flag_label`, which
+Thane fills from its record: it names the label only when Thane wrote
+that flag, so an operator's flag in a label's colour still reads as
+theirs.
+
+Whether a label sticks is the server's call. Every read-write SELECT
+reports the folder's `PERMANENTFLAGS`, which Thane reads as `permanent`
+(the list includes `\*`, so new keywords stay), `session_only` (a list
+without `\*`), or `unsupported` (an empty or absent list, which Thane
+takes as keeping nothing rather than as keeping everything). Anywhere
+but `permanent`, Thane writes no keywords, colour keywords included,
+and logs that once per account and folder, and `email_mark` refuses a
+label that needs them; a label that is only a red colour needs none.
+
+The model sees the labels an account carries in its entry, as `labels`
+`[{label, meaning, shows_as, apply}]`, where `shows_as` reads like "blue
+flag and keyword thane-contact", and INBOX's verdict as `keywords` once
+a read-write SELECT of INBOX has reported it. List, search, and read
+results name the labels a message carries and, as `flag_label`, the
+label whose flag Thane wrote on it, beside the raw flags. A new-mail
+wake's `flags` never include a mark Thane set. An account that carries
+no label renders none of this. The built-in passes and the default
+handler are told how to read label flags only when some account
+carries a label with `apply`.
+
+#### One client's presentation: flag colours
+
+The colour keywords follow the encoding Apple Mail on macOS and iOS
+uses, and Apple Mail shows only `\Flagged` and its colour, not
+arbitrary keywords. For an operator who triages there, the colour is
+the label and the keyword is only for searching. Other clients show the
+same messages as flagged, and a client that displays keywords shows the
+keyword.
+
+| `color` | Written as `\Flagged` plus |
+|---|---|
+| `red` | no colour keyword |
+| `orange` | `$MailFlagBit0` |
+| `yellow` | `$MailFlagBit1` |
+| `green` | `$MailFlagBit0` and `$MailFlagBit1` |
+| `blue` | `$MailFlagBit2` |
+| `purple` | `$MailFlagBit0` and `$MailFlagBit2` |
+| `grey` | `$MailFlagBit1` and `$MailFlagBit2` |
+
+Avoid `red` for a label on such a client: a red flag is also how the
+operator's own plain flag reads, and it is what a label's flag becomes
+when the model flags the message for the operator.
 
 ## Signal Messaging
 

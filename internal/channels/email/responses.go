@@ -3,6 +3,7 @@ package email
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -117,11 +118,21 @@ type messageSummaryView struct {
 	Date      string        `json:"date,omitempty"`
 	MessageID string        `json:"message_id,omitempty"`
 	Flags     []string      `json:"flags,omitempty"`
-	Size      uint32        `json:"size"`
+
+	// Labels names the labels the account carries whose keyword the
+	// message carries, and FlagLabel the label whose flag it shows, only
+	// when Thane's record says Thane wrote that flag (labels_view.go).
+	Labels    []string `json:"labels,omitempty"`
+	FlagLabel string   `json:"flag_label,omitempty"`
+	Size      uint32   `json:"size"`
 
 	// AddressesOmitted counts to and cc addresses past
 	// maxSummaryAddresses per list that the summary leaves out.
 	AddressesOmitted int `json:"addresses_omitted,omitempty"`
+
+	// ThaneDraft marks a drafts-folder row that is one of Thane's open
+	// drafts (draft_annotate.go).
+	ThaneDraft *thaneDraftRef `json:"thane_draft,omitempty"`
 }
 
 // listResponse is the result of email_list and email_search.
@@ -178,9 +189,12 @@ type readResponse struct {
 	Subject        string         `json:"subject"`
 	Date           string         `json:"date,omitempty"`
 	Flags          []string       `json:"flags,omitempty"`
+	Labels         []string       `json:"labels,omitempty"`
+	FlagLabel      string         `json:"flag_label,omitempty"`
 	Size           uint32         `json:"size"`
 	MarkedSeen     bool           `json:"marked_seen"`
 	BodySource     string         `json:"body_source,omitempty"`
+	HiddenContent  *hiddenContent `json:"hidden_content,omitempty"`
 	BodyTruncated  bool           `json:"body_truncated,omitempty"`
 	RawTruncated   bool           `json:"raw_truncated,omitempty"`
 	Attachments    []Attachment   `json:"attachments"`
@@ -200,6 +214,33 @@ type readResponse struct {
 	// AddressesOmitted counts to, cc, and reply_to addresses past
 	// maxHeaderAddresses per list that the header leaves out.
 	AddressesOmitted int `json:"addresses_omitted,omitempty"`
+
+	// ThaneDraft marks a message read from the drafts folder that is one
+	// of Thane's open drafts (draft_annotate.go).
+	ThaneDraft *thaneDraftRef `json:"thane_draft,omitempty"`
+}
+
+// hiddenContent says that an HTML body's own markup hid something from
+// a person reading the message, through an idiom the renderer
+// recognises (see [visibility]): text, an image's description, or a
+// link's target. The read result omits it when nothing was hidden.
+type hiddenContent struct {
+	// Present is always true, so the object reads as a statement
+	// wherever it appears.
+	Present bool `json:"present"`
+
+	// Chars counts the hidden characters of text and image
+	// descriptions, whitespace aside. That text is withheld from the
+	// body.
+	Chars int `json:"chars"`
+}
+
+// newHiddenContent returns nil when nothing was hidden.
+func newHiddenContent(hidden bool, chars int) *hiddenContent {
+	if !hidden {
+		return nil
+	}
+	return &hiddenContent{Present: true, Chars: chars}
 }
 
 // bodySeparator divides the read result's JSON header from the body
@@ -233,6 +274,7 @@ func newReadResponse(account, folder string, msg *Message, markedSeen bool, auth
 		Size:               msg.Size,
 		MarkedSeen:         markedSeen,
 		BodySource:         msg.BodySource,
+		HiddenContent:      newHiddenContent(msg.Hidden, msg.HiddenChars),
 		BodyTruncated:      msg.BodyTruncated,
 		RawTruncated:       msg.RawTruncated,
 		Attachments:        attachments,
@@ -301,6 +343,13 @@ type markResponse struct {
 	Flag         string   `json:"flag"`
 	UIDsAffected []uint32 `json:"uids_affected"`
 	UIDsNotFound []uint32 `json:"uids_not_found"`
+
+	// ThaneColorCleared lists the UIDs whose flag colour, written by
+	// Thane for a label, adding flagged turned into a plain flag.
+	ThaneColorCleared []uint32 `json:"thane_color_cleared,omitempty"`
+
+	// Note says what went wrong after the flag itself was set.
+	Note string `json:"note,omitempty"`
 }
 
 // moveResponse is the result of email_move.
@@ -318,7 +367,27 @@ type moveResponse struct {
 	// is empty when destination_uids_known is false, because the server
 	// then confirmed nothing.
 	UIDsNotFound []uint32 `json:"uids_not_found"`
-	Note         string   `json:"note,omitempty"`
+
+	// Moved lists each moved message with its UID in the destination
+	// when the server confirmed it, its Message-ID, its sender, and the
+	// sender's trust zone.
+	Moved []movedMessage `json:"moved"`
+
+	// Refused lists the messages the junk guard kept out of the junk
+	// folder, with why and what to do instead. They did not move.
+	Refused []refusedMessage `json:"refused"`
+
+	// MovedOmitted counts the entries at the end of moved that carry
+	// only uid and destination_uid, their detail dropped to hold the
+	// result to maxMoveOutput. They moved like the rest.
+	MovedOmitted int `json:"moved_omitted,omitempty"`
+
+	// RefusedOmitted counts the entries at the end of refused that
+	// carry only uid, their detail dropped to hold the result to
+	// maxMoveOutput. They stayed where they were like the rest.
+	RefusedOmitted int `json:"refused_omitted,omitempty"`
+
+	Note string `json:"note,omitempty"`
 }
 
 // sendResponse is the result of email_send and email_reply. The
@@ -341,11 +410,16 @@ type sendResponse struct {
 	SentFolder     string `json:"sent_folder,omitempty"`
 	SentFolderCopy string `json:"sent_folder_copy,omitempty"`
 
-	DraftsFolder string   `json:"drafts_folder,omitempty"`
-	DraftUID     uint32   `json:"draft_uid,omitempty"`
-	Signed       bool     `json:"signed"`
-	Note         string   `json:"note,omitempty"`
-	Decision     Decision `json:"decision"`
+	DraftsFolder string `json:"drafts_folder,omitempty"`
+	DraftUID     uint32 `json:"draft_uid,omitempty"`
+
+	// DraftID is the draft ledger's id for a drafted message, the key
+	// the email_drafts tools take.
+	DraftID string `json:"draft_id,omitempty"`
+
+	Signed   bool     `json:"signed"`
+	Note     string   `json:"note,omitempty"`
+	Decision Decision `json:"decision"`
 }
 
 // newSendResponse renders a delivered or drafted outcome.
@@ -363,11 +437,21 @@ func newSendResponse(outcome SendOutcome, subject, inReplyTo string) sendRespons
 		SentFolderCopy: outcome.SentFolderCopy,
 		DraftsFolder:   outcome.DraftsFolder,
 		DraftUID:       outcome.DraftUID,
+		DraftID:        outcome.DraftID,
 		Signed:         outcome.Signed,
 		Decision:       outcome.Decision,
 	}
-	if resp.Disposition == DispositionDrafted {
+	switch {
+	case resp.Disposition == DispositionDrafted:
 		resp.Note = "Held in " + outcome.DraftsFolder + " for the operator to send from their own client; nothing has left the mailbox. Do not resend it."
+		if outcome.DraftID != "" {
+			resp.Note += " To change it while it is still Thane's, pass draft_id " + outcome.DraftID + " to email_draft_revise, or to email_draft_withdraw to withdraw it (email_drafts capability tag)."
+		}
+		if outcome.DraftUntracked {
+			resp.Note += " The draft ledger could not record it, so it has no draft_id, no draft tool can change it, and it reads as a draft Thane did not write; do not draft this message again, and tell the operator it is waiting there."
+		}
+	case resp.Disposition == DispositionSent && len(outcome.OpenDraftIDs) > 0:
+		resp.Note = fmt.Sprintf("This reply was sent, and Thane's open draft %s still answers the same message in the drafts folder, where the operator could send it as a second answer; withdraw it with email_draft_withdraw (email_drafts capability tag) unless the operator wants it kept.", strings.Join(outcome.OpenDraftIDs, ", "))
 	}
 	return resp
 }

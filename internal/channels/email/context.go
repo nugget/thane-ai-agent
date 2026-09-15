@@ -71,6 +71,11 @@ type accountView struct {
 	Access   string `json:"access"`
 	Delivery string `json:"delivery"`
 
+	// DraftGate is "relaxed" on an account whose delivery is drafts and
+	// whose trust gate drafts for recipients it would refuse only for
+	// their zone, and omitted on every other account.
+	DraftGate string `json:"draft_gate,omitempty"`
+
 	// CanSend is whether the account may hand mail to SMTP itself:
 	// access is send and smtp is configured.
 	CanSend bool `json:"can_send"`
@@ -83,6 +88,19 @@ type accountView struct {
 	// those is known. An account that cannot draft omits it, except an
 	// operator mailbox, which shows its configured one.
 	DraftsFolder string `json:"drafts_folder,omitempty"`
+
+	// filingView adds junk_folder, move_into, and filing_note when the
+	// account limits where email_move may file its mail.
+	filingView
+
+	// reviewView adds wake_loop when the account's new mail is routed
+	// away from its owner's default, and review_loop with the cached
+	// pending_review when the account has a review pass.
+	reviewView
+
+	// labelsView adds labels and keywords when email.labels declares any
+	// and the account's access is not read.
+	labelsView
 
 	// DeniedRecipientDomains and AllowedRecipientDomains are the
 	// account's recipient-domain rules, shown so a refusal is never the
@@ -158,9 +176,15 @@ func (p *ContextProvider) buildContext(bound string, isAttended bool) (string, e
 			Refuses:                 routing.Refuses,
 			Bound:                   bound != "",
 		}
+		if cfg.RelaxedDraftGate() {
+			view.DraftGate = DraftGateRelaxed
+		}
 		view.Address = accountAddress(cfg)
 		view.mailboxView = newMailboxView(cfg)
 		view.DraftsFolder = p.service.entryDraftsFolder(cfg)
+		view.filingView = p.service.newFilingView(cfg)
+		view.reviewView = p.service.newReviewView(cfg, now)
+		view.labelsView = p.service.newLabelsView(cfg)
 		if snap, ok := p.service.cachedFolders(cfg.Name); ok {
 			view.Folders, view.FoldersTruncated = folderViews(snap.Folders)
 			view.FoldersAsOf = promptfmt.FormatDeltaOnly(snap.At, now)

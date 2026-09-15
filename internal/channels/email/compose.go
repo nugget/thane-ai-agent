@@ -40,6 +40,12 @@ type ComposeOptions struct {
 
 	// References is the full References chain (for threading).
 	References []string
+
+	// MessageID, when set, is the Message-ID the message carries,
+	// without angle brackets, in place of one generated here. A draft
+	// revision generates its fresh Message-ID in advance, so the
+	// write-ahead record can name the new version before it exists.
+	MessageID string
 }
 
 // Composed is a rendered message and the identifiers a caller needs to
@@ -49,8 +55,8 @@ type Composed struct {
 	Bytes []byte
 
 	// MessageID is the generated Message-ID without angle brackets. It
-	// is the key under which the message can be found in a Sent or
-	// Drafts folder and the value a reply's In-Reply-To will carry.
+	// is the key under which the message can be found in a sent or
+	// drafts folder and the value a reply's In-Reply-To will carry.
 	MessageID string
 
 	// From, To, and Cc are the parsed header addresses.
@@ -84,7 +90,9 @@ func ComposeMessage(opts ComposeOptions) (Composed, error) {
 
 	var h mail.Header
 	h.SetDate(time.Now())
-	if domain := from.Domain(); domain != "" {
+	if opts.MessageID != "" {
+		h.SetMessageID(opts.MessageID)
+	} else if domain := from.Domain(); domain != "" {
 		if err := h.GenerateMessageIDWithHostname(domain); err != nil {
 			return out, fmt.Errorf("generate message-id: %w", err)
 		}

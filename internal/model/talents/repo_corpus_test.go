@@ -128,6 +128,11 @@ var nonToolTokens = map[string]struct{}{
 	// Appears in talent prose describing routing, not as a tool call.
 	"wake_loop": {},
 
+	// Email account routing field (mailbox.review_loop), shown in the
+	// Email Accounts block beside wake_loop. The loop an account's mail
+	// is reviewed by, not a tool.
+	"review_loop": {},
+
 	// MQTT wake payload field (#1033 self-addressing): an automation
 	// publishes {"target_loop": "<definition name>"} to re-address a
 	// wake. A message field, not a tool.
@@ -225,6 +230,49 @@ var nonToolTokens = map[string]struct{}{
 	// model can find it in the snapshot. The matcher flags it because
 	// `contact_` is a real tool prefix, but it is a row name, not a tool.
 	"contact_directory": {},
+
+	// Email send-decision routes the email talents teach (#1580):
+	// `decision.route` values on a drafted or refused send result. The
+	// email_drafts tools (email_drafts, email_draft_get, ...) made `draft`
+	// and `drafts` real second segments, and `reply` already was one
+	// (email_reply), so these route names now match tool shapes. They are
+	// enum values, not tools.
+	"no_drafts_folder":       {},
+	"policy_drafts":          {},
+	"requested_draft":        {},
+	"operator_reply_started": {},
+
+	// Drafts-folder row annotation in email_list, email_search, and
+	// email_read results (#1580): `thane_draft {draft_id}` marks one of
+	// Thane's open drafts. The matcher flags it because `thane_` is a real
+	// tool prefix (thane_now, thane_loop_create), but it is a result field,
+	// not a tool.
+	"thane_draft": {},
+
+	// Email label vocabulary and results (#1580): `contact_matched` is the
+	// one apply rule an email.labels entry names, `session_only` a
+	// PERMANENTFLAGS verdict the Email Accounts entry shows as keywords,
+	// and `thane_color_cleared` an email_mark result field. The matcher
+	// flags them because `contact_`, `session_`, and `thane_` are real
+	// tool prefixes; they are a config value, an enum value, and a result
+	// field, not tools.
+	"contact_matched":     {},
+	"session_only":        {},
+	"thane_color_cleared": {},
+}
+
+// loopRuntimeToolTokens are real tools that no catalog lists: loop-private
+// runtime tools generated for one consumer loop at hydration
+// (internal/app/loop_queue_tools.go) and advertised only on that loop's
+// iterations. The email talents teach the review loop an account names as
+// its review_loop to drain its queue with them (#1580). They are exempt
+// because they exist outside the catalog, not because they are not tools.
+// queue_enqueue is deliberately absent: the email review loop does not
+// carry it, so a talent teaching it should fail this test.
+var loopRuntimeToolTokens = map[string]struct{}{
+	"queue_pull":  {},
+	"queue_ack":   {},
+	"queue_defer": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in
@@ -278,6 +326,9 @@ func TestRepoTalentToolReferences(t *testing.T) {
 				continue
 			}
 			if _, ok := nonToolTokens[token]; ok {
+				continue
+			}
+			if _, ok := loopRuntimeToolTokens[token]; ok {
 				continue
 			}
 			if _, ok := knownTags[token]; ok {

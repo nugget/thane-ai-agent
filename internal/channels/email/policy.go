@@ -18,7 +18,7 @@ const (
 	DispositionSent Disposition = "sent"
 
 	// DispositionDrafted means the message was written to the
-	// account's Drafts folder for the operator to send from their own
+	// account's drafts folder for the operator to send from their own
 	// client; nothing left the mailbox.
 	DispositionDrafted Disposition = "drafted"
 
@@ -32,6 +32,11 @@ const (
 	GatingAllowed      = "allowed"
 	GatingConfirmation = "confirmation"
 	GatingBlocked      = "blocked"
+
+	// GatingDraftOnly is not a zone's policy: it marks a recipient the
+	// gate refused only for its zone, drafted on an account whose draft
+	// gate is relaxed. It never sends, whatever the delivery mode.
+	GatingDraftOnly = "draft_only"
 )
 
 // Routes name the rule that settled a decision, so a log line or a
@@ -74,6 +79,17 @@ const (
 	// mark it auto-submitted or bulk, in a turn the operator is not
 	// present for. Nothing is sent or drafted (RFC 3834 §2).
 	RouteAutomaticResponse = "automatic_response"
+
+	// RoutePersonallyAddressedListReply: an unattended reply to bulk
+	// mail that names the account's own address in its To or Cc,
+	// drafted on an account whose draft gate is relaxed instead of being
+	// refused as an automatic response.
+	RoutePersonallyAddressedListReply = "personally_addressed_list_reply"
+
+	// RouteNoDraftsFolder: the message would have been drafted, but no
+	// folder on the account has the drafts role. Nothing is sent in its
+	// place.
+	RouteNoDraftsFolder = "no_drafts_folder"
 )
 
 // Decision is the gate's complete account of one outbound message. It
@@ -183,9 +199,14 @@ func gatingForZone(zone string) string {
 }
 
 // gatingRank orders gating levels from least to most restrictive.
+// draft_only ranks above confirmation, which a direct account may send,
+// so a recipient list mixing the two is recorded as draft_only, the
+// level that can only draft.
 func gatingRank(g string) int {
 	switch g {
 	case GatingBlocked:
+		return 3
+	case GatingDraftOnly:
 		return 2
 	case GatingConfirmation:
 		return 1
@@ -208,12 +229,15 @@ func mostRestrictive(assessments []RecipientAssessment) string {
 // routeDelivery decides where a message that passed the gate goes. The
 // caller's request for a draft wins, then the account's fixed modes,
 // then by_trust_zone: a confirmation-gated recipient drafts, an
-// unattended turn drafts, and everything else sends.
+// unattended turn drafts, and everything else sends. A draft_only
+// recipient drafts on every mode, direct included: only a relaxed
+// drafts-delivery account produces one, and this case keeps a
+// misrouted one from ever reaching SMTP.
 func routeDelivery(delivery, gating string, isAttended, draftRequested bool) (Disposition, string) {
 	switch {
 	case draftRequested:
 		return DispositionDrafted, RouteRequestedDraft
-	case delivery == DeliveryDrafts:
+	case delivery == DeliveryDrafts, gating == GatingDraftOnly:
 		return DispositionDrafted, RoutePolicyDrafts
 	case delivery == DeliveryDirect:
 		return DispositionSent, RoutePolicyDirect
@@ -291,11 +315,14 @@ type zoneRouting struct {
 }
 
 // routingByZone projects the account's policy onto every trust zone
-// for a turn with the given attendance.
+// for a turn with the given attendance. On an account whose draft gate
+// is relaxed, a blocked zone drafts rather than refuses, as the send
+// path's relaxation does.
 func routingByZone(cfg AccountConfig, isAttended bool) zoneRouting {
 	r := zoneRouting{SendsDirectlyTo: []string{}, DraftsFor: []string{}, Refuses: []string{}}
+	relaxed := cfg.RelaxedDraftGate()
 	for _, policy := range contacts.Policies() {
-		if !cfg.CanDraft() || policy.SendGating == GatingBlocked {
+		if !cfg.CanDraft() || (policy.SendGating == GatingBlocked && !relaxed) {
 			r.Refuses = append(r.Refuses, policy.Zone)
 			continue
 		}

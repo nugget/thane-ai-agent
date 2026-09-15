@@ -1410,11 +1410,20 @@ compaction:
 #       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 #       Leave empty to keep no server-side copy.
 #       sent_folder: Sent
-#       DraftsFolder is the IMAP folder that receives messages held for the
-#       operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
-#       empty to use the folder the server marks as its drafts folder, or
-#       "Drafts" when it marks none.
+#       DraftsFolder is the exact name of the IMAP folder that receives
+#       messages held for the operator to send, for a server that marks no
+#       folder with the \Drafts special-use attribute. Leave empty to use
+#       the folder the server marks. When neither names one, a message the
+#       policy would draft is refused; nothing is sent in its place.
 #       drafts_folder: Drafts
+#       JunkFolder is the exact name of the folder that holds spam, for a
+#       server that marks none with the \Junk special-use attribute. Leave
+#       empty to use the folder the server marks.
+#       junk_folder: ""
+#       TrashFolder is the exact name of the folder that holds deleted
+#       mail, for a server that marks none with \Trash. Leave empty to use
+#       the folder the server marks.
+#       trash_folder: ""
 #       Policy is what the model may do with this account beyond reading
 #       it, and where the mail it writes goes.
 #       policy:
@@ -1431,18 +1440,31 @@ compaction:
 #         has passed the trust gate. "by_trust_zone" (default) sends
 #         directly to admin and household recipients when the operator is
 #         present for the turn, holds mail for trusted recipients in the
-#         Drafts folder for the operator to send, and refuses known and
+#         drafts folder for the operator to send, and refuses known and
 #         unknown recipients. The operator is present only for their own
 #         message, sent through Thane's native API or written in a
 #         conversation bound to their contact; every other turn (a poller
 #         wake, a scheduled loop, a loop launched from the operator's
 #         conversation, a call through the Ollama-compatible shim that Home
-#         Assistant automations use) holds everything in Drafts, so an
-#         autonomous loop never sends on its own. "drafts" holds every
-#         message in Drafts. "direct" sends everything the gate allows,
+#         Assistant automations use) holds everything in the drafts folder,
+#         so an autonomous loop never sends on its own. "drafts" holds every
+#         message there. "direct" sends everything the gate allows,
 #         including to trusted recipients and from unattended turns; choose
 #         it deliberately.
 #         delivery: by_trust_zone
+#         DraftGate is how the trust gate treats recipients when delivery
+#         is drafts, where the operator sends every message by hand.
+#         "relaxed" (the default with delivery drafts) drafts for anyone a
+#         person could answer: a recipient refused only for its trust zone
+#         (no contact record, a known contact, or an address several records
+#         share whose least privileged one is blocked) is drafted, because
+#         the operator's own send is the gate. Automated mailboxes, failed
+#         directory lookups, and the recipient-domain rules stay refused. A
+#         relaxed account also drafts an unattended reply to mailing-list or
+#         bulk mail whose own To or Cc names the account's address. "strict"
+#         (the default otherwise) applies the gate as every other delivery
+#         mode does. relaxed with any other delivery mode is refused.
+#         draft_gate: strict
 #         DeniedRecipientDomains lists domains this account never writes
 #         to, even when the recipient is a trusted contact. An entry covers
 #         the domain and its subdomains ("example.com" also covers
@@ -1468,6 +1490,54 @@ compaction:
 #         as Alice; brief; sign with her first name only". It is shown to
 #         the model in the account's Email Accounts entry.
 #         voice: ""
+#         MoveInto lists where email_move may file this account's mail. An
+#         entry is role:<role>, the folder holding that special-use role
+#         (inbox, sent, trash, junk, archive, all, flagged or important;
+#         junk_folder and trash_folder answer for their roles first), or an
+#         exact folder name; "*" alone allows every folder. Moving mail back
+#         to INBOX out of a listed folder is always allowed, so a move can be
+#         undone. The drafts folder can never be listed. Default: [role:junk]
+#         when owner is operator, so only spam leaves the operator's INBOX,
+#         and ["*"] otherwise.
+#         move_into: []
+#         FilingNote is an optional operator-authored sentence, at most 300
+#         bytes, on how this mailbox is filed, shown to the model in the
+#         account's Email Accounts entry.
+#         filing_note: ""
+#         WakeLoop names the loop that receives this account's new-mail
+#         wakes. Default: "email-owner-triage" when owner is operator, a
+#         built-in pass that prefers local models, files only obvious spam,
+#         flags what needs the operator, drafts plain answers where the
+#         account can draft, and hands the rest to review_loop; and
+#         "email-default-handler" otherwise. The loop must be an
+#         event_driven definition, or startup refuses the config.
+#         wake_loop: email-default-handler
+#         ReviewLoop names a loop that looks at this account's mail after
+#         wake_loop: every draft a turn the operator is not present for
+#         writes here, and every message email_escalate hands over, is queued
+#         for it, and it is woken only while that queue holds work. Empty
+#         (the default) means no review pass, and email_escalate then
+#         refuses and says to flag the message instead. The built-in
+#         "email-draft-review" may use cloud models and asks for a higher
+#         quality floor than the wake loop. The loop must be an event_driven
+#         definition other than wake_loop, or startup refuses the config.
+#         review_loop: ""
+#         ReviewDelay is how long review work waits for more to arrive
+#         before review_loop is woken, so a burst of mail becomes one
+#         review. Default: 15m.
+#         review_delay: 15m
+#         ReviewMaxWait bounds how long a steady stream of new review work
+#         can postpone that wake. Default: 2h. It may not be shorter than
+#         review_delay.
+#         review_max_wait: 2h
+#         Labels names the email.labels this mailbox's mail carries, for
+#         example [contact]. Only these are written here, listed in the
+#         account's Email Accounts entry, and taken by email_mark and
+#         email_search on it. Empty (the default) means none, whatever
+#         email.labels declares. An account whose access is read is never
+#         written, so naming a label there is refused.
+#         labels:
+#           - contact
 #     - # Name is the short identifier tools and loop bindings use for this
 #       account (for example "personal" or "packages"). Required and unique.
 #       name: packages
@@ -1522,11 +1592,20 @@ compaction:
 #       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 #       Leave empty to keep no server-side copy.
 #       sent_folder: ""
-#       DraftsFolder is the IMAP folder that receives messages held for the
-#       operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
-#       empty to use the folder the server marks as its drafts folder, or
-#       "Drafts" when it marks none.
+#       DraftsFolder is the exact name of the IMAP folder that receives
+#       messages held for the operator to send, for a server that marks no
+#       folder with the \Drafts special-use attribute. Leave empty to use
+#       the folder the server marks. When neither names one, a message the
+#       policy would draft is refused; nothing is sent in its place.
 #       drafts_folder: ""
+#       JunkFolder is the exact name of the folder that holds spam, for a
+#       server that marks none with the \Junk special-use attribute. Leave
+#       empty to use the folder the server marks.
+#       junk_folder: ""
+#       TrashFolder is the exact name of the folder that holds deleted
+#       mail, for a server that marks none with \Trash. Leave empty to use
+#       the folder the server marks.
+#       trash_folder: ""
 #       Policy is what the model may do with this account beyond reading
 #       it, and where the mail it writes goes.
 #       policy:
@@ -1543,18 +1622,31 @@ compaction:
 #         has passed the trust gate. "by_trust_zone" (default) sends
 #         directly to admin and household recipients when the operator is
 #         present for the turn, holds mail for trusted recipients in the
-#         Drafts folder for the operator to send, and refuses known and
+#         drafts folder for the operator to send, and refuses known and
 #         unknown recipients. The operator is present only for their own
 #         message, sent through Thane's native API or written in a
 #         conversation bound to their contact; every other turn (a poller
 #         wake, a scheduled loop, a loop launched from the operator's
 #         conversation, a call through the Ollama-compatible shim that Home
-#         Assistant automations use) holds everything in Drafts, so an
-#         autonomous loop never sends on its own. "drafts" holds every
-#         message in Drafts. "direct" sends everything the gate allows,
+#         Assistant automations use) holds everything in the drafts folder,
+#         so an autonomous loop never sends on its own. "drafts" holds every
+#         message there. "direct" sends everything the gate allows,
 #         including to trusted recipients and from unattended turns; choose
 #         it deliberately.
 #         delivery: by_trust_zone
+#         DraftGate is how the trust gate treats recipients when delivery
+#         is drafts, where the operator sends every message by hand.
+#         "relaxed" (the default with delivery drafts) drafts for anyone a
+#         person could answer: a recipient refused only for its trust zone
+#         (no contact record, a known contact, or an address several records
+#         share whose least privileged one is blocked) is drafted, because
+#         the operator's own send is the gate. Automated mailboxes, failed
+#         directory lookups, and the recipient-domain rules stay refused. A
+#         relaxed account also drafts an unattended reply to mailing-list or
+#         bulk mail whose own To or Cc names the account's address. "strict"
+#         (the default otherwise) applies the gate as every other delivery
+#         mode does. relaxed with any other delivery mode is refused.
+#         draft_gate: strict
 #         DeniedRecipientDomains lists domains this account never writes
 #         to, even when the recipient is a trusted contact. An entry covers
 #         the domain and its subdomains ("example.com" also covers
@@ -1579,6 +1671,83 @@ compaction:
 #         as Alice; brief; sign with her first name only". It is shown to
 #         the model in the account's Email Accounts entry.
 #         voice: ""
+#         MoveInto lists where email_move may file this account's mail. An
+#         entry is role:<role>, the folder holding that special-use role
+#         (inbox, sent, trash, junk, archive, all, flagged or important;
+#         junk_folder and trash_folder answer for their roles first), or an
+#         exact folder name; "*" alone allows every folder. Moving mail back
+#         to INBOX out of a listed folder is always allowed, so a move can be
+#         undone. The drafts folder can never be listed. Default: [role:junk]
+#         when owner is operator, so only spam leaves the operator's INBOX,
+#         and ["*"] otherwise.
+#         move_into: []
+#         FilingNote is an optional operator-authored sentence, at most 300
+#         bytes, on how this mailbox is filed, shown to the model in the
+#         account's Email Accounts entry.
+#         filing_note: ""
+#         WakeLoop names the loop that receives this account's new-mail
+#         wakes. Default: "email-owner-triage" when owner is operator, a
+#         built-in pass that prefers local models, files only obvious spam,
+#         flags what needs the operator, drafts plain answers where the
+#         account can draft, and hands the rest to review_loop; and
+#         "email-default-handler" otherwise. The loop must be an
+#         event_driven definition, or startup refuses the config.
+#         wake_loop: email-default-handler
+#         ReviewLoop names a loop that looks at this account's mail after
+#         wake_loop: every draft a turn the operator is not present for
+#         writes here, and every message email_escalate hands over, is queued
+#         for it, and it is woken only while that queue holds work. Empty
+#         (the default) means no review pass, and email_escalate then
+#         refuses and says to flag the message instead. The built-in
+#         "email-draft-review" may use cloud models and asks for a higher
+#         quality floor than the wake loop. The loop must be an event_driven
+#         definition other than wake_loop, or startup refuses the config.
+#         review_loop: ""
+#         ReviewDelay is how long review work waits for more to arrive
+#         before review_loop is woken, so a burst of mail becomes one
+#         review. Default: 15m.
+#         review_delay: 15m
+#         ReviewMaxWait bounds how long a steady stream of new review work
+#         can postpone that wake. Default: 2h. It may not be shorter than
+#         review_delay.
+#         review_max_wait: 2h
+#         Labels names the email.labels this mailbox's mail carries, for
+#         example [contact]. Only these are written here, listed in the
+#         account's Email Accounts entry, and taken by email_mark and
+#         email_search on it. Empty (the default) means none, whatever
+#         email.labels declares. An account whose access is read is never
+#         written, so naming a label there is refused.
+#         labels: []
+#   Labels is the vocabulary of marks the operator sees in their mail
+#   client, keyed by label name: at most 8, at most one per colour. An
+#   account carries only the labels its mailbox.labels names.
+#   labels:
+#     contact:
+#       Meaning is what the label says about a message, in one short
+#       sentence, at most 200 bytes. It is shown to the model beside the
+#       label's name. Required.
+#       meaning: The sender matches a contact record
+#       Keyword is the IMAP keyword the label writes, for example
+#       "thane-contact": printable ASCII without spaces or any of
+#       ( ) { % * " \ ], at most 64 bytes. System flags such as \Flagged,
+#       keywords beginning with $ (the ones clients already give meaning
+#       to, such as $Junk and the $MailFlagBit0-2 colour keywords), and
+#       Junk, NonJunk, and NotJunk are refused. A keyword is always
+#       searchable; whether a client shows it depends on the client.
+#       keyword: thane-contact
+#       Color is the flag colour the label writes: red, orange, yellow,
+#       green, blue, purple, or grey. It is written as \Flagged plus the
+#       $MailFlagBit0-2 keywords that encode the colour, which a client
+#       that colours flags displays; every other client shows a plain flag.
+#       A colour is written only on a message nobody has flagged, and at
+#       most one label may use each colour.
+#       color: blue
+#       Apply names the rule under which Go applies the label itself, so
+#       the model never does. "contact_matched" applies it at poll time to
+#       new INBOX mail whose sender matches exactly one contact record, on
+#       every account whose mailbox.labels names the label. Leave empty for
+#       a label the model applies with email_mark.
+#       apply: contact_matched
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:
