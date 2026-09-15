@@ -1940,6 +1940,11 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 	if err != nil {
 		return err
 	}
+	s.notifySessionClosed(sessionID, reason)
+	return nil
+}
+
+func (s *ArchiveStore) notifySessionClosed(sessionID, reason string) {
 	if cb := s.sessionCloseCallback; cb != nil {
 		// Defer-recover guard: a bad callback should never poison the
 		// store's caller. The session is already closed — we just
@@ -1956,7 +1961,6 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 			cb(sessionID, reason)
 		}()
 	}
-	return nil
 }
 
 // SetSessionCloseCallback registers a function to be called after every

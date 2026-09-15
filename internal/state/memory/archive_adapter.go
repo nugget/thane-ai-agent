@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"log/slog"
 	"slices"
 	"sync"
@@ -33,9 +34,65 @@ type ArchiveAdapter struct {
 	msgStore MessageArchiver  // sets status='archived' in unified messages table
 	tcStore  ToolCallArchiver // sets status='archived' in unified tool_calls table
 
+	// Serialize durable boundaries with cache publication. A failed
+	// transaction must leave the previously published session untouched.
+	lifecycleMu sync.Mutex
+
 	// Track active sessions in memory for fast lookup
 	mu       sync.RWMutex
 	sessions map[string]sessionEntry // conversationID -> cached session
+}
+
+// ResetSession atomically closes the current session and opens its successor,
+// optionally inserting a carry-forward system message into the new window.
+func (a *ArchiveAdapter) ResetSession(conversationID, reason, carryForward string) error {
+	return a.transitionSession(conversationID, sessionTransition{reason: reason, carryForward: carryForward, restart: true})
+}
+
+// CloseConversation atomically archives the active window and closes its
+// session, retaining the conversation's identity, metadata, and transcript.
+func (a *ArchiveAdapter) CloseConversation(conversationID, reason string) error {
+	return a.transitionSession(conversationID, sessionTransition{reason: reason})
+}
+
+// CheckpointSession persists a bookmark of current message IDs and the active
+// window without ending the session or removing any messages from context.
+func (a *ArchiveAdapter) CheckpointSession(conversationID, label string) error {
+	return a.transitionSession(conversationID, sessionTransition{checkpoint: true, label: label})
+}
+
+// SplitSession moves the suffix starting at boundaryMessageID into a new
+// session and closes the prefix, preserving row identities and timestamps.
+// Boundaries retaining compacted sources are rejected without changes.
+func (a *ArchiveAdapter) SplitSession(conversationID, boundaryMessageID string) error {
+	if boundaryMessageID == "" {
+		return fmt.Errorf("split boundary message ID is required")
+	}
+	return a.transitionSession(conversationID, sessionTransition{reason: "split", boundaryID: boundaryMessageID})
+}
+
+func (a *ArchiveAdapter) transitionSession(conversationID string, op sessionTransition) error {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	result, err := a.store.transitionSession(conversationID, op)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	delete(a.sessions, conversationID)
+	if result.current != nil {
+		a.sessions[conversationID] = sessionEntry{id: result.current.ID, startedAt: result.current.StartedAt}
+	}
+	a.mu.Unlock()
+	if result.closedID != "" {
+		if store, ok := a.msgStore.(*SQLiteStore); ok {
+			store.forgetClipWarning(conversationID)
+		}
+		a.store.notifySessionClosed(result.closedID, op.reason)
+	}
+	a.logger.Info("session transition committed", "conversation_id", conversationID,
+		"reason", op.reason, "checkpoint", op.checkpoint, "closed_session_id", result.closedID)
+	return nil
 }
 
 // NewArchiveAdapter creates an adapter that implements agent.SessionArchiver.

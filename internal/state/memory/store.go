@@ -6,10 +6,11 @@
 // messages that are actively used for LLM context windows. Messages can be
 // compacted (summarized) when the context grows too large.
 //
-// Session archive (ArchiveStore) provides immutable, long-term storage of
-// all conversation transcripts. Messages are archived before any destructive
-// operation (compaction, reset, shutdown), ensuring primary source data is
-// never lost. The archive supports full-text search with gap-aware context
+// Session archive (ArchiveStore) reads the same durable message rows as active
+// memory. Compaction, reset, and shutdown change lifecycle state rather than
+// deleting or copying transcripts. [SessionLifecycle] commits boundaries and
+// row ownership together; checkpoints bookmark existing message IDs without
+// changing the active context. The archive supports full-text search with gap-aware context
 // expansion — search results include surrounding conversation bounded by
 // natural silence gaps rather than rigid message counts.
 package memory
@@ -63,12 +64,13 @@ const (
 
 // Message represents a conversation message. This is the unified type for
 // both active working-memory messages and archived session transcripts.
-// Archive-specific fields (ConversationID, SessionID, TokenCount, ArchivedAt,
-// ArchiveReason) are zero-valued for active messages.
+// Reader projections may omit ownership and archival fields. A SessionID
+// alone does not imply archival: active rows can already belong to a session
+// after a checkpoint, split, or carry-forward handoff.
 type Message struct {
 	ID             string    `json:"id"`                        // Stable UUIDv7 assigned at creation time
-	ConversationID string    `json:"conversation_id,omitempty"` // Set for archived messages
-	SessionID      string    `json:"session_id,omitempty"`      // Set for archived messages
+	ConversationID string    `json:"conversation_id,omitempty"` // Owning conversation, when included by the reader
+	SessionID      string    `json:"session_id,omitempty"`      // Owning session, independent of lifecycle status
 	Role           string    `json:"role"`                      // system, user, assistant, tool
 	Content        string    `json:"content"`
 	Timestamp      time.Time `json:"timestamp"`
