@@ -24,7 +24,7 @@ func emailTalentText(t *testing.T) map[string]string {
 			out[talent.Name] = strings.Join(strings.Fields(talent.Content), " ")
 		}
 	}
-	for _, name := range []string{"email", "email_triage", "email_respond", "email_organize"} {
+	for _, name := range []string{"email", "email_triage", "email_respond", "email_organize", "email_drafts"} {
 		if _, ok := out[name]; !ok {
 			t.Fatalf("email talent %q not loaded; the guard would be meaningless", name)
 		}
@@ -257,6 +257,99 @@ func TestEmailTalentTeachesDraftsOnlyGate(t *testing.T) {
 	}{
 		{"drafts folder by a site name", "held in Drafts"},
 		{"requested draft by a site name", "holds the message in Drafts"},
+	}
+	for _, tt := range absent {
+		t.Run(tt.name, func(t *testing.T) {
+			for name, body := range text {
+				if strings.Contains(body, tt.gone) {
+					t.Errorf("talent %s still contains %q", name, tt.gone)
+				}
+			}
+		})
+	}
+}
+
+// TestEmailTalentTeachesDraftEditPath pins the slice 4 teaching: the
+// email_drafts leaf and its edit path (find, read beside the original,
+// revise the body for accuracy and tone, or withdraw), the ownership
+// rule, gone and held as hands off, the two-pass tier, and the one-draft
+// refusals in email_respond. It also pins that nothing teaches a review
+// or approve verb, which the operator ruled out.
+func TestEmailTalentTeachesDraftEditPath(t *testing.T) {
+	text := emailTalentText(t)
+	present := []struct {
+		name   string
+		talent string
+		want   string
+	}{
+		{"trailhead routes to the leaf", "email", "activate `email_drafts` beside `email`"},
+		{"drafted disposition names draft_id", "email", "the result's `draft_id` is how you change it later"},
+		{"drafted mail reversible while yours", "email", "while it is still yours, the `email_drafts` tools revise its body or withdraw it"},
+		{"operator drafts folder marks only yours", "email", "only your own drafts carry `thane_draft`"},
+		{"operator reply comes first", "email", "refuses to draft another answer to it (`operator_reply_started`"},
+		{"list row shape", "email_triage", "size, thane_draft}]}"},
+		{"annotation needs uid and message-id", "email_triage", "only when both its UID and its Message-ID match what Thane recorded"},
+		{"unannotated row is not yours", "email_triage", "A row without `thane_draft` is not one of your open drafts"},
+		{"result shape carries draft_id", "email_respond", "drafts_folder, draft_uid, draft_id, signed"},
+		{"drafted bullet: revise, never redraft", "email_respond", "Never resend it, and never write a second draft to change it; revise the one you have."},
+		{"refused routes list draft_open", "email_respond", "`draft_open` (one of your drafts already answers the message; revise that one)"},
+		{"refused routes list operator_reply_started", "email_respond", "`operator_reply_started` (on an operator mailbox, a reply that is not one of your open drafts is already there, most likely the operator's; leave it to them)"},
+		{"refused routes list draft_limit", "email_respond", "`draft_limit` (the account already has 200 of your drafts open"},
+		{"a sent reply names the open draft", "email_respond", "the result's `note` names that `draft_id`: withdraw it with `email_draft_withdraw`"},
+		{"gone lists marked_deleted", "email_drafts", "`marked_deleted` when their client flagged it"},
+		{"one draft section", "email_respond", "## One draft per message"},
+		{"draft_open route", "email_respond", "`email_reply` refuses it with `decision.route` `draft_open`"},
+		{"draft_open recovery", "email_respond", "Change the existing draft with `email_draft_revise` instead"},
+		{"withdraw before a fresh draft", "email_respond", "withdraw the old one with `email_draft_withdraw` first and then reply"},
+		{"operator_reply_started route", "email_respond", "`email_reply` refuses with `decision.route` `operator_reply_started`"},
+		{"leave the operator's draft", "email_respond", "Leave their draft alone and write no second one beside it"},
+		{"draft true clears neither", "email_respond", "`draft: true` does not clear either refusal"},
+		{"withdraw is not a move", "email_organize", "Taking back one of your own drafts is `email_draft_withdraw`'s job"},
+		{"leaf heading", "email_drafts", "# Your drafts in flight"},
+		{"in flight until sent or discarded", "email_drafts", "A draft you write is in flight until the operator sends it or discards it from their own client."},
+		{"operator sends every draft", "email_drafts", "The operator reads and sends every draft by hand"},
+		{"carry email too", "email_drafts", "Carry `email` beside `email_drafts`."},
+		{"ownership is proven", "email_drafts", "A draft is yours only while Go can prove it"},
+		{"operator edit makes it theirs", "email_drafts", "from then on the draft is theirs"},
+		{"never an operator's draft", "email_drafts", "A draft the operator wrote is never yours, whatever it says or answers."},
+		{"find with email_drafts", "email_drafts", "`email_drafts` lists the ledger"},
+		{"read beside the original", "email_drafts", "Read one with `email_draft_get`"},
+		{"read both before changing", "email_drafts", "Read both bodies before you change a word"},
+		{"revise for accuracy and tone", "email_drafts", "Revise for two things. Accuracy:"},
+		{"tone is writes_as and voice", "email_drafts", "goes out under the account's `writes_as` and in its `voice`"},
+		{"body only", "email_drafts", "Only the body changes. Recipients, subject, and threading stay exactly as they were drafted"},
+		{"wrong audience is withdrawn", "email_drafts", "a draft that needs a different audience or subject is withdrawn, not revised"},
+		{"body replaces everything", "email_drafts", "`body` is markdown and replaces the whole old body"},
+		{"key on draft_id", "email_drafts", "Keep track of a draft by its `draft_id`, never by a UID you saw earlier."},
+		{"no approve step", "email_drafts", "there is no approve step"},
+		{"withdraw to trash", "email_drafts", "`email_draft_withdraw` moves a draft to the account's trash folder"},
+		{"withdraw ignores move_into", "email_drafts", "the account's `move_into` does not apply"},
+		{"no trash folder refusal", "email_drafts", "the refusal (`no_trash_folder`) names the gap"},
+		{"gone and held section", "email_drafts", "## Gone and held: hands off"},
+		{"held is operator takeover", "email_drafts", "`held`: the operator has taken the draft over."},
+		{"leave it", "email_drafts", "Either way, leave it."},
+		{"never recreate", "email_drafts", "Never write it again as a new draft and never try to restore your version"},
+		{"tier section", "email_drafts", "## A first draft, then an edit"},
+		{"local first pass", "email_drafts", "A first pass, often a free local model"},
+		{"editing loop carries both tags", "email_drafts", "a loop carrying `email` and `email_drafts`"},
+		{"first pass writes finished mail", "email_drafts", "If you are the first pass, write the finished message anyway"},
+	}
+	for _, tt := range present {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(text[tt.talent], tt.want) {
+				t.Errorf("talent %s must contain %q", tt.talent, tt.want)
+			}
+		})
+	}
+
+	absent := []struct {
+		name string
+		gone string
+	}{
+		{"old drafted bullet without the edit path", "do not resend it, and do not try to send it"},
+		{"design's review verb", "email_draft_review"},
+		{"design's held stage", "held_by_operator"},
+		{"review stage", "reviewed_by"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {
