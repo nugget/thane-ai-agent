@@ -297,6 +297,7 @@ instead of being reimplemented in each loop prompt.
 | `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. On an operator mailbox, adding `seen` is refused in a turn the operator is not present for. The account's drafts folder is refused as the folder to act in. |
 | `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in the account's drafts folder for the operator, or refused with a decision record. On an account with `policy.draft_gate: relaxed` (delivery `drafts`), a recipient refused only for its zone is drafted with gating `draft_only`, named in the draft by bare address; automated, unresolvable, and unparseable recipients, and those the recipient-domain rules refuse, are refused there too. A draft needs a folder with the drafts role (`drafts_folder`, else the server's `\Drafts` mark); without one it is refused with route `no_drafts_folder` and nothing is sent in its place. The `bcc_owner` audit copy rides only sent mail. An account whose access is not `send` is refused, and the refusal says the message must not be written from another account. A drafted result carries `draft_id`, the draft's key in the draft ledger that the `email_drafts` tools take. |
 | `email_reply` | Reply with threading headers through the same gate and decision, including the access refusal. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not, except on an account with a relaxed `draft_gate`, which drafts a reply to `bulk` mail that is not `auto_submitted` and names the account's own address in its To or Cc, with route `personally_addressed_list_reply`; a lone `Precedence: junk`, the classic autoresponder mark, does not qualify. A reply that would be drafted is refused with route `draft_open` while an open Thane draft already answers the same message (the refusal names its `draft_id`, for `email_draft_revise`), and, on an account with `mailbox.owner: operator`, with route `operator_reply_started` when one `UID SEARCH HEADER In-Reply-To` of the drafts folder finds a reply to the same message that the draft ledger does not hold. Any message that would be drafted is refused with route `draft_limit` while the account already has 200 open Thane drafts. A reply sent directly while an open Thane draft answers the same message carries a `note` naming that `draft_id`, so it can be withdrawn. |
+| `email_escalate` | Hand one message to the account's review pass, the loop its `mailbox.review_loop` names: queues `message:<account>:<message_id>` in that loop's work queue (a repeat coalesces, replacing the reason) and returns `{queued, subject, pending_for_review}`, with `pending_for_review` null when the queue could not be counted. Changes nothing in the mailbox. Refused, with nothing queued and the `email_mark` call to flag the message instead, on an account without a `review_loop`, for a message without a Message-ID, and from the review loop itself. |
 | `email_move` | Move messages within an account. `folder` is always the source, and the target is exactly one of `destination` (an exact folder name) or `destination_role` (a special-use role Go resolves, taking `junk_folder` or `trash_folder` first); neither or both is refused, and so is a role no folder holds. Only folders in the account's `mailbox.move_into` are accepted, plus INBOX out of one of them; the drafts folder is neither source nor destination. In a turn the operator is not present for, a move into the junk folder refuses each message from the operator's own record or a contact at `admin`, `household`, or `trusted` (or an address several contacts share when one of them is or may be at such a zone, or one the directory could not look up) and moves the rest. The result lists `moved` `{uid, destination_uid, message_id, from, trust_zone}` and `refused` `{uid, from, trust_zone, reason, recovery}`, reports the new UIDs when the server returns them, and records both UID lists in the Email Accounts block's recent operations. |
 
 Every email tool takes an `account`; in a loop bound with
@@ -310,8 +311,39 @@ is when the operator marked it (`owner`, `writes_as`, `voice`,
 (`junk_folder`, `move_into`, and any `filing_note`), whether it may
 hand mail to SMTP itself, whether this turn is `attended`, which trust
 zones it sends directly to, drafts for, and refuses this turn, and its
-cached folder names with roles. An account whose `access` is `read`
+cached folder names with roles. An account whose new mail wakes a loop
+other than its owner's default shows `wake_loop`, and one with a review
+pass shows `review_loop`, `pending_review` (the account's queued review
+work, counted by the poller and on each enqueue, never at render), and
+`pending_review_as_of`. An account whose `access` is `read`
 reads without marking messages seen and refuses flags and moves.
+
+**Review queue.** An account with `mailbox.review_loop` feeds that loop
+through the loopqueue store, in the partition named after the loop. A
+draft written on the account in a turn the operator is not present
+for, by any loop but the review loop, queues `draft:<draft_id>`, and
+`email_escalate` queues `message:<account>:<message_id>`; queueing a
+subject again coalesces with the waiting item. Each item's `source` is
+`email_review` and its summary is compact JSON: `{account, draft_id,
+message_subject, drafted_by}` for a draft, `{account, folder,
+message_id, from, message_subject, reason}` for a message, where
+`message_subject` is the message's Subject header and the item's own
+`subject` is its queue key. The review loop is woken with one
+`email_review` event of type `review_pending`, whose metadata counts
+`drafts`, `messages`, and `pending`. It carries three loop-private
+tools, attached at hydration to whatever definition an account names
+as `review_loop`, scoped to that loop's own partition, and never
+registered globally or listed in the tool catalog:
+
+| Tool | Description |
+|------|-------------|
+| `queue_pull` | Pull one batch per iteration (default 5, at most 25), highest priority first, then oldest. Each item gives `subject`, `source`, `summary`, `priority`, and `age`; the result adds `remaining`, the depth behind the batch (null when it could not be measured), and `oldest_wait`. A second pull in the same iteration is refused. |
+| `queue_ack` | Remove the exact item `queue_pull` returned, by subject, using a hidden one-shot receipt. Answers `ok`, `already_acknowledged`, or `retained_newer` when the subject was queued again while the item was worked; the newer item then stays queued. |
+| `queue_defer` | Keep a pulled item pending, moved behind every item currently queued, for a later wake. |
+
+The review loop has no `queue_enqueue`: its work comes only from drafts
+and escalations, and `email_escalate` refuses a call from the review
+loop itself.
 
 ## `email_drafts` — Thane's drafts in flight
 

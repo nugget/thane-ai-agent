@@ -202,7 +202,10 @@ Choose stream wiring by attention cost:
 - Use event-source `wake_loop` targets when each event from a
   *producer stream* deserves an immediate iteration. Producer tools
   such as `forge_repo_follow` and `media_follow` own those
-  subscriptions.
+  subscriptions. New mail is not one of them: each email account's
+  wake loop, and the review loop that may follow it, are the
+  operator's configuration, so no tool points mail at a loop. Ask the
+  operator when mail should reach a different loop (see `email`).
 
 Treat running loops as bi-directional. A service loop can pull you in
 via `request_core_attention` when something deserves a decision; you

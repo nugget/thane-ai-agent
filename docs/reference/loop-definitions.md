@@ -139,7 +139,7 @@ a checkout request from the caller's binding.
 |---|---|
 | `forge_account` | Forge account name (from `forge.accounts`) that this loop's forge tools resolve to. The account must exist at hydration, or the definition refuses |
 | `repo_root` | Named repository root registered by `forge_repo_follow` that file and `repo_git_*` tools resolve to. The root must exist at hydration, or the definition refuses |
-| `email_account` | Email account name (from `email.accounts`) that this loop's email tools resolve to, and the account the Email Accounts context block narrows to. The account must exist at hydration, or the definition refuses. The built-in `email-default-handler` is deliberately unbound: it triages every configured mailbox and reads the account from each wake event |
+| `email_account` | Email account name (from `email.accounts`) that this loop's email tools resolve to, and the account the Email Accounts context block narrows to. The account must exist at hydration, or the definition refuses. The built-in `email-default-handler`, `email-owner-triage`, and `email-draft-review` are deliberately unbound: each serves every mailbox that routes to it and reads the account from each wake event or queued item |
 
 Bindings cascade from container ancestors, and on a key collision the
 **ancestor wins** — the inverse of `routing_factors`. A routing factor is
@@ -161,3 +161,115 @@ bound forge credential, and a `repo_root` binding does not constrain a loop
 that also has the host `exec` tool: that process can reach anything allowed to
 the service account. Bindings scope tools; enclosure scopes processes. Both
 layers are needed, and neither substitutes for the other.
+
+## Built-in email loops
+
+When email is configured, Thane adds the event-driven definitions that
+receive mail, under the `pollers` container: the ones a poll wakes
+only while mail is polled (`email.poll_interval` above 0, the
+default), and the review pass whenever an account names it, because
+queued work wakes it either way. Each is deliberately unbound: one loop
+serves every account that routes to it and reads the account from each
+wake event or queued item. An account routes with two keys under its
+`mailbox` block, described in
+[Configuration](../operating/configuration.md#passes-wake_loop-and-review_loop):
+`wake_loop`, the loop each new message wakes, and `review_loop`, the
+loop that reviews the account's mail afterwards.
+
+| Definition | Added when | What it does |
+|---|---|---|
+| `email-default-handler` | always, with polling | The default `wake_loop` of every account whose `mailbox.owner` is not `operator`. On an operator mailbox whose `wake_loop` names it, it only flags what needs the operator and files obvious spam, and never replies or drafts |
+| `email-owner-triage` | with polling, when some account's `wake_loop` is this name, as every operator mailbox's is by default | The first pass over an operator mailbox. One action per message: junk obvious spam, flag what needs the operator, draft a plain answer where the account can draft, hand the message to the review pass with `email_escalate`, or nothing |
+| `email-draft-review` | some account's `review_loop` is this name, polled or not | The review pass. Woken only while its queue holds work; revises or withdraws queued drafts and handles escalated messages |
+
+| Key | `email-default-handler` | `email-owner-triage` | `email-draft-review` |
+|---|---|---|---|
+| `operation` | `event_driven` | `event_driven` | `event_driven` |
+| `prompt_mode` | `full` | `task` | `task` |
+| `tags` | `[email]` | `[email]` | `[email, email_drafts]` |
+| `exclude_tools` | none | `[email_send]` | `[email_send]` |
+| `profile.mission` | `email_triage` | `email_triage` | `email_review` |
+| `profile.local_only` | `"false"` | `"true"` | `"false"` |
+| `profile.quality_floor` | `5` | `5` | `8` |
+| `profile.delegation_gating` | `disabled` | `disabled` | `disabled` |
+
+`local_only: "true"` is a routing preference, not a requirement: the
+router favours local models for the triage pass and can still give the
+turn to a cloud model when no local one can take it. Neither pass has
+`email_send`, so neither can start a new thread or write about one
+account's mail from another, and both tasks pass `draft: true` on every
+`email_reply`, so neither sends, whatever the account's `delivery`. The
+review loop's queue tools (`queue_pull`, `queue_ack`, `queue_defer`)
+are not in its spec. Hydration attaches them to whatever definition an
+account names as its `review_loop`, built-in or not, scoped to that
+loop's own queue, and gives no loop `queue_enqueue` for it.
+
+### Overriding an email loop
+
+A definition document in `<core>/loops/` with the same `name`, or a
+`loops.definitions` entry with it, replaces the built-in: core
+documents and config entries are registered before the built-ins, and
+the first definition of a name wins. Nothing is merged, so the override
+states every key it needs:
+
+- `operation: event_driven`. Startup refuses an account whose
+  `review_loop`, or whose `wake_loop` when polling is on, names no
+  definition or a definition of another operation, and the error names
+  the account and the key.
+- `exclude_tools: [email_send]`, unless the loop should be able to
+  compose new mail. The built-ins exclude it; an override that leaves
+  the key out does not.
+- The tags its task needs, `email_drafts` included for a review loop,
+  whose work is mostly drafts.
+- For a review loop, a task that drains its queue: one `queue_pull` per
+  wake, then `queue_ack` for each subject once its outcome is written,
+  or `queue_defer` when its mailbox could not be reached. Subjects are
+  `draft:<draft_id>` and `message:<account>:<message_id>`, and each
+  item's summary is compact JSON naming the account.
+
+A skeleton for a review-loop override:
+
+````markdown
+# Email draft review
+
+## Spec
+
+```yaml
+# Every key this block accepts is documented in
+# docs/reference/loop-definitions.md.
+name: email-draft-review
+parent_name: pollers
+enabled: true
+operation: event_driven
+completion: none
+prompt_mode: task
+tags: [email, email_drafts]
+exclude_tools: [email_send]
+profile:
+    mission: email_review
+    local_only: "false"
+    quality_floor: 8
+    delegation_gating: disabled
+```
+
+## Task
+
+<The per-wake procedure: call queue_pull once; for each draft:<draft_id>
+subject, read the draft with email_draft_get and revise, withdraw, or
+leave it; for each message:<account>:<message_id> subject, find the
+message with email_search and handle it; call queue_ack for each
+subject once its outcome is written.>
+````
+
+A loop of your own works the same way under any other name: point
+`wake_loop` or `review_loop` at an event-driven definition, which may
+bind one mailbox with `bindings: {email_account: <name>}` when only
+that account routes to it. `review_loop` must differ from `wake_loop`.
+An override document is loaded whether or not an account routes to it,
+and a loop no account routes to is never woken by mail.
+
+With `email.poll_interval: 0` no new mail is routed, and of the
+built-in email loops only `email-draft-review` is added, when an
+account names it. An account's `review_loop` still receives drafts and
+escalations, is still woken for them, and is still checked at startup;
+nothing re-wakes the loop after a poll.
