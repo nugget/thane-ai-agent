@@ -63,6 +63,10 @@ type accountView struct {
 	Address     string `json:"address,omitempty"`
 	Description string `json:"description,omitempty"`
 
+	// mailboxView adds owner, writes_as, voice, and reads_mark_seen when
+	// the account's mailbox block departs from its defaults.
+	mailboxView
+
 	// Access and Delivery are the account's policy.
 	Access   string `json:"access"`
 	Delivery string `json:"delivery"`
@@ -76,7 +80,8 @@ type accountView struct {
 	// DraftsFolder is where a drafted message lands, resolved the way
 	// the send path resolves it: the configured folder, else the one
 	// the cached listing marks as drafts. It is omitted until one of
-	// those is known, and for an account that cannot draft.
+	// those is known. An account that cannot draft omits it, except an
+	// operator mailbox, which shows its configured one.
 	DraftsFolder string `json:"drafts_folder,omitempty"`
 
 	// DeniedRecipientDomains and AllowedRecipientDomains are the
@@ -154,9 +159,8 @@ func (p *ContextProvider) buildContext(bound string, isAttended bool) (string, e
 			Bound:                   bound != "",
 		}
 		view.Address = accountAddress(cfg)
-		if cfg.CanDraft() {
-			view.DraftsFolder = p.service.knownDraftsFolder(cfg)
-		}
+		view.mailboxView = newMailboxView(cfg)
+		view.DraftsFolder = p.service.entryDraftsFolder(cfg)
 		if snap, ok := p.service.cachedFolders(cfg.Name); ok {
 			view.Folders, view.FoldersTruncated = folderViews(snap.Folders)
 			view.FoldersAsOf = promptfmt.FormatDeltaOnly(snap.At, now)

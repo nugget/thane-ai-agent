@@ -59,11 +59,19 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 		return "", fmt.Errorf("uid is required (integer > 0): the UID of the message from an email_list or email_search result in the same account and folder")
 	}
 	folder := normalizeFolder(toolargs.TrimmedString(args, "folder"))
-	markSeen := toolargs.BoolOr(args, "mark_seen", true)
 
 	acct, err := t.service.ResolveAccount(ctx, toolargs.TrimmedString(args, "account"))
 	if err != nil {
 		return "", err
+	}
+	markSeen := readMarksSeen(args, acct.Config)
+	if markSeen {
+		// The operator-mailbox rule answers before the read-level
+		// downgrade below, so an unattended mark_seen: true on an operator
+		// mailbox is refused whatever the account's access.
+		if err := t.service.refuseUnattendedSeen(ctx, "email_read", acct, "nothing was read, so retry with mark_seen: false, which leaves the message unread"); err != nil {
+			return "", err
+		}
 	}
 	var accessNote string
 	if acct.Config.AccessLevel() == AccessRead && markSeen {
@@ -226,6 +234,11 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if err := t.service.requireOrganize(acct, "email_mark"); err != nil {
 		return "", err
 	}
+	if action.Add && action.Flag == "seen" {
+		if err := t.service.refuseUnattendedSeen(ctx, "email_mark", acct, "nothing was changed, and a message that needs the operator gets flag \"flagged\" instead"); err != nil {
+			return "", err
+		}
+	}
 
 	result, err := acct.Client.MarkMessages(ctx, action)
 	if err != nil {
@@ -293,17 +306,9 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 		Account:     toolargs.TrimmedString(args, "account"),
 	}
 
-	// Models sometimes pass "folder" meaning the destination (e.g.,
-	// "Trash") without providing "destination". When the destination
-	// key is truly absent and folder is set, promote folder to
-	// destination and let the source default to INBOX. An explicitly
-	// empty destination still triggers the required-field error.
-	_, hasDestination := args["destination"]
-	if !hasDestination && opts.Destination == "" && opts.Folder != "" {
-		opts.Destination = opts.Folder
-		opts.Folder = ""
-	}
-
+	// folder is always the source. A call that names only folder is
+	// refused rather than read as a destination: guessing which folder
+	// the model meant is how mail lands somewhere nobody chose.
 	opts.UIDs = toolargs.Uint32Slice(args, "uids")
 	if len(opts.UIDs) == 0 {
 		if uid := toolargs.Uint32(args, "uid"); uid != 0 {
@@ -316,7 +321,7 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
 	}
 	if opts.Destination == "" {
-		problems = append(problems, "destination is required: an existing folder in the same account (see email_folders)")
+		problems = append(problems, "destination is required; folder is the source: pass destination as a folder name exactly as email_folders or the Email Accounts block lists it for this account, and nothing was moved")
 	}
 	if len(problems) > 0 {
 		return "", fmt.Errorf("%s", strings.Join(problems, "; "))
@@ -355,6 +360,6 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	} else {
 		resp.Note = "the server did not confirm which UIDs moved or their new UIDs; list " + result.Destination + " to check"
 	}
-	t.service.recordOp("email_move", acct.Name, result.SourceFolder, fmt.Sprintf("%d to %s", len(result.UIDs), result.Destination))
+	t.service.recordOp("email_move", acct.Name, result.SourceFolder, moveOperationRef(result))
 	return marshalResponse(resp)
 }

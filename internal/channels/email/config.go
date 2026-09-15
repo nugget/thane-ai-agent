@@ -20,6 +20,10 @@ type SMTPConfig = platformconfig.EmailSMTPConfig
 // PolicyConfig is one account's access level and delivery policy.
 type PolicyConfig = platformconfig.EmailPolicyConfig
 
+// MailboxConfig says whose mailbox an account is and how its mail
+// should sound.
+type MailboxConfig = platformconfig.EmailMailboxConfig
+
 // Access levels, in the email package's vocabulary.
 const (
 	AccessRead     = platformconfig.EmailAccessRead

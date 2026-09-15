@@ -421,13 +421,14 @@ func TestHandleMarkAndMoveReturnStructuredOutcomes(t *testing.T) {
 	}
 	mustContain(t, err.Error(), `"Promotions"`, "Archive", "Trash")
 
-	// folder-as-destination alias still works.
+	// folder is always the source: naming only folder is refused, not
+	// read as the destination.
 	uid3 := primary.append("INBOX", rawMessage("a@example.com", "thane@example.com", "three", "3"))
-	out, err = svc.ToolProvider().HandleMove(context.Background(), map[string]any{"uid": float64(uid3), "folder": "Trash"})
-	if err != nil {
-		t.Fatalf("HandleMove alias: %v", err)
+	_, err = svc.ToolProvider().HandleMove(context.Background(), map[string]any{"uid": float64(uid3), "folder": "Trash"})
+	if err == nil {
+		t.Fatal("a move naming only folder must be refused")
 	}
-	mustContain(t, out, `"destination_folder":"Trash"`, `"source_folder":"INBOX"`)
+	mustContain(t, err.Error(), "destination is required; folder is the source")
 }
 
 func TestHandleSearchRejectsBadDatesTogether(t *testing.T) {

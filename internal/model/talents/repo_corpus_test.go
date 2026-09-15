@@ -179,6 +179,12 @@ var nonToolTokens = map[string]struct{}{
 	"can_send":    {},
 	"in_reply_to": {},
 
+	// Email Accounts entry field (operator mailboxes): what email_read
+	// does to the seen flag when the call passes no mark_seen. The
+	// matcher flags it because `mark` is the second segment of
+	// email_mark, but it is a field name, not a tool.
+	"reads_mark_seen": {},
+
 	// Contact identity fields stamped on every email address in tool
 	// results and on every new-mail wake event (#1551): the directory's
 	// answer about who an address is. The matcher flags them because

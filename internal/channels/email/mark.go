@@ -73,11 +73,20 @@ func (c *Client) MarkMessages(ctx context.Context, action MarkAction) (MarkResul
 		if !exists {
 			continue
 		}
-		if slices.Contains(have, imapFlag) == action.Add {
+		if flagIn(have, imapFlag) == action.Add {
 			result.Affected = append(result.Affected, uid)
 		}
 	}
 	return result, nil
+}
+
+// flagIn reports whether flags holds want. IMAP flags are
+// case-insensitive (RFC 3501 §2.3.2), so a server that answers \SEEN
+// for \Seen has still set the flag.
+func flagIn(flags []imap.Flag, want imap.Flag) bool {
+	return slices.ContainsFunc(flags, func(f imap.Flag) bool {
+		return strings.EqualFold(string(f), string(want))
+	})
 }
 
 // fetchFlags returns the current flags of every UID in set that still

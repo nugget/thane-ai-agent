@@ -50,7 +50,7 @@ func folderParameter(role string) map[string]any {
 func draftParameter() map[string]any {
 	return map[string]any{
 		"type":        "boolean",
-		"description": "Hold the message in the account's Drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says what happened and decision.route says which rule decided.",
+		"description": "Hold the message in the account's drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says what happened and decision.route says which rule decided. A drafted message carries no audit Bcc, so its bcc_count is 0.",
 	}
 }
 
@@ -106,7 +106,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"auto_submitted and bulk say what the message's own headers claim about how it was sent, and are absent when they claim nothing: auto_submitted is auto-replied (an out-of-office or other automatic reply), auto-generated (a machine notice), auto-notified, or other; bulk is true when a mailing-list header or a Precedence of bulk, list, or junk says it went to many. " +
 				"Nothing authenticates these headers and any sender can set or omit them, so neither their presence nor their absence vouches for who wrote the message. " +
 				"They describe this message, not its sender: trust_zone and automated describe the address and do not change, and only this full read shows them, never a list or search result. They stop one thing: email_reply refuses to answer such a message unless the operator is present for this turn. " +
-				"Reading marks the message seen unless mark_seen is false or the account's access is read, in which case marked_seen is false and access_note says why. " +
+				"Whether reading marks the message seen follows mark_seen, whose default comes from the account: false on an account whose Email Accounts entry shows owner: operator (the operator's own mailbox, where unread is how they see what is new), true on every other account. On an operator mailbox, mark_seen: true is refused unless the operator is present for this turn. An account whose access is read never marks mail seen; marked_seen is then false and access_note says why. " +
 				"The UID must be given with the account and folder it was listed from; a UID the folder does not hold is an error naming both.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -118,7 +118,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 					"folder": folderParameter("Folder containing the message."),
 					"mark_seen": map[string]any{
 						"type":        "boolean",
-						"description": "Mark the message seen as a side effect of reading (default: true). Pass false to read without changing its unseen state.",
+						"description": "Mark the message seen as a side effect of reading. Default: false on an account whose Email Accounts entry shows owner: operator, true on every other account. Pass false to read without changing its unseen state; true on an operator mailbox is refused unless the operator is present for this turn.",
 					},
 					"account": accountParameter(),
 				},
@@ -129,7 +129,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_folders",
 			Description: "List every folder (mailbox) in one account with its special-use role, whether it can hold messages, and its message and unseen counts. Returns JSON " +
-				"{account, count, total, truncated, folders:[{name, role, selectable, delimiter, messages, unseen}]}; role is one of inbox, drafts, sent, trash, junk, archive, or empty. " +
+				"{account, count, total, truncated, folders:[{name, role, selectable, delimiter, attributes, messages, unseen}]}; role is one of inbox, drafts, sent, trash, junk, archive, all, flagged, important, or empty, " +
+				"and attributes lists the server's raw mailbox attributes (such as \\Noselect or \\HasChildren), omitted when it sent none. " +
 				"At most 200 folders are listed; when an account has more, role-bearing folders come first and truncated is true. " +
 				"Folder names are exact and per account: use them verbatim as email_move destinations. No email tool creates folders.",
 			Parameters: map[string]any{
@@ -186,7 +187,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Add or remove a flag on messages in one folder: seen, flagged, or answered. Provide uids (array of integers) or uid (single integer) " +
 				"from an email_list or email_search result in the same account and folder; add defaults to true. Returns JSON " +
 				"{action: flag_added|flag_removed, account, folder, flag, uids_affected, uids_not_found}. " +
-				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying. An account whose access is read refuses this tool.",
+				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying. An account whose access is read refuses this tool. " +
+				"On an account whose Email Accounts entry shows owner: operator, adding seen is refused unless the operator is present for this turn, because unread is how the operator sees what is new; flagged is how to mark what needs them.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -212,12 +214,13 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Name: "email_send",
 			Description: "Compose a new message from one account and hand it to the send decision. body is markdown and is rendered to both text and HTML. " +
 				"Every recipient in to and cc (at most 50 together) must be in the contact directory at a trust zone whose send policy is not blocked and pass the account's recipient-domain rules, which the Email Accounts block lists; an address several contact records share is governed by the least privileged of them, and one the directory could not be checked for is refused rather than treated as a stranger. " +
-				"The account's policy then decides the disposition: sent (delivered by SMTP; cannot be recalled), drafted (held in the account's Drafts folder for the operator to send; nothing has left the mailbox), or refused. " +
+				"The account's policy then decides the disposition: sent (delivered by SMTP; cannot be recalled), drafted (held in the account's drafts folder for the operator to send; nothing has left the mailbox), or refused. " +
 				"The Email Accounts block lists, per account and for this turn, which zones it sends_directly_to, drafts_for, and refuses. " +
-				"The configured bcc_owner audit copy is added automatically. Returns JSON " +
+				"The configured bcc_owner audit copy rides only mail that is sent, and bcc_count counts it; a drafted message carries none, so its bcc_count is 0. Returns JSON " +
 				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, signed, note, decision:{disposition, route, attended, gating, reason, drafts_folder, recipients:[{address, trust_zone, automated, gating, contact_status, contact, allowed, reason}]}}; " +
 				"sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder, and signed says whether an outbound signature was applied. " +
 				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted. " +
+				"An account whose access is not send is refused with decision.route access: the message belongs to that mailbox, so never write it from any other account; report that the account cannot compose. " +
 				"You can clear a refusal yourself only by changing the message: drop or correct a recipient, or pass draft: true when the account has no SMTP. " +
 				"An automated recipient (a no-reply, notification, or bounce address, marked automated: true) is refused whatever its record's zone, and no zone change helps: drop it. " +
 				"For any other trust refusal the only legitimate recovery is the operator assigning the recipient a zone, and only the operator can change the account's access, recipient-domain rules, or SMTP. " +
@@ -253,6 +256,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 			Description: "Reply to a message by UID, preserving In-Reply-To and References so the reply threads in the recipient's client. " +
 				"The reply goes to the original Reply-To (else From); reply_all adds the original To and Cc minus this account's own address. " +
 				"Recipients pass through the same trust gate and send decision as email_send, including its handling of ambiguous, unresolvable, and automated addresses: any refused recipient refuses the whole reply, and the account's policy decides whether the reply is sent or held in Drafts for the operator. " +
+				"An account whose access is not send refuses the reply with decision.route access before the original is read: the reply belongs to that mailbox, so never write it from any other account; report that the account cannot compose. " +
 				"body is markdown. Returns the same JSON shape as email_send with in_reply_to set, and with decision.original {auto_submitted, bulk} when the message replied to carries either mark (see email_read) and the account can write mail. " +
 				"A reply to such a message would be an automatic response, so in any turn the operator is not present for it is refused with decision.route automatic_response, whatever the sender's zone and even with draft: true, and nothing is sent or drafted: do not retry it or send it fresh with email_send; file the message and, if it needs an answer, bring it to the operator with request_core_attention.",
 			Parameters: map[string]any{
@@ -281,12 +285,13 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		},
 		{
 			Name: "email_move",
-			Description: "Move messages to another folder in the same account. Provide uids (array of integers) or uid (single integer), and destination: " +
-				"an existing folder name for this account from email_folders (no tool creates folders, and there are no cross-account moves). " +
-				"If only folder is given without destination, folder is treated as the destination and INBOX as the source. Returns JSON " +
+			Description: "Move messages to another folder in the same account. Provide uids (array of integers) or uid (single integer), folder (the source, default INBOX), and destination (required): " +
+				"the target, a folder name exactly as email_folders or the Email Accounts block lists it for this account (no tool creates folders, and there are no cross-account moves). " +
+				"A call without destination is refused and moves nothing; folder is never read as the target. Returns JSON " +
 				"{action: moved, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known, uids_not_found}; " +
 				"when destination_uids_known is true, uids are the source UIDs the server confirmed moving, paired with destination_uids, and uids_not_found are requested UIDs the folder no longer held; " +
 				"when it is false the server confirmed nothing, and the destination must be listed to find the messages. " +
+				"The Email Accounts block's recent_operations records each move with both UID lists, at most 10 of each with the rest counted, or with destination_uids unknown when the server confirmed nothing; list destination_folder for any it does not show. To undo a move, move destination_uids from destination_folder with destination set to the original source_folder. " +
 				"A destination the account lacks is refused with the account's real folder list, the account's drafts folder is never a destination, and an account whose access is read refuses this tool.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -295,18 +300,17 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 					"uid":  uidParam,
 					"folder": map[string]any{
 						"type":        "string",
-						"description": "Source folder (default: INBOX). If destination is omitted, folder is treated as the destination instead.",
+						"description": "Source folder holding the messages (default: INBOX). Never the target; pass the target as destination.",
 					},
 					"destination": map[string]any{
 						"type":        "string",
-						"description": "Target folder, an existing name in the same account (for example Archive or Trash). Required unless folder is used as the destination alias.",
+						"description": "Target folder (required): a folder name exactly as email_folders or the Email Accounts block lists it for this account.",
 					},
 					"account": accountParameter(),
 				},
-				// One of (uids|uid) and one of (destination|folder) are
-				// validated by the handler; left out of required so
-				// the standard JSON-schema validator does not reject
-				// the folder-as-destination alias path.
+				// One of uids or uid is validated by the handler, which
+				// reports every missing field together.
+				"required": []string{"destination"},
 			},
 			ContentResolveExempt: []string{"folder", "destination", "account"},
 			Handler:              t.HandleMove,
