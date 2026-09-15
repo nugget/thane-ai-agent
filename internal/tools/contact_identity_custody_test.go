@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -178,15 +179,33 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_lookup", registry.Get("contact_lookup").Description, []string{
 			"formatted name or nickname", "operator's own contact wins, then one above known", "formatted-name match before a nickname match",
-			"search that must match exactly one contact", "known duplicate", "contact_directory",
+			"given name and the first word", "exactly one contact must fit", "whatever their zones", "contact_id, trust zone and the field it matched",
+			"retry with the full formatted name", "never matches notes", "known duplicate", "contact_directory",
+			"lists up to five of them", "query set to the same name lists every contact that fits ahead of any other match",
+			fmt.Sprintf("lists up to %d matches, and says so when more match than it lists", contacts.SearchLimit),
+			"Each query row carries the contact's contact_id and trust zone",
+		}},
+		{"contact_lookup name", parameterDescription("contact_lookup", "name"), []string{
+			"formatted name or nickname", "given name or the first word", "exactly one contact must fit", "never used to resolve a name",
+			"retry with the full formatted name", "Use query",
+		}},
+		{"contact_lookup query", parameterDescription("contact_lookup", "query"), []string{
+			"given names", "notes", fmt.Sprintf("up to %d matching contacts", contacts.SearchLimit), "listed first", "when more match than it lists",
+			"Each row carries the contact's contact_id and trust zone",
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
 			"exactly one of name or contact_id", "as contact_lookup resolves it", "operator's own contact first, then one above known",
 			"Forgot contact:", "above known", "operator's own contact", "Home Assistant person", "in every turn", "by name or by contact_id", "CardDAV",
-			"known duplicate", "with their UUIDs",
+			"known duplicate", "with their UUIDs", "no exact holder", "carry it as a nickname",
 		}},
 		{"contact_forget name", parameterDescription("contact_forget", "name"), []string{
-			"exactly one contact", "contact_lookup", "contact_id",
+			"exactly one contact", "contact_lookup", "never used to resolve a name", "retry with the contact_id",
+		}},
+		{"contact_export_vcf name", parameterDescription("contact_export_vcf", "name"), []string{
+			"\"self\"", "given name or the first word", "never used to resolve a name", "retry with the full formatted name",
+		}},
+		{"contact_export_vcf_qr name", parameterDescription("contact_export_vcf_qr", "name"), []string{
+			"\"self\"", "given name or the first word", "never used to resolve a name", "retry with the full formatted name",
 		}},
 		{"contact_forget contact_id", parameterDescription("contact_forget", "contact_id"), []string{
 			"Canonical UUID", "exactly one of name or contact_id", "known duplicate", "contact_directory", "same contacts by contact_id as by name",

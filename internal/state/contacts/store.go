@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -210,20 +211,25 @@ func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 	return s, nil
 }
 
-// tryEnableFTS creates the FTS5 virtual table for full-text search.
-// Falls back to LIKE-based search when FTS5 is not available.
+// searchColumns are the contact columns [Store.Search] reads, in the
+// order the FTS5 index declares them. The LIKE fallback reads the same
+// list, so both paths find a contact by the same fields. given_name is
+// among them because name resolution answers to a given name, and an
+// ambiguous name's continuation sends the model to query to find the
+// contacts the error did not list.
+var searchColumns = []string{"formatted_name", "nickname", "given_name", "note", "ai_summary", "org"}
+
+// tryEnableFTS creates the FTS5 virtual table for full-text search,
+// first dropping one whose columns are not [searchColumns] so it is
+// created again with them. Falls back to LIKE-based search when FTS5 is
+// not available.
 func (s *Store) tryEnableFTS() {
-	_, err := s.db.Exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(
-			formatted_name,
-			nickname,
-			note,
-			ai_summary,
-			org,
-			content=contacts,
-			content_rowid=rowid
-		)
-	`)
+	if err := s.dropStaleFTS(); err != nil {
+		s.logger.Warn("contacts FTS index could not be migrated, using LIKE fallback", "error", err)
+		return
+	}
+	_, err := s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(` +
+		strings.Join(searchColumns, ", ") + `, content=contacts, content_rowid=rowid)`)
 	if err != nil {
 		s.logger.Warn("FTS5 not available for contacts, using LIKE fallback", "error", err)
 		return
@@ -235,6 +241,39 @@ func (s *Store) tryEnableFTS() {
 		s.logger.Warn("failed to rebuild contacts FTS index", "error", err)
 		s.ftsEnabled = false
 	}
+}
+
+// dropStaleFTS drops the contacts_fts index when it exists with columns
+// other than [searchColumns], as a database indexed before given_name
+// was searched has it. Nothing is lost: the index is external-content
+// over contacts and keeps no text of its own, and the rebuild
+// tryEnableFTS runs after creating it again reindexes every row.
+func (s *Store) dropStaleFTS() error {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info('contacts_fts')`)
+	if err != nil {
+		return fmt.Errorf("read contacts_fts columns: %w", err)
+	}
+	var columns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan contacts_fts column: %w", err)
+		}
+		columns = append(columns, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read contacts_fts columns: %w", err)
+	}
+	if len(columns) == 0 || slices.Equal(columns, searchColumns) {
+		return nil
+	}
+	s.logger.Info("recreating contacts FTS index with new columns", "columns", columns, "want", searchColumns)
+	if _, err := s.db.Exec(`DROP TABLE contacts_fts`); err != nil {
+		return fmt.Errorf("drop stale contacts_fts: %w", err)
+	}
+	return nil
 }
 
 // Upsert creates or updates a contact. If the contact has no ID, a new
@@ -354,19 +393,29 @@ func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, erro
 		args...))
 }
 
-// ResolveContact finds a contact by name: first among the active
-// contacts whose formatted name or nickname is the name, ordered as
-// operator_order.go describes (the operator's own record, then records
-// above known, then a formatted-name match before a nickname match),
-// then by search fallback. Returns [sql.ErrNoRows] if no match is
-// found, or an error listing ambiguous matches if search returns
-// multiple results.
+// ResolveContact finds the active contact a name identifies, reading
+// name fields only: first the contacts whose formatted name or nickname
+// is the name, ordered as operator_order.go describes (the operator's
+// own record, then records above known, then a formatted-name match
+// before a nickname match), then the one contact that answers to it by
+// a given name or the first word of its formatted name, as
+// name_resolve.go describes. Notes, AI summaries and organizations are
+// never read; [Store.Search] reads them. Both steps compare the name
+// and each stored name trimmed of edge space and folded with LOWER, as
+// the fork audit folds them, so a blank name answers to no one. Returns
+// [sql.ErrNoRows] when no contact answers to the name, and an
+// [*AmbiguousNameError] when none holds it exactly and two or more
+// answer to it by a given name or first word.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
 	return s.resolveContact(context.Background(), name)
 }
 
 // resolveContact is [Store.ResolveContact] bound to ctx.
 func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, error) {
+	// Trimmed once, so both steps, and the errors that echo the name, see
+	// the name the lookup was made by.
+	name = strings.TrimSpace(name)
+
 	// 1. Formatted name or nickname, authority first.
 	c, err := s.findByNameOrNickname(ctx, name)
 	if err == nil {
@@ -376,23 +425,16 @@ func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, erro
 		return nil, fmt.Errorf("find by name or nickname %q: %w", name, err)
 	}
 
-	// 2. Search fallback (FTS or LIKE).
-	results, err := s.search(ctx, name)
+	// 2. The fork audit's other name keys, with no tie-break.
+	c, err = s.resolveByNameKeys(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("search fallback for %q: %w", name, err)
-	}
-	if len(results) == 1 {
-		return results[0], nil
-	}
-	if len(results) > 1 {
-		names := make([]string, len(results))
-		for i, c := range results {
-			names[i] = c.FormattedName
+		var ambiguous *AmbiguousNameError
+		if errors.Is(err, sql.ErrNoRows) || errors.As(err, &ambiguous) {
+			return nil, err
 		}
-		return nil, fmt.Errorf("ambiguous contact %q: matches %v", name, names)
+		return nil, fmt.Errorf("resolve %q by given name or first word: %w", name, err)
 	}
-
-	return nil, sql.ErrNoRows
+	return c, nil
 }
 
 // Get retrieves a contact by ID.
@@ -426,48 +468,134 @@ func (s *Store) getWithProperties(ctx context.Context, id uuid.UUID) (*Contact, 
 	return c, nil
 }
 
-// Search finds contacts matching the query using FTS5 or LIKE fallback.
+// SearchLimit bounds the contacts [Store.Search] returns.
+const SearchLimit = 50
+
+// Search finds up to [SearchLimit] active contacts whose formatted name,
+// nickname, given name, note, AI summary or organization matches the
+// query, using FTS5 or the LIKE fallback. The contacts that answer to
+// the query as a name, by the name keys resolution reads (a formatted
+// name, nickname, given name or first word of a formatted name), come
+// first, so up to SearchLimit of them are listed ahead of any contact
+// whose other text only mentions it.
 func (s *Store) Search(query string) ([]*Contact, error) {
-	return s.search(context.Background(), query)
+	found, _, err := s.search(context.Background(), query)
+	return found, err
 }
 
-// search is [Store.Search] bound to ctx.
-func (s *Store) search(ctx context.Context, query string) ([]*Contact, error) {
-	if s.ftsEnabled {
-		return s.searchFTS(ctx, query)
+// search is [Store.Search] bound to ctx. Both paths read one row past
+// SearchLimit, so truncated says whether more contacts match than it
+// returns.
+func (s *Store) search(ctx context.Context, query string) (found []*Contact, truncated bool, err error) {
+	first, err := s.nameHoldersFirst(ctx, query)
+	if err != nil {
+		return nil, false, err
 	}
-	return s.searchLIKE(ctx, query)
+	if s.ftsEnabled {
+		found, err = s.searchFTS(ctx, query, first)
+	} else {
+		found, err = s.searchLIKE(ctx, query, first)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if len(found) > SearchLimit {
+		return found[:SearchLimit], true, nil
+	}
+	return found, false, nil
 }
 
-func (s *Store) searchFTS(ctx context.Context, query string) ([]*Contact, error) {
+// searchOrder is the leading ORDER BY term [Store.nameHoldersFirst]
+// builds, and its arguments. A zero searchOrder orders nothing.
+type searchOrder struct {
+	sql  string
+	args []any
+}
+
+// then returns the ORDER BY clause body: the leading term, if any,
+// followed by rest.
+func (o searchOrder) then(rest string) string {
+	if o.sql == "" {
+		return rest
+	}
+	return o.sql + ", " + rest
+}
+
+// nameHoldersFirst builds the ORDER BY term that puts first the active
+// contacts answering to query as a name, as [nameKeys.answersTo] reads
+// their name keys, so a search lists them ahead of contacts it matches
+// only by other text. It names at most SearchLimit+1 of them, the
+// operator's first, then those above known, then by name and id, as an
+// ambiguous name lists them, since a search returns no more than that.
+func (s *Store) nameHoldersFirst(ctx context.Context, query string) (searchOrder, error) {
+	key := nameKey(query)
+	if key == "" {
+		return searchOrder{}, nil
+	}
+	records, err := s.activeDirectoryNames(ctx)
+	if err != nil {
+		return searchOrder{}, fmt.Errorf("find contacts answering to %q: %w", query, err)
+	}
+	var holders []ContactForkMember
+	for _, r := range records {
+		if r.keys.answersTo(key) {
+			holders = append(holders, r.member)
+		}
+	}
+	if len(holders) == 0 {
+		return searchOrder{}, nil
+	}
+	sort.SliceStable(holders, func(i, j int) bool { return forkMemberLess(holders[i], holders[j]) })
+	holders = holders[:min(len(holders), SearchLimit+1)]
+	args := make([]any, len(holders))
+	for i, h := range holders {
+		args[i] = h.ContactID.String()
+	}
+	return searchOrder{
+		sql:  `CASE WHEN contacts.id IN (` + database.Placeholders(len(args)) + `) THEN 0 ELSE 1 END`,
+		args: args,
+	}, nil
+}
+
+func (s *Store) searchFTS(ctx context.Context, query string, first searchOrder) ([]*Contact, error) {
 	sanitized := sanitizeFTS5Query(query)
 	if sanitized == "" {
 		return nil, nil
 	}
 
+	args := append([]any{sanitized}, first.args...)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+qualifiedContactColumns+`
 		FROM contacts_fts
 		JOIN contacts ON contacts_fts.rowid = contacts.rowid
 		WHERE contacts_fts MATCH ? AND contacts.`+activeFilter+`
-		ORDER BY rank
-		LIMIT 50
-	`, sanitized)
+		ORDER BY `+first.then("rank")+`
+		LIMIT ?
+	`, append(args, SearchLimit+1)...)
 	if err != nil {
 		s.logger.Warn("FTS5 search failed, falling back to LIKE", "error", err, "query", query)
-		return s.searchLIKE(ctx, query)
+		return s.searchLIKE(ctx, query, first)
 	}
 	defer rows.Close()
 
 	return s.scanContacts(rows)
 }
 
-func (s *Store) searchLIKE(ctx context.Context, query string) ([]*Contact, error) {
+// searchLIKE is the search path without FTS5. It reads the same
+// [searchColumns] the FTS5 index declares.
+func (s *Store) searchLIKE(ctx context.Context, query string, first searchOrder) ([]*Contact, error) {
 	pattern := "%" + query + "%"
+	match := make([]string, len(searchColumns))
+	args := make([]any, 0, len(searchColumns)+len(first.args)+1)
+	for i, column := range searchColumns {
+		match[i] = "contacts." + column + " LIKE ?"
+		args = append(args, pattern)
+	}
+	args = append(args, first.args...)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+
-			` AND (formatted_name LIKE ? OR nickname LIKE ? OR note LIKE ? OR ai_summary LIKE ? OR org LIKE ?) ORDER BY updated_at DESC LIMIT 50`,
-		pattern, pattern, pattern, pattern, pattern)
+		`SELECT `+qualifiedContactColumns+` FROM contacts WHERE contacts.`+activeFilter+
+			` AND (`+strings.Join(match, " OR ")+`) ORDER BY `+first.then("contacts.updated_at DESC")+` LIMIT ?`,
+		append(args, SearchLimit+1)...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}

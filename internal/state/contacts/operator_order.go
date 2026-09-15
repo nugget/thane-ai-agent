@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -14,7 +15,11 @@ import (
 // the operator's own record wins, at any zone, then one above known,
 // then a formatted-name match before a nickname match, then the lowest
 // id. A known record whose formatted name is another record's nickname
-// therefore never shadows the record with authority. When
+// therefore never shadows the record with authority. This order ranks
+// only records that hold the name exactly. When none does, the resolver
+// takes the one record that answers to it by a given name or first word
+// and ranks nothing, so a first name two records share resolves to
+// neither (see name_resolve.go). When
 // operator_contact_id or the legacy owner name is configured, the store
 // learns who the operator is from the contact tools, which pin the same
 // record identity custody protects and the channel resolver marks
@@ -36,18 +41,27 @@ func (s *Store) authorityOrderArgs() []any {
 }
 
 // findByNameOrNickname returns the active contact that answers to name
-// as its formatted name or its nickname, compared with LOWER as the
-// resolver always has, in the order this file describes. Returns
-// sql.ErrNoRows when no active contact answers to it.
+// as its formatted name or its nickname, in the order this file
+// describes. Both sides fold as [nameKey] folds a name: the stored name
+// is trimmed of every rune strings.TrimSpace trims and lowered with
+// LOWER, and compared with the name's key. So a stored name with space
+// at its edge is still an exact holder, as the fork audit counts it,
+// and a name with space at its edge still reaches the exact holders and
+// their authority order. Returns sql.ErrNoRows when no active contact
+// answers to it, or when name is blank.
 func (s *Store) findByNameOrNickname(ctx context.Context, name string) (*Contact, error) {
-	args := []any{name, name}
+	key := nameKey(name)
+	if key == "" {
+		return nil, sql.ErrNoRows
+	}
+	args := []any{edgeSpace, key, edgeSpace, key}
 	args = append(args, s.authorityOrderArgs()...)
-	args = append(args, name)
+	args = append(args, edgeSpace, key)
 	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts
-		WHERE `+activeFilter+` AND (LOWER(formatted_name) = LOWER(?) OR LOWER(nickname) = LOWER(?))
+		WHERE `+activeFilter+` AND (LOWER(TRIM(formatted_name, ?)) = ? OR LOWER(TRIM(nickname, ?)) = ?)
 		ORDER BY `+authorityOrderSQL+`,
-			CASE WHEN LOWER(formatted_name) = LOWER(?) THEN 0 ELSE 1 END,
+			CASE WHEN LOWER(TRIM(formatted_name, ?)) = ? THEN 0 ELSE 1 END,
 			id
 		LIMIT 1`,
 		args...))

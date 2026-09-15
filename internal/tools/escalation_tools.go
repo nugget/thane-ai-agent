@@ -49,7 +49,7 @@ func (r *Registry) registerHumanEscalation(deps EscalationDeps) {
 			"properties": map[string]any{
 				"recipient": map[string]any{
 					"type":        "string",
-					"description": "Contact name to ask (e.g., \"nugget\")",
+					"description": "Contact name of the person to ask, such as \"Alice\". " + contactNameRetryByName,
 				},
 				"question": map[string]any{
 					"type":        "string",

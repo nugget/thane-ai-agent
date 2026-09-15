@@ -12,6 +12,21 @@ import (
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
+// contactNameRule says what a contact name argument is matched against,
+// as [contacts.Store.ResolveContact] matches it, for every tool that
+// takes one. Each tool ends it with contactNameRetryByID or
+// contactNameRetryByName, because the next move after an ambiguous name
+// depends on whether the tool also takes a contact_id.
+const contactNameRule = "Matched case-insensitively against each contact's formatted name or nickname; when several contacts hold it that way, the operator's own contact wins, then one above known. Only when no contact's formatted name or nickname is exactly the name is it matched against each contact's given name or the first word of its formatted name, and then exactly one contact must fit. Notes, AI summaries and organizations are never used to resolve a name. When two or more contacts fit by given name or first word, none is chosen: the error lists up to five of them, each with its full formatted name, trust zone and contact_id, and counts the rest, which contact_lookup with the name as query lists ahead of any other match, each with its contact_id, up to 50"
+
+// contactNameRetryByID ends contactNameRule for a tool that also takes
+// contact_id.
+const contactNameRetryByID = contactNameRule + "; retry with the contact_id of the one you mean."
+
+// contactNameRetryByName ends contactNameRule for a tool that takes only
+// a name.
+const contactNameRetryByName = contactNameRule + "; retry with the full formatted name of the one you mean."
+
 // SetContactTools adds contact management tools to the registry.
 func (r *Registry) SetContactTools(ct *contacts.Tools) {
 	r.contactTools = ct
@@ -108,17 +123,17 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_lookup",
-		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. A name finds the contact whose formatted name or nickname it is, case-insensitive; when several contacts answer to it, the operator's own contact wins, then one above known, then a formatted-name match before a nickname match, then the lowest ID. Only when no contact answers to the name does it fall back to a search that must match exactly one contact. So a known duplicate whose formatted name or nickname a contact above known also goes by is never what that name returns. Resolution reads no given name or first word, though: \"Bob\" returns a known contact named just Bob, not a household Bob Smith, so check a first-name result against the contact_directory row of system_health, which names such pairs with their UUIDs. When contact dossiers are configured, a name result also carries the canonical contact UUID and an exact contact_dossier_read call that safely probes the canonical dossier without constructing a document ref. Dossier prose is not structured identity authority. With no arguments, returns directory statistics.",
+		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. A name finds the contact whose formatted name or nickname it is, case-insensitive; when several contacts answer to it, the operator's own contact wins, then one above known, then a formatted-name match before a nickname match, then the lowest ID. So a known duplicate whose formatted name or nickname a contact above known also goes by is never what that name returns. Only when no contact's formatted name or nickname is the name does it try each contact's given name and the first word of its formatted name, and then exactly one contact must fit: when two or more do, whatever their zones, the error lists up to five of them with each one's contact_id, trust zone and the field it matched, counts the rest, and returns none of them. query set to the same name lists every contact that fits ahead of any other match, up to 50, so it reaches the ones the error left out; retry with the full formatted name of the one you mean, and pass its contact_id to tools that take one. A name never matches notes, summaries or organizations; query searches those as well as formatted names, nicknames and given names, lists up to 50 matches, and says so when more match than it lists. Each query row carries the contact's contact_id and trust zone, and the name field it answers by when it answers to the query as a name. A whole name still beats a first name: \"Bob\" returns a known contact named just Bob, not a household Bob Smith, so check a first-name result against the contact_directory row of system_health, which names such pairs with their UUIDs. When contact dossiers are configured, a name result also carries the canonical contact UUID and an exact contact_dossier_read call that safely probes the canonical dossier without constructing a document ref. Dossier prose is not structured identity authority. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "A contact's formatted name or nickname, case-insensitive. When several contacts answer to it, the one with authority wins, as the tool description orders it; with none, a search that must match exactly one contact.",
+					"description": "A contact's name. " + contactNameRetryByName + " Use query to search notes and summaries.",
 				},
 				"query": map[string]any{
 					"type":        "string",
-					"description": "Search term to find matching contacts",
+					"description": "Words to search for in formatted names, nicknames, given names, notes, AI summaries and organizations; returns up to 50 matching contacts as a list, those whose formatted name, nickname, given name or first word it is listed first, and says so when more match than it lists. Each row carries the contact's contact_id and trust zone, and the name field it answers by when it answers to the query as a name.",
 				},
 				"kind": map[string]any{
 					"type":        "string",
@@ -162,13 +177,13 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "contact_forget",
-		Description: "Remove one known contact from the directory; a soft delete that no model-facing tool can undo. Pass exactly one of name or contact_id. A name is resolved once, as contact_lookup resolves it: the contact whose formatted name or nickname it is, the operator's own contact first, then one above known, then a formatted-name match before a nickname match, then the lowest ID, else a search that must match exactly one contact. A contact_id removes exactly that active contact. The result names the record removed as \"Forgot contact: <name> (<zone>, <uuid>)\". Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied and refused in every turn, by name or by contact_id, the operator's own message included, because forgetting one turns that person's email and Signal traffic into a stranger's; nothing is removed, and the operator deletes or demotes those through CardDAV or DELETE /v1/contacts/{id}. A known duplicate whose formatted name or nickname a contact above known also goes by resolves to that contact, so forgetting it by name is refused; the refusal names up to three known, unbound contacts the name also fits, with their UUIDs, and contact_forget with one of those contact_id values removes it. A known contact whose whole name is another's first word (\"Bob\" beside \"Bob Smith\") is what \"Bob\" resolves to, so check that the result names the record you meant.",
+		Description: "Remove one known contact from the directory; a soft delete that no model-facing tool can undo. Pass exactly one of name or contact_id. A name is resolved once, as contact_lookup resolves it: the contact whose formatted name or nickname it is, the operator's own contact first, then one above known, then a formatted-name match before a nickname match, then the lowest ID, else the one contact whose given name or first word it is; a first name two or more contacts share resolves to none of them, and the error lists up to five of their contact_id values. A contact_id removes exactly that active contact. The result names the record removed as \"Forgot contact: <name> (<zone>, <uuid>)\". Contacts above known, the operator's own contact and contacts bound to a Home Assistant person are operator-custodied and refused in every turn, by name or by contact_id, the operator's own message included, because forgetting one turns that person's email and Signal traffic into a stranger's; nothing is removed, and the operator deletes or demotes those through CardDAV or DELETE /v1/contacts/{id}. A known duplicate whose formatted name or nickname a contact above known also goes by resolves to that contact, so forgetting it by name is refused; the refusal names up to three known, unbound contacts the name also fits, with their UUIDs, and contact_forget with one of those contact_id values removes it. Forgetting the only contact whose formatted name or nickname is a name leaves that name with no exact holder: it then reaches the one contact whose given name or first word it is, or no one when two or more have it, so when the forgotten record held a name another contact should keep answering to, tell the operator which contact should carry it as a nickname. A known contact whose whole name is another's first word (\"Bob\" beside \"Bob Smith\") is what \"Bob\" resolves to, so check that the result names the record you meant.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Name of the contact to remove, resolved as contact_lookup resolves it: a formatted name or nickname, where the contact with authority wins a name several contacts answer to, or a search term that matches exactly one contact. Confirm the record with contact_lookup first. Omit it when passing contact_id.",
+					"description": "Name of the contact to remove, resolved as contact_lookup resolves it. " + contactNameRetryByID + " Confirm the record with contact_lookup first. Omit it when passing contact_id.",
 				},
 				"contact_id": map[string]any{
 					"type":        "string",
@@ -219,7 +234,7 @@ func (r *Registry) registerContactTools() {
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Contact name to export, or \"self\" for the agent's own card",
+					"description": "Contact name to export, or \"self\" for the agent's own card. " + contactNameRetryByName,
 				},
 				"recipient_trust_zone": map[string]any{
 					"type":        "string",
@@ -311,7 +326,7 @@ func (r *Registry) registerContactTools() {
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Contact name to export, or \"self\" for the agent's own card",
+					"description": "Contact name to export, or \"self\" for the agent's own card. " + contactNameRetryByName,
 				},
 				"recipient_trust_zone": map[string]any{
 					"type":        "string",

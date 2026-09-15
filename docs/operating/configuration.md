@@ -764,6 +764,12 @@ reaches a `known` record whose whole name it is, and
 `contact_dossier_write` will not start a second dossier for a name sibling
 that looks like the same person and has one (see
 [Contact Identity Custody](../understanding/trust-architecture.md#contact-identity-custody)).
+A name no record holds as a formatted name or nickname reaches the one
+record whose given name or first word it is, and none while several
+share it; notes and summaries never resolve a name. So forgetting a
+duplicate that is the only record holding a name exactly leaves that
+name to the first-name rule: give the record that stays the name as a
+nickname if lookups by it should keep reaching that record.
 
 ## Companion Apps
 

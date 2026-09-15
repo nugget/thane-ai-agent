@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -337,7 +339,7 @@ func TestSearch_LIKEFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := store.searchLIKE(context.Background(), "handyman")
+	results, err := store.searchLIKE(context.Background(), "handyman", searchOrder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,6 +692,77 @@ func TestFTS5Enabled(t *testing.T) {
 	}
 }
 
+// TestNewStore_MigratesFTSIndexToSearchColumns pins the migration of a
+// database indexed before given_name was searched: NewStore drops the
+// old contacts_fts, creates it with searchColumns and reindexes the rows
+// already stored, so a given name the old index never held is found,
+// and a second open leaves the migrated index as it is.
+func TestNewStore_MigratesFTSIndexToSearchColumns(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "contacts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := database.Migrate(db, schema, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE VIRTUAL TABLE contacts_fts USING fts5(formatted_name, nickname, note, ai_summary, org, content=contacts, content_rowid=rowid)`,
+		`INSERT INTO contacts (id, kind, formatted_name, given_name, trust_zone, rev, created_at, updated_at)
+			VALUES ('01990000-0000-7000-8000-000000000001', 'individual', 'Dr. A. Jones', 'Alice', 'known',
+				'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("build the old index: %v", err)
+		}
+	}
+	matches := func(expr string) int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM contacts_fts WHERE contacts_fts MATCH ?`, expr).Scan(&n); err != nil {
+			t.Fatalf("MATCH %s: %v", expr, err)
+		}
+		return n
+	}
+	if n := matches(`"alice"`); n != 0 {
+		t.Fatalf("the old index matches alice %d times; the case needs it to miss the given name", n)
+	}
+
+	for open := range 2 {
+		store, err := NewStore(db, slog.Default())
+		if err != nil {
+			t.Fatalf("open %d: %v", open, err)
+		}
+		if !store.ftsEnabled {
+			t.Fatalf("open %d: FTS5 disabled after migration", open)
+		}
+		var columns []string
+		rows, err := db.Query(`SELECT name FROM pragma_table_info('contacts_fts')`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			columns = append(columns, name)
+		}
+		rows.Close()
+		if !slices.Equal(columns, searchColumns) {
+			t.Errorf("open %d: contacts_fts columns = %v, want %v", open, columns, searchColumns)
+		}
+		if n := matches(`given_name : "alice"`); n != 1 {
+			t.Errorf("open %d: the migrated index matches given name alice %d times, want the stored row reindexed once", open, n)
+		}
+		found, err := store.Search("Alice")
+		if err != nil || len(found) != 1 || found[0].FormattedName != "Dr. A. Jones" {
+			t.Errorf("open %d: Search(Alice) = %+v, %v, want Dr. A. Jones", open, found, err)
+		}
+	}
+}
+
 func TestSemanticSearch_ZeroLimit(t *testing.T) {
 	store := newTestStore(t)
 
@@ -950,44 +1023,8 @@ func TestResolveContact_Nickname(t *testing.T) {
 	}
 }
 
-func TestResolveContact_SearchFallback(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Eve Engineer", Kind: "individual", AISummary: "Backend developer"}
-	if _, err := store.Upsert(c); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ResolveContact("Eve")
-	if err != nil {
-		t.Fatalf("ResolveContact() error = %v", err)
-	}
-	if got.FormattedName != "Eve Engineer" {
-		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "Eve Engineer")
-	}
-}
-
-func TestResolveContact_Ambiguous(t *testing.T) {
-	store := newTestStore(t)
-
-	contacts := []*Contact{
-		{FormattedName: "Eve Alpha", Kind: "individual", AISummary: "Eve works on alpha"},
-		{FormattedName: "Eve Beta", Kind: "individual", AISummary: "Eve works on beta"},
-	}
-	for _, c := range contacts {
-		if _, err := store.Upsert(c); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	_, err := store.ResolveContact("Eve")
-	if err == nil {
-		t.Fatal("expected error for ambiguous contact")
-	}
-	if !strings.Contains(err.Error(), "ambiguous") {
-		t.Errorf("error = %q, want to contain 'ambiguous'", err.Error())
-	}
-}
+// A name no record holds exactly, first names and ambiguity are pinned
+// by TestResolveContact_NameFieldsOnly in resolve_order_test.go.
 
 func TestResolveContact_NotFound(t *testing.T) {
 	store := newTestStore(t)

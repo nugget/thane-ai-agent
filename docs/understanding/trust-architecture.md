@@ -394,20 +394,42 @@ contact with authority and is still reported.
   behind an existing value says in its result which value delivery still
   uses.
 - **Names.** `ResolveContact` finds, in one query, the active contacts
-  whose formatted name or nickname is the name, compared with `LOWER`,
+  whose formatted name or nickname is the name, both sides trimmed of
+  edge space and compared with `LOWER` as the fork audit folds them,
   and takes the first in this order: the pinned operator's own record at
   any zone, then records above `known` (a malformed zone counts), then a
   formatted-name match before a nickname match, then ID. Only when no
-  contact answers to the name does it fall back to a text search, which
-  must match exactly one contact. Notifications, decision requests,
+  contact holds the name that way does it read the fork audit's short
+  forms, through the same `recordNameKeys` keys, reading the short
+  forms alone: a contact's given name and the first word of a formatted
+  name of more than one word, trimmed and folded the same way. Exactly
+  one active contact answering by a short form is the answer; two or
+  more are an `AmbiguousNameError` whatever their zones, naming up to
+  five with formatted name, zone, `contact_id` and the field matched,
+  counting the rest and pointing at `contact_lookup`'s `query` to find
+  them, because authority breaks ties among exact holders only.
+  `Store.Search` lists up to 50 contacts that answer to a name by these
+  keys ahead of any other match, and `contact_lookup` prints each
+  row's `contact_id` and zone, so that query reaches the rest while no
+  more than 50 (`SearchLimit`) share the name, even two whose names
+  differ only by edge space; past that the query lists only 50 of
+  them, and the error says so and to ask the operator for the full
+  formatted name of one it does not list. Notes, AI summaries, and organizations
+  are never read: a word in one contact's note does not make that
+  contact the person it names, and `Store.Search`, behind
+  `contact_lookup`'s `query` and the contacts API, is the only path
+  that reads them, together with formatted names, nicknames, and given
+  names. Search reads one row past its limit, so it says it stopped
+  only when more contacts match than it lists. Notifications, decision requests,
   `contact_lookup`, `contact_whereabouts`, vCard export, and
   `contact_forget` by name use it, and so does channel context for a
   sender no channel bound to a contact. A `known` record whose formatted
   name is the nickname of a contact with authority therefore never
-  shadows that contact. Resolution reads no given name and no first
-  word, so "Bob" reaches a record whose whole formatted name is Bob, not
-  a household Bob Smith without that nickname; the fork audit below
-  reports that shape. A nickname change on a custodied target follows the
+  shadows that contact. An exact holder always beats a short form, so
+  "Bob" reaches a record whose whole formatted name is Bob, not a
+  household Bob Smith without that nickname; the fork audit below
+  reports that shape. Forgetting such a record, the only exact holder
+  of the name, leaves the name to the short-form step. A nickname change on a custodied target follows the
   target rule and its lift; "changed" folds ASCII letters only, as SQLite
   `LOWER` does, after trimming, so a case-only edit is not a change. In
   every turn, no model writer gives a new contact a formatted name, or any
@@ -429,9 +451,10 @@ contact with authority and is still reported.
   exists, so it orders by zone and match kind alone: a `known` record
   cannot take it from a record above `known` that goes by it as a
   nickname. A
-  string that reaches a contact only through the search (its note, org,
-  or AI summary) is not protected, so the handle the operator is notified
-  by belongs in their formatted name or nickname.
+  short form is not protected the way a formatted name or nickname is:
+  any contact given the same first name makes it ambiguous, so the handle
+  the operator is notified by belongs in their formatted name or
+  nickname.
 - **Kind.** `kind` stays model-writable, so nothing may gate on it: no
   custody rule, notification route, or `IsOwner` decision reads it, and a
   test pins that changing it on the operator's contact moves neither.
@@ -478,8 +501,10 @@ contact with authority and is still reported.
   as a formatted name or nickname, one with authority, that no person
   holds together are different people: the key's one `shared_name`
   finding names one record per person, since a lookup reaches only one of
-  them. Short forms alone between different people are not reported,
-  because resolution reads no short forms. An email address held by
+  them. Short forms alone between different people are not reported:
+  resolution takes a short form only when exactly one record answers to
+  it, so a first name two people share resolves to neither rather than
+  to the wrong one. An email address held by
   several records, compared case-insensitively, is an `email` finding when
   a holder is a `known` record other than the operator's, so the send
   gate reads the address at `known` for every holder, or when a holder
