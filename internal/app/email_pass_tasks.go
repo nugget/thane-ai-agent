@@ -1,5 +1,50 @@
 package app
 
+import "github.com/nugget/thane-ai-agent/internal/platform/config"
+
+// The label note teaches a loop that reads new mail that a label with an
+// apply rule is Go's mechanical fact, never the loop's to set, how a row
+// says a flag is a label's, and what flagging does to a colour Go wrote.
+// It is appended only where it applies (withLabelNote): on a site where
+// no account carries such a label, no result ever shows one.
+const (
+	emailLabelNoteHead = "Labels the Email Accounts entry lists with apply, such as a contact label, are Go's: it sets them itself when mail arrives, from the contact directory, so never apply or remove one; email_mark refuses to. A message whose flag_label names a label (email_list, email_search, and email_read show it) carries that label's flag, which Go wrote, not a request for the operator's attention. "
+	emailLabelNoteTail = " When the operator must act on such a message, flag it anyway with email_mark flag \"flagged\": that clears the colour Go wrote, so the flag reads as the operator's attention flag."
+
+	// emailTriageLabelNote is the note for a loop woken by new mail,
+	// whose events carry the message's flags.
+	emailTriageLabelNote = emailLabelNoteHead + "event.metadata.flags never includes a mark Thane set, so a \\Flagged there is someone else's flag." + emailLabelNoteTail
+
+	// emailReviewLabelNote is the note for the review pass, whose wake
+	// carries no message flags.
+	emailReviewLabelNote = emailLabelNoteHead + "email_read shows a message's flags as they are now, labels included." + emailLabelNoteTail
+)
+
+// withLabelNote returns task with note appended when some account
+// carries a label Go applies, and task unchanged otherwise.
+func withLabelNote(task, note string, cfg *config.Config) string {
+	if !emailLabelsApplied(cfg) {
+		return task
+	}
+	return task + "\n\n" + note
+}
+
+// emailLabelsApplied reports whether some account's mailbox.labels names
+// a label with an apply rule.
+func emailLabelsApplied(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, acct := range cfg.Email.Accounts {
+		for _, name := range acct.Mailbox.Labels {
+			if cfg.Email.Labels[name].Apply != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // emailOwnerTriageTask is the built-in email-owner-triage's task: the
 // first pass over an operator mailbox's new mail, which prefers local
 // models. It does exactly one thing per message, the least that serves

@@ -301,9 +301,15 @@ type SearchOptions struct {
 	Since  time.Time
 	Before time.Time
 
-	// Unseen and Flagged restrict to messages with those flag states.
-	Unseen  bool
-	Flagged bool
+	// Unseen, Flagged, and Unflagged restrict to messages with those
+	// flag states.
+	Unseen    bool
+	Flagged   bool
+	Unflagged bool
+
+	// Keyword restricts to messages carrying this IMAP keyword, which is
+	// how a label is searched.
+	Keyword string
 
 	// MessageID and InReplyTo match those headers exactly (without
 	// angle brackets), which is how a caller finds an original message

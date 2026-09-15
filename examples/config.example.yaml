@@ -1530,6 +1530,14 @@ compaction:
 #         can postpone that wake. Default: 2h. It may not be shorter than
 #         review_delay.
 #         review_max_wait: 2h
+#         Labels names the email.labels this mailbox's mail carries, for
+#         example [contact]. Only these are written here, listed in the
+#         account's Email Accounts entry, and taken by email_mark and
+#         email_search on it. Empty (the default) means none, whatever
+#         email.labels declares. An account whose access is read is never
+#         written, so naming a label there is refused.
+#         labels:
+#           - contact
 #     - # Name is the short identifier tools and loop bindings use for this
 #       account (for example "personal" or "packages"). Required and unique.
 #       name: packages
@@ -1703,6 +1711,43 @@ compaction:
 #         can postpone that wake. Default: 2h. It may not be shorter than
 #         review_delay.
 #         review_max_wait: 2h
+#         Labels names the email.labels this mailbox's mail carries, for
+#         example [contact]. Only these are written here, listed in the
+#         account's Email Accounts entry, and taken by email_mark and
+#         email_search on it. Empty (the default) means none, whatever
+#         email.labels declares. An account whose access is read is never
+#         written, so naming a label there is refused.
+#         labels: []
+#   Labels is the vocabulary of marks the operator sees in their mail
+#   client, keyed by label name: at most 8, at most one per colour. An
+#   account carries only the labels its mailbox.labels names.
+#   labels:
+#     contact:
+#       Meaning is what the label says about a message, in one short
+#       sentence, at most 200 bytes. It is shown to the model beside the
+#       label's name. Required.
+#       meaning: The sender matches a contact record
+#       Keyword is the IMAP keyword the label writes, for example
+#       "thane-contact": printable ASCII without spaces or any of
+#       ( ) { % * " \ ], at most 64 bytes. System flags such as \Flagged,
+#       keywords beginning with $ (the ones clients already give meaning
+#       to, such as $Junk and the $MailFlagBit0-2 colour keywords), and
+#       Junk, NonJunk, and NotJunk are refused. A keyword is always
+#       searchable; whether a client shows it depends on the client.
+#       keyword: thane-contact
+#       Color is the flag colour the label writes: red, orange, yellow,
+#       green, blue, purple, or grey. It is written as \Flagged plus the
+#       $MailFlagBit0-2 keywords that encode the colour, which a client
+#       that colours flags displays; every other client shows a plain flag.
+#       A colour is written only on a message nobody has flagged, and at
+#       most one label may use each colour.
+#       color: blue
+#       Apply names the rule under which Go applies the label itself, so
+#       the model never does. "contact_matched" applies it at poll time to
+#       new INBOX mail whose sender matches exactly one contact record, on
+#       every account whose mailbox.labels names the label. Leave empty for
+#       a label the model applies with email_mark.
+#       apply: contact_matched
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:

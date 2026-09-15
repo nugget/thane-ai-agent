@@ -84,6 +84,14 @@ type EmailMailboxConfig struct {
 	// can postpone that wake. Default: 2h. It may not be shorter than
 	// review_delay.
 	ReviewMaxWait time.Duration `yaml:"review_max_wait"`
+
+	// Labels names the email.labels this mailbox's mail carries, for
+	// example [contact]. Only these are written here, listed in the
+	// account's Email Accounts entry, and taken by email_mark and
+	// email_search on it. Empty (the default) means none, whatever
+	// email.labels declares. An account whose access is read is never
+	// written, so naming a label there is refused.
+	Labels []string `yaml:"labels"`
 }
 
 // MailboxOwner returns the effective owner, applying the default.

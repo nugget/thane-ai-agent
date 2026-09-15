@@ -64,6 +64,11 @@ type EmailConfig struct {
 	// the primary: tools use it when no account is named and no loop
 	// binding selects one.
 	Accounts []EmailAccountConfig `yaml:"accounts"`
+
+	// Labels is the vocabulary of marks the operator sees in their mail
+	// client, keyed by label name: at most 8, at most one per colour. An
+	// account carries only the labels its mailbox.labels names.
+	Labels map[string]EmailLabelConfig `yaml:"labels"`
 }
 
 // EmailAccountConfig describes one mailbox: its IMAP connection, an
@@ -364,6 +369,7 @@ func (c *EmailConfig) ApplyDefaults() {
 		v := defaultEmailPollIntervalSec
 		c.PollInterval = &v
 	}
+	c.normalizeLabels()
 
 	for i := range c.Accounts {
 		acct := &c.Accounts[i]
@@ -455,7 +461,7 @@ func (c EmailConfig) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return c.validateLabels()
 }
 
 // validatePolicy checks the account's access and delivery policy.

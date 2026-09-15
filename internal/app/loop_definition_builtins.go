@@ -202,7 +202,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			Name:       email.DefaultHandlerLoopName,
 			Enabled:    true,
 			ParentName: pollersContainerName,
-			Task:       emailDefaultHandlerTask,
+			Task:       withLabelNote(emailDefaultHandlerTask, emailTriageLabelNote, cfg),
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
 			// The email tag is the handler's permanent tool surface;

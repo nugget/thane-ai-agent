@@ -15,6 +15,9 @@ type Manager struct {
 	order    []string // config order; order[0] is primary
 	bccOwner string
 	logger   *slog.Logger
+
+	// labels is the email.labels vocabulary, shared by every account.
+	labels labelSet
 }
 
 // NewManager creates a manager from the email configuration. Each
@@ -28,6 +31,7 @@ func NewManager(cfg Config, logger *slog.Logger) *Manager {
 		configs:  make(map[string]AccountConfig, len(cfg.Accounts)),
 		bccOwner: cfg.BccOwner,
 		logger:   logger,
+		labels:   newLabelSet(cfg.Labels),
 	}
 
 	for _, acct := range cfg.Accounts {

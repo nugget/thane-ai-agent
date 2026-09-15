@@ -421,6 +421,7 @@ func ExampleConfig() *Config {
 						WakeLoop:      EmailWakeLoopDefaultHandler,
 						ReviewDelay:   defaultEmailReviewDelay,
 						ReviewMaxWait: defaultEmailReviewMaxWait,
+						Labels:        []string{"contact"},
 					},
 				},
 				{
@@ -440,6 +441,14 @@ func ExampleConfig() *Config {
 						ReviewDelay:   defaultEmailReviewDelay,
 						ReviewMaxWait: defaultEmailReviewMaxWait,
 					},
+				},
+			},
+			Labels: map[string]EmailLabelConfig{
+				"contact": {
+					Meaning: "The sender matches a contact record",
+					Keyword: "thane-contact",
+					Color:   "blue",
+					Apply:   EmailLabelApplyContactMatched,
 				},
 			},
 		},

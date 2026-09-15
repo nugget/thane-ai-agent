@@ -78,6 +78,12 @@ func searchCriteria(opts SearchOptions) *imap.SearchCriteria {
 	if opts.Flagged {
 		criteria.Flag = append(criteria.Flag, imap.FlagFlagged)
 	}
+	if opts.Unflagged {
+		criteria.NotFlag = append(criteria.NotFlag, imap.FlagFlagged)
+	}
+	if opts.Keyword != "" {
+		criteria.Flag = append(criteria.Flag, imap.Flag(opts.Keyword))
+	}
 	return criteria
 }
 

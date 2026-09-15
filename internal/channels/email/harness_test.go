@@ -65,6 +65,15 @@ type memIMAP struct {
 	// answers, before the client sees the command complete
 	// (draft_harness_test.go).
 	fetchHook func()
+
+	// storeHook, when set, runs before every STORE a session answers and
+	// refuses the STORE when it returns an error (labels_harness_test.go).
+	storeHook func(*imap.StoreFlags) error
+
+	// permanentFlags replaces the PERMANENTFLAGS every SELECT answers
+	// when overridePermanent is set (labels_harness_test.go).
+	permanentFlags    []imap.Flag
+	overridePermanent bool
 }
 
 type memIMAPOptions struct {

@@ -158,6 +158,64 @@ func TestEmailPassBuiltinsAppearOnlyWhenRouted(t *testing.T) {
 	}
 }
 
+// TestEmailPassTasksCarryTheLabelNoteWhereItApplies pins the label note:
+// the two passes and the default handler carry it only when some account
+// carries a label Go applies, the review pass's note never names wake
+// metadata it does not get, and the triage note says a wake's flags
+// never include Thane's marks.
+func TestEmailPassTasksCarryTheLabelNoteWhereItApplies(t *testing.T) {
+	contact := config.EmailLabelConfig{Meaning: "The sender matches a contact record", Keyword: "thane-contact", Color: "blue", Apply: config.EmailLabelApplyContactMatched}
+	later := config.EmailLabelConfig{Meaning: "Read later", Keyword: "thane-later"}
+	tests := []struct {
+		name    string
+		labels  map[string]config.EmailLabelConfig
+		carried []string
+		want    bool
+	}{
+		{"no labels", nil, nil, false},
+		{"a label Go applies that no account carries", map[string]config.EmailLabelConfig{"contact": contact}, nil, false},
+		{"only a label the model applies", map[string]config.EmailLabelConfig{"later": later}, []string{"later"}, false},
+		{"an account carrying a label Go applies", map[string]config.EmailLabelConfig{"contact": contact}, []string{"contact"}, true},
+	}
+	notes := map[string]string{
+		email.OwnerTriageLoopName:    emailTriageLabelNote,
+		email.DraftReviewLoopName:    emailReviewLabelNote,
+		email.DefaultHandlerLoopName: emailTriageLabelNote,
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := emailPassConfig(
+				emailPassAccount("personal", config.EmailMailboxConfig{Owner: config.EmailMailboxOwnerOperator, ReviewLoop: email.DraftReviewLoopName, Labels: tt.carried}),
+				emailPassAccount("thane", config.EmailMailboxConfig{}),
+			)
+			cfg.Email.Labels = tt.labels
+			specs := builtInServiceDefinitionSpecs(cfg)
+			for loop, note := range notes {
+				spec, ok := specNamed(specs, loop)
+				if !ok {
+					t.Fatalf("no %s spec", loop)
+				}
+				if got := strings.Contains(spec.Task, note); got != tt.want {
+					t.Errorf("%s carries the label note: %v, want %v", loop, got, tt.want)
+				}
+			}
+		})
+	}
+	for _, note := range []string{emailTriageLabelNote, emailReviewLabelNote} {
+		for _, want := range []string{"so never apply or remove one", "A message whose flag_label names a label", "that clears the colour Go wrote"} {
+			if !strings.Contains(note, want) {
+				t.Errorf("label note must contain %q: %s", want, note)
+			}
+		}
+	}
+	if !strings.Contains(emailTriageLabelNote, "event.metadata.flags never includes a mark Thane set") {
+		t.Error("the triage note must say a wake's flags never include Thane's marks")
+	}
+	if strings.Contains(emailReviewLabelNote, "event.metadata") || !strings.Contains(emailReviewLabelNote, "email_read shows a message's flags as they are now") {
+		t.Errorf("the review note must point at email_read, never at wake metadata it does not get: %s", emailReviewLabelNote)
+	}
+}
+
 // TestEmailPassTasksTeachTheirProcedure pins the load-bearing lines of
 // each task, and that neither names a folder some server happens to use.
 func TestEmailPassTasksTeachTheirProcedure(t *testing.T) {
