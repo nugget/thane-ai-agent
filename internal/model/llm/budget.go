@@ -1,6 +1,15 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrOutputBudgetExhausted means the caller's output allowance is spent.
+// Clients enforcing a shared run budget return this instead of starting
+// another generation. An accompanying response may contain usage from a
+// failed attempt, but must not be treated as successful assistant output.
+var ErrOutputBudgetExhausted = errors.New("output token budget exhausted")
 
 // maxOutputTokensKey carries the remaining output-token budget for one
 // model call.
