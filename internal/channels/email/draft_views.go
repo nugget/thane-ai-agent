@@ -124,10 +124,15 @@ type draftGetHeader struct {
 	Voice    string `json:"voice,omitempty"`
 	Owner    string `json:"owner"`
 
-	To        []string `json:"to"`
-	Cc        []string `json:"cc,omitempty"`
-	Subject   string   `json:"subject"`
-	InReplyTo string   `json:"in_reply_to,omitempty"`
+	To []string `json:"to"`
+	Cc []string `json:"cc,omitempty"`
+
+	// AddressesOmitted counts to and cc addresses past
+	// maxHeaderAddresses per list that the header leaves out.
+	AddressesOmitted int `json:"addresses_omitted,omitempty"`
+
+	Subject   string `json:"subject"`
+	InReplyTo string `json:"in_reply_to,omitempty"`
 
 	Revisions      int                 `json:"revisions"`
 	History        []draftRevisionView `json:"history"`
@@ -150,25 +155,30 @@ type draftOriginalView struct {
 	Found     bool         `json:"found"`
 }
 
+// newDraftGetHeader builds email_draft_get's header with every
+// variable-length field clipped (draft_get_bounds.go).
 func newDraftGetHeader(e draftEntry, cfg AccountConfig, lookup *identityLookup, now time.Time) draftGetHeader {
+	to, toOmitted := clipList(e.To, maxHeaderAddresses, maxDraftAddressOutput)
+	cc, ccOmitted := clipList(e.Cc, maxHeaderAddresses, maxDraftAddressOutput)
 	header := draftGetHeader{
-		DraftID:      e.ID,
-		Account:      e.Account,
-		Stage:        e.Stage,
-		ClosedReason: e.ClosedReason,
-		DraftsFolder: e.Folder,
-		UID:          e.UID,
-		MessageID:    e.MessageID,
-		From:         e.From,
-		WritesAs:     cfg.DefaultFrom,
-		Voice:        cfg.Mailbox.Voice,
-		Owner:        cfg.MailboxOwner(),
-		To:           nonNilStrings(e.To),
-		Cc:           e.Cc,
-		Subject:      e.Subject,
-		InReplyTo:    e.InReplyTo,
-		Revisions:    e.Revisions,
-		History:      []draftRevisionView{},
+		DraftID:          e.ID,
+		Account:          clipTo(e.Account, maxNameOutput),
+		Stage:            e.Stage,
+		ClosedReason:     e.ClosedReason,
+		DraftsFolder:     clipTo(e.Folder, maxDraftFolderOutput),
+		UID:              e.UID,
+		MessageID:        clipTo(e.MessageID, maxMessageIDOutput),
+		From:             clipTo(e.From, maxDraftAddressOutput),
+		WritesAs:         clipTo(cfg.DefaultFrom, maxDraftAddressOutput),
+		Voice:            clipTo(cfg.Mailbox.Voice, maxDraftVoiceOutput),
+		Owner:            clipTo(cfg.MailboxOwner(), maxNameOutput),
+		To:               nonNilStrings(to),
+		Cc:               cc,
+		AddressesOmitted: toOmitted + ccOmitted,
+		Subject:          clipTo(e.Subject, maxSubjectOutput),
+		InReplyTo:        clipTo(e.InReplyTo, maxMessageIDOutput),
+		Revisions:        e.Revisions,
+		History:          []draftRevisionView{},
 	}
 	// The first version, as the draft was written, always shows; the
 	// versions left out come between it and the latest ones.
@@ -178,14 +188,20 @@ func newDraftGetHeader(e draftEntry, cfg AccountConfig, lookup *identityLookup, 
 		history = append(history[:1:1], history[len(history)-maxDraftGetHistory+1:]...)
 	}
 	for _, r := range history {
-		header.History = append(header.History, newDraftRevisionView(r, now, true))
+		view := newDraftRevisionView(r, now, true)
+		view.By, view.Note = clipTo(view.By, maxNameOutput), clipTo(view.Note, maxDraftNoteBytes)
+		header.History = append(header.History, view)
 	}
 	if e.Original != nil {
+		from := viewAddress(e.Original.From, lookup)
+		if from != nil {
+			from.Address = clipTo(from.Address, maxDraftAddressOutput)
+		}
 		header.Original = &draftOriginalView{
-			Folder:    e.Original.Folder,
-			MessageID: e.Original.MessageID,
-			From:      viewAddress(e.Original.From, lookup),
-			Subject:   e.Original.Subject,
+			Folder:    clipTo(e.Original.Folder, maxDraftFolderOutput),
+			MessageID: clipTo(e.Original.MessageID, maxMessageIDOutput),
+			From:      from,
+			Subject:   clipTo(e.Original.Subject, maxSubjectOutput),
 		}
 	}
 	return header
@@ -199,9 +215,10 @@ const draftCutMarker = "\n\n[cut to keep this result within 32 KB]"
 const draftHeaderSlack = 64
 
 // renderDraftGet joins the header, the draft's body, and the original's
-// body, cutting the bodies so the whole stays within maxReadOutput.
+// body within maxReadOutput: the header keeps to its share
+// (marshalDraftGetHeader), and the bodies are cut to fit the rest.
 func renderDraftGet(header draftGetHeader, draftBody, originalBody string) (string, error) {
-	data, err := marshalResponse(header)
+	data, err := marshalDraftGetHeader(header, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -210,15 +227,14 @@ func renderDraftGet(header draftGetHeader, draftBody, originalBody string) (stri
 	}
 	budget := maxReadOutput - len(data) - 2*len(bodySeparator) - 2*len(draftCutMarker) - draftHeaderSlack
 	draftShare, originalShare := splitBudget(budget, len(draftBody), len(originalBody))
-	if len(draftBody) > draftShare {
-		header.DraftBodyTruncated = true
+	draftCut, originalCut := len(draftBody) > draftShare, len(originalBody) > originalShare
+	if draftCut {
 		draftBody = truncateUTF8(draftBody, draftShare) + draftCutMarker
 	}
-	if len(originalBody) > originalShare {
-		header.OriginalBodyTruncated = true
+	if originalCut {
 		originalBody = truncateUTF8(originalBody, originalShare) + draftCutMarker
 	}
-	if data, err = marshalResponse(header); err != nil {
+	if data, err = marshalDraftGetHeader(header, draftCut, originalCut); err != nil {
 		return "", err
 	}
 	return data + bodySeparator + draftBody + bodySeparator + originalBody, nil

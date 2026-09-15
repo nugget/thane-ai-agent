@@ -18,24 +18,29 @@ import (
 //  1. Require UIDPLUS, which IMAP4rev2 includes: without it the server
 //     cannot say which UID the new version got, or expunge one UID alone.
 //  2. Prove the draft is still Thane's (proveOwnership).
-//  3. Write the write-ahead record, naming the new version's fresh
-//     Message-ID, generated in advance and never the old one.
+//  3. Write the write-ahead record in phase appending, naming the new
+//     version's fresh Message-ID, generated in advance and never the
+//     old one.
 //  4. APPEND the new version with \Draft and \Seen, and record its UID
-//     in the write-ahead record, so a crash from here is settled as a
-//     removal in progress.
+//     in phase appended.
 //  5. Check the old version is still there and not marked \Deleted,
 //     then UID STORE +FLAGS.SILENT (\Deleted) on it, with
 //     UNCHANGEDSINCE when the server has CONDSTORE.
 //  6. Read \Deleted back. If the check or the flag did not hold, the
 //     operator touched the draft: remove Thane's new version instead
-//     and close the entry.
+//     and close the entry. If it held, record phase retiring.
 //  7. UID EXPUNGE the old UID alone, then read back again, because UID
 //     EXPUNGE of a UID that is already gone answers OK.
-//  8. Update the ledger and log one line keyed to the turn.
+//  8. Update the ledger, clearing the record, and log one line keyed to
+//     the turn.
 //
-// Steps 5 to 7 are removeOwnLocked. A crash after step 3 leaves the
-// write-ahead record, which the next reconcile settles
-// (recoverPending).
+// Steps 5 to 7 are removeOwnLocked, split by retireOldLocked so the
+// retiring record is written between the flag's read-back and the
+// expunge. A crash after step 3 leaves the write-ahead record, which the
+// next reconcile settles by its phase (recoverPending): only a retiring
+// record lets recovery finish removing the old version, and a retiring
+// record exists only once Thane saw its own flag hold there. A store that
+// failed, timed out, or did not hold leaves the record at appended.
 
 // replaceVerdict is how the IMAP part of a revision ended.
 type replaceVerdict string
@@ -56,10 +61,20 @@ type replaceOutcome struct {
 	UIDValidity uint32
 }
 
-// replaceDraft runs steps 1 to 7 on e's draft, calling writeAhead for
-// step 3 and appended with the new version's UID and UIDVALIDITY in
-// step 4. An error after writeAhead leaves the record for reconcile.
-func (c *Client) replaceDraft(ctx context.Context, e draftEntry, version []byte, writeAhead func() error, appended func(uid, uidValidity uint32) error) (replaceOutcome, error) {
+// revisionRecord writes the write-ahead record at each phase of a
+// revision: appending in step 3, appended with the new version's UID and
+// UIDVALIDITY in step 4, and retiring in step 6, after the old version's
+// \Deleted flag reads back and before its expunge.
+type revisionRecord struct {
+	appending func() error
+	appended  func(uid, uidValidity uint32) error
+	retiring  func() error
+}
+
+// replaceDraft runs steps 1 to 7 on e's draft, writing record at each
+// phase. An error after the appending record leaves the record for
+// reconcile.
+func (c *Client) replaceDraft(ctx context.Context, e draftEntry, version []byte, record revisionRecord) (replaceOutcome, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.ensureConnected(ctx); err != nil {
@@ -75,7 +90,7 @@ func (c *Client) replaceDraft(ctx context.Context, e draftEntry, version []byte,
 	if verdict := proveOwnership(e, state); verdict != ownershipProven {
 		return replaceOutcome{Verdict: replaceNotProven, Ownership: verdict}, nil
 	}
-	if err := writeAhead(); err != nil {
+	if err := record.appending(); err != nil {
 		return replaceOutcome{}, err
 	}
 	stored, err := c.appendLocked(ctx, state.Folder, version, []imap.Flag{imap.FlagDraft, imap.FlagSeen})
@@ -89,12 +104,18 @@ func (c *Client) replaceDraft(ctx context.Context, e draftEntry, version []byte,
 	if validity == 0 {
 		validity = state.UIDValidity
 	}
-	if err := appended(stored.UID, validity); err != nil {
+	if err := record.appended(stored.UID, validity); err != nil {
 		return replaceOutcome{}, err
 	}
-	removed, err := c.removeOwnLocked(ctx, state.Folder, e.UID, state.Messages[e.UID].ModSeq)
+	unflagged, err := c.unflaggedLocked(ctx, state.Folder, e.UID)
 	if err != nil {
 		return replaceOutcome{}, err
+	}
+	removed := false
+	if unflagged {
+		if removed, err = c.retireOldLocked(ctx, state.Folder, e.UID, state.Messages[e.UID].ModSeq, record.retiring); err != nil {
+			return replaceOutcome{}, err
+		}
 	}
 	if !removed {
 		// The new version is Thane's by the APPENDUID this session got.
@@ -108,6 +129,24 @@ func (c *Client) replaceDraft(ctx context.Context, e draftEntry, version []byte,
 		return replaceOutcome{Verdict: replaceTouched}, nil
 	}
 	return replaceOutcome{Verdict: replaceDone, UID: stored.UID, UIDValidity: validity}, nil
+}
+
+// retireOldLocked removes the old version once its check has passed:
+// Thane's \Deleted flag and its read-back (flagOwnLocked), then the
+// retiring record, then the expunge (expungeFlaggedLocked). The record
+// follows the read-back, so a retiring record always means the flag on
+// the old version is one Thane set and saw hold. removed is false when
+// the flag did not hold or the old version outlived the expunge. Caller
+// must hold c.mu and have selected folder read-write.
+func (c *Client) retireOldLocked(ctx context.Context, folder string, uid uint32, modSeq uint64, retiring func() error) (removed bool, err error) {
+	flagged, err := c.flagOwnLocked(ctx, folder, uid, modSeq)
+	if err != nil || !flagged {
+		return false, err
+	}
+	if err := retiring(); err != nil {
+		return false, err
+	}
+	return c.expungeFlaggedLocked(ctx, folder, uid)
 }
 
 // draftRevised is email_draft_revise's result.
@@ -155,21 +194,30 @@ func (s *Service) reviseDraft(ctx context.Context, acct ResolvedAccount, e draft
 	}
 	rev := draftRevision{By: draftAuthor(ctx), At: time.Now().UTC(), Note: note}
 	next := e
-	writeAhead := func() error {
-		next.Pending = &draftPending{MessageID: messageID, SHA256: contentSum(composed.Bytes), Body: body, Revision: rev}
-		return s.saveDraft(&next)
+	record := revisionRecord{
+		appending: func() error {
+			next.Pending = &draftPending{Phase: pendingAppending, MessageID: messageID, SHA256: contentSum(composed.Bytes), Body: body, Revision: rev}
+			return s.saveDraft(&next)
+		},
+		appended: func(uid, uidValidity uint32) error {
+			next.Pending.Phase, next.Pending.NewUID, next.Pending.NewUIDValidity = pendingAppended, uid, uidValidity
+			return s.saveDraft(&next)
+		},
+		retiring: func() error {
+			next.Pending.Phase = pendingRetiring
+			return s.saveDraft(&next)
+		},
 	}
 
-	recordAppended := func(uid, uidValidity uint32) error {
-		next.Pending.NewUID, next.Pending.NewUIDValidity = uid, uidValidity
-		return s.saveDraft(&next)
-	}
-
-	out, err := acct.Client.replaceDraft(ctx, e, composed.Bytes, writeAhead, recordAppended)
+	out, err := acct.Client.replaceDraft(ctx, e, composed.Bytes, record)
 	if err != nil {
+		phase := ""
+		if next.Pending != nil {
+			phase = next.Pending.phase()
+		}
 		s.logger.Warn("email draft revision failed",
 			"draft_id", e.ID, "account", e.Account, "folder", e.Folder, "uid", e.UID,
-			"write_ahead", next.Pending != nil, "error", err,
+			"write_ahead", next.Pending != nil, "phase", phase, "error", err,
 			"loop_id", tools.LoopIDFromContext(ctx), "conversation_id", tools.ConversationIDFromContext(ctx))
 		return draftRevised{}, fmt.Errorf("revise draft %s: %w. If the new version was already stored, the next draft tool call on account %q settles it, so call email_drafts before trying again", e.ID, err, e.Account)
 	}

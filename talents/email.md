@@ -1204,6 +1204,16 @@ the draft stays where it is and the refusal (`no_trash_folder`) names
 the gap, which only the operator can close; tell them the draft should
 not be sent. An account whose `access` is `read` refuses withdrawal.
 
+The result's `action` is `withdrawn` only when the server reported
+that the move carried this draft into the trash. `unconfirmed` means
+the server accepted the move without that report: the draft is still
+in the drafts folder, or it is gone from there, most likely because the
+operator sent or discarded it first. A copy of it in the trash proves
+nothing, since the operator's client may have filed it there. Its entry
+is not marked withdrawn, and `note` says which. Never report an
+unconfirmed draft as withdrawn or promise it will not be sent; tell the
+operator it should not go out, so they can check.
+
 ## Gone and held: hands off
 
 A refusal from these tools is one sentence followed by `{action:
@@ -1231,8 +1241,9 @@ meant to change still matters, tell the operator in your report.
 
 The other reasons are plainer. `withdrawn` means you already withdrew
 it. `no_uidplus` means the server lacks the UIDPLUS extension a safe
-replacement needs, or never reported the draft's UID; retrying fails the same way, so tell the operator
-what you would change. `inspector` means the outbound inspector
+replacement or a confirmed withdrawal needs, or never reported the
+draft's UID; retrying fails the same way, so tell the operator what you
+would change, or that the draft should not be sent. `inspector` means the outbound inspector
 objected to the new body. `access` means the account can no longer
 write mail.
 
