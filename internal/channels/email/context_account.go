@@ -87,13 +87,15 @@ func (s *Service) newFilingView(cfg AccountConfig) filingView {
 }
 
 // reviewView is the part of an account's entry that says which loops
-// see its mail. wake_loop renders only when the operator routed the
-// account's new mail away from its owner's default, so an account at
-// its default renders as it did before routing existed. review_loop
-// renders when the account has a review pass, and with it
-// pending_review, the account's queued review work, and
-// pending_review_as_of, once the poller or an enqueue has counted it:
-// the render reads the count, it never counts.
+// see its mail. wake_loop is the loop each new message on the account
+// wakes, rendered on every entry while mail is polled, whether the
+// operator named it or it is the owner's default, because a default can
+// change between releases while the configuration stays the same. With
+// polling off no loop is woken, so none is named. review_loop renders
+// when the account has a review pass, and with it pending_review, the
+// account's queued review work, and pending_review_as_of, once the
+// poller or an enqueue has counted it: the render reads the count, it
+// never counts.
 type reviewView struct {
 	WakeLoop          string `json:"wake_loop,omitempty"`
 	ReviewLoop        string `json:"review_loop,omitempty"`
@@ -105,8 +107,8 @@ type reviewView struct {
 // count for its entry.
 func (s *Service) newReviewView(cfg AccountConfig, now time.Time) reviewView {
 	view := reviewView{ReviewLoop: cfg.ReviewLoopName()}
-	if wake := cfg.WakeLoopName(); wake != cfg.DefaultWakeLoopName() {
-		view.WakeLoop = wake
+	if s.PollingEnabled() {
+		view.WakeLoop = cfg.WakeLoopName()
 	}
 	if view.ReviewLoop == "" {
 		return view

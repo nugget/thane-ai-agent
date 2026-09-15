@@ -323,9 +323,10 @@ not present for when it limits that (`junk_folder`, `move_into`, and
 any `filing_note`), whether it may
 hand mail to SMTP itself, whether this turn is `attended`, which trust
 zones it sends directly to, drafts for, and refuses this turn, and its
-cached folder names with roles. An account whose new mail wakes a loop
-other than its owner's default shows `wake_loop`, and one with a review
-pass shows `review_loop`, `pending_review` (the account's queued review
+cached folder names with roles. While mail is polled, every account
+shows `wake_loop`, the loop its new mail wakes, its owner's default
+included; with polling off none does. An account with a review pass
+shows `review_loop`, `pending_review` (the account's queued review
 work, counted by the poller and on each enqueue, never at render), and
 `pending_review_as_of`. An account whose `mailbox.labels` names labels
 shows them as `labels` `[{label, meaning, shows_as, apply}]`, and
