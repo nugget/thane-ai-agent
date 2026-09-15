@@ -94,10 +94,10 @@ func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, err error
 		return fmt.Sprintf(". Looking %s up in the archive failed: %v", prefix, err)
 	}
 	total := max(lookup.Total, len(lookup.Matches))
-	switch {
-	case total == 0:
+	switch total {
+	case 0:
 		return ". No archived session has an id that begins with it"
-	case total == 1:
+	case 1:
 		match := lookup.Matches[0]
 		return fmt.Sprintf(". Exactly one archived session begins with it: cite %s%s (started_at %s, title %q)",
 			archiveSessionCitationPrefix, match.ID, formatCandidateTime(match.StartedAt), match.Title)
