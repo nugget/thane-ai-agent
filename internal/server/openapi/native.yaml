@@ -920,15 +920,38 @@ paths:
       tags: [Archive]
       operationId: listArchivedMessages
       summary: List archived messages
+      description: |
+        Returns the oldest matching messages in chronological order, using message
+        ID to break ties at the same instant. Bounds are inclusive, with nanosecond
+        precision, and may use different time-zone offsets. In the unified store,
+        all message statuses are included. The response echoes the supplied bounds.
       x-thane-scope: archive:read
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - name: from
+          in: query
+          required: true
+          description: Inclusive lower bound as an RFC3339 timestamp, optionally with fractional seconds.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: true
+          description: Inclusive upper bound as an RFC3339 timestamp; must not precede from.
+          schema: { type: string, format: date-time }
+        - name: conversation_id
+          in: query
+          description: Restrict results to this conversation; omit for all conversations.
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: Maximum messages to return. Non-positive values use 500; values above 1000 are clamped.
+          schema: { type: integer, default: 500 }
       responses:
         "200":
           description: Archived messages within the requested time range, with the count and echoed bounds.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ArchivedMessageList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /v1/archive/search:
     get:
       tags: [Archive]
@@ -1051,16 +1074,29 @@ paths:
     post:
       tags: [Checkpoints]
       operationId: restoreCheckpoint
-      summary: Restore from a checkpoint
+      summary: Report unsupported checkpoint restoration
+      description: >-
+        Restoration is not implemented. Diagnostic snapshots cannot be applied
+        to live state. When checkpointing is configured, any valid checkpoint
+        UUID returns 501 without looking up the snapshot or changing state.
       x-thane-scope: checkpoints:write
       parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
-        "200":
-          description: Acknowledgement that the checkpoint was restored.
+        "400":
+          description: The checkpoint ID is not a valid UUID.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/CheckpointRestoreAck" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: "#/components/schemas/Error" }
+        "501":
+          description: Checkpoint restoration is not supported; no state was changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Checkpointing is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   # --------------------------------------------------------- Model Routing
   /v1/models:
@@ -4705,7 +4741,7 @@ components:
             - type: "null"
           readOnly: true
           description: >-
-            The captured, restorable state. Populated on create and fetch;
+            The captured diagnostic state. Populated on create and fetch;
             null in list responses, which return metadata only.
         byte_size:
           type: integer
@@ -4753,14 +4789,16 @@ components:
 
     CheckpointState:
       type: object
-      description: The actual restorable data captured in a checkpoint.
+      description: >-
+        Selected diagnostic data captured in a checkpoint. This is not a
+        complete backup and cannot restore live state.
       required: [conversations, facts]
       properties:
         conversations:
           type: array
           items: { $ref: "#/components/schemas/CheckpointConversation" }
           readOnly: true
-          description: Captured chat sessions with their full message history.
+          description: Captured chat sessions with their current working windows; excludes archived history and full message provenance.
         facts:
           type: array
           items: { $ref: "#/components/schemas/CheckpointFact" }
@@ -4770,7 +4808,7 @@ components:
           type: array
           items: { $ref: "#/components/schemas/CheckpointTask" }
           readOnly: true
-          description: Pending scheduled tasks at checkpoint time; omitted when none.
+          description: Selected pending-task metadata, without full schedules or payloads; omitted when none.
         config:
           $ref: "#/components/schemas/CheckpointConfigSnapshot"
           description: Agent configuration at checkpoint time; omitted when not captured.
@@ -5084,32 +5122,3 @@ components:
             byte_size: 31077
             message_count: 198
             fact_count: 41
-
-    CheckpointRestoreAck:
-      type: object
-      description: >-
-        Acknowledgement that a checkpoint was restored. Backs POST
-        /v1/checkpoints/{id}/restore.
-      required: [status, id, message]
-      properties:
-        status:
-          type: string
-          readOnly: true
-          description: Outcome of the restore operation.
-          enum: [restored]
-          example: restored
-        id:
-          type: string
-          format: uuid
-          readOnly: true
-          description: Identifier of the checkpoint that was restored.
-          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
-        message:
-          type: string
-          readOnly: true
-          description: Human-readable confirmation message.
-          example: checkpoint restored successfully
-      example:
-        status: restored
-        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
-        message: checkpoint restored successfully

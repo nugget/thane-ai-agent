@@ -2,13 +2,48 @@ package checkpoint
 
 import (
 	"database/sql"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	_ "modernc.org/sqlite"
 )
+
+func TestRestoreUnsupported(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	cp, err := NewCheckpointer(db, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := cp.Create(TriggerManual, "readable diagnostic snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp.SetProviders(func() ([]Conversation, error) {
+		t.Fatal("restore must not call snapshot providers")
+		return nil, nil
+	}, nil, nil)
+	for _, id := range []uuid.UUID{snapshot.ID, uuid.New(), uuid.Nil} {
+		if err := cp.Restore(id); !errors.Is(err, ErrRestoreUnsupported) {
+			t.Errorf("Restore(%s) = %v, want ErrRestoreUnsupported", id, err)
+		}
+	}
+	// Unsupported restoration does not even depend on snapshot readability.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.Restore(snapshot.ID); !errors.Is(err, ErrRestoreUnsupported) {
+		t.Errorf("Restore with closed database = %v, want ErrRestoreUnsupported", err)
+	}
+}
 
 func TestGetStartupStatus_Empty(t *testing.T) {
 	// Create temp database
@@ -26,7 +61,7 @@ func TestGetStartupStatus_Empty(t *testing.T) {
 	defer db.Close()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	cp, err := NewCheckpointer(db, Config{}, logger)
+	cp, err := NewCheckpointer(db, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +107,7 @@ func TestGetStartupStatus_WithData(t *testing.T) {
 	defer db.Close()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	cp, err := NewCheckpointer(db, Config{}, logger)
+	cp, err := NewCheckpointer(db, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

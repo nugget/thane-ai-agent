@@ -3,13 +3,16 @@ package checkpoint
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrRestoreUnsupported reports that snapshots cannot be applied to live state.
+var ErrRestoreUnsupported = errors.New("checkpoint restoration is not supported")
 
 // ConversationFunc returns conversations for checkpointing.
 type ConversationFunc func() ([]Conversation, error)
@@ -29,31 +32,18 @@ type Checkpointer struct {
 	conversations ConversationFunc
 	facts         FactFunc
 	tasks         TaskFunc
-
-	// Config
-	periodicInterval int // Create checkpoint every N messages (0 = disabled)
-
-	// State
-	mu            sync.Mutex
-	messagesSince int // Messages since last checkpoint
-}
-
-// Config for the checkpointer.
-type Config struct {
-	PeriodicMessages int // Checkpoint every N messages (0 = disabled)
 }
 
 // NewCheckpointer creates a new checkpointer.
-func NewCheckpointer(db *sql.DB, cfg Config, log *slog.Logger) (*Checkpointer, error) {
+func NewCheckpointer(db *sql.DB, log *slog.Logger) (*Checkpointer, error) {
 	store, err := NewStore(db, log)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Checkpointer{
-		store:            store,
-		log:              log,
-		periodicInterval: cfg.PeriodicMessages,
+		store: store,
+		log:   log,
 	}, nil
 }
 
@@ -62,30 +52,6 @@ func (c *Checkpointer) SetProviders(conv ConversationFunc, facts FactFunc, tasks
 	c.conversations = conv
 	c.facts = facts
 	c.tasks = tasks
-}
-
-// OnMessage should be called after each message is processed.
-// It triggers periodic checkpointing if configured.
-func (c *Checkpointer) OnMessage() {
-	if c.periodicInterval <= 0 {
-		return
-	}
-
-	c.mu.Lock()
-	c.messagesSince++
-	shouldCheckpoint := c.messagesSince >= c.periodicInterval
-	if shouldCheckpoint {
-		c.messagesSince = 0
-	}
-	c.mu.Unlock()
-
-	if shouldCheckpoint {
-		go func() {
-			if _, err := c.Create(TriggerPeriodic, ""); err != nil {
-				c.log.Error("periodic checkpoint failed", "error", err)
-			}
-		}()
-	}
 }
 
 // Create makes a new checkpoint with the given trigger and optional note.
@@ -153,25 +119,11 @@ func (c *Checkpointer) Prune(olderThan time.Duration, minKeep int) (int, error) 
 	return c.store.Prune(olderThan, minKeep)
 }
 
-// Restore applies a checkpoint's state to the providers.
-// This is a placeholder — actual restoration depends on provider implementations.
+// Restore always returns [ErrRestoreUnsupported]. Snapshots are diagnostic
+// projections, not complete restore points. This method neither loads the
+// requested snapshot nor modifies live state, regardless of whether the ID exists.
 func (c *Checkpointer) Restore(id uuid.UUID) error {
-	cp, err := c.store.Get(id)
-	if err != nil {
-		return fmt.Errorf("get checkpoint: %w", err)
-	}
-
-	c.log.Info("restoring checkpoint",
-		"id", cp.ID.String()[:8],
-		"created", cp.CreatedAt.Format(time.RFC3339),
-		"messages", cp.MessageCount,
-		"facts", cp.FactCount,
-	)
-
-	// TODO: Implement actual restoration by calling provider restore methods
-	// For now, we just validate the checkpoint can be loaded
-
-	return nil
+	return ErrRestoreUnsupported
 }
 
 // StartupStatus returns info about persisted state for logging at startup.

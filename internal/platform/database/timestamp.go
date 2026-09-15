@@ -72,3 +72,15 @@ func ParseTimestamp(s string) (time.Time, error) {
 func FormatTimestamp(t time.Time) string {
 	return t.Format(SQLiteTimestampLayout)
 }
+
+// TimestampKey returns a lexically sortable instant with nanosecond precision,
+// independent of the original timestamp's layout and time zone. It matches the
+// thane_timestamp_key(TEXT) SQL function registered by [DriverName], which
+// accepts the same stored formats as [ParseTimestamp] and rejects invalid text.
+// Use it for range bounds against that function; it is not a display format.
+func TimestampKey(t time.Time) string {
+	// Flipping the sign bit maps signed Unix seconds into unsigned order.
+	// Fixed-width fields preserve ordering before the epoch and beyond the
+	// limited date range representable by an int64 UnixNano value.
+	return fmt.Sprintf("%020d%09d", uint64(t.Unix())^(uint64(1)<<63), t.Nanosecond())
+}

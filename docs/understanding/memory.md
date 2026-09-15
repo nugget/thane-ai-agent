@@ -84,6 +84,15 @@ Session bookmarks are separate from the broader state snapshots managed
 by the checkpoint subsystem. A bookmark records a point in conversation
 history; it does not restore agent state or undo external actions.
 
+The broader snapshots are diagnostic projections created by manual API
+requests, before model failover, and during graceful shutdown. They capture
+conversation working windows, facts, and selected task fields. They omit
+archived history, message provenance, full task payloads, and configuration;
+shutdown snapshots follow session closure and can have empty working windows.
+There is no automatic periodic snapshot hook. Snapshots can be inspected or
+deleted, but `POST /v1/checkpoints/{id}/restore` returns **501 Not Implemented**.
+Persistence across restarts comes from the underlying state stores.
+
 ## Session Management
 
 Sessions are bounded conversations with explicit lifecycle controls:
@@ -124,7 +133,7 @@ automatically.
    inject working memory, build enriched context
 2. **After LLM response:** Store new messages, auto-extract facts if
    enabled, update working memory
-3. **Periodic:** Compact old conversations, checkpoint state
+3. **As context fills:** Compact old conversations
 
 ## Future Directions
 
