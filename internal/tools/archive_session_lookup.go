@@ -81,16 +81,17 @@ func ambiguousSessionPrefixError(lookup memory.SessionPrefixLookup) error {
 		return fmt.Errorf("session_id %q matches %d archived sessions; listing them failed: %w", lookup.Prefix, lookup.Total, err)
 	}
 
-	unlisted := ""
+	unlisted, unlistedRecovery := "", ""
 	if n := lookup.Unlisted(); n > 0 {
 		unlisted = fmt.Sprintf(" (%d more not listed)", n)
+		unlistedRecovery = fmt.Sprintf(" The session you mean may be one of the %d not listed: keep the archive_search hit whose session_id begins with %q, listed here or not.", n, lookup.Prefix)
 	}
 	return fmt.Errorf(
 		"session_id %q matches %d archived sessions, so no transcript was read. Candidates in id order: %s%s. "+
-			"Retry with the full session_id of the one you mean. Sessions imported together share leading id digits, "+
-			"because an imported session's id records when it was imported rather than when the conversation happened; "+
-			"when the titles and start times do not decide it, %s.",
-		lookup.Prefix, lookup.Total, listed, unlisted, archiveSessionContentRecovery)
+			"Retry with the full session_id of the one you mean. Ids minted close together share leading digits, "+
+			"and an import mints a whole batch that way, recording when the import ran rather than when each conversation happened; "+
+			"when the titles and start times do not decide it, %s.%s",
+		lookup.Prefix, lookup.Total, listed, unlisted, archiveSessionContentRecovery, unlistedRecovery)
 }
 
 // missingArchiveSessionError distinguishes a full session id that names

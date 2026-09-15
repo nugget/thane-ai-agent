@@ -112,11 +112,15 @@ func TestWriteDossierResolvesArchiveSessionCitations(t *testing.T) {
 			full: "Imported claim. — evidence: archive:session-" + citeSharedPrefix,
 			want: []string{
 				"archive:session-01a1bbbb in field full carries only the first 8",
-				"7 archived sessions begin with it, because sessions imported together share an import-time prefix",
+				"7 archived sessions begin with it (ids minted close together share leading digits, and an import mints a whole batch that way)",
 				`{"session_id":"01a1bbbb-0000-7000-8000-000000000000","started_at":"2025-06-01T12:00:00Z","title":"Bob import 0"}`,
 				"(2 more not listed)",
-				"Search archive_search for the claim's own words and cite the hit whose session_id is among them",
+				"Search archive_search for the claim's own words and cite the hit whose session_id begins with 01a1bbbb, listed here or not",
 			},
+			// The collision is stated as a fact, never blamed on an import:
+			// native sessions minted within one UUIDv7 window collide too.
+			// "among them" would rule out the unlisted candidates.
+			absent:       []string{"import-time prefix", "among them"},
 			wantRejected: []string{"full"},
 			wantLookups:  []string{citeSharedPrefix},
 		},
@@ -272,8 +276,8 @@ func TestWriteDossierBoundsCitationLookups(t *testing.T) {
 	archive := newFakeArchiveSessions()
 	tools.ConfigureDossierArchiveSessions(archive.resolve)
 
-	citations := make([]string, 0, maxDossierCitationLookups+2)
-	for i := range maxDossierCitationLookups + 2 {
+	citations := make([]string, 0, MaxDossierCitationLookups+2)
+	for i := range MaxDossierCitationLookups + 2 {
 		citations = append(citations, fmt.Sprintf("archive:session:0190ab%02x", i))
 	}
 	_, err := tools.WriteDossier(context.Background(), DossierWriteArgs{
@@ -286,8 +290,8 @@ func TestWriteDossierBoundsCitationLookups(t *testing.T) {
 	if err == nil {
 		t.Fatal("WriteDossier() accepted leading parts")
 	}
-	if len(archive.calls) != maxDossierCitationLookups {
-		t.Errorf("archive lookups = %d, want %d", len(archive.calls), maxDossierCitationLookups)
+	if len(archive.calls) != MaxDossierCitationLookups {
+		t.Errorf("archive lookups = %d, want %d", len(archive.calls), MaxDossierCitationLookups)
 	}
 	for _, citation := range citations {
 		if !strings.Contains(err.Error(), citation+" in field full") {
@@ -296,6 +300,20 @@ func TestWriteDossierBoundsCitationLookups(t *testing.T) {
 	}
 	if got := strings.Count(err.Error(), "Not looked up"); got != 2 {
 		t.Errorf("refusal marks %d citations as not looked up, want 2:\n%v", got, err)
+	}
+	// A citation past the cap must read as work for the next call, not as
+	// a field to abandon: the frame refuses a listed field resent
+	// unchanged, so the refusal says leaving this one is expected and
+	// names the lookup that answers it now.
+	for _, want := range []string{
+		fmt.Sprintf("Not looked up in this refusal, which looks up at most %d leading parts", MaxDossierCitationLookups),
+		"Leaving this one as written in your next call is expected: once the citations looked up here are fixed, that call looks it up",
+		`call archive_session_transcript with session_id "0190ab0a"`,
+		`call archive_session_transcript with session_id "0190ab0b"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal lacks %q:\n%v", want, err)
+		}
 	}
 }
 

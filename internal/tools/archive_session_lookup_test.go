@@ -110,6 +110,8 @@ func TestArchiveSessionTranscriptTool_ResolvesSessionID(t *testing.T) {
 				"(2 more not listed)",
 				"Retry with the full session_id",
 				"archive_search for words from the conversation itself",
+				"Ids minted close together share leading digits",
+				`The session you mean may be one of the 2 not listed: keep the archive_search hit whose session_id begins with "01a1bbbb", listed here or not.`,
 			},
 			notInErr: []string{lookupSharedSessionID(5), lookupSharedSessionID(6)},
 		},
@@ -174,6 +176,36 @@ func TestArchiveSessionTranscriptTool_ResolvesSessionID(t *testing.T) {
 			}
 			if parsed.Messages[0].SessionID != lookupOldSessionID {
 				t.Fatalf("session_id = %q, want the full id %q", parsed.Messages[0].SessionID, lookupOldSessionID)
+			}
+		})
+	}
+}
+
+// TestAmbiguousSessionPrefixErrorSaysWhenTheListIsPartial pins that the
+// refusal says the session may be an unlisted one exactly when some
+// matches went unlisted, and never when every match is shown.
+func TestAmbiguousSessionPrefixErrorSaysWhenTheListIsPartial(t *testing.T) {
+	batch := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	matches := []memory.SessionPrefixMatch{
+		{ID: lookupSharedSessionID(0), StartedAt: batch, Title: "Bob import 0"},
+		{ID: lookupSharedSessionID(1), StartedAt: batch.Add(time.Hour), Title: "Bob import 1"},
+	}
+	const note = `may be one of the 7 not listed: keep the archive_search hit whose session_id begins with "01a1bbbb", listed here or not`
+	for _, tt := range []struct {
+		name     string
+		total    int
+		wantNote bool
+	}{
+		{name: "every match listed", total: len(matches)},
+		{name: "more matches than listed", total: len(matches) + 7, wantNote: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ambiguousSessionPrefixError(memory.SessionPrefixLookup{Prefix: lookupSharedPrefix, Matches: matches, Total: tt.total})
+			if got := strings.Contains(err.Error(), note); got != tt.wantNote {
+				t.Errorf("error carries the unlisted note = %v, want %v:\n%v", got, tt.wantNote, err)
+			}
+			if !tt.wantNote && strings.Contains(err.Error(), "not listed") {
+				t.Errorf("error mentions unlisted sessions when every match is listed:\n%v", err)
 			}
 		})
 	}

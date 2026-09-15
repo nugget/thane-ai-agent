@@ -166,6 +166,10 @@ func TestContactsTalentsTeachDossierCitations(t *testing.T) {
 		{"unpinned evidence has a home", "contacts", "Evidence you cannot pin to one session goes under Open Questions, never into prose that describes a prefix"},
 		{"folding carries citations whole", "contacts_save", "Carry each citation over whole"},
 		{"folding resolves inherited prefixes", "contacts_save", "copy the full citation it names, or move the claim to Open Questions, rather than rewording the citation into prose"},
+		{"an unlisted candidate can be the one", "contacts", "cite the hit whose id begins with the prefix, listed in the refusal or not"},
+		{"prefixes past the lookup cap come next call", "contacts", "One refusal looks up at most ten prefixes; leave the rest as written, and once the looked-up ones are fixed the next call looks them up"},
+		{"the duplicate's dossier is left behind", "contacts_save", "The duplicate's own dossier stays in the contacts root after the forget, and no tool you have retires it"},
+		{"the leftover dossier goes to the operator", "contacts_save", "Report it to the operator with the duplicate's UUID so they can remove it"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if !strings.Contains(text[tt.talent], tt.want) {

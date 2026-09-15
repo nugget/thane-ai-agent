@@ -152,7 +152,10 @@ ordinary documents instead.
   silently: the refusal names its full citation when one session matches,
   lists the candidates when several share it, and says so when none does.
   Choose among candidates by searching `archive_search` for the claim's own
-  words, since every hit carries its full `session_id`. Evidence you cannot
+  words, since every hit carries its full `session_id`: cite the hit whose
+  id begins with the prefix, listed in the refusal or not. One refusal
+  looks up at most ten prefixes; leave the rest as written, and once the
+  looked-up ones are fixed the next call looks them up. Evidence you cannot
   pin to one session goes under Open Questions, never into prose that
   describes a prefix. Replacing an existing dossier with
   no read of it on record, or after it changed since that read, is also an
@@ -851,7 +854,11 @@ that should go:
   citation over whole. An older dossier may name a session only by a
   prefix; the write refuses it and resolves it, so copy the full
   citation it names, or move the claim to Open Questions, rather than
-  rewording the citation into prose.
+  rewording the citation into prose. The duplicate's own dossier stays
+  in the contacts root after the forget, and no tool you have retires
+  it: `doc_delete` and `doc_move` refuse it, and `contact_dossier_write`
+  no longer reaches a forgotten contact. Report it to the operator with
+  the duplicate's UUID so they can remove it.
 - **Any other duplicate is the operator's.** Report the set with each
   contact's name, zone, and UUID. The operator merges the duplicate
   into the contact that should keep the name, renames one, or moves an

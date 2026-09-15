@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// maxDossierCitationLookups bounds how many distinct leading parts one
+// MaxDossierCitationLookups bounds how many distinct leading parts one
 // refusal resolves, so a dossier carrying dozens of inherited prefixes
 // still gets a refusal that fits in one tool result.
-const maxDossierCitationLookups = 10
+const MaxDossierCitationLookups = 10
 
 // ArchiveSessionMatch is one archived session whose id begins with a
 // leading part cited in a dossier.
@@ -47,7 +47,7 @@ func (t *Tools) ConfigureDossierArchiveSessions(resolve ArchiveSessionResolver) 
 }
 
 // citationResolver looks up the leading parts of one refusal, once each
-// and at most [maxDossierCitationLookups] of them.
+// and at most [MaxDossierCitationLookups] of them.
 type citationResolver struct {
 	resolve ArchiveSessionResolver
 	seen    map[string]string
@@ -66,8 +66,11 @@ func (r *citationResolver) describe(prefix string) string {
 	if described, ok := r.seen[prefix]; ok {
 		return described
 	}
-	if len(r.seen) >= maxDossierCitationLookups {
-		return fmt.Sprintf(". Not looked up: one refusal resolves at most %d leading parts", maxDossierCitationLookups)
+	if len(r.seen) >= MaxDossierCitationLookups {
+		return fmt.Sprintf(". Not looked up in this refusal, which looks up at most %d leading parts. "+
+			"Leaving this one as written in your next call is expected: once the citations looked up here are fixed, that call looks it up. "+
+			"To look it up now instead, call archive_session_transcript with session_id %q",
+			MaxDossierCitationLookups, prefix)
 	}
 	lookup, err := r.resolve(prefix)
 	described := describeSessionLookup(prefix, lookup, err)
@@ -116,10 +119,10 @@ func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, err error
 	if n := total - len(candidates); n > 0 {
 		unlisted = fmt.Sprintf(" (%d more not listed)", n)
 	}
-	return fmt.Sprintf(". %d archived sessions begin with it, because sessions imported together share an import-time prefix, "+
+	return fmt.Sprintf(". %d archived sessions begin with it (ids minted close together share leading digits, and an import mints a whole batch that way), "+
 		"so the prefix alone cannot say which one the claim meant. Candidates in id order: %s%s. "+
-		"Search archive_search for the claim's own words and cite the hit whose session_id is among them",
-		total, listed, unlisted)
+		"Search archive_search for the claim's own words and cite the hit whose session_id begins with %s, listed here or not",
+		total, listed, unlisted, prefix)
 }
 
 func formatCandidateTime(t time.Time) string {

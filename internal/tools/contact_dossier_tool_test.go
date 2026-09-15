@@ -257,7 +257,9 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 		"canonicalized_citations",
 		"names the full citation to copy",
 		"lists the candidates if several do, and says so if none does",
+		fmt.Sprintf("One refusal looks up at most %d leading parts; leave the rest as written, and once the looked-up ones are fixed the next call looks them up", contacts.MaxDossierCitationLookups),
 		"search archive_search for the claim's own words",
+		"the one to cite begins with the prefix whether or not the refusal listed it",
 		"### Open Questions",
 	} {
 		if !strings.Contains(fullDescription, want) {
