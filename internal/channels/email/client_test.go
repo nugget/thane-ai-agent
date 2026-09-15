@@ -562,7 +562,19 @@ func TestClientCancellationReleasesAHungConnection(t *testing.T) {
 }
 
 func TestClientReconnectsAfterConnectionLoss(t *testing.T) {
-	m := newMemIMAP(t)
+	// Implicit TLS keeps the connection quiet once Ping returns, so the
+	// drop below cannot land mid-exchange. Over STARTTLS, imapclient
+	// discards the capability set after the upgrade and re-fetches it
+	// with a CAPABILITY command from a background goroutine that the
+	// login does not wait for. When the drop interrupts that command,
+	// go-imap v2.0.0-beta.8 races on its result: the reader goroutine
+	// fills it in after releasing the client mutex, while the goroutine
+	// whose next write fails completes it. Here the greeting and the
+	// LOGIN response both carry the capability list, so no background
+	// command exists. Reconnection does not depend on how the
+	// connection was secured; STARTTLS connects are covered everywhere
+	// else in this package.
+	m := newMemIMAP(t, func(o *memIMAPOptions) { o.implicitTLS = true })
 	c := m.newClient("primary")
 	if err := c.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping: %v", err)
