@@ -444,7 +444,7 @@ func TestCanceledContext_DoesNotFailOver(t *testing.T) {
 	cancelIter()
 
 	timeoutRecovered := false
-	handler := loop.buildLLMErrorHandler(reqCtx, nil, loop.model, &Request{}, &timeoutRecovered)
+	handler := loop.buildLLMErrorHandler(reqCtx, nil, loop.llm, &Request{}, &timeoutRecovered)
 
 	_, _, err := handler(
 		iterCtx,
@@ -479,7 +479,7 @@ func TestProviderPrivateCancellationCanFailOver(t *testing.T) {
 	loop.model = "fallback-model"
 
 	timeoutRecovered := false
-	handler := loop.buildLLMErrorHandler(context.Background(), nil, loop.model, &Request{}, &timeoutRecovered)
+	handler := loop.buildLLMErrorHandler(context.Background(), nil, loop.llm, &Request{}, &timeoutRecovered)
 
 	resp, model, err := handler(
 		context.Background(),

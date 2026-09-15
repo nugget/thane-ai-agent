@@ -334,6 +334,8 @@ func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []llm
 }
 
 // ChatStream sends a chat request, optionally streaming tokens via callback.
+// On error, a non-nil response carries only usage already reported by the
+// provider; it is not a completed assistant response.
 func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	// A billing-blocked account fails fast without an HTTP round-trip
 	// (one probe per interval keeps recovery detection alive): the
@@ -578,7 +580,9 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader, upstreamRequestID string, log *slog.Logger, started time.Time) (*llm.ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		partial := convertFromAnthropic(&resp)
+		partial.UpstreamRequestID = upstreamRequestID
+		return usageOnlyResponse(partial), fmt.Errorf("decode response: %w", err)
 	}
 	result := convertFromAnthropic(&resp)
 	result.UpstreamRequestID = upstreamRequestID
@@ -709,7 +713,10 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read stream: %w", err)
+		partial := convertFromAnthropic(&anthropicResponse{Model: model, Usage: usage})
+		partial.UpstreamRequestID = upstreamRequestID
+		partial.StopReason = stopReason
+		return usageOnlyResponse(partial), fmt.Errorf("read stream: %w", err)
 	}
 
 	resp := &llm.ChatResponse{

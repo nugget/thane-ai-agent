@@ -48,7 +48,6 @@ func (a *App) initServers(s *newState) error {
 		cfg.Listen.Port,
 		a.loop,
 		a.rtr,
-		cfg.Pricing,
 		a.modelRegistry,
 		a.usageStore,
 		a.persistModelRegistryPolicy,

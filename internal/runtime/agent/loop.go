@@ -667,7 +667,11 @@ func (l *Loop) ConfigureSessionStores(w SessionStoreWiring) {
 	}
 	if w.UsageStore != nil {
 		l.usageStore = w.UsageStore
+	}
+	if w.Pricing != nil {
 		l.pricing = w.Pricing
+	}
+	if w.UsageCatalog != nil {
 		l.usageCatalog = w.UsageCatalog
 	}
 }
@@ -858,9 +862,10 @@ func (l *Loop) UseCapabilitySurface(surface []toolcatalog.CapabilitySurface) {
 	l.capSurface = toolcatalog.SortCapabilitySurface(surface)
 }
 
-// SetUsageRecorder configures persistent token usage recording. When
-// set, every LLM completion in the agent loop is persisted for cost
-// attribution and analysis.
+// SetUsageRecorder configures model-call pricing and optional persistence.
+// Every provider-reported usage response is priced separately, including
+// retries and partial failures. A nil store disables persistence; request
+// observers attached with [usage.WithObserver] still receive priced records.
 func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *fleet.Catalog) {
 	l.usageStore = store
 	l.pricing = pricing
@@ -1593,8 +1598,11 @@ func generateRequestID() string {
 	return "r_" + hex.EncodeToString(id[8:16])
 }
 
-// Run executes one iteration of the agent loop.
-// If stream is non-nil, tokens are pushed to it as they arrive.
+// Run executes an agent turn, including any tool iterations and recovery calls.
+// If stream is non-nil, tokens are pushed to it as they arrive. Response token
+// totals sum provider-reported usage across model calls. On failure Run returns
+// a nil response and an error; already-reported usage is still persisted and
+// published to request-scoped [usage.WithObserver] consumers.
 func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (resp *Response, err error) {
 	convID := req.ConversationID
 	if convID == "" {
@@ -1618,7 +1626,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			sessionID = sid
 		}
 	}
-	sessionTag := memory.ShortID(sessionID) // 8-char display tag for usage records
+	sessionTag := memory.ShortID(sessionID) // 8-char display tag for context
 
 	// Generate a request-scoped ID and logger. Every log line within this
 	// turn carries request_id so you can grep for a single user→response cycle.
@@ -1639,6 +1647,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// server id — be matched against the server's own record.
 	ctx = logging.WithRequestID(ctx, requestID)
 	runStarted := time.Now()
+	var accounting *modelCallAccounting
 	defer func() {
 		attrs := []any{
 			"kind", events.KindRequestComplete,
@@ -1663,6 +1672,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if len(resp.ToolsUsed) > 0 {
 				attrs = append(attrs, "tools_used", resp.ToolsUsed)
 			}
+		} else if accounting != nil && len(accounting.calls) > 0 {
+			// Failed runs still consumed any usage the provider reported.
+			partial := &iterate.Result{}
+			accounting.applyTotals(partial)
+			attrs = append(attrs,
+				"model", accounting.calls[len(accounting.calls)-1].Model,
+				"input_tokens", partial.InputTokens,
+				"output_tokens", partial.OutputTokens,
+				"cache_creation_input_tokens", partial.CacheCreationInputTokens,
+				"cache_read_input_tokens", partial.CacheReadInputTokens,
+			)
 		}
 		if err != nil {
 			log.Warn("request complete", append(attrs, "error", err.Error())...)
@@ -1753,6 +1773,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}, nil
 	}
 
+	accounting = &modelCallAccounting{
+		loop: l, conversationID: convID, fallbackSession: sessionID,
+		request: req, requestID: requestID, observerContext: ctx,
+	}
+	runClient := &accountingClient{Client: l.llm, accounting: accounting}
+	defer accounting.persist(ctx)
+
 	// Lightweight path: skip memory, tools, and heavy context injection.
 	// Used for auxiliary requests (title/tag generation) that don't need the
 	// full agent loop. Just send messages to the LLM with no tools.
@@ -1789,7 +1816,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			})
 		}
 
-		llmResp, err := l.llm.ChatStream(ctx, liteModel, llmMessages, nil, stream)
+		llmResp, err := runClient.ChatStream(ctx, liteModel, llmMessages, nil, stream)
 		if err != nil {
 			// Record failed outcome
 			if l.router != nil && liteDecision != nil {
@@ -1812,8 +1839,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"tool_calls", len(llmResp.Message.ToolCalls),
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
-
-		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheCreation5mInputTokens, llmResp.CacheCreation1hInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID, llmResp.UpstreamRequestID)
 
 		return &Response{
 			Content:                  llmResp.Message.Content,
@@ -2036,15 +2061,27 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
 	}
 	skipTagFilter := req.SkipTagFilter
-
-	visibleTools := baseTools
-	if gatingActive {
-		visibleTools = visibleTools.FilteredCopy(l.orchestratorTools)
+	currentTools := func() *tools.Registry {
+		available := baseTools
+		if scope != nil && !skipTagFilter {
+			if tags := scope.Snapshot(); len(tags) > 0 {
+				tagList := make([]string, 0, len(tags))
+				for tag := range tags {
+					tagList = append(tagList, tag)
+				}
+				available = available.FilterByTags(tagList)
+			}
+		}
+		if gatingActive {
+			available = available.FilteredCopy(l.orchestratorTools)
+		}
+		return available
 	}
-	needsTools := len(visibleTools.List()) > 0
+	visibleToolDefs := currentTools().List()
+	needsTools := len(visibleToolDefs) > 0
 	needsStreaming := stream != nil
 	needsImages := messagesNeedImages(req.Messages)
-	contextSize := estimateLLMMessagesContextTokens(llmMessages)
+	contextSize := estimateRequestContextTokens(llmMessages, visibleToolDefs)
 	query := ""
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
@@ -2059,7 +2096,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			NeedsTools:     needsTools,
 			NeedsStreaming: needsStreaming,
 			NeedsImages:    needsImages,
-			ToolCount:      len(visibleTools.List()),
+			ToolCount:      len(visibleToolDefs),
 			Priority:       router.PriorityInteractive,
 			RoutingFactors: req.RoutingFactors,
 		}
@@ -2096,7 +2133,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		if l.router != nil {
 			// Estimate effective prompt size for routing. This includes
 			// the assembled system prompt, user-visible message text, and
-			// a conservative surcharge for image-bearing inputs.
+			// a conservative surcharge for image-bearing inputs, and
+			// the tool schemas actually exposed to this request.
 			var routeErr error
 			model, routerDecision, routeErr = routeWithContextSize(contextSize)
 			if routeErr != nil {
@@ -2113,7 +2151,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// messages. Generation headroom is added when a load size is chosen,
 		// so that wanting room to answer never makes a servable request look
 		// incompatible here.
-		contextSize = estimateRequestContextTokens(llmMessages, visibleTools.List())
+		contextSize = estimateRequestContextTokens(llmMessages, visibleToolDefs)
 		resolvedModel, explicitErr := l.selectExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize)
 		switch {
 		case explicitErr == nil:
@@ -2134,10 +2172,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"reason", pinSkipReason,
 			)
 			// Route on the same full request size (messages plus tool
-			// schemas) the pin was just judged on. A messages-only figure
-			// could hand the router the very deployment the window check
-			// rejected, and the routed re-check below measures messages
-			// alone, so nothing later would catch it.
+			// schemas) the pin was just judged on so routing and preflight
+			// agree on the capacity this request needs.
 			var routeErr error
 			model, routerDecision, routeErr = routeWithContextSize(contextSize)
 			if routeErr != nil {
@@ -2148,7 +2184,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	for routedPromptChecks := 0; routerDecision != nil; routedPromptChecks++ {
 		rebuildSystemPromptForModel(model)
-		actualContextSize := estimateLLMMessagesContextTokens(llmMessages)
+		actualContextSize := estimateRequestContextTokens(llmMessages, visibleToolDefs)
 		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, actualContextSize)
 		if err == nil {
 			model = resolvedModel
@@ -2229,19 +2265,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		maxIterations = req.MaxIterations
 	}
 
-	currentTools := func() *tools.Registry {
-		toolsForIter := baseTools
-		if scope != nil && !skipTagFilter {
-			if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
-				tagList := make([]string, 0, len(tagSnap))
-				for tag := range tagSnap {
-					tagList = append(tagList, tag)
-				}
-				toolsForIter = baseTools.FilterByTags(tagList)
-			}
-		}
-		return toolsForIter
-	}
 	activeTagList := func() []string {
 		if scope == nil {
 			return nil
@@ -2292,11 +2315,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 	effectiveToolNames := func() []string {
-		toolsForIter := currentTools()
-		if gatingActive {
-			toolsForIter = toolsForIter.FilteredCopy(l.orchestratorTools)
-		}
-		defs := toolsForIter.List()
+		defs := currentTools().List()
 		if len(defs) == 0 {
 			return nil
 		}
@@ -2316,7 +2335,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	iterCfg := iterate.Config{
 		MaxIterations:   maxIterations,
 		Model:           model,
-		LLM:             l.llm,
+		LLM:             runClient,
 		Stream:          liveStreamCallback,
 		DeferMixedText:  true,
 		NudgeOnEmpty:    true,
@@ -2328,20 +2347,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via tag_activate are reflected.
 		ToolDefs: func(i int) []map[string]any {
-			toolsForIter := currentTools()
-			if gatingActive {
-				return toolsForIter.FilteredCopy(l.orchestratorTools).List()
-			}
-			return toolsForIter.List()
+			return currentTools().List()
 		},
 
 		// Tool availability check using the effective tools for this iteration.
 		CheckToolAvail: func(toolName string) bool {
-			toolsForIter := currentTools()
-			if gatingActive {
-				return toolsForIter.FilteredCopy(l.orchestratorTools).Get(toolName) != nil
-			}
-			return toolsForIter.Get(toolName) != nil
+			return currentTools().Get(toolName) != nil
 		},
 
 		NormalizeToolCall: func(iterCtx context.Context, i int, tc llm.ToolCall) llm.ToolCall {
@@ -2392,11 +2403,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		Executor: &iterate.DirectExecutor{
 			Exec: func(execCtx context.Context, name, argsJSON string) (string, error) {
-				toolsForExec := currentTools()
-				if gatingActive {
-					toolsForExec = toolsForExec.FilteredCopy(l.orchestratorTools)
-				}
-				return toolsForExec.Execute(execCtx, name, argsJSON)
+				return currentTools().Execute(execCtx, name, argsJSON)
 			},
 		},
 
@@ -2495,7 +2502,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Error handling: timeout retry, recovery model, failover.
-		OnLLMError: l.buildLLMErrorHandler(ctx, stream, model, req, &timeoutRecovered),
+		OnLLMError: l.buildLLMErrorHandler(ctx, stream, runClient, req, &timeoutRecovered),
 
 		// Enrich context before each tool execution.
 		OnBeforeToolExec: func(iterCtx context.Context, i int, tc llm.ToolCall) context.Context {
@@ -2672,6 +2679,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	engine := &iterate.Engine{}
 	iterResult, err := engine.Run(ctx, iterCfg, llmMessages)
+	accounting.applyTotals(iterResult)
+	if iterResult != nil {
+		l.archiveIterations(log, convID, iterResult.Iterations, iterationSessions)
+		l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
+		// Retain completed work on failures as well as successful turns.
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
+		}()
+	}
 	if err != nil {
 		if l.router != nil && routerDecision != nil {
 			latency := time.Since(startTime).Milliseconds()
@@ -2748,19 +2766,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		LoadedCapabilities:       toolcatalog.BuildLoadedCapabilityEntries(l.capSurface, activeTags),
 	}
 
-	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
-
-	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID, iterResult.UpstreamRequestID)
-	l.archiveIterations(log, convID, iterResult.Iterations, iterationSessions)
-
-	// Content retention is fire-and-forget with a short deadline so it
-	// never blocks response delivery.
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
-	}()
-
 	return resp, nil
 }
 
@@ -2785,7 +2790,7 @@ func (l *Loop) conversationChannelBinding(conversationID string) *memory.Channel
 
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
-func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
+func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, client llm.Client, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
 	explicitModelRequested := strings.TrimSpace(req.Model) != ""
 
 	return func(iterCtx context.Context, err error, model string,
@@ -2828,7 +2833,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					return nil, "", ctx.Err()
 				case <-time.After(backoff):
 				}
-				resp, retryErr := l.llm.ChatStream(iterCtx, model, msgs, toolDefs, stream)
+				resp, retryErr := client.ChatStream(iterCtx, model, msgs, toolDefs, stream)
 				if retryErr == nil {
 					iterLog.Info("LLM retry succeeded", "retry", retry, "model", model)
 					return resp, model, nil
@@ -2853,7 +2858,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				// generation is bounded like every other call.
 				recoveryBase := llm.WithMaxOutputTokens(context.Background(), llm.MaxOutputTokensFromContext(iterCtx))
 				recoveryCtx, recoveryCancel := context.WithTimeout(recoveryBase, timeoutRecoveryDeadline)
-				resp, recoveryErr := l.llm.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
+				resp, recoveryErr := client.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
 				if recoveryErr != nil {
 					iterLog.Error("recovery model also failed",
@@ -2908,7 +2913,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		}
 
 		if explicitModelRequested {
-			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, model, err, msgs, toolDefs, stream); handled {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, client, model, err, msgs, toolDefs, stream); handled {
 				if recoveryErr != nil {
 					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
 					return nil, "", recoveryErr
@@ -2943,7 +2948,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					iterLog.Warn("failover handler failed", "error", ferr)
 				}
 			}
-			resp, failErr := l.llm.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
+			resp, failErr := client.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
 			if failErr != nil {
 				// Same demotion as above: a failover that ran into the
 				// standing billing wall did so instantly and learned
@@ -3750,23 +3755,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// recordUsage persists a usage record for a completed LLM interaction.
-// No-op when usage recording is not configured. Errors are logged but
-// do not affect the caller.
-//
-// cacheCreate5m and cacheCreate1h break down cacheCreateIn by TTL when
-// the provider exposes the breakdown (Anthropic). Pass 0/0 when the
-// provider doesn't attribute the writes; pricing falls back to the 5m
-// rate for the unattributed portion.
-//
-// upstreamRequestID is the provider-side request ID (e.g. Anthropic's
-// `x-request-id` response header) when the provider exposes one. Pass
-// "" when no upstream ID is available; the column accepts empty.
-func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn int, convID, sessionTag, requestID, upstreamRequestID string) {
-	if l.usageStore == nil {
-		return
-	}
-
+// makeUsageRecord resolves pricing and provenance once, so persistent records
+// and live observers consume exactly the same per-call accounting.
+func (l *Loop) makeUsageRecord(req *Request, rec usage.Record) usage.Record {
 	role := "interactive"
 	taskName := ""
 	if req.UsageRole != "" {
@@ -3785,38 +3776,34 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 		}
 	}
 
-	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
-	cost := usage.ComputeDetailedCostForIdentityWithTTL(identity, totalIn, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn, totalOut, l.pricing)
+	identity := usage.ResolveModelIdentity(rec.Model, l.currentModelCatalog())
+	rec.CostUSD = usage.ComputeDetailedCostForIdentityWithTTL(identity, rec.InputTokens,
+		rec.CacheCreationInputTokens, rec.CacheCreation5mInputTokens, rec.CacheCreation1hInputTokens,
+		rec.CacheReadInputTokens, rec.OutputTokens, l.pricing)
 	if identity.Provider == "anthropic" {
 		if _, priced := usage.PricingFor(identity, l.pricing); !priced {
 			l.warnUnpricedModel(identity)
 		}
 	}
-	rec := usage.Record{
-		Timestamp:                  time.Now(),
-		RequestID:                  requestID,
-		UpstreamRequestID:          upstreamRequestID,
-		SessionID:                  sessionTag,
-		ConversationID:             convID,
-		Model:                      identity.Model,
-		UpstreamModel:              identity.UpstreamModel,
-		Resource:                   identity.Resource,
-		Provider:                   identity.Provider,
-		InputTokens:                totalIn,
-		OutputTokens:               totalOut,
-		CacheCreationInputTokens:   cacheCreateIn,
-		CacheCreation5mInputTokens: cacheCreate5m,
-		CacheCreation1hInputTokens: cacheCreate1h,
-		CacheReadInputTokens:       cacheReadIn,
-		CostUSD:                    cost,
-		Role:                       role,
-		TaskName:                   taskName,
-	}
+	rec.Model = identity.Model
+	rec.UpstreamModel = identity.UpstreamModel
+	rec.Resource = identity.Resource
+	rec.Provider = identity.Provider
+	rec.Role = role
+	rec.TaskName = taskName
+	return rec
+}
 
+// recordUsage persists an already priced model-call record. No-op when
+// persistence is not configured; write errors do not affect the caller.
+func (l *Loop) recordUsage(ctx context.Context, rec usage.Record) {
+	if l.usageStore == nil {
+		return
+	}
 	if err := l.usageStore.Record(ctx, rec); err != nil {
 		l.logger.Warn("failed to record usage",
 			"error", err,
-			"request_id", requestID,
+			"request_id", rec.RequestID,
 		)
 	}
 }

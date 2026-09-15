@@ -9,9 +9,9 @@ import (
 
 // Context-window arithmetic. These estimates answer two different questions
 // and are deliberately not the same number: how much context a request will
-// occupy (used to pick a model and to report usage), and how large a window
-// to ask a runner to load for it (which must also cover the tool schemas and
-// leave room to generate into).
+// occupy (messages and the visible tool schemas, used to pick a model), and
+// how large a window to ask a runner to load (which also leaves room to
+// generate into).
 
 const estimatedImageContextTokens = 1536
 

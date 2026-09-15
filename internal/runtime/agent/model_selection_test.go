@@ -96,9 +96,9 @@ func TestRun_ExplicitModelPreflightUsesModelSpecificPromptSize(t *testing.T) {
 	userMessage := "please inspect the loaded memory timeline"
 	reqMessages := []Message{{Role: "user", Content: userMessage}}
 	defaultPrompt, defaultSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, llm.DefaultModelInteractionProfile())
-	defaultSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}))
+	defaultSize := estimateRequestContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	modelPrompt, modelSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, loop.modelInteractionProfileForModel("gemma-local"))
-	modelSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(modelPrompt, modelSections, nil, reqMessages, "default", time.Time{}))
+	modelSize := estimateRequestContextTokens(buildInitialLLMMessages(modelPrompt, modelSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	if modelSize <= defaultSize {
 		t.Fatalf("model-specific prompt size = %d, want > default size %d", modelSize, defaultSize)
 	}
@@ -139,9 +139,9 @@ func TestRun_RoutedModelRechecksModelSpecificPromptSize(t *testing.T) {
 	userMessage := "what is the status"
 	reqMessages := []Message{{Role: "user", Content: userMessage}}
 	defaultPrompt, defaultSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, llm.DefaultModelInteractionProfile())
-	defaultSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}))
+	defaultSize := estimateRequestContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	qwenPrompt, qwenSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, loop.modelInteractionProfileForModel("qwen3:8b"))
-	qwenSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(qwenPrompt, qwenSections, nil, reqMessages, "default", time.Time{}))
+	qwenSize := estimateRequestContextTokens(buildInitialLLMMessages(qwenPrompt, qwenSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	if qwenSize <= defaultSize {
 		t.Fatalf("qwen prompt size = %d, want > default size %d", qwenSize, defaultSize)
 	}

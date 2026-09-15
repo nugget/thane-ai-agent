@@ -18,7 +18,7 @@ func (r *Registry) registerCostSummary() {
 
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Use to understand spending patterns and resource consumption.",
+		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Counts are usage records: new agent records represent model calls; older records may aggregate iterations. Use to understand spending patterns and resource consumption.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -48,7 +48,7 @@ func (r *Registry) registerCostSummary() {
 
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("Cost Summary (%s):\n", period))
-			sb.WriteString(fmt.Sprintf("  Total requests: %d\n", summary.TotalRecords))
+			sb.WriteString(fmt.Sprintf("  Usage records: %d\n", summary.TotalRecords))
 			sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", formatTokenCount(summary.TotalInputTokens)))
 			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(summary.TotalOutputTokens)))
 			if summary.TotalCacheCreationInputTokens > 0 {
@@ -71,7 +71,7 @@ func (r *Registry) registerCostSummary() {
 						if display == "" {
 							display = "(none)"
 						}
-						sb.WriteString(fmt.Sprintf("  %s: $%.4f (%d requests, %s in / %s out)\n",
+						sb.WriteString(fmt.Sprintf("  %s: $%.4f (%d usage records, %s in / %s out)\n",
 							display, gs.Summary.TotalCostUSD, gs.Summary.TotalRecords,
 							formatTokenCount(gs.Summary.TotalInputTokens),
 							formatTokenCount(gs.Summary.TotalOutputTokens),

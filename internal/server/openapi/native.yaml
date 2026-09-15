@@ -3569,7 +3569,8 @@ components:
       type: object
       description: >-
         Aggregated token-usage and cost totals for one breakdown bucket
-        (a model, upstream model, provider, or resource).
+        (a model, upstream model, provider, or resource). Includes reported
+        usage from failed model calls and failed requests.
       required:
         - total_records
         - total_input_tokens
@@ -3581,7 +3582,7 @@ components:
         total_records:
           type: integer
           readOnly: true
-          description: Number of usage records aggregated into this bucket.
+          description: Number of reported model calls in this bucket; one API request can produce multiple calls.
           example: 42
         total_input_tokens:
           type: integer
@@ -3610,7 +3611,7 @@ components:
         total_cost_usd:
           type: number
           readOnly: true
-          description: Total estimated cost in USD for this bucket, from the config pricing table.
+          description: Sum of the canonical per-call costs in USD, priced for each deployment and cache TTL using configured rates.
           example: 0.8421
       example:
         total_records: 42
@@ -3623,9 +3624,10 @@ components:
     SessionStats:
       type: object
       description: >-
-        Token-usage, cost, and context-window snapshot for the active
-        session, plus per-model/provider/resource breakdowns and build
-        metadata. Returned by GET /v1/sessions/stats.
+        API token usage and cost since server startup, plus current context
+        information, per-model/provider/resource breakdowns and build metadata.
+        Usage includes reported model calls from failed requests, even without
+        a configured usage ledger. Returned by GET /v1/sessions/stats.
       required:
         - total_input_tokens
         - total_output_tokens
@@ -3674,12 +3676,12 @@ components:
           type: integer
           format: int64
           readOnly: true
-          description: Total number of model requests recorded this session.
+          description: Number of successfully completed API requests since startup; separate from each breakdown's per-call total_records.
           example: 137
         estimated_cost_usd:
           type: number
           readOnly: true
-          description: Total estimated cost in USD this session, from the config pricing table.
+          description: Sum of canonical per-call costs in USD since startup, including reported usage from failed requests.
           example: 1.2843
         reported_balance_usd:
           type: number
@@ -3695,7 +3697,7 @@ components:
         by_model:
           type: object
           readOnly: true
-          description: Per-model usage totals, keyed by model alias.
+          description: Per-model usage totals, keyed by selected deployment ID when known.
           additionalProperties: { $ref: "#/components/schemas/UsageSummary" }
         by_upstream_model:
           type: object

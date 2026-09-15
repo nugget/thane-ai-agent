@@ -7,6 +7,12 @@ Ollama-compatible client (Open WebUI, HA Assist, API calls). The
 canonical Go shape is `router.VirtualModel`; older docs may still call
 these "routing profiles."
 
+Automatic routing and explicit model selection use the same request-size
+estimate: assembled messages, images, tool-call history, and the tool
+schemas visible to that request after capability and delegation filters.
+The selected model's prompt is checked again before generation. Loading
+a local model also reserves separate room for its reply.
+
 ## Available Virtual Models
 
 ### `thane:latest` — Daily Conversation *(default)*
