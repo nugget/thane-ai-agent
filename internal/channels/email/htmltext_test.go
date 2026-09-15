@@ -16,6 +16,10 @@ func TestHTMLToText(t *testing.T) {
 		// hidden is the count of non-whitespace characters the markup
 		// hid; zero for every case that hides nothing.
 		hidden int
+
+		// targetOnly marks a case whose markup hid a link's target and
+		// no characters, which the rendering still reports as hidden.
+		targetOnly bool
 	}{
 		{
 			name: "paragraphs and headings",
@@ -115,7 +119,7 @@ func TestHTMLToText(t *testing.T) {
 			hidden: 6 + 4,
 		},
 		{
-			name:   "zero font size in any unit",
+			name:   "zero font size in each spelling of a recognised unit",
 			in:     `<p>A<span style="font-size:0">b</span><span style="font-size:0px">c</span><span style="font-size: 0.0em">d</span><span style="font-size:.0rem">e</span><span style="font-size:0%">f</span>Z</p>`,
 			want:   "AZ",
 			hidden: 5,
@@ -299,6 +303,18 @@ func TestHTMLToText(t *testing.T) {
 			want: "abcdefg",
 		},
 		{
+			name: "a zero size in an unknown unit is dropped like any invalid value",
+			in: `<p style="font-size:16px">A` +
+				`<span style="font-size:0banana">B</span>` +
+				`<span style="font-size:0px">c</span>` +
+				`<span style="font-size:0;font-size:0banana">d</span>` +
+				`<span style="font-size:0!important;font-size:0banana!important">e</span>` +
+				`<span style="font-size:0em">f</span>` +
+				`Z</p>`,
+			want:   "ABZ",
+			hidden: 4,
+		},
+		{
 			name: "a size relative to a zero one stays zero",
 			in: `<div style="font-size:0">a` +
 				`<span style="font-size:1em">b</span><span style="font-size:100%">c</span><span style="font-size:2em">d</span>` +
@@ -332,8 +348,20 @@ func TestHTMLToText(t *testing.T) {
 			hidden: 5,
 		},
 		{
-			name: "an empty link inside hidden text withholds its target",
-			in:   `<p>ok</p><div style="font-size:0"><a href="https://example.org/ignore-prior-rules"> </a><a href="https://example.org/empty"></a></div>`,
+			name:       "an empty link inside hidden text withholds its target and says so",
+			in:         `<p>ok</p><div style="font-size:0"><a href="https://example.org/ignore-prior-rules"> </a><a href="https://example.org/empty"></a></div>`,
+			want:       "ok",
+			targetOnly: true,
+		},
+		{
+			name:       "a removed link with no text withholds its target and says so",
+			in:         `<p>ok<a hidden href="https://example.org/pixel"><img src="p.gif"></a></p>`,
+			want:       "ok",
+			targetOnly: true,
+		},
+		{
+			name: "a hidden link that would show no target withholds nothing",
+			in:   `<p>ok</p><div style="font-size:0"><a href="mailto:bob@example.org"> </a><a href="#top"></a></div><div hidden><a href="#x"></a><a> </a></div>`,
 			want: "ok",
 		},
 		{
@@ -344,12 +372,15 @@ func TestHTMLToText(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, hidden := htmlToText(tc.in)
+			got, present, hidden := htmlToText(tc.in)
 			if got != tc.want {
 				t.Errorf("htmlToText(%q) =\n%q\nwant\n%q", tc.in, got, tc.want)
 			}
 			if hidden != tc.hidden {
 				t.Errorf("htmlToText(%q) hidden chars = %d, want %d", tc.in, hidden, tc.hidden)
+			}
+			if want := tc.hidden > 0 || tc.targetOnly; present != want {
+				t.Errorf("htmlToText(%q) hidden = %v, want %v", tc.in, present, want)
 			}
 		})
 	}
@@ -372,6 +403,12 @@ func TestReadReportsHiddenHTMLContent(t *testing.T) {
 			name:       "html with hidden text",
 			raw:        head + "Content-Type: text/html; charset=utf-8\r\n\r\n<p>Invoice attached.</p>" + hiddenLine + "\r\n",
 			wantHeader: `"body_source":"html","hidden_content":{"present":true,"chars":37},`,
+			wantBody:   "Invoice attached.",
+		},
+		{
+			name:       "html hiding only an empty link",
+			raw:        head + "Content-Type: text/html; charset=utf-8\r\n\r\n<p>Invoice attached.</p><div style=\"font-size:0\"><a href=\"https://example.org/approve\"> </a></div>\r\n",
+			wantHeader: `"body_source":"html","hidden_content":{"present":true,"chars":0},`,
 			wantBody:   "Invoice attached.",
 		},
 		{

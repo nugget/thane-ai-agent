@@ -202,6 +202,131 @@ func maximalMove(moved, refused int) moveResponse {
 	return resp
 }
 
+// TestMoveResultClipsItsOwnFields pins the clip on the result's own
+// strings: an account, a folder, or a note of any size is cut on a
+// rune boundary and marked, the result stays within the cap, and every
+// UID and entry stays, at the largest batch as at the smallest, even
+// where JSON takes six bytes to escape each byte of every field.
+func TestMoveResultClipsItsOwnFields(t *testing.T) {
+	huge := strings.Repeat("é", 10*1024)
+	escaped := strings.Repeat("<\x01", 1024)
+	tests := []struct {
+		name string
+		in   moveResponse
+	}{
+		{"a 20 KB account name", withOwnFields(maximalMove(1, 0), huge, "INBOX", junkTestFolder, "")},
+		{"a 20 KB source folder", withOwnFields(maximalMove(1, 0), "primary", huge, junkTestFolder, "")},
+		{"a 20 KB destination folder and the note naming it", withOwnFields(maximalMove(1, 0), "primary", "INBOX", huge, "the server did not confirm which UIDs moved or their new UIDs; list "+huge+" to check")},
+		{"the largest batch with every field at its largest", withOwnFields(maximalMove(maxBatchUIDs/2, maxBatchUIDs/2), huge, huge, huge, huge)},
+		{"the largest batch with every byte escaped", withOwnFields(maximalMove(maxBatchUIDs, 0), escaped, escaped, escaped, escaped)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := marshalMoveResponse(tt.in)
+			if err != nil {
+				t.Fatalf("marshalMoveResponse: %v", err)
+			}
+			if len(out) > maxMoveOutput {
+				t.Errorf("move result = %d bytes, cap %d", len(out), maxMoveOutput)
+			}
+			resp := decodeMove(t, out)
+			if !slices.Equal(resp.UIDs, tt.in.UIDs) || !slices.Equal(resp.DestinationUIDs, tt.in.DestinationUIDs) || len(resp.Moved) != len(tt.in.Moved) || len(resp.Refused) != len(tt.in.Refused) {
+				t.Fatalf("uids %d, destination_uids %d, moved %d, refused %d; every UID and entry must stay", len(resp.UIDs), len(resp.DestinationUIDs), len(resp.Moved), len(resp.Refused))
+			}
+			for i, m := range resp.Moved {
+				if m.UID != tt.in.Moved[i].UID || m.DestinationUID != tt.in.Moved[i].DestinationUID {
+					t.Errorf("moved[%d] UIDs = %d→%d, want %d→%d", i, m.UID, m.DestinationUID, tt.in.Moved[i].UID, tt.in.Moved[i].DestinationUID)
+				}
+			}
+			for i, r := range resp.Refused {
+				if r.UID != tt.in.Refused[i].UID {
+					t.Errorf("refused[%d] uid = %d, want %d", i, r.UID, tt.in.Refused[i].UID)
+				}
+			}
+			checkClipped(t, "account", resp.Account, tt.in.Account)
+			checkClipped(t, "source_folder", resp.SourceFolder, tt.in.SourceFolder)
+			checkClipped(t, "destination_folder", resp.DestinationFolder, tt.in.DestinationFolder)
+			checkClipped(t, "note", resp.Note, tt.in.Note)
+		})
+	}
+}
+
+// TestMoveResultCutsListsAsALastResort pins the result of a server whose
+// COPYUID names far more messages than a call sends, so the result
+// passes the cap with every entry reduced to its UIDs: it still fits,
+// moved is cut first, then uids and destination_uids together so they
+// stay paired, then uids_not_found, then refused, and the note says the
+// lists were cut.
+func TestMoveResultCutsListsAsALastResort(t *testing.T) {
+	escaped := strings.Repeat("<\x01", 1024)
+	in := withOwnFields(maximalMove(1200, 3), escaped, escaped, escaped, "")
+	in.UIDsNotFound = []uint32{1, 2, 3}
+	resp := cutMove(t, in)
+	if len(resp.Moved) != 0 || resp.MovedOmitted != 0 {
+		t.Errorf("moved %d, moved_omitted %d; moved is cut first, and its count follows it", len(resp.Moved), resp.MovedOmitted)
+	}
+	n := len(resp.UIDs)
+	if n == 0 || n >= len(in.UIDs) || !slices.Equal(resp.UIDs, in.UIDs[:n]) || !slices.Equal(resp.DestinationUIDs, in.DestinationUIDs[:n]) {
+		t.Errorf("uids %d and destination_uids %d of %d; want the same leading run of each", n, len(resp.DestinationUIDs), len(in.UIDs))
+	}
+	if !slices.Equal(resp.UIDsNotFound, in.UIDsNotFound) || len(resp.Refused) != len(in.Refused) || resp.RefusedOmitted != len(in.Refused) {
+		t.Errorf("uids_not_found %v, refused %d, refused_omitted %d; both lists are cut only after uids", resp.UIDsNotFound, len(resp.Refused), resp.RefusedOmitted)
+	}
+
+	in = maximalMove(0, 1500)
+	resp = cutMove(t, in)
+	n = len(resp.Refused)
+	if n == 0 || n >= len(in.Refused) || resp.RefusedOmitted != n {
+		t.Fatalf("refused %d of %d, refused_omitted %d; want a leading run, every entry counted", n, len(in.Refused), resp.RefusedOmitted)
+	}
+	for i, r := range resp.Refused {
+		if r.UID != in.Refused[i].UID {
+			t.Errorf("refused[%d] uid = %d, want %d", i, r.UID, in.Refused[i].UID)
+		}
+	}
+}
+
+// cutMove renders a result that must be cut short and checks what every
+// cut result shares: it fits, and its note says the lists were cut.
+func cutMove(t *testing.T, in moveResponse) moveResponse {
+	t.Helper()
+	out, err := marshalMoveResponse(in)
+	if err != nil {
+		t.Fatalf("marshalMoveResponse: %v", err)
+	}
+	if len(out) > maxMoveOutput {
+		t.Errorf("move result = %d bytes, cap %d", len(out), maxMoveOutput)
+	}
+	resp := decodeMove(t, out)
+	if !strings.HasSuffix(resp.Note, moveCutNote) {
+		t.Errorf("note = %q, want it to end %q", resp.Note, moveCutNote)
+	}
+	return resp
+}
+
+// withOwnFields sets the account, folders, and note of a move result.
+func withOwnFields(resp moveResponse, account, source, destination, note string) moveResponse {
+	resp.Account, resp.SourceFolder, resp.DestinationFolder, resp.Note = account, source, destination, note
+	return resp
+}
+
+// checkClipped asserts a field within the bound is unchanged and a
+// longer one is a prefix of it, within the bound, valid UTF-8, and
+// ending with the marker.
+func checkClipped(t *testing.T, field, got, in string) {
+	t.Helper()
+	if len(in) <= maxMoveFieldOutput {
+		if got != in {
+			t.Errorf("%s = %q, want it unchanged", field, got)
+		}
+		return
+	}
+	kept, cut := strings.CutSuffix(got, fieldCutMarker)
+	if !cut || len(got) > maxMoveFieldOutput || !utf8.ValidString(got) || !strings.HasPrefix(in, kept) {
+		t.Errorf("%s = %d bytes %q; want a prefix of the input within %d bytes ending %q", field, len(got), got, maxMoveFieldOutput, fieldCutMarker)
+	}
+}
+
 // checkDetail asserts an entry either keeps its detail, each field
 // present, within the bound and valid UTF-8, or carries none.
 func checkDetail(t *testing.T, entry string, kept bool, fields ...string) {
