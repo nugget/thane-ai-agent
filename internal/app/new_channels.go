@@ -857,6 +857,12 @@ func (a *App) initChannels(s *newState) error {
 				Routing:          a.cfg.Signal.Routing,
 				Resolver:         a.contactBindingResolver,
 				BindConversation: a.mem.BindConversationChannel,
+				// OriginInternal system row: the bridge's record that a
+				// wake turn sent nothing, read by later turns as a
+				// framed memory note, never as something said on Signal.
+				RecordNote: func(conversationID, note string) error {
+					return a.mem.AddMessage(conversationID, "system", note, memory.OriginInternal)
+				},
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,
 					DestDir:   a.cfg.Signal.AttachmentDir,
