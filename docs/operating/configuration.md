@@ -670,10 +670,13 @@ final text is sent unless it calls `signal_hold_reply` with a reason,
 a tool offered on that turn only. A held turn sends nothing, logs
 `signal reply held` at Info with the reason and the length of the
 withheld text (never the text), and stores a `signal_reply_held` note
-in the conversation. A wake turn that ends with no text and no hold
-sends nothing either: it logs a Warn and stores a
-`signal_reply_not_sent` note. The interactive fallback ("I hit a
-problem before I could finish that") is never sent on a wake turn.
+in the conversation. The note records whether the turn delivered a
+message itself with `signal_send_message`. A hold is logged and noted
+even when the agent run fails after it. Only reply text the model
+wrote is ever sent on a wake turn. An empty ending, the interactive
+fallback ("I hit a problem before I could finish that"), and the
+runtime's timeout notice or recovery summary are not sent: such a turn
+logs a Warn and stores a `signal_reply_not_sent` note.
 
 ## Contacts & CardDAV
 
