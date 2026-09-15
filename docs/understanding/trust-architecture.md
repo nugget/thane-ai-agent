@@ -396,9 +396,17 @@ contact with authority and is still reported.
 - **Names.** `ResolveContact` finds, in one query, the active contacts
   whose formatted name or nickname is the name, both sides trimmed of
   edge space and compared with `LOWER` as the fork audit folds them,
-  and takes the first in this order: the pinned operator's own record at
-  any zone, then records above `known` (a malformed zone counts), then a
-  formatted-name match before a nickname match, then ID. Only when no
+  and ranks each holder by standing in three bands: the pinned
+  operator's own record at any zone, then records above `known` (a
+  malformed zone counts), then records at `known`. The one holder in the
+  highest band any holder reaches is the answer. Two or more distinct
+  holders in that band are an exact tie, an `AmbiguousNameError` with
+  `ExactTie` set that lists them as below, each with the field it holds
+  the name by, because whether a holder has the name as its formatted
+  name or its nickname, and which ID is lower, say nothing about which
+  person is meant. One record holding the name both ways is one holder,
+  and a tie is reported as itself, never merged with short-form
+  holders. Only when no
   contact holds the name that way does it read the fork audit's short
   forms, through the same `recordNameKeys` keys, reading the short
   forms alone: a contact's given name and the first word of a formatted
@@ -407,9 +415,12 @@ contact with authority and is still reported.
   more are an `AmbiguousNameError` whatever their zones, naming up to
   five with formatted name, zone, `contact_id` and the field matched,
   counting the rest and pointing at `contact_lookup`'s `query` to find
-  them, because authority breaks ties among exact holders only.
-  `Store.Search` lists up to 50 contacts that answer to a name by these
-  keys ahead of any other match, and `contact_lookup` prints each
+  them, because standing breaks ties only among exact holders in
+  different bands. `Store.Search` lists up to 50 contacts that answer to
+  a name by these keys ahead of any other match, in the order an
+  ambiguity lists them (exact holders first, by standing, then
+  short-form holders), so an exact tie's holders come first, and
+  `contact_lookup` prints each
   row's `contact_id` and zone, so that query reaches the rest while no
   more than 50 (`SearchLimit`) share the name, even two whose names
   differ only by edge space; past that the query lists only 50 of
@@ -441,16 +452,19 @@ contact with authority and is still reported.
   such a nickname off a merge, and never fills a nickname into a
   custodied target; an import card that carries only names and cannot
   resolve the operator counts every holder as one with authority.
-  `FindByNickname` orders a shared nickname the same way, without the
-  match-kind step. When `operator_contact_id` or the legacy owner name is
-  configured, the contact store learns the operator from the same pinned
-  record custody and `IsOwner` use, so notifications, lookups and context
-  all resolve a shared name alike. Under the sole-admin fallback nothing
-  is pinned, so a shared name orders by zone, then match kind, then ID.
-  The legacy owner name is itself resolved at startup, before any pin
-  exists, so it orders by zone and match kind alone: a `known` record
-  cannot take it from a record above `known` that goes by it as a
-  nickname. A
+  `FindByNickname`, which no resolution path calls, orders a shared
+  nickname by the same bands and then takes the lowest ID. When
+  `operator_contact_id` or the legacy owner name is configured, the
+  contact store learns the operator from the same pinned record custody
+  and `IsOwner` use, so notifications, lookups and context all resolve a
+  shared name alike. Under the sole-admin fallback nothing is pinned, so
+  the admin stands with every other record above `known`, and a name it
+  shares exactly with one of them is a tie. The legacy owner name is
+  itself resolved at startup, before any pin exists, so it has two bands
+  only: a `known` record cannot take it from a record above `known` that
+  goes by it as a nickname, and two records at the same standing that
+  hold it pin no operator at all; startup warns with the tie and both
+  `contact_id` values, and `identity.operator_contact_id` is the fix. A
   short form is not protected the way a formatted name or nickname is:
   any contact given the same first name makes it ambiguous, so the handle
   the operator is notified by belongs in their formatted name or
@@ -619,7 +633,8 @@ The rules are forward-only. Addresses added to elevated contacts before
 they shipped keep matching, so reviewing them is the operator's job,
 through CardDAV or `/v1/contacts`. The same holds for routing facts and
 for a name or nickname two contacts already share, though name resolution
-now prefers the one with authority and the fork audit reports the shared
+now prefers the one with authority, reaches neither of two at the same
+standing, and the fork audit reports the shared
 names, addresses, and numbers involving one that can misroute. One change
 reaches
 existing rows at upgrade: delivery now reads every letter case of a

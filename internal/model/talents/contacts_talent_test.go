@@ -42,6 +42,11 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		talent string
 		want   string
 	}{
+		{"standing decides between exact holders", "contacts_lookup", "standing decides: the operator's own contact first, then a contact above `known`, then a `known` one"},
+		{"an exact tie at one standing returns none", "contacts_lookup", "Two or more at the same standing are a tie, and the lookup returns none of them"},
+		{"a formatted name does not beat a nickname", "contacts_lookup", "Holding the name as a formatted name does not beat holding it as a nickname, and no ID breaks the tie"},
+		{"a tie is not settled by a first name", "contacts_lookup", "the lookup tries no given name or first word after a tie"},
+		{"a tied formatted name needs its id", "contacts_lookup", "then only its `contact_id` tells it apart"},
 		{"first names need a unique holder", "contacts_lookup", "the first word of its formatted name, and then exactly one contact must fit"},
 		{"authority breaks no first-name tie", "contacts_lookup", "the lookup returns neither, whatever their zones"},
 		{"ambiguity lists ids and fields", "contacts_lookup", "`contact_id`, and the field it matched"},
@@ -57,6 +62,9 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"ambiguity: query rows carry ids", "contacts_lookup", "ahead of any other match, each with its `contact_id`, so it reaches the ones the error left out while no more than 50 share the name"},
 		{"query rows carry ids", "contacts_lookup", "Each row carries the contact's `contact_id` and trust zone"},
 		{"routing shares the first-name rule", "contacts_save", "a first name two contacts share reaches neither"},
+		{"routing reaches no tied holder", "contacts_save", "and none of two or more at the same standing"},
+		{"a same-standing nickname splits both", "contacts_save", "a second contact at the same standing holding it exactly leaves the name reaching neither"},
+		{"check a nickname before giving it", "contacts_save", "check with `contact_lookup` that no contact at its standing already goes by it"},
 		{"descriptions reach no one", "contacts_save", "addressed by a description (\"the plumber\") reaches no one"},
 		{"forget by ambiguous name removes nothing", "contacts_save", "resolves to neither and removes nothing"},
 		{"forget result check", "contacts_save", "nickname or first-name match can land on a record you did not mean"},
@@ -68,11 +76,14 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"recipients share the first-name rule", "notifications", "a first name two contacts share reaches neither"},
 		{"recipients ignore free text", "notifications", "Notes, orgs, and AI summaries never resolve a recipient"},
 		{"recipient retry", "notifications", "send again with the full formatted name of the one you mean"},
+		{"recipients: a tie reaches no one", "notifications", "two or more at the same standing are a tie that reaches none of them"},
+		{"recipients: a tied formatted name goes to the operator", "notifications", "unless a tie leaves it no other name, and then ask the operator which contact should keep the name"},
 		{"recipients: the list is bounded", "notifications", "The error lists up to five of the contacts that share it"},
 		{"recipients: query finds the rest", "notifications", "`contact_lookup` with that first name as `query` lists ahead of any other match while no more than 50 share it"},
 		{"trailhead: names only", "people-trailhead", "never through what a note says about someone"},
-		{"trailhead: exact holders need no error", "people-trailhead", "one is chosen without an error"},
-		{"trailhead: only the short-form case is an error", "people-trailhead", "A name is an error only when no contact holds it that way and several have it as a given name or first word"},
+		{"trailhead: the most standing needs no error", "people-trailhead", "the one with the most standing is chosen without an error"},
+		{"trailhead: a tie at one standing is an error", "people-trailhead", "Two or more at the same standing are an error"},
+		{"trailhead: so is a shared first name", "people-trailhead", "and so is a name no contact holds that way that several have as a given name or first word"},
 		{"trailhead: carry the id", "people-trailhead", "the error lists up to five of them with their `contact_id`"},
 		{"trailhead: query lists the rest while they fit", "people-trailhead", "lists every one of them, each with its `contact_id`, ahead of any other match while no more than 50 share it"},
 	}
@@ -100,6 +111,11 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"forget lists every id", "the error lists each `contact_id`"},
 		{"query stops at exactly 50", "says so when it stops at 50"},
 		{"query lists the rest without a bound", "name as `query` lists the rest"},
+		{"a formatted name breaks a tie", "formatted-name match before a"},
+		{"the lowest id breaks a tie", "then the lowest ID"},
+		{"any exact holder is chosen without an error", "one is chosen without an error"},
+		{"only the short-form case is an error", "A name is an error only when no contact holds it that way"},
+		{"a known duplicate takes the notifications", "between two `known` contacts it can take their"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {

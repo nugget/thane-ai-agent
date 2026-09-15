@@ -759,7 +759,9 @@ to a Home Assistant person, and copy a duplicate's addresses onto a record
 above `known` only in the operator's own message; no model-facing tool
 renames a contact, removes an address, or moves a person binding. Until
 the fix, a name lookup prefers the record with authority when both answer
-to the name as a formatted name or nickname, though a first name still
+to the name as a formatted name or nickname, and reaches neither when
+both stand alike (two `known` records, or two above `known`), though a
+first name still
 reaches a `known` record whose whole name it is, and
 `contact_dossier_write` will not start a second dossier for a name sibling
 that looks like the same person and has one (see

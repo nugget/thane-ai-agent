@@ -204,11 +204,21 @@ contact's formatted name or nickname, case-insensitive:
 ```
 
 When several contacts hold the name as their formatted name or
-nickname, you get one of them: the operator's own contact first, then
-a contact above `known`, then a formatted-name match before a nickname
-match, then the lowest ID. So a `known` contact whose formatted name
-or nickname a contact above `known` also goes by is never what that
-name returns.
+nickname, standing decides: the operator's own contact first, then a
+contact above `known`, then a `known` one. So a `known` contact whose
+formatted name or nickname a contact above `known` also goes by is
+never what that name returns. Two or more at the same standing are a
+tie, and the lookup returns none of them: two `known` contacts both
+nicknamed Ally, or a household Bob beside a trusted Robert nicknamed
+Bob, since both are above `known`. Holding the name as a formatted
+name does not beat holding it as a nickname, and no ID breaks the tie,
+because nothing in the records says which person is meant. The error
+lists them the way the first-name error below does, and the lookup
+tries no given name or first word after a tie. Retry with the full
+formatted name of the one you mean, unless that is the tied name
+itself: then only its `contact_id` tells it apart, so pass that to a
+tool that takes one, and otherwise ask the operator which contact
+should keep the name.
 
 Only when no contact holds the name that way does the lookup try each
 contact's given name and the first word of its formatted name, and
@@ -474,15 +484,18 @@ on whom.
 A name or nickname is how a person is found: notifications, decision
 requests, and lookups find the contact whose formatted name or
 nickname it is, the operator's own contact first, then one above
-`known`, then a formatted-name match before a nickname match. Only
-when no contact holds the name that way do they take the one contact
-whose given name or first word it is, and a first name two contacts
-share reaches neither. Conversation context does the same when a
-channel has not bound the sender to a contact. A second contact answering to a person's name
-still splits them: between two `known` contacts it can take their
-notifications and decision requests, and a first name that is another
-contact's whole name ("Bob" beside "Bob Smith") reaches that contact,
-not them.
+`known`, and none of two or more at the same standing. Only when no
+contact holds the name that way do they take the one contact whose
+given name or first word it is, and a first name two contacts share
+reaches neither. Conversation context does the same when a channel has
+not bound the sender to a contact. A second contact answering to a
+person's name still splits them: a second contact at the same standing
+holding it exactly leaves the name reaching neither, so their
+notifications and decision requests by that name go nowhere, and a
+first name that is another contact's whole name ("Bob" beside "Bob
+Smith") reaches that contact, not them. Before giving a contact a
+nickname, check with `contact_lookup` that no contact at its standing
+already goes by it.
 
 - **Changing the nickname** of a contact above `known` or of the
   operator's own follows the first rule for addresses: only in the

@@ -22,10 +22,18 @@ func TestContactNameRuleTeachesResolution(t *testing.T) {
 		"none is chosen", "lists up to five of them", "full formatted name, trust zone and contact_id",
 		"counts the rest, which contact_lookup with the name as query lists ahead of any other match",
 		"each with its contact_id, up to 50",
+		"two or more at the same standing (both above known, or both known) are a tie",
+		"whichever holds it as a formatted name and whichever as a nickname",
+		"When a name is tied, or two or more contacts fit by given name or first word, none is chosen",
 	} {
 		if !strings.Contains(contactNameRule, want) {
 			t.Errorf("contactNameRule lacks %q: %s", want, contactNameRule)
 		}
+	}
+	// A tool that takes only a name cannot retry a tied contact whose
+	// formatted name is the tied name, so its retry says what to do then.
+	if want := "unless that is the tied name itself: then only its contact_id tells it apart, so ask the operator which contact should keep the name."; !strings.HasSuffix(contactNameRetryByName, want) {
+		t.Errorf("contactNameRetryByName = %q, want it to end with %q", contactNameRetryByName, want)
 	}
 }
 

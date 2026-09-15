@@ -176,9 +176,13 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_save nickname", parameterDescription("contact_save", "nickname"), []string{
 			"formatted name or nickname", "operator's own contact wins, then one above known", "in every turn", "already goes by", "operator's own message", "above known",
+			"two or more at the same standing are a tie that reaches none of them", "makes the name reach neither",
 		}},
 		{"contact_lookup", registry.Get("contact_lookup").Description, []string{
-			"formatted name or nickname", "operator's own contact wins, then one above known", "formatted-name match before a nickname match",
+			"formatted name or nickname", "operator's own contact wins, then one above known",
+			"Two or more holders at the same standing, both above known or both known, are a tie: it returns none of them",
+			"whichever holds the name as a formatted name and whichever as a nickname", "tries no given name or first word",
+			"those holding it as a formatted name or nickname first", "only its contact_id tells it apart",
 			"given name and the first word", "exactly one contact must fit", "whatever their zones", "contact_id, trust zone and the field it matched",
 			"retry with the full formatted name", "never matches notes", "known duplicate", "contact_directory",
 			"lists up to five of them", "query set to the same name lists every contact that fits ahead of any other match",
@@ -195,6 +199,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
 			"exactly one of name or contact_id", "as contact_lookup resolves it", "operator's own contact first, then one above known",
+			"none when two or more at the same standing hold it", "A name that resolves to none removes nothing",
 			"Forgot contact:", "above known", "operator's own contact", "Home Assistant person", "in every turn", "by name or by contact_id", "CardDAV",
 			"known duplicate", "with their UUIDs", "no exact holder", "carry it as a nickname",
 		}},
