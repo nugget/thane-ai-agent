@@ -255,6 +255,10 @@ type App struct {
 	// Email manager (for Close on shutdown)
 	emailService *email.Service
 
+	// emailReviewWake wakes email review loops on queued review work;
+	// nil when no account names a review_loop.
+	emailReviewWake *emailReviewWaker
+
 	// Signal bridge
 	signalClient *sigcli.Client
 	signalBridge *sigcli.Bridge

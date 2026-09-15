@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
 
 // folderCacheMaxAge is how old a cached folder listing may be before
@@ -53,9 +54,11 @@ type ServiceDependencies struct {
 	// decision and may only refuse it. Nil inspects nothing.
 	Inspector Inspector `json:"-"`
 
-	// WakeTarget overrides the loop that receives new-mail wakes. Nil
-	// means [DefaultHandlerLoopName].
-	WakeTarget *messages.LoopWakeTarget `json:"-"`
+	// Queue is the loop work queue that review work goes into: a draft
+	// an unattended turn writes on an account with a review_loop, and a
+	// message email_escalate hands over. Nil means nothing is queued for
+	// review and email_escalate refuses.
+	Queue *loopqueue.Store `json:"-"`
 
 	// Logger receives account, poller, and tool diagnostics. Nil means
 	// the default logger.
@@ -85,10 +88,18 @@ type Service struct {
 	// service was built without a state store.
 	state *opstate.Store
 
-	// draftsMu serializes every draft-ledger read-modify-write together
-	// with the IMAP work that proves it, so two calls never race one
-	// entry. It is always taken before any Client's lock, never after.
-	draftsMu sync.Mutex
+	// drafts holds the per-account draft-ledger locks (draft_lock.go).
+	drafts draftLocks
+
+	// queue holds review work (review_queue.go). It is nil when the
+	// service was built without one.
+	queue *loopqueue.Store
+
+	// reviewMu guards pendingReview, the per-account count of queued
+	// review work the Email Accounts block renders. Counts are measured
+	// by the poller and after each enqueue, never at render time.
+	reviewMu      sync.Mutex
+	pendingReview map[string]reviewCount
 
 	foldersMu sync.Mutex
 	folders   map[string]folderSnapshot
@@ -143,6 +154,8 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 		signers:       deps.Signers,
 		inspector:     deps.Inspector,
 		state:         deps.State,
+		queue:         deps.Queue,
+		pendingReview: make(map[string]reviewCount),
 	}
 	s.tools = newTools(s, deps.Contacts, deps.Logger)
 	s.contextProvider = newContextProvider(s)
@@ -154,11 +167,7 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 		if deps.MessageBus == nil {
 			return nil, fmt.Errorf("email polling is enabled but no message bus was provided: new mail could not wake a handler. Provide a bus, or set email.poll_interval: 0 to disable polling")
 		}
-		opts := []PollerOption{WithContactResolver(deps.Contacts), WithInteractionRecorder(deps.Interactions), WithMessageBus(deps.MessageBus)}
-		if deps.WakeTarget != nil {
-			opts = append(opts, WithDefaultWakeLoop(*deps.WakeTarget))
-		}
-		s.poller = newPoller(s, deps.State, deps.Logger, opts...)
+		s.poller = newPoller(s, deps.State, deps.Logger, WithContactResolver(deps.Contacts), WithInteractionRecorder(deps.Interactions), WithMessageBus(deps.MessageBus))
 	}
 	return s, nil
 }

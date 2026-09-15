@@ -169,7 +169,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		// The ledger stays locked from the conflict check through the
 		// entry the draft gets, so two replies to one message cannot both
 		// pass the check.
-		unlock := s.lockDraftLedger()
+		unlock := s.lockDraftLedger(req.Account.Name)
 		defer unlock()
 		if err := s.refuseDraftConflict(ctx, req, decision, draftsFolder); err != nil {
 			return SendOutcome{}, err
@@ -245,6 +245,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		outcome.DraftUID = appended.UID
 		outcome.DraftID = s.recordDraft(ctx, req, composed, appended)
 		outcome.DraftUntracked = s.state != nil && outcome.DraftID == ""
+		s.queueDraftForReview(ctx, req, decision, outcome.DraftID)
 	case DispositionSent:
 		wire := composed.Bytes
 		if signer := s.signerFor(cfg.Name); signer != nil {

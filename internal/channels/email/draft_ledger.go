@@ -244,16 +244,6 @@ func (s *Service) requireDraftLedger() error {
 	return nil
 }
 
-// lockDraftLedger takes draftsMu when there is a ledger to guard and
-// returns its release.
-func (s *Service) lockDraftLedger() func() {
-	if s.state == nil {
-		return func() {}
-	}
-	s.draftsMu.Lock()
-	return s.draftsMu.Unlock
-}
-
 // draftEntries returns an account's entries, or every account's when
 // account is "", most recently updated first. An entry that does not
 // parse is logged and skipped, so one corrupt row cannot hide the rest.

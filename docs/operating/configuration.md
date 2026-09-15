@@ -273,6 +273,7 @@ the trust gate.
         voice: "First person as Alice; brief; sign with her first name only."
         move_into: [role:junk]   # the default for an operator mailbox
         filing_note: "Server rules file lists and receipts; INBOX is what is left for Alice."
+        review_loop: email-draft-review   # optional second pass; unset means none
 ```
 
 Each account's `mailbox` block says whose mailbox it is, how mail
@@ -285,11 +286,9 @@ which Thane helps with but does not own. Any other value is refused at
 startup. On an operator mailbox `email_read` leaves mail unread unless
 the call asks otherwise, and a turn the operator is not present for
 cannot mark mail seen, whether by reading it or with `email_mark`; the
-operator's own turn can. The built-in `email-default-handler` leaves
-operator mail in INBOX, moves only obvious spam from an unmatched sender
-with `destination_role: junk` (an account where neither `junk_folder`
-nor the server names a junk folder keeps the spam where it is), flags
-what needs the operator, and neither replies nor drafts. `voice` is a
+operator's own turn can. New mail on an operator mailbox wakes the
+built-in `email-owner-triage` unless `wake_loop` names another loop (see
+"Passes" below). `voice` is a
 note of at most 500 bytes on how mail from the account should sound; a
 longer one is refused.
 
@@ -343,14 +342,112 @@ address included, and waits in the operator's drafts folder, under
 their `default_from` and in their voice, for them to review and send;
 an automated mailbox, a failed lookup, and a denied domain are still
 refused. Add `draft_gate: strict` under `policy` to keep the full trust
-gate there. The built-in handler
-only flags on this mailbox and neither replies nor drafts, so drafts
-there come from turns the operator asks for.
+gate there.
+
+### Passes: wake_loop and review_loop
+
+```yaml
+      mailbox:
+        owner: operator
+        wake_loop: email-owner-triage     # the default for an operator mailbox
+        review_loop: email-draft-review   # unset (the default) means no review pass
+        review_delay: 15m                 # the default
+        review_max_wait: 2h               # the default
+```
+
+Each account's new mail wakes one loop, its `wake_loop`, with one event
+per message, and an account may also name a `review_loop` that looks
+at its mail afterwards. Both must name an event-driven loop definition:
+a built-in, a core `loops/` document, or a `loops.definitions` entry.
+Startup refuses a name with no definition or with a definition of
+another operation, and the error names the account and the key;
+`wake_loop` is checked only when polling is on, because nothing else
+wakes it. `review_loop` must also differ from `wake_loop`,
+which is checked when the config loads.
+[Loop Definitions](../reference/loop-definitions.md#built-in-email-loops)
+lists the built-ins' specs and how to override one.
+
+`wake_loop` defaults to the built-in `email-owner-triage` on an
+operator mailbox and to `email-default-handler` everywhere else.
+`email-owner-triage` prefers local models (`local_only: "true"`, a
+routing preference, so a cloud model can still take the turn when no
+local one can) and does one thing per message: it files obvious spam
+from an unmatched sender with `destination_role: junk` (an account
+where neither `junk_folder` nor the server names a junk folder keeps
+the spam where it is), flags what needs the operator, drafts a plain
+answer as the operator where the account has `access: send` and a
+drafts folder, always with `draft: true`, hands a message it cannot
+judge to the review pass with `email_escalate`, or leaves the message
+alone. It reads with `mark_seen: false`, never moves mail anywhere but
+junk, and cannot use `email_send`.
+
+Before `wake_loop` existed, operator mailboxes woke
+`email-default-handler`. To keep that hands-off behaviour, which only
+flags and files spam and neither replies nor drafts, set
+`wake_loop: email-default-handler` on the account before upgrading.
+Otherwise an operator mailbox with `access: send` and a drafts folder
+starts receiving drafts from the triage pass.
+
+`review_loop` is empty by default, which means no second pass, and
+`email_escalate` is then refused with the flag to set instead. When it
+is set, every draft written on the account in a turn the operator is
+not present for, by any loop but the review loop itself, is queued for
+the review loop as `draft:<account>:<draft_id>`, and `email_escalate` queues a
+message as `message:<account>:<message_id>`. Queueing the same subject
+again replaces the item already waiting. Nothing about review is
+written to the mailbox or the draft ledger, and there is no review or
+approval stage: the queue is the only record that work waits. The
+review loop gets `queue_pull`, `queue_ack`, and `queue_defer` over its
+own queue when it starts, whether it is the built-in or a loop of your
+own. The built-in `email-draft-review` may use cloud models, asks for a
+higher quality floor than the triage pass, revises or withdraws queued
+drafts for accuracy and tone, and handles escalated messages the way
+the triage pass would, with more care. Like the triage pass, it cannot
+use `email_send` and drafts every reply.
+
+The review loop is woken only while its queue holds work, never for an
+empty one. `review_delay` (default `15m`) is how long work gathers after
+it arrives, so a burst becomes one review. `review_max_wait` (default
+`2h`) bounds how long a steady stream can put that wake off, and may
+not be shorter than `review_delay`. Both are Go durations, and a
+negative one is refused. The loop is also woken at startup for work
+queued before a restart, and again when work its last wake announced,
+such as a batch larger than one pull or an item it deferred, is still
+queued `review_delay` after that wake, though never sooner than a
+minute after it. That recheck runs on its own timer, whether or not
+mail is polled. Work queued since the last wake is left to its own
+`review_delay` and `review_max_wait`, so a recheck never cuts a burst
+short. A wake that cannot read the queue within 30 seconds is logged
+and tried again a minute later, whatever the `review_delay`. Accounts
+sharing a review loop share one wake, shaped by the shortest delay and
+wait among them.
+
+After every poll the poller also reconciles the draft ledger of each
+account with an open Thane draft whose poll succeeded, bounded to 10
+seconds per account, so a draft the operator sent, edited, or
+discarded closes within one poll, and it recounts the review queues.
+The ledger is locked per account, so a slow drafts folder holds
+drafting on its own account only.
+
+The built-in passes are registered only when an account routes to
+them, and a core `loops/` document or `loops.definitions` entry of the
+same name replaces one. The model sees `wake_loop` in the account's
+Email Accounts entry only when it differs from the owner's default.
+Whenever a review loop is set, it sees `review_loop` with
+`pending_review`, the count of the account's queued review work, and
+`pending_review_as_of`, when that was counted at the last poll or
+enqueue. Rendering the entry never counts the queue.
 
 `poll_interval` is how often, in seconds, every account's INBOX is checked
 for new mail; it defaults to 300 when email is configured and `0` disables
-polling, which also removes the built-in `email-poller` and
-`email-default-handler` loops. See
+polling, which also removes the built-in `email-poller`,
+`email-default-handler`, and `email-owner-triage` loops. With polling
+off, no new mail is routed and `wake_loop` is not checked. An
+account's `review_loop` still receives drafts and escalations and is
+still woken for them, so it is still checked at startup, and the
+built-in `email-draft-review` is still added when an account names
+it. Its recheck does not depend on polling, so work a wake left queued
+still wakes it again. See
 [Event Sources](../reference/event-sources.md) for what a new-mail wake
 carries. A loop that should only ever see one mailbox binds it with
 `bindings: {email_account: <name>}`; see

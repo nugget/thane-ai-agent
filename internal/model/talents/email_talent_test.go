@@ -362,3 +362,87 @@ func TestEmailTalentTeachesDraftEditPath(t *testing.T) {
 		})
 	}
 }
+
+// TestEmailTalentTeachesTwoPasses pins the slice 5 teaching: the wake
+// loop and the review loop in the entry, what queues review work and
+// that nothing records it, escalate versus flag, the review pass's
+// queue procedure with its queue_ack and queue_defer discipline, and the
+// border lines that keep a loop from triaging mail twice. It also pins
+// that nothing teaches a review marker, a local-only requirement, or a
+// queue tool the review loop does not carry.
+func TestEmailTalentTeachesTwoPasses(t *testing.T) {
+	text := emailTalentText(t)
+	present := []struct {
+		name   string
+		talent string
+		want   string
+	}{
+		{"shape bullet names escalate", "email", "**You want a more capable pass to look at a message** — call `email_escalate`"},
+		{"entry shows routing", "email", "An entry shows `wake_loop` when the account's new mail wakes a loop other than its owner's default, and `review_loop` with `pending_review`"},
+		{"wake metadata flags", "email", "so `\\Flagged` there means it is already flagged"},
+		{"review wake is unattended", "email", "A poller wake, a review wake, a scheduled loop"},
+		{"passes section", "email", "## Two passes over new mail"},
+		{"routing is configuration", "email", "is the operator's configuration, and no tool changes it"},
+		{"triage does one thing", "email", "The triage pass does exactly one thing per message"},
+		{"review woken by queued work", "email", "It is woken by queued work, never by the mail itself or by a timer, and only while work waits."},
+		{"drafts queue themselves", "email", "by any loop but the review loop itself, as `draft:<account>:<draft_id>`"},
+		{"escalations queue by message id", "email", "as `message:<account>:<message_id>`, keyed by Message-ID rather than UID"},
+		{"queueing coalesces", "email", "replaces the item already waiting instead of adding a second"},
+		{"pending_review is a snapshot", "email", "`pending_review_as_of` says when it was counted"},
+		{"no review record", "email", "no record that a draft was reviewed or approved"},
+		{"escalate or flag section", "email", "### Escalate or flag"},
+		{"choose by who acts", "email", "Choose by who has to act"},
+		{"operator decisions are flagged", "email", "A more capable model has none of those either, so escalating such a message only delays the flag."},
+		{"no review_loop means flag", "email", "so `email_escalate` is refused there with nothing queued, and the refusal gives the `email_mark` call to make instead"},
+		{"drafted messages need no escalation", "email", "A message you just drafted an answer to is already queued through its draft."},
+		{"escalate changes nothing", "email", "Escalating changes nothing in the mailbox"},
+		{"null count is not zero", "email", "is null when it could not be counted, which is not zero"},
+		{"no second triage loop", "email", "Do not build one to triage new mail message by message"},
+		{"a drafted result may be queued", "email_respond", "is also queued for that review pass, which may revise or withdraw it"},
+		{"first pass hands nothing over", "email_drafts", "so there is nothing to hand over; `email_escalate` is for a message you did not answer"},
+		{"queue section", "email_drafts", "### When your work comes from a queue"},
+		{"queue, not the ledger", "email_drafts", "Take work only from the queue, never from `email_drafts`"},
+		{"pull once", "email_drafts", "Call `queue_pull` once, with a `limit` you can finish in this wake, at most 10."},
+		{"message subject procedure", "email_drafts", "search INBOX the same way when that folder no longer holds it"},
+		{"review drafts are not re-queued", "email_drafts", "A draft you write here is not queued back to you, so write it finished."},
+		{"ack once the outcome is written", "email_drafts", "Call `queue_ack` for each subject once its outcome is written"},
+		{"never ack early", "email_drafts", "never acknowledge before the call that settles it has answered"},
+		{"never leave settled work", "email_drafts", "never leave a settled item unacknowledged"},
+		{"defer only on connection failure", "email_drafts", "Call `queue_defer` instead only when the account's mailbox could not be reached at all"},
+		{"doubt is not deferral", "email_drafts", "Doubt is not a reason to defer."},
+		{"retained_newer", "email_drafts", "When `queue_ack` answers `retained_newer`"},
+		{"answered mail is not drafted", "email", "A message whose `flags` include `\\Answered` has already been replied"},
+		{"queued message already answered", "email_drafts", "If its `flags` include `\\Answered`, someone has already"},
+		{"summary names the message subject", "email_drafts", "its `message_subject` (the"},
+		{"stop after the batch", "email_drafts", "Stop after this batch."},
+		{"ledger path remains", "email_drafts", "### When you work from the ledger"},
+	}
+	for _, tt := range present {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(text[tt.talent], tt.want) {
+				t.Errorf("talent %s must contain %q", tt.talent, tt.want)
+			}
+		})
+	}
+
+	absent := []struct {
+		name string
+		gone string
+	}{
+		{"design's router factor", "local_required"},
+		{"design's draft stages", "stage: staged"},
+		{"design's ready stage", "stage: ready"},
+		{"a queue tool the review loop lacks", "queue_enqueue"},
+		{"curators are not named", "curator"},
+		{"the old coupling paragraph", "the coupling is a queue"},
+	}
+	for _, tt := range absent {
+		t.Run(tt.name, func(t *testing.T) {
+			for name, body := range text {
+				if strings.Contains(body, tt.gone) {
+					t.Errorf("talent %s still contains %q", name, tt.gone)
+				}
+			}
+		})
+	}
+}
