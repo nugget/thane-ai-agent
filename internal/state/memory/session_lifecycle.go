@@ -51,12 +51,9 @@ type lifecycleMessage struct {
 	active bool
 }
 
-// transitionSession is deliberately restricted to the production shared
-// database. Cross-database copy semantics cannot implement these guarantees.
+// transitionSession commits the conversation boundary and all affected rows
+// together on the shared database.
 func (s *ArchiveStore) transitionSession(conversationID string, op sessionTransition) (*sessionTransitionResult, error) {
-	if s.messagesDB != s.db || s.msgTableName != "messages" || s.tcTableName != "tool_calls" {
-		return nil, fmt.Errorf("session lifecycle requires the shared conversation database")
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin session transition: %w", err)

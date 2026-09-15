@@ -157,6 +157,9 @@ func TestEngine_TextOnlyResponse(t *testing.T) {
 	if len(exec.calls) != 0 {
 		t.Errorf("no tools should have been called, got %v", exec.calls)
 	}
+	if len(result.ToolsUsed) != 0 {
+		t.Errorf("text-only response reported tool use: %v", result.ToolsUsed)
+	}
 }
 
 func TestEngine_SingleToolCallThenText(t *testing.T) {
@@ -224,6 +227,31 @@ func TestEngine_MultipleToolCalls(t *testing.T) {
 	}
 	if len(exec.calls) != 2 {
 		t.Errorf("executor calls = %v, want 2 calls", exec.calls)
+	}
+}
+
+func TestEngine_ToolsUsedAcrossIterations(t *testing.T) {
+	first := toolCallResponse(
+		makeToolCall("search", map[string]any{"q": "first"}),
+		makeToolCall("read", map[string]any{"path": "/x"}),
+	)
+	first.Message.Content = "I will search and inspect the document."
+	mock := &mockLLM{responses: []*llm.ChatResponse{
+		first,
+		toolCallResponse(makeToolCall("search", map[string]any{"q": "follow-up"})),
+		textResponse("Done."),
+	}}
+	exec := &mockExecutor{results: map[string]string{"search": "found", "read": "contents"}}
+
+	result, err := (&Engine{}).Run(context.Background(), baseCfg(mock, exec), baseMessages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ToolsUsed) != 2 || result.ToolsUsed["search"] != 2 || result.ToolsUsed["read"] != 1 {
+		t.Errorf("tools used = %v, want search:2 read:1", result.ToolsUsed)
+	}
+	if got := strings.Join(exec.calls, ","); got != "search,read,search" {
+		t.Errorf("executed tools = %q, want search,read,search", got)
 	}
 }
 
@@ -566,6 +594,9 @@ func TestEngine_ToolLoopDetection(t *testing.T) {
 	}
 	if !loopDetected {
 		t.Error("expected tool_loop break reason in iterations")
+	}
+	if result.ToolsUsed["search"] != 3 || len(exec.calls) != 3 {
+		t.Errorf("tool-loop guard counted a refused call: tools used = %v, executed = %v", result.ToolsUsed, exec.calls)
 	}
 }
 

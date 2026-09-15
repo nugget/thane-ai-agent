@@ -282,12 +282,7 @@ type ContextAdvertiser interface {
 
 // SessionArchiver handles session lifecycle and message archiving.
 type SessionArchiver interface {
-	// ArchiveConversation archives all messages from a conversation before clearing.
-	ArchiveConversation(conversationID string, messages []memory.Message, reason string) error
-	// StartSession begins a new session for a conversation.
-	StartSession(conversationID string) (sessionID string, err error)
-	// EndSession ends the current session.
-	EndSession(sessionID string, reason string) error
+	memory.SessionLifecycle
 	// ActiveSessionID returns the current session ID, or empty if none.
 	ActiveSessionID(conversationID string) string
 	// EnsureSession starts a session if none is active, returns the session ID.
@@ -297,8 +292,6 @@ type SessionArchiver interface {
 	// LinkPendingIterationToolCalls links archived tool calls to their
 	// parent iterations using stored tool_call_ids.
 	LinkPendingIterationToolCalls(sessionID string) error
-	// OnMessage is called after each message to track session stats.
-	OnMessage(conversationID string)
 	// ActiveSessionStartedAt returns when the active session began,
 	// or the zero time if there is no active session.
 	ActiveSessionStartedAt(conversationID string) time.Time
@@ -1614,7 +1607,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	defer func() {
 		if err == nil && l.archiver != nil && !req.SkipContext {
 			l.archiver.EnsureSession(convID)
-			l.archiver.OnMessage(convID)
 		}
 	}()
 
@@ -3293,101 +3285,31 @@ func (l *Loop) GetContextWindow() int {
 // window. Durable stores preserve every transcript row and the conversation's
 // metadata; only transient files and active capability tags are cleared.
 func (l *Loop) ResetConversation(conversationID string) error {
-	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
-		if err := lifecycle.ResetSession(conversationID, "reset", ""); err != nil {
-			return fmt.Errorf("reset session: %w", err)
-		}
-		l.finishSessionTransition(conversationID)
-		return nil
-	}
-	l.archiveAndEndSession(conversationID, "reset")
-	l.clearPersistedCapabilityTags(conversationID)
-
-	// Clean up temp files for this conversation.
-	if l.tools != nil {
-		if tfs := l.tools.TempFileStore(); tfs != nil {
-			if err := tfs.Cleanup(conversationID); err != nil {
-				l.logger.Error("failed to clean up temp files on reset",
-					"conversation_id", conversationID,
-					"error", err,
-				)
-			}
-		}
-	}
-
-	if err := l.memory.Clear(conversationID); err != nil {
-		return err
-	}
-
-	// Start a fresh session.
-	if l.archiver != nil {
-		if _, err := l.archiver.StartSession(conversationID); err != nil {
-			l.logger.Error("failed to start new session after reset", "error", err)
-		}
-	}
-
-	return nil
+	return l.resetSession(conversationID, "reset", "")
 }
 
-// CloseSession gracefully closes the current session, archives messages,
-// injects a carry-forward handoff into the new session, and starts a
-// fresh session. Unlike ResetConversation, the carry-forward summary
-// provides continuity across the session boundary.
+// CloseSession closes the current session and starts its successor with an
+// optional carry-forward handoff, preserving the durable transcript.
 func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 	if reason == "" {
 		reason = "close"
 	}
-	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
-		if err := lifecycle.ResetSession(conversationID, reason, carryForward); err != nil {
-			return fmt.Errorf("close session: %w", err)
-		}
-		l.finishSessionTransition(conversationID)
-		return nil
-	}
+	return l.resetSession(conversationID, reason, carryForward)
+}
 
-	// Archive and end current session (same pattern as ResetConversation).
-	l.archiveAndEndSession(conversationID, reason)
-	l.clearPersistedCapabilityTags(conversationID)
-
-	// Clean up temp files for this conversation.
-	if l.tools != nil {
-		if tfs := l.tools.TempFileStore(); tfs != nil {
-			if err := tfs.Cleanup(conversationID); err != nil {
-				l.logger.Error("failed to clean up temp files on close",
-					"conversation_id", conversationID,
-					"error", err,
-				)
-			}
-		}
-	}
-
-	if err := l.memory.Clear(conversationID); err != nil {
-		return fmt.Errorf("clear memory: %w", err)
-	}
-
-	// Start a fresh session.
+func (l *Loop) resetSession(conversationID, reason, carryForward string) error {
 	if l.archiver != nil {
-		if _, err := l.archiver.StartSession(conversationID); err != nil {
-			l.logger.Error("failed to start new session after close", "error", err)
+		if err := l.archiver.ResetSession(conversationID, reason, carryForward); err != nil {
+			return fmt.Errorf("reset session: %w", err)
+		}
+	} else {
+		// The CLI's one-shot agent has an in-memory store and no archiver.
+		// Clearing that ephemeral context does not require a durable boundary.
+		if err := l.memory.Clear(conversationID); err != nil {
+			return fmt.Errorf("clear memory: %w", err)
 		}
 	}
-
-	// Inject carry-forward into the new session as a system message.
-	if carryForward != "" {
-		if cs, ok := l.memory.(interface {
-			AddCompactionSummary(string, string) error
-		}); ok {
-			if err := cs.AddCompactionSummary(conversationID, "[Session Handoff]\n"+carryForward); err != nil {
-				l.logger.Error("failed to inject carry-forward", "error", err)
-			}
-		}
-	}
-
-	l.logger.Info("session closed",
-		"conversation_id", conversationID,
-		"reason", reason,
-		"carry_forward_len", len(carryForward),
-	)
+	l.finishSessionTransition(conversationID)
 	return nil
 }
 
@@ -3398,30 +3320,7 @@ func (l *Loop) CheckpointSession(conversationID, label string) error {
 	if l.archiver == nil {
 		return fmt.Errorf("no archiver configured")
 	}
-	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
-		return lifecycle.CheckpointSession(conversationID, label)
-	}
-
-	messages := l.getAllMessages(conversationID)
-	if len(messages) == 0 {
-		return fmt.Errorf("no messages to checkpoint")
-	}
-
-	reason := "checkpoint"
-	if label != "" {
-		reason = "checkpoint:" + label
-	}
-
-	if err := l.archiver.ArchiveConversation(conversationID, messages, reason); err != nil {
-		return fmt.Errorf("archive checkpoint: %w", err)
-	}
-
-	l.logger.Info("session checkpoint created",
-		"conversation_id", conversationID,
-		"label", label,
-		"messages", len(messages),
-	)
-	return nil
+	return l.archiver.CheckpointSession(conversationID, label)
 }
 
 // SplitSession retroactively splits the current session at a past message
@@ -3433,81 +3332,30 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 	if l.archiver == nil {
 		return fmt.Errorf("no archiver configured")
 	}
-	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
-		reader, ok := l.memory.(interface {
-			CurrentSessionMessages(string) ([]memory.Message, error)
-		})
-		if !ok {
-			return fmt.Errorf("memory backend cannot select a durable session split boundary")
-		}
-		messages, err := reader.CurrentSessionMessages(conversationID)
-		if err != nil {
-			return fmt.Errorf("read split messages: %w", err)
-		}
-		if len(messages) == 0 {
-			return fmt.Errorf("no messages to split")
-		}
-		splitIdx, err := findSplitPoint(messages, atIndex, atMessage)
-		if err != nil {
-			return err
-		}
-		if err := lifecycle.SplitSession(conversationID, messages[splitIdx].ID); err != nil {
-			return fmt.Errorf("split session: %w", err)
-		}
-		l.clearPersistedCapabilityTags(conversationID)
-		return nil
+	reader, ok := l.memory.(interface {
+		CurrentSessionMessages(string) ([]memory.Message, error)
+	})
+	if !ok {
+		return fmt.Errorf("memory backend cannot select a durable session split boundary")
 	}
-
-	messages := l.getAllMessages(conversationID)
+	messages, err := reader.CurrentSessionMessages(conversationID)
+	if err != nil {
+		return fmt.Errorf("read split messages: %w", err)
+	}
 	if len(messages) == 0 {
 		return fmt.Errorf("no messages to split")
 	}
-
 	splitIdx, err := findSplitPoint(messages, atIndex, atMessage)
 	if err != nil {
 		return err
 	}
-
-	preSplit := messages[:splitIdx]
-	postSplit := messages[splitIdx:]
-
-	// Archive pre-split messages.
-	if err := l.archiver.ArchiveConversation(conversationID, preSplit, "split"); err != nil {
-		return fmt.Errorf("archive pre-split messages: %w", err)
-	}
-
-	// End the current session at the split-point timestamp.
-	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
-		if err := l.archiver.EndSession(sid, "split"); err != nil {
-			l.logger.Error("failed to end session at split point", "error", err)
-		}
+	if err := l.archiver.SplitSession(conversationID, messages[splitIdx].ID); err != nil {
+		return fmt.Errorf("split session: %w", err)
 	}
 	l.clearPersistedCapabilityTags(conversationID)
-
-	// Start a new session for the post-split messages.
-	if _, err := l.archiver.StartSession(conversationID); err != nil {
-		l.logger.Error("failed to start new session after split", "error", err)
-	}
-
-	// Rebuild working memory with only the post-split messages.
-	if err := l.memory.Clear(conversationID); err != nil {
-		return fmt.Errorf("clear memory for split: %w", err)
-	}
-	for _, m := range postSplit {
-		if err := l.memory.AddMessage(conversationID, m.Role, m.Content, m.Origin); err != nil {
-			l.logger.Error("failed to re-add post-split message", "error", err, "role", m.Role)
-		}
-	}
-
-	l.logger.Info("session split",
-		"conversation_id", conversationID,
-		"pre_split_msgs", len(preSplit),
-		"post_split_msgs", len(postSplit),
-	)
 	return nil
 }
 
-// getAllMessages retrieves all messages for a conversation, preferring the
 // now returns the current time via the configurable clock. If nowFunc
 // is nil (e.g., in tests using a bare struct literal), it falls back to
 // time.Now.
@@ -3518,7 +3366,7 @@ func (l *Loop) now() time.Time {
 	return time.Now()
 }
 
-// full-fidelity GetAllMessages when available.
+// getAllMessages prefers full-fidelity history over the active prompt window.
 func (l *Loop) getAllMessages(conversationID string) []memory.Message {
 	if full, ok := l.memory.(interface {
 		GetAllMessages(string) []memory.Message
@@ -3559,37 +3407,18 @@ func (l *Loop) ConversationTranscript(conversationID string) string {
 	return b.String()
 }
 
-// archiveAndEndSession archives all messages and ends the active session.
-// Errors are logged but not propagated — callers should not be blocked by
-// archive failures.
+// archiveAndEndSession closes a durable conversation during shutdown.
+// Failures are logged because shutdown must continue draining other work.
 func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 	if l.archiver == nil {
 		return
 	}
-	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
-		if err := lifecycle.CloseConversation(conversationID, reason); err != nil {
-			l.logger.Error("failed to close conversation", "conversation_id", conversationID, "error", err)
-		}
-		return
-	}
-
-	messages := l.getAllMessages(conversationID)
-	if len(messages) > 0 {
-		if err := l.archiver.ArchiveConversation(conversationID, messages, reason); err != nil {
-			l.logger.Error("failed to archive conversation", "error", err)
-		}
-	}
-
-	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
-		if err := l.archiver.EndSession(sid, reason); err != nil {
-			l.logger.Error("failed to end session", "error", err)
-		}
+	if err := l.archiver.CloseConversation(conversationID, reason); err != nil {
+		l.logger.Error("failed to close conversation", "conversation_id", conversationID, "error", err)
 	}
 }
 
-// finishSessionTransition releases transient state only after the durable
-// boundary succeeds. Archivers without SessionLifecycle retain the in-memory
-// compatibility path above; the production shared store never copies/deletes.
+// finishSessionTransition releases transient state after the boundary succeeds.
 func (l *Loop) finishSessionTransition(conversationID string) {
 	l.clearPersistedCapabilityTags(conversationID)
 	if l.tools != nil {

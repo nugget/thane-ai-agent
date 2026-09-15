@@ -12,7 +12,7 @@ import (
 // Working memory captures experiential context that mechanical
 // summarisation destroys: emotional tone, conversational arc,
 // relationship temperature, and unresolved threads. The table lives in
-// archive.db alongside session transcripts.
+// the shared database alongside session transcripts.
 type WorkingMemoryStore struct {
 	db         *sql.DB
 	ftsEnabled bool

@@ -127,6 +127,11 @@ Active and archived messages share the `messages` table, differentiated by
 a lifecycle `status` column. FTS5 triggers keep the full-text index in sync
 automatically.
 
+The archive borrows the working store's database connection. Session
+transitions update the existing rows together; external imports insert into
+those same tables. Import cleanup also runs in one transaction, so a failed
+purge retains its messages, tool calls, sessions, and import tracking.
+
 ## Integration with the Agent Loop
 
 1. **Before LLM call:** Load conversation history, query relevant facts,

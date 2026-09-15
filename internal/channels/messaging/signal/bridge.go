@@ -90,7 +90,8 @@ type VisionAnalyzer interface {
 	Analyze(ctx context.Context, rec *attachments.Record) (string, error)
 }
 
-// BridgeConfig holds the dependencies for a Bridge.
+// BridgeConfig holds the dependencies for a Bridge. Client, Runner, Registry,
+// and Mailbox are required by [Bridge.Register].
 type BridgeConfig struct {
 	Client           *Client
 	Runner           AgentRunner
@@ -103,7 +104,7 @@ type BridgeConfig struct {
 	Attachments      AttachmentConfig                                                  // attachment storage configuration
 	AttachmentStore  *attachments.Store                                                // content-addressed store; nil = legacy copy
 	VisionAnalyzer   VisionAnalyzer                                                    // nil disables vision analysis
-	Registry         *loop.Registry                                                    // loop registry for dashboard visibility
+	Registry         *loop.Registry                                                    // owns parent and per-sender loops
 	Mailbox          *loop.Mailbox                                                     // durable data-plane inbox for per-sender loops
 	EventBus         *events.Bus                                                       // event bus for in-flight events
 }
@@ -134,7 +135,8 @@ type Bridge struct {
 	parentID      string                 // loop ID of the parent signal node
 }
 
-// NewBridge creates a Signal message bridge.
+// NewBridge creates a Signal message bridge. Call [Bridge.Register] to validate
+// its execution dependencies and begin receiving messages.
 func NewBridge(cfg BridgeConfig) *Bridge {
 	logger := cfg.Logger
 	if logger == nil {
@@ -187,14 +189,20 @@ func (b *Bridge) LastInboundTimestamp(sender string) (int64, bool) {
 // Register spawns the parent signal loop and returns. Inbound messages
 // are received event-driven via the signal-cli client and dispatched
 // to per-sender child loops. Returns an error if the parent loop
-// cannot be started.
-//
-// If no registry is configured, Register falls back to the legacy
-// blocking Start() behavior.
+// cannot be started or Client, Runner, Registry, or Mailbox is missing.
+// Every inbound turn is durably queued before its read receipt is sent.
 func (b *Bridge) Register(ctx context.Context) error {
+	if b.client == nil {
+		return fmt.Errorf("signal client is required")
+	}
+	if b.runner == nil {
+		return fmt.Errorf("signal runner is required")
+	}
 	if b.registry == nil {
-		go b.Start(ctx)
-		return nil
+		return fmt.Errorf("signal loop registry is required")
+	}
+	if b.mailbox == nil {
+		return fmt.Errorf("signal durable mailbox is required")
 	}
 
 	parentID, err := b.registry.SpawnLoopUnderParentOrCore(ctx, loop.Config{
@@ -236,30 +244,6 @@ func (b *Bridge) Register(ctx context.Context) error {
 	return nil
 }
 
-// Start receives messages from the signal-cli client and routes them
-// through the agent loop until ctx is cancelled. This is the legacy
-// blocking path; prefer Register() for loop-integrated operation.
-func (b *Bridge) Start(ctx context.Context) {
-	b.logger.Info("signal bridge started")
-
-	for {
-		select {
-		case <-ctx.Done():
-			b.logger.Info("signal bridge shutting down")
-			return
-		case env, ok := <-b.client.Messages():
-			if !ok {
-				b.logger.Info("signal message channel closed, bridge stopping")
-				return
-			}
-
-			if err := b.dispatch(ctx, env); err != nil {
-				b.logger.Error("signal dispatch error", "error", err)
-			}
-		}
-	}
-}
-
 // dispatch is the parent loop handler. It filters envelopes
 // (empty source, reactions, no content, rate limits) and fans out
 // valid messages to per-sender child loop mailboxes.
@@ -286,7 +270,7 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 	// text. Intercept them before the content filter.
 	if env.DataMessage != nil && env.DataMessage.Reaction != nil {
 		if env.DataMessage.Reaction.IsRemove {
-			b.handleReaction(ctx, env)
+			b.logReactionRemoval(env)
 			if summary != nil {
 				summary["action"] = "reaction_removed"
 				summary["sender"] = env.Source
@@ -389,18 +373,8 @@ func (b *Bridge) enqueueSenderEnvelope(ctx context.Context, env *Envelope) bool 
 		return false
 	}
 	if b.registry == nil || b.mailbox == nil {
-		// Legacy path with no durable mailbox: run the turn inline and
-		// only report success when it actually handled the message, so
-		// the caller does not send a read receipt for a turn we could
-		// not process (there is no queue here to retry from).
-		if err := b.handleEnvelope(ctx, env, nil); err != nil {
-			b.logger.Warn("signal legacy turn failed, not acking message",
-				"sender", env.Source,
-				"error", err,
-			)
-			return false
-		}
-		return true
+		b.logger.Error("signal message cannot be queued without a registry and durable mailbox", "sender", env.Source)
+		return false
 	}
 	payload, err := json.Marshal(env)
 	if err != nil {
@@ -629,55 +603,15 @@ func firstSignalMailboxSender(items []loop.MailboxItem) string {
 	return ""
 }
 
-// handleMessage processes a single inbound Signal message through the
-// loop-facing request path. The progressFn, if non-nil, is used by the
-// legacy no-registry path to forward in-flight events to loop telemetry.
-func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
-	_ = b.handleEnvelope(ctx, env, progressFn)
-}
-
-// handleReaction processes an inbound emoji reaction. Reaction
-// removals are logged but do not wake the agent. Non-removal
-// reactions are forwarded to the agent loop with contextual hints.
-func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
-	sender := env.Source
+// logReactionRemoval records removals without creating a turn or waking the agent.
+func (b *Bridge) logReactionRemoval(env *Envelope) {
 	reaction := signalReactionEvent(env)
-
-	if reaction.Removed {
-		b.logger.Info("signal reaction removed",
-			"sender", sender,
-			"emoji", reaction.Emoji,
-			"target_author", reaction.TargetAuthor,
-			"target_timestamp", reaction.TargetTimestamp,
-		)
-		return
-	}
-
-	_ = b.handleEnvelope(ctx, env, nil)
-}
-
-// handleEnvelope prepares and runs one Signal turn on the legacy
-// no-mailbox path. It returns an error when the turn could not be
-// prepared or the runner failed, so callers gate the read receipt on
-// actual handling instead of acking a message they could not process.
-// A nil turn (nothing to answer) is a successful no-op.
-func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) error {
-	turn, err := b.prepareSignalTurn(ctx, env)
-	if err != nil {
-		b.logger.Error("signal turn preparation failed", "error", err)
-		return err
-	}
-	if turn == nil {
-		return nil
-	}
-	req := turn.Request
-	if progressFn != nil {
-		req.OnProgress = progressFn
-	}
-	if _, err := (signalResponseRunner{bridge: b, runner: b.runner}).Run(ctx, req, nil); err != nil {
-		return err
-	}
-	return nil
+	b.logger.Info("signal reaction removed",
+		"sender", env.Source,
+		"emoji", reaction.Emoji,
+		"target_author", reaction.TargetAuthor,
+		"target_timestamp", reaction.TargetTimestamp,
+	)
 }
 
 // buildSignalTurn routes one iteration of a Signal sender loop to the
@@ -733,25 +667,6 @@ func mergeInitialTags(own, wake []string) []string {
 		merged = append(merged, t)
 	}
 	return merged
-}
-
-func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {
-	if env == nil || env.DataMessage == nil {
-		return nil, nil
-	}
-	if env.DataMessage.Reaction != nil {
-		if env.DataMessage.Reaction.IsRemove {
-			b.handleReaction(ctx, env)
-			return nil, nil
-		}
-		return b.prepareReactionTurn(ctx, env)
-	}
-	scaffold := b.prepareSignalTurnScaffold(env.Source)
-	msg, summary, ok, err := b.renderEnvelope(ctx, scaffold, env)
-	if err != nil || !ok {
-		return nil, err
-	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary, memory.OriginChannel), nil
 }
 
 func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, items []loop.MailboxItem, notifies []messages.Envelope) (*loop.AgentTurn, error) {
@@ -969,7 +884,7 @@ func (b *Bridge) renderEnvelope(ctx context.Context, scaffold signalTurnScaffold
 	}
 	if env.DataMessage.Reaction != nil {
 		if env.DataMessage.Reaction.IsRemove {
-			b.handleReaction(ctx, env)
+			b.logReactionRemoval(env)
 			return loop.Message{}, nil, false, nil
 		}
 		return b.renderReactionEnvelope(scaffold, env)
@@ -1061,20 +976,6 @@ func intSummary(summary map[string]any, key string) int {
 		return n
 	}
 	return 0
-}
-
-func (b *Bridge) prepareReactionTurn(_ context.Context, env *Envelope) (*loop.AgentTurn, error) {
-	scaffold := b.prepareSignalTurnScaffold(env.Source)
-	reaction := signalReactionEvent(env)
-	hints := reaction.Hints()
-	hints["source"] = "signal"
-	hints["sender"] = env.Source
-	scaffold.opts = b.requestOptions(env.Source, hints)
-	msg, summary, ok, err := b.renderReactionEnvelope(scaffold, env)
-	if err != nil || !ok {
-		return nil, err
-	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary, memory.OriginChannel), nil
 }
 
 func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, content string, opts router.RequestOptions, summary map[string]any, origin string) *loop.AgentTurn {
@@ -1384,13 +1285,6 @@ func formatMessage(env *Envelope, attachmentDescs []string) string {
 
 	sb.WriteString(env.DataMessage.Message)
 	return sb.String()
-}
-
-// formatReaction builds the user-facing message content for a
-// reaction envelope. The output identifies the sender, the emoji,
-// and the target message timestamp.
-func formatReaction(env *Envelope) string {
-	return signalReactionEvent(env).Prompt()
 }
 
 func signalReactionEvent(env *Envelope) messages.ReactionEvent {

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -56,7 +57,7 @@ func newSignalTestMailbox(t *testing.T) *loop.Mailbox {
 }
 
 // testRunner records the most recent Run call and returns a canned
-// response. Thread-safe for use from handleMessage goroutines.
+// response. Thread-safe for use from sender loop goroutines.
 type testRunner struct {
 	mu      sync.Mutex
 	lastReq *loop.Request
@@ -82,10 +83,14 @@ type blockingTestRunner struct {
 	release chan struct{}
 }
 
-func (r *blockingTestRunner) Run(_ context.Context, _ loop.Request, _ loop.StreamCallback) (*loop.Response, error) {
+func (r *blockingTestRunner) Run(ctx context.Context, _ loop.Request, _ loop.StreamCallback) (*loop.Response, error) {
 	close(r.started)
-	<-r.release
-	return &loop.Response{Content: "ok"}, nil
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.release:
+		return &loop.Response{Content: "ok"}, nil
+	}
 }
 
 func containsString(values []string, want string) bool {
@@ -115,9 +120,10 @@ func bridgeHelper(t *testing.T, opts ...bridgeOption) (*Bridge, io.Writer, io.Re
 	}
 
 	cfg := BridgeConfig{
-		Client: client,
-		Runner: runner,
-		Logger: slog.Default(),
+		Client:   client,
+		Runner:   runner,
+		Logger:   slog.Default(),
+		Registry: loop.NewRegistry(),
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -127,14 +133,72 @@ func bridgeHelper(t *testing.T, opts ...bridgeOption) (*Bridge, io.Writer, io.Re
 	}
 
 	bridge := NewBridge(cfg)
+	if cfg.Registry != nil {
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			cfg.Registry.ShutdownAll(ctx)
+		})
+	}
 	return bridge, stdout, stdin, runner
 }
 
-// drainRPCRequests reads all pending JSON-RPC requests from the stdin
-// reader and sends responses back to stdout. This prevents the client
-// from blocking on pipe writes.
+// dispatchSignalTestTurn exercises durable delivery and waits for the real
+// sender loop to finish before inspecting the runner or outbound RPCs.
+func dispatchSignalTestTurn(t *testing.T, bridge *Bridge, ctx context.Context, env *Envelope) {
+	t.Helper()
+	if err := bridge.dispatch(ctx, env); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if snapshot := waitSignalTestTurn(t, bridge, env.Source); snapshot.Error != "" {
+		t.Fatalf("sender turn failed: %s", snapshot.Error)
+	}
+}
+
+func waitSignalTestTurn(t *testing.T, bridge *Bridge, sender string) loop.IterationSnapshot {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if child := bridge.registry.GetByName(signalLoopName(sender)); child != nil {
+			if recent := child.Status().RecentIterations; len(recent) > 0 {
+				return recent[0]
+			}
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("sender loop did not finish a turn")
+		case <-tick.C:
+		}
+	}
+}
+
+// drainRPCRequests answers pipe-backed signal-cli requests so tests run the
+// complete delivery path without waiting for transport timeouts.
 func drainRPCRequests(t *testing.T, stdin io.Reader, stdout io.Writer) {
 	t.Helper()
+	serveSignalRPCRequests(stdin, stdout, nil)
+}
+
+func recordSignalRPCRequests(t *testing.T, stdin io.Reader, stdout io.Writer) func() []rpcRequest {
+	t.Helper()
+	var mu sync.Mutex
+	var requests []rpcRequest
+	go serveSignalRPCRequests(stdin, stdout, func(req rpcRequest) {
+		mu.Lock()
+		requests = append(requests, req)
+		mu.Unlock()
+	})
+	return func() []rpcRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]rpcRequest(nil), requests...)
+	}
+}
+
+func serveSignalRPCRequests(stdin io.Reader, stdout io.Writer, observe func(rpcRequest)) {
 	reader := bufio.NewReader(stdin)
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -145,7 +209,9 @@ func drainRPCRequests(t *testing.T, stdin io.Reader, stdout io.Writer) {
 		if err := json.Unmarshal(line, &req); err != nil {
 			continue
 		}
-		// Send a generic success response.
+		if observe != nil {
+			observe(req)
+		}
 		resp := `{"jsonrpc":"2.0","id":` + itoa(req.ID) + `,"result":{}}` + "\n"
 		if _, err := io.WriteString(stdout, resp); err != nil {
 			return
@@ -173,7 +239,7 @@ func itoa(n int64) string {
 	return string(digits)
 }
 
-func TestBridge_MessageRoutesToAgent(t *testing.T) {
+func TestBridge_RegisterRoutesMessagesThroughSenderLoop(t *testing.T) {
 	bridge, stdout, stdin, runner := bridgeHelper(t)
 
 	// Drain RPC requests (receipts, typing) so the client doesn't block.
@@ -187,11 +253,22 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 		DataMessage:  &DataMessage{Message: "What's the weather?"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := bridge.Register(ctx); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	bridge.client.messages <- env
+	if snapshot := waitSignalTestTurn(t, bridge, env.Source); snapshot.Error != "" {
+		t.Fatalf("sender turn failed: %s", snapshot.Error)
+	}
 
 	req := runner.getLastReq()
 	if req == nil {
 		t.Fatal("runner.Run was not called")
+	}
+	if req.RoutingFactors["loop_id"] == "" || req.RoutingFactors["loop_name"] != signalLoopName(env.Source) {
+		t.Fatalf("request did not traverse the sender loop: hints=%v", req.RoutingFactors)
 	}
 	if req.ConversationID != "signal-15551234567" {
 		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")
@@ -210,129 +287,110 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 	}
 }
 
-func TestBridge_DispatchWithoutMailboxRunsBeforeReceipt(t *testing.T) {
-	client, stdout, stdin := pipeClient(t)
-	runner := &blockingTestRunner{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
+func TestBridge_RegisterRequiresExecutionDependencies(t *testing.T) {
+	for _, missing := range []string{"client", "runner", "loop registry", "durable mailbox"} {
+		t.Run(missing, func(t *testing.T) {
+			client, _, _ := pipeClient(t)
+			cfg := BridgeConfig{Client: client, Runner: &testRunner{}, Registry: loop.NewRegistry(), Mailbox: newSignalTestMailbox(t)}
+			switch missing {
+			case "client":
+				cfg.Client = nil
+			case "runner":
+				cfg.Runner = nil
+			case "loop registry":
+				cfg.Registry = nil
+			case "durable mailbox":
+				cfg.Mailbox = nil
+			}
+			if err := NewBridge(cfg).Register(context.Background()); err == nil || !strings.Contains(err.Error(), missing+" is required") {
+				t.Fatalf("Register error = %v, want missing %s", err, missing)
+			}
+			if cfg.Registry != nil && cfg.Registry.GetByName("signal") != nil {
+				t.Fatal("invalid bridge started a parent loop")
+			}
+		})
 	}
-	bridge := NewBridge(BridgeConfig{
-		Client: client,
-		Runner: runner,
-		Logger: slog.Default(),
-	})
-	go drainRPCRequests(t, stdin, stdout)
+}
 
-	env := &Envelope{
-		Source:      "+15551234567",
-		Timestamp:   1700000000000,
-		DataMessage: &DataMessage{Message: "hello"},
+func TestBridge_DispatchReceiptsDurableMessageBeforeTurnCompletes(t *testing.T) {
+	runner := &blockingTestRunner{started: make(chan struct{}), release: make(chan struct{})}
+	bridge, stdout, stdin, _ := bridgeHelper(t, func(cfg *BridgeConfig) { cfg.Runner = runner })
+	requests := recordSignalRPCRequests(t, stdin, stdout)
+	env := &Envelope{Source: "+15551234567", Timestamp: 1700000000000, DataMessage: &DataMessage{Message: "hello"}}
+	if err := bridge.dispatch(context.Background(), env); err != nil {
+		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() {
-		if err := bridge.dispatch(context.Background(), env); err != nil {
-			t.Errorf("dispatch: %v", err)
-		}
-		close(done)
-	}()
-
 	select {
 	case <-runner.started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("runner did not start")
+		t.Fatal("sender runner did not start")
 	}
-	select {
-	case <-done:
-		t.Fatal("dispatch returned before legacy runner completed")
-	default:
+	items, err := bridge.mailbox.Peek(context.Background(), signalLoopName(env.Source), 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("pending mailbox before runner completes = %v, %v", items, err)
+	}
+	receipts := 0
+	for _, req := range requests() {
+		if req.Method == "sendReceipt" {
+			receipts++
+		}
+	}
+	if receipts != 1 {
+		t.Fatalf("read receipts = %d, want one after durable enqueue", receipts)
 	}
 	close(runner.release)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("dispatch did not finish after runner release")
+	if snapshot := waitSignalTestTurn(t, bridge, env.Source); snapshot.Error != "" {
+		t.Fatalf("sender turn failed: %s", snapshot.Error)
+	}
+	items, err = bridge.mailbox.Peek(context.Background(), signalLoopName(env.Source), 1)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("pending mailbox after success = %v, %v", items, err)
 	}
 }
 
-func TestBridge_EnqueueWithoutMailboxGatesReceiptOnTurnOutcome(t *testing.T) {
-	env := &Envelope{
-		Source:      "+15551234567",
-		Timestamp:   1700000000000,
-		DataMessage: &DataMessage{Timestamp: 1700000000000, Message: "hi"},
+func TestBridge_FailedSenderTurnRemainsQueued(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	requests := recordSignalRPCRequests(t, stdin, stdout)
+	runner.err = errors.New("runner down")
+	env := &Envelope{Source: "+15551234567", Timestamp: 1700000000000, DataMessage: &DataMessage{Message: "hello"}}
+	if err := bridge.dispatch(context.Background(), env); err != nil {
+		t.Fatal(err)
 	}
-
-	// The legacy no-mailbox path has no durable queue to retry from, so
-	// the read receipt (sent by dispatch on a true return) must reflect
-	// whether the turn actually handled the message.
-	t.Run("failed turn is not acked", func(t *testing.T) {
-		client, stdout, stdin := pipeClient(t)
-		go drainRPCRequests(t, stdin, stdout)
-		bridge := NewBridge(BridgeConfig{
-			Client: client,
-			Runner: &testRunner{err: errors.New("runner down")},
-			Logger: slog.Default(),
-		})
-		if bridge.enqueueSenderEnvelope(context.Background(), env) {
-			t.Fatal("returned true for a failed legacy turn; the message would be falsely acked")
+	if snapshot := waitSignalTestTurn(t, bridge, env.Source); !strings.Contains(snapshot.Error, "runner down") {
+		t.Fatalf("sender failure = %q, want runner down", snapshot.Error)
+	}
+	items, err := bridge.mailbox.Peek(context.Background(), signalLoopName(env.Source), 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("pending mailbox after failure = %v, %v", items, err)
+	}
+	receipts := 0
+	for _, req := range requests() {
+		if req.Method == "sendReceipt" {
+			receipts++
 		}
-	})
-
-	t.Run("successful turn is acked", func(t *testing.T) {
-		client, stdout, stdin := pipeClient(t)
-		go drainRPCRequests(t, stdin, stdout)
-		bridge := NewBridge(BridgeConfig{
-			Client: client,
-			Runner: &testRunner{resp: &loop.Response{Content: "ok"}},
-			Logger: slog.Default(),
-		})
-		if !bridge.enqueueSenderEnvelope(context.Background(), env) {
-			t.Fatal("returned false for a successful legacy turn")
+		if req.Method == "send" {
+			t.Fatal("failed turn sent a reply")
 		}
-	})
+	}
+	if receipts != 1 {
+		t.Fatalf("read receipts = %d, want one for the durably retained message", receipts)
+	}
 }
 
-func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {
-	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
-		cfg.Registry = loop.NewRegistry()
-	})
-	go drainRPCRequests(t, stdin, stdout)
-
-	bridge.mu.Lock()
-	bridge.parentID = "signal-parent"
-	bridge.mu.Unlock()
-
+func TestBridge_DispatchDoesNotReceiptUnqueuedMessage(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	requests := recordSignalRPCRequests(t, stdin, stdout)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	env := &Envelope{
-		Source:       "+15551234567",
-		SourceNumber: "+15551234567",
-		SourceName:   "Alice",
-		Timestamp:    1700000000000,
-		DataMessage:  &DataMessage{Message: "What's the weather?"},
-	}
-
+	cancel()
+	env := &Envelope{Source: "+15551234567", Timestamp: 1700000000000, DataMessage: &DataMessage{Message: "hello"}}
 	if err := bridge.dispatch(ctx, env); err != nil {
-		t.Fatalf("dispatch: %v", err)
+		t.Fatal(err)
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if runner.getLastReq() != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	if runner.getLastReq() != nil || bridge.registry.GetByName(signalLoopName(env.Source)) != nil {
+		t.Fatal("failed enqueue started a sender turn")
 	}
-
-	req := runner.getLastReq()
-	if req == nil {
-		t.Fatal("runner.Run was not called")
-	}
-	if req.RoutingFactors["loop_id"] == "" {
-		t.Fatal("loop_id hint is empty; request did not traverse sender loop turn preparation")
-	}
-	if req.RoutingFactors["loop_name"] != signalLoopName("+15551234567") {
-		t.Fatalf("loop_name = %q, want %s", req.RoutingFactors["loop_name"], signalLoopName("+15551234567"))
+	if got := requests(); len(got) != 0 {
+		t.Fatalf("RPC requests after failed enqueue = %v, want none", got)
 	}
 }
 
@@ -578,7 +636,7 @@ func TestBridge_MessageIncludesSourceName(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -599,7 +657,7 @@ func TestBridge_ZeroValueRoutingConfig(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -630,7 +688,7 @@ func TestBridge_CustomRoutingConfigKeepsSignalContext(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Use Opus"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -672,53 +730,29 @@ func TestSignalRoutingConfigLoopProfile(t *testing.T) {
 	}
 }
 
-func TestBridge_EmptyResponseNoReply(t *testing.T) {
-	bridge, _, stdin, runner := bridgeHelper(t)
-
-	// Track what gets written to stdin (client sends).
-	var mu sync.Mutex
-	var sentMethods []string
-
-	go func() {
-		reader := bufio.NewReader(stdin)
-		for {
-			line, err := reader.ReadBytes('\n')
-			if err != nil {
-				return
-			}
-			var req rpcRequest
-			if err := json.Unmarshal(line, &req); err != nil {
-				continue
-			}
-			mu.Lock()
-			sentMethods = append(sentMethods, req.Method)
-			mu.Unlock()
-		}
-	}()
-
-	runner.resp = &loop.Response{Content: ""}
-
+func TestBridge_EmptyResponseSendsFallback(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	requests := recordSignalRPCRequests(t, stdin, stdout)
+	runner.resp = &loop.Response{}
 	env := &Envelope{
-		Source:      "+15551234567",
-		Timestamp:   1700000000000,
+		Source: "+15551234567", Timestamp: 1700000000000,
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
-	// Use a short timeout context so typing/receipt RPCs fail quickly.
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	bridge.handleMessage(ctx, env, nil)
-
-	// Give a moment for any in-flight writes.
-	time.Sleep(50 * time.Millisecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	for _, m := range sentMethods {
-		if m == "send" {
-			t.Error("send should not be called for empty response")
+	var replies []string
+	for _, req := range requests() {
+		if req.Method == "send" {
+			params, ok := req.Params.(map[string]any)
+			if !ok {
+				t.Fatalf("send params = %T", req.Params)
+			}
+			content, _ := params["message"].(string)
+			replies = append(replies, content)
 		}
+	}
+	if len(replies) != 1 || replies[0] != prompts.InteractiveEmptyResponseFallback {
+		t.Fatalf("sent replies = %q, want one interactive fallback", replies)
 	}
 }
 
@@ -738,7 +772,7 @@ func TestBridge_GroupMessageIncludesGroupInfo(t *testing.T) {
 		},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -790,52 +824,20 @@ func TestBridge_RateLimitDisabledWhenZero(t *testing.T) {
 }
 
 func TestBridge_AgentAlreadySentSkipsDuplicateReply(t *testing.T) {
-	bridge, _, stdin, runner := bridgeHelper(t)
-
-	var mu sync.Mutex
-	var sentMethods []string
-
-	go func() {
-		reader := bufio.NewReader(stdin)
-		for {
-			line, err := reader.ReadBytes('\n')
-			if err != nil {
-				return
-			}
-			var req rpcRequest
-			if err := json.Unmarshal(line, &req); err != nil {
-				continue
-			}
-			mu.Lock()
-			sentMethods = append(sentMethods, req.Method)
-			mu.Unlock()
-		}
-	}()
-
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	requests := recordSignalRPCRequests(t, stdin, stdout)
 	runner.resp = &loop.Response{
-		Content: "Already sent via tool",
-		ToolsUsed: map[string]int{
-			"signal_send_message": 1,
-		},
+		Content:   "Already sent via tool",
+		ToolsUsed: map[string]int{"signal_send_message": 1},
 	}
-
 	env := &Envelope{
-		Source:      "+15551234567",
-		Timestamp:   1700000000000,
+		Source: "+15551234567", Timestamp: 1700000000000,
 		DataMessage: &DataMessage{Message: "Send me a message"},
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	bridge.handleMessage(ctx, env, nil)
-	time.Sleep(50 * time.Millisecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	for _, m := range sentMethods {
-		if m == "send" {
-			t.Error("send should not be called when agent already sent via tool")
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
+	for _, req := range requests() {
+		if req.Method == "send" {
+			t.Fatal("send should not be called when the agent already sent via a tool")
 		}
 	}
 }
@@ -1038,7 +1040,7 @@ func TestBridge_LastInboundTimestamp(t *testing.T) {
 		t.Error("expected no timestamp before any messages")
 	}
 
-	// Simulate storing a timestamp (as Start() would do).
+	// Simulate storing a timestamp during turn preparation.
 	bridge.mu.Lock()
 	bridge.lastInboundTS["+15551234567"] = lastMessage{
 		signalTS:   1700000000000,
@@ -1118,7 +1120,7 @@ func TestBridge_ContactResolution(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1148,7 +1150,7 @@ func TestBridge_ContactResolution_Unknown(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1173,7 +1175,7 @@ func TestBridge_ContactResolution_NilResolver(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1242,7 +1244,7 @@ func TestBridge_ReactionWakesAgent(t *testing.T) {
 		},
 	}
 
-	bridge.handleReaction(context.Background(), env)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1300,7 +1302,9 @@ func TestBridge_ReactionRemovalIgnored(t *testing.T) {
 		},
 	}
 
-	bridge.handleReaction(context.Background(), env)
+	if err := bridge.dispatch(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
 
 	if runner.getLastReq() != nil {
 		t.Error("runner.Run should not be called for reaction removal")
@@ -1351,7 +1355,7 @@ func TestFormatReaction(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatReaction(tt.env)
+			got := signalReactionEvent(tt.env).Prompt()
 			if !strings.Contains(got, tt.wantEmoji) {
 				t.Errorf("should contain emoji %q, got: %q", tt.wantEmoji, got)
 			}
@@ -1404,7 +1408,7 @@ func TestBridge_AttachmentOnlyMessageProcessed(t *testing.T) {
 		},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1431,7 +1435,7 @@ func TestBridge_AttachmentWithText(t *testing.T) {
 		},
 	}
 
-	bridge.handleMessage(context.Background(), env, nil)
+	dispatchSignalTestTurn(t, bridge, context.Background(), env)
 
 	req := runner.getLastReq()
 	if req == nil {

@@ -171,7 +171,7 @@ func newSessionPreservationFixture(t *testing.T, foreignKeys bool) *sessionPrese
 	if !archive.FTSEnabled() {
 		t.Fatal("production archive FTS was not initialized")
 	}
-	adapter := memory.NewArchiveAdapter(archive, mem, mem, slog.Default())
+	adapter := memory.NewArchiveAdapter(archive, mem, slog.Default())
 	f := &sessionPreservationFixture{mem: mem, archive: archive, adapter: adapter, convID: "preservation-conversation"}
 	f.loop = newTestLoop(mem, adapter)
 	if err := mem.BindConversationChannel(f.convID, &memory.ChannelBinding{

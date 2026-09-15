@@ -86,10 +86,7 @@ func TestSearchSessions_BackfillOnFirstInit(t *testing.T) {
 	// pre-Finding-2 database. We seed a session directly into the raw
 	// sessions table, bypassing the FTS triggers entirely by dropping
 	// them after the store wires them up.
-	store1, err := NewArchiveStore(dbPath, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store1 := newTestArchiveStoreAt(t, dbPath)
 
 	// Drop the FTS table and triggers to simulate a pre-existing db
 	// that has sessions but no FTS infrastructure yet.
@@ -120,16 +117,14 @@ func TestSearchSessions_BackfillOnFirstInit(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	store1.Close()
+	if err := store1.DB().Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	// Pass 2: re-open the store. The constructor calls
 	// trySetupSessionsFTS, which should recreate the FTS table,
 	// install triggers, and backfill the legacy session.
-	store2, err := NewArchiveStore(dbPath, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store2.Close() })
+	store2 := newTestArchiveStoreAt(t, dbPath)
 
 	results, err := store2.SearchSessions("kitchen timer", 5)
 	if err != nil {
@@ -234,11 +229,7 @@ func TestWorkingMemorySearch_UpdateReindexes(t *testing.T) {
 func newTestWorkingMemoryStoreWithFTS(t *testing.T) (*WorkingMemoryStore, *ArchiveStore) {
 	t.Helper()
 	dbPath := t.TempDir() + "/working-fts.db"
-	archive, err := NewArchiveStore(dbPath, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { archive.Close() })
+	archive := newTestArchiveStoreAt(t, dbPath)
 
 	wm, err := NewWorkingMemoryStore(archive.DB(), archive.FTSEnabled())
 	if err != nil {
@@ -273,11 +264,7 @@ func splitTags(s string) []string {
 // FormatMultiKindResults omits an array.
 func TestMemorySearch_AllSurfacesReachModelEnvelope(t *testing.T) {
 	dbPath := t.TempDir() + "/multi-surface.db"
-	archive, err := NewArchiveStore(dbPath, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { archive.Close() })
+	archive := newTestArchiveStoreAt(t, dbPath)
 
 	working, err := NewWorkingMemoryStore(archive.DB(), archive.FTSEnabled())
 	if err != nil {
@@ -285,7 +272,7 @@ func TestMemorySearch_AllSurfacesReachModelEnvelope(t *testing.T) {
 	}
 
 	// Raw-message hit: archive a message about the freezer alarm.
-	if err := archive.ArchiveMessages([]Message{{
+	if err := archive.ImportMessages([]Message{{
 		ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 		Role:          "user",
 		Content:       "Did the freezer alarm go off again last night?",
@@ -361,14 +348,10 @@ func TestMemorySearch_AllSurfacesReachModelEnvelope(t *testing.T) {
 // resilient.
 func TestMemorySearch_DistilledFailureDoesNotBlockMessages(t *testing.T) {
 	dbPath := t.TempDir() + "/soft-fail.db"
-	archive, err := NewArchiveStore(dbPath, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { archive.Close() })
+	archive := newTestArchiveStoreAt(t, dbPath)
 
 	// Seed a raw message so messages_fts has something to find.
-	if err := archive.ArchiveMessages([]Message{{
+	if err := archive.ImportMessages([]Message{{
 		ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 		Role: "user", Content: "this is the keeper",
 		Timestamp:     time.Now(),

@@ -321,7 +321,7 @@ func TestOllamaClientListModelInfos(t *testing.T) {
 	}
 }
 
-func TestOllamaClientListModels_UsesInventoryNames(t *testing.T) {
+func TestOllamaClientListModelInfos_PreservesInventoryOrder(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -331,15 +331,15 @@ func TestOllamaClientListModels_UsesInventoryNames(t *testing.T) {
 	defer srv.Close()
 
 	client := NewOllamaClient(srv.URL, nil)
-	names, err := client.ListModels(context.Background())
+	models, err := client.ListModelInfos(context.Background())
 	if err != nil {
-		t.Fatalf("ListModels() error = %v", err)
+		t.Fatalf("ListModelInfos() error = %v", err)
 	}
-	if len(names) != 2 {
-		t.Fatalf("len(names) = %d, want 2", len(names))
+	if len(models) != 2 {
+		t.Fatalf("len(models) = %d, want 2", len(models))
 	}
-	if names[0] != "qwen3:4b" || names[1] != "gpt-oss:20b" {
-		t.Fatalf("names = %v, want [qwen3:4b gpt-oss:20b]", names)
+	if models[0].Name != "qwen3:4b" || models[1].Name != "gpt-oss:20b" {
+		t.Fatalf("model names = [%q %q], want [qwen3:4b gpt-oss:20b]", models[0].Name, models[1].Name)
 	}
 }
 

@@ -899,41 +899,6 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 	return calls
 }
 
-// ArchiveToolCalls updates tool calls in the unified table to archived status.
-// This replaces the cross-DB copy that the legacy archive flow used.
-func (s *SQLiteStore) ArchiveToolCalls(conversationID, sessionID string) (int64, error) {
-	now := time.Now().UTC()
-	result, err := s.db.Exec(`
-		UPDATE tool_calls
-		SET session_id = COALESCE(session_id, ?),
-		    status = 'archived',
-		    archived_at = ?
-		WHERE conversation_id = ? AND status = 'active'
-	`, sessionID, now.Format(time.RFC3339Nano), conversationID)
-	if err != nil {
-		return 0, fmt.Errorf("archive tool calls: %w", err)
-	}
-	return result.RowsAffected()
-}
-
-// ArchiveMessages updates messages in the unified table to archived status.
-// This replaces the cross-DB copy that the legacy archive flow used.
-func (s *SQLiteStore) ArchiveMessages(conversationID, sessionID, reason string) (int64, error) {
-	now := time.Now().UTC()
-	result, err := s.db.Exec(`
-		UPDATE messages
-		SET session_id = COALESCE(session_id, ?),
-		    status = 'archived',
-		    archived_at = ?,
-		    archive_reason = ?
-		WHERE conversation_id = ? AND status IN ('active', 'compacted')
-	`, sessionID, now.Format(time.RFC3339Nano), reason, conversationID)
-	if err != nil {
-		return 0, fmt.Errorf("archive messages: %w", err)
-	}
-	return result.RowsAffected()
-}
-
 // ToolCallStats returns statistics about tool usage.
 func (s *SQLiteStore) ToolCallStats() map[string]any {
 	stats := make(map[string]any)

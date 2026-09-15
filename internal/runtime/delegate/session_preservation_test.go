@@ -39,8 +39,8 @@ func TestFinishLoopExecutionPreservesUnifiedTranscript(t *testing.T) {
 	if err := store.RecordToolCall(conversationID, messages[0].ID, "delegate-call", "example", `{}`); err != nil {
 		t.Fatal(err)
 	}
-	adapter := memory.NewArchiveAdapter(archive, store, store, slog.Default())
-	executor := &Executor{sessionArchiver: adapter, conversations: store}
+	adapter := memory.NewArchiveAdapter(archive, store, slog.Default())
+	executor := &Executor{sessionArchiver: adapter}
 	prep := &preparedExecution{conversationID: conversationID, archiveSessionID: session.ID, log: slog.Default()}
 	for range 2 {
 		executor.finishLoopExecution(prep)

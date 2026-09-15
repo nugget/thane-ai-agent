@@ -47,11 +47,6 @@ func (m *MultiClient) AddProvider(name string, client Client) {
 	m.clients[name] = client
 }
 
-// AddModel maps a model name to a provider.
-func (m *MultiClient) AddModel(modelName, providerName string) {
-	m.AddRoute(modelName, providerName, modelName)
-}
-
 // AddRoute maps a route target to a provider/resource and upstream
 // model name.
 func (m *MultiClient) AddRoute(target, providerName, modelName string) {

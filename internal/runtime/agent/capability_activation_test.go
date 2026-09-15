@@ -412,8 +412,9 @@ func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
 	loop.SetChannelTags(map[string][]string{
 		"signal": {"web"},
 	})
-	loop.memory = newMockMemWithCompaction()
-	loop.archiver = &mockArchiver{activeID: "old-session"}
+	sessionLoop, mem, _ := newSessionTestLoop(t)
+	loop.memory = mem
+	loop.archiver = sessionLoop.archiver
 
 	resp1, err := loop.Run(context.Background(), &Request{
 		ConversationID: "conv-1",
