@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -81,10 +82,11 @@ func decodeMove(t *testing.T, out string) moveResponse {
 	return resp
 }
 
-// TestMoveIntoAllowsAndRefusesPerOwner pins mailbox.move_into: an
-// operator mailbox files only into what the list resolves to, by role
-// or by name, and back to INBOX out of those; an assistant mailbox
-// files anywhere unless its list says otherwise.
+// TestMoveIntoAllowsAndRefusesPerOwner pins mailbox.move_into in a turn
+// the operator is not present for, the only turns it binds: an operator
+// mailbox files only into what the list resolves to, by role or by
+// name, and back to INBOX out of those; an assistant mailbox files
+// anywhere unless its list says otherwise.
 func TestMoveIntoAllowsAndRefusesPerOwner(t *testing.T) {
 	byRole := func(role string) map[string]any { return map[string]any{"destination_role": role} }
 	byName := func(name string) map[string]any { return map[string]any{"destination": name} }
@@ -125,7 +127,7 @@ func TestMoveIntoAllowsAndRefusesPerOwner(t *testing.T) {
 			for k, v := range tt.target {
 				args[k] = v
 			}
-			out, err := svc.ToolProvider().HandleMove(attendedCtx(), args)
+			out, err := svc.ToolProvider().HandleMove(context.Background(), args)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatalf("move = %s, want a refusal", out)
@@ -153,7 +155,9 @@ func TestMoveIntoAllowsAndRefusesPerOwner(t *testing.T) {
 // TestFilingRefusalTeachesWhatInboxIs pins the refusal text word for
 // word: on an operator mailbox it says what INBOX is to the operator and
 // where mail may go instead, naming a role no folder holds as a gap;
-// elsewhere it names the limit.
+// elsewhere it names the limit. Only a turn the operator is not present
+// for is refused, so every refusal says so and names their own
+// conversation as the way the move can still happen.
 func TestFilingRefusalTeachesWhatInboxIs(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -162,10 +166,10 @@ func TestFilingRefusalTeachesWhatInboxIs(t *testing.T) {
 		source string // "" is INBOX, moving into Receipts; otherwise a return to INBOX
 		want   string
 	}{
-		{"operator mailbox", "operator", false, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree; mail may move only into ["Bulk Mail"], and back to INBOX from there. Flag it instead; nothing was moved`},
-		{"operator mailbox without a junk folder", "operator", true, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree; mail may move only into [the junk role, which no folder here has], and back to INBOX from there. Flag it instead; nothing was moved`},
-		{"limited assistant mailbox", "assistant", false, "", `email_move cannot file into "Receipts" on account "primary": its mailbox.move_into allows only ["Bulk Mail"], and back to INBOX from there. Choose one of those or report the need; nothing was moved`},
-		{"a return to INBOX names the unlisted source", "operator", false, "Receipts", `email_move cannot return mail to INBOX from "Receipts" on account "primary": mail goes back to INBOX only out of a folder its mailbox.move_into lists, ["Bulk Mail"], and "Receipts" is not one of them. Leave the mail where it is, and if the operator asked for the move, tell them it is theirs to make; nothing was moved`},
+		{"operator mailbox", "operator", false, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree, so in a turn the operator is not present for, mail may move only into ["Bulk Mail"], and back to INBOX from there. Flag it instead; if it needs filing, the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way; nothing was moved`},
+		{"operator mailbox without a junk folder", "operator", true, "", `email_move cannot file into "Receipts" on account "primary": it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree, so in a turn the operator is not present for, mail may move only into [the junk role, which no folder here has], and back to INBOX from there. Flag it instead; if it needs filing, the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way; nothing was moved`},
+		{"limited assistant mailbox", "assistant", false, "", `email_move cannot file into "Receipts" on account "primary": in a turn the operator is not present for, its mailbox.move_into allows only ["Bulk Mail"], and back to INBOX from there. Choose one of those, or leave the mail and report the need: the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way; nothing was moved`},
+		{"a return to INBOX names the unlisted source", "operator", false, "Receipts", `email_move cannot return mail to INBOX from "Receipts" on account "primary": in a turn the operator is not present for, mail goes back to INBOX only out of a folder its mailbox.move_into lists, ["Bulk Mail"], and "Receipts" is not one of them. Leave the mail where it is: the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way; nothing was moved`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -400,15 +404,50 @@ func TestEmailAccountsEntryRendersFiling(t *testing.T) {
 		}
 	}
 
-	block, err := svc.ContextProvider().TagContext(context.Background(), agentctxRequest())
+	// move_into binds only turns the operator is not present for, and
+	// the entry shows it in the operator's own turn too: it is what the
+	// account's loops may file, which is the answer when they ask.
+	for _, attended := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attended=%v", attended), func(t *testing.T) {
+			assertFilingEntries(t, svc, attended)
+		})
+	}
+
+	// An assistant entry at its defaults contributes no bytes at all.
+	for _, cfg := range svc.AccountsInConfigOrder() {
+		if cfg.Name != "primary" {
+			continue
+		}
+		data, err := json.Marshal(svc.newFilingView(cfg))
+		if err != nil || string(data) != "{}" {
+			t.Errorf("default filing view = %s, %v; want {}", data, err)
+		}
+	}
+}
+
+// assertFilingEntries renders the Email Accounts block in an attended
+// or unattended turn and checks attended and each account's filing
+// fields against the accounts TestEmailAccountsEntryRendersFiling
+// configures.
+func assertFilingEntries(t *testing.T, svc *Service, wantAttended bool) {
+	t.Helper()
+	ctx := context.Background()
+	if wantAttended {
+		ctx = attendedCtx()
+	}
+	block, err := svc.ContextProvider().TagContext(ctx, agentctxRequest())
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
 	var payload struct {
+		Attended bool             `json:"attended"`
 		Accounts []map[string]any `json:"accounts"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(block, "### Email Accounts\n\n")), &payload); err != nil {
 		t.Fatalf("block = %s, %v", block, err)
+	}
+	if payload.Attended != wantAttended {
+		t.Fatalf("attended = %v, want %v", payload.Attended, wantAttended)
 	}
 	entries := make(map[string]map[string]any)
 	for _, e := range payload.Accounts {
@@ -453,16 +492,5 @@ func TestEmailAccountsEntryRendersFiling(t *testing.T) {
 				}
 			}
 		})
-	}
-
-	// An assistant entry at its defaults contributes no bytes at all.
-	for _, cfg := range svc.AccountsInConfigOrder() {
-		if cfg.Name != "primary" {
-			continue
-		}
-		data, err := json.Marshal(svc.newFilingView(cfg))
-		if err != nil || string(data) != "{}" {
-			t.Errorf("default filing view = %s, %v; want {}", data, err)
-		}
 	}
 }
