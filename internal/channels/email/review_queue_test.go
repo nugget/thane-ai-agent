@@ -83,7 +83,7 @@ func TestDraftsQueueForReview(t *testing.T) {
 				}
 				return
 			}
-			if want := "draft:" + resp.DraftID; len(got) != 1 || got[0] != want {
+			if want := "draft:primary:" + resp.DraftID; len(got) != 1 || got[0] != want {
 				t.Fatalf("queued %v, want [%s]", got, want)
 			}
 			items, _ := queue.PeekAll(context.Background(), testReviewLoop)
@@ -109,13 +109,13 @@ func TestReviewQueueCoalescesRepeats(t *testing.T) {
 	f, queue := reviewFixture(t, testReviewLoop, nil)
 	ctx := context.Background()
 	for _, summary := range []string{`{"n":1}`, `{"n":2}`} {
-		if _, err := f.svc.enqueueReview(ctx, testReviewLoop, "primary", draftReviewSubject("d-1"), reviewTypeDraft, summary); err != nil {
+		if _, err := f.svc.enqueueReview(ctx, testReviewLoop, "primary", draftReviewSubject("primary", "d-1"), reviewTypeDraft, summary); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
 	items, err := queue.PeekAll(ctx, testReviewLoop)
-	if err != nil || len(items) != 1 || items[0].DedupKey != "draft:d-1" {
-		t.Fatalf("pending = %+v (%v), want one draft:d-1", items, err)
+	if err != nil || len(items) != 1 || items[0].DedupKey != "draft:primary:d-1" {
+		t.Fatalf("pending = %+v (%v), want one draft:primary:d-1", items, err)
 	}
 	if !strings.Contains(string(items[0].Payload), `{\"n\":2}`) {
 		t.Errorf("payload = %s, want the later summary", items[0].Payload)
@@ -261,7 +261,7 @@ func TestEmailAccountsEntryRendersRouting(t *testing.T) {
 func TestPendingReviewIsCachedNotCounted(t *testing.T) {
 	f, queue := reviewFixture(t, testReviewLoop, func(a *AccountConfig) { a.Mailbox.Owner = "operator" })
 	ctx := context.Background()
-	if _, err := f.svc.enqueueReview(ctx, testReviewLoop, "primary", draftReviewSubject("d-1"), reviewTypeDraft, "{}"); err != nil {
+	if _, err := f.svc.enqueueReview(ctx, testReviewLoop, "primary", draftReviewSubject("primary", "d-1"), reviewTypeDraft, "{}"); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if got := emailAccountEntry(t, f.svc)["pending_review"]; got != float64(1) {

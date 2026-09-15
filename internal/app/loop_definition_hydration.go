@@ -136,7 +136,6 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 			if err != nil {
 				return err
 			}
-			a.emailReviewWake.resweep(ctx)
 			if wakes == 0 {
 				return looppkg.ErrNoOp
 			}

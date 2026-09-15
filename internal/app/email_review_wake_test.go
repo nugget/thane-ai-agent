@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,30 @@ func reviewAccount(delay, maxWait time.Duration) []config.EmailAccountConfig {
 	})}
 }
 
+// newTestReviewWaker is newEmailReviewWaker, stopped when the test
+// ends so no recheck timer or worker outlives it.
+func newTestReviewWaker(t *testing.T, queue *loopqueue.Store, bus *messages.Bus, accounts []config.EmailAccountConfig, logger *slog.Logger) *emailReviewWaker {
+	t.Helper()
+	w := newEmailReviewWaker(queue, bus, accounts, logger)
+	t.Cleanup(w.stop)
+	return w
+}
+
+// recheckAll runs every review loop's recheck now, as its timer would.
+func recheckAll(t *testing.T, w *emailReviewWaker) {
+	t.Helper()
+	for _, name := range w.names() {
+		w.wakeFor(t.Context(), name, emailReviewReasonLeftover, w.leftoverDue)
+	}
+}
+
+// armedRechecks counts the rechecks pending.
+func armedRechecks(w *emailReviewWaker) int {
+	w.lifeMu.Lock()
+	defer w.lifeMu.Unlock()
+	return len(w.rechecks)
+}
+
 func wakeEvent(t *testing.T, env messages.Envelope) messages.LoopEventPayload {
 	t.Helper()
 	payload, ok := env.Payload.(messages.LoopNotifyPayload)
@@ -59,9 +84,13 @@ func wakeEvent(t *testing.T, env messages.Envelope) messages.LoopEventPayload {
 	return payload.Events[0]
 }
 
+// enqueueReviewItem queues subject the way the email service does: its
+// payload names the item's type, the subject's prefix.
 func enqueueReviewItem(t *testing.T, queue *loopqueue.Store, loop, subject string) {
 	t.Helper()
-	if err := queue.Enqueue(t.Context(), loop, subject, 0, []byte(`{}`)); err != nil {
+	kind, _, _ := strings.Cut(subject, ":")
+	payload := `{"events":[{"source":"email_review","type":"` + kind + `"}]}`
+	if err := queue.Enqueue(t.Context(), loop, subject, 0, []byte(payload)); err != nil {
 		t.Fatalf("enqueue %s: %v", subject, err)
 	}
 }
@@ -90,7 +119,7 @@ func ackReviewItem(t *testing.T, queue *loopqueue.Store, loop, subject string) {
 func TestEmailReviewWakesAfterItsDelay(t *testing.T) {
 	queue := emailPassQueue(t)
 	bus, snapshot := captureBus()
-	w := newEmailReviewWaker(queue, bus, reviewAccount(300*time.Millisecond, 5*time.Second), nil)
+	w := newTestReviewWaker(t, queue, bus, reviewAccount(300*time.Millisecond, 5*time.Second), nil)
 	w.arm()
 
 	enqueueReviewItem(t, queue, email.DraftReviewLoopName, "draft:d-1")
@@ -113,7 +142,7 @@ func TestEmailReviewWakesAfterItsDelay(t *testing.T) {
 func TestEmailReviewWakeHonoursMaxWait(t *testing.T) {
 	queue := emailPassQueue(t)
 	bus, snapshot := captureBus()
-	w := newEmailReviewWaker(queue, bus, reviewAccount(250*time.Millisecond, 400*time.Millisecond), nil)
+	w := newTestReviewWaker(t, queue, bus, reviewAccount(250*time.Millisecond, 400*time.Millisecond), nil)
 	w.arm()
 
 	wokeDuringBurst := false
@@ -138,7 +167,7 @@ func TestEmailReviewDebounceSkipsAnnouncedWork(t *testing.T) {
 	const loop = email.DraftReviewLoopName
 	queue := emailPassQueue(t)
 	bus, snapshot := captureBus()
-	w := newEmailReviewWaker(queue, bus, reviewAccount(200*time.Millisecond, 5*time.Second), nil)
+	w := newTestReviewWaker(t, queue, bus, reviewAccount(200*time.Millisecond, 5*time.Second), nil)
 	w.arm()
 
 	enqueueReviewItem(t, queue, loop, "draft:d-1") // arms the debounce
@@ -155,10 +184,11 @@ func TestEmailReviewDebounceSkipsAnnouncedWork(t *testing.T) {
 	}
 }
 
-// TestEmailReviewSweeps pins the boot sweep and the re-wake: work
+// TestEmailReviewSweeps pins the boot sweep and the recheck: work
 // queued before a restart wakes the loop, work a wake announced and
 // left wakes it again once review_delay has passed since that wake, at
-// most once per delay, and an empty queue never wakes it.
+// most once per delay, and an empty queue never wakes it or arms a
+// recheck.
 func TestEmailReviewSweeps(t *testing.T) {
 	t.Run("boot sweep wakes queued work", func(t *testing.T) {
 		queue := emailPassQueue(t)
@@ -166,7 +196,7 @@ func TestEmailReviewSweeps(t *testing.T) {
 			enqueueReviewItem(t, queue, email.DraftReviewLoopName, subject)
 		}
 		bus, snapshot := captureBus()
-		w := newEmailReviewWaker(queue, bus, reviewAccount(0, 0), nil)
+		w := newTestReviewWaker(t, queue, bus, reviewAccount(0, 0), nil)
 		w.Sweep(t.Context())
 		envs := snapshot()
 		if len(envs) != 1 || !strings.Contains(wakeEvent(t, envs[0]).Summary, "1 draft and 1 message await review (2 queued)") {
@@ -176,24 +206,27 @@ func TestEmailReviewSweeps(t *testing.T) {
 
 	t.Run("idle queue never wakes", func(t *testing.T) {
 		bus, snapshot := captureBus()
-		w := newEmailReviewWaker(emailPassQueue(t), bus, reviewAccount(0, 0), nil)
+		w := newTestReviewWaker(t, emailPassQueue(t), bus, reviewAccount(0, 0), nil)
 		w.now = func() time.Time { return time.Now().Add(24 * time.Hour) }
 		w.Sweep(t.Context())
-		w.resweep(t.Context())
+		recheckAll(t, w)
 		if n := len(snapshot()); n != 0 {
 			t.Fatalf("an empty queue woke the loop %d times", n)
+		}
+		if n := armedRechecks(w); n != 0 {
+			t.Errorf("an empty queue armed %d rechecks, want none", n)
 		}
 		var none *emailReviewWaker
 		none.arm()
 		none.Sweep(t.Context())
-		none.resweep(t.Context())
+		none.stop()
 	})
 
 	t.Run("announced leftovers wake once per delay", func(t *testing.T) {
 		queue := emailPassQueue(t)
 		enqueueReviewItem(t, queue, email.DraftReviewLoopName, "draft:d-1")
 		bus, snapshot := captureBus()
-		w := newEmailReviewWaker(queue, bus, reviewAccount(15*time.Minute, time.Hour), nil)
+		w := newTestReviewWaker(t, queue, bus, reviewAccount(15*time.Minute, time.Hour), nil)
 		start := time.Now()
 		w.now = func() time.Time { return start }
 		w.Sweep(t.Context())
@@ -209,7 +242,7 @@ func TestEmailReviewSweeps(t *testing.T) {
 		}
 		for _, step := range steps {
 			w.now = func() time.Time { return start.Add(step.at) }
-			w.resweep(t.Context())
+			recheckAll(t, w)
 			if got := len(snapshot()); got != step.wantWakes {
 				t.Fatalf("at +%s: wakes = %d, want %d", step.at, got, step.wantWakes)
 			}
@@ -217,13 +250,13 @@ func TestEmailReviewSweeps(t *testing.T) {
 	})
 }
 
-// TestEmailReviewResweepLeavesNewWork pins what the re-wake after a poll
+// TestEmailReviewRecheckLeavesNewWork pins what the recheck after a wake
 // counts as leftover: only an item the last wake announced that still
 // waits under the same receipt, deferred or not. Work no wake has
 // announced, including an announced subject queued again with new
-// evidence, waits out its own debounce and max wait, so a poll never
+// evidence, waits out its own debounce and max wait, so a recheck never
 // cuts a burst short.
-func TestEmailReviewResweepLeavesNewWork(t *testing.T) {
+func TestEmailReviewRecheckLeavesNewWork(t *testing.T) {
 	const loop = email.DraftReviewLoopName
 	tests := []struct {
 		name      string
@@ -249,7 +282,7 @@ func TestEmailReviewResweepLeavesNewWork(t *testing.T) {
 			queue := emailPassQueue(t)
 			enqueueReviewItem(t, queue, loop, "draft:d-1")
 			bus, snapshot := captureBus()
-			w := newEmailReviewWaker(queue, bus, reviewAccount(15*time.Minute, 2*time.Hour), nil)
+			w := newTestReviewWaker(t, queue, bus, reviewAccount(15*time.Minute, 2*time.Hour), nil)
 			start := time.Now()
 			w.now = func() time.Time { return start }
 			if tt.sweep {
@@ -259,7 +292,7 @@ func TestEmailReviewResweepLeavesNewWork(t *testing.T) {
 				tt.after(t, queue)
 			}
 			w.now = func() time.Time { return start.Add(20 * time.Minute) }
-			w.resweep(t.Context())
+			recheckAll(t, w)
 			if got := len(snapshot()); got != tt.wantWakes {
 				t.Fatalf("wakes = %d, want %d", got, tt.wantWakes)
 			}
@@ -352,7 +385,7 @@ func TestStartEmailReviewPassesChecksRoutes(t *testing.T) {
 				enqueueReviewItem(t, queue, review, "draft:d-1")
 			}
 			bus, snapshot := captureBus()
-			a.emailReviewWake = newEmailReviewWaker(queue, bus, cfg.Email.Accounts, nil)
+			a.emailReviewWake = newTestReviewWaker(t, queue, bus, cfg.Email.Accounts, nil)
 
 			err := a.startEmailReviewPasses(t.Context())
 			switch {

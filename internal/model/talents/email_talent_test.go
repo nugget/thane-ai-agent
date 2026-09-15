@@ -385,7 +385,7 @@ func TestEmailTalentTeachesTwoPasses(t *testing.T) {
 		{"routing is configuration", "email", "is the operator's configuration, and no tool changes it"},
 		{"triage does one thing", "email", "The triage pass does exactly one thing per message"},
 		{"review woken by queued work", "email", "It is woken by queued work, never by the mail itself or by a timer, and only while work waits."},
-		{"drafts queue themselves", "email", "by any loop but the review loop itself, as `draft:<draft_id>`"},
+		{"drafts queue themselves", "email", "by any loop but the review loop itself, as `draft:<account>:<draft_id>`"},
 		{"escalations queue by message id", "email", "as `message:<account>:<message_id>`, keyed by Message-ID rather than UID"},
 		{"queueing coalesces", "email", "replaces the item already waiting instead of adding a second"},
 		{"pending_review is a snapshot", "email", "`pending_review_as_of` says when it was counted"},

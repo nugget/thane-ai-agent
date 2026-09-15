@@ -17,11 +17,15 @@ import (
 // its identity, so queueing the same work again coalesces into the one
 // pending item instead of adding a second:
 //
-//   - draft:<draft_id> for a draft an unattended turn wrote on an account
-//     with a review_loop;
+//   - draft:<account>:<draft_id> for a draft an unattended turn wrote on
+//     an account with a review_loop;
 //   - message:<account>:<message_id> for a message email_escalate handed
 //     over, keyed by Message-ID rather than UID so it survives the
 //     message being filed elsewhere.
+//
+// Both name the account after the kind, so the queue counts an
+// account's work, and the review wake its drafts and messages, by
+// subject prefix alone, without reading a payload.
 //
 // Nothing about review is written to the mailbox or the draft ledger:
 // the queue is the only record that work awaits review, and the review
@@ -48,13 +52,19 @@ type reviewCount struct {
 }
 
 // draftReviewSubject is the queue subject of a draft awaiting review.
-func draftReviewSubject(draftID string) string {
-	return reviewSubjectDraftPrefix + draftID
+func draftReviewSubject(account, draftID string) string {
+	return reviewSubjectDraftPrefix + account + ":" + draftID
 }
 
 // messageReviewSubject is the queue subject of an escalated message.
 func messageReviewSubject(account, messageID string) string {
 	return reviewSubjectMessagePrefix + account + ":" + normalizeMessageID(messageID)
+}
+
+// reviewSubjectPrefixes are the prefixes every subject of an account's
+// review work starts with: its drafts' and its messages'.
+func reviewSubjectPrefixes(account string) []string {
+	return []string{reviewSubjectDraftPrefix + account + ":", reviewSubjectMessagePrefix + account + ":"}
 }
 
 // callerLoopName names the loop whose turn is calling, or "" outside a
@@ -76,7 +86,7 @@ func (s *Service) queueDraftForReview(ctx context.Context, req SendRequest, deci
 	if draftID == "" || reviewLoop == "" || s.queue == nil || decision.Attended || callerLoopName(ctx) == reviewLoop {
 		return
 	}
-	subject := draftReviewSubject(draftID)
+	subject := draftReviewSubject(req.Account.Name, draftID)
 	summary := promptfmt.MarshalCompact(map[string]any{
 		"account":  req.Account.Name,
 		"draft_id": draftID,
@@ -134,38 +144,37 @@ func (s *Service) enqueueReview(ctx context.Context, reviewLoop, account, subjec
 	return &n, nil
 }
 
-// measurePendingReview counts reviewLoop's queued items per account and
-// records the counts for every account that names it, zero included.
+// measurePendingReview counts reviewLoop's queued items for every
+// account that names it, zero included, and records the counts. It
+// counts by subject prefix in one aggregate that reads no item, so a
+// backlog costs each enqueue and each poll no payload read and no
+// memory. An item whose subject names none of those accounts counts
+// for none of them.
 func (s *Service) measurePendingReview(ctx context.Context, reviewLoop string) (map[string]int, error) {
-	items, err := s.queue.PeekAll(ctx, reviewLoop)
+	var names, prefixes []string
+	for _, cfg := range s.AccountsInConfigOrder() {
+		if cfg.ReviewLoopName() == reviewLoop {
+			names = append(names, cfg.Name)
+			prefixes = append(prefixes, reviewSubjectPrefixes(cfg.Name)...)
+		}
+	}
+	byPrefix, _, err := s.queue.PendingCountsByKeyPrefix(ctx, reviewLoop, prefixes)
 	if err != nil {
 		return nil, fmt.Errorf("count review queue %q: %w", reviewLoop, err)
 	}
-	counts := make(map[string]int)
-	for _, item := range items {
-		if account := reviewItemAccount(item.Payload); account != "" {
-			counts[account]++
+	counts := make(map[string]int, len(names))
+	for _, name := range names {
+		for _, prefix := range reviewSubjectPrefixes(name) {
+			counts[name] += byPrefix[prefix]
 		}
 	}
 	now := time.Now()
 	s.reviewMu.Lock()
 	defer s.reviewMu.Unlock()
-	for _, cfg := range s.AccountsInConfigOrder() {
-		if cfg.ReviewLoopName() == reviewLoop {
-			s.pendingReview[cfg.Name] = reviewCount{Pending: counts[cfg.Name], At: now}
-		}
+	for _, name := range names {
+		s.pendingReview[name] = reviewCount{Pending: counts[name], At: now}
 	}
 	return counts, nil
-}
-
-// reviewItemAccount reads the account a queued review item belongs to,
-// or "" for an item this package did not write.
-func reviewItemAccount(raw []byte) string {
-	var p messages.LoopNotifyPayload
-	if err := json.Unmarshal(raw, &p); err != nil || len(p.Events) == 0 || p.Events[0].Source != reviewSource {
-		return ""
-	}
-	return p.Events[0].Metadata["account"]
 }
 
 // refreshPendingReview recounts every review loop's queue, once per
