@@ -404,7 +404,7 @@ func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 		t.Fatal("expected delegation_required to be true")
 	}
 
-	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "contact_save", "contact_lookup", "contact_owner", "session_working_memory", "session_close", "archive_search", "search"}
+	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "contact_save", "contact_lookup", "contact_owner", "session_working_memory", "session_close", "archive_search", "doc_search", "search"}
 	if len(cfg.Agent.OrchestratorTools) != len(want) {
 		t.Fatalf("orchestrator_tools length = %d, want %d; got %v", len(cfg.Agent.OrchestratorTools), len(want), cfg.Agent.OrchestratorTools)
 	}

@@ -68,6 +68,11 @@ call is `{"query":"MQTT decision","limit":8}`. Set `sources` to
 `["archives"]` or `["documents"]` to narrow it; specifying `root` alone
 selects documents and can include an `on_request` root.
 
+The default orchestrator allowlist includes `search`, `archive_search`, and
+`doc_search`, so either source remains usable after capability filtering.
+Custom allowlists must retain each desired source's own search tool; explicit
+request exclusions still remove that source from unified search.
+
 Results contain compact `hits` and per-source `coverage`. Ranking interleaves
 each source's own ordering; it does not compare scores from different corpora.
 Original transcript artifacts are labeled `primary`, summaries are `synthesis`,

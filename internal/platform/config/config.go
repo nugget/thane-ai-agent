@@ -3415,6 +3415,7 @@ func (c *Config) applyDefaults() {
 			"session_working_memory",
 			"session_close",
 			"archive_search",
+			"doc_search",
 			"search",
 		}
 	}

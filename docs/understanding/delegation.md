@@ -47,6 +47,8 @@ partitioned:
 - `remember_fact` / `recall_fact` — memory operations
 - `session_working_memory` — session scratchpad
 - `archive_search` — conversation history search
+- `doc_search` — document metadata discovery
+- `search` — discovery across the archive and document sources available in this run
 
 Pick by lifecycle: reach for `thane_now` when the orchestrator needs the result inline to continue reasoning, `thane_assign` when the work is fire-and-forget and a later message is acceptable.
 
