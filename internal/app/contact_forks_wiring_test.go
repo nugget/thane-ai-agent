@@ -245,3 +245,16 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 		}
 	})
 }
+
+// TestSharedNameWarningSaysATieReachesNone pins the shared_name boot
+// Warn to resolution's band rule: a lookup reaches the member with the
+// most standing, and none when two share it, as two household records
+// nicknamed "Mom" do, so the Warn never tells the operator one of them
+// still gets the notifications.
+func TestSharedNameWarningSaysATieReachesNone(t *testing.T) {
+	warn := contactForkWarningByKind[contacts.ForkKindSharedName]
+	if !strings.Contains(warn, "reaches only the one with the most standing, or none of them when two or more share it") ||
+		strings.Contains(warn, "reaches only one of them") {
+		t.Errorf("shared_name Warn = %q, want the band rule", warn)
+	}
+}

@@ -52,7 +52,7 @@ func (r *Registry) registerContactTools() {
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Display name of the person or organization (vCard FN)",
+					"description": "Display name of the person or organization (vCard FN). It matches an existing contact by formatted name only, in any ASCII case; any other name creates a new contact at known. Notifications, decision requests, lookups and conversation context find a contact by its formatted name or nickname, and two or more at the same standing holding one name are a tie that reaches none of them, so a new contact named what a known contact already goes by, as its formatted name or nickname, makes that name reach neither; check with contact_lookup first.",
 				},
 				"kind": map[string]any{
 					"type":        "string",

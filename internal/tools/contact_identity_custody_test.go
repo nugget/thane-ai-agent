@@ -172,6 +172,12 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 			"Outside the operator's own message it also refuses a new contact's name, or any contact's nickname, that one of those contacts answers to by its given name or the first word of its formatted name",
 			"changing the nickname or given name of such a contact, since lookups fall back to a given name",
 		}},
+		{"contact_save name", parameterDescription("contact_save", "name"), []string{
+			"matches an existing contact by formatted name only", "creates a new contact at known",
+			"two or more at the same standing holding one name are a tie that reaches none of them",
+			"a new contact named what a known contact already goes by, as its formatted name or nickname, makes that name reach neither",
+			"check with contact_lookup first",
+		}},
 		{"contact_save given_name", parameterDescription("contact_save", "given_name"), []string{
 			"lookups find the one contact whose given name or first word it is", "outside the operator's own message",
 			"a change to the given name of a contact above known or of the operator's own contact is refused",

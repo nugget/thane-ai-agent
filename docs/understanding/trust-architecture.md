@@ -540,8 +540,10 @@ contact with authority and is still reported.
   `name` finding listing exactly those records. Records that answer to the key
   as a formatted name or nickname, one with authority, that no person
   holds together are different people: the key's one `shared_name`
-  finding names one record per person, since a lookup reaches only one of
-  them. Short forms alone between different people are not reported:
+  finding names one record per person, since a lookup reaches only the
+  one with the most standing, and none of them when two or more share it,
+  such as two household records. Short forms alone between different
+  people are not reported:
   resolution takes a short form only when exactly one record answers to
   it, so a first name two people share resolves to neither rather than
   to the wrong one. An email address held by

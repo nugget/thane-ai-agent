@@ -506,9 +506,13 @@ person's name still splits them: a second contact at the same standing
 holding it exactly leaves the name reaching neither, so their
 notifications and decision requests by that name go nowhere, and a
 first name that is another contact's whole name ("Bob" beside "Bob
-Smith") reaches that contact, not them. Before giving a contact a
-nickname, check with `contact_lookup` that no contact at its standing
-already goes by it.
+Smith") reaches that contact, not them. Before giving a new contact
+its name, or any contact a nickname, check with `contact_lookup` that
+no contact at its standing already goes by it. A new contact starts at
+`known`, and `contact_save` matches an existing contact by formatted
+name only, so saving someone under a name a `known` contact has as
+its nickname creates a second contact, and the name then reaches
+neither.
 
 - **Changing the nickname or given name** of a contact above `known`
   or of the operator's own follows the first rule for addresses: only
@@ -758,7 +762,11 @@ finding is one of:
   name or nickname with no sign between them of being one person, such
   as two people nicknamed "Mom". It names one contact per person; a
   person saved twice is also its own `name` finding. A name lookup
-  reaches only one of them.
+  reaches only the one with more standing (the operator's own, then
+  one above `known`), and neither when they stand alike, such as two
+  household contacts both nicknamed "Mom": then notifications and
+  decision requests by that name reach no one until the operator
+  renames one of them.
 - **`email`**: contacts that hold one address, in any case, when a
   `known` holder makes email read it at `known` for all of them, or a
   holder has no other address of its own. A mailbox that contacts with

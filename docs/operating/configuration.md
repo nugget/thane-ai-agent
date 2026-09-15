@@ -733,7 +733,8 @@ record, or one with no real address or number of its own) that could be
 either of two people is listed with each. Different
 people who each answer to one formatted name or nickname, with no such
 sign between them, are one `shared_name` finding that names one record
-per person, since a lookup reaches only one of them. An email
+per person, since a lookup reaches only the one with the most standing,
+or none of them when two or more share it. An email
 address held by several records is a finding when a `known` record holds
 it or a holder has no other address of its own; a mailbox that records
 with authority share while each holds its own addresses is not. A phone

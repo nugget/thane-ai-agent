@@ -65,6 +65,11 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"routing reaches no tied holder", "contacts_save", "and none of two or more at the same standing"},
 		{"a same-standing nickname splits both", "contacts_save", "a second contact at the same standing holding it exactly leaves the name reaching neither"},
 		{"check a nickname before giving it", "contacts_save", "check with `contact_lookup` that no contact at its standing already goes by it"},
+		{"check a new contact's name too", "contacts_save", "Before giving a new contact its name, or any contact a nickname"},
+		{"a new contact's name ties with a nickname", "contacts_save", "saving someone under a name a `known` contact has as its nickname creates a second contact, and the name then reaches neither"},
+		{"a shared name reaches neither at one standing", "contacts_save", "A name lookup reaches only the one with more standing (the operator's own, then one above `known`), and neither when they stand alike"},
+		{"contact_owner reports a tied legacy name", "contacts_lookup", "`contact_owner` returns an error listing them with their `contact_id`s, not a record"},
+		{"a tied legacy name is the operator's to fix", "contacts_lookup", "Don't try to settle it with those tools; tell the operator to set `identity.operator_contact_id`"},
 		{"an authority first name is custodied", "contacts_save", "Outside the operator's own message, `contact_save` also refuses a new contact's name, or any contact's nickname, that is the given name or the first word of the formatted name of an admin, household, trusted, or operator contact"},
 		{"a first-name takeover is why", "contacts_save", "A formatted name or nickname is found before any first name"},
 		{"the operator's message lifts the first-name rule", "contacts_save", "if the operator wants the other contact to go by that name, they say so in their own message"},
@@ -122,6 +127,7 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"any exact holder is chosen without an error", "one is chosen without an error"},
 		{"only the short-form case is an error", "A name is an error only when no contact holds it that way"},
 		{"a known duplicate takes the notifications", "between two `known` contacts it can take their"},
+		{"a shared name always reaches one", "reaches only one of them"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {

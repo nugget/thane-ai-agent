@@ -28,7 +28,7 @@ var contactForkRemedyByKind = map[string]string{
 // contactForkWarningByKind is the boot Warn message for each kind.
 var contactForkWarningByKind = map[string]string{
 	contacts.ForkKindName:           "contact records that look like one person share a name with a record above known or the operator's own; a name lookup, presence or a dossier can land on the duplicate",
-	contacts.ForkKindSharedName:     "different contact records answer to one name, one of them above known or the operator's own; a name lookup reaches only one of them",
+	contacts.ForkKindSharedName:     "different contact records answer to one name, one of them above known or the operator's own; a name lookup reaches only the one with the most standing, or none of them when two or more share it",
 	contacts.ForkKindEmail:          "contact records share an email address with a record above known or the operator's own; mail to or from it can land on the duplicate or be gated at the wrong zone",
 	contacts.ForkKindPhone:          "contact records share a phone number with a record above known or the operator's own; a Signal sender on it can bind to the duplicate or to no contact",
 	contacts.ForkKindReservedDomain: "contact record above known or of the operator holds a placeholder email address on a reserved domain, where no mailbox exists",
