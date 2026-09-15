@@ -173,7 +173,9 @@ func TestRoutingByZoneProjectsThePolicy(t *testing.T) {
 		t.Errorf("direct = %+v", r)
 	}
 
-	draftsOnly := AccountConfig{Name: "b", Policy: PolicyConfig{Access: AccessSend, Delivery: DeliveryDrafts}}
+	// The relaxed gate, the default with drafts delivery, is pinned in
+	// TestEmailAccountsEntryShowsTheDraftGate.
+	draftsOnly := AccountConfig{Name: "b", Policy: PolicyConfig{Access: AccessSend, Delivery: DeliveryDrafts, DraftGate: DraftGateStrict}}
 	if r := routingByZone(draftsOnly, true); len(r.SendsDirectlyTo) != 0 || strings.Join(r.DraftsFor, ",") != "admin,household,trusted" {
 		t.Errorf("drafts without smtp = %+v", r)
 	}

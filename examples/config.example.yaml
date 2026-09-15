@@ -1410,10 +1410,11 @@ compaction:
 #       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 #       Leave empty to keep no server-side copy.
 #       sent_folder: Sent
-#       DraftsFolder is the IMAP folder that receives messages held for the
-#       operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
-#       empty to use the folder the server marks as its drafts folder, or
-#       "Drafts" when it marks none.
+#       DraftsFolder is the exact name of the IMAP folder that receives
+#       messages held for the operator to send, for a server that marks no
+#       folder with the \Drafts special-use attribute. Leave empty to use
+#       the folder the server marks. When neither names one, a message the
+#       policy would draft is refused; nothing is sent in its place.
 #       drafts_folder: Drafts
 #       JunkFolder is the exact name of the folder that holds spam, for a
 #       server that marks none with the \Junk special-use attribute. Leave
@@ -1439,18 +1440,31 @@ compaction:
 #         has passed the trust gate. "by_trust_zone" (default) sends
 #         directly to admin and household recipients when the operator is
 #         present for the turn, holds mail for trusted recipients in the
-#         Drafts folder for the operator to send, and refuses known and
+#         drafts folder for the operator to send, and refuses known and
 #         unknown recipients. The operator is present only for their own
 #         message, sent through Thane's native API or written in a
 #         conversation bound to their contact; every other turn (a poller
 #         wake, a scheduled loop, a loop launched from the operator's
 #         conversation, a call through the Ollama-compatible shim that Home
-#         Assistant automations use) holds everything in Drafts, so an
-#         autonomous loop never sends on its own. "drafts" holds every
-#         message in Drafts. "direct" sends everything the gate allows,
+#         Assistant automations use) holds everything in the drafts folder,
+#         so an autonomous loop never sends on its own. "drafts" holds every
+#         message there. "direct" sends everything the gate allows,
 #         including to trusted recipients and from unattended turns; choose
 #         it deliberately.
 #         delivery: by_trust_zone
+#         DraftGate is how the trust gate treats recipients when delivery
+#         is drafts, where the operator sends every message by hand.
+#         "relaxed" (the default with delivery drafts) drafts for anyone a
+#         person could answer: a recipient refused only for its trust zone
+#         (no contact record, a known contact, or an address several records
+#         share whose least privileged one is blocked) is drafted, because
+#         the operator's own send is the gate. Automated mailboxes, failed
+#         directory lookups, and the recipient-domain rules stay refused. A
+#         relaxed account also drafts an unattended reply to mailing-list or
+#         bulk mail whose own To or Cc names the account's address. "strict"
+#         (the default otherwise) applies the gate as every other delivery
+#         mode does. relaxed with any other delivery mode is refused.
+#         draft_gate: strict
 #         DeniedRecipientDomains lists domains this account never writes
 #         to, even when the recipient is a trusted contact. An entry covers
 #         the domain and its subdomains ("example.com" also covers
@@ -1544,10 +1558,11 @@ compaction:
 #       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
 #       Leave empty to keep no server-side copy.
 #       sent_folder: ""
-#       DraftsFolder is the IMAP folder that receives messages held for the
-#       operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
-#       empty to use the folder the server marks as its drafts folder, or
-#       "Drafts" when it marks none.
+#       DraftsFolder is the exact name of the IMAP folder that receives
+#       messages held for the operator to send, for a server that marks no
+#       folder with the \Drafts special-use attribute. Leave empty to use
+#       the folder the server marks. When neither names one, a message the
+#       policy would draft is refused; nothing is sent in its place.
 #       drafts_folder: ""
 #       JunkFolder is the exact name of the folder that holds spam, for a
 #       server that marks none with the \Junk special-use attribute. Leave
@@ -1573,18 +1588,31 @@ compaction:
 #         has passed the trust gate. "by_trust_zone" (default) sends
 #         directly to admin and household recipients when the operator is
 #         present for the turn, holds mail for trusted recipients in the
-#         Drafts folder for the operator to send, and refuses known and
+#         drafts folder for the operator to send, and refuses known and
 #         unknown recipients. The operator is present only for their own
 #         message, sent through Thane's native API or written in a
 #         conversation bound to their contact; every other turn (a poller
 #         wake, a scheduled loop, a loop launched from the operator's
 #         conversation, a call through the Ollama-compatible shim that Home
-#         Assistant automations use) holds everything in Drafts, so an
-#         autonomous loop never sends on its own. "drafts" holds every
-#         message in Drafts. "direct" sends everything the gate allows,
+#         Assistant automations use) holds everything in the drafts folder,
+#         so an autonomous loop never sends on its own. "drafts" holds every
+#         message there. "direct" sends everything the gate allows,
 #         including to trusted recipients and from unattended turns; choose
 #         it deliberately.
 #         delivery: by_trust_zone
+#         DraftGate is how the trust gate treats recipients when delivery
+#         is drafts, where the operator sends every message by hand.
+#         "relaxed" (the default with delivery drafts) drafts for anyone a
+#         person could answer: a recipient refused only for its trust zone
+#         (no contact record, a known contact, or an address several records
+#         share whose least privileged one is blocked) is drafted, because
+#         the operator's own send is the gate. Automated mailboxes, failed
+#         directory lookups, and the recipient-domain rules stay refused. A
+#         relaxed account also drafts an unattended reply to mailing-list or
+#         bulk mail whose own To or Cc names the account's address. "strict"
+#         (the default otherwise) applies the gate as every other delivery
+#         mode does. relaxed with any other delivery mode is refused.
+#         draft_gate: strict
 #         DeniedRecipientDomains lists domains this account never writes
 #         to, even when the recipient is a trusted contact. An entry covers
 #         the domain and its subdomains ("example.com" also covers

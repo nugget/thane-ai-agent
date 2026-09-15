@@ -413,6 +413,7 @@ func ExampleConfig() *Config {
 					Policy: EmailPolicyConfig{
 						Access:                 EmailAccessSend,
 						Delivery:               EmailDeliveryByTrustZone,
+						DraftGate:              EmailDraftGateStrict,
 						DeniedRecipientDomains: []string{"example.org"},
 					},
 					Mailbox: EmailMailboxConfig{Owner: EmailMailboxOwnerAssistant},
@@ -427,7 +428,7 @@ func ExampleConfig() *Config {
 						Password: "your-email-password",
 						TLS:      &imapTLS,
 					},
-					Policy:  EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone},
+					Policy:  EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone, DraftGate: EmailDraftGateStrict},
 					Mailbox: EmailMailboxConfig{Owner: EmailMailboxOwnerAssistant},
 				},
 			},

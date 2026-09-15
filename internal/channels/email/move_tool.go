@@ -23,7 +23,7 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 		return moveResponse{}, err
 	}
 	opts.Destination = dest
-	if namesFolder(dest, s.draftsFolder(ctx, acct)) {
+	if drafts := r.folder(ctx, RoleDrafts); drafts != "" && namesFolder(dest, drafts) {
 		s.logMoveRefusal(ctx, acct, "drafts_destination", opts.Folder, dest)
 		return moveResponse{}, fmt.Errorf("email_move cannot file mail into %q: it is account %q's drafts folder, which holds drafts waiting for the operator to send or discard, and a moved message there would look like one of them. Pick another destination, or report the need", dest, acct.Name)
 	}

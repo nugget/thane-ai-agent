@@ -79,7 +79,9 @@ func (s *Service) newFilingView(cfg AccountConfig) filingView {
 
 // entryDraftsFolder is the drafts folder an account's entry shows. An
 // account that can draft shows where a drafted message lands, resolved
-// the way the send path resolves it. An operator mailbox that cannot
+// by role the way the send path resolves it but without touching the
+// server, and none until configuration or a listing names one, which is
+// also when the send path would refuse to draft. An operator mailbox that cannot
 // draft still shows its configured drafts folder, even before any
 // folder listing, because what the operator keeps there is theirs and
 // email_move refuses it as a destination. Every other account that
@@ -87,7 +89,7 @@ func (s *Service) newFilingView(cfg AccountConfig) filingView {
 // mailbox block existed.
 func (s *Service) entryDraftsFolder(cfg AccountConfig) string {
 	if cfg.CanDraft() {
-		return s.knownDraftsFolder(cfg)
+		return s.knownRoleFolder(cfg, RoleDrafts)
 	}
 	if cfg.OperatorMailbox() {
 		return strings.TrimSpace(cfg.DraftsFolder)

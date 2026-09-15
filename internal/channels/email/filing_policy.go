@@ -69,14 +69,11 @@ func parseMoveRequest(args map[string]any) (moveRequest, []string) {
 // resolveMoveDestination returns the folder a move files into: the
 // destination as given, or destination_role resolved through r. The
 // drafts role resolves the way the send path does, so the drafts
-// refusal answers it. An unresolved role is refused with the gap it
-// names.
+// refusal answers it; resolved or not, it is never a destination. An
+// unresolved role is refused with the gap it names.
 func (s *Service) resolveMoveDestination(ctx context.Context, acct ResolvedAccount, r *folderResolver, req moveRequest) (string, error) {
-	switch req.role {
-	case "":
+	if req.role == "" {
 		return req.opts.Destination, nil
-	case RoleDrafts:
-		return s.draftsFolder(ctx, acct), nil
 	}
 	folder := r.folder(ctx, req.role)
 	if r.err != nil {
@@ -84,6 +81,10 @@ func (s *Service) resolveMoveDestination(ctx context.Context, acct ResolvedAccou
 	}
 	if folder != "" {
 		return folder, nil
+	}
+	if req.role == RoleDrafts {
+		s.logMoveRefusal(ctx, acct, "drafts_destination", normalizeFolder(req.opts.Folder), string(req.role))
+		return "", fmt.Errorf("email_move never files mail by destination_role drafts on account %q: drafts is not among destination_role's values, because a message moved into the drafts role would look like a draft waiting for the operator to send or discard, and nothing was moved. Pick another destination, or report the need", acct.Name)
 	}
 	s.logMoveRefusal(ctx, acct, "destination_role_unresolved", "", string(req.role))
 	if key := roleConfigKey(req.role); key != "" {

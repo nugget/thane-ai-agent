@@ -38,7 +38,8 @@ const (
 // vouch for it: they never change a sender's trust_zone or the
 // per-address automated key. Their one effect in Go is that
 // [Service.Send] refuses an unattended reply to a marked message
-// (RFC 3834 §2).
+// (RFC 3834 §2), except bulk mail a person sent that names a relaxed
+// drafts-only account in its own To or Cc, which is drafted instead.
 type HeaderMarks struct {
 	// AutoSubmitted is the message's Auto-Submitted keyword (RFC 3834
 	// §2): one of the AutoSubmitted constants, and empty when the header
@@ -50,6 +51,13 @@ type HeaderMarks struct {
 	// bulk, list, or junk. RFC 3834 §2 names only Precedence "list", as
 	// a heuristic; bulk and junk are de facto convention (RFC 2076).
 	Bulk bool `json:"bulk,omitempty"`
+
+	// junkOnly reports that a Precedence of junk is the message's only
+	// bulk mark: it carries no list field and no Precedence of bulk or
+	// list. Classic vacation-style autoresponders mark their replies
+	// that way and set no Auto-Submitted, so the list-mail rule treats
+	// such a message as automatic. It is never rendered.
+	junkOnly bool
 }
 
 // Marked reports whether the message carries either mark.
@@ -106,17 +114,22 @@ func headerMarks(raw []byte) (HeaderMarks, error) {
 			break
 		}
 	}
+	listed, junk := false, false
 	for _, field := range listHeaderFields {
 		if h.Has(field) {
-			marks.Bulk = true
+			listed = true
 		}
 	}
 	for _, v := range h.Values("Precedence") {
 		switch headerKeyword(v) {
-		case "bulk", "list", "junk":
-			marks.Bulk = true
+		case "bulk", "list":
+			listed = true
+		case "junk":
+			junk = true
 		}
 	}
+	marks.Bulk = listed || junk
+	marks.junkOnly = junk && !listed
 	return marks, err
 }
 
