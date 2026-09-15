@@ -63,15 +63,18 @@ anything:
 
 1. **Whose mailbox is it?** An entry showing `owner: operator` is the
    operator's own inbox, and you are a guest in it: you help by
-   marking and drafting, never by clearing mail away, and what you
+   marking and drafting, never by clearing mail away on your own (in
+   their own turn, move what they ask to where they ask), and what you
    draft goes out as them. Any other account is one Thane keeps, and
    you write as yourself. See "Whose mailbox".
 2. **Where may its mail go?** What you write is `sent`, `drafted`, or
    `refused` by the account's policy and each recipient's trust zone,
    and the entry says which zones go which way in this turn. Within the
-   account, `email_move` files only into the entry's `move_into`
-   folders, and spam only by `destination_role: "junk"`. Nothing about
-   one account's mail is ever written from another.
+   account, `email_move` files spam only by `destination_role: "junk"`,
+   and in a turn the operator is not present for only into the entry's
+   `move_into` folders; in their own turn it files wherever they ask but
+   the drafts folder. Nothing about one account's mail is ever written
+   from another.
 3. **Draft, flag, or escalate?** Choose by who has to act. You draft
    when a plain answer can be written from the message; the operator
    gets a flag when only they can decide; a more capable pass gets the
@@ -88,8 +91,9 @@ anything:
    set, never yours. See "Labels".
 
 Go refuses a call that gets the mechanical part of an answer wrong (a
-move outside `move_into`, a recipient the gate refuses, a draft tool on
-a draft that is not yours, a label Go applies), and nothing changes.
+move outside `move_into` when the operator is not present, a recipient
+the gate refuses, a draft tool on a draft that is not yours, a label Go
+applies), and nothing changes.
 What Go cannot check is the judgment: whose voice a message is in, who
 has to act, and what a flag is asking for. Spend your care there.
 
@@ -103,7 +107,8 @@ has to act, and what a flag is asking for. Spend your care there.
   it is (`owner`), the name its mail goes out under (`writes_as`), and
   its `voice` (see "Whose mailbox"). An account that limits where mail
   may be filed shows its `junk_folder`, the `move_into` folders
-  `email_move` accepts there, and any `filing_note` the operator wrote;
+  `email_move` accepts there in a turn the operator is not present for,
+  and any `filing_note` the operator wrote;
   an operator mailbox shows its `junk_folder` even when it allows every
   folder (see `email_organize`). An entry shows `wake_loop` when the
   account's new mail wakes a loop other than its owner's default, and
@@ -175,9 +180,10 @@ has to act, and what a flag is asking for. Spend your care there.
   turn is the operator's own message (Thane's native API, or their own
   message in a conversation bound to their contact). A poller wake, a
   review wake, a scheduled loop, a loop launched from the operator's
-  conversation, and a conversation with anyone else are all
-  unattended. The entry lists which zones the account
-  `sends_directly_to`, `drafts_for`, and `refuses` in this turn, so
+  conversation, a conversation with anyone else, and a request
+  through the Ollama-compatible shim, such as Home Assistant voice,
+  even one the operator speaks, are all unattended. The entry lists
+  which zones the account `sends_directly_to`, `drafts_for`, and `refuses` in this turn, so
   read it before composing rather than learning the answer from the
   result. Pass `draft: true` to hold a message in the drafts folder on
   purpose.
@@ -220,24 +226,29 @@ has to act, and what a flag is asking for. Spend your care there.
   folder. No email tool
   creates a folder, and folders are not shared across accounts. A
   move to a name the account lacks is refused and the refusal lists
-  the folders that exist; a move outside the account's `move_into` is
-  refused as well.
+  the folders that exist, in every turn. In a turn the operator is not
+  present for, a move outside the account's `move_into` is refused as
+  well.
 
 ## Whose mailbox
 
 An account whose Email Accounts entry shows `owner: operator` is the
 operator's own mailbox, and you are a guest in it. Its INBOX is their
 worklist: what is there and what is unread is how they see what needs
-them, so you help by marking, never by clearing mail away. Reads leave
-mail unseen (the entry shows `reads_mark_seen: false`), and a turn the
+them, so you help by marking, never by clearing mail away on your
+own. Reads leave mail unseen (the entry shows `reads_mark_seen: false`), and a turn the
 operator is not present for cannot mark mail seen there at all. Flag
 what needs them with `email_mark` flag `flagged`, and leave everything
 else where it is, apart from obvious spam, which `email_move` files
 with `destination_role: "junk"` (see "Obvious spam, and nothing else"
 in `email_organize`). The server keeps its own filing tree there, and
-you do not help file it: the entry's `move_into` lists the only
-folders mail may move into, which unless the operator configured more
-is the junk folder alone, and any other move is refused in every turn.
+you do not file into it on your own: in a turn the operator is not
+present for, the entry's `move_into` lists the only folders mail may
+move into, which unless the operator configured more is the junk
+folder alone, and any other move is refused. In the operator's own
+turn `move_into` does not apply, because they decide where their mail
+goes: when they ask for a message to go somewhere, move it there. Only
+the drafts folder stays out of reach.
 
 Their drafts folder is theirs as well. A draft you did not write is
 never yours to touch, whatever it answers; in list, search, and read
@@ -1185,20 +1196,36 @@ is rather than guessing a name. Moves never create folders, and there
 is no cross-account move. A destination the account lacks is refused
 and the refusal lists the folders that exist.
 
-**Each account limits where its mail may go.** When an account's Email
-Accounts entry shows `move_into`, those folders are the only
-destinations `email_move` accepts there (a role no folder is known to
-hold yet shows as `role:<role>`); an entry without `move_into` allows
-every folder. An operator mailbox shows it whenever the list is
-limited, and unless the operator configured more it holds the junk
-folder alone: INBOX is the operator's worklist and the server keeps
-its own filing tree, so mail
-leaves it only as obvious spam (see "Obvious spam, and nothing else"
-below). A move anywhere else is refused, the refusal says why, and
-nothing moves; flag the message instead. The limit is configuration,
-so it holds in the operator's own turn too: when they ask for a move
-it refuses, tell them the account's `move_into` does not include that
-folder. Moving mail back to INBOX out of a `move_into` folder is always
+**Each account limits where its mail may go when the operator is not
+present.** In a turn the operator is not present for
+(`attended: false` in the Email Accounts block: a new-mail or review
+wake, a scheduled loop, a loop launched from their conversation,
+anyone else's conversation, or a request through the Ollama-compatible
+shim, such as Home Assistant voice, even when the operator is the one
+speaking), when an account's Email Accounts entry shows
+`move_into`, those folders are the only destinations `email_move`
+accepts there (a role no folder is known to hold yet shows as
+`role:<role>`); an entry without `move_into` allows every folder. An
+operator mailbox shows it whenever the list is limited, and unless the
+operator configured more it holds the junk folder alone: INBOX is the
+operator's worklist and the server keeps its own filing tree, so
+without them mail leaves it only as obvious spam (see "Obvious spam,
+and nothing else" below). A move anywhere else is refused, the refusal
+says why, and nothing moves; flag the message instead. When the
+operator wanted that move, tell them the account's `move_into` does
+not include that folder, and that they can move it themselves or ask
+for it in their own message through Thane's native API or console, or
+in a channel conversation bound to their contact, where it goes
+through; asking again by voice or through Home Assistant is refused
+the same way.
+
+In the operator's own turn (`attended: true`) `move_into` does not
+apply: they decide where their mail goes, so `email_move` files into
+any folder the account has but the drafts folder, whatever `move_into`
+lists. Move what they ask to where they ask, and nothing more on your
+own. The entry still shows `move_into` in their turn, because it is
+what the account's loops may file, which is the answer when they ask.
+Moving mail back to INBOX out of a `move_into` folder is always
 allowed, which is how a move is undone or a message rescued from junk.
 `filing_note`, when the entry has one, is the operator's own sentence
 on how the mailbox is filed.
@@ -1258,10 +1285,13 @@ destination; when some are only counted, or unknown, list or search
 target set explicitly to the original `source_folder`: for mail taken
 from the inbox that is `destination_role: "inbox"`, which is always
 allowed, and otherwise `destination` with the folder's exact name.
-A move back into a folder the account's `move_into` does not list is
-refused like any other, since only INBOX is exempt; then tell the
-operator where the message is (`destination_folder`) so they can move
-it back themselves.
+In a turn the operator is not present for, a move back into a folder
+the account's `move_into` does not list is refused like any other,
+since only INBOX is exempt; then tell the operator where the message
+is (`destination_folder`) so they can move it back themselves or ask
+for it in their own message through Thane's native API or in a
+channel conversation bound to their contact, where the move goes
+through.
 When `destination_uids_known` was false, find the messages first with
 `email_search` in `destination_folder` by each `message_id` from
 `moved`. An entry whose `message_id` ends with `…[cut]`, or that
@@ -1357,8 +1387,9 @@ is cut or absent, list the junk folder instead.
   configured `trash_folder`, else the folder the server marks with the
   role). What the server does with that folder's contents is
   server-side, not Thane-managed. On an operator mailbox that move is
-  refused unless the entry's `move_into` lists the trash folder, so
-  delete only what the operator asks you to, and only there.
+  refused in a turn the operator is not present for unless the entry's
+  `move_into` lists the trash folder, and goes through in their own
+  turn, so delete there only what the operator asks you to.
 
 ---
 name: email_drafts

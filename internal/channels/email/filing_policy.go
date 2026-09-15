@@ -18,6 +18,14 @@ import (
 // operator wrote. INBOX is always a legal destination out of a listed
 // folder, so undoing a move or rescuing mail from junk needs no rule
 // of its own.
+//
+// The rule binds only turns the operator is not present for (attended,
+// in policy.go). In their own conversation the operator decides where
+// their mail goes, so email_move files into any folder the account
+// has, and a move the rule would refuse is logged rather than refused.
+// The protections that are not filing policy hold in every turn: the
+// drafts folder is never a source or a destination (drafts_guard.go),
+// and an account whose access is read refuses the tool.
 
 // moveRequest is one email_move call's arguments, validated.
 type moveRequest struct {
@@ -200,10 +208,22 @@ func (p filingPolicy) entryNames() []string {
 	return names
 }
 
+// filingRecovery is how a move refused by move_into can still happen.
+// Only a turn the operator is not present for is refused, so the way
+// through is a message of their own on a route that attended counts as
+// present: Thane's native API or console, or a channel conversation
+// bound to their contact. The
+// Ollama-compatible shim is named because the operator can be the one
+// speaking there (Home Assistant voice) and still be refused, so asking
+// again the same way cannot be the recovery.
+const filingRecovery = "the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way"
+
 // refuseFiling returns the refusal for a move p does not allow, or nil.
-// On an operator mailbox the refusal says what INBOX is to the
-// operator, because that is why the move cannot happen, and the next
-// move (flag it) follows from it.
+// Tools.move calls it only in a turn the operator is not present for,
+// so every refusal says so and ends on filingRecovery. On an operator
+// mailbox the refusal says what INBOX is to the operator, because that
+// is why the move cannot happen, and the next move (flag it) follows
+// from it.
 func (s *Service) refuseFiling(ctx context.Context, acct ResolvedAccount, p filingPolicy, source, destination string) error {
 	if p.allows(source, destination) {
 		return nil
@@ -212,19 +232,54 @@ func (s *Service) refuseFiling(ctx context.Context, acct ResolvedAccount, p fili
 		// INBOX is refused only because the source is not listed, so
 		// the refusal names the source, not INBOX.
 		s.logMoveRefusal(ctx, acct, "inbox_return_outside_move_into", source, destination)
-		return fmt.Errorf("email_move cannot return mail to INBOX from %q on account %q: mail goes back to INBOX only out of a folder its mailbox.move_into lists, %s, and %q is not one of them. Leave the mail where it is, and if the operator asked for the move, tell them it is theirs to make; nothing was moved", source, acct.Name, p.describe(), source)
+		return fmt.Errorf("email_move cannot return mail to INBOX from %q on account %q: in a turn the operator is not present for, mail goes back to INBOX only out of a folder its mailbox.move_into lists, %s, and %q is not one of them. Leave the mail where it is: %s; nothing was moved", source, acct.Name, p.describe(), source, filingRecovery)
 	}
 	s.logMoveRefusal(ctx, acct, "outside_move_into", source, destination)
 	if acct.Config.OperatorMailbox() {
-		return fmt.Errorf("email_move cannot file into %q on account %q: it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree; mail may move only into %s, and back to INBOX from there. Flag it instead; nothing was moved", destination, acct.Name, p.describe())
+		return fmt.Errorf("email_move cannot file into %q on account %q: it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree, so in a turn the operator is not present for, mail may move only into %s, and back to INBOX from there. Flag it instead; if it needs filing, %s; nothing was moved", destination, acct.Name, p.describe(), filingRecovery)
 	}
-	return fmt.Errorf("email_move cannot file into %q on account %q: its mailbox.move_into allows only %s, and back to INBOX from there. Choose one of those or report the need; nothing was moved", destination, acct.Name, p.describe())
+	return fmt.Errorf("email_move cannot file into %q on account %q: in a turn the operator is not present for, its mailbox.move_into allows only %s, and back to INBOX from there. Choose one of those, or leave the mail and report the need: %s; nothing was moved", destination, acct.Name, p.describe(), filingRecovery)
 }
 
 // logMoveRefusal records one refused move, keyed to the loop and
 // conversation that asked.
 func (s *Service) logMoveRefusal(ctx context.Context, acct ResolvedAccount, reason, source, destination string) {
-	s.logger.Info("email move refused",
+	s.logger.Info("email move refused", moveLogAttrs(ctx, acct, reason, source, destination)...)
+}
+
+// logMoveOutsideMoveInto records a completed move that move_into does
+// not allow, which went ahead because the operator was present for the
+// turn. It names the messages that moved, by UID on both sides and by
+// Message-ID, because recent_operations forgets them after a few
+// operations or a restart, and this line is how a later pass finds
+// which mail left a folder outside the rule. Tools.move calls it only
+// after the server moved the messages, so a move that failed never
+// reads as one made outside the rule; a result that moved nothing logs
+// nothing.
+func (s *Service) logMoveOutsideMoveInto(ctx context.Context, acct ResolvedAccount, result MoveResult, moved []movedMessage) {
+	if len(result.UIDs) == 0 {
+		return
+	}
+	messageIDs := make([]string, 0, len(moved))
+	for _, m := range moved {
+		if m.MessageID != "" {
+			messageIDs = append(messageIDs, m.MessageID)
+		}
+	}
+	attrs := append(moveLogAttrs(ctx, acct, "operator_present", result.SourceFolder, result.Destination),
+		"count", len(result.UIDs),
+		"uids", result.UIDs,
+		"destination_uids_known", result.DestUIDsKnown,
+		"destination_uids", result.DestUIDs,
+		"message_ids", messageIDs,
+	)
+	s.logger.Info("email move outside move_into allowed", attrs...)
+}
+
+// moveLogAttrs are the fields every filing decision logs, keyed to the
+// loop, conversation, request, and tool call that asked.
+func moveLogAttrs(ctx context.Context, acct ResolvedAccount, reason, source, destination string) []any {
+	return []any{
 		"account", acct.Name,
 		"reason", reason,
 		"source_folder", source,
@@ -232,5 +287,7 @@ func (s *Service) logMoveRefusal(ctx context.Context, acct ResolvedAccount, reas
 		"owner", acct.Config.MailboxOwner(),
 		"loop_id", tools.LoopIDFromContext(ctx),
 		"conversation_id", tools.ConversationIDFromContext(ctx),
-	)
+		"request_id", tools.RequestIDFromContext(ctx),
+		"tool_call_id", tools.ToolCallIDFromContext(ctx),
+	}
 }
