@@ -71,6 +71,8 @@ These tools load on every turn regardless of active tags.
 `archive_range` selects the newest messages matching inclusive time bounds and
 returns them oldest first, breaking equal-time ties by message ID. Bounds accept
 RFC3339 timestamps or signed deltas and compare exact instants across time zones.
+Omitted `min_time` is unbounded and omitted `max_time` defaults to now; explicit
+timestamps, including `0001-01-01T00:00:00Z`, remain exact bounds.
 `max_messages` defaults to 200 and is capped at 1000. If `min_messages` cannot be
 met within the window, retrieval extends before `min_time`, up to that cap. The
 floor remains subject to available history and the tool's output size limit;

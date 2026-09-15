@@ -944,7 +944,7 @@ paths:
         - name: limit
           in: query
           description: Maximum messages to return. Non-positive values use 500; values above 1000 are clamped.
-          schema: { type: integer, default: 500, maximum: 1000 }
+          schema: { type: integer, default: 500 }
       responses:
         "200":
           description: Archived messages within the requested time range, with the count and echoed bounds.

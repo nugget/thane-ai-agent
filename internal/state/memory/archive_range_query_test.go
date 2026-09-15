@@ -57,7 +57,7 @@ func TestArchiveRangeMixedTimestamps(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: tc.from, To: tc.to, ConversationID: "conv"})
+					newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(tc.from), To: timePointer(tc.to), ConversationID: "conv"})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -79,7 +79,7 @@ func TestArchiveRangeMixedTimestamps(t *testing.T) {
 			if err != nil || len(oldest) != 1 || oldest[0].ID != "b" {
 				t.Fatalf("oldest = %v, %v", oldest, err)
 			}
-			newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: from, To: to, ConversationID: "conv", MaxMessages: 2})
+			newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(from), To: timePointer(to), ConversationID: "conv", MaxMessages: 2})
 			if err != nil || !truncated || len(newest) != 2 || newest[0].ID != "c" || newest[1].ID != "d" {
 				t.Fatalf("newest = %v, truncated=%t, %v", newest, truncated, err)
 			}
@@ -106,7 +106,7 @@ func TestArchiveRangeHardLimitAndDefaults(t *testing.T) {
 			if len(oldest) != want || oldest[0].Content != "0" {
 				t.Fatalf("oldest count=%d want=%d first=%s", len(oldest), want, oldest[0].Content)
 			}
-			newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: base, To: base.Add(time.Second), MaxMessages: limit})
+			newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(base), To: timePointer(base.Add(time.Second)), MaxMessages: limit})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -131,7 +131,7 @@ func TestArchiveRangeCancellationAndInvalidBounds(t *testing.T) {
 			return err
 		}},
 		{"newest", func(ctx context.Context, from, to time.Time) error {
-			_, _, err := store.GetMessagesInRange(ctx, RangeOptions{From: from, To: to})
+			_, _, err := store.GetMessagesInRange(ctx, RangeOptions{From: timePointer(from), To: timePointer(to)})
 			return err
 		}},
 	} {
@@ -200,11 +200,11 @@ func TestArchiveRangeUnboundedIncludesBeforeEpoch(t *testing.T) {
 	store, insert := newRangeTestStore(t)
 	insert("conv", "session", "user", "before epoch", time.Unix(-1, 999999999))
 	insert("conv", "session", "user", "epoch", time.Unix(0, 0))
-	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{To: time.Unix(0, 0)})
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{To: timePointer(time.Unix(0, 0))})
 	if err != nil || truncated || len(got) != 2 || got[0].Content != "before epoch" || got[1].Content != "epoch" {
 		t.Fatalf("unbounded range = %v, truncated=%t, %v", got, truncated, err)
 	}
-	got, truncated, err = store.GetMessagesInRange(context.Background(), RangeOptions{From: time.Unix(0, 0), To: time.Unix(0, 0), MinMessages: 2})
+	got, truncated, err = store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(time.Unix(0, 0)), To: timePointer(time.Unix(0, 0)), MinMessages: 2})
 	if err != nil || truncated || len(got) != 2 || got[0].Content != "before epoch" {
 		t.Fatalf("floor range = %v, truncated=%t, %v", got, truncated, err)
 	}
@@ -218,6 +218,12 @@ func TestArchiveRangeExplicitZeroInstant(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Content != "zero" {
 		t.Fatalf("explicit zero range = %v, %v", got, err)
 	}
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
+		From: timePointer(time.Time{}), To: timePointer(time.Time{}), ConversationID: "conv",
+	})
+	if err != nil || truncated || len(got) != 1 || got[0].Content != "zero" {
+		t.Fatalf("explicit zero newest range = %v, truncated=%t, %v", got, truncated, err)
+	}
 }
 
 func TestArchiveRangeDoesNotReadExcludedMalformedTimestamps(t *testing.T) {
@@ -229,7 +235,7 @@ func TestArchiveRangeDoesNotReadExcludedMalformedTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{ConversationID: "conv", ExcludeSessionID: "excluded", From: now.Add(-time.Hour), To: now})
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{ConversationID: "conv", ExcludeSessionID: "excluded", From: timePointer(now.Add(-time.Hour)), To: timePointer(now)})
 	if err != nil || len(got) != 1 || got[0].Content != "valid" {
 		t.Fatalf("filtered range = %v, %v", got, err)
 	}

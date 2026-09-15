@@ -415,14 +415,14 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				if err != nil {
 					return "", fmt.Errorf("min_time: %w", err)
 				}
-				opts.From = t
+				opts.From = &t
 			}
 			if v, ok := args["max_time"].(string); ok && v != "" {
 				t, err := promptfmt.ParseTimeOrDelta(v, now)
 				if err != nil {
 					return "", fmt.Errorf("max_time: %w", err)
 				}
-				opts.To = t
+				opts.To = &t
 			}
 			if n, ok := args["min_messages"].(float64); ok && n > 0 {
 				opts.MinMessages = int(min(n, float64(memory.MaxArchiveRangeMessages)))

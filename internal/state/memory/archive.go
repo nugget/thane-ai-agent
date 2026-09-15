@@ -2536,14 +2536,15 @@ type RangeOptions struct {
 	// message list).
 	ExcludeSessionID string `json:"exclude_session_id,omitempty"`
 
-	// From is the earliest timestamp to include (inclusive). Zero means
+	// From is the earliest timestamp to include (inclusive). Nil means
 	// unbounded — combined with MinMessages, this is how the "give me at
 	// least N most-recent messages regardless of age" query is expressed.
-	From time.Time `json:"from,omitzero"`
+	// A non-nil zero time is the explicit year-one boundary.
+	From *time.Time `json:"from,omitempty"`
 
-	// To is the latest timestamp to include (inclusive). Zero is treated
-	// as time.Now() at query time.
-	To time.Time `json:"to,omitzero"`
+	// To is the latest timestamp to include (inclusive). Nil defaults to
+	// time.Now() at query time; a non-nil zero time remains an exact bound.
+	To *time.Time `json:"to,omitempty"`
 
 	// MinMessages widens the window to older matching history when fewer
 	// than this many messages fall inside [From, To], subject to the
@@ -2572,19 +2573,18 @@ func (s *ArchiveStore) GetMessagesInRange(ctx context.Context, opts RangeOptions
 		maxN = 200
 	}
 	maxN = min(maxN, MaxArchiveRangeMessages)
-	if opts.To.IsZero() {
-		opts.To = time.Now()
+	if opts.To == nil {
+		now := time.Now()
+		opts.To = &now
 	}
 
 	query := messageRangeQuery{
-		to:               &opts.To,
+		from:             opts.From,
+		to:               opts.To,
 		conversationID:   opts.ConversationID,
 		excludeSessionID: opts.ExcludeSessionID,
 		limit:            maxN + 1,
 		newest:           true,
-	}
-	if !opts.From.IsZero() {
-		query.from = &opts.From
 	}
 
 	// Step 1: most recent messages within [from, to], DESC. Ask for one
@@ -2603,7 +2603,7 @@ func (s *ArchiveStore) GetMessagesInRange(ctx context.Context, opts RangeOptions
 	// messages. MinMessages is a floor ("at least this many"), not a
 	// cap — when it triggers we still return up to MaxMessages so the
 	// model gets useful context, not exactly MinMessages.
-	if !opts.From.IsZero() && opts.MinMessages > 0 && len(msgs) < min(opts.MinMessages, maxN) {
+	if opts.From != nil && opts.MinMessages > 0 && len(msgs) < min(opts.MinMessages, maxN) {
 		query.from = nil
 		floor, err := s.queryMessagesRange(ctx, query)
 		if err != nil {
@@ -2675,7 +2675,7 @@ func (s *ArchiveStore) RecentContactTimes(conversationID string, limit int) ([]t
 }
 
 // Pointer bounds distinguish an omitted bound from the valid year-one zero
-// instant accepted by the HTTP range contract.
+// instant accepted by the HTTP and tool range contracts.
 type messageRangeQuery struct {
 	from, to         *time.Time
 	conversationID   string
