@@ -28,6 +28,7 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -83,6 +84,7 @@ type Registry struct {
 	homeLocation       *time.Location
 	workingMemoryStore *memory.WorkingMemoryStore
 	archiveStore       *memory.ArchiveStore
+	documentSearch     *documents.Tools
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 
@@ -1361,7 +1363,7 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		}
 	}
 
-	return tool.Handler(ctx, args)
+	return tool.Handler(withToolExecutionScope(ctx, r), args)
 }
 
 func mergeUniqueStrings(parts ...[]string) []string {

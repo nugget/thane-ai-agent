@@ -13,7 +13,7 @@ import (
 )
 
 // mockArchiveSearcher implements [MemorySearcher] for testing. Most
-// existing tests set only `results` (raw-message hits) — Search
+// existing tests set only `results` (raw-message hits) — SearchContext
 // wraps that into a SearchBundle so the prewarm provider's
 // multi-surface contract is satisfied. Tests that exercise the
 // distilled surfaces set `sessions` and `workingMemory` directly.
@@ -27,7 +27,7 @@ type mockArchiveSearcher struct {
 	callCount     int
 }
 
-func (m *mockArchiveSearcher) Search(opts SearchOptions) (*SearchBundle, error) {
+func (m *mockArchiveSearcher) SearchContext(_ context.Context, opts SearchOptions) (*SearchBundle, error) {
 	m.callCount++
 	m.lastQuery = opts.Query
 	m.lastLimit = opts.Limit
@@ -39,6 +39,20 @@ func (m *mockArchiveSearcher) Search(opts SearchOptions) (*SearchBundle, error) 
 		Sessions:      m.sessions,
 		WorkingMemory: m.workingMemory,
 	}, nil
+}
+
+func TestArchiveContextProviderCanceledSearch(t *testing.T) {
+	archive := newTestArchiveStore(t)
+	seedArchiveSearchMessage(t, archive, "hit", "conv", "needle", time.Now())
+	provider := NewArchiveContextProvider(NewMemorySearch(archive, nil, nil), 5, 4096, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{UserMessage: "needle"})
+	// Archive context is optional: cancellation must stop its database
+	// search and contribute no context, without failing the whole wake.
+	if err != nil || got != "" {
+		t.Fatalf("canceled prewarm = %q, %v; want no context and no blocking error", got, err)
+	}
 }
 
 // archivePayload is the projection produced under the "### Past

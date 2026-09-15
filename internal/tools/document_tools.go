@@ -21,6 +21,8 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	if r == nil || dt == nil {
 		return
 	}
+	r.documentSearch = dt
+	r.registerKnowledgeSearch()
 
 	r.Register(&Tool{
 		Name:                 "doc_read",

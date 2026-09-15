@@ -1398,6 +1398,11 @@ type RootContextPolicy struct {
 	// "never".
 	Search string `yaml:"search,omitempty"`
 
+	// SearchBody opts this root's logical document bodies into explicit
+	// content search. Default false searches indexed metadata only.
+	// Search still governs visibility, and Indexing must be enabled.
+	SearchBody bool `yaml:"search_body,omitempty"`
+
 	// RequiresTag optionally gates the whole root behind one capability
 	// tag. It is a coarse companion to per-document tags: cheap to
 	// enforce, and the right shape when an entire corpus is only
@@ -1436,7 +1441,7 @@ type RootContextPolicy struct {
 // An undeclared policy keeps the root's historical behavior so an
 // existing config does not silently change how context is assembled.
 func (p RootContextPolicy) Declared() bool {
-	return p.Inject != "" || p.Search != "" || p.RequiresTag != "" || p.Advertise != ""
+	return p.Inject != "" || p.Search != "" || p.SearchBody || p.RequiresTag != "" || p.Advertise != ""
 }
 
 // EffectiveInject resolves the injection policy. A root that declares a
@@ -3410,6 +3415,8 @@ func (c *Config) applyDefaults() {
 			"session_working_memory",
 			"session_close",
 			"archive_search",
+			"doc_search",
+			"search",
 		}
 	}
 

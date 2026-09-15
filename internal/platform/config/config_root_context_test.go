@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestRootSearchBodyOptInSurvivesNormalization(t *testing.T) {
+	cfg := &Config{Roots: map[string]RootEntry{
+		"notes": {Path: "/tmp/notes", Context: RootContextPolicy{SearchBody: true}},
+		"other": {Path: "/tmp/other"},
+	}}
+	if err := cfg.normalizeRoots(); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.DocRoots["notes"].Context.SearchBody || cfg.DocRoots["other"].Context.SearchBody || (RootContextPolicy{}).SearchBody {
+		t.Fatalf("body search must remain explicit: %+v", cfg.DocRoots)
+	}
+	if !cfg.DocRoots["notes"].Context.Declared() {
+		t.Fatal("body-only context policy disappeared during normalization")
+	}
+}
+
 func TestRootContextPolicyValidate(t *testing.T) {
 	tests := []struct {
 		name    string

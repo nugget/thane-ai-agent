@@ -77,5 +77,21 @@ var schema = database.Schema{
 					(SELECT root, rel_path FROM indexed_documents WHERE facet_bytes_json IS NULL);
 				DELETE FROM indexed_documents WHERE facet_bytes_json IS NULL`,
 		},
+		// NULL marks rows predating content indexing. The next refresh
+		// reparses those files even when their mtime and size are unchanged.
+		database.ColumnAdd{Table: "indexed_documents", Column: "content_body_indexed", Typedef: "INTEGER"},
+		database.Raw{
+			Description: "create rebuildable document content search index",
+			SQL: `CREATE VIRTUAL TABLE IF NOT EXISTS indexed_document_content_fts USING fts5(
+				rel_path, title, summary, tags, body, tokenize='unicode61'
+			)`,
+		},
+		database.Raw{
+			Description: "remove content index entries with their source metadata",
+			SQL: `CREATE TRIGGER IF NOT EXISTS indexed_documents_content_delete
+				AFTER DELETE ON indexed_documents BEGIN
+					DELETE FROM indexed_document_content_fts WHERE rowid = old.rowid;
+				END`,
+		},
 	},
 }

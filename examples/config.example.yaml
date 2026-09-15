@@ -520,6 +520,10 @@ roots:
       # Search controls search visibility: "default", "on_request", or
       # "never".
       search: ""
+      # SearchBody opts this root's logical document bodies into explicit
+      # content search. Default false searches indexed metadata only.
+      # Search still governs visibility, and Indexing must be enabled.
+      search_body: false
       # RequiresTag optionally gates the whole root behind one capability
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
@@ -691,6 +695,10 @@ roots:
       # Search controls search visibility: "default", "on_request", or
       # "never".
       search: default
+      # SearchBody opts this root's logical document bodies into explicit
+      # content search. Default false searches indexed metadata only.
+      # Search still governs visibility, and Indexing must be enabled.
+      search_body: true
       # RequiresTag optionally gates the whole root behind one capability
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
@@ -827,6 +835,10 @@ roots:
       # Search controls search visibility: "default", "on_request", or
       # "never".
       search: ""
+      # SearchBody opts this root's logical document bodies into explicit
+      # content search. Default false searches indexed metadata only.
+      # Search still governs visibility, and Indexing must be enabled.
+      search_body: false
       # RequiresTag optionally gates the whole root behind one capability
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
