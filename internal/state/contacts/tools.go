@@ -61,6 +61,7 @@ type Tools struct {
 	dossierRead          func(context.Context, documents.RefArgs) (string, error)
 	dossierWrite         func(context.Context, documents.FacetedWriteArgs) (string, error)
 	dossierExists        func(context.Context, string) (bool, error)
+	dossierSessions      ArchiveSessionResolver
 	mutationSink         func(context.Context, ContactMutation) error
 }
 

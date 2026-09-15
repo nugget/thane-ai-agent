@@ -145,7 +145,13 @@ ordinary documents instead.
   if prose changed those sources of truth. A write that fails validation
   stores nothing and lists every violation at once, each over-budget
   projection with its overage and whether rewording closes it or whole items
-  must go; fix them all in the next call. Replacing an existing dossier with
+  must go; fix them all in the next call. Archive evidence cites the whole
+  session id, `archive:session:<full-session-uuid>`. A refused leading part
+  comes back with its full citation when one session matches, or with the
+  candidates when several share it; choose among them by searching
+  `archive_search` for the claim's own words. Evidence you cannot pin to one
+  session goes under Open Questions, never into prose that describes a
+  prefix. Replacing an existing dossier with
   no read of it on record, or after it changed since that read, is also an
   error that stores nothing: read it again with `contact_dossier_read`, fold
   in the intervening change the error carries, and write again. The digest is

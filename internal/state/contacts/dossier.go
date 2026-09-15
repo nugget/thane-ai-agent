@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -26,8 +24,6 @@ const DossierRootName = "contacts"
 const DossierWriteToolName = "contact_dossier_write"
 
 var dossierOutputContract = documentfacets.DefaultContract()
-
-var archiveSessionCitationPattern = regexp.MustCompile(`archive:session([:-])([[:alnum:]-]*)`)
 
 // DossierWriteArgs carries the content projections for one canonical contact
 // dossier. The contact UUID selects the structured identity; Go derives the
@@ -145,6 +141,7 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Digest:     args.Digest,
 		Full:       args.Full,
 	}
+	canonicalized := canonicalizeDossierCitations(&payload)
 	var validationErrs []error
 	if err := dossierOutputContract.Validate(payload); err != nil {
 		validationErrs = append(validationErrs, err)
@@ -155,13 +152,13 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err := validateDossierSubjectName(contact.FormattedName, payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
-	if err := validateDossierEvidenceCitations(payload); err != nil {
+	if err := validateDossierEvidenceCitations(payload, t.dossierSessions); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
 	if len(validationErrs) > 0 {
 		return "", documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)
 	}
-	return t.dossierWrite(ctx, documents.FacetedWriteArgs{
+	result, err := t.dossierWrite(ctx, documents.FacetedWriteArgs{
 		Ref:          DossierRef(id),
 		Title:        contact.FormattedName,
 		Tags:         []string{DossierSubject(id)},
@@ -175,6 +172,10 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		// dossier, so an inline refusal would hide the loss.
 		RejectionIsError: true,
 	})
+	if err != nil {
+		return result, err
+	}
+	return withCanonicalizedCitations(result, canonicalized)
 }
 
 func (t *Tools) resolveDossierContact(rawID string) (*Contact, uuid.UUID, error) {
@@ -327,7 +328,7 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 	if err := validateDossierSubjectName(contactName, payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
 	}
-	if err := validateDossierEvidenceCitations(payload); err != nil {
+	if err := validateDossierEvidenceCitations(payload, nil); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
 	}
 	if len(validationErrs) > 0 {
@@ -421,52 +422,6 @@ func containsFoldedPhrase(text, phrase string) bool {
 
 func isDossierNameRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
-}
-
-// validateDossierEvidenceCitations keeps archive claims independently
-// checkable. Archive tools accept short session prefixes for interactive
-// convenience, but imported sessions can share those prefixes; durable
-// citations therefore need the full canonical UUID.
-func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
-	fields := []struct {
-		name  string
-		value string
-	}{
-		{name: "status_line", value: payload.StatusLine},
-		{name: "teaser", value: payload.Teaser},
-		{name: "digest", value: payload.Digest},
-		{name: "full", value: payload.Full},
-	}
-
-	seen := make(map[string]struct{})
-	invalid := make([]string, 0)
-	var rejected []string
-	for _, field := range fields {
-		fieldRejected := false
-		for _, match := range archiveSessionCitationPattern.FindAllStringSubmatch(field.value, -1) {
-			citation := match[0]
-			rawID := match[2]
-			id, err := uuid.Parse(rawID)
-			if match[1] == ":" && err == nil && id != uuid.Nil && id.String() == rawID {
-				continue
-			}
-			fieldRejected = true
-			key := field.name + "\x00" + citation
-			if _, duplicate := seen[key]; duplicate {
-				continue
-			}
-			seen[key] = struct{}{}
-			invalid = append(invalid, field.name+"="+citation)
-		}
-		if fieldRejected {
-			rejected = append(rejected, field.name)
-		}
-	}
-	if len(invalid) == 0 {
-		return nil
-	}
-	sort.Strings(invalid)
-	return toolargs.Rejected(fmt.Errorf("archive-session citation(s) [%s] do not use a full canonical UUID; replace each with archive:session:<full-session-uuid> from archive_search or archive_sessions because short prefixes can be ambiguous", strings.Join(invalid, ", ")), rejected...)
 }
 
 func dossierIDFromPath(relPath string) (uuid.UUID, error) {

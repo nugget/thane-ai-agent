@@ -244,7 +244,14 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 		}
 	}
 	fullDescription := properties["full"].(map[string]any)["description"].(string)
-	for _, want := range []string{"archive:session:<full-session-uuid>", "full canonical session UUID", "short prefixes can be ambiguous"} {
+	for _, want := range []string{
+		"archive:session:<full-session-uuid>",
+		"sessions imported together share leading digits",
+		"canonicalized_citations",
+		"names the full citation to copy",
+		"search archive_search for the claim's own words",
+		"### Open Questions",
+	} {
 		if !strings.Contains(fullDescription, want) {
 			t.Errorf("full description = %q, want %q", fullDescription, want)
 		}

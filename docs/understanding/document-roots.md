@@ -662,10 +662,25 @@ ready work rather than losing it or letting it block the queue.
 
 Archive evidence in a contact dossier uses
 `archive:session:<full-session-uuid>`. Archive tools accept short prefixes as
-an interactive convenience, but durable dossier citations do not: imported
-sessions can share a prefix, making a shortened citation impossible to resolve
-unambiguously. `contact_dossier_write` and the contacts-root validator reject
-those ambiguous citations before Git changes.
+an interactive convenience, but durable dossier citations do not: an imported
+session's id records when the import ran, so sessions imported together share
+leading digits, and a shortened citation cannot say which of them it meant.
+
+`contact_dossier_write` repairs what it can without guessing and refuses the
+rest before Git changes. A full id written in the older hyphen form
+(`archive:session-<uuid>`) is rewritten to the colon form, and the result lists
+each rewrite under `canonicalized_citations`. A leading part is never
+completed silently; the refusal looks it up across the whole archive and names
+the full citation when exactly one session begins with it, lists up to five
+candidates with their start times and titles when several do, and says so when
+none does. Every refusal teaches content recovery (search `archive_search` for
+the claim's own words; each hit carries its full `session_id`) and sends
+evidence that cannot be pinned to one session to the dossier's open questions
+rather than into prose about a prefix. The write checks citation shape only,
+never whether a cited session still exists: a `-purge` re-import gives imported
+sessions new ids, and an existence check would then make every dossier citing
+them unwritable. The contacts-root validator stays strict and accepts only the
+canonical colon form.
 
 Fresh `thane init` workspaces declare and establish the root with the agent's
 signing key, required signature verification, and this context policy:

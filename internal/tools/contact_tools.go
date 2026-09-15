@@ -411,7 +411,7 @@ func registerContactDossierWriteTool(r *Registry, contactTools *contacts.Tools) 
 			description += " Omit the contact's canonical name: the structured record and dossier title already identify the subject."
 		}
 		if field.Key == "full" {
-			description += " Cite archive-session evidence as archive:session:<full-session-uuid>; the full canonical session UUID is required because short prefixes can be ambiguous."
+			description += " Cite archive-session evidence as archive:session:<full-session-uuid>, the whole 36-character session_id: a leading part such as an 8-character prefix is refused because sessions imported together share leading digits. A full id written with the older hyphen separator (archive:session-<uuid>) is rewritten to the colon form, and the result lists each rewrite under canonicalized_citations. When a leading part is refused, the error names the full citation to copy if exactly one archived session begins with it, or lists the candidates if several do. To find a full id, search archive_search for the claim's own words; every hit carries its full session_id. Evidence you cannot pin to one session belongs under ### Open Questions, not in prose that describes a prefix."
 		}
 		if field.MaxRunes > 0 {
 			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
