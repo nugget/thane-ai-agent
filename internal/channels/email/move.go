@@ -42,9 +42,11 @@ func (c *Client) MoveMessages(ctx context.Context, opts MoveOptions) (MoveResult
 			Err: fmt.Errorf("server advertises neither MOVE nor UIDPLUS, and moving without them would expunge every message flagged \\Deleted in %q", source)}
 	}
 
-	if _, err := c.selectFolder(ctx, source, false); err != nil {
+	selected, err := c.selectFolder(ctx, source, false)
+	if err != nil {
 		return result, err
 	}
+	result.SourceUIDValidity = selected.UIDValidity
 
 	uidSet := imap.UIDSet{}
 	for _, uid := range opts.UIDs {

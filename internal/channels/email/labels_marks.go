@@ -1,9 +1,12 @@
 package email
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,12 +16,13 @@ import (
 )
 
 // Thane's label provenance: what it set on a message, kept in the
-// operational state store under labelMarksNamespace with the key
-// <account>/<Message-ID>. The Message-ID survives a move between folders,
-// where a UID does not. The record is the only thing that lets Thane
-// tell its own marks from the operator's: a keyword it did not add, and
-// a flag whose colour is no longer the one it wrote, are the operator's,
-// and nothing removes them.
+// operational state store under labelMarksNamespace, one record per
+// account and Message-ID (labelMarksKey). What the record claims holds
+// only for the one copy of the message Thane marked (labels_copy.go). The
+// record is the only thing that lets Thane tell its own marks from the
+// operator's: a keyword it did not add, a flag whose colour is no longer
+// the one it wrote, and any mark on another copy are the operator's, and
+// nothing removes them.
 
 const (
 	// labelMarksNamespace is the opstate namespace of the records.
@@ -32,15 +36,20 @@ const (
 
 // labelMarks is what Thane set on one message.
 type labelMarks struct {
+	// Account and MessageID name the message the record is for. A record
+	// read back under a key must name the same pair, or it is not this
+	// message's (loadLabelMarks).
 	Account   string `json:"account"`
 	MessageID string `json:"message_id"`
 
-	// Size is the RFC822.SIZE of the copy Thane marked. One folder can
-	// hold two copies of a message under one Message-ID, such as a direct
-	// copy and a mailing list's; a copy of another size is not the one
-	// this record describes, so Thane claims nothing on it. A move keeps
-	// the size. Zero means no copy is marked yet.
-	Size uint32 `json:"size,omitempty"`
+	// Copy is the copy of the message Thane marked: its folder, the
+	// folder's UIDVALIDITY, and its UID, recorded when Thane first writes
+	// to it. Every claim below holds for that copy alone. Another copy
+	// under the same Message-ID, byte-identical or not, and the same
+	// message after a move Thane did not carry (carryLabelClaims), is not
+	// the copy the record describes, so Thane claims nothing on it. Zero
+	// means no copy is marked yet.
+	Copy messageCopy `json:"copy,omitzero"`
 
 	// Keywords lists the label keywords Thane added. A keyword the
 	// message already carried is not listed, because Thane did not set
@@ -66,15 +75,22 @@ type labelMarks struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// labelMarksKey is a record's opstate key.
+// labelMarksKey is a record's opstate key: the hex SHA-256 of the
+// account name's length in bytes, a colon, the account name, and the
+// bare Message-ID. The length prefix fixes where the name ends, so no
+// two pairs share the digest's input: an account name and a Message-ID
+// may each contain any character, "/" included.
 func labelMarksKey(account, messageID string) string {
-	return account + "/" + normalizeMessageID(messageID)
+	sum := sha256.Sum256([]byte(strconv.Itoa(len(account)) + ":" + account + normalizeMessageID(messageID)))
+	return hex.EncodeToString(sum[:])
 }
 
 // loadLabelMarks returns Thane's record for a message, or an empty one
 // for the same account and Message-ID when there is none. A record that
-// does not decode is an error: reading it as empty would let Thane treat
-// its own marks as the operator's, or the reverse.
+// does not decode, or that names another account or Message-ID than the
+// one asked for, is an error: reading it as this message's would let
+// Thane claim marks it never set, and reading it as empty would let
+// Thane overwrite another message's record.
 func loadLabelMarks(state *opstate.Store, account, messageID string) (labelMarks, error) {
 	empty := labelMarks{Account: account, MessageID: normalizeMessageID(messageID)}
 	raw, err := state.Get(labelMarksNamespace, labelMarksKey(account, messageID))
@@ -87,6 +103,9 @@ func loadLabelMarks(state *opstate.Store, account, messageID string) (labelMarks
 	var m labelMarks
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return empty, fmt.Errorf("decode Thane's label record for message %s: %w", empty.MessageID, err)
+	}
+	if m.Account != empty.Account || m.MessageID != empty.MessageID {
+		return empty, fmt.Errorf("label record for message %s on account %q names message %s on account %q; it is another message's record, so Thane claims nothing from it", empty.MessageID, account, m.MessageID, m.Account)
 	}
 	return m, nil
 }
@@ -116,20 +135,6 @@ func saveLabelMarks(state *opstate.Store, m *labelMarks) error {
 // derived label.
 func (m labelMarks) empty() bool {
 	return len(m.Keywords) == 0 && !m.SetFlagged && m.Color == "" && len(m.Derived) == 0
-}
-
-// covers reports whether the record describes the copy of a message
-// that is size bytes long. A record that has marked no copy yet
-// describes any.
-func (m labelMarks) covers(size uint32) bool {
-	return m.Size == 0 || m.Size == size
-}
-
-// bind ties the record to the copy Thane is about to mark.
-func (m *labelMarks) bind(size uint32) {
-	if m.Size == 0 {
-		m.Size = size
-	}
 }
 
 // ownsFlag reports whether the message's flag is still the one Thane

@@ -358,16 +358,25 @@ never marking mail seen. The poller applies each label with `apply:
 contact_matched` to every new INBOX message whose sender matches exactly
 one contact record, once per message, before the message's wake is
 dispatched; the wake's `flags` metadata never includes a mark Thane
-set, even when a failed dispatch lists the message again, and a failed
-`STORE` is logged and costs only that message's label. What Thane set
-on each message (the keywords, the colour and its keywords, whether it
-set `\Flagged`, the derived labels applied, and the size of the copy
-marked) is recorded in the operational state store, namespace
-`email_labels`, key `<account>/<message_id>`, for 90 days after the
-last change. Removing a label and handing a flag to the operator touch
-only what that record claims, on the copy it describes, and a flag
-counts as Thane's only while it still carries exactly the recorded
-colour; `flag_label` on a row is read from the same record. Keywords,
+still claims, even when a failed dispatch lists the message again or
+the account no longer carries the label, and a failed `STORE` is logged
+and costs only that message's label. What Thane set on each message
+(the keywords, the colour and its keywords, whether it set `\Flagged`,
+the derived labels applied, and the copy marked, by folder,
+UIDVALIDITY, and UID) is recorded in the operational state store,
+namespace `email_labels`, key the hex SHA-256 of the account name's
+byte length, `:`, the account name, and the bare Message-ID, for 90
+days after the last change; a record whose own account and Message-ID
+differ from the pair asked for is refused. Removing a label and handing
+a flag to the operator touch only what that record claims, on the one
+copy it describes, and a flag counts as Thane's only while it still
+carries exactly the recorded colour; `flag_label` on a row is read from
+the same record, under the message's whole Message-ID. A second copy
+of the message, and the message once someone else moves it, is not
+that copy, so its marks are the operator's; `email_move` carries the
+record to the new copy when the server returns COPYUID and the call
+moved no other copy under the same Message-ID, since go-imap keeps the
+COPYUID sets sorted rather than paired. Keywords,
 colour keywords included, are written only in a folder whose
 `PERMANENTFLAGS` include `\*`. See
 [Configuration](../operating/configuration.md#labels).

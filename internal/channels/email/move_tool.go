@@ -74,6 +74,9 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 	if err != nil {
 		return moveResponse{}, err
 	}
+	// Thane's label claims follow the messages only to copies the server
+	// named (labels_copy.go).
+	s.carryLabelClaims(ctx, acct.Name, result, senders)
 	resp := moveResponse{
 		Action:               "moved",
 		Account:              acct.Name,

@@ -302,8 +302,12 @@ func TestPollLabelIsIdempotent(t *testing.T) {
 	uid := mem.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Hello", "hi"))
 	poll(t, svc)
 	acct, _ := svc.ResolveAccount(t.Context(), "primary")
+	listed, err := acct.Client.ListMessages(t.Context(), ListOptions{Limit: MaxListLimit})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
 	envs := []Envelope{{UID: uid, From: addr("alice@example.com"), MessageID: messageIDFor("Hello")}}
-	svc.poller.applyDerivedLabels(t.Context(), "primary", acct.Client, envs)
+	svc.poller.applyDerivedLabels(t.Context(), "primary", acct.Client, listed.UIDValidity, envs)
 
 	checkFlags(t, flagsOf(t, svc, "INBOX", uid), []string{"thane-contact", flagFlag, colorBit2}, []string{colorBit0, colorBit1})
 	if m := marksFor(t, svc, "Hello"); !m.SetFlagged || m.Color != "blue" || !slices.Equal(m.Keywords, []string{"thane-contact"}) {

@@ -186,12 +186,16 @@ func (s *Service) markLabelOne(fs *flagSession, account string, uid uint32, st *
 	if st.MessageID == "" {
 		return "it has no Message-ID, which is how Thane records the marks it sets, so Thane could never tell them from the operator's; nothing was changed on it", nil
 	}
+	copyID := fs.copyOf(uid)
+	if !copyID.known() {
+		return "this folder's server reports no UIDVALIDITY, which with the UID is how Thane records which copy of a message it marked, so Thane could never tell its marks from the operator's; nothing was changed on it", nil
+	}
 	marks, err := loadLabelMarks(s.state, account, st.MessageID)
 	if err != nil {
 		return "", err
 	}
-	if !marks.covers(st.Size) {
-		return "another copy of this message, under the same Message-ID, carries the marks Thane recorded, and Thane keeps one record per Message-ID, so it could not tell its own marks on this copy from the operator's; nothing was changed on it", nil
+	if !marks.covers(copyID) {
+		return "Thane's record of the marks it set under this Message-ID describes another copy of the message, a second copy or this one before someone else moved it, and Thane keeps one record per Message-ID, so it cannot tell its own marks on this copy from the operator's; nothing was changed on it", nil
 	}
 	marks.reconcile(st.Flags)
 	var reason string
@@ -269,9 +273,9 @@ func (s *Service) answeredRefusal(ctx context.Context, acct ResolvedAccount) err
 // flag. Without it, which comes before email_mark removes flagged, it
 // removes \Flagged together with those bits, so no colour keyword of
 // Thane's is left behind to colour a flag the operator sets later. Bits
-// the operator set, flags Thane did not write, and flags on another copy
-// of a message are never touched. It returns the UIDs whose flag was
-// Thane's.
+// the operator set, flags Thane did not write, and flags on any copy of
+// a message but the one Thane marked are never touched. It returns the
+// UIDs whose flag was Thane's.
 func (s *Service) releaseThaneFlags(ctx context.Context, acct ResolvedAccount, folder string, uids []uint32, keepFlag bool) ([]uint32, error) {
 	if s.state == nil || !s.manager.labels.hasColors() || len(uids) == 0 {
 		return nil, nil
@@ -306,7 +310,7 @@ func (s *Service) releaseThaneFlags(ctx context.Context, acct ResolvedAccount, f
 // and reports whether it did.
 func (s *Service) releaseThaneFlag(ctx context.Context, fs *flagSession, account string, uid uint32, st *flagState, keepFlag bool) (bool, error) {
 	marks, err := loadLabelMarks(s.state, account, st.MessageID)
-	if err != nil || !marks.covers(st.Size) {
+	if err != nil || !marks.covers(fs.copyOf(uid)) {
 		return false, err
 	}
 	changed := marks.reconcile(st.Flags)

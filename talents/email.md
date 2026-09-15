@@ -122,9 +122,9 @@ has to act, and what a flag is asking for. Spend your care there.
   `account` and `folder` in metadata: pass both to every call about
   that message. Its `flags`, present only when the message has any,
   are the message's IMAP flags as the server spells them,
-  comma-separated, without any mark Thane set for a label, so
-  `\Flagged` there is someone else's flag: the message is already
-  flagged.
+  comma-separated, without any mark that is still Thane's for a label
+  (see "Labels"), so `\Flagged` there is someone else's flag: the
+  message is already flagged.
 - **Every address comes with the directory's answer.** Each `from`,
   `to`, `cc`, and `reply_to` entry in a result is `{name, address,
   trust_zone, automated, contact, contact_status}`. `contact_status` is
@@ -364,9 +364,22 @@ the label says only that the sender's address matches one contact
 record, at whatever zone, `known` included; it says nothing about who
 wrote the message or whether it matters. Never apply or remove such a
 label: `email_mark` refuses both, and there is nothing to fix. The wake
-event's `flags` never include a mark Thane set; `email_read`,
+event's `flags` never include a mark that is still Thane's; `email_read`,
 `email_list`, and `email_search` show the message as it is now, labels
 included.
+
+**A mark is Thane's only on the message Thane marked, in the folder
+Thane marked it in.** Go's record names that one message by its folder
+and UID. When the
+operator moves the message, or a second copy of it arrives under the
+same Message-ID, the marks that copy carries are the operator's: its
+row has no `flag_label`, flagging it clears no colour, and removing a
+label from it is refused. `email_move` keeps Go's record with the
+message when its result shows `destination_uids_known: true` and the
+call moved no other copy under the same Message-ID; otherwise the moved
+message's marks become the operator's the same way. This is
+deliberate: when Go cannot prove a mark is Thane's, the mark is the
+operator's, and nothing Thane does removes it.
 
 **A flag means one of two things, and the row says which.** A flag
 colour is `\Flagged` plus colour keywords: a client that colours flags
@@ -500,7 +513,9 @@ appears there, because a colour alone cannot say who set it. A flagged
 row whose flag Thane wrote for a label names that label as
 `flag_label`. Go reads that from its own record of what it set, never
 from the colour, so an operator's flag in a label's colour carries no
-`flag_label`. The raw `flags` stay beside both. Read a flag through
+`flag_label`, and neither does a flag on a second copy of the message,
+or on one the operator moved after Thane marked it. The raw `flags`
+stay beside both. Read a flag through
 them: a flag with `flag_label` is that label's mark, and any other flag
 is someone's attention flag (see "Labels" in `email`).
 
@@ -1130,7 +1145,10 @@ call off marks that are not yours, so none of this is yours to judge:
 A label whose entry shows `apply` is Go's, and `email_mark` refuses to
 apply or remove it. It also refuses a label on a message without a
 Message-ID, because Thane keeps its record of what it set by
-Message-ID. The result is `{action: "label_added" | "label_removed" |
+Message-ID, and on a copy of a message other than the one Thane's
+record describes: a second copy under the same Message-ID, or one
+someone else moved after Thane marked it, where Thane cannot tell its
+own marks from the operator's. The result is `{action: "label_added" | "label_removed" |
 "refused", account, folder, label, uids_affected, uids_not_found,
 refused:[{uid, reason}]}`, and `action` is `refused` only when every
 message found was refused. A refused message refuses the same way

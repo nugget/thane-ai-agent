@@ -46,19 +46,34 @@ func (s *Service) newLabelsView(cfg AccountConfig) labelsView {
 }
 
 // labelRows fills each row of a list or search result from one account
-// with the labels it carries and the label whose flag it shows.
-func (s *Service) labelRows(account string, resp *listResponse) {
+// with the labels it carries and the label whose flag it shows. It reads
+// each message's identity from the envelopes listed, not from the row:
+// a row's message_id is cut to maxMessageIDOutput, and Thane's record is
+// keyed by the whole Message-ID, so a row would lose flag_label that
+// email_read shows for the same message.
+func (s *Service) labelRows(account string, listed ListResult, resp *listResponse) {
+	envs := make(map[uint32]Envelope, len(listed.Envelopes))
+	for _, env := range listed.Envelopes {
+		envs[env.UID] = env
+	}
 	for i := range resp.Messages {
 		m := &resp.Messages[i]
-		m.Labels, m.FlagLabel = s.labelsFor(account, m.MessageID, m.Size, m.Flags)
+		env, ok := envs[m.UID]
+		if !ok {
+			// No envelope names this row's copy, so it claims no flag.
+			m.Labels, m.FlagLabel = s.labelsFor(account, messageCopy{}, "", m.Flags)
+			continue
+		}
+		m.Labels, m.FlagLabel = s.labelsFor(account, newMessageCopy(listed.Folder, listed.UIDValidity, env.UID), env.MessageID, m.Flags)
 	}
 }
 
 // labelsFor returns the labels the account carries whose keyword flags
-// hold, and the label whose flag the message shows (flagLabel). Both are
-// empty on an account that carries no label, so its rows render as they
-// did before labels existed.
-func (s *Service) labelsFor(account, messageID string, size uint32, flags []string) ([]string, string) {
+// hold, and the label whose flag the message shows (flagLabel). c names
+// the copy the flags were read from and messageID is its whole
+// Message-ID. Both results are empty on an account that carries no
+// label, so its rows render as they did before labels existed.
+func (s *Service) labelsFor(account string, c messageCopy, messageID string, flags []string) ([]string, string) {
 	if s == nil || s.manager == nil {
 		return nil, ""
 	}
@@ -66,15 +81,16 @@ func (s *Service) labelsFor(account, messageID string, size uint32, flags []stri
 	if len(labels) == 0 {
 		return nil, ""
 	}
-	return labels.carried(flags), s.flagLabel(account, messageID, size, flags)
+	return labels.carried(flags), s.flagLabel(account, c, messageID, flags)
 }
 
 // flagLabel names the label whose flag a message shows: only when
-// Thane's record says Thane wrote that flag and the message still
-// carries it exactly as written. Go states this from the record, so the
-// model never infers a label's flag from its colour, which the operator
-// can set too. "" means the flag, if any, is someone's attention flag.
-func (s *Service) flagLabel(account, messageID string, size uint32, flags []string) string {
+// Thane's record says Thane wrote that flag on this very copy and the
+// copy still carries it exactly as written. Go states this from the
+// record, so the model never infers a label's flag from its colour,
+// which the operator can set too. "" means the flag, if any, is
+// someone's attention flag.
+func (s *Service) flagLabel(account string, c messageCopy, messageID string, flags []string) string {
 	if s.state == nil || messageID == "" || !flagged(flags) || !s.manager.labels.hasColors() {
 		return ""
 	}
@@ -83,7 +99,7 @@ func (s *Service) flagLabel(account, messageID string, size uint32, flags []stri
 		s.logger.Warn("email flag_label not shown: Thane's label record is unreadable", "account", account, "message_id", messageID, "error", err)
 		return ""
 	}
-	if !marks.covers(size) || !marks.ownsFlag(flags) {
+	if !marks.covers(c) || !marks.ownsFlag(flags) {
 		return ""
 	}
 	if l, ok := s.manager.labels.byColor(marks.Color); ok {

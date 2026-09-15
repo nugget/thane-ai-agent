@@ -331,7 +331,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 		)
 	}
 	// Derived labels go on before the wake (labels_apply.go).
-	newMessages = p.applyDerivedLabels(ctx, accountName, client, newMessages)
+	newMessages = p.applyDerivedLabels(ctx, accountName, client, listed.UIDValidity, newMessages)
 
 	delivered, err := p.dispatchAccountBatches(ctx, accountName, stateKey, stored, newMessages)
 	if err != nil {

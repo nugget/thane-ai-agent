@@ -50,7 +50,7 @@ func (s *flagSession) writeLabel(uid uint32, st *flagState, l mailLabel, marks *
 			return w, err
 		}
 		st.applyStore(imap.StoreFlagsAdd, kw)
-		marks.bind(st.Size)
+		marks.bind(s.copyOf(uid))
 		marks.addKeyword(l.Keyword)
 		w.keywordAdded = true
 	}
@@ -89,7 +89,7 @@ func (s *flagSession) writeColor(uid uint32, st *flagState, l mailLabel, marks *
 		return w, err
 	}
 	st.applyStore(imap.StoreFlagsAdd, add)
-	marks.bind(st.Size)
+	marks.bind(s.copyOf(uid))
 	marks.setColor(l.Color, set)
 	w.colorWritten = true
 

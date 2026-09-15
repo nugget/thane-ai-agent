@@ -51,7 +51,7 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
 	resp := newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
 	t.service.draftIndexFor(ctx, acct, listed.Folder).annotate(&resp)
-	t.service.labelRows(acct.Name, &resp)
+	t.service.labelRows(acct.Name, listed, &resp)
 	return marshalListResponse(resp)
 }
 
@@ -93,7 +93,7 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 	header := newReadResponse(acct.Name, folder, msg, markSeen, auth, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
 	header.AccessNote = accessNote
 	header.ThaneDraft = t.service.draftIndexFor(ctx, acct, folder).refRow(msg.UID, msg.MessageID, msg.Flags)
-	header.Labels, header.FlagLabel = t.service.labelsFor(acct.Name, msg.MessageID, msg.Size, msg.Flags)
+	header.Labels, header.FlagLabel = t.service.labelsFor(acct.Name, newMessageCopy(folder, msg.UIDValidity, msg.UID), msg.MessageID, msg.Flags)
 	return renderRead(header, msg)
 }
 
@@ -211,7 +211,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
 	resp := newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now)
 	t.service.draftIndexFor(ctx, acct, found.Folder).annotate(&resp)
-	t.service.labelRows(acct.Name, &resp)
+	t.service.labelRows(acct.Name, found, &resp)
 	return marshalListResponse(resp)
 }
 

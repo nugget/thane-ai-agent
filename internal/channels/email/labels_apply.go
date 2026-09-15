@@ -9,27 +9,32 @@ import (
 // wrote.
 const emailPollerAuthor = "email_poller"
 
-// applyDerivedLabels applies every label whose apply rule is
-// contact_matched to the new INBOX messages whose sender matches exactly
-// one contact record, on an account whose mailbox.labels names it. The
-// contact directory decides, not the model, and before the wake is
+// applyDerivedLabels takes every mark Thane's records say it set out of
+// the new INBOX messages' flags (withoutThaneMarks), and applies every
+// label whose apply rule is contact_matched to the messages whose sender
+// matches exactly one contact record, on an account whose mailbox.labels
+// names it. envs were listed from INBOX under uidValidity. It returns
+// envs with those marks taken out, which is what the wake shows. The
+// marks come out whatever the account carries today: a message Thane
+// marked before the operator took the label off the account still
+// carries Thane's marks, and the record still names them.
+//
+// The contact directory decides, not the model, and before the wake is
 // dispatched, so the pass that reads a message finds the label already
-// there. It returns envs with every mark Thane's records say it set taken
-// out of their flags, which is what the wake shows (withoutThaneMarks).
-// Each label goes on a message at most once, so a mark the operator takes
-// off stays off when a failed dispatch lists the message again. A message
-// with no Message-ID is skipped, because Thane's record of what it set is
-// keyed by it. Every failure is logged and the poll goes on: a missing
-// label must never cost a wake. Nothing here marks mail seen.
-func (p *Poller) applyDerivedLabels(ctx context.Context, account string, client *Client, envs []Envelope) []Envelope {
-	carried := p.manager.accountLabels(account)
-	if len(carried) == 0 || len(envs) == 0 || p.state == nil || client == nil {
+// there. Each label goes on a message at most once, so a mark the
+// operator takes off stays off when a failed dispatch lists the message
+// again. A message with no Message-ID is skipped, because Thane's record
+// of what it set is keyed by it. Every failure is logged and the poll
+// goes on: a missing label must never cost a wake. Nothing here marks
+// mail seen.
+func (p *Poller) applyDerivedLabels(ctx context.Context, account string, client *Client, uidValidity uint32, envs []Envelope) []Envelope {
+	if len(envs) == 0 || p.state == nil {
 		return envs
 	}
-	envs = p.withoutThaneMarks(account, envs)
-	labels := carried.appliedBy(LabelApplyContactMatched)
-	if len(labels) == 0 {
-		return envs
+	shown := p.withoutThaneMarks(account, uidValidity, envs)
+	labels := p.manager.accountLabels(account).appliedBy(LabelApplyContactMatched)
+	if len(labels) == 0 || client == nil {
+		return shown
 	}
 	lookup := newIdentityLookup(ctx, p.contacts, p.logger)
 	var uids []uint32
@@ -40,11 +45,17 @@ func (p *Poller) applyDerivedLabels(ctx context.Context, account string, client 
 		uids = append(uids, env.UID)
 	}
 	if len(uids) == 0 {
-		return envs
+		return shown
 	}
 	slices.Sort(uids)
 
 	err := client.withFlagSession(ctx, DefaultFolder, func(s *flagSession) error {
+		if s.uidValidity != uidValidity {
+			// The folder was rebuilt since it was listed, so the listed
+			// UIDs now name other messages, whose senders nobody looked up.
+			p.logger.Info("email labels not applied: INBOX's UIDVALIDITY changed since it was listed", "account", account, "listed_uid_validity", uidValidity, "uid_validity", s.uidValidity)
+			return nil
+		}
 		if s.verdict != KeywordsPermanent && client.claimVerdictWarning(DefaultFolder) {
 			p.logger.Warn("email folder keeps no keywords permanently; label keywords and colours are skipped there",
 				"account", account,
@@ -70,17 +81,19 @@ func (p *Poller) applyDerivedLabels(ctx context.Context, account string, client 
 	if err != nil {
 		p.logger.Warn("email labels not applied", "account", account, "folder", DefaultFolder, "messages", len(uids), "error", err)
 	}
-	return envs
+	return shown
 }
 
 // withoutThaneMarks returns envs with the marks Thane's records say it
-// set taken out of each message's flags, so a wake's flags never include
-// a mark Thane set. A message listed again after a failed dispatch, or
-// moved back into INBOX, already carries Thane's labels; without this
-// its wake would show Go's flag as if someone had flagged the message.
-// envs is not changed. A record Thane cannot read leaves the flags as
-// listed.
-func (p *Poller) withoutThaneMarks(account string, envs []Envelope) []Envelope {
+// set on each listed copy taken out of its flags, so a wake's flags never
+// include a mark Thane still claims. A message listed again after a
+// failed dispatch, or one email_move put back into INBOX, already carries
+// Thane's labels; without this its wake would show Go's flag as if
+// someone had flagged the message. A copy the record does not describe,
+// such as a second copy or one the operator moved back, keeps its flags:
+// its marks are the operator's. envs is not changed. A record Thane
+// cannot read leaves the flags as listed.
+func (p *Poller) withoutThaneMarks(account string, uidValidity uint32, envs []Envelope) []Envelope {
 	out := slices.Clone(envs)
 	for i, env := range out {
 		if env.MessageID == "" || len(env.Flags) == 0 {
@@ -91,7 +104,7 @@ func (p *Poller) withoutThaneMarks(account string, envs []Envelope) []Envelope {
 			p.logger.Warn("email wake flags may include Thane's label marks: Thane's label record is unreadable", "account", account, "uid", env.UID, "message_id", env.MessageID, "error", err)
 			continue
 		}
-		if marks.covers(env.Size) {
+		if marks.claims() && marks.covers(newMessageCopy(DefaultFolder, uidValidity, env.UID)) {
 			out[i].Flags = marks.strip(env.Flags)
 		}
 	}
@@ -107,14 +120,20 @@ func (p *Poller) applyLabelsTo(s *flagSession, account string, uid uint32, st *f
 	if st.MessageID == "" {
 		return
 	}
+	copyID := s.copyOf(uid)
+	if !copyID.known() {
+		p.logger.Info("email labels not applied: INBOX reports no UIDVALIDITY, so Thane could not record which copy it marked", "account", account, "folder", DefaultFolder, "uid", uid, "message_id", st.MessageID)
+		return
+	}
 	marks, err := loadLabelMarks(p.state, account, st.MessageID)
 	if err != nil {
 		p.logger.Warn("email labels not applied: Thane's label record is unreadable", "account", account, "folder", DefaultFolder, "uid", uid, "message_id", st.MessageID, "error", err)
 		return
 	}
-	if !marks.covers(st.Size) {
-		p.logger.Info("email labels not applied: another copy of this message carries Thane's label record",
-			"account", account, "folder", DefaultFolder, "uid", uid, "message_id", st.MessageID, "size", st.Size, "record_size", marks.Size)
+	if !marks.covers(copyID) {
+		p.logger.Info("email labels not applied: Thane's label record for this Message-ID describes another copy of the message",
+			"account", account, "folder", DefaultFolder, "uid", uid, "uid_validity", copyID.UIDValidity, "message_id", st.MessageID,
+			"record_folder", marks.Copy.Folder, "record_uid_validity", marks.Copy.UIDValidity, "record_uid", marks.Copy.UID)
 		return
 	}
 	changed := marks.reconcile(st.Flags)
@@ -128,7 +147,7 @@ func (p *Poller) applyLabelsTo(s *flagSession, account string, uid uint32, st *f
 			p.logger.Warn("email label not applied", "account", account, "folder", DefaultFolder, "uid", uid, "message_id", st.MessageID, "label", l.Name, "keyword_added", w.keywordAdded, "color_written", w.colorWritten, "error", err)
 			continue
 		}
-		marks.bind(st.Size)
+		marks.bind(copyID)
 		marks.addDerived(l.Name)
 		changed = true
 		p.logger.Info("email label applied",

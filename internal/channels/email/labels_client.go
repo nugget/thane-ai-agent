@@ -81,6 +81,10 @@ type flagSession struct {
 	folder    string
 	verdict   KeywordVerdict
 	permanent []imap.Flag
+
+	// uidValidity is the folder's UIDVALIDITY as the SELECT reported it,
+	// which with a UID names the copy a label record describes (copyOf).
+	uidValidity uint32
 }
 
 // withFlagSession selects folder read-write and runs fn inside the
@@ -98,18 +102,18 @@ func (c *Client) withFlagSession(ctx context.Context, folder string, fn func(*fl
 		return err
 	}
 	return fn(&flagSession{
-		c:         c,
-		ctx:       ctx,
-		folder:    folder,
-		verdict:   keywordVerdictOf(data.PermanentFlags),
-		permanent: slices.Clone(data.PermanentFlags),
+		c:           c,
+		ctx:         ctx,
+		folder:      folder,
+		verdict:     keywordVerdictOf(data.PermanentFlags),
+		permanent:   slices.Clone(data.PermanentFlags),
+		uidValidity: data.UIDValidity,
 	})
 }
 
-// flagState is one message's Message-ID, size, and current flags.
+// flagState is one message's Message-ID and current flags.
 type flagState struct {
 	MessageID string
-	Size      uint32
 	Flags     []string
 }
 
@@ -129,7 +133,7 @@ func (s *flagSession) states(uids []uint32) (map[uint32]*flagState, error) {
 		return nil, err
 	}
 	for _, env := range envs {
-		out[env.UID] = &flagState{MessageID: env.MessageID, Size: env.Size, Flags: slices.Clone(env.Flags)}
+		out[env.UID] = &flagState{MessageID: env.MessageID, Flags: slices.Clone(env.Flags)}
 	}
 	return out, nil
 }

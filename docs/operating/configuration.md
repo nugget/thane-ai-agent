@@ -531,18 +531,36 @@ wakes.
 
 Thane records what it set on each message (the keywords, the colour and
 its keywords, whether it set `\Flagged`, the derived labels the poller
-has applied, and the size of the copy it marked) in the operational
-state store, namespace `email_labels`, keyed by account and Message-ID,
-for 90 days after the last change. That record is the only thing that
-tells Thane's marks from the operator's. Removing a label touches only
-what it records, and a flag counts as Thane's only while it still
-carries exactly the colour Thane wrote, so a flag the operator
-recoloured or took off is theirs from then on; whenever Thane reads a
-message beside its record, it drops what the operator has taken back.
-A second copy of a message under the same Message-ID but of another
-size, such as a mailing list's copy beside a direct one, is not the
-copy the record describes: Thane writes no label on it and claims
-nothing there. When the model flags a message for the operator
+has applied, and the copy it marked: the folder, the folder's
+UIDVALIDITY, and the UID) in the operational state store, namespace
+`email_labels`, one record per account and Message-ID under a SHA-256
+key of the two, for 90 days after the last change. The record repeats
+the account and Message-ID, and one naming another message is never
+read as this one's. That record is the only thing that tells Thane's
+marks from the operator's. Removing a label touches only what it
+records, and a flag counts as Thane's only while it still carries
+exactly the colour Thane wrote, so a flag the operator recoloured or
+took off is theirs from then on; whenever Thane reads a message beside
+its record, it drops what the operator has taken back.
+
+What the record claims holds only on the copy Thane marked. Every other
+copy is the operator's: a second copy under the same Message-ID, such
+as a mailing list's copy beside a direct one or a byte-identical
+duplicate, and the same message once someone else moves it, since a
+move gives it a new UID. Thane writes no label on such a copy, claims
+nothing there, and never removes its marks, so a message the operator
+moves keeps Thane's marks as the operator's own. When `email_move`
+moves a message Thane marked and the server reports the new UIDs
+(COPYUID), the record follows the message to its new copy; without
+COPYUID the claim lapses the same way, and so it does when the same
+call moves another copy under the same Message-ID, because the IMAP
+library sorts the COPYUID sets and loses which new UID belongs to which
+copy. The wake's `flags` leave out
+what the record claims whether or not the account still carries the
+label, so taking a label off an account does not make the marks Thane
+already set read as someone's flag.
+
+When the model flags a message for the operator
 (`email_mark` flag `flagged`) and its flag is still the one Thane wrote,
 Thane removes that colour's keywords, so the flag loses the label's
 colour and reads as the operator's attention flag; the keyword stays.

@@ -48,7 +48,8 @@ func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, e
 	}
 	folder := normalizeFolder(opts.Folder)
 
-	if _, err := c.selectFolder(ctx, folder, opts.Peek); err != nil {
+	selected, err := c.selectFolder(ctx, folder, opts.Peek)
+	if err != nil {
 		return nil, err
 	}
 
@@ -75,7 +76,7 @@ func (c *Client) ReadMessage(ctx context.Context, opts ReadOptions) (*Message, e
 		return nil, &ClientError{Account: c.name, Op: "fetch message", Folder: folder, UID: opts.UID, Kind: FailureMessageNotFound}
 	}
 
-	result := &Message{}
+	result := &Message{UIDValidity: selected.UIDValidity}
 	var rawBody []byte
 	for {
 		item := msg.Next()

@@ -144,6 +144,10 @@ func TestLabelVocabulary(t *testing.T) {
 // claims nothing, refused when unreadable, and the ownership rule.
 func TestLabelMarksRecord(t *testing.T) {
 	state := testOpstate(t)
+	key := labelMarksKey("primary", "abc@example.com")
+	if key != labelMarksKey("primary", "<abc@example.com>") || len(key) != 64 {
+		t.Fatalf("key = %q: want one hex SHA-256 for the bare and bracketed Message-ID", key)
+	}
 	m, err := loadLabelMarks(state, "primary", "<abc@example.com>")
 	if err != nil || !m.empty() || m.MessageID != "abc@example.com" || m.Account != "primary" {
 		t.Fatalf("fresh record = %+v, %v", m, err)
@@ -154,7 +158,7 @@ func TestLabelMarksRecord(t *testing.T) {
 	if err := saveLabelMarks(state, &m); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	raw, err := state.Get(labelMarksNamespace, "primary/abc@example.com")
+	raw, err := state.Get(labelMarksNamespace, key)
 	if err != nil || raw == "" {
 		t.Fatalf("stored row = %q, %v", raw, err)
 	}
@@ -177,11 +181,11 @@ func TestLabelMarksRecord(t *testing.T) {
 	if err := saveLabelMarks(state, &back); err != nil {
 		t.Fatalf("save empty: %v", err)
 	}
-	if raw, _ := state.Get(labelMarksNamespace, "primary/abc@example.com"); raw != "" {
+	if raw, _ := state.Get(labelMarksNamespace, key); raw != "" {
 		t.Errorf("a record that claims nothing must be deleted, got %s", raw)
 	}
 
-	if err := state.Set(labelMarksNamespace, "primary/bad@example.com", "{"); err != nil {
+	if err := state.Set(labelMarksNamespace, labelMarksKey("primary", "bad@example.com"), "{"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadLabelMarks(state, "primary", "bad@example.com"); err == nil {
@@ -219,8 +223,9 @@ func TestLabelMarksRecord(t *testing.T) {
 // without them (strip), only the copy Thane marked (covers), and a
 // record that remembers a derived label is kept.
 func TestLabelMarksProvenance(t *testing.T) {
+	marked := newMessageCopy("inbox", 7, 100)
 	blue := func() labelMarks {
-		return labelMarks{Size: 100, Keywords: []string{"thane-contact"}, Color: "blue", ColorBits: []string{colorBit2}, SetFlagged: true}
+		return labelMarks{Copy: marked, Keywords: []string{"thane-contact"}, Color: "blue", ColorBits: []string{colorBit2}, SetFlagged: true}
 	}
 	tests := []struct {
 		name         string
@@ -252,14 +257,30 @@ func TestLabelMarksProvenance(t *testing.T) {
 	}
 
 	m := blue()
-	if !m.covers(100) || m.covers(120) || !(labelMarks{}).covers(120) {
-		t.Errorf("covers: a record describes only the copy it marked, and an unbound one any copy")
+	covers := []struct {
+		name  string
+		marks labelMarks
+		copy  messageCopy
+		want  bool
+	}{
+		{"the copy Thane marked, INBOX in any case", m, newMessageCopy("INBOX", 7, 100), true},
+		{"another UID in the same folder", m, newMessageCopy("INBOX", 7, 101), false},
+		{"the same UID after the folder was rebuilt", m, newMessageCopy("INBOX", 8, 100), false},
+		{"the same UID in another folder", m, newMessageCopy("Archive", 7, 100), false},
+		{"a folder that reports no UIDVALIDITY", m, newMessageCopy("INBOX", 0, 100), false},
+		{"an unbound record that claims nothing", labelMarks{Derived: []string{"contact"}}, newMessageCopy("Archive", 3, 9), true},
+		{"an unbound record that claims a mark", labelMarks{Keywords: []string{"thane-contact"}}, newMessageCopy("INBOX", 7, 100), false},
+	}
+	for _, tt := range covers {
+		if got := tt.marks.covers(tt.copy); got != tt.want {
+			t.Errorf("covers, %s: %v, want %v", tt.name, got, tt.want)
+		}
 	}
 	var fresh labelMarks
-	fresh.bind(120)
-	fresh.bind(130)
-	if fresh.Size != 120 {
-		t.Errorf("bind rebound the record to size %d", fresh.Size)
+	fresh.bind(newMessageCopy("INBOX", 7, 120))
+	fresh.bind(newMessageCopy("INBOX", 7, 130))
+	if fresh.Copy.UID != 120 {
+		t.Errorf("bind rebound the record to uid %d", fresh.Copy.UID)
 	}
 	fresh.addDerived("contact")
 	if fresh.empty() || !fresh.hasDerived("contact") {
