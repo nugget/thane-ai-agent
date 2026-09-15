@@ -28,7 +28,8 @@ func (t *Tools) Tools() []*tools.Tool {
 	if t == nil {
 		return nil
 	}
-	return append(t.toolDefinitions(), t.draftToolDefinitions()...)
+	defs := append(t.toolDefinitions(), t.escalateToolDefinition())
+	return append(defs, t.draftToolDefinitions()...)
 }
 
 func accountParameter() map[string]any {

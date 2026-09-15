@@ -37,7 +37,7 @@ const (
 // Thane's, which comes first there. The check runs after reconcile, so
 // a draft the operator has since sent or discarded no longer counts. A
 // check that cannot complete stops the draft rather than risk a second
-// answer. Caller must hold s.draftsMu.
+// answer. Caller must hold the account's draft lock.
 func (s *Service) refuseDraftConflict(ctx context.Context, req SendRequest, decision Decision, folder string) error {
 	if s.state == nil {
 		return nil

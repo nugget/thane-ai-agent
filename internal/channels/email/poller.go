@@ -14,21 +14,14 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-const (
-	// pollNamespace is the opstate namespace for email polling state.
-	pollNamespace = "email_poll"
-
-	// DefaultHandlerLoopName is the name of the built-in event-driven
-	// loop that receives new-mail wake events when an operator hasn't
-	// pointed the poller at a custom handler. The loop definition
-	// runtime registers it as a durable built-in whenever email is
-	// configured.
-	DefaultHandlerLoopName = "email-default-handler"
-)
+// pollNamespace is the opstate namespace for email polling state.
+const pollNamespace = "email_poll"
 
 // Poller checks configured email accounts for new messages by comparing
 // IMAP UIDs against a persisted high-water mark. It is not a tool — it
 // runs as infrastructure code called by the scheduler task executor.
+// Each account's wakes go to the loop its mailbox.wake_loop names
+// (poller_route.go).
 type Poller struct {
 	service      *Service
 	manager      *Manager
@@ -37,8 +30,6 @@ type Poller struct {
 	bus          *messages.Bus
 	contacts     ContactResolver
 	interactions InteractionRecorder
-	wakeLoop     messages.LoopWakeTarget
-	wakeReady    bool
 }
 
 // PollerOption customizes poller behavior.
@@ -69,18 +60,6 @@ func WithInteractionRecorder(r InteractionRecorder) PollerOption {
 	return func(p *Poller) { p.interactions = r }
 }
 
-// WithDefaultWakeLoop overrides the wake target attached to email
-// envelopes. Defaults to [DefaultHandlerLoopName] when this option
-// isn't passed. Operators can point email wakes at a bespoke handler
-// (e.g. an "inbox triage" event-driven loop they declared in YAML)
-// by passing one here.
-func WithDefaultWakeLoop(target messages.LoopWakeTarget) PollerOption {
-	return func(p *Poller) {
-		p.wakeLoop = target
-		p.wakeReady = true
-	}
-}
-
 // NewPoller creates an email poller that checks all accounts managed by
 // the given Manager and tracks state in the provided opstate store.
 // [Service] constructs one through newPoller; this constructor exists
@@ -109,10 +88,6 @@ func newPollerWith(service *Service, manager *Manager, state *opstate.Store, log
 		if opt != nil {
 			opt(p)
 		}
-	}
-	if !p.wakeReady {
-		p.wakeLoop = messages.LoopWakeTarget{Name: DefaultHandlerLoopName}
-		p.wakeReady = true
 	}
 	return p
 }
@@ -156,8 +131,8 @@ func (m highWaterMark) encode() string {
 
 // CheckNewMessages polls every configured account for messages newer
 // than its stored high-water mark and dispatches each new message as
-// a [messages.LoopEventPayload] to the configured wake_loop target
-// (default: [DefaultHandlerLoopName]). Each event's metadata names the
+// a [messages.LoopEventPayload] to the account's wake loop
+// (poller_route.go). Each event's metadata names the
 // account, folder, UID, and Message-ID of the message and the trust
 // zone of its sender, so the receiving iteration never has to guess
 // which mailbox a number belongs to or who is writing.
@@ -181,7 +156,7 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 	accounts := p.manager.AccountNames()
 	p.logger.Debug("email poll starting", "accounts", len(accounts))
 
-	var failed int
+	failed := make(map[string]bool)
 	var totalNew int
 	var delivered int
 
@@ -190,7 +165,7 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 
 		count, sent, err := p.checkAccount(ctx, name)
 		if err != nil {
-			failed++
+			failed[name] = true
 			p.logger.Warn("email poll failed for account",
 				"account", name,
 				"error", err,
@@ -201,11 +176,16 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 		delivered += sent
 	}
 
+	// Mail is dispatched first, so upkeep never delays a wake.
+	if p.service != nil {
+		p.service.pollUpkeep(ctx, failed)
+	}
+
 	p.logger.Debug("email poll complete",
 		"accounts", len(accounts),
 		"new_messages", totalNew,
 		"delivered_events", delivered,
-		"failed", failed,
+		"failed", len(failed),
 	)
 
 	if summary := loop.IterationSummary(ctx); summary != nil {
@@ -214,8 +194,8 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 		if delivered > 0 {
 			summary["event_wakes"] = delivered
 		}
-		if failed > 0 {
-			summary["failed"] = failed
+		if len(failed) > 0 {
+			summary["failed"] = len(failed)
 		}
 	}
 
@@ -396,6 +376,10 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 	if p.bus == nil {
 		return 0, fmt.Errorf("email message bus not configured: %d new message(s) in account %q observed but not dispatched; the high-water mark stays where it was", len(newMessages), accountName)
 	}
+	target, err := p.wakeTargetFor(accountName)
+	if err != nil {
+		return 0, err
+	}
 
 	// IMAP returns newest-first; flip to oldest-first so per-batch
 	// progress always advances the high-water mark monotonically.
@@ -413,7 +397,6 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 		lookup := newIdentityLookup(ctx, p.contacts, p.logger)
 		events, batchMaxUID := p.buildBatchEvents(accountName, chunk, lookup)
 
-		target := p.wakeLoop
 		env, err := messages.NewEventSourceEnvelope(
 			messages.Identity{Kind: messages.IdentitySystem, Name: "email_poller"},
 			target,
@@ -441,63 +424,6 @@ func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateK
 		}
 	}
 	return delivered, nil
-}
-
-// buildBatchEvents converts a chunk of envelopes into structured
-// LoopEventPayloads and reports the highest UID observed in the chunk.
-// Every fact the handler needs to act on a message travels in the
-// event's metadata: the account and folder the UID belongs to, the
-// Message-ID, the sender's address and display name, and the contact
-// directory's answer about the sender — contact_id, contact_name,
-// is_owner, contact_status, and the effective trust_zone ("unknown"
-// for a stranger). is_owner says the record is the operator's, not that
-// the operator wrote the message; a From header is a claim. automated
-// is present, as "true", only for a no-reply, notification, or bounce
-// sender, whose trust_zone is capped at known; the sender is still
-// recognised through contact_id.
-func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope, lookup *identityLookup) ([]messages.LoopEventPayload, uint32) {
-	events := make([]messages.LoopEventPayload, 0, len(chunk))
-	var maxUID uint32
-	for _, env := range chunk {
-		match := lookup.resolve(env.From)
-		if env.UID > maxUID {
-			maxUID = env.UID
-		}
-		metadata := map[string]string{
-			"account":        accountName,
-			"folder":         DefaultFolder,
-			"uid":            strconv.FormatUint(uint64(env.UID), 10),
-			"from":           env.From.String(),
-			"from_address":   env.From.Key(),
-			"trust_zone":     match.TrustZone,
-			"contact_status": string(match.Status),
-			"is_owner":       "false",
-		}
-		if env.From.Name != "" {
-			metadata["from_name"] = env.From.Name
-		}
-		if env.MessageID != "" {
-			metadata["message_id"] = env.MessageID
-		}
-		if match.Automated {
-			metadata["automated"] = "true"
-		}
-		if match.Binding != nil {
-			metadata["contact_id"] = match.Binding.ContactID
-			metadata["contact_name"] = match.Binding.ContactName
-			metadata["is_owner"] = strconv.FormatBool(match.Binding.IsOwner)
-		}
-		events = append(events, messages.LoopEventPayload{
-			Source:     "email_poll",
-			Type:       "new_message",
-			ID:         fmt.Sprintf("%s:%d", accountName, env.UID),
-			Title:      env.Subject,
-			Summary:    fmt.Sprintf("From %s (account %s, folder %s)", env.From.String(), accountName, DefaultFolder),
-			ObservedAt: env.Date,
-			Metadata:   metadata,
-		})
-	}
-	return events, maxUID
 }
 
 // recordInboundInteractions notes, once per matched contact in a

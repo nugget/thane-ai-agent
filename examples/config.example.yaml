@@ -1504,6 +1504,32 @@ compaction:
 #         bytes, on how this mailbox is filed, shown to the model in the
 #         account's Email Accounts entry.
 #         filing_note: ""
+#         WakeLoop names the loop that receives this account's new-mail
+#         wakes. Default: "email-owner-triage" when owner is operator, a
+#         built-in pass that prefers local models, files only obvious spam,
+#         flags what needs the operator, drafts plain answers where the
+#         account can draft, and hands the rest to review_loop; and
+#         "email-default-handler" otherwise. The loop must be an
+#         event_driven definition, or startup refuses the config.
+#         wake_loop: email-default-handler
+#         ReviewLoop names a loop that looks at this account's mail after
+#         wake_loop: every draft a turn the operator is not present for
+#         writes here, and every message email_escalate hands over, is queued
+#         for it, and it is woken only while that queue holds work. Empty
+#         (the default) means no review pass, and email_escalate then
+#         refuses and says to flag the message instead. The built-in
+#         "email-draft-review" may use cloud models and asks for a higher
+#         quality floor than the wake loop. The loop must be an event_driven
+#         definition other than wake_loop, or startup refuses the config.
+#         review_loop: ""
+#         ReviewDelay is how long review work waits for more to arrive
+#         before review_loop is woken, so a burst of mail becomes one
+#         review. Default: 15m.
+#         review_delay: 15m
+#         ReviewMaxWait bounds how long a steady stream of new review work
+#         can postpone that wake. Default: 2h. It may not be shorter than
+#         review_delay.
+#         review_max_wait: 2h
 #     - # Name is the short identifier tools and loop bindings use for this
 #       account (for example "personal" or "packages"). Required and unique.
 #       name: packages
@@ -1651,6 +1677,32 @@ compaction:
 #         bytes, on how this mailbox is filed, shown to the model in the
 #         account's Email Accounts entry.
 #         filing_note: ""
+#         WakeLoop names the loop that receives this account's new-mail
+#         wakes. Default: "email-owner-triage" when owner is operator, a
+#         built-in pass that prefers local models, files only obvious spam,
+#         flags what needs the operator, drafts plain answers where the
+#         account can draft, and hands the rest to review_loop; and
+#         "email-default-handler" otherwise. The loop must be an
+#         event_driven definition, or startup refuses the config.
+#         wake_loop: email-default-handler
+#         ReviewLoop names a loop that looks at this account's mail after
+#         wake_loop: every draft a turn the operator is not present for
+#         writes here, and every message email_escalate hands over, is queued
+#         for it, and it is woken only while that queue holds work. Empty
+#         (the default) means no review pass, and email_escalate then
+#         refuses and says to flag the message instead. The built-in
+#         "email-draft-review" may use cloud models and asks for a higher
+#         quality floor than the wake loop. The loop must be an event_driven
+#         definition other than wake_loop, or startup refuses the config.
+#         review_loop: ""
+#         ReviewDelay is how long review work waits for more to arrive
+#         before review_loop is woken, so a burst of mail becomes one
+#         review. Default: 15m.
+#         review_delay: 15m
+#         ReviewMaxWait bounds how long a steady stream of new review work
+#         can postpone that wake. Default: 2h. It may not be shorter than
+#         review_delay.
+#         review_max_wait: 2h
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:

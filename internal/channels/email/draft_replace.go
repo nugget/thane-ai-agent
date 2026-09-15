@@ -166,7 +166,8 @@ type draftRevised struct {
 }
 
 // reviseDraft replaces an open draft's body, keeping every header but
-// Message-ID and Date. Caller must hold s.draftsMu and have reconciled.
+// Message-ID and Date. Caller must hold the account's draft lock and
+// have reconciled.
 func (s *Service) reviseDraft(ctx context.Context, acct ResolvedAccount, e draftEntry, body, note string) (draftRevised, error) {
 	const tool = "email_draft_revise"
 	if !acct.Config.CanDraft() {

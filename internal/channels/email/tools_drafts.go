@@ -12,7 +12,8 @@ import (
 
 // The draft tools act only on drafts in the ledger (draft_ledger.go),
 // and each one proves the draft is still Thane's before it acts. Every
-// handler holds s.draftsMu from its reconcile to its last ledger write.
+// handler holds its account's draft lock (draft_lock.go) from its
+// reconcile to its last ledger write.
 
 // maxDraftNoteBytes bounds a revision note or a withdrawal reason, which
 // the entry's history keeps.
@@ -30,12 +31,10 @@ func (t *Tools) HandleDrafts(ctx context.Context, args map[string]any) (string, 
 	}
 	includeClosed := toolargs.Bool(args, "include_closed")
 
-	unlock := s.lockDraftLedger()
-	defer unlock()
 	resp := draftsResponse{Drafts: []draftRowView{}, Errors: []draftAccountError{}}
 	var listed []draftEntry
 	for _, acct := range accounts {
-		entries, err := s.reconcileDrafts(ctx, acct)
+		entries, err := s.reconcileDraftsLocked(ctx, acct)
 		if err != nil {
 			resp.Errors = append(resp.Errors, draftAccountError{Account: acct.Name, Error: err.Error()})
 			continue
@@ -86,7 +85,7 @@ func (t *Tools) draftAccounts(ctx context.Context, requested string) ([]Resolved
 // draftFor loads the entry a draft tool names, resolves its account
 // through the loop's binding, reconciles that account, and returns the
 // entry as it stands afterwards. A draft_id the ledger does not hold is
-// refused. Caller must hold s.draftsMu.
+// refused. Caller must hold the draft's account lock (lockDraft).
 func (t *Tools) draftFor(ctx context.Context, tool, id string) (draftEntry, ResolvedAccount, error) {
 	s := t.service
 	if err := s.requireDraftLedger(); err != nil {
@@ -132,7 +131,7 @@ func (t *Tools) HandleDraftGet(ctx context.Context, args map[string]any) (string
 		return "", fmt.Errorf("%s", p)
 	}
 	s := t.service
-	unlock := s.lockDraftLedger()
+	unlock := t.lockDraft(id)
 	defer unlock()
 	e, acct, err := t.draftFor(ctx, tool, id)
 	if err != nil {
@@ -213,7 +212,7 @@ func (t *Tools) HandleDraftRevise(ctx context.Context, args map[string]any) (str
 	}
 
 	s := t.service
-	unlock := s.lockDraftLedger()
+	unlock := t.lockDraft(id)
 	defer unlock()
 	e, acct, err := t.draftFor(ctx, tool, id)
 	if err != nil {
@@ -250,7 +249,7 @@ func (t *Tools) HandleDraftWithdraw(ctx context.Context, args map[string]any) (s
 	}
 
 	s := t.service
-	unlock := s.lockDraftLedger()
+	unlock := t.lockDraft(id)
 	defer unlock()
 	e, acct, err := t.draftFor(ctx, tool, id)
 	if err != nil {

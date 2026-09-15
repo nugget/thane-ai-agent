@@ -128,11 +128,15 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		if a.emailService == nil || !a.emailService.PollingEnabled() {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires email poller runtime", emailPollerDefinitionName)
 		}
+		if err := a.validateEmailRoutes(); err != nil {
+			return looppkg.Spec{}, err
+		}
 		spec.Handler = func(ctx context.Context, _ any) error {
 			wakes, err := a.emailService.CheckNewMessages(ctx)
 			if err != nil {
 				return err
 			}
+			a.emailReviewWake.resweep(ctx)
 			if wakes == 0 {
 				return looppkg.ErrNoOp
 			}
@@ -187,7 +191,7 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		}
 		return a.hydrateLoopOutputs(spec)
 	default:
-		return a.hydrateLoopOutputs(spec)
+		return a.hydrateLoopOutputs(a.attachEmailReviewTools(spec))
 	}
 }
 

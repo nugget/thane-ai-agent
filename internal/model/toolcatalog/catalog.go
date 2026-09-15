@@ -188,6 +188,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"email_draft_revise":            {CanonicalID: "native:email_draft_revise", Source: NativeToolSource, Tags: []string{"email_drafts"}},
 	"email_draft_withdraw":          {CanonicalID: "native:email_draft_withdraw", Source: NativeToolSource, Tags: []string{"email_drafts"}},
 	"email_drafts":                  {CanonicalID: "native:email_drafts", Source: NativeToolSource, Tags: []string{"email_drafts"}},
+	"email_escalate":                {CanonicalID: "native:email_escalate", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_folders":                 {CanonicalID: "native:email_folders", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_list":                    {CanonicalID: "native:email_list", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_mark":                    {CanonicalID: "native:email_mark", Source: NativeToolSource, Tags: []string{"email"}},

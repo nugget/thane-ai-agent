@@ -93,6 +93,11 @@ type accountView struct {
 	// account limits where email_move may file its mail.
 	filingView
 
+	// reviewView adds wake_loop when the account's new mail is routed
+	// away from its owner's default, and review_loop with the cached
+	// pending_review when the account has a review pass.
+	reviewView
+
 	// DeniedRecipientDomains and AllowedRecipientDomains are the
 	// account's recipient-domain rules, shown so a refusal is never the
 	// first place the model learns them.
@@ -174,6 +179,7 @@ func (p *ContextProvider) buildContext(bound string, isAttended bool) (string, e
 		view.mailboxView = newMailboxView(cfg)
 		view.DraftsFolder = p.service.entryDraftsFolder(cfg)
 		view.filingView = p.service.newFilingView(cfg)
+		view.reviewView = p.service.newReviewView(cfg, now)
 		if snap, ok := p.service.cachedFolders(cfg.Name); ok {
 			view.Folders, view.FoldersTruncated = folderViews(snap.Folders)
 			view.FoldersAsOf = promptfmt.FormatDeltaOnly(snap.At, now)

@@ -863,6 +863,12 @@ func (a *App) initServers(s *newState) error {
 				a.subWakeFeeder.Rebuild()
 				a.subWakeFeeder.Sweep(ctx)
 			}
+			// Every definition is registered now: refuse an account
+			// whose review_loop names none, polling or not, then wake
+			// review loops for work queued before a restart.
+			if err := a.startEmailReviewPasses(ctx); err != nil {
+				return err
+			}
 			// Now that the durable definition snapshot is registered,
 			// fail loud on any config-defined MQTT wake subscription
 			// that names a loop nobody actually registered. Runtime
