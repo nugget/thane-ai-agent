@@ -694,13 +694,20 @@ A UID identifies a message *within one folder*. After `email_move`,
 the message has a fresh UID in the destination folder; the old UID in
 the source folder stops resolving. The result is `{action, account,
 source_folder, destination_folder, uids, destination_uids,
-destination_uids_known, uids_not_found, moved, refused, note}`.
+destination_uids_known, uids_not_found, moved, refused, moved_omitted,
+refused_omitted, note}`.
 `action` is `moved`, or `refused` when the junk guard refused every
 message and nothing moved. `moved` lists each message that moved as
 `{uid, destination_uid, message_id, from, trust_zone}`, and `refused`
 lists each one the junk guard kept back (see "Obvious spam, and
 nothing else" below); both are always present, empty when nothing
-belongs there. When `destination_uids_known` is true,
+belongs there. A call takes at most 100 UIDs, so split a larger set
+across calls. The result stays within 16 KB: a `from`, `message_id`,
+or `reason` over 256 bytes is cut and ends with `…[cut]`, and when the
+entries would pass that, the last `moved_omitted` entries of `moved`,
+then the last `refused_omitted` of `refused`, carry only their UIDs.
+`uids`, `destination_uids`, and every entry's UIDs are always
+complete. When `destination_uids_known` is true,
 `uids` are the messages the server confirmed moving, `uids_not_found`
 the requested UIDs it did not find, and the
 `destination_uids` (each `moved` entry's `destination_uid`) are the
@@ -732,7 +739,9 @@ operator where the message is (`destination_folder`) so they can move
 it back themselves.
 When `destination_uids_known` was false, find the messages first with
 `email_search` in `destination_folder` by each `message_id` from
-`moved`.
+`moved`. An entry whose `message_id` ends with `…[cut]`, or that
+carries only its UIDs, cannot be found that way; list
+`destination_folder` for those.
 
 ## Obvious spam, and nothing else
 
@@ -788,7 +797,9 @@ is the zone the guard judged: the contact record's own, which for an
 `automated` address can sit above the `known` its events carry. Do
 what its `recovery` says: flag it with `email_mark` flag `flagged` if
 it needs the operator, and bring it to them with
-`request_core_attention` if it cannot wait. Do not retry the move, by
+`request_core_attention` if it cannot wait. An entry counted in
+`refused_omitted` carries only its `uid`; the same recovery applies to
+it. Do not retry the move, by
 role or by name; a refused message waits for the operator, not for
 another attempt. The guard is a floor under the rule above, not the rule
 itself: it lets a `known` contact's mail through, but mail from any
@@ -804,7 +815,8 @@ and moving mail back to INBOX out of a `move_into` folder is always
 allowed. When the result had `destination_uids_known: false`, first
 find each message with `email_search {account, folder: <junk_folder>,
 message_id}`, taking each `message_id` from the result's `moved` list,
-and move the UIDs the search returns.
+and move the UIDs the search returns. For an entry whose `message_id`
+is cut or absent, list the junk folder instead.
 
 ## Cross-references
 

@@ -65,7 +65,9 @@ func (a EmailAccountConfig) MovesAnywhere() bool {
 // note. A role must be one a folder listing can report, the drafts
 // folder can never be listed, and "*" cannot be combined with anything,
 // because a list that allows everything and also names folders says
-// two things at once.
+// two things at once. The drafts name is compared without case, as the
+// runtime refusal compares it: some servers fold the case of every
+// mailbox name, so a case variant can reach the drafts folder.
 func (a EmailAccountConfig) validateFiling(i int) error {
 	where := fmt.Sprintf("email.accounts[%d] (%s)", i, a.Name)
 	drafts := strings.TrimSpace(a.DraftsFolder)
@@ -79,7 +81,7 @@ func (a EmailAccountConfig) validateFiling(i int) error {
 			if len(a.Mailbox.MoveInto) > 1 {
 				return fmt.Errorf("%s: mailbox.move_into[%d] is %q, which allows every folder and cannot be combined with other entries", where, j, EmailMoveIntoAny)
 			}
-		case isRole && role == "drafts", !isRole && drafts != "" && token == drafts:
+		case isRole && role == "drafts", !isRole && drafts != "" && strings.EqualFold(token, drafts):
 			return fmt.Errorf("%s: mailbox.move_into[%d] %q names the drafts folder, which is never a move destination", where, j, token)
 		case isRole && !slices.Contains(emailFolderRoles, role):
 			return fmt.Errorf("%s: mailbox.move_into[%d] %q names no special-use role; use role: with one of %s, or an exact folder name", where, j, token, strings.Join(destinationRoles(), ", "))

@@ -185,11 +185,105 @@ func TestHTMLToText(t *testing.T) {
 				`<span style="DISPLAY : NONE !IMPORTANT">b</span>` +
 				`<span style="display:/* note */none">c</span>` +
 				`<span style="color:red;;display:none;">d</span>` +
-				`<span style="display:none;display:block">e</span>` +
-				`<span style="font-size:0"><span style="font-size:banana">f</span><span style="font-size:calc(16px)">g</span></span>` +
+				`<span style="font-size:0"><span style="font-size:banana">e</span><span style="font-size:calc(16px)">f</span></span>` +
 				`Z</p>`,
 			want:   "AZ",
-			hidden: 6,
+			hidden: 5,
+		},
+
+		// Declaration precedence within one style attribute: each
+		// property is judged by the declaration a browser applies.
+		{
+			name: "a later declaration wins over an earlier one",
+			in: `<p>A` +
+				`<span style="display:none;display:block">b</span>` +
+				`<span style="font-size:0;font-size:12px">c</span>` +
+				`<span style="opacity:0;opacity:1">d</span>` +
+				`<span style="visibility:hidden;visibility:visible">e</span>` +
+				`<span style="display:none;displ\61y:bl\ock">f</span>` +
+				`<span style="display:none;display:block !important">g</span>` +
+				`<span style="display:block;display:none">x</span>` +
+				`<span style="font-size:12px;font-size:0">y</span>` +
+				`Z</p>`,
+			want:   "AbcdefgZ",
+			hidden: 2,
+		},
+		{
+			name: "an important declaration beats a later plain one",
+			in: `<p>A` +
+				`<span style="display:none !important;display:block">b</span>` +
+				`<span style="font-size:0!important;font-size:12px">c</span>` +
+				`<span style="opacity:0 ! IMPORTANT;opacity:1">d</span>` +
+				`<span style="visibility:hidden!important;visibility:visible">e</span>` +
+				`<span style="font-size:12px !important;font-size:0">V</span>` +
+				`Z</p>`,
+			want:   "AVZ",
+			hidden: 4,
+		},
+		{
+			name: "a later important declaration beats an earlier important one",
+			in: `<p>A` +
+				`<span style="display:none!important;display:block!important">B</span>` +
+				`<span style="font-size:0!important;font-size:12px!important;font-size:0">C</span>` +
+				`<span style="display:block!important;display:none!important">x</span>` +
+				`<span style="visibility:visible!important;visibility:hidden!important;visibility:visible">y</span>` +
+				`Z</p>`,
+			want:   "ABCZ",
+			hidden: 2,
+		},
+		{
+			name: "a declaration a browser would drop takes no part",
+			in: `<p>A` +
+				`<span style="display:none;display:banana">b</span>` +
+				`<span style="display:none;display:">c</span>` +
+				`<span style="display:none;display:!important">d</span>` +
+				`<span style="display:none;display:block flow">e</span>` +
+				`<span style="font-size:0;font-size:-2px">f</span>` +
+				`<span style="font-size:0;font-size:12 px">g</span>` +
+				`<span style="opacity:0;opacity:nan">h</span>` +
+				`<span style="visibility:hidden;visibility:shown">i</span>` +
+				`<span style="display:none !important;display:banana !important">j</span>` +
+				`Z</p>`,
+			want:   "AZ",
+			hidden: 9,
+		},
+		{
+			name: "a CSS-wide keyword takes part",
+			in: `<p>A` +
+				`<span style="display:none;display:initial">b</span>` +
+				`<span style="opacity:0;opacity:unset">c</span>` +
+				`<span style="visibility:hidden;visibility:inherit">d</span>` +
+				`<span style="font-size:0;font-size:inherit">e</span>` +
+				`</p>` +
+				`<div style="font-size:0"><span style="font-size:12px;font-size:inherit">x</span></div>` +
+				`<div style="visibility:hidden"><span style="visibility:visible;visibility:revert">y</span></div>`,
+			want:   "Abcde",
+			hidden: 2,
+		},
+		{
+			name: "each element's own winning size applies under its parent's",
+			in: `<div style="font-size:0">` +
+				`<span style="font-size:12px;font-size:1em">x</span>` +
+				`<span style="font-size:1em;font-size:12px">A</span>` +
+				`<font size="3" style="font-size:0;font-size:12px">B</font>` +
+				`<font size="3" style="font-size:12px;font-size:0">y</font>` +
+				`</div>` +
+				`<div style="font-size:0;font-size:12px"><span style="font-size:0;font-size:1em">C</span></div>`,
+			want:   "AB\n\nC",
+			hidden: 2,
+		},
+		{
+			name: "a number reads the way the CSS tokenizer reads it",
+			in: `<p>A` +
+				`<span style="font-size:0e3px">b</span>` +
+				`<span style="font-size:-0px">c</span>` +
+				`<span style="opacity:0;opacity:1e0">D</span>` +
+				`<span style="opacity:0;opacity:.5">E</span>` +
+				`<span style="opacity:0;opacity:1.">f</span>` +
+				`<span style="opacity:0;opacity:1e999">g</span>` +
+				`Z</p>`,
+			want:   "ADEZ",
+			hidden: 4,
 		},
 		{
 			name: "malformed styles that hide nothing",

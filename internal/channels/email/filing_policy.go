@@ -50,6 +50,9 @@ func parseMoveRequest(args map[string]any) (moveRequest, []string) {
 	if len(req.opts.UIDs) == 0 {
 		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
 	}
+	if p := batchProblem("email_move", len(req.opts.UIDs), "nothing was moved"); p != "" {
+		problems = append(problems, p)
+	}
 	roleName := toolargs.TrimmedString(args, "destination_role")
 	switch {
 	case req.opts.Destination != "" && roleName != "":
@@ -68,15 +71,20 @@ func parseMoveRequest(args map[string]any) (moveRequest, []string) {
 
 // resolveMoveDestination returns the folder a move files into: the
 // destination as given, or destination_role resolved through r. The
-// drafts role resolves the way the send path does, so the drafts
-// refusal answers it. An unresolved role is refused with the gap it
-// names.
-func (s *Service) resolveMoveDestination(ctx context.Context, acct ResolvedAccount, r *folderResolver, req moveRequest) (string, error) {
+// drafts role answers with drafts, the drafts folder the call already
+// resolved, so the drafts refusal meets it; on an account with no
+// drafts folder it is refused here. Any other unresolved role is
+// refused with the gap it names.
+func (s *Service) resolveMoveDestination(ctx context.Context, acct ResolvedAccount, r *folderResolver, req moveRequest, drafts string) (string, error) {
 	switch req.role {
 	case "":
 		return req.opts.Destination, nil
 	case RoleDrafts:
-		return s.draftsFolder(ctx, acct), nil
+		if drafts != "" {
+			return drafts, nil
+		}
+		s.logMoveRefusal(ctx, acct, "drafts_destination", "", string(req.role))
+		return "", fmt.Errorf("email_move cannot file mail by destination_role %q on account %q: the drafts folder is never a destination. Pick another destination, or report the need; nothing was moved", req.role, acct.Name)
 	}
 	folder := r.folder(ctx, req.role)
 	if r.err != nil {
@@ -211,26 +219,6 @@ func (s *Service) refuseFiling(ctx context.Context, acct ResolvedAccount, p fili
 		return fmt.Errorf("email_move cannot file into %q on account %q: it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree; mail may move only into %s, and back to INBOX from there. Flag it instead; nothing was moved", destination, acct.Name, p.describe())
 	}
 	return fmt.Errorf("email_move cannot file into %q on account %q: its mailbox.move_into allows only %s, and back to INBOX from there. Choose one of those or report the need; nothing was moved", destination, acct.Name, p.describe())
-}
-
-// refuseDraftsSource returns the refusal for a tool acting on mail in
-// the account's drafts folder, or nil for any other folder. The drafts
-// folder holds what waits for the operator to send or discard, their
-// own drafts and Thane's alike, so neither moving mail out of it nor
-// changing its flags is Thane's to do. outcome finishes the sentence.
-func (s *Service) refuseDraftsSource(ctx context.Context, tool string, acct ResolvedAccount, folder, outcome string) error {
-	drafts := s.draftsFolder(ctx, acct)
-	if !namesFolder(normalizeFolder(folder), drafts) {
-		return nil
-	}
-	s.logger.Info("email drafts folder refused as source",
-		"tool", tool,
-		"account", acct.Name,
-		"folder", drafts,
-		"loop_id", tools.LoopIDFromContext(ctx),
-		"conversation_id", tools.ConversationIDFromContext(ctx),
-	)
-	return fmt.Errorf("%s cannot act on mail in %q: it is account %q's drafts folder, which holds drafts waiting for the operator to send or discard, and they are the operator's to handle; %s", tool, drafts, acct.Name, outcome)
 }
 
 // logMoveRefusal records one refused move, keyed to the loop and

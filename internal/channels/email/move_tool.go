@@ -2,32 +2,34 @@ package email
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/emersion/go-imap/v2"
 )
 
 // move runs one validated email_move. Before anything moves it resolves
-// the destination, applies the drafts protections and the account's
-// filing policy, reads each message's sender, and lets the junk guard
-// hold back what it must; then it moves the rest and reports every
-// moved message with its sender.
+// the drafts folder once and the destination, applies the drafts
+// protections and the account's filing policy, reads each message's
+// sender, and lets the junk guard hold back what it must; then it moves
+// the rest and reports every moved message with its sender.
 func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest) (moveResponse, error) {
 	s := t.service
 	r := s.newFolderResolver(acct)
 	opts := req.opts
 	opts.Folder = normalizeFolder(opts.Folder)
 
-	dest, err := s.resolveMoveDestination(ctx, acct, r, req)
+	drafts, err := s.protectedDrafts(ctx, "email_move", acct, r, "nothing was moved")
+	if err != nil {
+		return moveResponse{}, err
+	}
+	dest, err := s.resolveMoveDestination(ctx, acct, r, req, drafts)
 	if err != nil {
 		return moveResponse{}, err
 	}
 	opts.Destination = dest
-	if namesFolder(dest, s.draftsFolder(ctx, acct)) {
-		s.logMoveRefusal(ctx, acct, "drafts_destination", opts.Folder, dest)
-		return moveResponse{}, fmt.Errorf("email_move cannot file mail into %q: it is account %q's drafts folder, which holds drafts waiting for the operator to send or discard, and a moved message there would look like one of them. Pick another destination, or report the need", dest, acct.Name)
+	if err := s.refuseDraftsDestination(ctx, acct, drafts, opts.Folder, dest); err != nil {
+		return moveResponse{}, err
 	}
-	if err := s.refuseDraftsSource(ctx, "email_move", acct, opts.Folder, "nothing was moved"); err != nil {
+	if err := s.refuseDraftsSource(ctx, "email_move", acct, drafts, opts.Folder, "nothing was moved"); err != nil {
 		return moveResponse{}, err
 	}
 	policy := resolveFilingPolicy(acct.Config, func(role FolderRole) string { return r.folder(ctx, role) })
@@ -124,13 +126,14 @@ func (t *Tools) moveSenders(ctx context.Context, acct ResolvedAccount, folder st
 
 // movedMessage is one message a move filed: its UID in the source, its
 // UID in the destination when the server confirmed it, and who sent it,
-// so a later turn can find it again or undo the move.
+// so a later turn can find it again or undo the move. An entry past the
+// result's size budget keeps only its UIDs (see marshalMoveResponse).
 type movedMessage struct {
 	UID            uint32 `json:"uid"`
 	DestinationUID uint32 `json:"destination_uid,omitempty"`
 	MessageID      string `json:"message_id,omitempty"`
-	From           string `json:"from"`
-	TrustZone      string `json:"trust_zone"`
+	From           string `json:"from,omitempty"`
+	TrustZone      string `json:"trust_zone,omitempty"`
 }
 
 // movedMessages pairs a move's result with the senders read before it.

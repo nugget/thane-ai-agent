@@ -218,6 +218,9 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if len(action.UIDs) == 0 {
 		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
 	}
+	if p := batchProblem("email_mark", len(action.UIDs), "nothing was changed"); p != "" {
+		problems = append(problems, p)
+	}
 	if action.Flag == "" {
 		problems = append(problems, fmt.Sprintf("flag is required (one of %s)", strings.Join(ValidFlagNames(), ", ")))
 	} else if _, ok := ValidFlag(action.Flag); !ok {
@@ -234,7 +237,11 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if err := t.service.requireOrganize(acct, "email_mark"); err != nil {
 		return "", err
 	}
-	if err := t.service.refuseDraftsSource(ctx, "email_mark", acct, action.Folder, "nothing was changed"); err != nil {
+	drafts, err := t.service.protectedDrafts(ctx, "email_mark", acct, t.service.newFolderResolver(acct), "nothing was changed")
+	if err != nil {
+		return "", err
+	}
+	if err := t.service.refuseDraftsSource(ctx, "email_mark", acct, drafts, action.Folder, "nothing was changed"); err != nil {
 		return "", err
 	}
 	if action.Add && action.Flag == "seen" {
@@ -321,5 +328,5 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	if err != nil {
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
-	return marshalResponse(resp)
+	return marshalMoveResponse(resp)
 }
