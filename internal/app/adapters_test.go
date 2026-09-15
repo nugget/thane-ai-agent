@@ -140,7 +140,7 @@ func TestConversationSystemInjector(t *testing.T) {
 		t.Fatalf("NewArchiveStoreFromDB: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	archiver := memory.NewArchiveAdapter(archiveStore, workingStore, workingStore, logger)
+	archiver := memory.NewArchiveAdapter(archiveStore, workingStore, logger)
 	if _, err := archiver.StartSession("conv-1"); err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}

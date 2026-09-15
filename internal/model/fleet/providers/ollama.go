@@ -481,16 +481,3 @@ func (c *OllamaClient) ListModelInfos(ctx context.Context) ([]OllamaModelInfo, e
 
 	return result.Models, nil
 }
-
-// ListModels returns available model names.
-func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
-	models, err := c.ListModelInfos(ctx)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(models))
-	for i, m := range models {
-		names[i] = m.Name
-	}
-	return names, nil
-}

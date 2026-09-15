@@ -63,7 +63,7 @@ func newAccountingTestLoop(t *testing.T) (*Loop, *memory.SQLiteStore, *memory.Ar
 	})
 	loop := &Loop{
 		logger: logger, memory: store, tools: reg, model: "claude-primary",
-		archiver:   memory.NewArchiveAdapter(archive, store, store, logger),
+		archiver:   memory.NewArchiveAdapter(archive, store, logger),
 		usageStore: usageStore, retryBaseDelay: time.Millisecond,
 		pricing: map[string]config.PricingEntry{
 			"claude-primary":  {InputPerMillion: 2, OutputPerMillion: 10},

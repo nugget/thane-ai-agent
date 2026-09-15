@@ -8,7 +8,7 @@ import (
 )
 
 func TestAdapterSessionOperationsWaitForCommittedCachePublication(t *testing.T) {
-	for _, operation := range []string{"id", "timing", "ensure", "enumerate", "start", "end", "archive"} {
+	for _, operation := range []string{"id", "timing", "ensure", "enumerate", "start", "close"} {
 		t.Run(operation, func(t *testing.T) {
 			adapter, archive, store := newTestAdapter(t)
 			if err := store.AddMessage("conv", "user", "before transition", OriginChannel); err != nil {
@@ -44,7 +44,7 @@ func TestAdapterSessionOperationsWaitForCommittedCachePublication(t *testing.T) 
 			if cached != oldID {
 				t.Fatalf("test did not establish stale cache: got %q, want %q", cached, oldID)
 			}
-			if operation == "archive" {
+			if operation == "close" {
 				if err := store.AddMessage("conv", "user", "successor message", OriginChannel); err != nil {
 					t.Fatal(err)
 				}
@@ -70,10 +70,8 @@ func TestAdapterSessionOperationsWaitForCommittedCachePublication(t *testing.T) 
 					got.value = strings.Join(adapter.ActiveConversationIDs(), ",")
 				case "start":
 					got.value, got.err = adapter.StartSession("conv")
-				case "end":
-					got.err = adapter.EndSession(result.current.ID, "ended after publication")
-				case "archive":
-					got.err = adapter.ArchiveConversation("conv", nil, "archived after publication")
+				case "close":
+					got.err = adapter.CloseConversation("conv", "closed after publication")
 				}
 				done <- got
 			}()
@@ -113,11 +111,10 @@ func TestAdapterSessionOperationsWaitForCommittedCachePublication(t *testing.T) 
 				if got.value == "" || got.value == result.current.ID || adapter.ActiveSessionID("conv") != got.value {
 					t.Fatalf("start did not follow boundary publication: %+v", got)
 				}
-			case "end":
+			case "close":
 				if sid := adapter.ActiveSessionID("conv"); sid != "" {
-					t.Fatalf("end left closed session cached: %q", sid)
+					t.Fatalf("close left closed session cached: %q", sid)
 				}
-			case "archive":
 				var owner string
 				if err := store.DB().QueryRow(`SELECT session_id FROM messages WHERE content = 'successor message'`).Scan(&owner); err != nil {
 					t.Fatal(err)
@@ -164,14 +161,13 @@ func TestAdapterEnsureSessionCreatesOnceForConcurrentCallers(t *testing.T) {
 }
 
 func TestAdapterSessionCloseCallbacksCanReenter(t *testing.T) {
-	for _, operation := range []string{"reset", "close", "end"} {
+	for _, operation := range []string{"reset", "close"} {
 		t.Run(operation, func(t *testing.T) {
 			adapter, archive, store := newTestAdapter(t)
 			if err := store.AddMessage("conv", "user", "before close", OriginChannel); err != nil {
 				t.Fatal(err)
 			}
-			sid, err := adapter.StartSession("conv")
-			if err != nil {
+			if _, err := adapter.StartSession("conv"); err != nil {
 				t.Fatal(err)
 			}
 			callbackResult := make(chan error, 1)
@@ -205,8 +201,6 @@ func TestAdapterSessionCloseCallbacksCanReenter(t *testing.T) {
 					done <- adapter.ResetSession("conv", "reset", "")
 				case "close":
 					done <- adapter.CloseConversation("conv", "close")
-				case "end":
-					done <- adapter.EndSession(sid, "end")
 				}
 			}()
 			select {
