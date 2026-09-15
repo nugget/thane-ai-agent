@@ -50,6 +50,9 @@ type memIMAP struct {
 	attrs   map[string][]imap.MailboxAttr
 	tls     bool // implicit TLS listener
 
+	// lists counts the LIST commands the special-use session answered,
+	// so a test can tell a cached answer from a fresh round trip.
+	lists int
 }
 
 type memIMAPOptions struct {
@@ -219,6 +222,9 @@ func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns 
 	if options == nil {
 		options = &imap.ListOptions{}
 	}
+	s.mem.mu.Lock()
+	s.mem.lists++
+	s.mem.mu.Unlock()
 	for _, name := range s.mem.folderNames() {
 		matched := false
 		for _, p := range patterns {

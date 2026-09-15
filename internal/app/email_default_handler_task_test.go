@@ -45,13 +45,24 @@ func TestEmailDefaultHandlerTaskBranchesOnMailboxOwner(t *testing.T) {
 		{"branch keyed on owner", `If that account's entry shows owner: "operator"`},
 		{"operator section", "### The operator's own mailboxes"},
 		{"leave mail in INBOX", "Leave the message in INBOX."},
-		{"only obvious spam moves, to the junk role", "destination: <the folder listed with role junk in that account's folders>"},
-		{"destination always explicit", "Always pass destination; folder is the source."},
+		{"only obvious spam moves, by the junk role", `uids: [uid], destination_role: "junk"}`},
+		{"folder is the source", "and folder is the source."},
+		{"no junk folder leaves the message", "If email_move answers that no folder has the junk role, leave the message where it is."},
 		{"matched senders never go to junk", "Never move mail from a matched sender into junk"},
+		{"guard refusals are taught", "lists each refused message under refused[] with its from, trust_zone, reason, and recovery"},
+		{"a refused message is not retried", "A refused message stays in INBOX: do not retry the move"},
+		{"a refused message reaches the operator", "bring it to them with request_core_attention if it cannot wait"},
+		{"filing is enforced by move_into", "email_move refuses every folder outside the entry's move_into"},
 		{"reads leave mail unread", "always pass mark_seen: false"},
 		{"flag what needs the operator", `flag: "flagged"`},
 		{"no reply or draft yet", "Do not reply or draft here"},
-		{"undo names INBOX", `destination: "INBOX"`},
+		{"undo reads junk_folder from the entry", "folder: <junk_folder from the account's entry>"},
+		{"undo returns by the inbox role", `destination_role: "inbox"}`},
+		{"undo without destination uids searches by message_id", "message_id: <its message_id from the move result's moved[]>"},
+		{"other accounts may file by role", "or a destination_role such as junk or trash for Go to resolve"},
+		{"other accounts learn the guard", "A move into junk in a wake refuses mail from the operator's own record"},
+		{"the guard refuses what it cannot check", "or from a sender the directory could not look up"},
+		{"the guard refuses shared addresses", "from an address several contacts share when one of them is or may be at such a zone"},
 		{"other accounts section", "### Every other account"},
 		{"step 5 says policy can refuse", "The policy can also refuse it"},
 		{"step 5 forbids another account", "do not write the message from another account"},
@@ -65,6 +76,11 @@ func TestEmailDefaultHandlerTaskBranchesOnMailboxOwner(t *testing.T) {
 	}
 	if strings.Contains(task, "description begins") {
 		t.Error("the operator branch must be keyed on owner, not on the account description")
+	}
+	for _, stale := range []string{"the folder listed with role junk", "call email_folders {account} once", `destination: "INBOX"`} {
+		if strings.Contains(task, stale) {
+			t.Errorf("the operator branch files by destination_role now and must not teach %q", stale)
+		}
 	}
 	if strings.Contains(task, "held in its Drafts folder for the operator to send and the result says disposition: drafted;") {
 		t.Error("step 5 must not promise a draft wherever policy can refuse one")

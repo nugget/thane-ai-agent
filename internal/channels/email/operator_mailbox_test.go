@@ -146,7 +146,7 @@ func TestEmailMoveRequiresDestination(t *testing.T) {
 			if err == nil {
 				t.Fatal("a move without destination must be refused")
 			}
-			mustContain(t, err.Error(), "destination is required; folder is the source", "nothing was moved")
+			mustContain(t, err.Error(), "destination or destination_role is required; folder is the source", "nothing was moved")
 			acct, _ := svc.ResolveAccount(context.Background(), "primary")
 			listed, err := acct.Client.ListMessages(context.Background(), ListOptions{Folder: "INBOX"})
 			if err != nil || len(listed.Envelopes) != 1 || listed.Envelopes[0].UID != uid {
@@ -414,7 +414,7 @@ func TestEmailAccountsEntryRendersMailbox(t *testing.T) {
 		{
 			name:     "operator mailbox",
 			entry:    payload.Accounts[1],
-			wantKeys: []string{"access", "account", "address", "can_send", "delivery", "description", "drafts_folder", "drafts_for", "folders", "owner", "reads_mark_seen", "refuses", "sends_directly_to", "voice", "writes_as"},
+			wantKeys: []string{"access", "account", "address", "can_send", "delivery", "description", "drafts_folder", "drafts_for", "folders", "move_into", "owner", "reads_mark_seen", "refuses", "sends_directly_to", "voice", "writes_as"},
 			want: map[string]any{
 				"owner":           "operator",
 				"writes_as":       "Alice Example <alice@example.org>",

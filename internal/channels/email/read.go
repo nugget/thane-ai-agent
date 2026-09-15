@@ -258,7 +258,8 @@ func truncateUTF8(s string, maxBytes int) string {
 }
 
 // finishBody settles the readable body: a text part wins, an HTML-only
-// message is rendered to text, BodySource records which happened, and
+// message is rendered to text with what its markup hid withheld and
+// counted in HiddenChars, BodySource records which happened, and
 // BodyTruncated is set from that part alone, so an oversized HTML
 // alternative does not mark a complete plain body as cut.
 func finishBody(msg *Message) {
@@ -267,7 +268,7 @@ func finishBody(msg *Message) {
 		msg.BodySource = "text"
 		msg.BodyTruncated = msg.textTruncated
 	case msg.HTMLBody != "":
-		msg.TextBody = htmlToText(msg.HTMLBody)
+		msg.TextBody, msg.HiddenChars = htmlToText(msg.HTMLBody)
 		msg.BodySource = "html"
 		msg.BodyTruncated = msg.htmlTruncated
 	}

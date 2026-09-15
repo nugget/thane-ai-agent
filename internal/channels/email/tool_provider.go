@@ -98,8 +98,11 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, auto_submitted, bulk, access_note} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, hidden_content:{present, chars}, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, auto_submitted, bulk, access_note} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
+				"The rendering leaves out text the HTML's own markup hides with an inline idiom Go recognises (the hidden attribute, aria-hidden=\"true\", or an inline display:none, visibility:hidden, zero font-size, or zero opacity): that text is withheld from the body, hidden_content appears, and chars counts its characters, whitespace aside. " +
+				"Go reads no stylesheet and compares no colours, so text hidden any other way stays in the body and hidden_content stays absent; its absence does not show that the body is what a reader saw. " +
+				"Bulk mail often hides a preview line this way, so hidden_content alone is not a sign of abuse; weigh it with who sent the message and what the visible body asks. " +
 				"The whole result stays within 32 KB: a long body is cut to fit and body_truncated is true, to, cc, and reply_to list at most 25 addresses each with addresses_omitted counting the rest, and at most 50 attachments are described with attachments_omitted counting the rest; raw_truncated means the message exceeded 5 MB and later parts were not parsed. Attachments are described, never downloaded. " +
 				addressShapeDescription +
 				"authentication.verified is true only when Thane validated a signature with a key the directory holds for the sender; status absent means nothing was checked and carries no suspicion, failed means a signature did not validate, unavailable means a check could not complete. " +
@@ -132,7 +135,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"{account, count, total, truncated, folders:[{name, role, selectable, delimiter, attributes, messages, unseen}]}; role is one of inbox, drafts, sent, trash, junk, archive, all, flagged, important, or empty, " +
 				"and attributes lists the server's raw mailbox attributes (such as \\Noselect or \\HasChildren), omitted when it sent none. " +
 				"At most 200 folders are listed; when an account has more, role-bearing folders come first and truncated is true. " +
-				"Folder names are exact and per account: use them verbatim as email_move destinations. No email tool creates folders.",
+				"Folder names are exact and per account: use them verbatim as an email_move destination, or pass email_move destination_role to have Go find the folder by its role. No email tool creates folders.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -188,7 +191,8 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"from an email_list or email_search result in the same account and folder; add defaults to true. Returns JSON " +
 				"{action: flag_added|flag_removed, account, folder, flag, uids_affected, uids_not_found}. " +
 				"A UID under uids_not_found no longer exists in that folder (moved or deleted) — list again rather than retrying. An account whose access is read refuses this tool. " +
-				"On an account whose Email Accounts entry shows owner: operator, adding seen is refused unless the operator is present for this turn, because unread is how the operator sees what is new; flagged is how to mark what needs them.",
+				"On an account whose Email Accounts entry shows owner: operator, adding seen is refused unless the operator is present for this turn, because unread is how the operator sees what is new; flagged is how to mark what needs them. " +
+				"The account's drafts folder is refused as folder and nothing changes: it holds drafts waiting for the operator to send or discard.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -285,14 +289,16 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		},
 		{
 			Name: "email_move",
-			Description: "Move messages to another folder in the same account. Provide uids (array of integers) or uid (single integer), folder (the source, default INBOX), and destination (required): " +
-				"the target, a folder name exactly as email_folders or the Email Accounts block lists it for this account (no tool creates folders, and there are no cross-account moves). " +
-				"A call without destination is refused and moves nothing; folder is never read as the target. Returns JSON " +
-				"{action: moved, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known, uids_not_found}; " +
-				"when destination_uids_known is true, uids are the source UIDs the server confirmed moving, paired with destination_uids, and uids_not_found are requested UIDs the folder no longer held; " +
-				"when it is false the server confirmed nothing, and the destination must be listed to find the messages. " +
-				"The Email Accounts block's recent_operations records each move with both UID lists, at most 10 of each with the rest counted, or with destination_uids unknown when the server confirmed nothing; list destination_folder for any it does not show. To undo a move, move destination_uids from destination_folder with destination set to the original source_folder. " +
-				"A destination the account lacks is refused with the account's real folder list, the account's drafts folder is never a destination, and an account whose access is read refuses this tool.",
+			Description: "Move messages to another folder in the same account. Provide uids (array of integers) or uid (single integer), folder (the source, default INBOX), and exactly one target: " +
+				"destination, a folder name exactly as email_folders or the Email Accounts block lists it for this account, or destination_role, a special-use role that Go resolves to this account's folder with that role, taking junk_folder or trash_folder first when the account configures one (no tool creates folders, and there are no cross-account moves). " +
+				"A call with neither or both is refused and moves nothing; folder is never read as the target. A role no folder on the account holds is refused, naming the gap. " +
+				"Each account allows moves only into the folders its mailbox.move_into names, shown as move_into in its Email Accounts entry whenever it is limited, and back to INBOX out of one of those; any other target is refused and nothing moves. An account whose entry shows owner: operator allows only its junk folder unless the operator configured more. " +
+				"In a turn the operator is not present for, a move into the junk folder refuses each message whose sender is the operator's own record, is held by a contact at admin, household, or trusted, is an address several contacts share when one of them is or may be at such a zone, or could not be looked up, and moves the rest; the refused messages stay where they were. " +
+				"Returns JSON {action: moved|refused, account, source_folder, destination_folder, uids, destination_uids, destination_uids_known, uids_not_found, moved:[{uid, destination_uid, message_id, from, trust_zone}], refused:[{uid, from, trust_zone, reason, recovery}], note}; action is refused only when every message was refused and nothing moved. " +
+				"when destination_uids_known is true, uids are the source UIDs the server confirmed moving, paired with destination_uids and with each moved entry's destination_uid, and uids_not_found are UIDs the folder no longer held; " +
+				"when it is false the server confirmed nothing, moved lists what was sent without destination UIDs, and the destination must be listed or searched by message_id to find the messages. " +
+				"The Email Accounts block's recent_operations records each move with both UID lists, at most 10 of each with the rest counted, or with destination_uids unknown when the server confirmed nothing; list destination_folder for any it does not show. To undo a move, move destination_uids from destination_folder back to the original source_folder, with destination_role inbox when that was INBOX; a limited move_into refuses a move back into any other folder it does not list, so then tell the operator where the messages are. " +
+				"A destination the account lacks is refused with the account's real folder list, the account's drafts folder is never a destination or a source, and an account whose access is read refuses this tool.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -300,19 +306,24 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 					"uid":  uidParam,
 					"folder": map[string]any{
 						"type":        "string",
-						"description": "Source folder holding the messages (default: INBOX). Never the target; pass the target as destination.",
+						"description": "Source folder holding the messages (default: INBOX). Never the target; pass the target as destination or destination_role.",
 					},
 					"destination": map[string]any{
 						"type":        "string",
-						"description": "Target folder (required): a folder name exactly as email_folders or the Email Accounts block lists it for this account.",
+						"description": "Target folder by name, exactly as email_folders or the Email Accounts block lists it for this account. Pass this or destination_role, not both.",
+					},
+					"destination_role": map[string]any{
+						"type":        "string",
+						"enum":        destinationRoleNames(),
+						"description": "Target folder by special-use role instead of by name; Go resolves it to this account's folder with that role. Pass this or destination, not both. inbox is INBOX, the target that undoes a move out of it.",
 					},
 					"account": accountParameter(),
 				},
-				// One of uids or uid is validated by the handler, which
-				// reports every missing field together.
-				"required": []string{"destination"},
+				// One of uids or uid, and exactly one of destination and
+				// destination_role, are validated by the handler, which
+				// reports every problem together.
 			},
-			ContentResolveExempt: []string{"folder", "destination", "account"},
+			ContentResolveExempt: []string{"folder", "destination", "destination_role", "account"},
 			Handler:              t.HandleMove,
 		},
 	}

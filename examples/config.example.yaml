@@ -1415,6 +1415,14 @@ compaction:
 #       empty to use the folder the server marks as its drafts folder, or
 #       "Drafts" when it marks none.
 #       drafts_folder: Drafts
+#       JunkFolder is the exact name of the folder that holds spam, for a
+#       server that marks none with the \Junk special-use attribute. Leave
+#       empty to use the folder the server marks.
+#       junk_folder: ""
+#       TrashFolder is the exact name of the folder that holds deleted
+#       mail, for a server that marks none with \Trash. Leave empty to use
+#       the folder the server marks.
+#       trash_folder: ""
 #       Policy is what the model may do with this account beyond reading
 #       it, and where the mail it writes goes.
 #       policy:
@@ -1468,6 +1476,20 @@ compaction:
 #         as Alice; brief; sign with her first name only". It is shown to
 #         the model in the account's Email Accounts entry.
 #         voice: ""
+#         MoveInto lists where email_move may file this account's mail. An
+#         entry is role:<role>, the folder holding that special-use role
+#         (inbox, sent, trash, junk, archive, all, flagged or important;
+#         junk_folder and trash_folder answer for their roles first), or an
+#         exact folder name; "*" alone allows every folder. Moving mail back
+#         to INBOX out of a listed folder is always allowed, so a move can be
+#         undone. The drafts folder can never be listed. Default: [role:junk]
+#         when owner is operator, so only spam leaves the operator's INBOX,
+#         and ["*"] otherwise.
+#         move_into: []
+#         FilingNote is an optional operator-authored sentence, at most 300
+#         bytes, on how this mailbox is filed, shown to the model in the
+#         account's Email Accounts entry.
+#         filing_note: ""
 #     - # Name is the short identifier tools and loop bindings use for this
 #       account (for example "personal" or "packages"). Required and unique.
 #       name: packages
@@ -1527,6 +1549,14 @@ compaction:
 #       empty to use the folder the server marks as its drafts folder, or
 #       "Drafts" when it marks none.
 #       drafts_folder: ""
+#       JunkFolder is the exact name of the folder that holds spam, for a
+#       server that marks none with the \Junk special-use attribute. Leave
+#       empty to use the folder the server marks.
+#       junk_folder: ""
+#       TrashFolder is the exact name of the folder that holds deleted
+#       mail, for a server that marks none with \Trash. Leave empty to use
+#       the folder the server marks.
+#       trash_folder: ""
 #       Policy is what the model may do with this account beyond reading
 #       it, and where the mail it writes goes.
 #       policy:
@@ -1579,6 +1609,20 @@ compaction:
 #         as Alice; brief; sign with her first name only". It is shown to
 #         the model in the account's Email Accounts entry.
 #         voice: ""
+#         MoveInto lists where email_move may file this account's mail. An
+#         entry is role:<role>, the folder holding that special-use role
+#         (inbox, sent, trash, junk, archive, all, flagged or important;
+#         junk_folder and trash_folder answer for their roles first), or an
+#         exact folder name; "*" alone allows every folder. Moving mail back
+#         to INBOX out of a listed folder is always allowed, so a move can be
+#         undone. The drafts folder can never be listed. Default: [role:junk]
+#         when owner is operator, so only spam leaves the operator's INBOX,
+#         and ["*"] otherwise.
+#         move_into: []
+#         FilingNote is an optional operator-authored sentence, at most 300
+#         bytes, on how this mailbox is filed, shown to the model in the
+#         account's Email Accounts entry.
+#         filing_note: ""
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:

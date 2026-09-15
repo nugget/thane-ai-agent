@@ -41,6 +41,42 @@ func newMailboxView(cfg AccountConfig) mailboxView {
 	return view
 }
 
+// filingView is the part of an account's entry that says where
+// email_move may file its mail. move_into renders only when it is
+// limited. junk_folder renders beside it, and on every operator mailbox
+// even when the operator allowed every folder, because the undo of a
+// spam move starts from it. filing_note renders whenever the operator
+// wrote one. An assistant account at its defaults therefore renders as
+// it did before.
+type filingView struct {
+	// JunkFolder is the folder holding the junk role, from junk_folder
+	// or the cached listing, omitted until one of those is known.
+	JunkFolder string `json:"junk_folder,omitempty"`
+
+	// MoveInto lists the folders email_move may file into, resolved to
+	// names; a role no folder is known to hold yet shows as role:<role>.
+	MoveInto []string `json:"move_into,omitempty"`
+
+	// FilingNote is the operator's sentence on how the mailbox is filed.
+	FilingNote string `json:"filing_note,omitempty"`
+}
+
+// newFilingView projects an account's filing policy for its entry,
+// resolved from configuration and the cached folder listing only: a
+// render never touches the server.
+func (s *Service) newFilingView(cfg AccountConfig) filingView {
+	view := filingView{FilingNote: strings.TrimSpace(cfg.Mailbox.FilingNote)}
+	if cfg.MovesAnywhere() && !cfg.OperatorMailbox() {
+		return view
+	}
+	known := func(role FolderRole) string { return s.knownRoleFolder(cfg, role) }
+	view.JunkFolder = known(RoleJunk)
+	if !cfg.MovesAnywhere() {
+		view.MoveInto = resolveFilingPolicy(cfg, known).entryNames()
+	}
+	return view
+}
+
 // entryDraftsFolder is the drafts folder an account's entry shows. An
 // account that can draft shows where a drafted message lands, resolved
 // the way the send path resolves it. An operator mailbox that cannot

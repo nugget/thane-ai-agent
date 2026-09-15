@@ -428,7 +428,7 @@ func TestHandleMarkAndMoveReturnStructuredOutcomes(t *testing.T) {
 	if err == nil {
 		t.Fatal("a move naming only folder must be refused")
 	}
-	mustContain(t, err.Error(), "destination is required; folder is the source")
+	mustContain(t, err.Error(), "destination or destination_role is required; folder is the source")
 }
 
 func TestHandleSearchRejectsBadDatesTogether(t *testing.T) {
