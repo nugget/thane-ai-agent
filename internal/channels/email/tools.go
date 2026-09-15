@@ -65,17 +65,20 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 	markSeen := readMarksSeen(args, acct.Config)
+	if markSeen {
+		// The operator-mailbox rule answers before the read-level
+		// downgrade below, so an unattended mark_seen: true on an operator
+		// mailbox is refused whatever the account's access.
+		if err := t.service.refuseUnattendedSeen(ctx, "email_read", acct, "nothing was read, so retry with mark_seen: false, which leaves the message unread"); err != nil {
+			return "", err
+		}
+	}
 	var accessNote string
 	if acct.Config.AccessLevel() == AccessRead && markSeen {
 		// A read-level account is never mutated, not even by the seen
 		// flag a read would ordinarily set.
 		markSeen = false
 		accessNote = "policy.access is read for this account, so the message was not marked seen"
-	}
-	if markSeen {
-		if err := t.service.refuseUnattendedSeen(ctx, "email_read", acct, "nothing was read, so retry with mark_seen: false, which leaves the message unread"); err != nil {
-			return "", err
-		}
 	}
 
 	msg, err := acct.Client.ReadMessage(ctx, ReadOptions{Folder: folder, UID: uid, Peek: !markSeen})
