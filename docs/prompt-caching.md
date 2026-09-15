@@ -71,6 +71,14 @@ Fixed core prompt files (`axioms.md`, `persona.md`, `mission.md`,
 read/verify/frontmatter-strip/truncate mechanics. Their cache policy
 follows the section they render into, not a separate file-specific path.
 
+Between tool-loop iterations, a generated prompt refresh replaces both
+the plain text and its structured sections. Providers that serialize
+sections therefore see the same updated capabilities, guidance, and live
+state as providers that consume plain text. The initial context-usage
+estimate is omitted after a refresh because it describes the earlier
+prompt. Caller-supplied system prompts remain intact across iterations
+and are represented as a section without an explicit cache TTL.
+
 ## Adding a New Section
 
 When adding a new system-prompt section, classify it before choosing any

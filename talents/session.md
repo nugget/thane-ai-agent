@@ -32,20 +32,21 @@ conversation" is on the wrong leaf entirely — the live message
 history is already in your prompt, and older content (when it
 exists) lives in archive.
 
-## The destructive / non-destructive split
+## Choose the context you want to carry forward
 
-This is the cleanest mental model. Two of the four operations end the
-current session; two do not.
+Session controls preserve the conversation archive. Choose an operation
+by what should remain in active context.
 
 | Operation | What it does | Current session ends? |
 |---|---|---|
-| `conversation_reset` | Wipes the conversation. Archives messages but starts blank. | **Yes** (and brutally — no carry-forward) |
+| `conversation_reset` | Archives the current messages and starts blank. | **Yes** (no carry-forward) |
 | `session_close` | Closes current session, opens a fresh one with a carry-forward handoff injected. | **Yes** (but with continuity) |
-| `session_checkpoint` | Snapshots state. Current session continues uninterrupted. | No |
-| `session_split` | Archives early messages, keeps recent ones in the current session. | No (the current session keeps going) |
+| `session_checkpoint` | Records a labeled point in conversation history. Context stays intact. | No |
+| `session_split` | Archives early messages and retains recent messages in a successor session. | **Yes** (recent context carries forward) |
 | `conversation_model_pin` | Holds this conversation to one model deployment, or clears the hold. Touches no messages. | No |
 
-When in doubt about destructiveness, look at this table first.
+Reset requires an explicit user request; it removes all model-visible
+continuity even though the archive remains searchable.
 
 ## conversation_reset — the nuclear option
 
@@ -99,10 +100,10 @@ Use this when:
 `session_close` is the workhorse of conversation-lifecycle management.
 Reach for it more often than for `conversation_reset`.
 
-## session_checkpoint — non-destructive safety net
+## session_checkpoint — mark a point in the conversation
 
-**Snapshot state, keep going.** Use *before* a risky operation, not
-after the fact.
+**Record a labeled bookmark, keep going.** Use when a milestone is worth
+identifying for later investigation.
 
 ```json
 {
@@ -110,26 +111,23 @@ after the fact.
 }
 ```
 
-Cheap to call. The session continues uninterrupted; the archive
-captures a recoverable point. The label is for your future self when
-you're staring at a list of checkpoints in the archive.
+The bookmark records which messages belong to the session and which are
+in active context at that point. The session continues with the same
+context, and the underlying messages remain preserved across later
+closes, resets, and splits.
 
-Common moments to checkpoint:
-- About to run a destructive shell command, migration, or schema change
-- About to make a large mutation (mass-rename, bulk delete) that's
-  recoverable in principle but tedious to undo
-- The conversation just reached a known-good state and you want to be
-  able to come back to *exactly* this point
-
-Don't checkpoint reflexively every turn — that fills the archive with
-noise. Checkpoint when there's a specific reason to want this
-particular state recoverable.
+A checkpoint does not undo shell commands, migrations, or other external
+changes, and this tool does not provide a restore operation. Arrange any
+required backup or rollback separately. Use a specific label when a
+decision or phase boundary deserves a record; avoid checkpointing every
+turn.
 
 ## session_split — retroactive trim
 
-**Drop the early messages, keep the recent ones in the current
-session.** The early messages get archived as a completed session;
-the current session continues from the split point onward.
+**Archive the early messages, keep the recent context.** The early
+messages form a completed session; a successor session continues from
+the split point onward. Messages retain their IDs, timestamps, and
+provenance.
 
 ```json
 {
@@ -149,7 +147,9 @@ Exactly one of `at_index` or `at_message`. `at_index` is **negative
 offset from the end** (`-20` means "20 messages back"); passing a
 positive value errors out. `at_message` matches the first message
 whose content contains the substring; the split happens before that
-message.
+message. Selectors search only the current session. Choose a boundary
+after compacted history so every retained message is available in active
+context; a split that would retain compacted source messages is rejected.
 
 Use this when:
 - The first half of a conversation explored a dead end and the second
@@ -161,9 +161,9 @@ Use this when:
 - You realize mid-conversation that the productive turn started later
   than the conversation began
 
-Distinguish from `session_close`: split keeps you *in* the current
-session (no carry-forward needed, no handoff). It's "compact this
-session" rather than "transition to a new session."
+Use `session_split` when the recent messages already contain the context
+you need. Use `session_close` when a written carry-forward should replace
+the accumulated conversation.
 
 ## conversation_model_pin — steer which mind answers
 
@@ -221,7 +221,7 @@ explainable (`model_route_explain`) and usually right for a reason.
 If you're tempted to reset the conversation, ask: did the user *ask*
 for it? If not, the right move is one of the other three:
 
-- The current session is fine but I want a snapshot → `session_checkpoint`
+- The current session is fine but I want to mark a milestone → `session_checkpoint`
 - The topic changed and I want a clean room with a handoff →
   `session_close`
 - Old turns are dead weight; recent turns are the work → `session_split`
