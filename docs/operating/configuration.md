@@ -295,7 +295,9 @@ longer one is refused.
 `move_into` lists the only folders `email_move` may file this
 account's mail into in a turn the operator is not present for: a
 new-mail or review wake, a scheduled loop, a loop launched from their
-conversation, or anyone else's conversation. An entry is
+conversation, anyone else's conversation, or a call through the
+Ollama-compatible shim that Home Assistant voice satellites use, even
+when the operator is the one speaking. An entry is
 `role:<role>`, the folder holding that
 special-use role (`inbox`, `sent`, `trash`, `junk`, `archive`, `all`,
 `flagged`, or `important`, resolved through `junk_folder` and
@@ -308,11 +310,15 @@ how accounts behaved before the key existed. Moving mail back to INBOX out of a 
 folder is always allowed, so a move can be undone and mail rescued from
 junk. The drafts folder can never be listed, by role or by name, and
 `email_move` refuses it as a source too, as `email_mark` does. The
-limit does not apply in the operator's own turn: there they decide
-where their mail goes, and `email_move` files into any folder the
-account has except the drafts folder. A move there that `move_into`
-would have refused is logged at Info as `email move outside move_into
-allowed`, with the account, folders, and the conversation that asked.
+limit does not apply in the operator's own turn, their message through
+Thane's native API or in a conversation bound to their own contact:
+there they decide where their mail goes, and `email_move` files into
+any folder the account has except the drafts folder. A move there that
+`move_into` would have refused is logged at Info as `email move outside
+move_into allowed` once the server has moved the messages, with the
+account, folders, the moved UIDs on both sides and their Message-IDs,
+and the conversation, request, and tool call that asked. A move that
+fails, a folder the account lacks included, logs no such line.
 The drafts refusals, `access: read`, and the refusal of a folder the
 account lacks hold in every turn. An unknown role, an
 empty entry, or `"*"` beside other entries is refused at startup.

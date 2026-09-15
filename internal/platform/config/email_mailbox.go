@@ -47,8 +47,11 @@ type EmailMailboxConfig struct {
 	// first), or an exact folder name; "*" alone allows every folder.
 	// Moving mail back to INBOX out of a listed folder is always allowed,
 	// so a move can be undone. The drafts folder can never be listed. It
-	// binds only those turns: in the operator's own conversation
-	// email_move may file into any folder but the drafts folder.
+	// binds only those turns: in the operator's own message, sent through
+	// Thane's native API or in a conversation bound to their contact,
+	// email_move may file into any folder but the drafts folder. A call
+	// through the Ollama-compatible shim, such as Home Assistant voice,
+	// is not their own message.
 	// Default: [role:junk] when owner is operator, so a turn the operator
 	// is not present for moves only spam out of their INBOX, and ["*"]
 	// otherwise.

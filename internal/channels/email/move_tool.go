@@ -38,10 +38,12 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 		return moveResponse{}, r.err
 	}
 	// move_into binds only turns the operator is not present for. In
-	// theirs the move goes ahead and the log records that it went
-	// outside the rule; the drafts protections above hold in both.
+	// theirs the move goes ahead, and once it has moved something the
+	// log records what went outside the rule; the drafts protections
+	// above hold in both.
+	outsideMoveInto := false
 	if attended(ctx) {
-		s.logMoveOutsideMoveInto(ctx, acct, policy, opts.Folder, dest)
+		outsideMoveInto = !policy.allows(opts.Folder, dest)
 	} else if err := s.refuseFiling(ctx, acct, policy, opts.Folder, dest); err != nil {
 		return moveResponse{}, err
 	}
@@ -105,6 +107,9 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 		resp.UIDsNotFound = nonNilUIDs(missingUIDs(opts.UIDs, result.UIDs))
 	} else {
 		resp.Note = "the server did not confirm which UIDs moved or their new UIDs; list " + result.Destination + " to check"
+	}
+	if outsideMoveInto {
+		s.logMoveOutsideMoveInto(ctx, acct, result, resp.Moved)
 	}
 	s.recordOp("email_move", acct.Name, result.SourceFolder, moveOperationRef(result))
 	return resp, nil

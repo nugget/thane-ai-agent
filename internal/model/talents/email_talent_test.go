@@ -140,7 +140,13 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		{"move_into binds only unattended turns", "email_organize", "**Each account limits where its mail may go when the operator is not present.**"},
 		{"move_into lifted when attended", "email_organize", "In the operator's own turn (`attended: true`) `move_into` does not apply"},
 		{"attended move still spares drafts", "email_organize", "any folder the account has but the drafts folder, whatever `move_into` lists"},
-		{"refused move names the operator's way through", "email_organize", "they can move it themselves or ask for it in their own conversation"},
+		{"refused move names the operator's way through", "email_organize", "they can move it themselves or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where it goes through"},
+		{"refused move says voice is refused the same way", "email_organize", "asking again by voice or through Home Assistant is refused the same way"},
+		{"move_into lists the shim as unattended", "email_organize", "or a request through the Ollama-compatible shim, such as Home Assistant voice, even when the operator is the one speaking"},
+		{"undo names the operator's way through", "email_organize", "ask for it in their own message through Thane's native API or in a channel conversation bound to their contact, where the move goes through"},
+		{"send lists the shim as unattended", "email", "and a request through the Ollama-compatible shim, such as Home Assistant voice, even one the operator speaks, are all unattended"},
+		{"question one qualifies clearing", "email", "never by clearing mail away on your own (in their own turn, move what they ask to where they ask)"},
+		{"whose mailbox qualifies clearing", "email", "so you help by marking, never by clearing mail away on your own."},
 		{"inbox return always allowed", "email_organize", "Moving mail back to INBOX out of a `move_into` folder is always allowed"},
 		{"result carries moved", "email_organize", "`moved` lists each message that moved as `{uid, destination_uid, message_id, from, trust_zone}`"},
 		{"result action refused", "email_organize", "`action` is `moved`, or `refused` when the junk guard refused every message and nothing moved"},
@@ -190,6 +196,9 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		{"operator entry claimed to always show move_into", "An operator mailbox always shows it"},
 		{"move_into claimed to hold when attended", "so it holds in the operator's own turn too"},
 		{"move_into claimed to refuse in every turn", "any other move is refused in every turn"},
+		{"question one forbids clearing even when asked", "never by clearing mail away, and what you draft"},
+		{"whose mailbox forbids clearing even when asked", "never by clearing mail away. Reads"},
+		{"recovery points at the conversation the refusal came in on", "or ask for it in their own conversation."},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {

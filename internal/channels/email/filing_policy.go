@@ -210,8 +210,12 @@ func (p filingPolicy) entryNames() []string {
 
 // filingRecovery is how a move refused by move_into can still happen.
 // Only a turn the operator is not present for is refused, so the way
-// through is the operator's own conversation.
-const filingRecovery = "the operator can make the move themselves or ask for it in their own conversation, where move_into does not apply"
+// through is a message of their own on a route attended counts: Thane's
+// native API, or a channel conversation bound to their contact. The
+// Ollama-compatible shim is named because the operator can be the one
+// speaking there (Home Assistant voice) and still be refused, so asking
+// again the same way cannot be the recovery.
+const filingRecovery = "the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way"
 
 // refuseFiling returns the refusal for a move p does not allow, or nil.
 // Tools.move calls it only in a turn the operator is not present for,
@@ -242,19 +246,37 @@ func (s *Service) logMoveRefusal(ctx context.Context, acct ResolvedAccount, reas
 	s.logger.Info("email move refused", moveLogAttrs(ctx, acct, reason, source, destination)...)
 }
 
-// logMoveOutsideMoveInto records a move p does not allow that goes
-// ahead because the operator is present for the turn, so a later pass
-// can tell a move made outside move_into from one the rule allows. A
-// move p allows logs nothing.
-func (s *Service) logMoveOutsideMoveInto(ctx context.Context, acct ResolvedAccount, p filingPolicy, source, destination string) {
-	if p.allows(source, destination) {
+// logMoveOutsideMoveInto records a completed move that move_into does
+// not allow, which went ahead because the operator was present for the
+// turn. It names the messages that moved, by UID on both sides and by
+// Message-ID, because recent_operations forgets them after a few
+// operations or a restart, and this line is how a later pass finds
+// which mail left a folder outside the rule. Tools.move calls it only
+// after the server moved the messages, so a move that failed never
+// reads as one made outside the rule; a result that moved nothing logs
+// nothing.
+func (s *Service) logMoveOutsideMoveInto(ctx context.Context, acct ResolvedAccount, result MoveResult, moved []movedMessage) {
+	if len(result.UIDs) == 0 {
 		return
 	}
-	s.logger.Info("email move outside move_into allowed", moveLogAttrs(ctx, acct, "operator_present", source, destination)...)
+	messageIDs := make([]string, 0, len(moved))
+	for _, m := range moved {
+		if m.MessageID != "" {
+			messageIDs = append(messageIDs, m.MessageID)
+		}
+	}
+	attrs := append(moveLogAttrs(ctx, acct, "operator_present", result.SourceFolder, result.Destination),
+		"count", len(result.UIDs),
+		"uids", result.UIDs,
+		"destination_uids_known", result.DestUIDsKnown,
+		"destination_uids", result.DestUIDs,
+		"message_ids", messageIDs,
+	)
+	s.logger.Info("email move outside move_into allowed", attrs...)
 }
 
 // moveLogAttrs are the fields every filing decision logs, keyed to the
-// loop and conversation that asked.
+// loop, conversation, request, and tool call that asked.
 func moveLogAttrs(ctx context.Context, acct ResolvedAccount, reason, source, destination string) []any {
 	return []any{
 		"account", acct.Name,
@@ -264,5 +286,7 @@ func moveLogAttrs(ctx context.Context, acct ResolvedAccount, reason, source, des
 		"owner", acct.Config.MailboxOwner(),
 		"loop_id", tools.LoopIDFromContext(ctx),
 		"conversation_id", tools.ConversationIDFromContext(ctx),
+		"request_id", tools.RequestIDFromContext(ctx),
+		"tool_call_id", tools.ToolCallIDFromContext(ctx),
 	}
 }
