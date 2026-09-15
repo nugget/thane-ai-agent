@@ -98,7 +98,7 @@ func (s *specialUseSession) divertMove(numSet imap.NumSet, dest string) (bool, e
 	// imapmemserver's Search rewrites the set's ranges in place and reads
 	// its options without a nil check, so it gets a copy and options.
 	criteria := &imap.SearchCriteria{UID: []imap.UIDSet{append(imap.UIDSet(nil), uids...)}}
-	found, err := s.Session.Search(imapserver.NumKindUID, criteria, &imap.SearchOptions{})
+	found, err := s.Search(imapserver.NumKindUID, criteria, &imap.SearchOptions{})
 	if err != nil {
 		return true, err
 	}

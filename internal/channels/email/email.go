@@ -139,6 +139,12 @@ type Message struct {
 	// the message has no readable body.
 	BodySource string `json:"body_source,omitempty"`
 
+	// Hidden reports whether a rendered TextBody withholds anything an
+	// HTML part's own markup hid from a person reading the message:
+	// text, an image's description, or a link's target. It is false
+	// when BodySource is "text".
+	Hidden bool `json:"hidden,omitempty"`
+
 	// HiddenChars counts the characters, whitespace aside, of text an
 	// HTML part's own markup hid from a person reading the message,
 	// which a rendered TextBody withholds. It is zero when BodySource

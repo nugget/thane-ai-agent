@@ -16,26 +16,28 @@ import (
 // Runs of blank lines collapse to one. It is deliberately conservative
 // — the goal is a faithful, readable rendering, not layout.
 //
-// Faithful means the text a person reading the message would see. Text
+// Faithful means the text a person reading the message would see. What
 // the markup hides from that person through an inline idiom (see
-// [visibility]) is withheld, and hiddenChars counts its characters,
-// whitespace aside, so the caller can say something was hidden instead
-// of dropping it silently. A link whose text is all hidden withholds
-// its target too.
+// [visibility]) is withheld, so the caller can say something was hidden
+// instead of dropping it silently: hidden reports whether anything was,
+// whether text, an image's description, or a link's target, and
+// hiddenChars counts the characters of the text and descriptions,
+// whitespace aside. A link whose text is all hidden withholds its
+// target too.
 //
 // The body is parsed into a tree the way a browser parses it, so an
 // element a sender leaves unclosed ends where a browser would end it.
-func htmlToText(src string) (text string, hiddenChars int) {
+func htmlToText(src string) (text string, hidden bool, hiddenChars int) {
 	doc, err := html.Parse(strings.NewReader(src))
 	if err != nil {
 		// A strings.Reader never fails, so the parser recovered from a
 		// panic on this input. Any other rendering could let hidden text
 		// through, so the body says what happened instead.
-		return "[the HTML body could not be rendered: " + err.Error() + "]", 0
+		return "[the HTML body could not be rendered: " + err.Error() + "]", false, 0
 	}
 	var r htmlRenderer
 	r.children(doc, visibility{})
-	return strings.TrimSpace(r.sb.String()), r.hiddenChars
+	return strings.TrimSpace(r.sb.String()), r.hiddenTarget || r.hiddenChars > 0, r.hiddenChars
 }
 
 // htmlRenderer accumulates the rendering of one parsed HTML body.
@@ -56,6 +58,11 @@ type htmlRenderer struct {
 	// hiddenChars counts the non-whitespace characters withheld because
 	// the markup hid them.
 	hiddenChars int
+
+	// hiddenTarget records a link target withheld because the markup
+	// hid the link. A hidden link with no text withholds its target and
+	// no characters.
+	hiddenTarget bool
 }
 
 func (r *htmlRenderer) children(n *html.Node, vis visibility) {
@@ -93,9 +100,13 @@ func (r *htmlRenderer) element(n *html.Node, inherited visibility) {
 	switch {
 	case vis.removed:
 		// A removed element takes no space, so it adds no line breaks;
-		// its text and image descriptions are only counted.
-		if n.DataAtom == atom.Img {
+		// its text, image description, and link target are only
+		// counted.
+		switch n.DataAtom {
+		case atom.Img:
 			r.hiddenChars += nonSpaceRunes(attr(n, "alt"))
+		case atom.A:
+			r.withholdTarget(attr(n, "href"), "")
 		}
 		r.children(n, vis)
 	case n.DataAtom == atom.A:
@@ -179,15 +190,31 @@ func (r *htmlRenderer) link(n *html.Node, vis visibility) {
 	r.children(n, vis)
 	r.inLink = false
 
+	text := strings.TrimSpace(r.linkText.String())
 	shown := strings.TrimSpace(r.sb.String()[start:]) != "" || r.linkImage
 	if vis.boxHidden() || (!shown && (vis.textHidden() || r.hiddenChars > hiddenBefore)) {
+		r.withholdTarget(href, text)
 		return
 	}
-	text := strings.TrimSpace(r.linkText.String())
-	if strings.HasPrefix(strings.ToLower(href), "mailto:") || strings.EqualFold(text, href) || strings.HasPrefix(href, "#") {
-		return
+	if showsTarget(href, text) {
+		r.write(" (" + href + ")")
 	}
-	r.write(" (" + href + ")")
+}
+
+// withholdTarget records that the markup hid a link whose target a
+// reader would otherwise have seen after its text.
+func (r *htmlRenderer) withholdTarget(href, text string) {
+	if showsTarget(href, text) {
+		r.hiddenTarget = true
+	}
+}
+
+// showsTarget reports whether a visible link with the given text shows
+// its target after it: one that is not mailto or in-page, and whose
+// text is not the target itself.
+func showsTarget(href, text string) bool {
+	return href != "" && !strings.HasPrefix(strings.ToLower(href), "mailto:") &&
+		!strings.HasPrefix(href, "#") && !strings.EqualFold(text, href)
 }
 
 // image renders an image as its alt text. A zero font-size does not

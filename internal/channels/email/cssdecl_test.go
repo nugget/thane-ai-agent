@@ -149,6 +149,34 @@ func TestInlineStyleSplitsLikeABrowser(t *testing.T) {
 // assertSpanShown renders a one-character span with the given style
 // between two visible letters and checks whether its text reaches the
 // model.
+// TestZeroFontSizeInEveryLengthUnit checks that a zero font-size hides
+// text in every CSS length unit, including the newer ones that only some
+// engines accept, because a reader whose engine accepts the unit sees
+// none of the text. A nonzero size in a newer unit is not recognised,
+// so it never shows text that a zero size hid.
+func TestZeroFontSizeInEveryLengthUnit(t *testing.T) {
+	units := []string{"", "%", "px", "cm", "mm", "Q", "in", "pt", "pc",
+		"em", "rem", "ex", "rex", "cap", "rcap", "ch", "rch", "ic", "ric", "lh", "rlh"}
+	for _, axis := range []string{"w", "h", "i", "b", "min", "max"} {
+		units = append(units, "v"+axis, "sv"+axis, "lv"+axis, "dv"+axis, "cq"+axis)
+	}
+	for _, unit := range units {
+		assertSpanShown(t, "font-size:0"+unit, false)
+		assertSpanShown(t, "font-size:0"+strings.ToUpper(unit), false)
+	}
+	for _, unit := range []string{"lh", "ic", "rcap", "vi", "svh", "dvw", "cqw", "cqmin"} {
+		// Under a visible size, the nonzero declaration hides nothing.
+		assertSpanShown(t, "font-size:12"+unit, true)
+		// A zero size earlier on the same element still stands.
+		assertSpanShown(t, "font-size:0;font-size:12"+unit, false)
+		// A zero size on the parent still hides the text.
+		in := `<p>A<span style="font-size:0">b<span style="font-size:12` + unit + `">c</span></span>Z</p>`
+		if got, present, chars := htmlToText(in); got != "AZ" || !present || chars != 2 {
+			t.Errorf("font-size:12%s under a zero size: text %q, hidden %v with %d chars; want \"AZ\", 2 chars", unit, got, present, chars)
+		}
+	}
+}
+
 func assertSpanShown(t *testing.T, style string, shown bool) {
 	t.Helper()
 	in := `<p>A<span style="` + strings.ReplaceAll(style, `"`, "&quot;") + `">x</span>Z</p>`
@@ -156,8 +184,8 @@ func assertSpanShown(t *testing.T, style string, shown bool) {
 	if shown {
 		want, wantHidden = "AxZ", 0
 	}
-	got, hidden := htmlToText(in)
-	if got != want || hidden != wantHidden {
-		t.Errorf("style %q: text %q, hidden %d; want %q, hidden %d", style, got, hidden, want, wantHidden)
+	got, present, hidden := htmlToText(in)
+	if got != want || hidden != wantHidden || present != (wantHidden > 0) {
+		t.Errorf("style %q: text %q, hidden %v with %d chars; want %q, %d chars", style, got, present, hidden, want, wantHidden)
 	}
 }
