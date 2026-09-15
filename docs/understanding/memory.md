@@ -61,7 +61,10 @@ Complete, immutable transcripts of all conversations with full-text search.
 - **Tool:** `archive_search` — search across all historical conversations
 - **Use:** "What did we discuss about MQTT last week?" searches across all sessions
 
-Archived messages are never modified after writing — they're a permanent record.
+Session transitions update lifecycle status and session ownership in one
+transaction. Message content, IDs, timestamps, provenance, and tool-call
+links stay intact; resetting a conversation clears its active context
+while preserving its searchable history and channel binding.
 
 ### Episodic Summaries
 
@@ -71,13 +74,15 @@ across sessions.
 
 ### Checkpoints
 
-Full state snapshots for crash recovery, triggered by:
-- Message count threshold (configurable, default 50)
-- Graceful shutdown
-- Manual request (`session_checkpoint` tool)
+The `session_checkpoint` tool records a labeled bookmark of the session's
+message IDs and active context in `session_checkpoints`. It leaves every
+message in its current lifecycle state, so checkpointing does not empty
+the next turn's context. Bookmarks survive later session transitions
+because those transitions preserve the referenced messages.
 
-Checkpoints capture conversations, facts, and metadata so the agent can
-resume exactly where it left off.
+Session bookmarks are separate from the broader state snapshots managed
+by the checkpoint subsystem. A bookmark records a point in conversation
+history; it does not restore agent state or undo external actions.
 
 ## Session Management
 
@@ -86,10 +91,14 @@ Sessions are bounded conversations with explicit lifecycle controls:
 - **session_close** — End the session with a carry-forward note for the
   next session. The carry-forward is the primary continuity mechanism
   across session boundaries.
-- **session_checkpoint** — Save state without closing. Enables crash
-  recovery without losing conversational flow.
-- **session_split** — Fork the session. Post-split messages stay in
-  memory for the new branch.
+- **session_checkpoint** — Record a labeled point without closing or
+  changing the active conversation context.
+- **session_split** — Close the early part of a session and retain the
+  selected message and later messages in a successor session. Selectors
+  apply only to the current session, and the retained portion must be
+  after compacted history. Retained messages keep their original identity
+  and provenance. Historical tool executions and model iterations remain
+  attributed to their originating session, with their message links intact.
 
 Context usage is injected into the system prompt so the agent can monitor
 its own token consumption and make informed decisions about when to

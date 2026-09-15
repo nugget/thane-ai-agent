@@ -217,6 +217,14 @@ type ToolCallRecorder interface {
 	CompleteToolCall(toolCallID, result, errMsg string) error
 }
 
+// SessionToolCallRecorder records a tool call in the session that produced
+// its model iteration. Stores may implement it alongside [ToolCallRecorder]
+// to retain that ownership when an earlier tool in the same batch rotates
+// the conversation to a new session.
+type SessionToolCallRecorder interface {
+	RecordSessionToolCall(conversationID, sessionID, messageID, toolCallID, toolName, arguments string) error
+}
+
 // Compactor handles conversation compaction.
 type Compactor interface {
 	NeedsCompaction(conversationID string) bool
@@ -1955,6 +1963,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	var systemSections []llm.PromptSection
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
+		// Keep caller text in the section representation before appending
+		// context usage; providers that render sections must receive both.
+		systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 	} else {
 		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, llm.DefaultModelInteractionProfile())
 	}
@@ -2199,9 +2210,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Check if memory store supports tool call recording.
 	recorder, hasRecorder := l.memory.(ToolCallRecorder)
+	sessionRecorder, hasSessionRecorder := l.memory.(SessionToolCallRecorder)
 
 	// Track whether the error handler triggered timeout recovery.
 	var timeoutRecovered bool
+	// A lifecycle tool can rotate the session during an iteration. Keep
+	// each model call with the session that supplied its starting context.
+	iterationSessions := make(map[int]string)
 
 	// Optional per-tool timeout wrapper for request-scoped runs such as
 	// delegates. Cancelled after each tool completes.
@@ -2388,6 +2403,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// Iteration lifecycle callbacks.
 		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
+			if l.archiver != nil {
+				iterationSessions[i] = l.archiver.EnsureSession(convID)
+			}
 
 			// Rebuild system prompt each iteration so that:
 			// - Capability context reflects tags activated mid-run
@@ -2396,10 +2414,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use for callers
 			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt := l.buildSystemPromptWithProfile(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
+				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
+				// Providers may render Sections instead of Content, so refresh
+				// both representations of the same prompt together.
 				msgs[0].Content = rebuilt
+				msgs[0].Sections = sections
 				systemPrompt = rebuilt // keep retained content in sync
 				systemTokens = len(rebuilt) / 4
 			}
@@ -2488,10 +2509,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if scope != nil {
 				toolCtx = tools.WithInheritableCapabilityTags(toolCtx, scope.InheritableTags())
 			}
-			if l.archiver != nil {
-				if sid := l.archiver.ActiveSessionID(convID); sid != "" {
-					toolCtx = tools.WithSessionID(toolCtx, sid)
-				}
+			if sid := iterationSessions[i]; sid != "" {
+				toolCtx = tools.WithSessionID(toolCtx, sid)
 			}
 			toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
 			toolCtx = tools.WithIterationIndex(toolCtx, i)
@@ -2524,8 +2543,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argsBytes, _ := json.Marshal(tc.Function.Arguments)
 					argsJSON = string(argsBytes)
 				}
-				if err := recorder.RecordToolCall(convID, "", toolCallIDStr, tc.Function.Name, argsJSON); err != nil {
-					logging.Logger(iterCtx).Warn("failed to record tool call", "error", err)
+				var recordErr error
+				if hasSessionRecorder {
+					recordErr = sessionRecorder.RecordSessionToolCall(convID, iterationSessions[i], "", toolCallIDStr, tc.Function.Name, argsJSON)
+				} else {
+					recordErr = recorder.RecordToolCall(convID, "", toolCallIDStr, tc.Function.Name, argsJSON)
+				}
+				if recordErr != nil {
+					logging.Logger(iterCtx).Warn("failed to record tool call", "error", recordErr)
 				}
 			}
 
@@ -2726,7 +2751,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
 
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID, iterResult.UpstreamRequestID)
-	l.archiveIterations(log, convID, iterResult.Iterations)
+	l.archiveIterations(log, convID, iterResult.Iterations, iterationSessions)
 
 	// Content retention is fire-and-forget with a short deadline so it
 	// never blocks response delivery.
@@ -2960,22 +2985,46 @@ func toArchivedIterations(sessionID string, iters []iterate.IterationRecord) []m
 	return archived
 }
 
-// archiveIterations persists iteration records. Tool call linkage happens
-// later in ArchiveConversation when tool calls are moved to the archive.
+// archiveIterations persists iteration records in their originating sessions
+// and links tool calls already archived by a mid-turn lifecycle transition.
 // Errors are logged but not returned.
-func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []iterate.IterationRecord) {
+func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []iterate.IterationRecord, iterationSessions map[int]string) {
 	if l.archiver == nil || len(iterations) == 0 {
 		return
 	}
-	// Ensure a session exists so first-turn iterations are not lost.
-	sessionID := l.archiver.EnsureSession(convID)
-	if sessionID == "" {
-		log.Warn("no active session for iteration archive", "conversation_id", convID)
-		return
+	bySession := make(map[string][]iterate.IterationRecord)
+	var sessionOrder []string
+	for _, iter := range iterations {
+		sessionID := iterationSessions[iter.Index]
+		if sessionID == "" {
+			// Force-text recovery skips OnIterationStart. It runs after the
+			// final tool batch, so it belongs to the then-current session.
+			sessionID = l.archiver.EnsureSession(convID)
+		}
+		if sessionID == "" {
+			log.Warn("no active session for iteration archive", "conversation_id", convID, "iteration", iter.Index)
+			continue
+		}
+		if _, exists := bySession[sessionID]; !exists {
+			sessionOrder = append(sessionOrder, sessionID)
+		}
+		// The archive offsets each batch after the session's last iteration.
+		// Start at zero even when this session began mid-run; iter is a copy,
+		// so request-level indexes remain unchanged.
+		iter.Index = len(bySession[sessionID])
+		bySession[sessionID] = append(bySession[sessionID], iter)
 	}
-	archived := toArchivedIterations(sessionID, iterations)
-	if err := l.archiver.ArchiveIterations(archived); err != nil {
-		log.Warn("failed to archive iterations", "error", err)
+	// ArchiveStore offsets iteration indices per session, so each batch
+	// must contain exactly one session even when a turn crosses a boundary.
+	for _, sessionID := range sessionOrder {
+		archived := toArchivedIterations(sessionID, bySession[sessionID])
+		if err := l.archiver.ArchiveIterations(archived); err != nil {
+			log.Warn("failed to archive iterations", "session_id", sessionID, "error", err)
+			continue
+		}
+		if err := l.archiver.LinkPendingIterationToolCalls(sessionID); err != nil {
+			log.Warn("failed to link iteration tool calls", "session_id", sessionID, "error", err)
+		}
 	}
 }
 
@@ -3217,8 +3266,17 @@ func (l *Loop) GetContextWindow() int {
 	return l.contextWindow
 }
 
-// ResetConversation archives and then clears the conversation history.
+// ResetConversation closes the current session and opens an empty active
+// window. Durable stores preserve every transcript row and the conversation's
+// metadata; only transient files and active capability tags are cleared.
 func (l *Loop) ResetConversation(conversationID string) error {
+	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
+		if err := lifecycle.ResetSession(conversationID, "reset", ""); err != nil {
+			return fmt.Errorf("reset session: %w", err)
+		}
+		l.finishSessionTransition(conversationID)
+		return nil
+	}
 	l.archiveAndEndSession(conversationID, "reset")
 	l.clearPersistedCapabilityTags(conversationID)
 
@@ -3255,6 +3313,13 @@ func (l *Loop) ResetConversation(conversationID string) error {
 func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 	if reason == "" {
 		reason = "close"
+	}
+	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
+		if err := lifecycle.ResetSession(conversationID, reason, carryForward); err != nil {
+			return fmt.Errorf("close session: %w", err)
+		}
+		l.finishSessionTransition(conversationID)
+		return nil
 	}
 
 	// Archive and end current session (same pattern as ResetConversation).
@@ -3303,11 +3368,15 @@ func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 	return nil
 }
 
-// CheckpointSession archives a snapshot of the current conversation state
-// without ending the session. The active session continues uninterrupted.
+// CheckpointSession bookmarks the current transcript and active message IDs
+// without ending the session or changing its context. The durable bookmark
+// does not promise restoration of the full application state.
 func (l *Loop) CheckpointSession(conversationID, label string) error {
 	if l.archiver == nil {
 		return fmt.Errorf("no archiver configured")
+	}
+	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
+		return lifecycle.CheckpointSession(conversationID, label)
 	}
 
 	messages := l.getAllMessages(conversationID)
@@ -3340,6 +3409,30 @@ func (l *Loop) CheckpointSession(conversationID, label string) error {
 func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string) error {
 	if l.archiver == nil {
 		return fmt.Errorf("no archiver configured")
+	}
+	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
+		reader, ok := l.memory.(interface {
+			CurrentSessionMessages(string) ([]memory.Message, error)
+		})
+		if !ok {
+			return fmt.Errorf("memory backend cannot select a durable session split boundary")
+		}
+		messages, err := reader.CurrentSessionMessages(conversationID)
+		if err != nil {
+			return fmt.Errorf("read split messages: %w", err)
+		}
+		if len(messages) == 0 {
+			return fmt.Errorf("no messages to split")
+		}
+		splitIdx, err := findSplitPoint(messages, atIndex, atMessage)
+		if err != nil {
+			return err
+		}
+		if err := lifecycle.SplitSession(conversationID, messages[splitIdx].ID); err != nil {
+			return fmt.Errorf("split session: %w", err)
+		}
+		l.clearPersistedCapabilityTags(conversationID)
+		return nil
 	}
 
 	messages := l.getAllMessages(conversationID)
@@ -3450,6 +3543,12 @@ func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 	if l.archiver == nil {
 		return
 	}
+	if lifecycle, ok := l.archiver.(memory.SessionLifecycle); ok {
+		if err := lifecycle.CloseConversation(conversationID, reason); err != nil {
+			l.logger.Error("failed to close conversation", "conversation_id", conversationID, "error", err)
+		}
+		return
+	}
 
 	messages := l.getAllMessages(conversationID)
 	if len(messages) > 0 {
@@ -3461,6 +3560,20 @@ func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
 		if err := l.archiver.EndSession(sid, reason); err != nil {
 			l.logger.Error("failed to end session", "error", err)
+		}
+	}
+}
+
+// finishSessionTransition releases transient state only after the durable
+// boundary succeeds. Archivers without SessionLifecycle retain the in-memory
+// compatibility path above; the production shared store never copies/deletes.
+func (l *Loop) finishSessionTransition(conversationID string) {
+	l.clearPersistedCapabilityTags(conversationID)
+	if l.tools != nil {
+		if files := l.tools.TempFileStore(); files != nil {
+			if err := files.Cleanup(conversationID); err != nil {
+				l.logger.Error("failed to clean up session temporary files", "conversation_id", conversationID, "error", err)
+			}
 		}
 	}
 }

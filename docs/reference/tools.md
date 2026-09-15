@@ -74,9 +74,9 @@ These tools load on every turn regardless of active tags.
 |------|-------------|
 | `conversation_reset` | Reset the current conversation's message history. |
 | `conversation_model_pin` | Hold the current conversation to one model deployment, or clear the hold. Outranks channel and client model selection; memory-only, cleared by restart. |
-| `session_checkpoint` | Save current session state as a checkpoint. |
+| `session_checkpoint` | Bookmark the current messages and active context without closing. |
 | `session_close` | Close the current session with carry-forward context. |
-| `session_split` | Fork the current session. |
+| `session_split` | Archive early messages and retain recent context in a successor session. |
 
 ## `awareness` — live-context entity management
 

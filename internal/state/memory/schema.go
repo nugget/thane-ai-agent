@@ -46,6 +46,19 @@ var schema = database.Schema{
 		database.IndexCreate{Name: "idx_messages_conversation", SQL: `CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp)`},
 		database.IndexCreate{Name: "idx_messages_session", SQL: `CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp)`},
 		database.IndexCreate{Name: "idx_messages_status", SQL: `CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(conversation_id, status)`},
+		database.TableCreate{
+			Table: "session_checkpoints",
+			SQL: `CREATE TABLE IF NOT EXISTS session_checkpoints (
+				id TEXT PRIMARY KEY,
+				conversation_id TEXT NOT NULL,
+				session_id TEXT NOT NULL,
+				label TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMP NOT NULL,
+				message_ids TEXT NOT NULL,
+				active_message_ids TEXT NOT NULL
+			)`,
+		},
+		database.IndexCreate{Name: "idx_session_checkpoints_session", SQL: `CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session ON session_checkpoints(session_id, created_at)`},
 		// Expression indexes over the normalized (zone-collapsed, lexically
 		// sortable) timestamp form so the conversation-query endpoint's ORDER BY
 		// and keyset seeks are index-driven. They MUST match the strftime
