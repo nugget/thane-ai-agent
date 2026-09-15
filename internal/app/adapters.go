@@ -795,21 +795,16 @@ func (n *conversationSystemInjector) IsSessionAlive(conversationID string) bool 
 	return n.archiver.ActiveSessionID(conversationID) != ""
 }
 
-// conversationNoteStore is the one conversation-memory write a Signal
-// reply note needs.
-type conversationNoteStore interface {
-	AddMessage(conversationID, role, content, origin string) error
-}
-
-// signalReplyNoteRecorder returns the Signal bridge's RecordNote hook.
-// The bridge calls it for a wake turn whose final text was not sent. The
-// note is stored as a system row with OriginInternal, which later turns
-// render as a framed memory note (not_active_instruction) rather than as
-// something said on Signal. Unlike InjectSystemMessage it drops nothing
-// silently: a store error reaches the bridge, which logs it.
-func signalReplyNoteRecorder(store conversationNoteStore) func(conversationID, note string) error {
+// signalReplyNoteRecorder returns the Signal bridge's RecordNote hook,
+// given the conversation store's AddMessage. The bridge calls it for a
+// wake turn whose final text was not sent. The note is stored as a
+// system row with OriginInternal, which later turns render as a framed
+// memory note (not_active_instruction) rather than as something said on
+// Signal. Unlike InjectSystemMessage it drops nothing silently: a store
+// error reaches the bridge, which logs it.
+func signalReplyNoteRecorder(addMessage func(conversationID, role, content, origin string) error) func(conversationID, note string) error {
 	return func(conversationID, note string) error {
-		return store.AddMessage(conversationID, "system", note, memory.OriginInternal)
+		return addMessage(conversationID, "system", note, memory.OriginInternal)
 	}
 }
 

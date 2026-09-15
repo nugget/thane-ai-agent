@@ -40,7 +40,7 @@ func TestSignalReplyNoteRecorder(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = store.Close() })
 
-			if err := signalReplyNoteRecorder(store)(tt.conversationID, tt.note); err != nil {
+			if err := signalReplyNoteRecorder(store.AddMessage)(tt.conversationID, tt.note); err != nil {
 				t.Fatalf("record note: %v", err)
 			}
 
@@ -75,15 +75,12 @@ func TestSignalReplyNoteRecorder(t *testing.T) {
 	}
 }
 
-type failingNoteStore struct{ err error }
-
-func (s failingNoteStore) AddMessage(string, string, string, string) error { return s.err }
-
 // TestSignalReplyNoteRecorder_ReturnsStoreError pins that a failed write
 // reaches the bridge, which logs it, instead of vanishing.
 func TestSignalReplyNoteRecorder_ReturnsStoreError(t *testing.T) {
 	storeErr := errors.New("database is locked")
-	if err := signalReplyNoteRecorder(failingNoteStore{err: storeErr})("signal-1", `{"kind":"signal_reply_held"}`); !errors.Is(err, storeErr) {
+	failingAdd := func(string, string, string, string) error { return storeErr }
+	if err := signalReplyNoteRecorder(failingAdd)("signal-1", `{"kind":"signal_reply_held"}`); !errors.Is(err, storeErr) {
 		t.Fatalf("error = %v, want the store's error", err)
 	}
 }
