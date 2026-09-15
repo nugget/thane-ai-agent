@@ -169,6 +169,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 			"operator's own message", "already holds", "nothing is saved", "CardDAV",
 			"notification_preference or ha_companion_app", "changing the nickname", "only the first value",
 			"already goes by", "what to do",
+			"Outside the operator's own message it also refuses a new contact's name, or any contact's nickname, that one of those contacts answers to by its given name or the first word of its formatted name",
 		}},
 		{"contact_save facts", parameterDescription("contact_save", "facts"), []string{
 			"letters, digits", "KEY and X-THANE-* keys are refused", "control characters", "above known", "already holds",
@@ -177,6 +178,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		{"contact_save nickname", parameterDescription("contact_save", "nickname"), []string{
 			"formatted name or nickname", "operator's own contact wins, then one above known", "in every turn", "already goes by", "operator's own message", "above known",
 			"two or more at the same standing are a tie that reaches none of them", "makes the name reach neither",
+			"also refused when one of those contacts answers to it by its given name or the first word of its formatted name",
 		}},
 		{"contact_lookup", registry.Get("contact_lookup").Description, []string{
 			"formatted name or nickname", "operator's own contact wins, then one above known",
@@ -218,6 +220,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		{"contact_import_vcf", registry.Get("contact_import_vcf").Description, []string{
 			"above known", "already holds", "no turn lifts", "CardDAV", "dry_run reports the same counts",
 			"NOTIFICATION_PREFERENCE and HA_COMPANION_APP", "already goes by", "changes its nickname",
+			"or answers to by its given name or the first word of its formatted name, is left out",
 		}},
 	}
 	for _, tc := range cases {

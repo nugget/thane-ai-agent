@@ -88,8 +88,10 @@ ordinary documents instead.
   `contact_forget` will not remove such a contact. The first of those
   rules also covers the device and channel that carry such a contact's
   notifications, and its nickname, and no turn may give another contact
-  a name or nickname such a contact already goes by. `contacts_save`
-  carries the full rules and what to do when refused.
+  a name or nickname such a contact already goes by, nor, outside the
+  operator's own message, one that is such a contact's given name or
+  first word. `contacts_save` carries the full rules and what to do
+  when refused.
 
 - **Email results already carry the directory's answer.** Every
   address in an `email_list`, `email_search`, or `email_read` result
@@ -514,14 +516,26 @@ already goes by it.
   since a fuller name there would create a second contact. Two people
   sharing a name or nickname on purpose is a card edit the operator
   makes.
+- **A first name someone with authority answers to.** Outside the
+  operator's own message, `contact_save` also refuses a new contact's
+  name, or any contact's nickname, that is the given name or the first
+  word of the formatted name of an admin, household, trusted, or
+  operator contact. A formatted name or nickname is found before any
+  first name, so saving a `known` Bob, or nicknaming someone Bob, while
+  a household Bob Smith has no nickname Bob would make that contact the
+  one "Bob" finds, and Bob Smith's notifications would go to it.
+  `contact_import_vcf` applies the same rule to every card. The refusal
+  names the contact and whether the name is its given name or first
+  word. Recover as above; if the operator wants the other contact to go
+  by that name, they say so in their own message.
 - **Descriptions are not names.** A contact's note, org, and AI
   summary never resolve a name, so a notification or decision request
   addressed by a description ("the plumber") reaches no one, not
   whoever's note mentions it. Address one by the person's exact name
   or nickname. A given name or first word works only while no other
-  contact has it, and nothing stops another contact from taking it
-  later, so a handle someone must always be reachable by belongs in
-  their formatted name or nickname.
+  contact has it, and nothing stops a second contact with the same
+  first name from being saved later, so a handle someone must always be
+  reachable by belongs in their formatted name or nickname.
 
 `kind` (individual, group, org, location) describes a contact and
 decides nothing: no gate, notification route, or operator check reads

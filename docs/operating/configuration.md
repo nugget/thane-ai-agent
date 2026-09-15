@@ -807,7 +807,8 @@ Delivery reads each routing fact in any letter case, so a card line
 `HA_COMPANION_APP:mobile_app_bob_pixel` routes, and uses only its first
 value, so replacing a device means removing the old line. No model-facing
 tool gives another contact a name or nickname such a contact already goes
-by; sharing one on purpose is a card edit.
+by, or, outside the operator's own message, one that is such a contact's
+given name or first word; sharing one on purpose is a card edit.
 A malformed (non-UUID)
 value is rejected at config load; a UUID that matches no contact fails
 closed at render time — the devices degrade to account-only

@@ -446,7 +446,14 @@ contact with authority and is still reported.
   every turn, no model writer gives a new contact a formatted name, or any
   contact a nickname, that another active contact above `known` or the
   operator's own already uses as its formatted name or nickname, compared
-  with `LOWER` as the resolver compares them. The check runs in the
+  as the resolver compares them: trimmed of every edge space rune and
+  folded with `LOWER`. Outside the operator's own message, and on every
+  import, the same holds for a name such a contact answers to by a short
+  form, its given name or the first word of a formatted name of more
+  than one word: the claim would make the target an exact holder, which
+  resolution finds before any short form, so it would take that
+  contact's notifications. The refusal names the holder and the field it
+  answers by. The check runs in the
   write's own transaction, so an operator promotion cannot land between
   the check and the write. `contact_import_vcf` skips such a card, leaves
   such a nickname off a merge, and never fills a nickname into a
@@ -465,10 +472,11 @@ contact with authority and is still reported.
   goes by it as a nickname, and two records at the same standing that
   hold it pin no operator at all; startup warns with the tie and both
   `contact_id` values, and `identity.operator_contact_id` is the fix. A
-  short form is not protected the way a formatted name or nickname is:
-  any contact given the same first name makes it ambiguous, so the handle
-  the operator is notified by belongs in their formatted name or
-  nickname.
+  short form is protected less than a formatted name or nickname:
+  custody keeps a model writer from making another contact its exact
+  holder only outside the operator's own message, and any contact saved
+  with the same first name makes it ambiguous, so the handle the
+  operator is notified by belongs in their formatted name or nickname.
 - **Kind.** `kind` stays model-writable, so nothing may gate on it: no
   custody rule, notification route, or `IsOwner` decision reads it, and a
   test pins that changing it on the operator's contact moves neither.
@@ -599,8 +607,9 @@ zone, rule (`zone`, `operator`, or `holder`), properties (`EMAIL`, `TEL`,
 `IMPP`, a routing key, or `FN` or `NICKNAME` for a name), holder ID, and
 the turn's request, conversation, and loop IDs. Import drops the refused
 values, keeps the rest of the card, skips a card that would create a
-contact under a name or nickname a contact with authority goes by, leaves
-such a nickname off a merge, logs the same warning (marked `dry_run` for a
+contact under a name or nickname a contact with authority goes by, or
+answers to by its given name or first word, leaves such a nickname off a
+merge, logs the same warning (marked `dry_run` for a
 preview), and counts the drops in its result, naming each skipped card;
 its rows carry the turn's provenance under the source
 `contact_import_vcf`. A forget refusal logs the same warning with the

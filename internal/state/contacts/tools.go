@@ -320,6 +320,10 @@ var saveContactKnownFields = map[string]bool{
 //     that an active contact above known or the operator's own already
 //     goes by. This rule holds in every turn, the operator's own message
 //     included;
+//   - outside the operator's own message, give a new contact a
+//     formatted name, or any contact a nickname, that such a contact
+//     answers to by its given name or the first word of its formatted
+//     name;
 //   - under the legacy owner-name selector, give a contact other than
 //     the operator's own the owner name.
 //
@@ -1395,7 +1399,7 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 			if existing == nil {
 				skipped++
 				if args.DryRun {
-					fmt.Fprintf(&summary, "Would skip card %d: an admin, household, trusted or operator contact already goes by its name or nickname; import it under a fuller name or without that nickname\n", i+1)
+					fmt.Fprintf(&summary, "Would skip card %d: an admin, household, trusted or operator contact already goes by its name or nickname, or answers to it by its given name or first word; import it under a fuller name or without that nickname\n", i+1)
 				} else {
 					drops.nameTaken = append(drops.nameTaken, i+1)
 				}

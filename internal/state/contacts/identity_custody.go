@@ -128,7 +128,10 @@ type IdentityHolder struct {
 
 	// Property and Value are the row the holder carries, which may be
 	// an equivalent spelling of the refused value (TEL without '+' for
-	// a signal number, for example).
+	// a signal number, for example). For a name claim they are the
+	// field the holder answers to the name by and its stored value: FN
+	// or NICKNAME when it holds the name exactly, GIVEN_NAME or
+	// FN_FIRST_WORD when it answers by a short form.
 	Property string
 	Value    string
 }
@@ -171,7 +174,9 @@ type identityGuard struct {
 	snapshotNickname string
 
 	// liftTargetCustody lifts the target rule for the operator's own
-	// contact_save turn. The holder rule still applies.
+	// contact_save turn, and with it the name rule for a name an
+	// authority record answers to only by a short form. The holder rule
+	// still applies, a name such a record holds exactly included.
 	liftTargetCustody bool
 
 	// claims are the names the write gives a record (see saveClaims),
@@ -198,8 +203,10 @@ type queryFunc func(query string, args ...any) (*sql.Rows, error)
 // Target rule: nothing is added to an existing record whose zone is not
 // known, or to the operator's record at any zone, unless the guard
 // lifts it. Holder rule: nothing is added that another active record
-// holds when that record is above known or is the operator's. Routing
-// facts get the target rule only.
+// holds when that record is above known or is the operator's; for a
+// name claim, where the target rule holds, that includes a name such a
+// record answers to by a short form (see nameHolder). Routing facts get
+// the target rule only.
 func identityViolations(query queryFunc, target uuid.UUID, guard identityGuard, props []Property) ([]IdentityViolation, error) {
 	violations, err := claimViolations(query, target, guard)
 	if err != nil {

@@ -692,7 +692,7 @@ func TestImportVCF_RoutingAndNameCustody(t *testing.T) {
 			}
 		}
 		out := importText(t, tools, vcf, map[string]any{"merge": false})
-		for _, want := range []string{"1 created, 0 merged, 3 skipped", "3 card(s) were skipped because an admin, household, trusted or operator contact already goes by their name or nickname: cards 1, 2, 3.", "fuller name"} {
+		for _, want := range []string{"1 created, 0 merged, 3 skipped", "3 card(s) were skipped because an admin, household, trusted or operator contact already goes by their name or nickname, or answers to it by its given name or first word: cards 1, 2, 3.", "fuller name"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("import = %q, want %q", out, want)
 			}
@@ -812,7 +812,7 @@ func TestSaveContact_EdgeSpaceNickname(t *testing.T) {
 		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:nugget\r\nHA_COMPANION_APP:mobile_app_mallory\r\nEND:VCARD\r\n" +
 			"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Dan Known\r\nNICKNAME:Mom \r\nORG:Acme\r\nEND:VCARD\r\n"
 		out := importText(t, tools, vcf, nil)
-		for _, want := range []string{"0 created, 1 merged, 1 skipped", "already goes by their name or nickname: card 1.", "1 nickname(s) were not filled in on a merge"} {
+		for _, want := range []string{"0 created, 1 merged, 1 skipped", "already goes by their name or nickname, or answers to it by its given name or first word: card 1.", "1 nickname(s) were not filled in on a merge"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("import = %q, want %q", out, want)
 			}
@@ -872,4 +872,214 @@ func TestLegacyOwnerName_ResolverParity(t *testing.T) {
 			t.Errorf("Bob Known nickname = %q", got.Nickname)
 		}
 	})
+}
+
+// seedGivenAt seeds a contact with a given name through the operator
+// path.
+func seedGivenAt(t *testing.T, store *Store, name, given, zone string) *Contact {
+	t.Helper()
+	c, err := store.UpsertWithProperties(&Contact{FormattedName: name, GivenName: given, Kind: "individual", TrustZone: zone}, nil)
+	if err != nil {
+		t.Fatalf("seed %s: %v", name, err)
+	}
+	return c
+}
+
+// TestSaveContact_ShortFormNameClaim pins the short-form name rule:
+// outside the operator's own message, no contact is created under, or
+// given as a nickname, a name a contact with authority answers to by its
+// given name or the first word of its formatted name. The saved contact
+// would hold that name exactly, and resolution finds an exact holder
+// before any short form, so it would take the notifications meant for
+// the contact with authority. The operator's own message lifts the rule;
+// a name such a contact holds exactly stays refused in every turn.
+func TestSaveContact_ShortFormNameClaim(t *testing.T) {
+	setup := func(t *testing.T) (*Tools, *int, map[string]*Contact) {
+		t.Helper()
+		tools, calls := newCountingTools(t)
+		seeded := map[string]*Contact{
+			"bob":   seedContactAt(t, tools.store, "Bob Smith", ZoneHousehold),
+			"jones": seedGivenAt(t, tools.store, "Dr. A. Jones", "Alice", ZoneHousehold),
+			"carol": seedContactAt(t, tools.store, "Carol Operator", ZoneKnown),
+			"eve":   seedContactAt(t, tools.store, "Eve Stone", ZoneKnown),
+			"dave":  seedContactAt(t, tools.store, "Dave Known", ZoneKnown),
+		}
+		tools.ConfigureOperatorContactID(seeded["carol"].ID)
+		return tools, calls, seeded
+	}
+	// The next step each refusal teaches: a fuller name or no nickname on
+	// a new contact, no nickname or another one on an existing contact,
+	// and the operator's own message for the name as asked.
+	const (
+		createNext   = `save this contact under a fuller name ("Bob Jones", not "Bob") or without the nickname, or, if you meant that person, save to their contact by its exact name`
+		updateNext   = "retry without the nickname, or with one no admin, household, trusted or operator contact goes by or answers to"
+		operatorNext = "If the operator wants this contact to go by it, ask them to say so in their own message, or to set it through CardDAV or the contacts API"
+	)
+	cases := []struct {
+		name, args string
+		// claimed is the name the save would make its contact the exact
+		// holder of, and owner the seeded contact that answers to it by a
+		// short form.
+		claimed, owner string
+		next           string
+		want           []string
+	}{
+		{"a known contact's nickname is a household first word", `{"name":"Dave Known","nickname":"Bob"}`, "Bob", "bob", updateNext,
+			[]string{`"nickname"="Bob" (NICKNAME)`, `Bob Smith answers to "Bob" as the first word of its formatted name (household, `}},
+		{"a known contact's nickname is a household given name", `{"name":"Dave Known","nickname":"alice"}`, "Alice", "jones", updateNext,
+			[]string{`"nickname"="alice" (NICKNAME)`, `Dr. A. Jones answers to "Alice" by its given name (household, `}},
+		{"a new contact is named a household given name", `{"name":"Alice","kind":"individual"}`, "Alice", "jones", createNext,
+			[]string{`"name"="Alice" (FN)`, `Dr. A. Jones answers to "Alice" by its given name (household, `}},
+		{"a new contact is nicknamed a household first word", `{"name":"Mallory Known","nickname":"BOB","kind":"individual"}`, "Bob", "bob", createNext,
+			[]string{`"nickname"="BOB" (NICKNAME)`, `Bob Smith answers to "Bob" as the first word of its formatted name`}},
+		{"a new contact is named the operator's first word", `{"name":"Carol","kind":"individual"}`, "Carol", "carol", createNext,
+			[]string{`"name"="Carol" (FN)`, `Carol Operator answers to "Carol" as the first word of its formatted name (known, `, "the operator's own contact"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/unattended is refused", func(t *testing.T) {
+			tools, calls, seeded := setup(t)
+			_, err := modelSave(tools, tc.args, false)
+			wants := append([]string{"nothing was saved", "operator-custodied", seeded[tc.owner].ID.String(),
+				"would be found by that name instead of", tc.next, operatorNext}, tc.want...)
+			requireContains(t, err, wants...)
+			if err != nil && strings.Contains(err.Error(), "in every turn") {
+				t.Errorf("a short-form refusal is lifted by the operator's own message, so it must not claim every turn: %v", err)
+			}
+			if *calls != 0 {
+				t.Errorf("refused save signaled %d mutations", *calls)
+			}
+			for _, name := range []string{"Alice", "Carol", "Mallory Known"} {
+				if _, err := tools.store.FindByName(name); !errors.Is(err, sql.ErrNoRows) {
+					t.Errorf("a refused save created %q: %v", name, err)
+				}
+			}
+			if got, _ := tools.store.Get(seeded["dave"].ID); got.Nickname != "" {
+				t.Errorf("Dave Known nickname = %q", got.Nickname)
+			}
+			if got, err := tools.store.ResolveContact(tc.claimed); err != nil || got.ID != seeded[tc.owner].ID {
+				t.Errorf("ResolveContact(%q) = %+v, %v, want %s", tc.claimed, got, err, seeded[tc.owner].FormattedName)
+			}
+		})
+		t.Run(tc.name+"/the operator's own message is allowed", func(t *testing.T) {
+			tools, _, seeded := setup(t)
+			if _, err := modelSave(tools, tc.args, true); err != nil {
+				t.Fatalf("attended save: %v", err)
+			}
+			// The operator chose it: the saved contact now holds the name
+			// exactly, so resolution finds it.
+			if got, err := tools.store.ResolveContact(tc.claimed); err != nil || got.ID == seeded[tc.owner].ID {
+				t.Errorf("ResolveContact(%q) = %+v, %v, want the contact the operator named", tc.claimed, got, err)
+			}
+		})
+	}
+
+	for _, tc := range []struct{ name, args string }{
+		{"a known contact's first word does not block", `{"name":"Dave Known","nickname":"Eve"}`},
+		{"a name nobody answers to", `{"name":"Dave Known","nickname":"Dee"}`},
+		{"a fuller name is not a short form", `{"name":"Bob Jones","kind":"individual"}`},
+	} {
+		t.Run("negative control/"+tc.name, func(t *testing.T) {
+			tools, _, _ := setup(t)
+			if _, err := modelSave(tools, tc.args, false); err != nil {
+				t.Errorf("unattended %s: %v", tc.args, err)
+			}
+		})
+	}
+
+	for _, attended := range []bool{false, true} {
+		t.Run(fmt.Sprintf("an exact claim is refused in every turn/attended=%v", attended), func(t *testing.T) {
+			tools, _, _ := setup(t)
+			_, err := modelSave(tools, `{"name":"Dave Known","nickname":"bob smith"}`, attended)
+			requireContains(t, err, `Bob Smith already goes by "Bob Smith" (household, `, "in every turn", "retry without the nickname")
+		})
+		t.Run(fmt.Sprintf("an exact name stored with a no-break space stays its holder's/attended=%v", attended), func(t *testing.T) {
+			tools, _, seeded := setup(t)
+			seedNicknameAt(t, tools.store, "Jane Doe", "Mom ", ZoneHousehold)
+			_, err := modelSave(tools, `{"name":"Dave Known","nickname":"Mom"}`, attended)
+			requireContains(t, err, "Jane Doe already goes by", "in every turn")
+			if got, _ := tools.store.Get(seeded["dave"].ID); got.Nickname != "" {
+				t.Errorf("Dave Known nickname = %q", got.Nickname)
+			}
+		})
+	}
+
+	t.Run("import applies it to every card", func(t *testing.T) {
+		tools, _, seeded := setup(t)
+		vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nEND:VCARD\r\n" +
+			"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Mallory Known\r\nNICKNAME:Bob\r\nEND:VCARD\r\n" +
+			"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Dave Known\r\nNICKNAME:Carol\r\nORG:Acme\r\nEND:VCARD\r\n"
+		out := importText(t, tools, vcf, nil)
+		for _, want := range []string{"0 created, 1 merged, 2 skipped", "or answers to it by its given name or first word: cards 1, 2.", "1 nickname(s) were not filled in on a merge"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("import = %q, want %q", out, want)
+			}
+		}
+		if got, _ := tools.store.Get(seeded["dave"].ID); got.Nickname != "" || got.Org != "Acme" {
+			t.Errorf("Dave Known after merge = nickname %q org %q", got.Nickname, got.Org)
+		}
+	})
+}
+
+// TestNameHolder pins which record a name claim is refused for: an
+// active record other than the target, carrying authority, that holds
+// the name exactly in every turn, or answers to it by a short form where
+// the target rule holds. Both sides fold with nameKey, so a name stored
+// with a tab or a no-break space at its edge is still its holder's, and
+// the holder names the field it answers by.
+func TestNameHolder(t *testing.T) {
+	store := newTestStore(t)
+	ada := seedContactAt(t, store, "\tAda Admin ", ZoneAdmin)
+	bob := seedContactAt(t, store, "Bob Smith", ZoneHousehold)
+	jones := seedGivenAt(t, store, "Dr. A. Jones", "\tAlice ", ZoneHousehold)
+	jane := seedNicknameAt(t, store, "Jane Doe", "Mom ", ZoneTrusted)
+	eve := seedContactAt(t, store, "Eve Stone", ZoneKnown)
+	// Jane Doe sorts before Zed Roe and answers to "Jane" only by a
+	// first word, so Zed Roe is named because an exact holder comes first.
+	zed := seedNicknameAt(t, store, "Zed Roe", "Jane", ZoneTrusted)
+	query := func(q string, args ...any) (*sql.Rows, error) { return store.db.Query(q, args...) }
+
+	unattended, attended := identityGuard{}, identityGuard{liftTargetCustody: true}
+	tests := []struct {
+		name         string
+		target       uuid.UUID
+		guard        identityGuard
+		claim        string
+		want         *Contact
+		field, value string
+	}{
+		{"a first word", uuid.Nil, unattended, "Bob", bob, claimFNFirstWord, "Bob"},
+		{"a padded claim folds", uuid.Nil, unattended, " bob\t", bob, claimFNFirstWord, "Bob"},
+		{"a first word after a tab", uuid.Nil, unattended, "ADA", ada, claimFNFirstWord, "Ada"},
+		{"a given name stored with a tab and a no-break space", uuid.Nil, unattended, "alice", jones, claimGivenName, "\tAlice "},
+		{"a nickname stored with a no-break space", uuid.Nil, unattended, "mom", jane, claimNickname, "Mom "},
+		{"a formatted name stored with a tab", uuid.Nil, unattended, "ada admin", ada, claimFN, "\tAda Admin "},
+		{"an exact holder is named before a short-form one", uuid.Nil, unattended, "jane", zed, claimNickname, "Jane"},
+		{"an exact holder holds in the operator's own message", uuid.Nil, attended, "Mom", jane, claimNickname, "Mom "},
+		{"a short form does not hold in the operator's own message", uuid.Nil, attended, "Bob", nil, "", ""},
+		{"a known record's short form does not hold", uuid.Nil, unattended, "Eve", nil, "", ""},
+		{"the operator's record at known holds", uuid.Nil, identityGuard{operatorID: eve.ID}, "eve", eve, claimFNFirstWord, "Eve"},
+		{"an unresolved operator counts every record", uuid.Nil, identityGuard{operatorUnresolved: true}, "eve", eve, claimFNFirstWord, "Eve"},
+		{"the target is not its own first word's holder", bob.ID, unattended, "Bob", nil, "", ""},
+		{"the target is not its own formatted name's holder", ada.ID, unattended, "Ada Admin", nil, "", ""},
+		{"the target is not its own given name's holder", jones.ID, unattended, "Alice", nil, "", ""},
+		{"the target is not its own nickname's holder", jane.ID, unattended, "Mom", nil, "", ""},
+		{"a blank claim has no holder", uuid.Nil, unattended, "  ", nil, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := nameHolder(query, tt.target, tt.guard, tt.claim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("nameHolder(%q) = %+v, want none", tt.claim, got)
+				}
+				return
+			}
+			if got == nil || got.ID != tt.want.ID || got.Property != tt.field || got.Value != tt.value || got.Operator != (tt.guard.operatorID == tt.want.ID) {
+				t.Errorf("nameHolder(%q) = %+v, want %s by %s %q", tt.claim, got, tt.want.FormattedName, tt.field, tt.value)
+			}
+		})
+	}
 }

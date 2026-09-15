@@ -27,7 +27,13 @@ import (
 // model-facing writer gives a new contact a formatted name, or any
 // contact a nickname, that an active contact above known or the
 // operator's own already goes by, compared the way ResolveContact
-// compares them. These name claims ride on identityGuard.claims, so the
+// compares them. Where the target rule holds, outside the operator's
+// own message and on every import, the same goes for a name such a
+// contact answers to by a short form, its given name or the first word
+// of its formatted name (see name_keys.go): the record holding a name
+// exactly is the one resolution finds, so an exact claim on another
+// record's first name would take that name, and its notifications,
+// from it. These name claims ride on identityGuard.claims, so the
 // check runs inside the write's own transaction.
 
 // Routing fact keys, in the lowercase spelling contact_save stores and
@@ -48,6 +54,22 @@ const (
 	claimFN       = "FN"
 	claimNickname = "NICKNAME"
 )
+
+// Short forms, as [IdentityHolder.Property] names the field a holder
+// answers to a refused name claim by when it does not hold the name
+// exactly: its given name, or the first word of a formatted name of
+// more than one word. A violation's own Property is always the claim,
+// claimFN or claimNickname.
+const (
+	claimGivenName   = "GIVEN_NAME"
+	claimFNFirstWord = "FN_FIRST_WORD"
+)
+
+// isShortFormHolder reports whether a refused name claim's holder
+// answers to the name by a short form rather than holding it exactly.
+func isShortFormHolder(h *IdentityHolder) bool {
+	return h != nil && (h.Property == claimGivenName || h.Property == claimFNFirstWord)
+}
 
 // FactValues returns a contact fact's values the way notification
 // delivery reads them: props[key] first, then every other spelling of
@@ -214,56 +236,121 @@ func claimViolations(query queryFunc, target uuid.UUID, guard identityGuard) ([]
 	return violations, nil
 }
 
-// nameHolder returns the first active record other than target whose
-// formatted name or nickname matches name, compared as findByName and
-// findByNickname compare after trimming space from both sides, and that
-// carries authority: a zone other than known (a malformed zone counts)
-// or the operator's own record. Trimming the stored side as well keeps
-// protecting a name an authority record stores with edge space, which
-// the resolver would otherwise hand to a second record claiming the
-// bare name. When the operator could not be resolved, every holder
-// counts. Rows are read fully so no cursor stays open inside a
-// transaction.
+// nameHolder returns the active record other than target, carrying
+// authority, that name would be taken from, or nil. Authority is a zone
+// other than known (a malformed zone counts) or the operator's own
+// record, and when the operator could not be resolved every record
+// counts, so the rule fails closed.
+//
+// Names are compared as the resolver and the fork audit compare them,
+// through [recordNameKeys] and [nameKey]: both sides trimmed of every
+// edge space rune and folded with LOWER. So a name an authority record
+// stores with a tab or a no-break space at its edge stays its own. A
+// record that holds the name exactly, as its formatted name or
+// nickname, counts in every turn. A record that answers to it only by a
+// short form, its given name or the first word of its formatted name,
+// counts where the target rule holds (guard.liftTargetCustody unset):
+// the claimed name would make the target an exact holder, which
+// resolution finds before any short form. An exact holder is returned
+// before a short-form one, and within each by formatted name and id;
+// the holder's Property names the field it answers by.
 func nameHolder(query queryFunc, target uuid.UUID, guard identityGuard, name string) (*IdentityHolder, error) {
-	name = strings.TrimSpace(name)
+	key := nameKey(name)
+	if key == "" {
+		return nil, nil
+	}
+	records, err := authorityNameRecords(query, target, guard)
+	if err != nil {
+		return nil, err
+	}
+	var short *IdentityHolder
+	for _, r := range records {
+		switch field := r.keys.matchField(key); field {
+		case "":
+		case NameFieldFormatted, NameFieldNickname:
+			h := r.heldAs(field)
+			return &h, nil
+		default:
+			if short == nil && !guard.liftTargetCustody {
+				h := r.heldAs(field)
+				short = &h
+			}
+		}
+	}
+	return short, nil
+}
+
+// nameClaimRecord is one active record with authority as the name rules
+// read it: the holder a refusal names, the stored names a refusal
+// echoes, and the record's name keys.
+type nameClaimRecord struct {
+	holder          IdentityHolder
+	nickname, given string
+	keys            nameKeys
+}
+
+// heldAs is r as the holder of a refused name claim, answering by field
+// (one of the NameField values [nameKeys.matchField] returns), with the
+// stored value it answers by.
+func (r nameClaimRecord) heldAs(field string) IdentityHolder {
+	h := r.holder
+	switch field {
+	case NameFieldFormatted:
+		h.Property, h.Value = claimFN, h.Name
+	case NameFieldNickname:
+		h.Property, h.Value = claimNickname, r.nickname
+	case NameFieldGiven:
+		h.Property, h.Value = claimGivenName, r.given
+	default:
+		// matchField names the first word only for a formatted name of
+		// more than one word, so Fields has one.
+		h.Property, h.Value = claimFNFirstWord, strings.Fields(h.Name)[0]
+	}
+	return h
+}
+
+// authorityNameRecords reads every active record other than target that
+// carries authority as nameHolder counts it, by formatted name and id,
+// marking the operator's own. Rows are read fully so no cursor stays
+// open inside a transaction.
+func authorityNameRecords(query queryFunc, target uuid.UUID, guard identityGuard) ([]nameClaimRecord, error) {
+	operator, everyRecord := "", 0
+	if guard.operatorID != uuid.Nil {
+		operator = guard.operatorID.String()
+	}
+	if guard.operatorUnresolved {
+		everyRecord = 1
+	}
 	rows, err := query(`
-		SELECT id, formatted_name, COALESCE(trust_zone, ''), COALESCE(nickname, '')
+		SELECT id, COALESCE(formatted_name, ''), COALESCE(nickname, ''), COALESCE(given_name, ''), COALESCE(trust_zone, '')
 		FROM contacts
 		WHERE deleted_at IS NULL
 		  AND id <> ?
-		  AND (LOWER(TRIM(formatted_name)) = LOWER(?) OR LOWER(TRIM(COALESCE(nickname, ''))) = LOWER(?))
+		  AND (? = 1 OR id = ? OR COALESCE(trust_zone, '') <> ?)
 		ORDER BY formatted_name, id
-	`, target.String(), name, name)
+	`, target.String(), everyRecord, operator, ZoneKnown)
 	if err != nil {
 		return nil, fmt.Errorf("find name holders: %w", err)
 	}
 	defer rows.Close()
-	var holders []IdentityHolder
+	var records []nameClaimRecord
 	for rows.Next() {
-		var id, nickname string
-		var h IdentityHolder
-		if err := rows.Scan(&id, &h.Name, &h.Zone, &nickname); err != nil {
+		var id string
+		var r nameClaimRecord
+		if err := rows.Scan(&id, &r.holder.Name, &r.nickname, &r.given, &r.holder.Zone); err != nil {
 			return nil, fmt.Errorf("scan name holder: %w", err)
 		}
-		if h.ID, err = uuid.Parse(id); err != nil {
+		if r.holder.ID, err = uuid.Parse(id); err != nil {
 			return nil, fmt.Errorf("parse name holder id %q: %w", id, err)
 		}
-		h.Property, h.Value = claimNickname, nickname
-		if sqliteLowerEqual(strings.TrimSpace(h.Name), name) {
-			h.Property, h.Value = claimFN, h.Name
-		}
-		holders = append(holders, h)
+		r.holder.Operator = operator != "" && id == operator
+		r.keys = recordNameKeys(r.holder.Name, r.nickname, r.given)
+		records = append(records, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("find name holders: %w", err)
 	}
-	for _, h := range holders {
-		h.Operator = guard.operatorID != uuid.Nil && h.ID == guard.operatorID
-		if h.Zone != ZoneKnown || h.Operator || guard.operatorUnresolved {
-			return &h, nil
-		}
-	}
-	return nil, nil
+	return records, nil
 }
 
 // routingViolation applies the target rule to one routing fact. A new

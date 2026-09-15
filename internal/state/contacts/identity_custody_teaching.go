@@ -132,6 +132,10 @@ func (t *Tools) ownerNicknameReplacementRefusal(ctx context.Context, args SaveCo
 type refusalClasses struct {
 	addresses, routing, names bool
 	target, addressHeld, name bool
+	// shortName marks a name claim refused because a contact with
+	// authority answers to the name by a short form, a rule the
+	// operator's own message lifts.
+	shortName bool
 }
 
 func classifyRefusal(violations []IdentityViolation) refusalClasses {
@@ -150,6 +154,8 @@ func classifyRefusal(violations []IdentityViolation) refusalClasses {
 		switch {
 		case v.Reason != IdentityReasonHolder:
 			c.target = true
+		case claim && isShortFormHolder(v.Holder):
+			c.shortName = true
 		case claim:
 			c.name = true
 		default:
@@ -206,6 +212,14 @@ func identityRefusal(targetName, targetZone string, created bool, violations []I
 	case c.name:
 		b.WriteString("A name or nickname an admin, household, trusted or operator contact goes by stays with that contact, in every turn: retry without the nickname, or with one no admin, household, trusted or operator contact goes by. ")
 	}
+	// Only a turn that is not the operator's own reaches the short-form
+	// rule, so this recovery may say so.
+	switch {
+	case c.shortName && created:
+		b.WriteString("A given name or first word an admin, household, trusted or operator contact answers to stays with that contact outside the operator's own message, and this turn is not one: save this contact under a fuller name (\"Bob Jones\", not \"Bob\") or without the nickname, or, if you meant that person, save to their contact by its exact name. If the operator wants this contact to go by it, ask them to say so in their own message, or to set it through CardDAV or the contacts API. ")
+	case c.shortName:
+		b.WriteString("A given name or first word an admin, household, trusted or operator contact answers to stays with that contact outside the operator's own message, and this turn is not one: retry without the nickname, or with one no admin, household, trusted or operator contact goes by or answers to. If the operator wants this contact to go by it, ask them to say so in their own message, or to set it through CardDAV or the contacts API. ")
+	}
 	if c.names {
 		b.WriteString("Retry without the refused values to save the rest")
 	} else {
@@ -238,6 +252,15 @@ func violationReason(v IdentityViolation, targetName, targetZone string) string 
 	}
 	name := echoForRefusal(h.Name)
 	if isClaimProperty(v.Property) {
+		switch h.Property {
+		case claimGivenName, claimFNFirstWord:
+			how := "by its given name"
+			if h.Property == claimFNFirstWord {
+				how = "as the first word of its formatted name"
+			}
+			return fmt.Sprintf("%s answers to %q %s (%s, %s%s); a contact with it as its formatted name or nickname would be found by that name instead of %s, and take the notifications, decision requests and context meant for %s",
+				name, echoForRefusal(h.Value), how, echoForRefusal(h.Zone), h.ID, operator, name, name)
+		}
 		return fmt.Sprintf("%s already goes by %q (%s, %s%s); a second contact answering to it would take the notifications, decision requests and context meant for %s",
 			name, echoForRefusal(h.Value), echoForRefusal(h.Zone), h.ID, operator, name)
 	}
