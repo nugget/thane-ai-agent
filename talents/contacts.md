@@ -276,7 +276,10 @@ Returns up to 50 matching contacts, those whose formatted name,
 nickname, given name, or first word the query is listed first, and
 says so when more match than it lists. Each row carries the contact's
 `contact_id` and trust zone, and a contact that answers to the query
-as a name also names the field it answers by. Useful when the name in the
+as a name also names the field it answers by. The list stays within
+16 KB: a name or organization over 256 bytes, or a summary over 512,
+is cut and ends with `…[cut]`, and rows past the limit are left off
+the end and counted, so narrow the query to list them. Useful when the name in the
 input is the person's company, their title, or a partial spelling. It is the
 only lookup that reads those text fields, and it returns a list to
 choose from, never an answer to who a name is.
