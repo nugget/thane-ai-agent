@@ -210,8 +210,9 @@ func (p filingPolicy) entryNames() []string {
 
 // filingRecovery is how a move refused by move_into can still happen.
 // Only a turn the operator is not present for is refused, so the way
-// through is a message of their own on a route attended counts: Thane's
-// native API, or a channel conversation bound to their contact. The
+// through is a message of their own on a route that attended counts as
+// present: Thane's native API or console, or a channel conversation
+// bound to their contact. The
 // Ollama-compatible shim is named because the operator can be the one
 // speaking there (Home Assistant voice) and still be refused, so asking
 // again the same way cannot be the recovery.
