@@ -102,7 +102,9 @@ has to act, and what a flag is asking for. Spend your care there.
 - **Which account am I in?** The Email Accounts block lists every
   mailbox this site has configured: its name, address, the operator's
   description of what it is for, what it may do, and its folder names
-  with their roles. The rest of an entry appears only when it has
+  with their roles. In a loop bound to one account it lists only that
+  account, and its entry shows `bound: true`: the site's other
+  accounts are hidden from you, not missing. The rest of an entry appears only when it has
   something to say. An account the operator marked shows whose mailbox
   it is (`owner`), the name its mail goes out under (`writes_as`), and
   its `voice` (see "Whose mailbox"). An account that limits where mail
@@ -303,9 +305,12 @@ missing `\Answered` does not show that a draft you wrote went unsent.
 
 An account whose entry shows `review_loop` has a second pass: that
 loop, which may run on a more capable model. An entry without
-`review_loop` has no review pass, and the built-in review loop,
-`email-draft-review`, is added only on a site where some entry shows
-it as `review_loop`. A review loop is woken by queued work, never by
+`review_loop` has no review pass on that account. Do not judge from
+the entries whether a review loop runs on this site, because a loop
+bound to one account sees only that account's entry: `loop_status`
+(in the `loops` tag) lists the loops that are running, and the
+built-in review loop, `email-draft-review`, is among them when any
+account names it as its `review_loop`. A review loop is woken by queued work, never by
 the mail itself or by a timer, and only while work waits. Two things queue work for it, each keyed so that queueing the
 same thing again replaces the item already waiting instead of adding a
 second:
