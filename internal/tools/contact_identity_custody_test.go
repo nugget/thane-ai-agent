@@ -178,7 +178,14 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_lookup", registry.Get("contact_lookup").Description, []string{
 			"formatted name or nickname", "operator's own contact wins, then one above known", "formatted-name match before a nickname match",
-			"search that must match exactly one contact", "known duplicate", "contact_directory",
+			"given name and the first word", "exactly one contact must fit", "whatever their zones", "contact_id, trust zone and the field it matched",
+			"never matches notes", "known duplicate", "contact_directory",
+		}},
+		{"contact_lookup name", parameterDescription("contact_lookup", "name"), []string{
+			"formatted name or nickname", "given name or first word", "exactly one contact", "Never matched against notes",
+		}},
+		{"contact_lookup query", parameterDescription("contact_lookup", "query"), []string{
+			"notes", "every matching contact",
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
 			"exactly one of name or contact_id", "as contact_lookup resolves it", "operator's own contact first, then one above known",

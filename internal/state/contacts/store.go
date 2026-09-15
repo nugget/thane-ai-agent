@@ -354,13 +354,16 @@ func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, erro
 		args...))
 }
 
-// ResolveContact finds a contact by name: first among the active
-// contacts whose formatted name or nickname is the name, ordered as
-// operator_order.go describes (the operator's own record, then records
-// above known, then a formatted-name match before a nickname match),
-// then by search fallback. Returns [sql.ErrNoRows] if no match is
-// found, or an error listing ambiguous matches if search returns
-// multiple results.
+// ResolveContact finds the active contact a name identifies, reading
+// name fields only: first the contacts whose formatted name or nickname
+// is the name, ordered as operator_order.go describes (the operator's
+// own record, then records above known, then a formatted-name match
+// before a nickname match), then the one contact that answers to it by
+// a given name or the first word of its formatted name, as
+// name_resolve.go describes. Notes, AI summaries and organizations are
+// never read; [Store.Search] reads them. Returns [sql.ErrNoRows] when no
+// contact answers to the name, and an [*AmbiguousNameError] when none
+// holds it exactly and two or more answer to it by another name field.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
 	return s.resolveContact(context.Background(), name)
 }
@@ -376,23 +379,16 @@ func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, erro
 		return nil, fmt.Errorf("find by name or nickname %q: %w", name, err)
 	}
 
-	// 2. Search fallback (FTS or LIKE).
-	results, err := s.search(ctx, name)
+	// 2. The fork audit's other name keys, with no tie-break.
+	c, err = s.resolveByNameKeys(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("search fallback for %q: %w", name, err)
-	}
-	if len(results) == 1 {
-		return results[0], nil
-	}
-	if len(results) > 1 {
-		names := make([]string, len(results))
-		for i, c := range results {
-			names[i] = c.FormattedName
+		var ambiguous *AmbiguousNameError
+		if errors.Is(err, sql.ErrNoRows) || errors.As(err, &ambiguous) {
+			return nil, err
 		}
-		return nil, fmt.Errorf("ambiguous contact %q: matches %v", name, names)
+		return nil, fmt.Errorf("resolve %q by given name or first word: %w", name, err)
 	}
-
-	return nil, sql.ErrNoRows
+	return c, nil
 }
 
 // Get retrieves a contact by ID.

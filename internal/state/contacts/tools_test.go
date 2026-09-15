@@ -646,6 +646,51 @@ func TestLookupContact_ByQuery(t *testing.T) {
 	}
 }
 
+// TestLookupContact_NameReadsNamesQueryReadsText pins the split between
+// contact_lookup's two doors: a name no record holds is not found even
+// when notes and summaries mention it, query lists every record whose
+// text does, and a first name two records share is an error naming
+// both contact_id values.
+func TestLookupContact_NameReadsNamesQueryReadsText(t *testing.T) {
+	tools := newTestTools(t)
+	for _, args := range []string{
+		`{"name":"Carol Rivera","kind":"individual","note":"Dave's partner"}`,
+		`{"name":"Eve Rivera","kind":"individual","ai_summary":"Dave's daughter"}`,
+	} {
+		if _, err := tools.SaveContact(args); err != nil {
+			t.Fatalf("save %s: %v", args, err)
+		}
+	}
+	byName, err := tools.LookupContact(`{"name":"Dave"}`)
+	if err != nil || !strings.Contains(byName, `No contact found named "Dave"`) {
+		t.Errorf("name lookup = %q, %v, want not found", byName, err)
+	}
+	byQuery, err := tools.LookupContact(`{"query":"Dave"}`)
+	if err != nil || !strings.Contains(byQuery, "Found 2 contact(s)") ||
+		!strings.Contains(byQuery, "Carol Rivera") || !strings.Contains(byQuery, "Eve Rivera") {
+		t.Errorf("query lookup = %q, %v, want both records listed", byQuery, err)
+	}
+
+	for _, args := range []string{
+		`{"name":"Dave Smith","kind":"individual","given_name":"Dave"}`,
+		`{"name":"Dave Jones","kind":"individual","given_name":"Dave"}`,
+	} {
+		if _, err := tools.SaveContact(args); err != nil {
+			t.Fatalf("save %s: %v", args, err)
+		}
+	}
+	smith, err := tools.store.FindByName("Dave Smith")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jones, err := tools.store.FindByName("Dave Jones")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tools.LookupContact(`{"name":"Dave"}`)
+	requireContains(t, err, `ambiguous contact "Dave"`, smith.ID.String(), jones.ID.String(), "matched on given_name", "Retry with the contact_id")
+}
+
 func TestLookupContact_ByKind(t *testing.T) {
 	tools := newTestTools(t)
 

@@ -23,11 +23,25 @@ import (
 // the short record. The fork audit ([Store.ContactForks]) and the
 // second-dossier refusal find siblings by these keys, and judge whether
 // siblings are one person by the evidence fork_evidence.go describes.
+// [Store.ResolveContact] reads the same keys when no record holds a
+// name exactly (see name_resolve.go), so what the resolver finds by a
+// name and what the audit says answers to it cannot drift apart.
+
+// Name fields a record answers to a name key by, as
+// [nameKeys.matchField] names them.
+const (
+	NameFieldFormatted          = "formatted_name"
+	NameFieldNickname           = "nickname"
+	NameFieldGiven              = "given_name"
+	NameFieldFormattedFirstWord = "formatted_name_first_word"
+)
 
 // nameKeys is one record's name keys.
 type nameKeys struct {
 	// formatted is the formatted-name key, or "" when the name is blank.
 	formatted string
+	// given is the given-name key, or "" when the given name is blank.
+	given string
 	// exact holds the formatted-name and nickname keys.
 	exact []string
 	// short holds the given-name key and the first word of the
@@ -45,9 +59,10 @@ func nameKey(name string) string {
 func recordNameKeys(formattedName, nickname, givenName string) nameKeys {
 	var k nameKeys
 	k.formatted = nameKey(formattedName)
+	k.given = nameKey(givenName)
 	k.exact = appendNameKey(k.exact, k.formatted)
 	k.exact = appendNameKey(k.exact, nameKey(nickname))
-	k.short = appendNameKey(k.short, nameKey(givenName))
+	k.short = appendNameKey(k.short, k.given)
 	if words := strings.Fields(k.formatted); len(words) > 1 {
 		k.short = appendNameKey(k.short, words[0])
 	}
@@ -75,6 +90,24 @@ func containsNameKey(keys []string, key string) bool {
 // exactly or by a short form.
 func (k nameKeys) answersTo(key string) bool {
 	return key != "" && (containsNameKey(k.exact, key) || containsNameKey(k.short, key))
+}
+
+// matchField names the field by which a record with these keys answers
+// to key, the formatted name first, then the nickname, the given name
+// and the first word of the formatted name, or "" when it does not
+// answer to key.
+func (k nameKeys) matchField(key string) string {
+	switch {
+	case !k.answersTo(key):
+		return ""
+	case key == k.formatted:
+		return NameFieldFormatted
+	case containsNameKey(k.exact, key):
+		return NameFieldNickname
+	case key == k.given:
+		return NameFieldGiven
+	}
+	return NameFieldFormattedFirstWord
 }
 
 // sharedNameKey returns a name key two records share and true, or ""
@@ -107,6 +140,19 @@ type directoryRecord struct {
 // binding and identity addresses of every active contact, in id order,
 // marking the pinned operator's record.
 func (s *Store) activeDirectoryRecords(ctx context.Context) ([]directoryRecord, error) {
+	records, err := s.activeDirectoryNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadDirectoryAddresses(ctx, records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// activeDirectoryNames reads what [Store.activeDirectoryRecords] reads
+// except the identity addresses, which name resolution does not need.
+func (s *Store) activeDirectoryNames(ctx context.Context) ([]directoryRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, COALESCE(formatted_name, ''), COALESCE(nickname, ''), COALESCE(given_name, ''),
 			COALESCE(trust_zone, ''), COALESCE(ha_person_entity, '')
@@ -143,9 +189,6 @@ func (s *Store) activeDirectoryRecords(ctx context.Context) ([]directoryRecord, 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate directory names: %w", err)
-	}
-	if err := s.loadDirectoryAddresses(ctx, records); err != nil {
-		return nil, err
 	}
 	return records, nil
 }

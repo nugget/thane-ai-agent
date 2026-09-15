@@ -14,7 +14,11 @@ import (
 // the operator's own record wins, at any zone, then one above known,
 // then a formatted-name match before a nickname match, then the lowest
 // id. A known record whose formatted name is another record's nickname
-// therefore never shadows the record with authority. When
+// therefore never shadows the record with authority. This order ranks
+// only records that hold the name exactly. When none does, the resolver
+// takes the one record that answers to it by a given name or first word
+// and ranks nothing, so a first name two records share resolves to
+// neither (see name_resolve.go). When
 // operator_contact_id or the legacy owner name is configured, the store
 // learns who the operator is from the contact tools, which pin the same
 // record identity custody protects and the channel resolver marks

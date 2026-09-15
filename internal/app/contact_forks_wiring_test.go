@@ -162,8 +162,48 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 	t.Run("a name that matches nothing warns", func(t *testing.T) {
 		capture := &auditLogCapture{}
 		logLegacyOperatorResolution(slog.New(capture), store, contactIdentityConfig{legacyOwnerContactName: "Nobody"}, uuid.Nil)
-		if warns := capture.warns(); len(warns) != 1 || !strings.Contains(warns[0].msg, "matches no active contact") {
-			t.Errorf("warns = %+v, want one no-match Warn", warns)
+		if warns := capture.warns(); len(warns) != 1 || !strings.Contains(warns[0].msg, "matches no active contact") || warns[0].attrs["error"] != "" {
+			t.Errorf("warns = %+v, want one no-match Warn with no resolver error", warns)
+		}
+	})
+
+	t.Run("a first name several records share warns with the candidates", func(t *testing.T) {
+		shared := newEmailIdentityStore(t)
+		var ids []string
+		for _, name := range []string{"Eve Alpha", "Eve Beta"} {
+			c, err := shared.Upsert(&contacts.Contact{FormattedName: name, TrustZone: contacts.ZoneKnown})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, c.ID.String())
+		}
+		resolver := &contactChannelBindingResolver{store: shared, legacyOwnerContactName: "Eve"}
+		capture := &auditLogCapture{}
+		logLegacyOperatorResolution(slog.New(capture), shared, contactIdentityConfig{legacyOwnerContactName: "Eve"}, resolver.resolvedOperatorContactID())
+		warns := capture.warns()
+		if len(warns) != 1 || !strings.Contains(warns[0].attrs["error"], `ambiguous contact "Eve"`) ||
+			!strings.Contains(warns[0].attrs["error"], ids[0]) || !strings.Contains(warns[0].attrs["error"], ids[1]) {
+			t.Errorf("warns = %+v, want one Warn carrying the ambiguity and both ids", warns)
+		}
+	})
+
+	t.Run("a first word names the field it matched", func(t *testing.T) {
+		single := newEmailIdentityStore(t)
+		bob, err := single.Upsert(&contacts.Contact{FormattedName: "Bob Stone", TrustZone: contacts.ZoneKnown})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolver := &contactChannelBindingResolver{store: single, legacyOwnerContactName: "Bob"}
+		capture := &auditLogCapture{}
+		logLegacyOperatorResolution(slog.New(capture), single, contactIdentityConfig{legacyOwnerContactName: "Bob"}, resolver.resolvedOperatorContactID())
+		var info *auditLogRecord
+		for i := range capture.records {
+			if capture.records[i].level == slog.LevelInfo {
+				info = &capture.records[i]
+			}
+		}
+		if info == nil || info.attrs["contact_id"] != bob.ID.String() || info.attrs["matched_by"] != contacts.NameFieldFormattedFirstWord {
+			t.Errorf("Info = %+v, want Bob Stone matched by %s", info, contacts.NameFieldFormattedFirstWord)
 		}
 	})
 

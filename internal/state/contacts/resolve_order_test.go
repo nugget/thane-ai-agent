@@ -3,9 +3,15 @@ package contacts
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// wantCandidate is one contact an ambiguous name must list, and the
+// field it must say the contact matched on.
+type wantCandidate struct{ name, field string }
 
 // TestResolveContact_AuthorityOrder pins the order a name resolves in
 // when several active records answer to it as a formatted name or a
@@ -60,9 +66,9 @@ func TestResolveContact_AuthorityOrder(t *testing.T) {
 			lookup: "Dave", want: "Dave",
 		},
 		{
-			name:   "a name no record answers to still falls back to search",
-			seeds:  []seed{{"Frank Search", "", ZoneKnown}, {"Grace Household", "", ZoneHousehold}},
-			lookup: "Frank", want: "Frank Search",
+			name:   "a first word no record holds exactly resolves to the one record it begins",
+			seeds:  []seed{{"Frank Known", "", ZoneKnown}, {"Grace Household", "", ZoneHousehold}},
+			lookup: "Frank", want: "Frank Known",
 		},
 	}
 	for _, tt := range tests {
@@ -103,18 +109,244 @@ func TestResolveContact_KnownOnlyCollisionsAreDeterministic(t *testing.T) {
 	}
 }
 
-// TestResolveContact_SearchFallbackUnchanged pins that authority plays
-// no part in the search fallback: several partial matches stay
-// ambiguous even when one is above known, and no match stays
-// sql.ErrNoRows.
-func TestResolveContact_SearchFallbackUnchanged(t *testing.T) {
-	store := newTestStore(t)
-	seedContactAt(t, store, "Eve Alpha", ZoneHousehold)
-	seedContactAt(t, store, "Eve Beta", ZoneKnown)
-	if _, err := store.ResolveContact("Eve"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Errorf("ResolveContact(Eve) error = %v, want an ambiguous-match error", err)
+// TestResolveContact_NameFieldsOnly pins what a name resolves to when
+// no record holds it as a formatted name or nickname. It replaces the
+// search-fallback tests, which pinned the old behaviour on purpose: such
+// a name fell to a search of names, notes, AI summaries and
+// organizations, and a single hit was taken as the person. Resolution
+// now reads name fields only, through the fork audit's name keys, takes
+// the one record that answers to the name by a given name or first
+// word, and resolves a name two records answer to that way to neither,
+// whatever their zones. Every case runs with and without FTS5, since
+// resolution no longer touches either search path.
+func TestResolveContact_NameFieldsOnly(t *testing.T) {
+	type seed struct{ name, nickname, given, zone, note, summary, org string }
+	type candidate = wantCandidate
+	tests := []struct {
+		name   string
+		seeds  []seed
+		lookup string
+		// want is the formatted name the lookup resolves to; with neither
+		// it nor wantAmbiguous set the lookup must be sql.ErrNoRows.
+		want          string
+		wantAmbiguous []candidate
+		// searchFinds is a control: records Search finds for the lookup,
+		// proving the free text is there for resolution to ignore.
+		searchFinds []string
+	}{
+		{
+			name: "a name only other records' notes, summaries and organizations mention resolves to none of them",
+			seeds: []seed{
+				{name: "Carol Rivera", zone: ZoneHousehold, note: "Dave's partner"},
+				{name: "Eve Rivera", zone: ZoneHousehold, summary: "daughter of Dave and Carol"},
+				{name: "Mallory Works", zone: ZoneKnown, org: "Dave Industries"},
+			},
+			lookup:      "Dave",
+			searchFinds: []string{"Carol Rivera", "Eve Rivera", "Mallory Works"},
+		},
+		{
+			name:        "a single note that mentions a name is not that person",
+			seeds:       []seed{{name: "Carol Rivera", zone: ZoneHousehold, note: "Dave's partner"}},
+			lookup:      "Dave",
+			searchFinds: []string{"Carol Rivera"},
+		},
+		{
+			name: "a unique given name resolves by short form",
+			seeds: []seed{
+				{name: "Dr. Alice Jones", given: "Alice", zone: ZoneHousehold},
+				{name: "Bob Stone", zone: ZoneKnown, note: "Alice's neighbour"},
+			},
+			lookup: "alice", want: "Dr. Alice Jones",
+			searchFinds: []string{"Dr. Alice Jones", "Bob Stone"},
+		},
+		{
+			name:   "a unique first word resolves by short form",
+			seeds:  []seed{{name: "Bob Stone", zone: ZoneKnown}, {name: "Carol Rivera", zone: ZoneKnown, note: "Bob's sister"}},
+			lookup: "BOB", want: "Bob Stone",
+		},
+		{
+			name:   "case and edge space fold as the fork audit folds them",
+			seeds:  []seed{{name: "Bob Stone", zone: ZoneKnown}},
+			lookup: "  bOb ", want: "Bob Stone",
+		},
+		{
+			name: "a given name two records share is ambiguous, and authority does not break the tie",
+			seeds: []seed{
+				{name: "Dave Smith", given: "Dave", zone: ZoneKnown},
+				{name: "Dave Rivera", given: "Dave", zone: ZoneHousehold},
+			},
+			lookup:        "Dave",
+			wantAmbiguous: []candidate{{"Dave Rivera", NameFieldGiven}, {"Dave Smith", NameFieldGiven}},
+		},
+		{
+			name: "a first word and a given name two records answer by are ambiguous, each naming its field",
+			seeds: []seed{
+				{name: "Eve Alpha", zone: ZoneHousehold},
+				{name: "Eve Beta", given: "Eve", zone: ZoneKnown},
+			},
+			lookup:        "Eve",
+			wantAmbiguous: []candidate{{"Eve Alpha", NameFieldFormattedFirstWord}, {"Eve Beta", NameFieldGiven}},
+		},
+		{
+			name: "an exact holder still wins over short-form holders",
+			seeds: []seed{
+				{name: "Dave", zone: ZoneKnown},
+				{name: "Dave Rivera", given: "Dave", zone: ZoneHousehold},
+				{name: "Dave Smith", given: "Dave", zone: ZoneTrusted},
+			},
+			lookup: "Dave", want: "Dave",
+		},
+		{
+			name: "exact holders still break a tie by authority",
+			seeds: []seed{
+				{name: "Carol", zone: ZoneKnown},
+				{name: "Carol Household", nickname: "Carol", zone: ZoneHousehold},
+				{name: "Carol Smith", given: "Carol", zone: ZoneTrusted},
+			},
+			lookup: "Carol", want: "Carol Household",
+		},
+		{
+			name:        "a surname is not a name the resolver reads",
+			seeds:       []seed{{name: "Dave Rivera", given: "Dave", zone: ZoneHousehold}},
+			lookup:      "Rivera",
+			searchFinds: []string{"Dave Rivera"},
+		},
+		{
+			name:   "a multi-word miss matches none of its words",
+			seeds:  []seed{{name: "Dave Rivera", given: "Dave", zone: ZoneHousehold}, {name: "Bob Stone", zone: ZoneKnown}},
+			lookup: "Dave Stone",
+		},
+		{
+			name:   "a name nothing answers to is sql.ErrNoRows",
+			seeds:  []seed{{name: "Bob Stone", zone: ZoneKnown}},
+			lookup: "Nobody Here",
+		},
 	}
-	if _, err := store.ResolveContact("Nobody Here"); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("ResolveContact(Nobody Here) error = %v, want sql.ErrNoRows", err)
+	for _, fts := range []bool{true, false} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s/fts=%v", tt.name, fts), func(t *testing.T) {
+				store := newTestStore(t)
+				store.ftsEnabled = fts
+				byName := make(map[string]*Contact, len(tt.seeds))
+				for _, s := range tt.seeds {
+					c, err := store.UpsertWithProperties(&Contact{
+						FormattedName: s.name, Nickname: s.nickname, GivenName: s.given, Kind: "individual",
+						TrustZone: s.zone, Note: s.note, AISummary: s.summary, Org: s.org,
+					}, nil)
+					if err != nil {
+						t.Fatalf("seed %s: %v", s.name, err)
+					}
+					byName[s.name] = c
+				}
+				requireSearchFinds(t, store, tt.lookup, tt.searchFinds, byName)
+
+				got, err := store.ResolveContact(tt.lookup)
+				switch {
+				case tt.want != "":
+					if err != nil || got.ID != byName[tt.want].ID {
+						t.Fatalf("ResolveContact(%q) = %+v, %v, want %s", tt.lookup, got, err, tt.want)
+					}
+				case len(tt.wantAmbiguous) > 0:
+					requireAmbiguous(t, err, tt.lookup, tt.wantAmbiguous, byName)
+				default:
+					if !errors.Is(err, sql.ErrNoRows) {
+						t.Fatalf("ResolveContact(%q) = %+v, %v, want sql.ErrNoRows", tt.lookup, got, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// requireSearchFinds fails unless Search finds every record in want.
+func requireSearchFinds(t *testing.T, store *Store, query string, want []string, byName map[string]*Contact) {
+	t.Helper()
+	if len(want) == 0 {
+		return
+	}
+	found, err := store.Search(query)
+	if err != nil {
+		t.Fatalf("control Search(%q): %v", query, err)
+	}
+	for _, name := range want {
+		if !slices.ContainsFunc(found, func(c *Contact) bool { return c.ID == byName[name].ID }) {
+			t.Errorf("control Search(%q) did not find %s, so the case does not prove resolution ignores it", query, name)
+		}
+	}
+}
+
+// requireAmbiguous fails unless err is an [AmbiguousNameError] listing
+// exactly want, in order, each with its contact_id, zone and field in
+// the text.
+func requireAmbiguous(t *testing.T, err error, lookup string, want []wantCandidate, byName map[string]*Contact) {
+	t.Helper()
+	var ambiguous *AmbiguousNameError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("ResolveContact(%q) error = %v, want an AmbiguousNameError", lookup, err)
+	}
+	if ambiguous.Total != len(want) || len(ambiguous.Candidates) != len(want) {
+		t.Fatalf("ambiguity lists %d of %d, want %d:\n%v", len(ambiguous.Candidates), ambiguous.Total, len(want), err)
+	}
+	for i, w := range want {
+		c, seeded := ambiguous.Candidates[i], byName[w.name]
+		if c.ContactID != seeded.ID || c.Name != seeded.FormattedName || c.TrustZone != seeded.TrustZone || c.Field != w.field {
+			t.Errorf("candidate %d = %+v, want %s (%s, %s) matched on %s", i, c, w.name, seeded.TrustZone, seeded.ID, w.field)
+		}
+		entry := fmt.Sprintf("%q (%s, contact_id %s, matched on %s)", seeded.FormattedName, seeded.TrustZone, seeded.ID, w.field)
+		if !strings.Contains(err.Error(), entry) {
+			t.Errorf("error does not list %s:\n%v", entry, err)
+		}
+	}
+	for _, s := range []string{fmt.Sprintf("ambiguous contact %q", lookup), "resolves to none of them", "Retry with the contact_id", "full formatted name"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("error missing %q:\n%v", s, err)
+		}
+	}
+}
+
+// TestResolveContact_AmbiguityIsBounded pins that an ambiguous name
+// lists at most maxAmbiguousNamed candidates, says how many it left
+// out, and still counts them all.
+func TestResolveContact_AmbiguityIsBounded(t *testing.T) {
+	store := newTestStore(t)
+	const total = maxAmbiguousNamed + 2
+	for i := range total {
+		seedContactAt(t, store, fmt.Sprintf("Eve %c", 'A'+i), ZoneKnown)
+	}
+	_, err := store.ResolveContact("Eve")
+	var ambiguous *AmbiguousNameError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("ResolveContact(Eve) error = %v, want an AmbiguousNameError", err)
+	}
+	if ambiguous.Total != total || len(ambiguous.Candidates) != maxAmbiguousNamed {
+		t.Errorf("listed %d of %d, want %d of %d", len(ambiguous.Candidates), ambiguous.Total, maxAmbiguousNamed, total)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d answer to it", total)) || !strings.Contains(err.Error(), "and 2 more not listed") {
+		t.Errorf("error does not count what it left out:\n%v", err)
+	}
+	if strings.Contains(err.Error(), "Eve G") {
+		t.Errorf("error names a candidate past the bound:\n%v", err)
+	}
+}
+
+// TestForgetContact_AmbiguousNameRemovesNothing pins that contact_forget
+// by a first name two known records share removes neither and hands
+// back both contact_id values.
+func TestForgetContact_AmbiguousNameRemovesNothing(t *testing.T) {
+	tools := newTestTools(t)
+	a, err := tools.store.UpsertWithProperties(&Contact{FormattedName: "Dave Smith", GivenName: "Dave", Kind: "individual", TrustZone: ZoneKnown}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := tools.store.UpsertWithProperties(&Contact{FormattedName: "Dave Jones", GivenName: "Dave", Kind: "individual", TrustZone: ZoneKnown}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tools.ForgetContact(`{"name":"Dave"}`)
+	requireContains(t, err, `ambiguous contact "Dave"`, a.ID.String(), b.ID.String(), "nothing was removed")
+	for _, c := range []*Contact{a, b} {
+		if _, err := tools.store.Get(c.ID); err != nil {
+			t.Errorf("%s is no longer active: %v", c.FormattedName, err)
+		}
 	}
 }

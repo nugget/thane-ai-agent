@@ -24,8 +24,11 @@ type HAClient interface {
 
 // ContactResolver resolves a contact name to its record and properties.
 // ResolveContact matches a formatted name or nickname, preferring the
-// operator's own record and then records above known, and falls back
-// to search for flexible name matching.
+// operator's own record and then records above known, then the one
+// contact whose given name or first word the name is. It never matches
+// notes, and a first name two contacts share is an error that lists
+// both rather than a guess, so a notification is never routed to a
+// contact the name only mentions.
 type ContactResolver interface {
 	ResolveContact(name string) (*contacts.Contact, error)
 	GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error)

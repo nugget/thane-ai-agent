@@ -950,44 +950,8 @@ func TestResolveContact_Nickname(t *testing.T) {
 	}
 }
 
-func TestResolveContact_SearchFallback(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Eve Engineer", Kind: "individual", AISummary: "Backend developer"}
-	if _, err := store.Upsert(c); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ResolveContact("Eve")
-	if err != nil {
-		t.Fatalf("ResolveContact() error = %v", err)
-	}
-	if got.FormattedName != "Eve Engineer" {
-		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "Eve Engineer")
-	}
-}
-
-func TestResolveContact_Ambiguous(t *testing.T) {
-	store := newTestStore(t)
-
-	contacts := []*Contact{
-		{FormattedName: "Eve Alpha", Kind: "individual", AISummary: "Eve works on alpha"},
-		{FormattedName: "Eve Beta", Kind: "individual", AISummary: "Eve works on beta"},
-	}
-	for _, c := range contacts {
-		if _, err := store.Upsert(c); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	_, err := store.ResolveContact("Eve")
-	if err == nil {
-		t.Fatal("expected error for ambiguous contact")
-	}
-	if !strings.Contains(err.Error(), "ambiguous") {
-		t.Errorf("error = %q, want to contain 'ambiguous'", err.Error())
-	}
-}
+// A name no record holds exactly, first names and ambiguity are pinned
+// by TestResolveContact_NameFieldsOnly in resolve_order_test.go.
 
 func TestResolveContact_NotFound(t *testing.T) {
 	store := newTestStore(t)
