@@ -259,7 +259,19 @@ decides its own cadence — how long to dwell, when to look again.
 
 **Background tasks** have configurable iteration and wall-clock limits.
 
-The agent sees its token budget in the context, so it can make informed
+An optional output-token limit applies across all model attempts in a request,
+including failed attempts, retries, failover, and recovery. Each call receives
+only the allowance left after provider-reported output is deducted. Once spent,
+the agent stops generating and reports `token_budget`; completed tool work and
+its usage records remain available. A final response may use static fallback
+text when no complete model response is available. Zero means unlimited.
+
+This limit depends on provider reporting and enforcement: usage missing from an
+interrupted response cannot be deducted, and a provider may exceed the ceiling
+it was sent. Reported overruns are retained in accounting and stop further
+generation.
+
+The agent sees its context token budget in the context, so it can make informed
 decisions about when to checkpoint, delegate, or wrap up.
 
 ## Entry Points
