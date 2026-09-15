@@ -142,6 +142,7 @@ type CapabilitySurface struct {
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
+	"search":                        {CanonicalID: "native:search", Source: NativeToolSource, Tags: []string{"archive", "documents"}},
 	"tag_activate":                  {CanonicalID: "native:tag_activate", Source: NativeToolSource},
 	"lens_activate":                 {CanonicalID: "native:lens_activate", Source: NativeToolSource},
 	"archive_range":                 {CanonicalID: "native:archive_range", Source: NativeToolSource, Tags: []string{"archive"}},

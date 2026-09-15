@@ -31,6 +31,7 @@ func documentRootPolicyFromConfig(rootCfg config.DocumentRootConfig) documents.R
 	policy.Context = documents.RootContextPolicy{
 		Inject:      strings.TrimSpace(rootCfg.Context.Inject),
 		Search:      strings.TrimSpace(rootCfg.Context.Search),
+		SearchBody:  rootCfg.Context.SearchBody,
 		Advertise:   strings.TrimSpace(rootCfg.Context.Advertise),
 		RequiresTag: strings.TrimSpace(rootCfg.Context.RequiresTag),
 		Untagged:    strings.TrimSpace(rootCfg.Context.Untagged),

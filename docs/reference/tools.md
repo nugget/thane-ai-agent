@@ -61,8 +61,35 @@ These tools load on every turn regardless of active tags.
 
 ## `archive` — conversation archive retrieval
 
+`search` is the cross-source discovery tool, available through both `archive`
+and `documents`. It searches only sources whose own search tool is available
+in the current run; activate both capabilities for combined coverage. A typical
+call is `{"query":"MQTT decision","limit":8}`. Set `sources` to
+`["archives"]` or `["documents"]` to narrow it; specifying `root` alone
+selects documents and can include an `on_request` root.
+
+Results contain compact `hits` and per-source `coverage`. Ranking interleaves
+each source's own ordering; it does not compare scores from different corpora.
+Original transcript artifacts are labeled `primary`, summaries are `synthesis`,
+and documents have `unspecified` evidentiary status until their provenance is
+read. Primary means an original artifact, not a verified claim. A message and
+its session summary share a session reference and are not independent evidence.
+Follow a hit's `read` tool/arguments when present. Authored summaries are separate
+from matching excerpts, and ages identify whether they describe message time,
+session start, summary update, or document modification.
+
+The lookup is synchronous, has a 20-second deadline, and returns at most 20
+hits within 16 KB. A failed source is reported explicitly when another source
+completes; all-source failure and cancellation are tool errors. Unavailable
+sources and document root coverage remain visible. Search bodies require
+`roots.<root>.context.search_body: true`; otherwise documents are
+searched by indexed title, path, summary, and tags. This option defaults to
+false and does not change injection, advertisement, or restricted-audience
+rules. Email, facts, and web retain their separate tools.
+
 | Tool | Description |
 |------|-------------|
+| `search` | Discover evidence across available archives and searchable documents. |
 | `archive_search` | Full-text search across conversation archives. |
 | `archive_sessions` | Browse session archive metadata. |
 | `archive_session_transcript` | Retrieve a full session transcript. |
@@ -270,7 +297,7 @@ wake lands it.
 | `doc_outline` | Emit the heading/section outline for a document. |
 | `doc_read` | Read a document by prefixed path, including faceting, available levels, and exact `write_tool`; on writable git-backed roots, also retain a hidden comparison base for this loop/conversation. |
 | `doc_section` | Retrieve a named section from a document. |
-| `doc_search` | Full-text and tagged search across roots; hits advertise facets and exact `write_tool`. |
+| `doc_search` | Search document metadata with tag/frontmatter filters; hits advertise facets and exact `write_tool`. Use `search` for opted-in body text. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
 | `doc_create` | Create a normal faceted document safely: corpus collision check + normalized placement + logical write in one call. New `dossiers:` documents must be direct children. |

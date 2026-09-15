@@ -63,8 +63,11 @@ const (
 // whether they can be injected into a prompt, and how they surface in
 // search.
 type RootContextPolicy struct {
-	Inject      string `json:"inject,omitempty"`
-	Search      string `json:"search,omitempty"`
+	Inject string `json:"inject,omitempty"`
+	Search string `json:"search,omitempty"`
+	// SearchBody opts logical bodies into explicit content search.
+	// False retains metadata-only search; Search still controls visibility.
+	SearchBody  bool   `json:"search_body,omitempty"`
 	Advertise   string `json:"advertise,omitempty"`
 	RequiresTag string `json:"requires_tag,omitempty"`
 	Untagged    string `json:"untagged,omitempty"`
@@ -131,6 +134,7 @@ type RootPolicySummary struct {
 type RootContextSummary struct {
 	Inject      string `json:"inject"`
 	Search      string `json:"search"`
+	SearchBody  bool   `json:"search_body"`
 	Advertise   string `json:"advertise"`
 	RequiresTag string `json:"requires_tag,omitempty"`
 	// Untagged says what a document carrying no tags means here. It is
@@ -387,6 +391,7 @@ func (s *Store) rootPolicySummary(root string) RootPolicySummary {
 		Context: RootContextSummary{
 			Inject:      policy.Context.EffectiveInject(),
 			Search:      policy.Context.EffectiveSearch(),
+			SearchBody:  policy.Context.SearchBody,
 			Advertise:   policy.Context.EffectiveAdvertise(),
 			RequiresTag: policy.Context.RequiresTag,
 			Untagged:    policy.Context.EffectiveUntagged(),

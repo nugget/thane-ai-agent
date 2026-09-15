@@ -342,12 +342,10 @@ func TestMemorySearch_AllSurfacesReachModelEnvelope(t *testing.T) {
 	}
 }
 
-// TestMemorySearch_DistilledFailureDoesNotBlockMessages — a session
-// or working-memory search error must NOT take down the raw-message
-// results. Soft-fail of the distilled side is what keeps retrieval
-// resilient.
-func TestMemorySearch_DistilledFailureDoesNotBlockMessages(t *testing.T) {
-	dbPath := t.TempDir() + "/soft-fail.db"
+// An unconfigured working-memory store is skipped, while failures in a
+// configured surface are covered by TestMemorySearchContextFailsIncompleteBundle.
+func TestMemorySearch_UnconfiguredWorkingMemoryDoesNotBlockMessages(t *testing.T) {
+	dbPath := t.TempDir() + "/unconfigured-working.db"
 	archive := newTestArchiveStoreAt(t, dbPath)
 
 	// Seed a raw message so messages_fts has something to find.
@@ -369,7 +367,7 @@ func TestMemorySearch_DistilledFailureDoesNotBlockMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(bundle.Messages) == 0 {
-		t.Fatal("messages search blocked by missing working memory — soft-fail broken")
+		t.Fatal("messages search blocked by unconfigured working memory")
 	}
 	if len(bundle.WorkingMemory) != 0 {
 		t.Errorf("expected zero working_memory hits with nil store, got %d", len(bundle.WorkingMemory))

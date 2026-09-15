@@ -139,7 +139,9 @@ durable queue holds that).
      automation configs, while conversations call it "game room door,"
      "the brass-handle door," "smoke-break door," or whatever inside-joke
      vocabulary the household uses. Phrase-first FTS misses whichever form
-     you didn't query. Use `archive_search` for each known phrasing;
+     you didn't query. Use `search` for each known phrasing across available
+     archives and documents; check source/root coverage and read promising
+     evidence. Use `archive_search` for conversation/time filters and context;
      `recall_fact` for stored facts; `contact_lookup` if contact-shaped;
      the documents tools to read any existing dossier and adjacent KB
      content. Record every alias you discover in the dossier's Aliases

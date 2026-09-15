@@ -93,7 +93,8 @@ func TestBuildDocumentStoreOptionsMapsConfigPolicy(t *testing.T) {
 				Indexing:  &indexing,
 				Authoring: "read_only",
 				Context: config.RootContextPolicy{
-					Advertise: config.RootAdvertiseExactSubject,
+					Advertise:  config.RootAdvertiseExactSubject,
+					SearchBody: true,
 				},
 				Git: config.DocumentRootGitConfig{
 					Enabled:          true,
@@ -110,6 +111,9 @@ func TestBuildDocumentStoreOptionsMapsConfigPolicy(t *testing.T) {
 	policy := opts.RootPolicies["kb"]
 	if policy.Indexing || policy.Authoring != documents.AuthoringReadOnly {
 		t.Fatalf("policy = %#v, want non-indexed read_only", policy)
+	}
+	if !policy.Context.SearchBody {
+		t.Fatal("explicit body-search policy was lost in document store mapping")
 	}
 	if !policy.Git.Enabled || policy.Git.VerifySignatures != documents.VerificationWarn {
 		t.Fatalf("policy.Git = %#v, want enabled warn verification", policy.Git)
