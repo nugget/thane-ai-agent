@@ -617,20 +617,23 @@ yourself.
 
 **List mail addressed to the account.** On the same accounts, one
 reply that would otherwise be an automatic response is drafted: a
-reply to a message marked `bulk` and not `auto_submitted` whose own
+reply to list mail, marked by a `List-Id` or a `Precedence` of
+`bulk` or `list` and not `auto_submitted`, whose own
 `to` or `cc` names the account's own address (the entry's `address`,
 compared without regard to case). A person on a list answers mail
 addressed to them. The result is `drafted` with `decision.route`
 `personally_addressed_list_reply`, `draft: true` or not, and
-`decision.original` records the marks. Three cases stay refused with
+`decision.original` records the marks. Four cases stay refused with
 `automatic_response`, and the refusal says which: list mail that
 reached the account only through a list address, whose `to` and `cc`
 name the list and not the account (an alias or a plus address does not
 count as named); anything `auto_submitted`, such as an automatic
 reply, a bounce, or a notification, because nobody reads an answer to
-those; and mail whose only bulk mark is `Precedence: junk`, which
-classic autoresponders put on their replies (it shows as `bulk: true`
-like any list mail, so only the refusal tells them apart). Go knows an
+those; mail marked `Precedence: junk`, which classic autoresponders put
+on their replies, whatever list header sits beside it; and mail whose
+only list marks are fields such as `List-Unsubscribe`, which a sender
+adds to its own mailings (both show as `bulk: true` like any list mail,
+so only the refusal tells them apart). Go knows an
 automatic reply only by those headers, so one marked any other way,
 such as an out-of-office notice carrying only `Precedence: bulk`, can
 still be drafted: read the body, and do not answer an automatic reply.
