@@ -613,6 +613,15 @@ readable and writable at their current refs so the guardrail does not strand
 history; normal authoring does not fork one into a second flat document merely
 to repair topology.
 
+The archivist cites archive evidence here in the same form as a contact
+dossier, `archive:session:<full-session-uuid>`, but this root has no citation
+validator: `doc_write` stores whatever citation text it is given. Documents
+written before the colon form was taught still carry the older
+`archive:session-` spelling, some with only an 8-character prefix. The
+archivist is taught to resolve such a prefix with `archive_session_transcript`
+before carrying the claim forward, and to move evidence it cannot pin to one
+session into the dossier's open questions.
+
 ### Contact dossiers
 
 `contacts` is the optional longitudinal document side of the structured
@@ -661,8 +670,9 @@ remainder or unavailable canonical writer defers the durable queue item behind
 ready work rather than losing it or letting it block the queue.
 
 Archive evidence in a contact dossier uses
-`archive:session:<full-session-uuid>`. Archive tools accept short prefixes as
-an interactive convenience, but durable dossier citations do not: an imported
+`archive:session:<full-session-uuid>`. `archive_session_transcript` looks up
+any leading part of an id across the whole archive as an interactive
+convenience, but durable dossier citations do not accept one: an imported
 session's id records when the import ran, so sessions imported together share
 leading digits, and a shortened citation cannot say which of them it meant.
 

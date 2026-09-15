@@ -142,3 +142,35 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestContactsTalentsTeachDossierCitations pins how the contacts
+// talents teach archive-session citations in a dossier: the whole id in
+// the colon form, the hyphen spelling repaired in Go, a leading part
+// refused with its resolution rather than completed, content search to
+// choose among candidates, and Open Questions (never prose about a
+// prefix) for evidence that cannot be pinned to one session. It pins the
+// same rule where a duplicate's dossier is folded into the survivor,
+// because that fold is where inherited prefixes arrive.
+func TestContactsTalentsTeachDossierCitations(t *testing.T) {
+	text := peopleTalentText(t)
+	for _, tt := range []struct {
+		name   string
+		talent string
+		want   string
+	}{
+		{"whole id in the colon form", "contacts", "Archive evidence cites the whole session id, `archive:session:<full-session-uuid>`"},
+		{"hyphen spelling is repaired", "contacts", "rewritten for you and listed under `canonicalized_citations`"},
+		{"a leading part is not completed", "contacts", "A leading part is refused, never completed silently"},
+		{"the refusal resolves each case", "contacts", "names its full citation when one session matches, lists the candidates when several share it, and says so when none does"},
+		{"content search chooses", "contacts", "searching `archive_search` for the claim's own words, since every hit carries its full `session_id`"},
+		{"unpinned evidence has a home", "contacts", "Evidence you cannot pin to one session goes under Open Questions, never into prose that describes a prefix"},
+		{"folding carries citations whole", "contacts_save", "Carry each citation over whole"},
+		{"folding resolves inherited prefixes", "contacts_save", "copy the full citation it names, or move the claim to Open Questions, rather than rewording the citation into prose"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(text[tt.talent], tt.want) {
+				t.Errorf("talent %s must contain %q", tt.talent, tt.want)
+			}
+		})
+	}
+}

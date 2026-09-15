@@ -94,9 +94,9 @@ rules. Email, facts, and web retain their separate tools.
 
 | Tool | Description |
 |------|-------------|
-| `search` | Discover evidence across available archives and searchable documents. |
-| `archive_search` | Full-text search across conversation archives. |
-| `archive_sessions` | Browse session archive metadata. |
+| `search` | Discover evidence across available archives and searchable documents. An archives hit's `ref` of the form `archive:session:<full-session-uuid>` is already the durable citation for its session. |
+| `archive_search` | Full-text search across conversation archives. Every message and session hit carries its full `session_id`, the id to pass on and to cite. |
+| `archive_sessions` | Browse session archive metadata; each entry's `id` is the full session ID. |
 | `archive_session_transcript` | Retrieve a full session transcript by full session ID, or by any leading part of one; a part several sessions share returns the candidates. |
 | `archive_range` | Retrieve archived messages by time range or message-count floor. |
 

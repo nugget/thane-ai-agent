@@ -108,7 +108,10 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			"Use this when something jogs a memory or you need context from a prior " +
 			"conversation — the distilled surfaces are higher signal per byte and worth " +
 			"reading first when they have hits. Pair with archive_session_transcript when " +
-			"a hit looks worth reading in full.",
+			"a hit looks worth reading in full. Every messages[] and sessions[] hit carries its " +
+			"session's full session_id: pass it on as is, and use it whole wherever you cite the " +
+			"session. Searching for a claim's own words is also how to recover the full id behind " +
+			"an id prefix in older notes, since sessions imported together share leading digits.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -268,8 +271,9 @@ func (r *Registry) registerArchiveSessions(store *memory.ArchiveStore) {
 			"newest first. Each entry shows when it happened (delta seconds), how long it " +
 			"ran, message count, title, tags, and summary. Use this when you want to flip " +
 			"through history without a specific search query, or to find a session by " +
-			"tag or title. Returns JSON. Once you spot one worth a closer look, " +
-			"archive_session_transcript pulls the full transcript.",
+			"tag or title. Returns JSON; each entry's id is the full session id. Once you " +
+			"spot one worth a closer look, pass that id to archive_session_transcript for " +
+			"the full transcript.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -372,7 +376,8 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 			"Filter to one conversation_id or omit " +
 			"it for everything. Crosses session boundaries — sessions are an internal " +
 			"abstraction here; this tool just gives you the messages. Returns JSON with " +
-			"delta-second timestamps and originating session IDs.",
+			"delta-second timestamps; every message carries the full session_id of the " +
+			"session it came from.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

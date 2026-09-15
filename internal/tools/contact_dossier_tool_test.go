@@ -227,10 +227,17 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 	// person, both UUIDs, advice by authority, updates free.
 	for _, want := range []string{"first write of a contact's dossier is refused", "shares a name", "looks like the same person",
 		"merely share a name each keep their own dossier", "names both UUIDs", "forget the duplicate by contact_id",
-		"If they are different people, write nothing and report both to the operator", "never refused"} {
+		"If they are different people, write nothing and report both to the operator", "never refused",
+		"cites the whole session id as archive:session:<full-session-uuid>"} {
 		if !strings.Contains(tool.Description, want) {
 			t.Errorf("contact_dossier_write description lacks %q: %s", want, tool.Description)
 		}
+	}
+	// The top-level description once said "full canonical session UUID",
+	// which a model read as a rule about the id alone and never about
+	// the separator.
+	if strings.Contains(tool.Description, "full canonical session UUID") {
+		t.Errorf("contact_dossier_write description still teaches the retired wording: %s", tool.Description)
 	}
 	properties := tool.Parameters["properties"].(map[string]any)
 	for field, budget := range map[string]string{
@@ -249,6 +256,7 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 		"sessions imported together share leading digits",
 		"canonicalized_citations",
 		"names the full citation to copy",
+		"lists the candidates if several do, and says so if none does",
 		"search archive_search for the claim's own words",
 		"### Open Questions",
 	} {

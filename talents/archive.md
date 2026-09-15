@@ -148,6 +148,16 @@ Once a hit looks worth reading, pull the full session with
 `archive_session_transcript` (in the `archive_session` branch).
 Search-then-transcript is the canonical pairing.
 
+Every `messages[]` and `sessions[]` hit names its session by the
+full `session_id`; pass that id on as is, and cite a session by it
+whole. That also makes content search the way back from a bare
+prefix. When an older note or dossier names a session only by its
+first digits and `archive_session_transcript` answers with several
+candidates for them, search for the words of the claim itself and
+keep the hit whose `session_id` begins with that prefix. Sessions
+imported together share their leading digits, so the prefix alone
+cannot choose; the claim's own words can.
+
 ## Cross-references
 
 - For "what was said in this *time window*" (regardless of topic),

@@ -146,12 +146,15 @@ ordinary documents instead.
   stores nothing and lists every violation at once, each over-budget
   projection with its overage and whether rewording closes it or whole items
   must go; fix them all in the next call. Archive evidence cites the whole
-  session id, `archive:session:<full-session-uuid>`. A refused leading part
-  comes back with its full citation when one session matches, or with the
-  candidates when several share it; choose among them by searching
-  `archive_search` for the claim's own words. Evidence you cannot pin to one
-  session goes under Open Questions, never into prose that describes a
-  prefix. Replacing an existing dossier with
+  session id, `archive:session:<full-session-uuid>`; a whole id in the older
+  hyphen spelling is rewritten for you and listed under
+  `canonicalized_citations`. A leading part is refused, never completed
+  silently: the refusal names its full citation when one session matches,
+  lists the candidates when several share it, and says so when none does.
+  Choose among candidates by searching `archive_search` for the claim's own
+  words, since every hit carries its full `session_id`. Evidence you cannot
+  pin to one session goes under Open Questions, never into prose that
+  describes a prefix. Replacing an existing dossier with
   no read of it on record, or after it changed since that read, is also an
   error that stores nothing: read it again with `contact_dossier_read`, fold
   in the intervening change the error carries, and write again. The digest is
@@ -844,7 +847,11 @@ that should go:
   duplicate's dossier claims and citations into the surviving
   contact's dossier with `contact_dossier_write`: an existing dossier
   updates as usual, and a first one for the survivor is refused only
-  while a duplicate holding a dossier is still active.
+  while a duplicate holding a dossier is still active. Carry each
+  citation over whole. An older dossier may name a session only by a
+  prefix; the write refuses it and resolves it, so copy the full
+  citation it names, or move the claim to Open Questions, rather than
+  rewording the citation into prose.
 - **Any other duplicate is the operator's.** Report the set with each
   contact's name, zone, and UUID. The operator merges the duplicate
   into the contact that should keep the name, renames one, or moves an

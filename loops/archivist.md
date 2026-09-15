@@ -158,11 +158,16 @@ durable queue holds that).
    can share a prefix, turning a shortened durable citation into an ambiguous
    one that cannot be checked later. When older material you fold in carries a
    prefix, `contact_dossier_write` refuses it and names the full citation if
-   one session matches, or lists the candidates if several do; otherwise search
-   `archive_search` for the claim's own words, since every hit carries its full
-   `session_id`. Evidence you still cannot pin to one session goes under Open
-   Questions. Never reword it as prose about a prefix: that hides the claim from
-   the check instead of backing it.
+   one session matches, or lists the candidates if several do. In a
+   `dossiers:` document nothing checks the form, so do the same lookup
+   yourself: `archive_session_transcript` takes the prefix, reads the session
+   when one matches, and lists the candidates when several do. To choose among
+   candidates, search `archive_search` for the claim's own words, since every
+   hit carries its full `session_id`. Write the colon form in `dossiers:` too;
+   only the contacts writer repairs the older hyphen spelling for you. Evidence
+   you still cannot pin to one session goes under Open Questions. Never reword
+   it as prose about a prefix: that hides the claim from the check instead of
+   backing it.
    - A contact is the contract-owned exception. Resolve an active structured
      contact and use its exact canonical UUID. Call `contact_dossier_read` with
      that UUID; Go derives the canonical ref so never transcribe or construct
