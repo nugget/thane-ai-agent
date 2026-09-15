@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 
 	"github.com/emersion/go-imap/v2"
@@ -239,6 +238,17 @@ func contentSum(b []byte) string {
 // message as it is, when the check or the removal does not hold. Caller
 // must hold c.mu and have selected the folder read-write.
 func (c *Client) removeOwnLocked(ctx context.Context, folder string, uid uint32, modSeq uint64) (bool, error) {
+	unflagged, err := c.unflaggedLocked(ctx, folder, uid)
+	if err != nil || !unflagged {
+		return false, err
+	}
+	return c.expungeOwnLocked(ctx, folder, uid, modSeq)
+}
+
+// unflaggedLocked reports whether uid is still in the selected folder
+// and not marked \Deleted, the check removeOwnLocked makes before its
+// store. Caller must hold c.mu and have selected the folder.
+func (c *Client) unflaggedLocked(ctx context.Context, folder string, uid uint32) (bool, error) {
 	set := imap.UIDSet{}
 	set.AddNum(imap.UID(uid))
 	release := c.guard(ctx)
@@ -247,29 +257,35 @@ func (c *Client) removeOwnLocked(ctx context.Context, folder string, uid uint32,
 	if err != nil {
 		return false, c.wrap(ctx, "check draft flags", folder, uid, err)
 	}
-	if have, present := before[uid]; !present || flagIn(have, imap.FlagDeleted) {
-		return false, nil
-	}
-	return c.expungeOwnLocked(ctx, folder, uid, modSeq)
+	have, present := before[uid]
+	return present && !flagIn(have, imap.FlagDeleted), nil
 }
 
 // expungeOwnLocked deletes one message the caller has proven Thane's
-// from the selected folder: UID STORE +FLAGS.SILENT (\Deleted), with
-// UNCHANGEDSINCE when the server has CONDSTORE and modSeq is known; a
-// read-back that the flag holds; UID EXPUNGE of that UID alone, which
-// never removes another message anyone flagged \Deleted; and a second
-// read-back, because UID EXPUNGE of a UID that is already gone still
-// answers OK. It reports false when the flag did not hold or the message
-// outlived the expunge, which means someone changed it in between.
-// Caller must hold c.mu and have selected the folder read-write.
+// from the selected folder: flagOwnLocked, then expungeFlaggedLocked.
+// It reports false when the flag did not hold or the message outlived
+// the expunge, which means someone changed it in between. Caller must
+// hold c.mu and have selected the folder read-write.
 func (c *Client) expungeOwnLocked(ctx context.Context, folder string, uid uint32, modSeq uint64) (bool, error) {
+	flagged, err := c.flagOwnLocked(ctx, folder, uid, modSeq)
+	if err != nil || !flagged {
+		return false, err
+	}
+	return c.expungeFlaggedLocked(ctx, folder, uid)
+}
+
+// flagOwnLocked marks one message the caller has proven Thane's
+// \Deleted: UID STORE +FLAGS.SILENT (\Deleted), with UNCHANGEDSINCE when
+// the server has CONDSTORE and modSeq is known, and a read-back that the
+// flag holds. It reports false when the read-back does not show the
+// flag. Caller must hold c.mu and have selected the folder read-write.
+func (c *Client) flagOwnLocked(ctx context.Context, folder string, uid uint32, modSeq uint64) (bool, error) {
 	set := imap.UIDSet{}
 	set.AddNum(imap.UID(uid))
 	var opts *imap.StoreOptions
 	if modSeq != 0 && c.capsLocked(ctx).Has(imap.CapCondStore) {
 		opts = &imap.StoreOptions{UnchangedSince: modSeq}
 	}
-
 	release := c.guard(ctx)
 	err := c.client.Store(set, &imap.StoreFlags{Op: imap.StoreFlagsAdd, Silent: true, Flags: []imap.Flag{imap.FlagDeleted}}, opts).Close()
 	var flags map[uint32][]imap.Flag
@@ -280,12 +296,22 @@ func (c *Client) expungeOwnLocked(ctx context.Context, folder string, uid uint32
 	if err != nil {
 		return false, c.wrap(ctx, "flag draft \\Deleted", folder, uid, err)
 	}
-	if have, ok := flags[uid]; !ok || !flagIn(have, imap.FlagDeleted) {
-		return false, nil
-	}
+	have, ok := flags[uid]
+	return ok && flagIn(have, imap.FlagDeleted), nil
+}
 
-	release = c.guard(ctx)
-	err = c.client.UIDExpunge(set).Close()
+// expungeFlaggedLocked removes one message flagOwnLocked flagged: UID
+// EXPUNGE of that UID alone, which never removes another message anyone
+// flagged \Deleted, and a read-back, because UID EXPUNGE of a UID that
+// is already gone still answers OK. It reports false when the message
+// outlived the expunge. Caller must hold c.mu and have selected the
+// folder read-write.
+func (c *Client) expungeFlaggedLocked(ctx context.Context, folder string, uid uint32) (bool, error) {
+	set := imap.UIDSet{}
+	set.AddNum(imap.UID(uid))
+	release := c.guard(ctx)
+	err := c.client.UIDExpunge(set).Close()
+	var flags map[uint32][]imap.Flag
 	if err == nil {
 		flags, err = c.fetchFlags(set)
 	}
@@ -295,77 +321,4 @@ func (c *Client) expungeOwnLocked(ctx context.Context, folder string, uid uint32
 	}
 	_, survived := flags[uid]
 	return !survived, nil
-}
-
-// removeProvenDraft proves e's draft and removes it, under one hold of
-// the lock. With anyFlags false the draft must be proven and unflagged
-// (removeOwnLocked); with anyFlags true, for a copy Thane knows it made
-// or was already removing, one marked \Deleted is expunged too. removed
-// is false when the proof failed, and verdict says how, or when the
-// removal did not hold.
-func (c *Client) removeProvenDraft(ctx context.Context, e draftEntry, anyFlags bool) (removed bool, verdict ownershipVerdict, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.ensureConnected(ctx); err != nil {
-		return false, "", err
-	}
-	state, err := c.draftFolderStateLocked(ctx, e.Folder, false, []uint32{e.UID})
-	if err != nil {
-		return false, "", err
-	}
-	verdict = proveOwnership(e, state)
-	switch {
-	case anyFlags && (verdict == ownershipProven || verdict == ownershipDeleted):
-		removed, err = c.expungeOwnLocked(ctx, state.Folder, e.UID, 0)
-	case verdict == ownershipProven:
-		removed, err = c.removeOwnLocked(ctx, state.Folder, e.UID, state.Messages[e.UID].ModSeq)
-	}
-	return removed, verdict, err
-}
-
-// withdrawOutcome is what email_draft_withdraw's IMAP step did.
-type withdrawOutcome struct {
-	Verdict       ownershipVerdict
-	TrashUID      uint32
-	TrashUIDKnown bool
-}
-
-// withdrawDraft proves e's draft and moves that one UID into trash,
-// under one hold of the lock. A server with neither MOVE nor UIDPLUS is
-// refused as [FailureUnsupported], as email_move refuses it, because a
-// move there would expunge every message flagged \Deleted.
-func (c *Client) withdrawDraft(ctx context.Context, e draftEntry, trash string) (withdrawOutcome, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.ensureConnected(ctx); err != nil {
-		return withdrawOutcome{}, err
-	}
-	if caps := c.capsLocked(ctx); !caps.Has(imap.CapMove) && !caps.Has(imap.CapUIDPlus) {
-		return withdrawOutcome{}, &ClientError{Account: c.name, Op: "move draft to trash folder", Folder: trash, Kind: FailureUnsupported,
-			Err: fmt.Errorf("server advertises neither MOVE nor UIDPLUS, and moving without them would expunge every message flagged \\Deleted in %q", e.Folder)}
-	}
-	state, err := c.draftFolderStateLocked(ctx, e.Folder, false, []uint32{e.UID})
-	if err != nil {
-		return withdrawOutcome{}, err
-	}
-	if verdict := proveOwnership(e, state); verdict != ownershipProven {
-		return withdrawOutcome{Verdict: verdict}, nil
-	}
-	set := imap.UIDSet{}
-	set.AddNum(imap.UID(e.UID))
-	release := c.guard(ctx)
-	data, err := c.client.Move(set, trash).Wait()
-	release()
-	if err != nil {
-		return withdrawOutcome{}, c.folderError(ctx, "move draft to trash folder", trash, err)
-	}
-	out := withdrawOutcome{Verdict: ownershipProven}
-	if data != nil {
-		if dest, ok := data.DestUIDs.(imap.UIDSet); ok {
-			if nums, complete := dest.Nums(); complete && len(nums) == 1 {
-				out.TrashUID, out.TrashUIDKnown = uint32(nums[0]), true
-			}
-		}
-	}
-	return out, nil
 }

@@ -452,7 +452,9 @@ an inline idiom Go recognises (the `hidden` attribute,
 `aria-hidden="true"`, or an inline `display:none`, `visibility:hidden`,
 zero font-size, or zero opacity): that text is withheld from the body
 and `hidden_content` `{present: true, chars}` says so, counting its
-characters with whitespace aside; the key is absent otherwise.
+characters with whitespace aside; the key is absent otherwise. A
+hidden link's target is withheld with it, so `chars` is 0 when all
+the markup hid was a link with no text.
 `hidden_content` is evidence that the sender put text in the message
 that a person reading it would not see. Bulk mail often hides a
 preview line this way, so `hidden_content` alone is not a sign of
@@ -1018,12 +1020,14 @@ message and nothing moved. `moved` lists each message that moved as
 lists each one the junk guard kept back (see "Obvious spam, and
 nothing else" below); both are always present, empty when nothing
 belongs there. A call takes at most 100 UIDs, so split a larger set
-across calls. The result stays within 16 KB: a `from`, `message_id`,
-or `reason` over 256 bytes is cut and ends with `…[cut]`, and when the
-entries would pass that, the last `moved_omitted` entries of `moved`,
-then the last `refused_omitted` of `refused`, carry only their UIDs.
-`uids`, `destination_uids`, and every entry's UIDs are always
-complete. When `destination_uids_known` is true,
+across calls. The result stays within 16 KB: the account, a folder
+name, the `note`, or a `from`, `message_id`, or `reason` over 256
+bytes is cut and ends with `…[cut]`, and when the entries would pass
+that, the last `moved_omitted` entries of `moved`, then the last
+`refused_omitted` of `refused`, carry only their UIDs. `uids`,
+`destination_uids`, and every entry's UIDs are complete unless the
+server reports moving more messages than the call sent; then the
+lists are cut short from the end and `note` says so. When `destination_uids_known` is true,
 `uids` are the messages the server confirmed moving, `uids_not_found`
 the requested UIDs it did not find, and the
 `destination_uids` (each `moved` entry's `destination_uid`) are the
@@ -1310,6 +1314,16 @@ the draft stays where it is and the refusal (`no_trash_folder`) names
 the gap, which only the operator can close; tell them the draft should
 not be sent. An account whose `access` is `read` refuses withdrawal.
 
+The result's `action` is `withdrawn` only when the server reported
+that the move carried this draft into the trash. `unconfirmed` means
+the server accepted the move without that report: the draft is still
+in the drafts folder, or it is gone from there, most likely because the
+operator sent or discarded it first. A copy of it in the trash proves
+nothing, since the operator's client may have filed it there. Its entry
+is not marked withdrawn, and `note` says which. Never report an
+unconfirmed draft as withdrawn or promise it will not be sent; tell the
+operator it should not go out, so they can check.
+
 ## Gone and held: hands off
 
 A refusal from these tools is one sentence followed by `{action:
@@ -1337,8 +1351,9 @@ meant to change still matters, tell the operator in your report.
 
 The other reasons are plainer. `withdrawn` means you already withdrew
 it. `no_uidplus` means the server lacks the UIDPLUS extension a safe
-replacement needs, or never reported the draft's UID; retrying fails the same way, so tell the operator
-what you would change. `inspector` means the outbound inspector
+replacement or a confirmed withdrawal needs, or never reported the
+draft's UID; retrying fails the same way, so tell the operator what you
+would change, or that the draft should not be sent. `inspector` means the outbound inspector
 objected to the new body. `access` means the account can no longer
 write mail.
 

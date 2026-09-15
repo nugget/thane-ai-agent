@@ -57,7 +57,10 @@ func (t *Tools) draftToolDefinitions() []*tools.Tool {
 				"writes_as is the From mail from the account goes out under, voice is the operator's note on how that mail should sound, and owner says whose mailbox it is; revise against them. " +
 				"history lists at most 10 versions, oldest first: the first is always the draft as it was written, and when history_omitted is above 0, that many versions between it and the latest 9 are left out. original.from carries the directory's answer about the sender, as email_read's addresses do. " +
 				"The original is looked for by its Message-ID in the folder it was read from; when it has moved, original.found is false and its body section says so, and email_search with message_id finds it. " +
-				"A draft that is not open has no body to read; its header says why. The result stays within 32 KB: a body that would pass it is cut, ends with a marker, and sets its truncated flag. " +
+				"A draft that is not open has no body to read; its header says why. " +
+				"The result stays within 32 KB, and the header within 16 KB of it: a subject over 1 KB, voice over 2 KB, address over 320 bytes, history author over 256 bytes, or note over 500 bytes is cut and ends with …[cut]; to and cc list at most 25 addresses each, with addresses_omitted counting the rest. " +
+				"A header that would still pass 16 KB is replaced by {draft_id, account, stage, closed_reason, drafts_folder, uid, revisions, history_omitted, addresses_omitted, header_truncated: true, draft_body_truncated, original_body_truncated}, where the omitted counts cover every version and address; email_read of uid in drafts_folder shows the draft's own headers. " +
+				"A body that would pass what is left is cut, ends with a marker, and sets its truncated flag. " +
 				"A draft_id the ledger does not hold is refused. " + draftOwnershipRule,
 			Parameters: map[string]any{
 				"type": "object",
@@ -98,8 +101,10 @@ func (t *Tools) draftToolDefinitions() []*tools.Tool {
 			Name: "email_draft_withdraw",
 			Description: "Withdraw one of Thane's open drafts by moving it to the account's trash folder, for a draft that should not be sent at all: the message no longer needs this answer, or a different one is wanted. " +
 				"The draft must still be Thane's; a draft the operator has touched is theirs and is refused. The trash folder is found by its role: the account's trash_folder, else the folder the server marks with the trash special-use attribute. Withdrawing is not filing, so the account's move_into does not apply. " +
-				"reason says why, for the draft's entry. Returns JSON {action: withdrawn, draft_id, account, drafts_folder, trash_folder, trash_uid, trash_uid_known, note}, and the entry's stage becomes withdrawn. " +
-				"A refusal is one sentence followed by JSON {action: refused, reason, draft_id, account, stage, closed_reason}, and the draft stays where it is: reason gone, held, or withdrawn as for email_draft_revise; no_trash_folder when no folder on the account has the trash role, which only the operator can fix by configuring trash_folder; no_uidplus when the server never reported the draft's UID. " +
+				"reason says why, for the draft's entry. Returns JSON {action, draft_id, account, drafts_folder, trash_folder, trash_uid, trash_uid_known, note}. " +
+				"action withdrawn means the server reported that the move carried this draft's UID into the trash, the only proof Go accepts, and the entry's stage becomes withdrawn. " +
+				"action unconfirmed means the server accepted the move without that report: the draft is still in the drafts folder, or it is gone from there, most likely because the operator sent or discarded it first. A copy of it in the trash proves nothing, since the operator's client may have filed it there. The entry is not marked withdrawn, and note says which; never report such a draft as withdrawn or say it will not be sent, and tell the operator it should not go out. " +
+				"A refusal is one sentence followed by JSON {action: refused, reason, draft_id, account, stage, closed_reason}, and the draft stays where it is: reason gone, held, or withdrawn as for email_draft_revise; no_trash_folder when no folder on the account has the trash role, which only the operator can fix by configuring trash_folder; no_uidplus when the server lacks the UIDPLUS extension, without which it never reports which message a move carried, or never reported the draft's UID. " +
 				"An account whose access is read refuses this tool, and a draft_id the ledger does not hold is refused.",
 			Parameters: map[string]any{
 				"type": "object",

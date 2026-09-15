@@ -185,10 +185,14 @@ type draftPending struct {
 	Body      string        `json:"body"`
 	Revision  draftRevision `json:"revision"`
 
-	// NewUID and NewUIDValidity are the new version's, recorded once its
-	// APPEND answered and before the old version is flagged \Deleted.
-	// Zero means Thane had not begun removing the old version, so a
-	// \Deleted flag or an absence there is the operator's doing.
+	// Phase is how far the revision provably got, written at the point
+	// each phase's comment names (pendingAppending, pendingAppended,
+	// pendingRetiring; see draftPending.phase). Recovery reads it through
+	// phase, never raw.
+	Phase string `json:"phase,omitempty"`
+
+	// NewUID and NewUIDValidity are the new version's, recorded with the
+	// appended phase once its APPEND answered.
 	NewUID         uint32 `json:"new_uid,omitempty"`
 	NewUIDValidity uint32 `json:"new_uid_validity,omitempty"`
 }

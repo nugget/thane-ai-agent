@@ -65,6 +65,19 @@ type memIMAP struct {
 	// answers, before the client sees the command complete
 	// (draft_harness_test.go).
 	fetchHook func()
+
+	// moveHook, when set, runs once in place of the next MOVE a session
+	// receives, which then answers a bare OK (draft_harness_test.go).
+	moveHook func() error
+
+	// storeHook, when set, runs once before the next STORE a session
+	// receives; an error it returns is the server's answer instead of
+	// the store (draft_harness_test.go).
+	storeHook func() error
+
+	// expungeHook, when set, runs once before the next EXPUNGE a session
+	// receives (draft_harness_test.go).
+	expungeHook func()
 }
 
 type memIMAPOptions struct {
@@ -276,6 +289,9 @@ func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns 
 }
 
 func (s *specialUseSession) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string) error {
+	if diverted, err := s.divertMove(numSet, dest); diverted {
+		return err
+	}
 	return s.Session.(imapserver.SessionMove).Move(w, numSet, dest)
 }
 
