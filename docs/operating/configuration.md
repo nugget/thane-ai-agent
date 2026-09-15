@@ -293,20 +293,28 @@ note of at most 500 bytes on how mail from the account should sound; a
 longer one is refused.
 
 `move_into` lists the only folders `email_move` may file this
-account's mail into. An entry is `role:<role>`, the folder holding that
+account's mail into in a turn the operator is not present for: a
+new-mail or review wake, a scheduled loop, a loop launched from their
+conversation, or anyone else's conversation. An entry is
+`role:<role>`, the folder holding that
 special-use role (`inbox`, `sent`, `trash`, `junk`, `archive`, `all`,
 `flagged`, or `important`, resolved through `junk_folder` and
 `trash_folder` first, then the server's own marks), or an exact folder
 name; `"*"` on its own allows every folder and cannot be combined with
 other entries. The default is `[role:junk]` on an operator mailbox,
-where the server keeps its own filing tree and only spam leaves INBOX,
-and `["*"]` on every other account, which is how accounts behaved
-before the key existed. Moving mail back to INBOX out of a listed
+where the server keeps its own filing tree and only spam leaves INBOX
+without the operator, and `["*"]` on every other account, which is
+how accounts behaved before the key existed. Moving mail back to INBOX out of a listed
 folder is always allowed, so a move can be undone and mail rescued from
 junk. The drafts folder can never be listed, by role or by name, and
 `email_move` refuses it as a source too, as `email_mark` does. The
-limit applies in every turn, the operator's own included: it is
-configuration, not a judgment about who asked. An unknown role, an
+limit does not apply in the operator's own turn: there they decide
+where their mail goes, and `email_move` files into any folder the
+account has except the drafts folder. A move there that `move_into`
+would have refused is logged at Info as `email move outside move_into
+allowed`, with the account, folders, and the conversation that asked.
+The drafts refusals, `access: read`, and the refusal of a folder the
+account lacks hold in every turn. An unknown role, an
 empty entry, or `"*"` beside other entries is refused at startup.
 `filing_note` is an optional sentence of at most 300 bytes on how the
 mailbox is filed, shown to the model as written.
@@ -329,7 +337,9 @@ The model sees these in the account's Email Accounts entry: `owner`
 display name included), `voice`, and on an operator mailbox
 `reads_mark_seen: false`. On any account whose `move_into` is not
 `["*"]` it also sees `move_into` resolved to folder names, with
-`role:<role>` standing in for a role no folder is known to hold yet.
+`role:<role>` standing in for a role no folder is known to hold yet,
+in the operator's own turn too, where it does not bind, because it
+still says what the account's loops may file.
 Those accounts and every operator mailbox also show `junk_folder`
 (once configuration or the server's folder listing names one);
 `filing_note`

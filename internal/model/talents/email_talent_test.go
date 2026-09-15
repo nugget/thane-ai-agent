@@ -124,7 +124,8 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		talent string
 		want   string
 	}{
-		{"entry shows filing fields", "email", "shows its `junk_folder`, the `move_into` folders `email_move` accepts there, and any `filing_note`"},
+		{"entry shows filing fields", "email", "shows its `junk_folder`, the `move_into` folders `email_move` accepts there in a turn the operator is not present for, and any `filing_note`"},
+		{"whose mailbox lifts move_into when attended", "email", "In the operator's own turn `move_into` does not apply, because they decide where their mail goes"},
 		{"whose mailbox files spam by role", "email", "which `email_move` files with `destination_role: \"junk\"`"},
 		{"whose mailbox names move_into", "email", "the entry's `move_into` lists the only folders mail may move into"},
 		{"folders bullet offers the role", "email", "`email_move` takes `destination_role` (such as `junk` or `trash`) and Go finds the folder"},
@@ -136,7 +137,10 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		{"neither or both refused", "email_organize", "A call with neither or both is refused and moves nothing"},
 		{"move_into limits destinations", "email_organize", "those folders are the only destinations `email_move` accepts there"},
 		{"operator default is junk alone", "email_organize", "unless the operator configured more it holds the junk folder alone"},
-		{"move_into holds when attended", "email_organize", "so it holds in the operator's own turn too"},
+		{"move_into binds only unattended turns", "email_organize", "**Each account limits where its mail may go when the operator is not present.**"},
+		{"move_into lifted when attended", "email_organize", "In the operator's own turn (`attended: true`) `move_into` does not apply"},
+		{"attended move still spares drafts", "email_organize", "any folder the account has but the drafts folder, whatever `move_into` lists"},
+		{"refused move names the operator's way through", "email_organize", "they can move it themselves or ask for it in their own conversation"},
 		{"inbox return always allowed", "email_organize", "Moving mail back to INBOX out of a `move_into` folder is always allowed"},
 		{"result carries moved", "email_organize", "`moved` lists each message that moved as `{uid, destination_uid, message_id, from, trust_zone}`"},
 		{"result action refused", "email_organize", "`action` is `moved`, or `refused` when the junk guard refused every message and nothing moved"},
@@ -160,7 +164,7 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		{"guard covers addresses it cannot fully check", "email_organize", "when one of them is, or may be, at such a zone"},
 		{"refused trust_zone is the judged zone", "email_organize", "Its `trust_zone` is the zone the guard judged"},
 		{"a refusal waits for the operator", "email_organize", "a refused message waits for the operator, not for another attempt"},
-		{"undo into an unlisted folder is refused", "email_organize", "A move back into a folder the account's `move_into` does not list is refused like any other"},
+		{"undo into an unlisted folder is refused", "email_organize", "In a turn the operator is not present for, a move back into a folder the account's `move_into` does not list is refused like any other"},
 		{"operator entry shows move_into when limited", "email_organize", "An operator mailbox shows it whenever the list is limited"},
 		{"operator entry always shows junk_folder", "email", "an operator mailbox shows its `junk_folder` even when it allows every folder"},
 	}
@@ -184,6 +188,8 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		{"hidden text gap told backwards", "showed a reader something other than what reached you"},
 		{"guard claimed to answer a repeat the same way", "the guard answers the same way every time"},
 		{"operator entry claimed to always show move_into", "An operator mailbox always shows it"},
+		{"move_into claimed to hold when attended", "so it holds in the operator's own turn too"},
+		{"move_into claimed to refuse in every turn", "any other move is refused in every turn"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {
