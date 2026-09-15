@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -140,5 +141,181 @@ func TestImportVCF_MergeIntoGivenName(t *testing.T) {
 	}
 	if !merged || got.GivenName != "Alice" {
 		t.Errorf("merged record = given %q, properties %+v; want the email merged and Alice kept", got.GivenName, got.Properties)
+	}
+}
+
+// loggedLine reports whether one line of logs carries every want.
+func loggedLine(logs string, wants ...string) bool {
+	for _, line := range strings.Split(logs, "\n") {
+		all := true
+		for _, want := range wants {
+			if !strings.Contains(line, want) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// TestImportVCF_GivenNameFillIsTargetCustody pins the import's side of
+// the given-name target rule. A merge fills an empty given name, and a
+// given name is a name lookups find the record by, so a card merged
+// into a contact above known, or into the operator's own, leaves the
+// fill out, counts it and logs it, as it does a nickname fill, while the
+// rest of the merge lands. A known target takes the fill, a refused
+// nickname fill leaves a known target's given-name fill alone, and a
+// card that creates a contact keeps its given name, which is no claim on
+// a new record, as on contact_save.
+func TestImportVCF_GivenNameFillIsTargetCustody(t *testing.T) {
+	const (
+		givenCard    = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Dr. A. Jones\r\nN:Jones;Alice;;;\r\nORG:Acme\r\nEND:VCARD\r\n"
+		bothCard     = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Dr. A. Jones\r\nN:Jones;Alice;;;\r\nNICKNAME:Ally\r\nORG:Acme\r\nEND:VCARD\r\n"
+		givenNote    = "1 given name(s) were not filled in on a merge"
+		nicknameNote = "1 nickname(s) were not filled in on a merge"
+	)
+	for _, tc := range []struct {
+		name     string
+		zone     string
+		operator bool // pin the target as the operator's own record
+		card     string
+		// rule is the custody rule the log names, or "" when the fill
+		// lands.
+		rule         string
+		wantNickname string
+		properties   string
+		notes        []string
+	}{
+		{name: "household", zone: ZoneHousehold, card: givenCard, rule: IdentityReasonZone, properties: "GIVEN_NAME", notes: []string{givenNote}},
+		{name: "trusted", zone: ZoneTrusted, card: givenCard, rule: IdentityReasonZone, properties: "GIVEN_NAME", notes: []string{givenNote}},
+		{name: "admin", zone: ZoneAdmin, card: givenCard, rule: IdentityReasonZone, properties: "GIVEN_NAME", notes: []string{givenNote}},
+		{name: "operator's own at known", zone: ZoneKnown, operator: true, card: givenCard, rule: IdentityReasonOperator, properties: "GIVEN_NAME", notes: []string{givenNote}},
+		{name: "household with a nickname fill too", zone: ZoneHousehold, card: bothCard, rule: IdentityReasonZone, properties: "GIVEN_NAME,NICKNAME", notes: []string{givenNote, nicknameNote}},
+		{name: "known takes both", zone: ZoneKnown, card: bothCard, wantNickname: "Ally"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := newTestTools(t)
+			jones := seedContactAt(t, tools.store, "Dr. A. Jones", tc.zone)
+			if tc.operator {
+				tools.ConfigureOperatorContactID(jones.ID)
+			} else {
+				tools.ConfigureOperatorContactID(seedContactAt(t, tools.store, "Carol Operator", ZoneKnown).ID)
+			}
+			refused := tc.rule != ""
+			logs := captureDefaultLog(t)
+
+			dry := importText(t, tools, tc.card, map[string]any{"dry_run": true})
+			if got, err := tools.store.Get(jones.ID); err != nil || got.GivenName != "" || got.Org != "" {
+				t.Fatalf("dry run wrote %+v, %v", got, err)
+			}
+			out := importText(t, tools, tc.card, nil)
+			for label, result := range map[string]string{"dry run": dry, "import": out} {
+				for _, note := range []string{givenNote, nicknameNote} {
+					want := false
+					for _, n := range tc.notes {
+						want = want || n == note
+					}
+					if strings.Contains(result, note) != want {
+						t.Errorf("%s contains %q = %v, want %v:\n%s", label, note, !want, want, result)
+					}
+				}
+			}
+			if !strings.Contains(out, "1 merged, 0 skipped") {
+				t.Errorf("import = %q, want the card merged", out)
+			}
+
+			got, err := tools.store.Get(jones.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantGiven := "Alice"
+			if refused {
+				wantGiven = ""
+			}
+			if got.GivenName != wantGiven || got.Nickname != tc.wantNickname || got.Org != "Acme" {
+				t.Errorf("after merge = given %q nickname %q org %q, want given %q nickname %q and the org merged",
+					got.GivenName, got.Nickname, got.Org, wantGiven, tc.wantNickname)
+			}
+			resolved, err := tools.store.ResolveContact("Alice")
+			switch {
+			case refused && !errors.Is(err, sql.ErrNoRows):
+				t.Errorf("ResolveContact(Alice) = %+v, %v, want no contact to answer to it", resolved, err)
+			case !refused && (err != nil || resolved.ID != jones.ID):
+				t.Errorf("ResolveContact(Alice) = %+v, %v, want Dr. A. Jones", resolved, err)
+			}
+
+			applied := loggedLine(logs.String(), "tool=contact_import_vcf", "contact_id="+jones.ID.String(), "properties="+tc.properties, "dry_run=false")
+			if refused && (!applied || !loggedLine(logs.String(), "properties="+tc.properties, "rule="+tc.rule, "dry_run=true")) {
+				t.Errorf("log lacks the refusal (rule %s, properties %s) for the dry run and the import:\n%s", tc.rule, tc.properties, logs)
+			}
+			if !refused && strings.Contains(logs.String(), "contact identity custody refused") {
+				t.Errorf("a known merge logged a refusal:\n%s", logs)
+			}
+		})
+	}
+
+	t.Run("a refused nickname fill leaves a known target's given-name fill", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedNicknameAt(t, tools.store, "Jane Doe", "Mom", ZoneHousehold)
+		dan := seedContactAt(t, tools.store, "Dan Known", ZoneKnown)
+		out := importText(t, tools, "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Dan Known\r\nN:Known;Daniel;;;\r\nNICKNAME:Mom\r\nORG:Acme\r\nEND:VCARD\r\n", nil)
+		if !strings.Contains(out, nicknameNote) || strings.Contains(out, givenNote) {
+			t.Errorf("import = %q, want only the nickname fill counted", out)
+		}
+		if got, err := tools.store.Get(dan.ID); err != nil || got.GivenName != "Daniel" || got.Nickname != "" || got.Org != "Acme" {
+			t.Errorf("Dan Known after merge = %+v, %v, want given name Daniel, no nickname, org Acme", got, err)
+		}
+	})
+
+	t.Run("a new contact keeps its given name", func(t *testing.T) {
+		tools := newTestTools(t)
+		seedGivenAt(t, tools.store, "Dr. A. Jones", "Alice", ZoneHousehold)
+		out := importText(t, tools, "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Mallory New\r\nN:New;Alice;;;\r\nEND:VCARD\r\n", map[string]any{"merge": false})
+		if !strings.Contains(out, "1 created") || strings.Contains(out, "not filled in") {
+			t.Errorf("import = %q, want the card created with nothing left out", out)
+		}
+		got, err := tools.store.FindByName("Mallory New")
+		if err != nil || got.GivenName != "Alice" {
+			t.Errorf("Mallory New = %+v, %v, want given name Alice", got, err)
+		}
+	})
+}
+
+// TestImportVCF_GivenNameFillRace pins the recheck inside the card's
+// write: a known merge target the operator promotes after the import
+// judged its given-name fill, and before the card's write, writes
+// nothing, so the fill never lands on a contact now above known.
+func TestImportVCF_GivenNameFillRace(t *testing.T) {
+	tools := newTestTools(t)
+	// Ada holds a number rather than an address, so the card merges into
+	// Kim by name, and the number's refusal is the log line the operator
+	// write rides on.
+	seedContactAt(t, tools.store, "Ada Admin", ZoneAdmin, Property{Property: "TEL", Value: "+15550009999"})
+	kim := seedContactAt(t, tools.store, "Kim Known", ZoneKnown)
+	onImportRefusal(t, func() {
+		promoted, err := tools.store.Get(kim.ID)
+		if err != nil {
+			t.Errorf("read Kim: %v", err)
+			return
+		}
+		promoted.TrustZone = ZoneHousehold
+		if _, err := tools.store.Upsert(promoted); err != nil {
+			t.Errorf("operator promotion: %v", err)
+		}
+	})
+
+	out := importText(t, tools, "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Kim Known\r\nN:Known;Kimberly;;;\r\nTEL:+15550009999\r\nORG:Acme\r\nEND:VCARD\r\n", nil)
+	if !strings.Contains(out, "0 merged, 1 skipped") || !strings.Contains(out, "1 card(s) were skipped, not merged") {
+		t.Errorf("import = %q, want card 1 skipped with its cause", out)
+	}
+	got, err := tools.store.Get(kim.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrustZone != ZoneHousehold || got.GivenName != "" || got.Org != "" {
+		t.Errorf("Kim after import = zone %q given %q org %q, want the promotion kept and nothing written", got.TrustZone, got.GivenName, got.Org)
 	}
 }

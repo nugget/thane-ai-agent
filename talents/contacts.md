@@ -519,7 +519,9 @@ neither.
   in the operator's own message. Lookups fall back to a given name, so
   rewriting it would free that person's first name for another contact
   to take. A change only in the case of ASCII letters is not a change,
-  and neither is edge space on a given name.
+  and neither is edge space on a given name. `contact_import_vcf`
+  never fills either into such a contact, since a filled-in given name
+  is a new name lookups find that person by.
 - **A name or nickname someone with authority goes by.** In every
   turn, the operator's own included, `contact_save` refuses a new
   contact's name, or any contact's nickname, that an admin,

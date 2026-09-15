@@ -474,9 +474,10 @@ contact with authority and is still reported.
   answers by. The check runs in the
   write's own transaction, so an operator promotion cannot land between
   the check and the write. `contact_import_vcf` skips such a card, leaves
-  such a nickname off a merge, and never fills a nickname into a
-  custodied target; an import card that carries only names and cannot
-  resolve the operator counts every holder as one with authority.
+  such a nickname off a merge, and never fills a nickname or a given
+  name into a custodied target; an import card that carries only names
+  and cannot resolve the operator counts every holder as one with
+  authority.
   `FindByNickname`, which no resolution path calls, orders a shared
   nickname by the same bands and then takes the lowest ID. When
   `operator_contact_id` or the legacy owner name is configured, the

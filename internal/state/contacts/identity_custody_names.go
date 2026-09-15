@@ -211,10 +211,10 @@ func authorityNameRecords(query queryFunc, target uuid.UUID, guard identityGuard
 
 // withoutAuthorityNameClaim applies the name rules to one vCard card
 // before its write. A new card whose name or nickname one of them
-// refuses is skipped whole; a merge leaves the refused nickname fill
-// out and drops its claim from guard. It returns the refused claims,
-// which the import counts and logs; applyContactImport rechecks the
-// kept claims inside the card's write.
+// refuses is skipped whole; a merge leaves each refused nickname or
+// given-name fill out and drops its claim from guard. It returns the
+// refused claims, which the import counts and logs; applyContactImport
+// rechecks the kept claims inside the card's write.
 func (t *Tools) withoutAuthorityNameClaim(query queryFunc, target uuid.UUID, guard *identityGuard, incoming *Contact) ([]IdentityViolation, error) {
 	if len(guard.claims) == 0 {
 		return nil, nil
@@ -223,9 +223,22 @@ func (t *Tools) withoutAuthorityNameClaim(query queryFunc, target uuid.UUID, gua
 	if err != nil {
 		return nil, fmt.Errorf("check name custody: %w", err)
 	}
-	if len(violations) > 0 && target != uuid.Nil {
-		incoming.Nickname = ""
-		guard.claims = nil
+	if len(violations) == 0 || target == uuid.Nil {
+		return violations, nil
 	}
+	kept := guard.claims[:0:0]
+	for _, c := range guard.claims {
+		if !refusedIdentity(c, violations) {
+			kept = append(kept, c)
+			continue
+		}
+		switch c.Property {
+		case claimNickname:
+			incoming.Nickname = ""
+		case claimGivenName:
+			incoming.GivenName = ""
+		}
+	}
+	guard.claims = kept
 	return violations, nil
 }

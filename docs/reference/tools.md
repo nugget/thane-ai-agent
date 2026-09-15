@@ -443,7 +443,7 @@ sees these tools; a loop that edits drafts carries both.
 | `contact_export_vcf` | Export one contact as a vCard. |
 | `contact_export_vcf_qr` | Export one contact as a vCard QR code. |
 | `contact_export_all_vcf` | Bulk vCard export. |
-| `contact_import_vcf` | Import one or more vCards. Drops `KEY`, `X-THANE-KEY-*`, malformed property names, and values carrying control characters, drops addresses, numbers, notification routing facts, and nickname fills merged into an elevated or operator contact, addresses or numbers already held by one, and a nickname fill one already goes by or answers to by its given name or first word, and skips a card that would create a contact under such a name or nickname; rows carry turn provenance and the result counts every drop and names each skipped card. |
+| `contact_import_vcf` | Import one or more vCards. Drops `KEY`, `X-THANE-KEY-*`, malformed property names, and values carrying control characters, drops addresses, numbers, notification routing facts, and nickname and given-name fills merged into an elevated or operator contact, addresses or numbers already held by one, and a nickname fill one already goes by or answers to by its given name or first word, and skips a card that would create a contact under such a name or nickname; rows carry turn provenance and the result counts every drop and names each skipped card. |
 
 ## `owner` — trusted operator context
 

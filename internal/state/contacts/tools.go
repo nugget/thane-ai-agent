@@ -1421,7 +1421,7 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 		// A name or nickname an admin, household, trusted or operator
 		// contact goes by stays theirs: a new card claiming one is left
 		// out, and a merge leaves the nickname fill out, as does a merge
-		// into a contact whose nickname is operator custody.
+		// into such a contact with its nickname and given-name fills.
 		refusedNames, err := t.withoutAuthorityNameClaim(query, target, &guard, incoming)
 		if err != nil {
 			return "", stop(i, err)
@@ -1437,7 +1437,7 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 				}
 				continue
 			}
-			drops.naming++
+			drops.countNameFills(refusedNames)
 		}
 		props, refused, err := t.withoutCustodiedIdentity(ctx, target, guard, props)
 		if err != nil {

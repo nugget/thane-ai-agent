@@ -183,16 +183,22 @@ func saveClaims(args SaveContactArgs, contact *Contact, created bool) []Property
 }
 
 // importClaims returns the names one vCard card claims: a new
-// contact's formatted name and nickname, or the nickname a merge fills
-// into a contact that has none.
+// contact's formatted name and nickname, or what a merge fills into a
+// contact that has none of it: a nickname, and a given name, which is a
+// name the record then answers to (see mergeContact). A new contact's
+// given name is no claim, as on contact_save.
 func importClaims(existing, incoming *Contact) []Property {
 	if existing == nil {
 		return saveClaims(SaveContactArgs{Name: incoming.FormattedName, Nickname: incoming.Nickname}, nil, true)
 	}
-	if existing.Nickname != "" || strings.TrimSpace(incoming.Nickname) == "" {
-		return nil
+	var claims []Property
+	if existing.Nickname == "" && strings.TrimSpace(incoming.Nickname) != "" {
+		claims = append(claims, Property{Property: claimNickname, Value: incoming.Nickname})
 	}
-	return []Property{{Property: claimNickname, Value: incoming.Nickname}}
+	if existing.GivenName == "" && nameKey(incoming.GivenName) != "" {
+		claims = append(claims, Property{Property: claimGivenName, Value: incoming.GivenName})
+	}
+	return claims
 }
 
 // routingViolation applies the target rule to one routing fact. A new
