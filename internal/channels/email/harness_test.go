@@ -50,6 +50,12 @@ type memIMAP struct {
 	attrs   map[string][]imap.MailboxAttr
 	tls     bool // implicit TLS listener
 
+	// lists counts the LIST commands the special-use session answered,
+	// so a test can tell a cached answer from a fresh round trip.
+	lists int
+
+	// listFailures is how many of the next LIST commands answer NO.
+	listFailures int
 }
 
 type memIMAPOptions struct {
@@ -218,6 +224,16 @@ var _ imapserver.SessionIMAP4rev2 = (*specialUseSession)(nil)
 func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns []string, options *imap.ListOptions) error {
 	if options == nil {
 		options = &imap.ListOptions{}
+	}
+	s.mem.mu.Lock()
+	s.mem.lists++
+	fail := s.mem.listFailures > 0
+	if fail {
+		s.mem.listFailures--
+	}
+	s.mem.mu.Unlock()
+	if fail {
+		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "LIST unavailable"}
 	}
 	for _, name := range s.mem.folderNames() {
 		matched := false

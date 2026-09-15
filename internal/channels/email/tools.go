@@ -218,6 +218,9 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	if len(action.UIDs) == 0 {
 		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
 	}
+	if p := batchProblem("email_mark", len(action.UIDs), "nothing was changed"); p != "" {
+		problems = append(problems, p)
+	}
 	if action.Flag == "" {
 		problems = append(problems, fmt.Sprintf("flag is required (one of %s)", strings.Join(ValidFlagNames(), ", ")))
 	} else if _, ok := ValidFlag(action.Flag); !ok {
@@ -232,6 +235,13 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 		return "", err
 	}
 	if err := t.service.requireOrganize(acct, "email_mark"); err != nil {
+		return "", err
+	}
+	drafts, err := t.service.protectedDrafts(ctx, "email_mark", acct, t.service.newFolderResolver(acct), "nothing was changed")
+	if err != nil {
+		return "", err
+	}
+	if err := t.service.refuseDraftsSource(ctx, "email_mark", acct, drafts, action.Folder, "nothing was changed"); err != nil {
 		return "", err
 	}
 	if action.Add && action.Flag == "seen" {
@@ -298,68 +308,25 @@ func parseMarkAction(args map[string]any) MarkAction {
 	return action
 }
 
-// HandleMove moves messages between folders of one account.
+// HandleMove moves messages between folders of one account. What may
+// move is decided before anything does: the destination and filing
+// policy in filing_policy.go, the junk guard in junk_guard.go.
 func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, error) {
-	opts := MoveOptions{
-		Folder:      toolargs.TrimmedString(args, "folder"),
-		Destination: toolargs.TrimmedString(args, "destination"),
-		Account:     toolargs.TrimmedString(args, "account"),
-	}
-
-	// folder is always the source. A call that names only folder is
-	// refused rather than read as a destination: guessing which folder
-	// the model meant is how mail lands somewhere nobody chose.
-	opts.UIDs = toolargs.Uint32Slice(args, "uids")
-	if len(opts.UIDs) == 0 {
-		if uid := toolargs.Uint32(args, "uid"); uid != 0 {
-			opts.UIDs = []uint32{uid}
-		}
-	}
-
-	var problems []string
-	if len(opts.UIDs) == 0 {
-		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
-	}
-	if opts.Destination == "" {
-		problems = append(problems, "destination is required; folder is the source: pass destination as a folder name exactly as email_folders or the Email Accounts block lists it for this account, and nothing was moved")
-	}
+	req, problems := parseMoveRequest(args)
 	if len(problems) > 0 {
 		return "", fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 
-	acct, err := t.service.ResolveAccount(ctx, opts.Account)
+	acct, err := t.service.ResolveAccount(ctx, req.opts.Account)
 	if err != nil {
 		return "", err
 	}
 	if err := t.service.requireOrganize(acct, "email_move"); err != nil {
 		return "", err
 	}
-	if opts.Destination == t.service.draftsFolder(ctx, acct) {
-		return "", fmt.Errorf("email_move cannot file mail into %q: it is account %q's drafts folder, which holds only messages Thane composed for the operator to send, and a moved message there would look like one of them. Pick another destination, or report the need", opts.Destination, acct.Name)
-	}
-
-	result, err := acct.Client.MoveMessages(ctx, opts)
+	resp, err := t.move(ctx, acct, req)
 	if err != nil {
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
-
-	resp := moveResponse{
-		Action:               "moved",
-		Account:              acct.Name,
-		SourceFolder:         result.SourceFolder,
-		DestinationFolder:    result.Destination,
-		UIDs:                 nonNilUIDs(result.UIDs),
-		DestinationUIDs:      nonNilUIDs(result.DestUIDs),
-		DestinationUIDsKnown: result.DestUIDsKnown,
-		UIDsNotFound:         []uint32{},
-	}
-	if result.DestUIDsKnown {
-		// COPYUID named what moved; a requested UID absent from it was
-		// not in the folder.
-		resp.UIDsNotFound = nonNilUIDs(missingUIDs(opts.UIDs, result.UIDs))
-	} else {
-		resp.Note = "the server did not confirm which UIDs moved or their new UIDs; list " + result.Destination + " to check"
-	}
-	t.service.recordOp("email_move", acct.Name, result.SourceFolder, moveOperationRef(result))
-	return marshalResponse(resp)
+	return marshalMoveResponse(resp)
 }

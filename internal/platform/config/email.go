@@ -105,6 +105,16 @@ type EmailAccountConfig struct {
 	// "Drafts" when it marks none.
 	DraftsFolder string `yaml:"drafts_folder"`
 
+	// JunkFolder is the exact name of the folder that holds spam, for a
+	// server that marks none with the \Junk special-use attribute. Leave
+	// empty to use the folder the server marks.
+	JunkFolder string `yaml:"junk_folder"`
+
+	// TrashFolder is the exact name of the folder that holds deleted
+	// mail, for a server that marks none with \Trash. Leave empty to use
+	// the folder the server marks.
+	TrashFolder string `yaml:"trash_folder"`
+
 	// Policy is what the model may do with this account beyond reading
 	// it, and where the mail it writes goes.
 	Policy EmailPolicyConfig `yaml:"policy"`
@@ -361,6 +371,7 @@ func (c *EmailConfig) ApplyDefaults() {
 		acct.Policy.DeniedRecipientDomains = normalizeDomains(acct.Policy.DeniedRecipientDomains)
 		acct.Policy.AllowedRecipientDomains = normalizeDomains(acct.Policy.AllowedRecipientDomains)
 		acct.Mailbox.Owner = acct.MailboxOwner()
+		acct.Mailbox.MoveInto = acct.MoveIntoTokens()
 	}
 }
 

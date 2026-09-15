@@ -181,6 +181,7 @@ type readResponse struct {
 	Size           uint32         `json:"size"`
 	MarkedSeen     bool           `json:"marked_seen"`
 	BodySource     string         `json:"body_source,omitempty"`
+	HiddenContent  *hiddenContent `json:"hidden_content,omitempty"`
 	BodyTruncated  bool           `json:"body_truncated,omitempty"`
 	RawTruncated   bool           `json:"raw_truncated,omitempty"`
 	Attachments    []Attachment   `json:"attachments"`
@@ -200,6 +201,29 @@ type readResponse struct {
 	// AddressesOmitted counts to, cc, and reply_to addresses past
 	// maxHeaderAddresses per list that the header leaves out.
 	AddressesOmitted int `json:"addresses_omitted,omitempty"`
+}
+
+// hiddenContent says that an HTML body's own markup hid something from
+// a person reading the message, through an idiom the renderer
+// recognises (see [visibility]): text, an image's description, or a
+// link's target. The read result omits it when nothing was hidden.
+type hiddenContent struct {
+	// Present is always true, so the object reads as a statement
+	// wherever it appears.
+	Present bool `json:"present"`
+
+	// Chars counts the hidden characters of text and image
+	// descriptions, whitespace aside. That text is withheld from the
+	// body.
+	Chars int `json:"chars"`
+}
+
+// newHiddenContent returns nil when nothing was hidden.
+func newHiddenContent(hidden bool, chars int) *hiddenContent {
+	if !hidden {
+		return nil
+	}
+	return &hiddenContent{Present: true, Chars: chars}
 }
 
 // bodySeparator divides the read result's JSON header from the body
@@ -233,6 +257,7 @@ func newReadResponse(account, folder string, msg *Message, markedSeen bool, auth
 		Size:               msg.Size,
 		MarkedSeen:         markedSeen,
 		BodySource:         msg.BodySource,
+		HiddenContent:      newHiddenContent(msg.Hidden, msg.HiddenChars),
 		BodyTruncated:      msg.BodyTruncated,
 		RawTruncated:       msg.RawTruncated,
 		Attachments:        attachments,
@@ -318,7 +343,27 @@ type moveResponse struct {
 	// is empty when destination_uids_known is false, because the server
 	// then confirmed nothing.
 	UIDsNotFound []uint32 `json:"uids_not_found"`
-	Note         string   `json:"note,omitempty"`
+
+	// Moved lists each moved message with its UID in the destination
+	// when the server confirmed it, its Message-ID, its sender, and the
+	// sender's trust zone.
+	Moved []movedMessage `json:"moved"`
+
+	// Refused lists the messages the junk guard kept out of the junk
+	// folder, with why and what to do instead. They did not move.
+	Refused []refusedMessage `json:"refused"`
+
+	// MovedOmitted counts the entries at the end of moved that carry
+	// only uid and destination_uid, their detail dropped to hold the
+	// result to maxMoveOutput. They moved like the rest.
+	MovedOmitted int `json:"moved_omitted,omitempty"`
+
+	// RefusedOmitted counts the entries at the end of refused that
+	// carry only uid, their detail dropped to hold the result to
+	// maxMoveOutput. They stayed where they were like the rest.
+	RefusedOmitted int `json:"refused_omitted,omitempty"`
+
+	Note string `json:"note,omitempty"`
 }
 
 // sendResponse is the result of email_send and email_reply. The

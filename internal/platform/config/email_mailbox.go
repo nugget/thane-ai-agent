@@ -35,6 +35,22 @@ type EmailMailboxConfig struct {
 	// as Alice; brief; sign with her first name only". It is shown to
 	// the model in the account's Email Accounts entry.
 	Voice string `yaml:"voice"`
+
+	// MoveInto lists where email_move may file this account's mail. An
+	// entry is role:<role>, the folder holding that special-use role
+	// (inbox, sent, trash, junk, archive, all, flagged or important;
+	// junk_folder and trash_folder answer for their roles first), or an
+	// exact folder name; "*" alone allows every folder. Moving mail back
+	// to INBOX out of a listed folder is always allowed, so a move can be
+	// undone. The drafts folder can never be listed. Default: [role:junk]
+	// when owner is operator, so only spam leaves the operator's INBOX,
+	// and ["*"] otherwise.
+	MoveInto []string `yaml:"move_into"`
+
+	// FilingNote is an optional operator-authored sentence, at most 300
+	// bytes, on how this mailbox is filed, shown to the model in the
+	// account's Email Accounts entry.
+	FilingNote string `yaml:"filing_note"`
 }
 
 // MailboxOwner returns the effective owner, applying the default.
@@ -67,5 +83,5 @@ func (a EmailAccountConfig) validateMailbox(i int) error {
 	if n := len(a.Mailbox.Voice); n > maxEmailMailboxVoiceBytes {
 		return fmt.Errorf("email.accounts[%d] (%s): mailbox.voice is %d bytes, over the %d-byte limit; keep it to a short note on how mail from this account should sound", i, a.Name, n, maxEmailMailboxVoiceBytes)
 	}
-	return nil
+	return a.validateFiling(i)
 }

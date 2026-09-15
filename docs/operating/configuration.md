@@ -155,6 +155,13 @@ drafted message carries no `bcc_owner` audit copy, on any account: the
 operator sends it from their own client, under the account's
 `default_from`, and nothing Thane adds rides along. `drafts_folder` names where drafts go
 and defaults to the folder the server marks as drafts, else `Drafts`.
+`junk_folder` and `trash_folder` name, exactly, the folders that hold
+spam and deleted mail, for a server that marks no folder with the
+`\Junk` or `\Trash` special-use attribute; leave them empty to use the
+folder the server marks. They are what `email_move`'s
+`destination_role: junk` and `destination_role: trash` resolve to
+first, and a role that neither a key nor the server answers is refused
+by name rather than guessed.
 `denied_recipient_domains` refuses recipients at those domains and their
 subdomains regardless of trust zone, and `allowed_recipient_domains`,
 when set, refuses every domain outside it. An automated-looking
@@ -192,11 +199,14 @@ the trust gate.
       mailbox:
         owner: operator
         voice: "First person as Alice; brief; sign with her first name only."
+        move_into: [role:junk]   # the default for an operator mailbox
+        filing_note: "Server rules file lists and receipts; INBOX is what is left for Alice."
 ```
 
-Each account's `mailbox` block says whose mailbox it is and how mail
-written from it should sound. It changes nothing about what the model
-may do there or where its mail goes; that is `policy`. `owner` is
+Each account's `mailbox` block says whose mailbox it is, how mail
+written from it should sound, and where `email_move` may file its
+mail. Whether the model may compose or move at all, and where its mail
+goes, is `policy`. `owner` is
 `assistant` (the default), a mailbox Thane keeps for itself or for a
 purpose the operator gave it, or `operator`, the operator's own inbox,
 which Thane helps with but does not own. Any other value is refused at
@@ -205,15 +215,54 @@ the call asks otherwise, and a turn the operator is not present for
 cannot mark mail seen, whether by reading it or with `email_mark`; the
 operator's own turn can. The built-in `email-default-handler` leaves
 operator mail in INBOX, moves only obvious spam from an unmatched sender
-to the folder the server marks with the junk role (a server that marks
-none keeps the spam where it is), flags what needs the operator, and
-neither replies nor drafts. `voice` is a note of at most 500 bytes on
-how mail from the account should sound; a longer one is refused.
+with `destination_role: junk` (an account where neither `junk_folder`
+nor the server names a junk folder keeps the spam where it is), flags
+what needs the operator, and neither replies nor drafts. `voice` is a
+note of at most 500 bytes on how mail from the account should sound; a
+longer one is refused.
+
+`move_into` lists the only folders `email_move` may file this
+account's mail into. An entry is `role:<role>`, the folder holding that
+special-use role (`inbox`, `sent`, `trash`, `junk`, `archive`, `all`,
+`flagged`, or `important`, resolved through `junk_folder` and
+`trash_folder` first, then the server's own marks), or an exact folder
+name; `"*"` on its own allows every folder and cannot be combined with
+other entries. The default is `[role:junk]` on an operator mailbox,
+where the server keeps its own filing tree and only spam leaves INBOX,
+and `["*"]` on every other account, which is how accounts behaved
+before the key existed. Moving mail back to INBOX out of a listed
+folder is always allowed, so a move can be undone and mail rescued from
+junk. The drafts folder can never be listed, by role or by name, and
+`email_move` refuses it as a source too, as `email_mark` does. The
+limit applies in every turn, the operator's own included: it is
+configuration, not a judgment about who asked. An unknown role, an
+empty entry, or `"*"` beside other entries is refused at startup.
+`filing_note` is an optional sentence of at most 300 bytes on how the
+mailbox is filed, shown to the model as written.
+
+In a turn the operator is not present for, a move into the junk folder,
+by role or by name, is also checked message by message: a message whose
+sender is the operator's own contact record, is held by a contact at
+`admin`, `household`, or `trusted`, shares its address with such a
+contact (or with more contacts than the directory could name, any of
+whom might be one), or could not be looked up in the directory stays
+where it is,
+and the rest of the batch moves. The result lists each refused message
+with its sender, zone, reason, and recovery (flag it, and bring it to
+the operator if it cannot wait), and each refusal is logged with the
+loop and conversation that asked. The operator's own turn is not
+checked. No key changes this guard.
 
 The model sees these in the account's Email Accounts entry: `owner`
 (only when it is `operator`), `writes_as` (the full `default_from`,
 display name included), `voice`, and on an operator mailbox
-`reads_mark_seen: false`. An account left at the defaults renders as it
+`reads_mark_seen: false`. On any account whose `move_into` is not
+`["*"]` it also sees `move_into` resolved to folder names, with
+`role:<role>` standing in for a role no folder is known to hold yet.
+Those accounts and every operator mailbox also show `junk_folder`
+(once configuration or the server's folder listing names one);
+`filing_note`
+appears whenever it is set. An account left at the defaults renders as it
 did before the block existed. The example above is one shape for an
 operator's inbox: with `delivery: drafts` and no `smtp`, nothing the
 model writes there is sent. A message the trust gate allows waits in
