@@ -141,10 +141,12 @@ reply, and draft); it defaults to `send` when `smtp` is configured and
 decides what happens once every recipient has passed the trust gate:
 `by_trust_zone` (the default) sends directly to `admin` and `household`
 recipients when the operator is present for the turn, holds mail for `trusted`
-recipients in the Drafts folder for the operator to send from their own
+recipients in the drafts folder for the operator to send from their own
 client, refuses `known` and unknown recipients, and holds everything an
 unattended loop writes, so a poller-woken handler never sends on its own;
-`drafts` holds every message; `direct` sends everything the gate allows,
+`drafts` holds every message, and by default drafts for more recipients
+than the gate allows elsewhere (see `draft_gate` below); `direct` sends
+everything the gate allows,
 including from unattended turns, and should be chosen deliberately. The
 operator is present only for their own message: one sent through Thane's
 native API, or one they wrote in a conversation bound to their own contact.
@@ -153,8 +155,45 @@ conversation, and a call through the Ollama-compatible shim that Home
 Assistant automations and voice satellites use are all unattended. A
 drafted message carries no `bcc_owner` audit copy, on any account: the
 operator sends it from their own client, under the account's
-`default_from`, and nothing Thane adds rides along. `drafts_folder` names where drafts go
-and defaults to the folder the server marks as drafts, else `Drafts`.
+`default_from`, and nothing Thane adds rides along.
+
+`draft_gate` says how the trust gate treats recipients on an account
+whose `delivery` is `drafts`, where the operator reads and sends every
+message by hand. `relaxed`, the default with `delivery: drafts`, drafts
+for anyone a person could answer: a recipient the gate would refuse
+only for its trust zone (an address with no contact record, a `known`
+contact, or an address several records share whose least privileged
+record is at a blocked zone) is drafted instead, and the decision
+records it with gating `draft_only`. An automated mailbox, an address
+the directory could not be consulted for, the recipient-domain rules
+below, and the 50-recipient limit still refuse there, and one refused
+recipient still refuses the whole message. A relaxed account also
+drafts one kind of reply that would otherwise be refused as an
+automatic response (see below). `strict`, the default with every other
+delivery mode, applies the full gate. `relaxed` beside any `delivery`
+other than `drafts` is refused at startup, because a recipient the gate
+relaxed could then be sent to, and so is any value other than those
+two. The model sees `draft_gate: relaxed` in the account's Email
+Accounts entry, whose `drafts_for` then lists every zone and whose
+`refuses` lists none. **Upgrading:** an account already configured with
+`delivery: drafts` becomes relaxed without any change to its file; set
+`draft_gate: strict` to keep the gate it had.
+
+`drafts_folder` names, exactly, the folder drafts go to, for a server
+that marks none with the `\Drafts` special-use attribute; leave it
+empty to use the folder the server marks, found in the cached folder
+listing or, when the cache names none, by one fresh listing. Thane
+never guesses a drafts folder by name. When neither the key nor the
+server names one, a message that would have been drafted, for whatever
+reason, is refused with route `no_drafts_folder`, and nothing is sent
+in its place, on every delivery mode; the model is told to ask the
+operator to configure `drafts_folder`, and, when it asked for the draft
+itself, not to resend the message without `draft: true`. A listing that fails is reported
+as an error rather than as that refusal. `email_mark` and `email_move`
+refuse to act in the drafts folder only once one is known, so on a
+server without special-use attributes set `drafts_folder` to keep those
+guards in force.
+
 `junk_folder` and `trash_folder` name, exactly, the folders that hold
 spam and deleted mail, for a server that marks no folder with the
 `\Junk` or `\Trash` special-use attribute; leave them empty to use the
@@ -172,8 +211,19 @@ automatic or bulk (an `Auto-Submitted` value other than `no`, a
 `List-Id` or any RFC 2369 `List-*` field, or a `Precedence` of
 `bulk`, `list`, or `junk`) is refused with route `automatic_response`
 in every turn the operator is not present for, whatever the
-`delivery` mode and even when a draft was requested; no key changes
-that, and the operator's own turn replies as usual. Every send ends in one of
+`delivery` mode and even when a draft was requested, and the
+operator's own turn replies as usual. The one exception is on an
+account with a relaxed `draft_gate`: an unattended reply to mail marked
+bulk and not `Auto-Submitted`, whose own `To` or `Cc` holds the
+account's address (its `default_from`, else its IMAP username when that
+is an address, compared without regard to case), is drafted with route
+`personally_addressed_list_reply`, because a person on a list answers
+mail addressed to them. List mail that reached the account only through
+the list's address stays refused, and so does anything
+`Auto-Submitted` (automatic replies, bounces, notifications) and mail
+whose only bulk mark is `Precedence: junk`, which classic
+autoresponders set without `Auto-Submitted`; an alias
+or plus address of the account does not count as its address. Every send ends in one of
 three dispositions, `sent`, `drafted`, or `refused`, and the tool result
 or refusal carries the decision that produced it.
 
@@ -265,10 +315,13 @@ Those accounts and every operator mailbox also show `junk_folder`
 appears whenever it is set. An account left at the defaults renders as it
 did before the block existed. The example above is one shape for an
 operator's inbox: with `delivery: drafts` and no `smtp`, nothing the
-model writes there is sent. A message the trust gate allows waits in
-the operator's drafts folder, under their `default_from` and in their
-voice, for them to send; a recipient the gate refuses, such as a
-`known` or unmatched address, is still refused. The built-in handler
+model writes there is sent. Its draft gate is relaxed by default, so a
+draft may go to anyone a person could answer, a `known` or unmatched
+address included, and waits in the operator's drafts folder, under
+their `default_from` and in their voice, for them to review and send;
+an automated mailbox, a failed lookup, and a denied domain are still
+refused. Add `draft_gate: strict` under `policy` to keep the full trust
+gate there. The built-in handler
 only flags on this mailbox and neither replies nor drafts, so drafts
 there come from turns the operator asks for.
 

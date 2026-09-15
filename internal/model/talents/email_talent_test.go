@@ -11,7 +11,7 @@ import (
 // the model to email_folders or the Email Accounts block for the name,
 // because a name taught by example is a name the model files into on a
 // server where it means something else.
-var siteFolderName = regexp.MustCompile(`\b(Archive|Trash|Junk|Spam)\b|\[Gmail\]|All Mail`)
+var siteFolderName = regexp.MustCompile(`\b(Archive|Drafts|Trash|Junk|Spam)\b|\[Gmail\]|All Mail`)
 
 // emailTalentText returns the in-tree email talents (the email trailhead
 // and its leaves), keyed by name, with whitespace collapsed so a phrase
@@ -184,6 +184,79 @@ func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
 		{"hidden text gap told backwards", "showed a reader something other than what reached you"},
 		{"guard claimed to answer a repeat the same way", "the guard answers the same way every time"},
 		{"operator entry claimed to always show move_into", "An operator mailbox always shows it"},
+	}
+	for _, tt := range absent {
+		t.Run(tt.name, func(t *testing.T) {
+			for name, body := range text {
+				if strings.Contains(body, tt.gone) {
+					t.Errorf("talent %s still contains %q", name, tt.gone)
+				}
+			}
+		})
+	}
+}
+
+// TestEmailTalentTeachesDraftsOnlyGate pins the slice 3 teaching: the
+// relaxed draft gate and what it still refuses, writing a draft for the
+// operator to review, the personally addressed list-mail rule and its
+// two refusals, and the refusal when no folder has the drafts role. It
+// also pins that draft: true is not taught as a way past the gate.
+func TestEmailTalentTeachesDraftsOnlyGate(t *testing.T) {
+	text := emailTalentText(t)
+	present := []struct {
+		name   string
+		talent string
+		want   string
+	}{
+		{"trailhead names the relaxed gate", "email", "where the entry shows `draft_gate: \"relaxed\"`, the operator sends every draft by hand"},
+		{"trailhead keeps the refusals", "email", "An `automated` mailbox, a failed lookup, and any recipient the account's recipient-domain rules refuse are refused there too"},
+		{"draft_only by bare address", "email_respond", "The draft names such a recipient by bare address, dropping any display name"},
+		{"report what the directory holds", "email_respond", "what the directory holds for each `draft_only` recipient"},
+		{"junk-only stays refused", "email_respond", "mail whose only bulk mark is `Precedence: junk`, which classic autoresponders put on their replies"},
+		{"judge automatic replies by content", "email_respond", "read the body, and do not answer an automatic reply"},
+		{"requested draft keeps its flag", "email_respond", "If you asked for the draft with `draft: true`, do not resend it without the flag"},
+		{"trailhead list-mail exception", "email", "list mail that names the account's own address in its `to` or `cc` can be answered as a draft"},
+		{"triage list-mail exception", "email_triage", "apart from the one list-mail case that `email_respond` drafts"},
+		{"respond section", "email_respond", "## A drafts-only account"},
+		{"anyone a person could answer", "email_respond", "a draft may go to anyone a person could answer"},
+		{"zone-only refusals draft", "email_respond", "A recipient refused only for its zone"},
+		{"recipient gating", "email_respond", "It shows `gating: \"draft_only\"` in `decision.recipients`"},
+		{"entry refuses nothing", "email_respond", "`drafts_for` lists every zone and its `refuses` is empty"},
+		{"what stays refused", "email_respond", "an `automated` mailbox, a `lookup_failed` address (retry later), an address that does not parse, a domain the account's recipient-domain rules deny or leave out, and more than 50 recipients"},
+		{"still all-or-nothing", "email_respond", "one of those beside a stranger refuses the whole message"},
+		{"draft true does not relax", "email_respond", "`draft: true` does not relax it anywhere"},
+		{"draft true holds, never admits", "email_respond", "It holds, and it never admits"},
+		{"write it for review", "email_respond", "A draft there is the operator's to send, so write it for them to review."},
+		{"finished message, not a note", "email_respond", "write the finished message, never a note about one"},
+		{"review context goes in the report", "email_respond", "put what they need to know before sending in your report to them instead"},
+		{"list-mail rule", "email_respond", "whose own `to` or `cc` names the account's own address"},
+		{"list-mail route", "email_respond", "`decision.route` `personally_addressed_list_reply`, `draft: true` or not"},
+		{"list-only stays refused", "email_respond", "list mail that reached the account only through a list address"},
+		{"aliases do not count", "email_respond", "an alias or a plus address does not count as named"},
+		{"auto_submitted stays refused", "email_respond", "anything `auto_submitted`, such as an automatic reply, a bounce, or a notification"},
+		{"reply_to may be the list", "email_respond", "a list that sets its own address as the `reply_to` puts the whole list in the draft's `to`"},
+		{"drafted route list", "email_respond", "or `personally_addressed_list_reply` (list mail addressed to the account"},
+		{"refused route list", "email_respond", "`no_drafts_folder` (the message would have been drafted, but no folder on the account has the drafts role"},
+		{"no drafts folder section", "email_respond", "## When no folder holds drafts"},
+		{"resolution order", "email_respond", "the account's configured `drafts_folder`, else the folder the server marks as drafts, found in the cached folder listing or by one fresh listing"},
+		{"no guessed name", "email_respond", "Go never guesses a name."},
+		{"nothing sent instead", "email_respond", "nothing is sent in its place, on any delivery mode"},
+		{"operator configures drafts_folder", "email_respond", "Only the operator can close the gap, by configuring `drafts_folder`"},
+	}
+	for _, tt := range present {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(text[tt.talent], tt.want) {
+				t.Errorf("talent %s must contain %q", tt.talent, tt.want)
+			}
+		})
+	}
+
+	absent := []struct {
+		name string
+		gone string
+	}{
+		{"drafts folder by a site name", "held in Drafts"},
+		{"requested draft by a site name", "holds the message in Drafts"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {

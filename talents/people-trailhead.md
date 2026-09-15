@@ -24,7 +24,7 @@ Choose the next move deliberately:
 - If the relationship thread lives in inbox history or email
   correspondence rather than chat, activate `email` — it branches
   into triage (read), respond (compose; the account's policy and the
-  recipients' trust zones decide direct send, Drafts for the operator,
+  recipients' trust zones decide direct send, a draft for the operator,
   or refusal), and organize (mark/move).
 - If `owner` is already present and authenticated owner identity
   matters, use it as trustworthy ground truth.
