@@ -592,6 +592,13 @@ Prefer `doc_move` to a `scratchpad:archive/` ref over `doc_delete` when
 the content might still be useful as reference. Delete is for things
 that should be gone, not things that should be quiet.
 
+Neither tool touches a document its root accepts only through a
+narrower owner, such as a contact dossier owned by
+`contact_dossier_write`: the call is refused, names the owning tool, and
+changes nothing. Change what such a document says through its owner. If
+it should be retired or relocated, that is the operator's call, so
+report it rather than looking for another door.
+
 ---
 name: documents_curate
 tags: [documents_curate]

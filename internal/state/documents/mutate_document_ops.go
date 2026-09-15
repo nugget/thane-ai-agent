@@ -109,6 +109,9 @@ func (s *Store) Delete(ctx context.Context, args DeleteArgs) (*DeleteResult, err
 		}
 		return nil, err
 	}
+	if err := s.refuseManagedLifecycle("doc_delete", args.Ref, root, record); err != nil {
+		return nil, err
+	}
 
 	if err := s.removeDocumentFile(ctx, root, relPath); err != nil {
 		if os.IsNotExist(err) {
@@ -157,6 +160,9 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
 		}
 		return nil, fmt.Errorf("read source document: %w", err)
+	}
+	if err := s.refuseManagedLifecycle("doc_move", args.Ref, srcRoot, sourceRecord); err != nil {
+		return nil, err
 	}
 
 	destinationExists := false

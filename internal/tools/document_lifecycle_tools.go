@@ -10,7 +10,7 @@ import (
 func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 	r.Register(&Tool{
 		Name:                 "doc_delete",
-		Description:          "Delete one managed markdown document by semantic ref like `kb:article.md`. Use when a document should leave the managed corpus entirely; the tool removes the file and updates the document index for you.",
+		Description:          "Delete one managed markdown document by semantic ref like `kb:article.md`. Use when a document should leave the managed corpus entirely; the tool removes the file and updates the document index for you. A document its root accepts only through a narrower owning tool, such as a contact dossier owned by contact_dossier_write, is refused with an error naming that tool, and nothing is deleted.",
 		ContentResolveExempt: []string{"ref"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -33,7 +33,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_move",
-		Description:          "Move or rename a managed markdown document to a new semantic ref. Use when the document should live under a new root or path without dropping down to raw file operations.",
+		Description:          "Move or rename a managed markdown document to a new semantic ref. Use when the document should live under a new root or path without dropping down to raw file operations. A document its root accepts only through a narrower owning tool, such as a contact dossier owned by contact_dossier_write, is refused with an error naming that tool, and nothing moves.",
 		ContentResolveExempt: []string{"ref", "destination_ref", "overwrite"},
 		Parameters: map[string]any{
 			"type": "object",

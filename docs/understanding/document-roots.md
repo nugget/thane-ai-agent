@@ -729,13 +729,20 @@ Contact lifecycle does not rename or silently erase this history:
   one. A duplicate above `known`, the
   operator's own, or bound to a Home Assistant person is forgotten only by
   the operator.
-  The duplicate dossier is retained unless the operator explicitly archives it
-  with `doc_move` to another suitable managed root or removes it with
-  `doc_delete`.
-- `doc_move` and `doc_delete` are recovery and lifecycle operations, not normal
-  dossier-authoring doors. A deletion removes the live document but remains a
-  signed deletion in the source root's Git history; forgetting or merging a
-  structured contact never performs that step automatically.
+  The duplicate dossier is retained unless the operator explicitly archives or
+  removes it in the contacts root's repository.
+- `doc_move` and `doc_delete` refuse a dossier stamped
+  `managed_by: contact_dossier_write` and name that tool. They refuse any
+  document stamped with an owner narrower than `doc_write` in a root whose
+  write validator enforces a domain contract, because a generic delete would
+  retire the document without its owner and a move would carry it out of the
+  validated root. Retiring or relocating a managed dossier is an operator
+  action in the root's Git repository, where it remains a signed change;
+  forgetting or merging a structured contact never performs that step
+  automatically. A legacy dossier stamped `managed_by: doc_write`, or not
+  stamped at all, can still be moved or deleted with the document tools, as
+  can a managed document in an ordinary root, such as a deleted loop's
+  outputs.
 
 An existing installation can seed historical stewardship explicitly through
 `POST /v1/archive/contact-dossier-backfill`. Each call handles at most 200

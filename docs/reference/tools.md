@@ -312,8 +312,8 @@ wake lands it.
 | `doc_body_write` | Write one undifferentiated Markdown body for the unusual document that intentionally has no projection ladder. It cannot create a nested `dossiers:` target. |
 | `doc_edit` | Targeted edit within an ordinary document, with automatic stale-write protection; faceted and contract-owned documents use their returned `write_tool`. |
 | `doc_copy` | Copy a document to another location. |
-| `doc_move` | Move or rename a document. |
-| `doc_delete` | Delete a document. |
+| `doc_move` | Move or rename a document; refuses, naming the owning tool, a document its root accepts only through a narrower owner (a contact dossier). |
+| `doc_delete` | Delete a document; refuses, naming the owning tool, a document its root accepts only through a narrower owner (a contact dossier). |
 | `doc_copy_section` | Copy one named section into an ordinary destination; faceted destinations reject partial mutation. |
 | `doc_move_section` | Move one named section between ordinary documents; faceted sources or destinations reject partial mutation. |
 | `doc_journal_update` | Append or update an ordinary journal-style entry, with automatic stale-write protection. |
