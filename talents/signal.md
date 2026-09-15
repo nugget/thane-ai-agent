@@ -23,9 +23,22 @@ the automatic reply (no double-send). So the rule isn't "calling
 the tool causes a duplicate" — it's "the tool replaces the bridge
 reply, so be deliberate about what you actually want to send."
 
+A loop wake on the Signal thread (a loop reached you through the
+loop bus and nobody sent a new message) follows the same rule: your
+final text is sent to them word for word, even a note to yourself.
+When nothing should reach them from that turn, call
+`signal_hold_reply` with your reason, and the bridge sends nothing,
+whatever the final text says. Leaving the final text empty is not a
+hold: the runtime asks you to respond, and what you write then is
+sent. The hold is offered only on those wake turns, because every
+other Signal turn answers something they sent. Holding the Signal
+message does not answer the loop that woke you; that reply still goes
+through `loop_wake`.
+
 | Situation | Right move |
 |---|---|
 | Reply to the Signal message the user just sent | Just respond as your final text — the bridge sends it |
+| A loop woke you and nothing should reach them right now | `signal_hold_reply` with your reason — otherwise your final text is sent |
 | Send a *proactive* message that isn't a reply (initiate outbound, follow up after the conversation ended) | `signal_send_message` |
 | Send a *second* message in addition to your reply (e.g., a long reply split for readability) | First `signal_send_message`, then either let the bridge reply or call again |
 | React to a specific message with an emoji | `signal_send_reaction` |
@@ -36,7 +49,8 @@ The cleanest test: *if I do nothing extra, will the bridge send the
 right thing?* If yes, just answer and let the bridge handle it. If
 no — the message goes to a different recipient, or you need to send
 multiple things, or you want to send *before* the final reply text
-— `signal_send_message` is the right path.
+— `signal_send_message` is the right path. If a loop woke you and the
+right thing to send is nothing, `signal_hold_reply` is.
 
 ## Constants
 

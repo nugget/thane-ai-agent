@@ -795,6 +795,19 @@ func (n *conversationSystemInjector) IsSessionAlive(conversationID string) bool 
 	return n.archiver.ActiveSessionID(conversationID) != ""
 }
 
+// signalReplyNoteRecorder returns the Signal bridge's RecordNote hook,
+// given the conversation store's AddMessage. The bridge calls it for a
+// wake turn whose final text was not sent. The note is stored as a
+// system row with OriginInternal, which later turns render as a framed
+// memory note (not_active_instruction) rather than as something said on
+// Signal. Unlike InjectSystemMessage it drops nothing silently: a store
+// error reaches the bridge, which logs it.
+func signalReplyNoteRecorder(addMessage func(conversationID, role, content, origin string) error) func(conversationID, note string) error {
+	return func(conversationID, note string) error {
+		return addMessage(conversationID, "system", note, memory.OriginInternal)
+	}
+}
+
 // notifDelegateSpawner adapts the delegate executor into a
 // [notifications.DelegateSpawner].
 type notifDelegateSpawner struct {

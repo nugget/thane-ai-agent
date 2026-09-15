@@ -692,10 +692,13 @@ Declared via a Provider with async binding; handlers return
 signal-cli isn't connected. In inbound Signal conversations, final
 response text is sent automatically by the bridge; prefer
 `message_channel` for in-channel reactions and reserve these native
-tools for Signal-specific workflows.
+tools for Signal-specific workflows. On a turn opened by a loop wake,
+`signal_hold_reply` is the only way to end the turn without sending
+the final text.
 
 | Tool | Description |
 |------|-------------|
+| `signal_hold_reply` | Runtime tool offered only on Signal loop-notification wake turns: send nothing to the person on the thread, with a required reason that is logged and stored in the conversation. |
 | `signal_send_message` | Send a Signal message to a phone number. |
 | `signal_send_reaction` | React to an inbound Signal message. |
 

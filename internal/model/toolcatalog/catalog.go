@@ -323,6 +323,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"session_split":                 {CanonicalID: "native:session_split", Source: NativeToolSource, Tags: []string{"session"}},
 	"session_working_memory":        {CanonicalID: "native:session_working_memory", Source: NativeToolSource, Tags: []string{"memory"}},
 	"send_notification":             {CanonicalID: "native:send_notification", Source: NativeToolSource, Tags: []string{"notifications"}},
+	"signal_hold_reply":             {CanonicalID: "native:signal_hold_reply", Source: NativeToolSource, Tags: []string{"signal"}},
 	"signal_send_message":           {CanonicalID: "native:signal_send_message", Source: NativeToolSource, Tags: []string{"signal"}},
 	"signal_send_reaction":          {CanonicalID: "native:signal_send_reaction", Source: NativeToolSource, Tags: []string{"signal"}},
 	"web_fetch":                     {CanonicalID: "native:web_fetch", Source: NativeToolSource, Tags: []string{"web"}},
