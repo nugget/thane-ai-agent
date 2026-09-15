@@ -17,7 +17,7 @@ import (
 // siteFolderName matches a folder name some server happens to use, as
 // opposed to a role. Model-facing text names roles and sends the model
 // to the folder listing for the name.
-var siteFolderName = regexp.MustCompile(`\b(Archive|Trash|Junk|Spam)\b|\[Gmail\]|All Mail`)
+var siteFolderName = regexp.MustCompile(`\b(Archive|Drafts|Trash|Junk|Spam)\b|\[Gmail\]|All Mail`)
 
 // TestAccessRefusalNamesNoOtherAccount pins the refusal an account that
 // cannot compose returns: it says the message belongs to this mailbox
@@ -487,6 +487,15 @@ func TestModelFacingEmailTextNamesNoSiteFolder(t *testing.T) {
 		{Name: "a", Policy: PolicyConfig{Access: AccessRead}},
 	} {
 		walk("accessRefusalSentence", accessRefusalSentence(cfg))
+	}
+	relaxed := AccountConfig{Name: "a", DefaultFrom: "a@example.com", Policy: PolicyConfig{Access: AccessSend, Delivery: DeliveryDrafts}}
+	walk("noDraftsFolderReason", noDraftsFolderReason(relaxed, false))
+	walk("noDraftsFolderReason requested", noDraftsFolderReason(relaxed, true))
+	for _, marks := range []HeaderMarks{{Bulk: true}, {Bulk: true, listReplyBar: listReplyBarJunk}, {Bulk: true, listReplyBar: listReplyBarListFields}, {AutoSubmitted: AutoSubmittedReplied}} {
+		walk("automaticResponseReason", automaticResponseReason(marks, listReplyGap(relaxed, marks)))
+	}
+	for _, status := range []ContactStatus{ContactUnmatched, ContactMatched, ContactAmbiguous} {
+		walk("draftOnlyReason", draftOnlyReason(RecipientAssessment{ContactStatus: status, TrustZone: "known"}))
 	}
 	_, err := svc.ToolProvider().HandleMove(context.Background(), map[string]any{"uid": float64(1)})
 	if err == nil {

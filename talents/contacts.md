@@ -164,7 +164,10 @@ ordinary documents instead.
   account and for this turn, which zones it `sends_directly_to`,
   `drafts_for`, and `refuses`, and a refusal's `decision.recipients`
   names each recipient at issue with its recovery. The gate is
-  all-or-nothing: any refused recipient refuses the whole message.
+  all-or-nothing: any refused recipient refuses the whole message. An
+  account whose entry shows `draft_gate: "relaxed"` drafts, rather
+  than refuses, a recipient refused only for its zone, `known`
+  included, because the operator sends every draft there by hand.
 - For Signal messages, the same contact directory backs sender
   recognition; activate `signal` for the messaging side.
 - For "what did this person and I last discuss" beyond what's in the

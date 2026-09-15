@@ -26,13 +26,18 @@ type SendRequest struct {
 	InReplyTo  string
 	References []string
 
-	// Draft asks for the message to be held in Drafts regardless of
-	// what the policy would have done.
+	// Draft asks for the message to be held in the account's drafts
+	// folder regardless of what the policy would have done.
 	Draft bool
 
 	// Original is the header marks of the message being replied to; it
 	// is zero for email_send.
 	Original HeaderMarks
+
+	// OriginalRecipients is the To and Cc of the message being replied
+	// to, which says whether list mail named the account personally; it
+	// is nil for email_send.
+	OriginalRecipients []Address
 }
 
 // SendOutcome is what happened to a message that was not refused.
@@ -76,13 +81,19 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	// An unattended reply to mail whose own headers mark it automatic
 	// or bulk would be an automatic response (RFC 3834 §2). It is
 	// refused in every delivery mode, a requested draft included, and
-	// whatever the recipients' zones.
+	// whatever the recipients' zones, with one exception that only
+	// drafts: list mail addressed to a relaxed drafts-only account in
+	// its own To or Cc, which a person reads and sends by hand.
+	listReply := false
 	if req.Original.Marked() {
 		decision.Original = req.Original
 		if !decision.Attended {
-			decision.Route = RouteAutomaticResponse
-			decision.Reason = automaticResponseReason(req.Original)
-			return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+			if !personallyAddressedListReply(cfg, req.Original, req.OriginalRecipients) {
+				decision.Route = RouteAutomaticResponse
+				decision.Reason = automaticResponseReason(req.Original, listReplyGap(cfg, req.Original))
+				return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+			}
+			listReply = true
 		}
 	}
 	if n := len(req.To) + len(req.Cc); n > maxRecipients {
@@ -92,6 +103,10 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	}
 
 	trust := CheckRecipientTrust(ctx, s.contacts, slices.Concat(req.To, req.Cc))
+	// The relaxation must come first: applyDomainRules skips recipients
+	// already refused, so only a recipient relaxed before it can be
+	// refused again for its domain.
+	relaxForDraftsOnly(&trust, cfg)
 	applyDomainRules(&trust, cfg.Policy)
 	if trust.Assessments != nil {
 		decision.Recipients = trust.Assessments
@@ -101,13 +116,37 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		decision.Reason = trustRefusalSentence(trust)
 		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
+	// The draft names a draft_only recipient by bare address, so the
+	// operator about to send it sees where it goes.
+	req.To, req.Cc = withoutDraftOnlyNames(req.To, trust.Assessments), withoutDraftOnlyNames(req.Cc, trust.Assessments)
 	decision.Gating = mostRestrictive(trust.Assessments)
 	decision.Disposition, decision.Route = routeDelivery(cfg.DeliveryMode(), decision.Gating, decision.Attended, req.Draft)
+	if listReply {
+		// The exemption decided this reply, and it only ever drafts.
+		decision.Disposition, decision.Route = DispositionDrafted, RoutePersonallyAddressedListReply
+	}
 	if decision.Disposition == DispositionSent && !cfg.SMTPConfigured() {
 		decision.Disposition = DispositionRefused
 		decision.Route = RouteNoSMTP
 		decision.Reason = fmt.Sprintf("Email not sent: account %q has no smtp configured, so it can only draft; retry with draft: true, and do not write the message from any other account.", cfg.Name)
 		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+	}
+	// A draft needs a folder with the drafts role. Without one the
+	// message is refused here, before it is composed or inspected, and
+	// never sent in the draft's place.
+	var draftsFolder string
+	if decision.Disposition == DispositionDrafted {
+		folder, err := s.sendDraftsFolder(ctx, req.Account)
+		if err != nil {
+			s.logDecision(ctx, req, decision, SendOutcome{}, err)
+			return SendOutcome{}, err
+		}
+		if folder == "" {
+			decision.Route = RouteNoDraftsFolder
+			decision.Reason = noDraftsFolderReason(cfg, req.Draft)
+			return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
+		}
+		draftsFolder = folder
 	}
 
 	// The audit copy rides only mail Thane delivers. A draft carries
@@ -167,16 +206,15 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	outcome := SendOutcome{Composed: composed, BccCount: len(bcc)}
 	switch decision.Disposition {
 	case DispositionDrafted:
-		folder := s.draftsFolder(ctx, req.Account)
-		appended, err := req.Account.Client.AppendMessage(ctx, folder, composed.Bytes, []imap.Flag{imap.FlagDraft, imap.FlagSeen})
+		appended, err := req.Account.Client.AppendMessage(ctx, draftsFolder, composed.Bytes, []imap.Flag{imap.FlagDraft, imap.FlagSeen})
 		if err != nil {
-			decision.DraftsFolder = folder
-			err = fmt.Errorf("hold message in drafts folder %q of account %q: %w", folder, cfg.Name, err)
+			decision.DraftsFolder = draftsFolder
+			err = fmt.Errorf("hold message in drafts folder %q of account %q: %w", draftsFolder, cfg.Name, err)
 			s.logDecision(ctx, req, decision, outcome, err)
 			return SendOutcome{}, err
 		}
-		decision.DraftsFolder = folder
-		outcome.DraftsFolder = folder
+		decision.DraftsFolder = draftsFolder
+		outcome.DraftsFolder = draftsFolder
 		outcome.DraftUID = appended.UID
 	case DispositionSent:
 		wire := composed.Bytes
@@ -298,10 +336,11 @@ func originalAttrs(original HeaderMarks) []any {
 
 // automaticResponseReason explains an unattended reply refused because
 // the original's own headers mark it automatic or bulk, and names the
-// only moves that work.
-func automaticResponseReason(original HeaderMarks) string {
+// only moves that work. gap is the clause naming why the list-mail rule
+// did not apply, or empty where the account has no such rule.
+func automaticResponseReason(original HeaderMarks, gap string) string {
 	return "Email not sent: the original message's own headers mark it as " + original.describe() +
-		", so a reply written while the operator is not present would be an automatic response, which is neither sent nor drafted (RFC 3834); do not retry it or send it fresh with email_send, " +
+		", so a reply written while the operator is not present would be an automatic response, which is neither sent nor drafted (RFC 3834)" + gap + "; do not retry it or send it fresh with email_send, " +
 		"but file the message and, if it needs an answer, bring it to the operator with request_core_attention so they can reply in their own turn."
 }
 
@@ -374,38 +413,6 @@ func (s *Service) auditCopy(to, cc []string) ([]string, error) {
 		}
 	}
 	return []string{owner}, nil
-}
-
-// draftsFolder returns where an account's drafts go: the configured
-// folder, else the folder the server marks \Drafts (listing the account
-// when nothing is cached yet), else "Drafts".
-func (s *Service) draftsFolder(ctx context.Context, acct ResolvedAccount) string {
-	if folder := s.knownDraftsFolder(acct.Config); folder != "" {
-		return folder
-	}
-	if _, ok := s.cachedFolders(acct.Name); !ok {
-		if _, err := s.listFolders(ctx, acct); err == nil {
-			if folder := s.knownDraftsFolder(acct.Config); folder != "" {
-				return folder
-			}
-		}
-	}
-	return "Drafts"
-}
-
-// knownDraftsFolder resolves an account's drafts folder without
-// touching the server: the configured folder, else the folder the
-// cached listing marks \Drafts, else empty when neither is known yet.
-func (s *Service) knownDraftsFolder(cfg AccountConfig) string {
-	if configured := strings.TrimSpace(cfg.DraftsFolder); configured != "" {
-		return configured
-	}
-	if snap, ok := s.cachedFolders(cfg.Name); ok {
-		if f, found := FindFolderByRole(snap.Folders, RoleDrafts); found {
-			return f.Name
-		}
-	}
-	return ""
 }
 
 // recordOutboundInteractions notes, once per matched recipient, that

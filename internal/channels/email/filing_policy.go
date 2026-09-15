@@ -83,8 +83,8 @@ func (s *Service) resolveMoveDestination(ctx context.Context, acct ResolvedAccou
 		if drafts != "" {
 			return drafts, nil
 		}
-		s.logMoveRefusal(ctx, acct, "drafts_destination", "", string(req.role))
-		return "", fmt.Errorf("email_move cannot file mail by destination_role %q on account %q: the drafts folder is never a destination. Pick another destination, or report the need; nothing was moved", req.role, acct.Name)
+		s.logMoveRefusal(ctx, acct, "drafts_destination", normalizeFolder(req.opts.Folder), string(req.role))
+		return "", fmt.Errorf("email_move never files mail by destination_role drafts on account %q: drafts is not among destination_role's values, because a message moved into the drafts role would look like a draft waiting for the operator to send or discard, and nothing was moved. Pick another destination, or report the need", acct.Name)
 	}
 	folder := r.folder(ctx, req.role)
 	if r.err != nil {

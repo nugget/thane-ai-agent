@@ -71,6 +71,11 @@ type accountView struct {
 	Access   string `json:"access"`
 	Delivery string `json:"delivery"`
 
+	// DraftGate is "relaxed" on an account whose delivery is drafts and
+	// whose trust gate drafts for recipients it would refuse only for
+	// their zone, and omitted on every other account.
+	DraftGate string `json:"draft_gate,omitempty"`
+
 	// CanSend is whether the account may hand mail to SMTP itself:
 	// access is send and smtp is configured.
 	CanSend bool `json:"can_send"`
@@ -161,6 +166,9 @@ func (p *ContextProvider) buildContext(bound string, isAttended bool) (string, e
 			DraftsFor:               routing.DraftsFor,
 			Refuses:                 routing.Refuses,
 			Bound:                   bound != "",
+		}
+		if cfg.RelaxedDraftGate() {
+			view.DraftGate = DraftGateRelaxed
 		}
 		view.Address = accountAddress(cfg)
 		view.mailboxView = newMailboxView(cfg)

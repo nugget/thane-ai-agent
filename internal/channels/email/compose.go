@@ -49,8 +49,8 @@ type Composed struct {
 	Bytes []byte
 
 	// MessageID is the generated Message-ID without angle brackets. It
-	// is the key under which the message can be found in a Sent or
-	// Drafts folder and the value a reply's In-Reply-To will carry.
+	// is the key under which the message can be found in a sent or
+	// drafts folder and the value a reply's In-Reply-To will carry.
 	MessageID string
 
 	// From, To, and Cc are the parsed header addresses.

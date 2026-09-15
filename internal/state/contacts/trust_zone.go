@@ -18,8 +18,8 @@ const (
 	// Frontier model access, safe tool subset, limited proactive
 	// outreach. Its SendGating is "confirmation": under an email
 	// account's default by_trust_zone delivery, mail to a trusted
-	// recipient is held in Drafts for the operator, while an account the
-	// operator configured for direct delivery sends it.
+	// recipient is held in the drafts folder for the operator, while an
+	// account the operator configured for direct delivery sends it.
 	ZoneTrusted = "trusted"
 
 	// ZoneKnown is the default zone for contacts with a record but

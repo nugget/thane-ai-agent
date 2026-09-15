@@ -37,3 +37,9 @@ const (
 	DeliveryDrafts      = platformconfig.EmailDeliveryDrafts
 	DeliveryDirect      = platformconfig.EmailDeliveryDirect
 )
+
+// Draft gates, in the email package's vocabulary.
+const (
+	DraftGateRelaxed = platformconfig.EmailDraftGateRelaxed
+	DraftGateStrict  = platformconfig.EmailDraftGateStrict
+)

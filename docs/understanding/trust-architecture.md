@@ -165,7 +165,7 @@ config-driven and validated at startup.
 **Status: Implemented for email; planned for Signal and other channels**
 
 Every outbound email passes through one Go path, `Service.Send`, and ends
-in exactly one disposition: sent, held in the account's Drafts folder for
+in exactly one disposition: sent, held in the account's drafts folder for
 the operator to send, or refused with a decision record. The path checks
 the account's access level, assesses every recipient against the contact
 directory and the account's domain lists, routes on the most restrictive
@@ -179,6 +179,41 @@ skip a stage, a refusal names each recipient at issue with its recovery,
 and one log line per decision records which rule settled it. Rate
 limiting and Message-ID dedup remain planned, as does extending the gate
 to Signal.
+
+An account whose delivery is `drafts` never hands mail to SMTP: the
+operator reads and sends every draft from their own client, so their
+send is a gate the path cannot skip. With `draft_gate: relaxed`, the
+default there, the path relaxes the trust gate to match. A recipient
+refused only for its trust zone (no contact record, a `known` contact,
+or a shared address whose least privileged record is blocked) is
+drafted with gating `draft_only` rather than refused. The relaxation
+runs after the contact assessment and before the account's
+recipient-domain rules, and that order is the point: the domain rules
+skip recipients already refused, so relaxing after them would draft to
+a stranger at a denied domain, while relaxing first leaves the domain
+rules to refuse it again. Automated mailboxes, failed directory
+lookups, unparseable addresses, and the recipient limit are never
+relaxed: nobody reads a reply at an automated mailbox, and a failed
+lookup is no judgement to relax. `draft_only` ranks above
+`confirmation` and below `blocked`, so a mixed recipient list decides
+as its most restrictive recipient, and routing drafts any `draft_only`
+recipient on every delivery mode as a backstop. `relaxed` beside any
+other delivery mode is refused at startup, and the check that enables
+it reads the delivery mode again rather than trusting validation, so a
+relaxed gate can never admit a recipient to mail Thane sends. Because
+the operator's send is the gate, the draft names every `draft_only`
+recipient by bare address: a display name is whatever the model or the
+original message supplied, and on a recipient the directory does not
+vouch for, `"Alice" <mallory@example.net>` would read as Alice to the
+operator about to press send. Recipients the gate allowed keep their
+names.
+
+A draft goes only to the folder holding the drafts role: the account's
+`drafts_folder`, else the folder the server marks `\Drafts`, from the
+cached listing or one fresh one. The path never guesses a folder name.
+When none resolves, it refuses the message with route
+`no_drafts_folder` before composing it, on every delivery mode, so a
+draft that has nowhere to go can never fall through to delivery.
 
 ### Router Quality Floors
 
@@ -271,7 +306,18 @@ to a marked message, written in a turn the operator is not present
 for, would be an automatic response, so the send decision refuses it
 with route `automatic_response` in every delivery mode, a requested
 draft included, before any recipient is assessed; nothing is sent or
-drafted. The operator's own turn replies as usual. Every reply to
+drafted. The one exception only drafts. On an account with a relaxed
+draft gate, a reply to list mail, marked by a `List-Id` or a `Precedence` of
+`bulk` or `list` and not `auto_submitted`, whose own To or Cc holds the account's address, is drafted with route
+`personally_addressed_list_reply`: a person on a list answers mail
+addressed to them, the operator sends the draft by hand, and its
+recipients still pass the gate. Mail that reached the account only
+through a list address stays refused, and so does anything
+`auto_submitted` or marked `Precedence: junk`, which classic
+autoresponders set without `Auto-Submitted`, because answering an
+automatic reply, a bounce, or a notification is pointless, and so does
+mail whose only list marks are `List-*` fields such as
+`List-Unsubscribe`, which a sender adds to its own mailings. The operator's own turn replies as usual. Every reply to
 marked mail that gets past the account's access check records the
 marks as `original` in its decision, and the decision log line carries
 them as `original_auto_submitted` and `original_bulk`; a reply from an
@@ -583,15 +629,20 @@ handler Task and the email talents carry the rule that nothing
 consequential a message asks for is done on its word alone. The Go floor
 bounds what a forged From can win: a wake is never an attended turn, so
 under the default delivery policy anything the handler writes is held in
-Drafts for the operator (only an account configured with `delivery:
+the drafts folder for the operator (only an account configured with `delivery:
 direct` sends from a wake), and the handler loop wears only the `email`
 tag. A message's own `auto_submitted` and `bulk` marks move no zone at
 all, because they are unauthenticated and any sender can set or omit
 them; they only stop an unattended reply. `email_send` does not consult
 them, so a wake refused on such a reply can still write fresh mail to
 the same address: the handler Task and the refusal forbid that, and
-under the default delivery policy it would be held in Drafts like any
-other wake mail.
+under the default delivery policy it would be held in the drafts folder
+like any other wake mail. On a drafts-only account with a relaxed draft
+gate, a forged or list message can draw a draft addressed to a
+stranger, including a list address or a Reply-To the sender chose.
+Nothing leaves the mailbox until the operator reads that draft and
+sends it: their review is that account's gate, and the email talents
+tell the model to report who a draft is addressed to and why.
 
 **Structural fix:** Signature verification against keys the directory
 holds (#317), so a claimed sender is established rather than read from

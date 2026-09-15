@@ -66,7 +66,7 @@ func TestDraftsProtectionResolvesByRoleAndFailsClosed(t *testing.T) {
 		{"a folder without the role is ordinary, whatever its name", draftsRoleFolder, 0, "Drafts", (*Tools).HandleMove, dest("Receipts"), nil},
 		{"no drafts folder: a move goes through", "", 0, "Drafts", (*Tools).HandleMove, dest("Receipts"), nil},
 		{"no drafts folder: a mark goes through", "", 0, "Drafts", (*Tools).HandleMark, flagged, nil},
-		{"no drafts folder: destination_role drafts is refused", "", 0, "INBOX", (*Tools).HandleMove, byRole, []string{`email_move cannot file mail by destination_role "drafts" on account "primary": the drafts folder is never a destination`, "nothing was moved"}},
+		{"no drafts folder: destination_role drafts is refused", "", 0, "INBOX", (*Tools).HandleMove, byRole, []string{`email_move never files mail by destination_role drafts on account "primary"`, "drafts is not among destination_role's values", "nothing was moved"}},
 		{"failed LIST refuses a move out of the drafts folder", draftsRoleFolder, persistent, draftsRoleFolder, (*Tools).HandleMove, dest("Receipts"), moved},
 		{"failed LIST refuses a move out of INBOX", draftsRoleFolder, persistent, "INBOX", (*Tools).HandleMove, dest("Receipts"), moved},
 		{"failed LIST refuses a mark in the drafts folder", draftsRoleFolder, persistent, draftsRoleFolder, (*Tools).HandleMark, flagged, changed},

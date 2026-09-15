@@ -29,11 +29,11 @@ const (
 const (
 	// EmailDeliveryByTrustZone sends directly to admin and household
 	// recipients when the operator is present for the turn, holds mail for
-	// trusted recipients in Drafts, refuses known and unknown ones,
-	// and holds everything an unattended loop writes.
+	// trusted recipients in the drafts folder, refuses known and unknown
+	// ones, and holds everything an unattended loop writes.
 	EmailDeliveryByTrustZone = "by_trust_zone"
 
-	// EmailDeliveryDrafts holds every message in Drafts.
+	// EmailDeliveryDrafts holds every message in the drafts folder.
 	EmailDeliveryDrafts = "drafts"
 
 	// EmailDeliveryDirect sends everything the gate allows.
@@ -99,10 +99,11 @@ type EmailAccountConfig struct {
 	// Leave empty to keep no server-side copy.
 	SentFolder string `yaml:"sent_folder"`
 
-	// DraftsFolder is the IMAP folder that receives messages held for the
-	// operator to send, for example "Drafts" or "[Gmail]/Drafts". Leave
-	// empty to use the folder the server marks as its drafts folder, or
-	// "Drafts" when it marks none.
+	// DraftsFolder is the exact name of the IMAP folder that receives
+	// messages held for the operator to send, for a server that marks no
+	// folder with the \Drafts special-use attribute. Leave empty to use
+	// the folder the server marks. When neither names one, a message the
+	// policy would draft is refused; nothing is sent in its place.
 	DraftsFolder string `yaml:"drafts_folder"`
 
 	// JunkFolder is the exact name of the folder that holds spam, for a
@@ -125,7 +126,7 @@ type EmailAccountConfig struct {
 
 // EmailPolicyConfig is one account's access level and delivery policy.
 // Every outbound message ends in exactly one disposition: sent, held
-// in Drafts for the operator, or refused with a record of why.
+// in the drafts folder for the operator, or refused with a record of why.
 type EmailPolicyConfig struct {
 	// Access is the most the model may do with this account: "read"
 	// (list, search, and read without marking messages seen),
@@ -141,18 +142,32 @@ type EmailPolicyConfig struct {
 	// has passed the trust gate. "by_trust_zone" (default) sends
 	// directly to admin and household recipients when the operator is
 	// present for the turn, holds mail for trusted recipients in the
-	// Drafts folder for the operator to send, and refuses known and
+	// drafts folder for the operator to send, and refuses known and
 	// unknown recipients. The operator is present only for their own
 	// message, sent through Thane's native API or written in a
 	// conversation bound to their contact; every other turn (a poller
 	// wake, a scheduled loop, a loop launched from the operator's
 	// conversation, a call through the Ollama-compatible shim that Home
-	// Assistant automations use) holds everything in Drafts, so an
-	// autonomous loop never sends on its own. "drafts" holds every
-	// message in Drafts. "direct" sends everything the gate allows,
+	// Assistant automations use) holds everything in the drafts folder,
+	// so an autonomous loop never sends on its own. "drafts" holds every
+	// message there. "direct" sends everything the gate allows,
 	// including to trusted recipients and from unattended turns; choose
 	// it deliberately.
 	Delivery string `yaml:"delivery"`
+
+	// DraftGate is how the trust gate treats recipients when delivery
+	// is drafts, where the operator sends every message by hand.
+	// "relaxed" (the default with delivery drafts) drafts for anyone a
+	// person could answer: a recipient refused only for its trust zone
+	// (no contact record, a known contact, or an address several records
+	// share whose least privileged one is blocked) is drafted, because
+	// the operator's own send is the gate. Automated mailboxes, failed
+	// directory lookups, and the recipient-domain rules stay refused. A
+	// relaxed account also drafts an unattended reply to mailing-list or
+	// bulk mail whose own To or Cc names the account's address. "strict"
+	// (the default otherwise) applies the gate as every other delivery
+	// mode does. relaxed with any other delivery mode is refused.
+	DraftGate string `yaml:"draft_gate"`
 
 	// DeniedRecipientDomains lists domains this account never writes
 	// to, even when the recipient is a trusted contact. An entry covers
@@ -285,7 +300,9 @@ func (a EmailAccountConfig) DeliveryMode() string {
 }
 
 // CanDraft reports whether the model may write outbound mail from this
-// account at all, to SMTP or to Drafts.
+// account at all, to SMTP or to its drafts folder. It is configuration
+// only: a draft also needs a folder with the drafts role, which the
+// send path resolves when it drafts and refuses the message without.
 func (a EmailAccountConfig) CanDraft() bool {
 	return a.AccessLevel() == EmailAccessSend
 }
@@ -368,6 +385,7 @@ func (c *EmailConfig) ApplyDefaults() {
 		}
 		acct.Policy.Access = acct.AccessLevel()
 		acct.Policy.Delivery = acct.DeliveryMode()
+		acct.Policy.DraftGate = acct.DraftGateMode()
 		acct.Policy.DeniedRecipientDomains = normalizeDomains(acct.Policy.DeniedRecipientDomains)
 		acct.Policy.AllowedRecipientDomains = normalizeDomains(acct.Policy.AllowedRecipientDomains)
 		acct.Mailbox.Owner = acct.MailboxOwner()
@@ -446,6 +464,9 @@ func (a EmailAccountConfig) validatePolicy(i int) error {
 	}
 	if a.Policy.Delivery != "" && !validEmailDelivery[a.Policy.Delivery] {
 		return fmt.Errorf("email.accounts[%d] (%s): policy.delivery %q is not one of by_trust_zone, drafts, direct", i, a.Name, a.Policy.Delivery)
+	}
+	if err := a.validateDraftGate(i); err != nil {
+		return err
 	}
 	if a.CanDraft() && !a.SMTPConfigured() {
 		if a.DeliveryMode() != EmailDeliveryDrafts {

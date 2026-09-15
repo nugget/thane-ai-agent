@@ -97,14 +97,17 @@ audiences and trust models are different.
   `email_reply` refuses to answer such a message in any turn the
   operator is not present for (`automatic_response`), even with
   `draft: true`. File it, and bring it to the operator if it needs an
-  answer.
+  answer. The one exception only drafts: on an account whose entry
+  shows `draft_gate: "relaxed"`, list mail that names the account's
+  own address in its `to` or `cc` can be answered as a draft (see "A
+  drafts-only account" in `email_respond`).
 - **Every outbound message gets a decision, and the result says
   which way it went.** Each account carries a policy: `access`
   (`read`, `organize`, or `send`) is the most you may do there, and
   `delivery` says where mail goes once every recipient has passed
   the trust gate. `email_send` and `email_reply` end in one of three
   dispositions: `sent` (delivered by SMTP), `drafted` (held in the
-  account's Drafts folder for the operator to send from their own
+  account's drafts folder for the operator to send from their own
   client; nothing has left the mailbox, so never resend it), or
   `refused` (one sentence, then a `decision` JSON naming every
   recipient at issue and its recovery; nothing was sent or drafted).
@@ -120,7 +123,7 @@ audiences and trust models are different.
   lists, per account, which zones it
   `sends_directly_to`, `drafts_for`, and `refuses`, so read it before
   composing rather than learning the answer from the result. Pass
-  `draft: true` to hold a message in Drafts on purpose.
+  `draft: true` to hold a message in the drafts folder on purpose.
 - **Recipients must be in the contact directory at a zone whose send
   policy is not blocked.** The gate refuses the whole message on
   *any* recipient at issue — a `known` contact, a stranger, an
@@ -136,13 +139,20 @@ audiences and trust models are different.
   contact already holds (see the refusal section below). Nothing goes
   to the rest. Confirm recipients via
   `contact_lookup` before composing; the refusal after you've drafted
-  the body is annoying and avoidable.
+  the body is annoying and avoidable. One kind of account asks less,
+  and only ever drafts: where the entry shows `draft_gate: "relaxed"`,
+  the operator sends every draft by hand, so a stranger, a `known`
+  contact, or a shared address is drafted there rather than refused.
+  An `automated` mailbox, a failed lookup, and any recipient the
+  account's recipient-domain rules refuse are refused there too (see
+  "A drafts-only account" in `email_respond` for the full list).
 - **Sent mail is irreversible; drafted mail is not.** There is no
   "unsend" for a `sent` disposition, and a message sent to the wrong
   audience is permanent. A `drafted` message stays reversible until
   the operator sends it. When uncertain about the recipient list or
   the body's tone, send with `draft: true` so the operator reviews it
-  in Drafts; don't reach for a direct send as an optimistic move.
+  in the drafts folder; don't reach for a direct send as an optimistic
+  move.
 - **Folders are exact names, never guesses.** The account's folder
   list in the Email Accounts block, or `email_folders` when that list
   is cut short or missing, is the only source of destination names;
@@ -379,7 +389,8 @@ inherits that person's zone, and the confirmation rule above still
 applies. A message's own `auto_submitted` or `bulk` moves no zone in
 either direction, because nothing authenticates those headers and any
 sender can set or omit them; all they do is stop a reply written while
-the operator is not present.
+the operator is not present, apart from the one list-mail case that
+`email_respond` drafts.
 
 ## Cross-references
 
@@ -397,20 +408,23 @@ the operator is not present.
 name: email_respond
 tags: [email_respond]
 kind: trailhead
-teaser: "Compose a new email or reply to an existing one; the account policy sends it, holds it in Drafts, or refuses it."
+teaser: "Compose a new email or reply to an existing one; the account policy sends it, holds it in the drafts folder, or refuses it."
 ---
 
 # Respond
 
 Sending mail. Two tools, one decision that dwarfs both: **every
-recipient must be in the contact directory, and the account's policy
-decides whether the message is sent, held in Drafts for the operator,
-or refused.** The Email Accounts block is the map: `access` says
+recipient must pass the trust gate, and the account's policy decides
+whether the message is sent, held in the account's drafts folder for
+the operator, or refused.** The Email Accounts block is the map: `access` says
 whether the account may write mail at all (`send`) or only read and
 file it (`organize`, `read`), `can_send` says whether it may hand mail
 to SMTP itself, `attended` says whether the operator is present for this
 turn, and `sends_directly_to` / `drafts_for` / `refuses` say where a
-message to each trust zone lands right now. `owner`, `writes_as`, and
+message to each trust zone lands right now. `draft_gate: "relaxed"`,
+shown only on a drafts-only account, says the gate drafts there for
+recipients it refuses elsewhere (see "A drafts-only account" below).
+`owner`, `writes_as`, and
 `voice` say whose name the message goes out in and how it should
 sound; on an operator mailbox you write as the operator (see "Whose
 mailbox" in the `email` trailhead). A send from an account that cannot
@@ -435,7 +449,10 @@ The body is markdown; the server converts to both `text/plain` and
 `cc` address against the contact directory and the account's domain
 rules, then routes on the most restrictive recipient. **Any
 trust-gate issue refuses the whole message** — there is no "send the
-allowed ones and skip the others." The result is `{disposition,
+allowed ones and skip the others." On an account whose entry shows
+`draft_gate: "relaxed"` a zone alone is no issue (see "A drafts-only
+account" below), but whatever is still refused there
+refuses the whole message too. The result is `{disposition,
 account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy,
 drafts_folder, draft_uid, signed, note, decision}`, and
 `disposition` is one of three:
@@ -445,7 +462,7 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   `bcc_count` counts the
   operator's configured audit copy, which rides only sent mail;
   `message_id` is the key under
-  which the message can be found in the Sent folder and the value a
+  which the message can be found in `sent_folder` and the value a
   reply's `in_reply_to` will carry; `signed` says whether an outbound
   signature was applied (false until a signing scheme is configured);
   `decision.recipients` lists each address with its `trust_zone`, `gating`,
@@ -460,8 +477,11 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   Nothing has left the mailbox.
   `decision.route` says why it was held: `trust_zone` (a `trusted`
   recipient), `unattended_floor` (the operator is not present for this turn),
-  `policy_drafts` (the account always drafts), or `requested_draft`
-  (you asked). Tell the person you are talking to, if any, that the
+  `policy_drafts` (the account always drafts), `requested_draft`
+  (you asked), or `personally_addressed_list_reply` (list mail
+  addressed to the account; see "A drafts-only account"). A recipient
+  drafted only because the account's draft gate is relaxed shows
+  `gating: "draft_only"` in `decision.recipients`. Tell the person you are talking to, if any, that the
   message awaits the operator; do not resend it, and do not try to
   send it "properly" from another account.
 - **`refused`** — nothing was sent or drafted. The error is one
@@ -472,11 +492,15 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   `email_reply` to a message whose own headers mark it
   `auto_submitted` or `bulk`, in a turn the operator is not present
   for; nothing to fix, so file the message and bring it to the
-  operator if it needs an answer), `no_smtp` (the account
+  operator if it needs an answer; on a drafts-only account the
+  sentence also says why the list-mail rule did not apply), `no_smtp` (the account
   has no SMTP connection and can only draft; retry with `draft: true`
-  on the same account, never from another),
+  on the same account, never from another), `no_drafts_folder` (the
+  message would have been drafted, but no folder on the account has
+  the drafts role; see "When no folder holds drafts"),
   `trust_gate` (see `decision.recipients` for each recipient's
-  `reason`: a `known` contact or a stranger, whose only legitimate
+  `reason`: a `known` contact or a stranger on an account without a
+  relaxed draft gate, whose only legitimate
   recovery is the operator assigning a zone, an `automated` mailbox or
   a denied domain to drop, a duplicate to report, or a `lookup_failed`
   to retry later),
@@ -534,13 +558,18 @@ all-or-nothing behavior means a reply_all to a thread where any
 recipient is at `known` zone or has no contact record will be
 **refused entirely** — the handler doesn't selectively drop bad
 recipients and send to the rest — while a thread with one `trusted`
-recipient among `household` ones is **drafted** as a whole. Replying
+recipient among `household` ones is **drafted** as a whole. On an
+account whose entry shows `draft_gate: "relaxed"` those `known` and
+unmatched recipients are drafted instead, and only a recipient that
+gate still refuses (the list is in "A drafts-only account") refuses
+the whole reply. Replying
 to an `automated` sender is refused as well whenever the reply goes to
 that address, which it does unless the message set a Reply-To. A
 reply to a message whose own headers mark it `auto_submitted` or
 `bulk` is refused with `automatic_response` in any turn the operator
 is not present for, whatever the sender's zone and even with
-`draft: true`, because it would be an automatic response; in the
+`draft: true`, because it would be an automatic response, unless the
+list-mail rule under "A drafts-only account" drafts it; in the
 operator's own turn it goes through the usual decision. On an account
 that can write mail, `decision.original` records the marks either way;
 an account that cannot is refused with `access` before the original is
@@ -550,10 +579,81 @@ just took the UID from, each with its `trust_zone` and
 not change the original's seen state. The result has the same shape as
 `email_send` with `in_reply_to` set.
 
+## A drafts-only account
+
+An account whose Email Accounts entry shows `draft_gate: "relaxed"`
+never sends: its `delivery` is `drafts`, and the operator reads and
+sends every draft by hand from their own client. Their send is the
+gate there, so the trust gate asks less, and a draft may go to anyone
+a person could answer. A recipient refused only for its zone (a
+stranger with no contact record, a `known` contact, or an address
+several records share whose least privileged record is blocked) is
+drafted rather than refused. It shows `gating: "draft_only"` in
+`decision.recipients`, `decision.gating` becomes `draft_only`, and its
+`reason` says the draft gate is why. The draft names such a recipient
+by bare address, dropping any display name you or the original message
+gave it, so the operator sees exactly where the message goes. That is
+also why the entry's `drafts_for` lists every zone and its `refuses` is
+empty.
+
+What no person could answer is refused there as on every account: an
+`automated` mailbox, a `lookup_failed` address (retry later), an
+address that does not parse, a domain the account's recipient-domain
+rules deny or leave out, and more than 50 recipients. The gate is
+still all-or-nothing, so one of those beside a stranger refuses the
+whole message; drop it and the rest drafts. An account without
+`draft_gate: "relaxed"` applies the full gate, and `draft: true` does
+not relax it anywhere.
+
+**A draft there is the operator's to send, so write it for them to
+review.** The body is exactly what goes out when they press send, so
+write the finished message, never a note about one, and put what they
+need to know before sending in your report to them instead: who it is
+addressed to, what the directory holds for each `draft_only` recipient
+(its `contact_status` and `trust_zone` in `decision.recipients`: no
+record, a `known` contact, or a shared address), and why you drafted
+it. Their review is the only check
+between that message and someone the directory does not vouch for, so
+write nothing to such a recipient that you would not send them
+yourself.
+
+**List mail addressed to the account.** On the same accounts, one
+reply that would otherwise be an automatic response is drafted: a
+reply to list mail, marked by a `List-Id` or a `Precedence` of
+`bulk` or `list` and not `auto_submitted`, whose own
+`to` or `cc` names the account's own address (the entry's `address`,
+compared without regard to case). A person on a list answers mail
+addressed to them. The result is `drafted` with `decision.route`
+`personally_addressed_list_reply`, `draft: true` or not, and
+`decision.original` records the marks. Four cases stay refused with
+`automatic_response`, and the refusal says which: list mail that
+reached the account only through a list address, whose `to` and `cc`
+name the list and not the account (an alias or a plus address does not
+count as named); anything `auto_submitted`, such as an automatic
+reply, a bounce, or a notification, because nobody reads an answer to
+those; mail marked `Precedence: junk`, which classic autoresponders put
+on their replies, whatever list header sits beside it; and mail whose
+only list marks are fields such as `List-Unsubscribe`, which a sender
+adds to its own mailings (both show as `bulk: true` like any list mail,
+so only the refusal tells them apart). Go knows an
+automatic reply only by those headers, so one marked any other way,
+such as an out-of-office notice carrying only `Precedence: bulk`, can
+still be drafted: read the body, and do not answer an automatic reply.
+The recipients still pass the gate, so an `automated` poster is
+refused whatever the headers say. Read the original's `to` and `cc` in
+the `email_read` result before replying, and read who the reply goes
+to: a list that sets its own address as the `reply_to` puts the whole
+list in the draft's `to`, which the operator needs to hear from you.
+In the operator's own turn a reply is never an automatic response, and
+the usual decision applies.
+
 ## Drafting on purpose
 
-`draft: true` on either tool holds the message in Drafts whatever the
-policy would have done. Use it when the message is right but the
+`draft: true` on either tool holds the message in the account's
+drafts folder whatever the policy would have done. It holds, and it
+never admits: a recipient the gate refuses is refused with or without
+it, and only the account's own `draft_gate: "relaxed"` drafts for a
+stranger or a `known` contact. Use it when the message is right but the
 moment to send it is the operator's call — a sensitive reply, a
 commitment on their behalf, anything you would want a human to read
 once more with their finger on the button. The draft carries no audit
@@ -561,6 +661,26 @@ once more with their finger on the button. The draft carries no audit
 under the account's own From, so what goes out is exactly what you
 composed and nothing Thane adds rides along. Whose voice to write it
 in follows the account's owner, as "Whose mailbox" in `email` says.
+
+## When no folder holds drafts
+
+Every draft, whichever rule decided it and `draft: true` included,
+goes to the folder with the drafts role: the account's configured
+`drafts_folder`, else the folder the server marks as drafts, found in
+the cached folder listing or by one fresh listing. Go never guesses a
+name. When none of those answers, the message is refused with
+`decision.route` `no_drafts_folder` and one sentence naming the gap,
+and nothing is sent in its place, on any delivery mode. Only the
+operator can close the gap, by configuring `drafts_folder`, so report
+that, and never write the message from another account. If you asked
+for the draft with `draft: true`, do not resend it without the flag to
+get it out: the reason you wanted the operator to read it first has
+not changed, and the refusal says so. A listing that
+fails is an error rather than this refusal; retry later. The entry
+shows `drafts_folder` once configuration or a listing names one, so an
+entry whose `folders` are listed with no `drafts` role and that shows
+no `drafts_folder` will refuse every draft: say so before composing,
+not after.
 
 ## reply vs send — the right shape
 
@@ -580,7 +700,7 @@ audience-wrong is a real leak.
   directory state going in.
 - For high-stakes outgoing mail (sensitive, legal, ambiguous tone),
   send with `draft: true`, so the operator reads it once more in
-  Drafts before it goes.
+  the drafts folder before it goes.
 - For the loop shape that reads incoming mail and decides whether to
   reply, see `loops_examples_curate` — a `thane_loop_create` with
   `operation=service` is the right vehicle when "every morning"
