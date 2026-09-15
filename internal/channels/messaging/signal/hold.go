@@ -81,6 +81,14 @@ func holdReplyRuntimeTool() loop.RuntimeTool {
 	}
 }
 
+// holdReplyNext is the hold result's guidance. The loop_wake duty leads
+// and ending the turn is conditional on it: the description allows the
+// hold before loop_wake, and a model that reads "end the turn" first can
+// stop with the requesting loop unanswered — the dropped thread the wake
+// prompt exists to prevent. The result carries no signal_message_sent
+// field: at call time the handler cannot know what else the turn sends.
+const holdReplyNext = "The Signal message is held. If a loop asked you for a determination and you have not sent it back yet, send it now with loop_wake (its reply_to.loop_id); the hold does not send it. Then end the turn with one short line saying what you decided. That line is kept in the conversation record and never sent."
+
 func handleHoldReply(ctx context.Context, args map[string]any) (string, error) {
 	reason, _ := args["reason"].(string)
 	reason = strings.TrimSpace(reason)
@@ -93,10 +101,9 @@ func handleHoldReply(ctx context.Context, args map[string]any) (string, error) {
 	}
 	hold.set(reason)
 	out, err := json.Marshal(map[string]any{
-		"status":              "held",
-		"signal_message_sent": false,
-		"reason":              reason,
-		"next":                "End the turn with one short line saying what you decided; it is kept in the conversation record and never sent. A reply you owe a requesting loop still needs loop_wake: holding the Signal message does not send it.",
+		"status": "held",
+		"reason": reason,
+		"next":   holdReplyNext,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal %s result: %w", HoldReplyToolName, err)
@@ -116,22 +123,55 @@ func offersReplyHold(tools []loop.RuntimeTool) bool {
 	return false
 }
 
+// finishReasonTimeoutRecovery is the agent's FinishReason for a turn
+// whose final text the runtime wrote after the model call timed out: the
+// static timeout notice, or a recovery model's summary of the work. The
+// signal package does not import the agent, so the value is mirrored
+// here; TestBridge_WakeTimeoutRecoveryThroughAgent pins it against the
+// real agent.
+const finishReasonTimeoutRecovery = "timeout_recovery"
+
+// runtimeWroteFinalText reports whether a turn's final text came from
+// the runtime rather than from the model deciding what the thread should
+// see: a placeholder isRuntimeFallback recognises, or any text on a
+// timeout-recovered turn. A recovery model's summary is written for a
+// user waiting on an answer, and no one on a wake turn is.
+func runtimeWroteFinalText(resp *loop.Response, requestFallback string) bool {
+	return resp.FinishReason == finishReasonTimeoutRecovery || isRuntimeFallback(resp.Content, requestFallback)
+}
+
 // isRuntimeFallback reports whether content is one of the runtime's own
-// empty-response placeholders rather than text the model wrote. On a
-// wake turn such a placeholder ("... Please try again.") answers a
-// request nobody made, so it must not be sent. The comparison is exact:
-// only the strings the runtime itself substitutes are recognised.
+// placeholders rather than text the model wrote: an empty-response
+// fallback or a timeout notice. On a wake turn such a placeholder ("...
+// Please try again.") answers a request nobody made, so it must not be
+// sent. Fixed strings compare exactly. The one formatted notice,
+// prompts.TimeoutRecoveryFallback, matches on the text around its verbs.
 func isRuntimeFallback(content, requestFallback string) bool {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return false
 	}
-	for _, fallback := range []string{requestFallback, prompts.InteractiveEmptyResponseFallback, prompts.EmptyResponseFallback} {
+	for _, fallback := range []string{requestFallback, prompts.InteractiveEmptyResponseFallback, prompts.EmptyResponseFallback, prompts.TimeoutRecoveryEmpty} {
 		if fallback != "" && content == strings.TrimSpace(fallback) {
 			return true
 		}
 	}
-	return false
+	return matchesFormatFrame(content, prompts.TimeoutRecoveryFallback)
+}
+
+// matchesFormatFrame reports whether content has the frame of format as
+// fmt renders it: the text before the first verb and the text after the
+// last one. Verbs are assumed to be one letter, as in %d and %s.
+func matchesFormatFrame(content, format string) bool {
+	first := strings.IndexByte(format, '%')
+	last := strings.LastIndexByte(format, '%')
+	if first < 0 || last+2 > len(format) {
+		return false
+	}
+	prefix, suffix := format[:first], format[last+2:]
+	return len(content) >= len(prefix)+len(suffix) &&
+		strings.HasPrefix(content, prefix) &&
+		strings.HasSuffix(content, suffix)
 }
 
 // Note kinds persisted into the Signal conversation when a wake turn
@@ -141,14 +181,21 @@ const (
 	replyNoteNotSent = "signal_reply_not_sent"
 )
 
-// signalReplyNote is the system-authored record of a wake turn that sent
-// nothing. It is stored as a system row, which later turns read as a
-// framed memory note rather than as something said on Signal, so the
-// history shows a deliberate hold instead of an unexplained gap, and an
-// unsent final text row above it is not mistaken for a delivered one.
+// signalReplyNote is the system-authored record of a wake turn whose
+// final text was not sent to the person on the thread. It is stored as a
+// system row, which later turns read as a framed memory note rather than
+// as something said on Signal, so the history shows a deliberate hold
+// instead of an unexplained gap, and an unsent final text row above it
+// is not mistaken for a delivered one.
 type signalReplyNote struct {
-	Kind              string `json:"kind"`
-	SignalMessageSent bool   `json:"signal_message_sent"`
+	Kind string `json:"kind"`
+	// SignalMessageSent reports whether the turn delivered a message
+	// itself with signal_send_message. It is read from the turn's tool
+	// tally, so it is absent when the run failed and returned none.
+	SignalMessageSent *bool `json:"signal_message_sent,omitempty"`
+	// RunFailed is true when the agent run ended in an error after the
+	// model held the reply.
+	RunFailed bool `json:"run_failed,omitempty"`
 	// Reason is the model's own words, set only for a hold.
 	Reason string `json:"reason,omitempty"`
 	// Cause is the runtime's explanation, set only when the turn sent

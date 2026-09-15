@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -236,15 +237,21 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 	)
 
 	type outcome struct {
-		sends     []string
+		sends []string
+		// note is the one note wanted. Its Cause, when set, is a substring
+		// the stored cause must contain.
 		note      *signalReplyNote
 		logs      []string
 		forbidLog []string
+		// sameLine lists substrings that must all appear on one log line.
+		sameLine []string
 	}
 
 	tests := []struct {
 		name   string
 		script func(t *testing.T, ctx context.Context, req loop.Request, wakes *[]string) *loop.Response
+		// runErr is what the runner returns beside the script's response.
+		runErr error
 		want   outcome
 	}{
 		{
@@ -256,7 +263,7 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				return &loop.Response{RequestID: "req-hold-empty", ToolsUsed: map[string]int{HoldReplyToolName: 1}}
 			},
 			want: outcome{
-				note: &signalReplyNote{Kind: replyNoteHeld, Reason: reason},
+				note: &signalReplyNote{Kind: replyNoteHeld, Reason: reason, SignalMessageSent: boolPtr(false)},
 				logs: []string{`"msg":"signal reply held"`, `"reason":"` + reason + `"`, `"discarded_text_len":0`, `"request_id":"req-hold-empty"`, `"loop_id":"loop-signal-1"`, `"conversation_id":"signal-15551234567"`},
 			},
 		},
@@ -269,7 +276,7 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				return &loop.Response{Content: stageDirected, RequestID: "req-hold-text", ToolsUsed: map[string]int{HoldReplyToolName: 1}}
 			},
 			want: outcome{
-				note:      &signalReplyNote{Kind: replyNoteHeld, Reason: reason, FinalTextWithheld: true},
+				note:      &signalReplyNote{Kind: replyNoteHeld, Reason: reason, SignalMessageSent: boolPtr(false), FinalTextWithheld: true},
 				logs:      []string{`"msg":"signal reply held"`, fmt.Sprintf(`"discarded_text_len":%d`, len(stageDirected))},
 				forbidLog: []string{"nothing worth waking them"},
 			},
@@ -290,7 +297,7 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				}
 			},
 			want: outcome{
-				note: &signalReplyNote{Kind: replyNoteHeld, Reason: reason, FinalTextWithheld: true},
+				note: &signalReplyNote{Kind: replyNoteHeld, Reason: reason, SignalMessageSent: boolPtr(false), FinalTextWithheld: true},
 				logs: []string{`"msg":"signal reply held"`},
 			},
 		},
@@ -311,7 +318,7 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				return &loop.Response{RequestID: "req-empty"}
 			},
 			want: outcome{
-				note:      &signalReplyNote{Kind: replyNoteNotSent},
+				note:      &signalReplyNote{Kind: replyNoteNotSent, SignalMessageSent: boolPtr(false)},
 				logs:      []string{`"level":"WARN"`, `"msg":"signal wake reply not sent: turn ended without reply text or a hold"`, `"runtime_fallback":false`},
 				forbidLog: []string{"signal reply held"},
 			},
@@ -324,7 +331,7 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				return &loop.Response{Content: req.FallbackContent, RequestID: "req-fallback"}
 			},
 			want: outcome{
-				note: &signalReplyNote{Kind: replyNoteNotSent, FinalTextWithheld: true},
+				note: &signalReplyNote{Kind: replyNoteNotSent, SignalMessageSent: boolPtr(false), FinalTextWithheld: true},
 				logs: []string{`"msg":"signal wake reply not sent: turn ended without reply text or a hold"`, `"runtime_fallback":true`},
 			},
 		},
@@ -342,6 +349,79 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				forbidLog: []string{"signal reply held"},
 			},
 		},
+		{
+			name: "the runtime's timeout notice is not sent on a wake",
+			script: func(t *testing.T, _ context.Context, _ loop.Request, _ *[]string) *loop.Response {
+				// What the agent returns, with a nil error, when every
+				// same-model retry timed out and no recovery model is set.
+				return &loop.Response{
+					Content:      fmt.Sprintf(prompts.TimeoutRecoveryFallback, 1, "loop_wake ×1"),
+					FinishReason: finishReasonTimeoutRecovery,
+					RequestID:    "req-timeout",
+					ToolsUsed:    map[string]int{"loop_wake": 1},
+				}
+			},
+			want: outcome{
+				note:      &signalReplyNote{Kind: replyNoteNotSent, SignalMessageSent: boolPtr(false), Cause: "timed out", FinalTextWithheld: true},
+				sameLine:  []string{`"msg":"signal wake reply not sent: turn ended without reply text or a hold"`, `"runtime_fallback":true`, `"finish_reason":"timeout_recovery"`},
+				forbidLog: []string{"signal sending reply"},
+			},
+		},
+		{
+			name: "a recovery model's summary is not sent on a wake",
+			script: func(t *testing.T, _ context.Context, _ loop.Request, _ *[]string) *loop.Response {
+				// The recovery model writes for a user waiting on an answer;
+				// its text is not the model's decision about the thread.
+				return &loop.Response{
+					Content:      "Summary: the previous assistant answered garage-watch and closed the concern.",
+					FinishReason: finishReasonTimeoutRecovery,
+					RequestID:    "req-recovery",
+					ToolsUsed:    map[string]int{"loop_wake": 1},
+				}
+			},
+			want: outcome{
+				note:      &signalReplyNote{Kind: replyNoteNotSent, SignalMessageSent: boolPtr(false), Cause: "timed out", FinalTextWithheld: true},
+				sameLine:  []string{`"msg":"signal wake reply not sent: turn ended without reply text or a hold"`, `"finish_reason":"timeout_recovery"`},
+				forbidLog: []string{"signal sending reply"},
+			},
+		},
+		{
+			name: "a hold stands when the run fails after it",
+			script: func(t *testing.T, ctx context.Context, req loop.Request, _ *[]string) *loop.Response {
+				if _, err := callRuntimeTool(ctx, req, HoldReplyToolName, map[string]any{"reason": reason}); err != nil {
+					t.Fatalf("hold: %v", err)
+				}
+				// The post-hold model call fails, so the runner returns no
+				// response and no tool tally.
+				return nil
+			},
+			runErr: errors.New("provider returned 500 after the hold"),
+			want: outcome{
+				note:     &signalReplyNote{Kind: replyNoteHeld, Reason: reason, RunFailed: true},
+				logs:     []string{`"msg":"signal agent run failed"`},
+				sameLine: []string{`"msg":"signal reply held"`, `"reason":"` + reason + `"`, `"error":"provider returned 500 after the hold"`},
+			},
+		},
+		{
+			name: "a hold after signal_send_message records the tool's send",
+			script: func(t *testing.T, ctx context.Context, req loop.Request, _ *[]string) *loop.Response {
+				// The model sent a heads-up itself, then held the closing
+				// text so the bridge would not send a second message.
+				if _, err := callRuntimeTool(ctx, req, HoldReplyToolName, map[string]any{"reason": reason}); err != nil {
+					t.Fatalf("hold: %v", err)
+				}
+				return &loop.Response{
+					Content:   "Sent the heads-up; nothing more for the thread.",
+					RequestID: "req-hold-sent",
+					ToolsUsed: map[string]int{"signal_send_message": 1, HoldReplyToolName: 1},
+				}
+			},
+			want: outcome{
+				note:      &signalReplyNote{Kind: replyNoteHeld, Reason: reason, SignalMessageSent: boolPtr(true), FinalTextWithheld: true},
+				sameLine:  []string{`"msg":"signal reply held"`, `"signal_message_sent":true`},
+				forbidLog: []string{"signal reply already sent by agent tool call"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -349,7 +429,7 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 			h := newHoldHarness(t)
 			var wakes []string
 			h.runner.script = func(ctx context.Context, req loop.Request) (*loop.Response, error) {
-				return tt.script(t, ctx, req, &wakes), nil
+				return tt.script(t, ctx, req, &wakes), tt.runErr
 			}
 
 			turn, err := h.bridge.buildSignalTurn(context.Background(), holdTestSender, loop.TurnInput{
@@ -368,8 +448,8 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			resp, err := signalResponseRunner{bridge: h.bridge, runner: h.runner}.Run(ctx, req, nil)
-			if err != nil {
-				t.Fatalf("Run: %v", err)
+			if !errors.Is(err, tt.runErr) {
+				t.Fatalf("Run error = %v, want %v", err, tt.runErr)
 			}
 
 			if got := h.rpc.sentMessages(); !equalStrings(got, tt.want.sends) {
@@ -384,13 +464,16 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				if len(notes) != 1 {
 					t.Fatalf("notes = %+v, want exactly one", notes)
 				}
-				got := notes[0]
-				if got.Kind != tt.want.note.Kind || got.Reason != tt.want.note.Reason || got.FinalTextWithheld != tt.want.note.FinalTextWithheld || got.SignalMessageSent {
-					t.Errorf("note = %+v, want kind=%q reason=%q final_text_withheld=%v signal_message_sent=false",
-						got, tt.want.note.Kind, tt.want.note.Reason, tt.want.note.FinalTextWithheld)
+				got, want := notes[0], tt.want.note
+				if got.Kind != want.Kind || got.Reason != want.Reason || got.FinalTextWithheld != want.FinalTextWithheld ||
+					got.RunFailed != want.RunFailed || !equalBoolPtr(got.SignalMessageSent, want.SignalMessageSent) {
+					t.Errorf("note = %s\nwant   %s (cause compared separately)", describeNote(got), describeNote(*want))
 				}
-				if tt.want.note.Kind == replyNoteNotSent && got.Cause == "" {
-					t.Errorf("not-sent note carries no cause: %+v", got)
+				if want.Kind == replyNoteNotSent && got.Cause == "" {
+					t.Errorf("not-sent note carries no cause: %s", describeNote(got))
+				}
+				if !strings.Contains(got.Cause, want.Cause) {
+					t.Errorf("note cause = %q, want it to mention %q", got.Cause, want.Cause)
 				}
 				if convIDs[0] != "signal-15551234567" {
 					t.Errorf("note conversation = %q, want the Signal conversation", convIDs[0])
@@ -407,6 +490,9 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 				if strings.Contains(logs, forbid) {
 					t.Errorf("log contains %q, want it absent\nlogs:\n%s", forbid, logs)
 				}
+			}
+			if len(tt.want.sameLine) > 0 && !logLineWithAll(logs, tt.want.sameLine) {
+				t.Errorf("no single log line contains all of %q\nlogs:\n%s", tt.want.sameLine, logs)
 			}
 
 			if tt.name == "loop_wake reply stands and the hold still sends nothing" {
@@ -527,10 +613,10 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func startHoldSenderLoop(t *testing.T) (*holdHarness, *loop.Registry) {
+func startHoldSenderLoop(t *testing.T, opts ...bridgeOption) (*holdHarness, *loop.Registry) {
 	t.Helper()
 	registry := loop.NewRegistry()
-	h := newHoldHarness(t, func(cfg *BridgeConfig) { cfg.Registry = registry })
+	h := newHoldHarness(t, append([]bridgeOption{func(cfg *BridgeConfig) { cfg.Registry = registry }}, opts...)...)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -647,6 +733,44 @@ func TestHandleHoldReply_OutsideAWakeTurn(t *testing.T) {
 	}
 }
 
+// TestHandleHoldReply_ResultLeadsWithTheLoopReply pins the order of the
+// hold result's guidance. The description lets the model hold before it
+// calls loop_wake, so the result must put the reply owed to a requesting
+// loop ahead of ending the turn: a model that reads "end the turn" first
+// can stop with the requester unanswered.
+func TestHandleHoldReply_ResultLeadsWithTheLoopReply(t *testing.T) {
+	const reason = "sensor glitch; nothing for a person to do"
+	hold := &replyHold{}
+	out, err := handleHoldReply(withReplyHold(context.Background(), hold), map[string]any{"reason": reason})
+	if err != nil {
+		t.Fatalf("handleHoldReply: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("result is not JSON: %v\n%s", err, out)
+	}
+	if result["status"] != "held" || result["reason"] != reason {
+		t.Errorf("result = %s, want status held and the reason echoed", out)
+	}
+	// The handler cannot know what else the turn sends, so the result
+	// makes no claim about what reached the operator.
+	if _, ok := result["signal_message_sent"]; ok {
+		t.Errorf("result claims signal_message_sent: %s", out)
+	}
+	next, _ := result["next"].(string)
+	lower := strings.ToLower(next)
+	loopWake, endTurn := strings.Index(lower, "loop_wake"), strings.Index(lower, "end the turn")
+	if loopWake < 0 || endTurn < 0 || loopWake > endTurn {
+		t.Errorf("next = %q, want the loop_wake reply named before ending the turn", next)
+	}
+	if !strings.HasPrefix(next, "The Signal message is held.") {
+		t.Errorf("next = %q, want it to open with what the hold did, not an instruction", next)
+	}
+	if got, held := hold.heldReason(); !held || got != reason {
+		t.Errorf("recorded hold = %q, %v; want %q, true", got, held, reason)
+	}
+}
+
 func TestIsRuntimeFallback(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -658,6 +782,10 @@ func TestIsRuntimeFallback(t *testing.T) {
 		{name: "request fallback", content: prompts.InteractiveEmptyResponseFallback, fallback: prompts.InteractiveEmptyResponseFallback, want: true},
 		{name: "engine default fallback", content: " " + prompts.EmptyResponseFallback + "\n", want: true},
 		{name: "model text that mentions a problem", content: "I hit a problem with the garage sensor.", fallback: prompts.InteractiveEmptyResponseFallback},
+		{name: "timeout notice without a recovery model", content: fmt.Sprintf(prompts.TimeoutRecoveryFallback, 2, "loop_wake ×1, thane_now ×1"), fallback: prompts.InteractiveEmptyResponseFallback, want: true},
+		{name: "timeout notice with no tool calls", content: fmt.Sprintf(prompts.TimeoutRecoveryFallback, 0, "none"), want: true},
+		{name: "timeout notice after an empty recovery summary", content: prompts.TimeoutRecoveryEmpty, fallback: prompts.InteractiveEmptyResponseFallback, want: true},
+		{name: "model text that opens like the timeout notice", content: "I completed the garage check; nothing needs you tonight.", fallback: prompts.InteractiveEmptyResponseFallback},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -666,6 +794,41 @@ func TestIsRuntimeFallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func equalBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// describeNote renders a note as the JSON the conversation stores.
+func describeNote(n signalReplyNote) string {
+	raw, err := json.Marshal(n)
+	if err != nil {
+		return fmt.Sprintf("%+v (marshal: %v)", n, err)
+	}
+	return string(raw)
+}
+
+// logLineWithAll reports whether one line of logs contains every want.
+func logLineWithAll(logs string, want []string) bool {
+	for _, line := range strings.Split(logs, "\n") {
+		all := true
+		for _, w := range want {
+			if !strings.Contains(line, w) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 func equalStrings(a, b []string) bool {

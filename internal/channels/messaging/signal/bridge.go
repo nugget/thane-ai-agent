@@ -887,8 +887,9 @@ func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string,
 	// fallback_suppressed is enforced at the send gate, not here: the
 	// request keeps the interactive fallback (an empty FallbackContent
 	// cannot survive the loop's firstNonEmpty merge), and the response
-	// runner refuses to deliver that placeholder on a turn that offers
-	// the hold tool.
+	// runner refuses to deliver that placeholder, or any other text the
+	// runtime wrote in the model's place, on a turn that offers the hold
+	// tool.
 	turn := b.agentTurn(convID, channelBinding, content, opts, map[string]any{
 		"event_type":          "loop_notification",
 		"sender":              sender,
@@ -1193,6 +1194,12 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		} else {
 			log.Error("signal agent run failed", "error", err)
 		}
+		// A hold made before the failure is still the model's decision
+		// about the thread. Nothing is sent either way, but without the
+		// held line and note the turn reads as a plain failed run.
+		if reason, held := hold.heldReason(); held {
+			b.finishHeldReply(log, req, resp, reason, err)
+		}
 		return resp, err
 	}
 	wake := hold != nil
@@ -1211,14 +1218,14 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 	// turn sends nothing whatever the text says, including text the
 	// engine's empty-response nudge coaxed out after the hold.
 	if reason, held := hold.heldReason(); held {
-		b.finishHeldReply(log, req, resp, reason)
+		b.finishHeldReply(log, req, resp, reason, nil)
 		return resp, nil
 	}
 	if agentAlreadySent(resp.ToolsUsed) {
 		log.Info("signal reply already sent by agent tool call")
 		return resp, nil
 	}
-	if wake && (strings.TrimSpace(resp.Content) == "" || isRuntimeFallback(resp.Content, req.FallbackContent)) {
+	if wake && (strings.TrimSpace(resp.Content) == "" || runtimeWroteFinalText(resp, req.FallbackContent)) {
 		b.finishUndeliverableWakeReply(log, req, resp)
 		return resp, nil
 	}
@@ -1246,42 +1253,64 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 // one Info line keyed to the turn, then a conversation note. The log
 // carries the discarded text's length, never its content — the text is
 // already in the conversation store, and the log is not a second copy.
-func (b *Bridge) finishHeldReply(log *slog.Logger, req loop.Request, resp *loop.Response, reason string) {
+//
+// runErr is the agent run's error when the run failed after the hold. A
+// failed run returns no tool tally, so whether signal_send_message
+// delivered anything is left unrecorded rather than guessed.
+func (b *Bridge) finishHeldReply(log *slog.Logger, req loop.Request, resp *loop.Response, reason string, runErr error) {
 	discarded := strings.TrimSpace(resp.Content)
-	log.Info("signal reply held",
+	note := signalReplyNote{
+		Kind:              replyNoteHeld,
+		Reason:            reason,
+		FinalTextWithheld: discarded != "",
+	}
+	attrs := []any{
 		"reason", reason,
 		"discarded_text_len", len(discarded),
 		"loop_id", req.RoutingFactors["loop_id"],
 		"loop_name", req.RoutingFactors["loop_name"],
-	)
-	b.recordReplyNote(log, req.ConversationID, signalReplyNote{
-		Kind:              replyNoteHeld,
-		Reason:            reason,
-		FinalTextWithheld: discarded != "",
-	})
+	}
+	if runErr != nil {
+		note.RunFailed = true
+		attrs = append(attrs, "error", runErr)
+	} else {
+		sent := agentAlreadySent(resp.ToolsUsed)
+		note.SignalMessageSent = &sent
+		attrs = append(attrs, "signal_message_sent", sent)
+	}
+	log.Info("signal reply held", attrs...)
+	b.recordReplyNote(log, req.ConversationID, note)
 }
 
 // finishUndeliverableWakeReply closes a wake turn that ended with neither
-// a hold nor text the model wrote: an empty final text, or the runtime's
-// own empty-response placeholder. Nothing is sent. It is a Warn because
-// the model skipped the contract the wake prompt states — a deliberate
-// "nothing to send" is a hold.
+// a hold nor text the model wrote: an empty final text, one of the
+// runtime's placeholders, or the text of a timeout-recovered turn.
+// Nothing is sent. It is a Warn because the model skipped the contract
+// the wake prompt states — a deliberate "nothing to send" is a hold — or
+// timed out before it could keep it.
 func (b *Bridge) finishUndeliverableWakeReply(log *slog.Logger, req loop.Request, resp *loop.Response) {
-	fallback := isRuntimeFallback(resp.Content, req.FallbackContent)
+	runtimeText := runtimeWroteFinalText(resp, req.FallbackContent)
 	log.Warn("signal wake reply not sent: turn ended without reply text or a hold",
-		"runtime_fallback", fallback,
+		"runtime_fallback", runtimeText,
+		"finish_reason", resp.FinishReason,
 		"response_len", len(resp.Content),
 		"loop_id", req.RoutingFactors["loop_id"],
 		"loop_name", req.RoutingFactors["loop_name"],
 	)
 	cause := "the wake turn ended with no final text and no " + HoldReplyToolName + " call"
-	if fallback {
+	switch {
+	case resp.FinishReason == finishReasonTimeoutRecovery:
+		cause = "the wake turn's model call timed out before it wrote a reply or made a " + HoldReplyToolName + " call; the runtime's timeout text stored above was not sent"
+	case runtimeText:
 		cause = "the wake turn ended with no reply text and no " + HoldReplyToolName + " call; the runtime's empty-response placeholder stored above was not sent"
 	}
+	// This gate runs only after agentAlreadySent found no send.
+	sent := false
 	b.recordReplyNote(log, req.ConversationID, signalReplyNote{
 		Kind:              replyNoteNotSent,
+		SignalMessageSent: &sent,
 		Cause:             cause,
-		FinalTextWithheld: fallback,
+		FinalTextWithheld: runtimeText && strings.TrimSpace(resp.Content) != "",
 	})
 }
 
