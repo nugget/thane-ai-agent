@@ -106,13 +106,10 @@ func (m *MultiClient) Chat(ctx context.Context, model string, messages []Message
 		return nil, err
 	}
 	resp, err := client.Chat(ctx, routedModel, messages, tools)
-	if err != nil {
-		return nil, err
-	}
 	if resp != nil {
 		resp.Model = routeTarget
 	}
-	return resp, nil
+	return resp, err
 }
 
 // ChatStream sends a streaming request to the appropriate provider.
@@ -131,13 +128,10 @@ func (m *MultiClient) ChatStream(ctx context.Context, model string, messages []M
 		}
 	}
 	resp, err := client.ChatStream(ctx, routedModel, messages, tools, wrapped)
-	if err != nil {
-		return nil, err
-	}
 	if resp != nil {
 		resp.Model = routeTarget
 	}
-	return resp, nil
+	return resp, err
 }
 
 // Ping checks the fallback provider.

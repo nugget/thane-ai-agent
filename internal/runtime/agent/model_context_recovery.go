@@ -13,6 +13,7 @@ import (
 
 func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	ctx context.Context,
+	client llm.Client,
 	model string,
 	err error,
 	msgs []llm.Message,
@@ -120,15 +121,15 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 
 	retryCall := func(tools []map[string]any) (*llm.ChatResponse, error) {
 		if retryUpstreamModel != "" {
-			if client := l.modelRuntime.LMStudioClient(dep.ResourceID); client != nil {
-				resp, err := client.ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
+			if direct := l.modelRuntime.LMStudioClient(dep.ResourceID); direct != nil {
+				resp, err := accountRecoveryClient(client, direct, retryModel).ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
 				if resp != nil {
 					resp.Model = retryModel
 				}
 				return resp, err
 			}
 		}
-		return l.llm.ChatStream(ctx, retryModel, msgs, tools, stream)
+		return client.ChatStream(ctx, retryModel, msgs, tools, stream)
 	}
 
 	// Dropping the tool schemas is the cheaper lever than growing the window

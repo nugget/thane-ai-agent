@@ -144,7 +144,7 @@ func TestCostSummaryTool_EmptyStore(t *testing.T) {
 		t.Fatalf("handler error: %v", err)
 	}
 
-	if !strings.Contains(result, "Total requests: 0") {
+	if !strings.Contains(result, "Usage records: 0") {
 		t.Errorf("expected zero requests in output, got:\n%s", result)
 	}
 	if !strings.Contains(result, "$0.0000") {
@@ -182,8 +182,8 @@ func TestCostSummaryTool_WithData(t *testing.T) {
 		t.Fatalf("handler error: %v", err)
 	}
 
-	if !strings.Contains(result, "Total requests: 2") {
-		t.Errorf("expected 2 requests, got:\n%s", result)
+	if !strings.Contains(result, "Usage records: 2") {
+		t.Errorf("expected 2 usage records, got:\n%s", result)
 	}
 	if !strings.Contains(result, "$2.0000") {
 		t.Errorf("expected $2.0000 total cost, got:\n%s", result)

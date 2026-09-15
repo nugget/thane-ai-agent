@@ -215,6 +215,20 @@ that provider actually has matching semantics.
 
 ## Validating Caching
 
+Usage is priced per model call, including provider-reported usage from
+retries, partial failures, and forced-response recovery. The durable
+ledger and live API statistics use the same per-call cost, with separate
+5-minute and 1-hour cache-write rates. Request token totals sum those
+calls; changing models during a request does not reprice earlier work.
+Calls without reported usage and static fallback text create no usage
+record. A failed request retains the usage already reported.
+Usage absent before an interruption cannot be reconstructed.
+
+Usage summaries and `cost_summary` count records,
+while live API `total_requests` counts successful logical requests.
+Historical records written before per-call accounting can contain
+several iterations in one row; their counts cannot recover call totals.
+
 Provider-specific metrics differ, but useful validation usually asks:
 
 - Are stable prompt bytes reused after the first turn?

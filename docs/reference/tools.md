@@ -727,7 +727,7 @@ and pinning a loop definition is `loop_definition_update` under `loops`.
 | Tool | Description |
 |------|-------------|
 | `get_version` | Agent version, build info, and commit SHA. |
-| `cost_summary` | Aggregated token usage and cost (uses `usage.Summary`, including `cache_hit_rate`). |
+| `cost_summary` | Aggregated token usage and cost, counting usage records rather than logical requests. New agent records represent model calls; older rows may aggregate iterations (uses `usage.Summary`, including `cache_hit_rate`). |
 | `logs_query` | Query the structured log index with attribute filters. |
 | `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, per-partition queue depths, a 24h telemetry rollup, the deploy story (running vs previous version, recent boots), and the process's own WARN/ERROR rates. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |

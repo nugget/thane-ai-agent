@@ -185,7 +185,8 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, model string, messages []
 }
 
 // ChatStream sends a chat request. If callback is non-nil,
-// tokens are streamed via OpenAI-compatible SSE.
+// tokens are streamed via OpenAI-compatible SSE. On error, a non-nil response
+// contains only provider-reported accounting metadata, not assistant output.
 func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
@@ -297,14 +298,18 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	if !stream {
 		var wire openAICompatChatResponse
 		if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
-			return nil, fmt.Errorf("decode response: %w", err)
+			partial := usageOnlyResponse(openAICompatResponseMetadata(&wire))
+			if partial != nil && headerRequestID != "" {
+				partial.UpstreamRequestID = headerRequestID
+			}
+			return partial, fmt.Errorf("decode response: %w", err)
 		}
 		result, err := c.chatResponseFromWire(&wire, validToolNames)
-		if err != nil {
-			return nil, err
-		}
-		if headerRequestID != "" {
+		if result != nil && headerRequestID != "" {
 			result.UpstreamRequestID = headerRequestID
+		}
+		if err != nil {
+			return result, err
 		}
 		log.Debug("response received",
 			"model", result.Model,
@@ -336,22 +341,47 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 	if wire == nil {
 		return nil, fmt.Errorf("nil response")
 	}
+	result := openAICompatResponseMetadata(wire)
 	if len(wire.Choices) == 0 || wire.Choices[0].Message == nil {
-		return nil, fmt.Errorf("response contained no choices")
+		return usageOnlyResponse(result), fmt.Errorf("response contained no choices")
 	}
 
 	toolCalls, err := decodeOpenAICompatToolCallsFromSlice(wire.Choices[0].Message.ToolCalls)
 	if err != nil {
-		return nil, err
+		return usageOnlyResponse(result), err
 	}
+	result.Message.Role = normalizeOpenAICompatMessageRole(wire.Choices[0].Message.Role)
+	result.Message.Content = openAICompatContentText(wire.Choices[0].Message.Content)
+	result.Message.ToolCalls = toolCalls
+	if err := applyTextToolFallback(result, validToolNames); err != nil {
+		return usageOnlyResponse(result), err
+	}
+	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
+		// Same reasoning-only diagnosis as the streaming path: no
+		// answer to return either way, but "the model thought and
+		// never answered" reads very differently from "the model said
+		// nothing". Sizes only; reasoning text stays out of logs.
+		if r := wire.Choices[0].Message.reasoningText(); r != "" {
+			return usageOnlyResponse(result), fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, wire.Model, len(r), result.StopReason)
+		}
+		return usageOnlyResponse(result), fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
+	}
+	result.Done = true
+	return result, nil
+}
+
+// Metadata is decoded before validating assistant output so refusals and
+// malformed tool payloads retain any provider-reported usage.
+func openAICompatResponseMetadata(wire *openAICompatChatResponse) *llm.ChatResponse {
 	result := &llm.ChatResponse{
 		Model:        wire.Model,
-		Done:         true,
+		Done:         false,
 		InputTokens:  0,
 		OutputTokens: 0,
 	}
-	if fr := wire.Choices[0].FinishReason; fr != nil {
-		result.StopReason = strings.TrimSpace(*fr)
+	if len(wire.Choices) > 0 && wire.Choices[0].FinishReason != nil {
+		result.StopReason = strings.TrimSpace(*wire.Choices[0].FinishReason)
 	}
 	result.UpstreamRequestID = wire.ID
 	if wire.Created > 0 {
@@ -361,24 +391,7 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		result.InputTokens = wire.Usage.PromptTokens
 		result.OutputTokens = wire.Usage.CompletionTokens
 	}
-	result.Message.Role = normalizeOpenAICompatMessageRole(wire.Choices[0].Message.Role)
-	result.Message.Content = openAICompatContentText(wire.Choices[0].Message.Content)
-	result.Message.ToolCalls = toolCalls
-	if err := applyTextToolFallback(result, validToolNames); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
-		// Same reasoning-only diagnosis as the streaming path: no
-		// answer to return either way, but "the model thought and
-		// never answered" reads very differently from "the model said
-		// nothing". Sizes only; reasoning text stays out of logs.
-		if r := wire.Choices[0].Message.reasoningText(); r != "" {
-			return nil, fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
-				c.provider, wire.Model, len(r), result.StopReason)
-		}
-		return nil, fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
-	}
-	return result, nil
+	return result
 }
 
 // normalizeOpenAICompatBaseURL trims the trailing slash and the
