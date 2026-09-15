@@ -361,15 +361,22 @@ func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, erro
 // before a nickname match), then the one contact that answers to it by
 // a given name or the first word of its formatted name, as
 // name_resolve.go describes. Notes, AI summaries and organizations are
-// never read; [Store.Search] reads them. Returns [sql.ErrNoRows] when no
-// contact answers to the name, and an [*AmbiguousNameError] when none
-// holds it exactly and two or more answer to it by another name field.
+// never read; [Store.Search] reads them. Both steps compare the name
+// and each stored name trimmed of edge space and folded with LOWER, as
+// the fork audit folds them, so a blank name answers to no one. Returns
+// [sql.ErrNoRows] when no contact answers to the name, and an
+// [*AmbiguousNameError] when none holds it exactly and two or more
+// answer to it by a given name or first word.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
 	return s.resolveContact(context.Background(), name)
 }
 
 // resolveContact is [Store.ResolveContact] bound to ctx.
 func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, error) {
+	// Trimmed once, so both steps, and the errors that echo the name, see
+	// the name the lookup was made by.
+	name = strings.TrimSpace(name)
+
 	// 1. Formatted name or nickname, authority first.
 	c, err := s.findByNameOrNickname(ctx, name)
 	if err == nil {
@@ -422,7 +429,11 @@ func (s *Store) getWithProperties(ctx context.Context, id uuid.UUID) (*Contact, 
 	return c, nil
 }
 
-// Search finds contacts matching the query using FTS5 or LIKE fallback.
+// SearchLimit bounds the contacts [Store.Search] returns.
+const SearchLimit = 50
+
+// Search finds up to [SearchLimit] active contacts matching the query
+// using FTS5 or LIKE fallback.
 func (s *Store) Search(query string) ([]*Contact, error) {
 	return s.search(context.Background(), query)
 }
@@ -447,8 +458,8 @@ func (s *Store) searchFTS(ctx context.Context, query string) ([]*Contact, error)
 		JOIN contacts ON contacts_fts.rowid = contacts.rowid
 		WHERE contacts_fts MATCH ? AND contacts.`+activeFilter+`
 		ORDER BY rank
-		LIMIT 50
-	`, sanitized)
+		LIMIT ?
+	`, sanitized, SearchLimit)
 	if err != nil {
 		s.logger.Warn("FTS5 search failed, falling back to LIKE", "error", err, "query", query)
 		return s.searchLIKE(ctx, query)
@@ -462,8 +473,8 @@ func (s *Store) searchLIKE(ctx context.Context, query string) ([]*Contact, error
 	pattern := "%" + query + "%"
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+
-			` AND (formatted_name LIKE ? OR nickname LIKE ? OR note LIKE ? OR ai_summary LIKE ? OR org LIKE ?) ORDER BY updated_at DESC LIMIT 50`,
-		pattern, pattern, pattern, pattern, pattern)
+			` AND (formatted_name LIKE ? OR nickname LIKE ? OR note LIKE ? OR ai_summary LIKE ? OR org LIKE ?) ORDER BY updated_at DESC LIMIT ?`,
+		pattern, pattern, pattern, pattern, pattern, SearchLimit)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}

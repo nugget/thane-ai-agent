@@ -647,6 +647,47 @@ func TestLookupContact_ByQuery(t *testing.T) {
 }
 
 // TestLookupContact_NameReadsNamesQueryReadsText pins the split between
+// TestLookupContact_QuerySaysWhenItStops pins that a query reaching
+// SearchLimit matches says it stopped there and how to reach a contact
+// it left out, and that a shorter list says nothing of the kind, on
+// both search paths.
+func TestLookupContact_QuerySaysWhenItStops(t *testing.T) {
+	tests := []struct {
+		seeded   int
+		wantMark bool
+	}{
+		{SearchLimit - 1, false},
+		{SearchLimit + 1, true},
+	}
+	for _, fts := range []bool{true, false} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("seeded=%d/fts=%v", tt.seeded, fts), func(t *testing.T) {
+				tools := newTestTools(t)
+				tools.store.ftsEnabled = fts
+				for i := range tt.seeded {
+					if _, err := tools.store.UpsertWithProperties(&Contact{
+						FormattedName: fmt.Sprintf("Neighbour %03d", i), Kind: "individual", TrustZone: ZoneKnown, Note: "lives next to Dave",
+					}, nil); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got, err := tools.LookupContact(`{"query":"Dave"}`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if listed := min(tt.seeded, SearchLimit); !strings.Contains(got, fmt.Sprintf("Found %d contact(s)", listed)) {
+					t.Errorf("query lookup does not list %d contacts:\n%s", listed, got)
+				}
+				for _, mark := range []string{fmt.Sprintf("Stopped at %d matches", SearchLimit), "full formatted name as name"} {
+					if strings.Contains(got, mark) != tt.wantMark {
+						t.Errorf("query lookup of %d matches contains %q = %v, want %v:\n%s", tt.seeded, mark, !tt.wantMark, tt.wantMark, got)
+					}
+				}
+			})
+		}
+	}
+}
+
 // contact_lookup's two doors: a name no record holds is not found even
 // when notes and summaries mention it, query lists every record whose
 // text does, and a first name two records share is an error naming

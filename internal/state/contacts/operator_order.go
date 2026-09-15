@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -40,18 +41,27 @@ func (s *Store) authorityOrderArgs() []any {
 }
 
 // findByNameOrNickname returns the active contact that answers to name
-// as its formatted name or its nickname, compared with LOWER as the
-// resolver always has, in the order this file describes. Returns
-// sql.ErrNoRows when no active contact answers to it.
+// as its formatted name or its nickname, in the order this file
+// describes. Both sides fold as [nameKey] folds a name: the stored name
+// is trimmed of every rune strings.TrimSpace trims and lowered with
+// LOWER, and compared with the name's key. So a stored name with space
+// at its edge is still an exact holder, as the fork audit counts it,
+// and a name with space at its edge still reaches the exact holders and
+// their authority order. Returns sql.ErrNoRows when no active contact
+// answers to it, or when name is blank.
 func (s *Store) findByNameOrNickname(ctx context.Context, name string) (*Contact, error) {
-	args := []any{name, name}
+	key := nameKey(name)
+	if key == "" {
+		return nil, sql.ErrNoRows
+	}
+	args := []any{edgeSpace, key, edgeSpace, key}
 	args = append(args, s.authorityOrderArgs()...)
-	args = append(args, name)
+	args = append(args, edgeSpace, key)
 	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts
-		WHERE `+activeFilter+` AND (LOWER(formatted_name) = LOWER(?) OR LOWER(nickname) = LOWER(?))
+		WHERE `+activeFilter+` AND (LOWER(TRIM(formatted_name, ?)) = ? OR LOWER(TRIM(nickname, ?)) = ?)
 		ORDER BY `+authorityOrderSQL+`,
-			CASE WHEN LOWER(formatted_name) = LOWER(?) THEN 0 ELSE 1 END,
+			CASE WHEN LOWER(TRIM(formatted_name, ?)) = ? THEN 0 ELSE 1 END,
 			id
 		LIMIT 1`,
 		args...))

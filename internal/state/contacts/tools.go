@@ -749,7 +749,8 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	// Name lookup (formatted name or nickname, authority first, then search).
+	// Name lookup (formatted name or nickname, authority first, then the
+	// one contact whose given name or first word it is).
 	if args.Name != "" {
 		c, err := t.store.ResolveContact(args.Name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -802,6 +803,9 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		}
 		if len(contacts) == 0 {
 			return fmt.Sprintf("No contacts matching %q", args.Query), nil
+		}
+		if len(contacts) >= SearchLimit {
+			return formatContactList(contacts) + fmt.Sprintf("\nStopped at %d matches, so other contacts may match %q too; contact_lookup with a contact's full formatted name as name reaches one this list left out.\n", SearchLimit, args.Query), nil
 		}
 		return formatContactList(contacts), nil
 	}

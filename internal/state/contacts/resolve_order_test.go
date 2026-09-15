@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // wantCandidate is one contact an ambiguous name must list, and the
@@ -217,6 +218,48 @@ func TestResolveContact_NameFieldsOnly(t *testing.T) {
 			lookup: "Dave Stone",
 		},
 		{
+			// Unfolded, the lookup would miss both exact holders and fall to
+			// the short-form step, which would pick Carol Smith by given
+			// name without a word of warning.
+			name: "a name with edge space still reaches the exact holders and their authority order",
+			seeds: []seed{
+				{name: "Carol", zone: ZoneKnown},
+				{name: "Alice Household", nickname: "Carol", zone: ZoneHousehold},
+				{name: "Carol Smith", given: "Carol", zone: ZoneTrusted},
+			},
+			lookup: " Carol\t", want: "Alice Household",
+		},
+		{
+			name: "a nickname stored with edge space is still an exact holder, as the fork audit counts it",
+			seeds: []seed{
+				{name: "Carol", zone: ZoneKnown},
+				{name: "Carol Household", nickname: " Carol\n", zone: ZoneHousehold},
+			},
+			lookup: "Carol", want: "Carol Household",
+		},
+		{
+			name: "a formatted name stored with any edge space strings.TrimSpace trims still beats a short form",
+			seeds: []seed{
+				{name: "Dave ", zone: ZoneKnown},
+				{name: "Dave Rivera", given: "Dave", zone: ZoneHousehold},
+			},
+			lookup: "dave", want: "Dave ",
+		},
+		{
+			name: "an edge-spaced first name two records share lists them by short form only",
+			seeds: []seed{
+				{name: "Dave Smith", given: "Dave", zone: ZoneKnown},
+				{name: "Dave Rivera", given: "Dave", zone: ZoneHousehold},
+			},
+			lookup:        "Dave ",
+			wantAmbiguous: []candidate{{"Dave Rivera", NameFieldGiven}, {"Dave Smith", NameFieldGiven}},
+		},
+		{
+			name:   "a blank name answers to no one, not even a record whose nickname is blank",
+			seeds:  []seed{{name: "Bob Stone", nickname: "  ", zone: ZoneKnown}},
+			lookup: " \t ",
+		},
+		{
 			name:   "a name nothing answers to is sql.ErrNoRows",
 			seeds:  []seed{{name: "Bob Stone", zone: ZoneKnown}},
 			lookup: "Nobody Here",
@@ -277,8 +320,9 @@ func requireSearchFinds(t *testing.T, store *Store, query string, want []string,
 
 // requireAmbiguous fails unless err is an [AmbiguousNameError] listing
 // exactly want, in order, each with its contact_id, zone and field in
-// the text.
+// the text, and echoing the lookup as trimmed.
 func requireAmbiguous(t *testing.T, err error, lookup string, want []wantCandidate, byName map[string]*Contact) {
+	lookup = strings.TrimSpace(lookup)
 	t.Helper()
 	var ambiguous *AmbiguousNameError
 	if !errors.As(err, &ambiguous) {
@@ -297,7 +341,7 @@ func requireAmbiguous(t *testing.T, err error, lookup string, want []wantCandida
 			t.Errorf("error does not list %s:\n%v", entry, err)
 		}
 	}
-	for _, s := range []string{fmt.Sprintf("ambiguous contact %q", lookup), "resolves to none of them", "Retry with the contact_id", "full formatted name"} {
+	for _, s := range []string{fmt.Sprintf("ambiguous contact %q", lookup), "answer to it by a given name or the first word of a formatted name", "resolves to none of them", "Retry with the contact_id", "full formatted name"} {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("error missing %q:\n%v", s, err)
 		}
@@ -324,8 +368,23 @@ func TestResolveContact_AmbiguityIsBounded(t *testing.T) {
 	if !strings.Contains(err.Error(), fmt.Sprintf("%d answer to it", total)) || !strings.Contains(err.Error(), "and 2 more not listed") {
 		t.Errorf("error does not count what it left out:\n%v", err)
 	}
+	if next := fmt.Sprintf("contact_lookup with query set to %q lists up to %d contacts", "Eve", SearchLimit); !strings.Contains(err.Error(), next) {
+		t.Errorf("error does not say how to find what it left out, want %q:\n%v", next, err)
+	}
 	if strings.Contains(err.Error(), "Eve G") {
 		t.Errorf("error names a candidate past the bound:\n%v", err)
+	}
+}
+
+// TestEdgeSpaceIsWhatTrimSpaceTrims pins that the set the exact step's
+// SQL TRIM strips from a stored name holds exactly the runes
+// strings.TrimSpace trims, so the exact step and nameKey cannot disagree
+// about edge space.
+func TestEdgeSpaceIsWhatTrimSpaceTrims(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if got, want := strings.ContainsRune(edgeSpace, r), unicode.IsSpace(r); got != want {
+			t.Errorf("edgeSpace contains %U = %v, want %v", r, got, want)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -12,9 +13,9 @@ import (
 // Name keys.
 //
 // A contact answers to a name when the name is its formatted name or
-// its nickname, compared the way the resolver compares them: LOWER,
-// which folds ASCII letters and nothing else, here after trimming edge
-// space. Those are the record's exact keys, and every name lookup finds
+// its nickname, compared the way the resolver compares them: trimmed of
+// edge space on both sides, then with LOWER, which folds ASCII letters
+// and nothing else. Those are the record's exact keys, and every name lookup finds
 // only one of two records that share one. A record's short forms are
 // its given name and the first word of a formatted name of more than
 // one word. A record whose whole formatted name is another record's
@@ -54,6 +55,22 @@ type nameKeys struct {
 func nameKey(name string) string {
 	return sqliteLower(strings.TrimSpace(name))
 }
+
+// maxEdgeSpaceRune is the highest rune unicode.IsSpace reports, U+3000
+// IDEOGRAPHIC SPACE.
+const maxEdgeSpaceRune = '　'
+
+// edgeSpace holds every rune strings.TrimSpace trims, so SQL
+// TRIM(column, edgeSpace) trims a stored name as [nameKey] trims it.
+var edgeSpace = func() string {
+	var b strings.Builder
+	for r := rune(0); r <= maxEdgeSpaceRune; r++ {
+		if unicode.IsSpace(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}()
 
 // recordNameKeys returns the name keys of a record with these names.
 func recordNameKeys(formattedName, nickname, givenName string) nameKeys {
@@ -104,6 +121,20 @@ func (k nameKeys) matchField(key string) string {
 		return NameFieldFormatted
 	case containsNameKey(k.exact, key):
 		return NameFieldNickname
+	case key == k.given:
+		return NameFieldGiven
+	}
+	return NameFieldFormattedFirstWord
+}
+
+// shortField names the short form by which a record with these keys
+// answers to key, the given name before the first word of the formatted
+// name, or "" when neither is key. It never names an exact key, so the
+// short-form step of name resolution reads short forms alone.
+func (k nameKeys) shortField(key string) string {
+	switch {
+	case key == "" || !containsNameKey(k.short, key):
+		return ""
 	case key == k.given:
 		return NameFieldGiven
 	}
