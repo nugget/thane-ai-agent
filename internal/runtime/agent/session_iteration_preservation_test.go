@@ -100,6 +100,9 @@ func TestSessionLifecycleIterationsKeepOriginatingSession(t *testing.T) {
 				if oldIterations[0].InputTokens != 10 || newIterations[0].InputTokens != 20 || len(oldIterations[0].ToolCallIDs) != 2 || newIterations[0].HasToolCalls {
 					t.Fatalf("iterations assigned to wrong sessions: old=%+v new=%+v", oldIterations, newIterations)
 				}
+				if oldIterations[0].IterationIndex != 0 || newIterations[0].IterationIndex != 0 {
+					t.Errorf("first session iteration indexes = old:%d new:%d; want zero in both sessions", oldIterations[0].IterationIndex, newIterations[0].IterationIndex)
+				}
 				for _, id := range oldIterations[0].ToolCallIDs {
 					var sessionID, status, result, toolError string
 					var iteration int
@@ -127,6 +130,45 @@ func TestSessionLifecycleIterationsKeepOriginatingSession(t *testing.T) {
 				}
 				if iterations != 2 || inputTokens != 30 || outputTokens != 8 {
 					t.Errorf("archived usage duplicated/lost: iterations=%d input=%d output=%d", iterations, inputTokens, outputTokens)
+				}
+
+				// A later turn must append directly after the successor's
+				// first iteration, keeping tool links in that same sequence.
+				mock.responses = append(mock.responses,
+					&llm.ChatResponse{Model: "test-model", InputTokens: 30, OutputTokens: 7, Message: llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{afterCall}}},
+					&llm.ChatResponse{Model: "test-model", InputTokens: 40, OutputTokens: 9, Message: llm.Message{Role: "assistant", Content: "Follow-up complete."}},
+				)
+				followup, err := loop.Run(context.Background(), &Request{
+					ConversationID: conversationID,
+					Messages:       []Message{{Role: "user", Content: "Inspect the new session again."}},
+					MaxIterations:  2,
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if followup.Content != "Follow-up complete." || followup.Iterations != 2 || afterCallSession != newSession {
+					t.Fatalf("follow-up response or session mismatch: response=%+v tool_session=%q", followup, afterCallSession)
+				}
+				newIterations, err = archive.GetSessionIterations(newSession)
+				if err != nil || len(newIterations) != 3 {
+					t.Fatalf("successor iterations after another turn = %+v, error = %v; want three", newIterations, err)
+				}
+				for i, iteration := range newIterations {
+					if iteration.IterationIndex != i {
+						t.Errorf("successor iteration %d stored with index %d", i, iteration.IterationIndex)
+					}
+				}
+				if len(newIterations[1].ToolCallIDs) != 1 {
+					t.Fatalf("follow-up tool iteration = %+v", newIterations[1])
+				}
+				var toolIndex, linkedInputTokens int
+				if err := store.DB().QueryRow(`SELECT tc.iteration_index, ai.input_tokens FROM tool_calls tc
+					JOIN archive_iterations ai ON ai.session_id = tc.session_id AND ai.iteration_index = tc.iteration_index
+					WHERE tc.id = ? AND tc.session_id = ?`, newIterations[1].ToolCallIDs[0], newSession).Scan(&toolIndex, &linkedInputTokens); err != nil {
+					t.Fatal(err)
+				}
+				if toolIndex != 1 || linkedInputTokens != 30 {
+					t.Errorf("follow-up tool linked to index=%d input_tokens=%d; want 1 and 30", toolIndex, linkedInputTokens)
 				}
 			})
 		}

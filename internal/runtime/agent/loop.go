@@ -3008,6 +3008,10 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 		if _, exists := bySession[sessionID]; !exists {
 			sessionOrder = append(sessionOrder, sessionID)
 		}
+		// The archive offsets each batch after the session's last iteration.
+		// Start at zero even when this session began mid-run; iter is a copy,
+		// so request-level indexes remain unchanged.
+		iter.Index = len(bySession[sessionID])
 		bySession[sessionID] = append(bySession[sessionID], iter)
 	}
 	// ArchiveStore offsets iteration indices per session, so each batch

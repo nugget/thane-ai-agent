@@ -3,6 +3,7 @@ package memory
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -161,10 +162,10 @@ func lifecycleSession(tx *sql.Tx, conversationID string, now time.Time) (*Sessio
 	err := tx.QueryRow(`SELECT id, started_at, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions WHERE conversation_id = ? AND ended_at IS NULL ORDER BY started_at DESC, id DESC LIMIT 1`,
 		conversationID).Scan(&session.ID, &started, &metadata, &parentSession, &parentTool)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("read current session: %w", err)
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		var first sql.NullString
 		if err := tx.QueryRow(`SELECT MIN(timestamp) FROM messages WHERE conversation_id = ? AND status IN ('active', 'compacted')`, conversationID).Scan(&first); err != nil {
 			return nil, fmt.Errorf("read first session message: %w", err)
@@ -202,7 +203,7 @@ func insertLifecycleSession(tx *sql.Tx, conversationID string, at time.Time, pre
 		return nil, fmt.Errorf("ensure conversation identity: %w", err)
 	}
 	var rawMetadata sql.NullString
-	if err := tx.QueryRow(`SELECT metadata FROM conversations WHERE id = ?`, conversationID).Scan(&rawMetadata); err != nil && err != sql.ErrNoRows {
+	if err := tx.QueryRow(`SELECT metadata FROM conversations WHERE id = ?`, conversationID).Scan(&rawMetadata); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("read conversation metadata: %w", err)
 	}
 	if rawMetadata.Valid {

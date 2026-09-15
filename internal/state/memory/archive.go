@@ -1934,14 +1934,20 @@ func (s *ArchiveStore) EndSession(sessionID string, reason string) error {
 // notification and any panic / slow execution there does NOT roll back
 // the DB write.
 func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt time.Time) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?
-	`, endedAt.Format(time.RFC3339Nano), reason, sessionID)
-	if err != nil {
+	if err := s.endSessionAt(sessionID, reason, endedAt); err != nil {
 		return err
 	}
 	s.notifySessionClosed(sessionID, reason)
 	return nil
+}
+
+// endSessionAt performs the durable write without notification so adapters
+// can publish their cache and release lifecycle locks before callbacks run.
+func (s *ArchiveStore) endSessionAt(sessionID string, reason string, endedAt time.Time) error {
+	_, err := s.db.Exec(`
+		UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?
+	`, endedAt.Format(time.RFC3339Nano), reason, sessionID)
+	return err
 }
 
 func (s *ArchiveStore) notifySessionClosed(sessionID, reason string) {

@@ -34,9 +34,11 @@ type ArchiveAdapter struct {
 	msgStore MessageArchiver  // sets status='archived' in unified messages table
 	tcStore  ToolCallArchiver // sets status='archived' in unified tool_calls table
 
-	// Serialize durable boundaries with cache publication. A failed
-	// transaction must leave the previously published session untouched.
-	lifecycleMu sync.Mutex
+	// Gate every session lookup and creation against durable boundaries
+	// and their cache publication. Readers hold RLock; mutations hold
+	// Lock. Always acquire lifecycleMu before mu, and notify callbacks
+	// only after releasing both locks so callbacks can re-enter.
+	lifecycleMu sync.RWMutex
 
 	// Track active sessions in memory for fast lookup
 	mu       sync.RWMutex
@@ -73,17 +75,13 @@ func (a *ArchiveAdapter) SplitSession(conversationID, boundaryMessageID string) 
 
 func (a *ArchiveAdapter) transitionSession(conversationID string, op sessionTransition) error {
 	a.lifecycleMu.Lock()
-	defer a.lifecycleMu.Unlock()
 	result, err := a.store.transitionSession(conversationID, op)
 	if err != nil {
+		a.lifecycleMu.Unlock()
 		return err
 	}
-	a.mu.Lock()
-	delete(a.sessions, conversationID)
-	if result.current != nil {
-		a.sessions[conversationID] = sessionEntry{id: result.current.ID, startedAt: result.current.StartedAt}
-	}
-	a.mu.Unlock()
+	a.publishSessionTransitionLocked(conversationID, result)
+	a.lifecycleMu.Unlock()
 	if result.closedID != "" {
 		if store, ok := a.msgStore.(*SQLiteStore); ok {
 			store.forgetClipWarning(conversationID)
@@ -93,6 +91,17 @@ func (a *ArchiveAdapter) transitionSession(conversationID string, op sessionTran
 	a.logger.Info("session transition committed", "conversation_id", conversationID,
 		"reason", op.reason, "checkpoint", op.checkpoint, "closed_session_id", result.closedID)
 	return nil
+}
+
+// publishSessionTransitionLocked makes the committed boundary visible before
+// releasing lifecycleMu. A failed transaction never reaches publication.
+func (a *ArchiveAdapter) publishSessionTransitionLocked(conversationID string, result *sessionTransitionResult) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.sessions, conversationID)
+	if result.current != nil {
+		a.sessions[conversationID] = sessionEntry{id: result.current.ID, startedAt: result.current.StartedAt}
+	}
 }
 
 // NewArchiveAdapter creates an adapter that implements agent.SessionArchiver.
@@ -111,7 +120,9 @@ func NewArchiveAdapter(store *ArchiveStore, msgStore MessageArchiver, tcStore To
 // ArchiveConversation archives all messages and tool calls from a
 // conversation by setting their status to 'archived' in the unified table.
 func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []Message, reason string) error {
-	sessionID := a.ActiveSessionID(conversationID)
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	sessionID := a.activeSessionLocked(conversationID).id
 
 	affected, err := a.msgStore.ArchiveMessages(conversationID, sessionID, reason)
 	if err != nil {
@@ -160,6 +171,12 @@ func (a *ArchiveAdapter) linkIterations(conversationID, sessionID string) {
 
 // StartSession begins a new session and returns its ID.
 func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	return a.startSessionLocked(conversationID)
+}
+
+func (a *ArchiveAdapter) startSessionLocked(conversationID string) (string, error) {
 	var opts []SessionOption
 	if binding := a.conversationChannelBinding(conversationID); binding != nil {
 		opts = append(opts, WithChannelBinding(binding))
@@ -184,7 +201,9 @@ func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
 // background summarizer worker, not here — this avoids a race with
 // process shutdown that previously caused summaries to be lost.
 func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
-	if err := a.store.EndSession(sessionID, reason); err != nil {
+	a.lifecycleMu.Lock()
+	if err := a.store.endSessionAt(sessionID, reason, time.Now().UTC()); err != nil {
+		a.lifecycleMu.Unlock()
 		return err
 	}
 
@@ -197,6 +216,8 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 		}
 	}
 	a.mu.Unlock()
+	a.lifecycleMu.Unlock()
+	a.store.notifySessionClosed(sessionID, reason)
 
 	a.logger.Info("session ended",
 		"session_id", sessionID,
@@ -207,26 +228,35 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 
 // ActiveSessionID returns the current session ID for a conversation, or empty.
 func (a *ArchiveAdapter) ActiveSessionID(conversationID string) string {
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	return a.activeSessionLocked(conversationID).id
+}
+
+// activeSessionLocked requires lifecycleMu (shared or exclusive) so a cache
+// miss cannot repopulate an old session across a committed transition.
+func (a *ArchiveAdapter) activeSessionLocked(conversationID string) sessionEntry {
 	a.mu.RLock()
 	entry := a.sessions[conversationID]
 	a.mu.RUnlock()
 
 	if entry.id != "" {
-		return entry.id
+		return entry
 	}
 
 	// Fall back to database lookup
 	sess, err := a.store.ActiveSession(conversationID)
 	if err != nil || sess == nil {
-		return ""
+		return sessionEntry{}
 	}
 
 	// Cache it
+	entry = sessionEntry{id: sess.ID, startedAt: sess.StartedAt}
 	a.mu.Lock()
-	a.sessions[conversationID] = sessionEntry{id: sess.ID, startedAt: sess.StartedAt}
+	a.sessions[conversationID] = entry
 	a.mu.Unlock()
 
-	return sess.ID
+	return entry
 }
 
 // OnMessage is a no-op retained for interface compatibility. Session
@@ -235,11 +265,13 @@ func (a *ArchiveAdapter) OnMessage(_ string) {}
 
 // EnsureSession starts a session if none is active for the conversation.
 func (a *ArchiveAdapter) EnsureSession(conversationID string) string {
-	if sid := a.ActiveSessionID(conversationID); sid != "" {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	if sid := a.activeSessionLocked(conversationID).id; sid != "" {
 		return sid
 	}
 
-	sid, err := a.StartSession(conversationID)
+	sid, err := a.startSessionLocked(conversationID)
 	if err != nil {
 		a.logger.Error("failed to start session", "error", err)
 		return ""
@@ -252,25 +284,9 @@ func (a *ArchiveAdapter) EnsureSession(conversationID string) string {
 // cache populated by StartSession and ActiveSessionID to avoid per-turn
 // database lookups.
 func (a *ArchiveAdapter) ActiveSessionStartedAt(conversationID string) time.Time {
-	a.mu.RLock()
-	entry := a.sessions[conversationID]
-	a.mu.RUnlock()
-
-	if entry.id != "" {
-		return entry.startedAt
-	}
-
-	// Fall back to database lookup and cache the result.
-	sess, err := a.store.ActiveSession(conversationID)
-	if err != nil || sess == nil {
-		return time.Time{}
-	}
-
-	a.mu.Lock()
-	a.sessions[conversationID] = sessionEntry{id: sess.ID, startedAt: sess.StartedAt}
-	a.mu.Unlock()
-
-	return sess.StartedAt
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	return a.activeSessionLocked(conversationID).startedAt
 }
 
 // ActiveConversationIDs returns the conversation IDs with currently open
@@ -278,6 +294,8 @@ func (a *ArchiveAdapter) ActiveSessionStartedAt(conversationID string) time.Time
 // merges in any active sessions found in the store so startup recovery
 // and direct store writes are also reflected.
 func (a *ArchiveAdapter) ActiveConversationIDs() []string {
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
 	ids := make(map[string]struct{})
 
 	a.mu.RLock()
