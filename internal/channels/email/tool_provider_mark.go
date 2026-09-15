@@ -56,8 +56,12 @@ func (t *Tools) markParameters(uidsParam, uidParam map[string]any) map[string]an
 	if len(markable) == 0 {
 		return map[string]any{"type": "object", "properties": props, "required": []string{"flag"}}
 	}
-	props["flag"].(map[string]any)["description"] = "Flag to add or remove. Pass flag or label, not both."
-	props["add"].(map[string]any)["description"] = "true adds the flag or label, false removes it (default: true)."
+	if flag, ok := props["flag"].(map[string]any); ok {
+		flag["description"] = "Flag to add or remove. Pass flag or label, not both."
+	}
+	if add, ok := props["add"].(map[string]any); ok {
+		add["description"] = "true adds the flag or label, false removes it (default: true)."
+	}
 	props["label"] = map[string]any{
 		"type":        "string",
 		"enum":        markable,
