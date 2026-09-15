@@ -69,11 +69,25 @@ func (e *AmbiguousNameError) Error() string {
 		fmt.Fprintf(&b, "%q (%s, contact_id %s, matched on %s)", echoForRefusal(c.Name), c.TrustZone, c.ContactID, c.Field)
 	}
 	if more := e.Total - len(e.Candidates); more > 0 {
-		fmt.Fprintf(&b, "; and %d more not listed: contact_lookup with query set to %q lists up to %d contacts whose formatted name, nickname, note, AI summary or organization mentions it, so look for the one you mean there",
-			more, echoForRefusal(e.Name), SearchLimit)
+		b.WriteString(e.continuation(more))
 	}
 	b.WriteString(". Retry with the contact_id of the one you mean where the tool takes contact_id, or with that contact's full formatted name where it takes only a name")
 	return b.String()
+}
+
+// continuation says where to find the more candidates the error leaves
+// out. [Store.Search] lists every contact that answers to a name ahead
+// of any other match, so a query by the name lists them all while there
+// are no more than SearchLimit; past that no lookup lists the rest, and
+// the error says so rather than send the model to a list that stops
+// short of the one it wants.
+func (e *AmbiguousNameError) continuation(more int) string {
+	if e.Total <= SearchLimit {
+		return fmt.Sprintf("; and %d more not listed: contact_lookup with query set to %q lists all %d of them first, ahead of any other match, so find the one you mean there",
+			more, echoForRefusal(e.Name), e.Total)
+	}
+	return fmt.Sprintf("; and %d more not listed: contact_lookup with query set to %q lists only %d of the %d, and no lookup lists the rest, so ask the operator for the full formatted name of the one you mean",
+		more, echoForRefusal(e.Name), SearchLimit, e.Total)
 }
 
 // resolveByNameKeys is the second step of [Store.ResolveContact]: the

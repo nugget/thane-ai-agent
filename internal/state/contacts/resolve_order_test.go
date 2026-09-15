@@ -368,11 +368,107 @@ func TestResolveContact_AmbiguityIsBounded(t *testing.T) {
 	if !strings.Contains(err.Error(), fmt.Sprintf("%d answer to it", total)) || !strings.Contains(err.Error(), "and 2 more not listed") {
 		t.Errorf("error does not count what it left out:\n%v", err)
 	}
-	if next := fmt.Sprintf("contact_lookup with query set to %q lists up to %d contacts", "Eve", SearchLimit); !strings.Contains(err.Error(), next) {
+	if next := fmt.Sprintf("contact_lookup with query set to %q lists all %d of them first", "Eve", total); !strings.Contains(err.Error(), next) {
 		t.Errorf("error does not say how to find what it left out, want %q:\n%v", next, err)
 	}
 	if strings.Contains(err.Error(), "Eve G") {
 		t.Errorf("error names a candidate past the bound:\n%v", err)
+	}
+}
+
+// TestAmbiguousNameError_Continuation pins what an ambiguous name that
+// leaves candidates out says about the rest: while they fit in one
+// query, that query lists them all first; past SearchLimit, no lookup
+// lists them all, and the error says so rather than send the model to a
+// list that stops short of the one it wants.
+func TestAmbiguousNameError_Continuation(t *testing.T) {
+	tests := []struct {
+		total     int
+		want, not string
+	}{
+		{maxAmbiguousNamed + 2, `and 2 more not listed: contact_lookup with query set to "Eve" lists all 7 of them first, ahead of any other match`, "no lookup lists the rest"},
+		{SearchLimit, fmt.Sprintf(`and %d more not listed: contact_lookup with query set to "Eve" lists all %d of them first`, SearchLimit-maxAmbiguousNamed, SearchLimit), "no lookup lists the rest"},
+		{SearchLimit + 1, fmt.Sprintf(`lists only %d of the %d, and no lookup lists the rest, so ask the operator for the full formatted name`, SearchLimit, SearchLimit+1), "lists all"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("total=%d", tt.total), func(t *testing.T) {
+			e := &AmbiguousNameError{Name: "Eve", Total: tt.total}
+			for i := range maxAmbiguousNamed {
+				e.Candidates = append(e.Candidates, NameCandidate{Name: fmt.Sprintf("Eve %c", 'A'+i), TrustZone: ZoneKnown, Field: NameFieldFormattedFirstWord})
+			}
+			got := e.Error()
+			if !strings.Contains(got, tt.want) || strings.Contains(got, tt.not) {
+				t.Errorf("error = %s\nwant it to contain %q and not %q", got, tt.want, tt.not)
+			}
+		})
+	}
+}
+
+// TestResolveContact_ContinuationReachesEveryCandidate pins that an
+// ambiguous name's continuation reaches every candidate the error leaves
+// out, on both search paths. contact_lookup with the name as query lists
+// all seven contacts that answer to "Alice" by a short form first, among
+// them a record that answers only by its given name and whose formatted
+// name does not contain it, ahead of more contacts than SearchLimit
+// whose notes merely mention Alice.
+func TestResolveContact_ContinuationReachesEveryCandidate(t *testing.T) {
+	for _, fts := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fts=%v", fts), func(t *testing.T) {
+			tools := newTestTools(t)
+			tools.store.ftsEnabled = fts
+			seed := func(c Contact) *Contact {
+				t.Helper()
+				c.Kind = "individual"
+				saved, err := tools.store.UpsertWithProperties(&c, nil)
+				if err != nil {
+					t.Fatalf("seed %s: %v", c.FormattedName, err)
+				}
+				return saved
+			}
+			var holders []*Contact
+			for _, name := range []string{"Alice Adams", "Alice Baker", "Alice Clark", "Alice Davis", "Alice Evans"} {
+				holders = append(holders, seed(Contact{FormattedName: name, TrustZone: ZoneHousehold}))
+			}
+			givenOnly := seed(Contact{FormattedName: "Dr. A. Jones", GivenName: "Alice", TrustZone: ZoneKnown})
+			holders = append(holders, seed(Contact{FormattedName: "Alice Zed", TrustZone: ZoneKnown}), givenOnly)
+			for i := range SearchLimit {
+				seed(Contact{FormattedName: fmt.Sprintf("Neighbour %03d", i), TrustZone: ZoneKnown, Note: "lives next to Alice"})
+			}
+
+			_, err := tools.store.ResolveContact("Alice")
+			var ambiguous *AmbiguousNameError
+			if !errors.As(err, &ambiguous) {
+				t.Fatalf("ResolveContact(Alice) error = %v, want an AmbiguousNameError", err)
+			}
+			leftOut := !slices.ContainsFunc(ambiguous.Candidates, func(c NameCandidate) bool { return c.ContactID == givenOnly.ID })
+			if ambiguous.Total != len(holders) || len(ambiguous.Candidates) != maxAmbiguousNamed || !leftOut {
+				t.Fatalf("listed %d of %d, given-name-only record left out = %v; the case needs %d of %d with it left out:\n%v",
+					len(ambiguous.Candidates), ambiguous.Total, leftOut, maxAmbiguousNamed, len(holders), err)
+			}
+			requireContains(t, err, fmt.Sprintf(`and %d more not listed: contact_lookup with query set to "Alice" lists all %d of them first`, len(holders)-maxAmbiguousNamed, len(holders)))
+
+			found, truncated, err := tools.store.search(t.Context(), "Alice")
+			if err != nil {
+				t.Fatalf("search(Alice): %v", err)
+			}
+			if !truncated || len(found) != SearchLimit {
+				t.Errorf("search(Alice) = %d contacts, truncated %v, want %d and truncated", len(found), truncated, SearchLimit)
+			}
+			for _, h := range holders {
+				if !slices.ContainsFunc(found[:min(len(found), len(holders))], func(c *Contact) bool { return c.ID == h.ID }) {
+					t.Errorf("search(Alice) does not list %s among its first %d contacts", h.FormattedName, len(holders))
+				}
+			}
+			got, err := tools.LookupContact(`{"query":"Alice"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, h := range holders {
+				if !strings.Contains(got, "**"+h.FormattedName+"**") {
+					t.Errorf("contact_lookup query Alice does not list %s:\n%s", h.FormattedName, got)
+				}
+			}
+		})
 	}
 }
 

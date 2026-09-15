@@ -797,15 +797,15 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 
 	// Search.
 	if args.Query != "" {
-		contacts, err := t.store.Search(args.Query)
+		contacts, truncated, err := t.store.search(context.Background(), args.Query)
 		if err != nil {
 			return "", fmt.Errorf("search: %w", err)
 		}
 		if len(contacts) == 0 {
 			return fmt.Sprintf("No contacts matching %q", args.Query), nil
 		}
-		if len(contacts) >= SearchLimit {
-			return formatContactList(contacts) + fmt.Sprintf("\nStopped at %d matches, so other contacts may match %q too; contact_lookup with a contact's full formatted name as name reaches one this list left out.\n", SearchLimit, args.Query), nil
+		if truncated {
+			return formatContactList(contacts) + fmt.Sprintf("\nStopped at %d matches; more contacts match %q. Contacts whose formatted name, nickname, given name or first word it is are listed first. contact_lookup with a contact's full formatted name as name reaches one this list left out.\n", SearchLimit, args.Query), nil
 		}
 		return formatContactList(contacts), nil
 	}

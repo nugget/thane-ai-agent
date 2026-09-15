@@ -646,17 +646,19 @@ func TestLookupContact_ByQuery(t *testing.T) {
 	}
 }
 
-// TestLookupContact_NameReadsNamesQueryReadsText pins the split between
-// TestLookupContact_QuerySaysWhenItStops pins that a query reaching
-// SearchLimit matches says it stopped there and how to reach a contact
-// it left out, and that a shorter list says nothing of the kind, on
-// both search paths.
+// TestLookupContact_QuerySaysWhenItStops pins that a query matching more
+// contacts than SearchLimit lists SearchLimit of them, says it stopped
+// there and how to reach one it left out, and that a query matching
+// SearchLimit contacts or fewer lists them all and says nothing of the
+// kind, since then no contact was left out. It runs on both search
+// paths.
 func TestLookupContact_QuerySaysWhenItStops(t *testing.T) {
 	tests := []struct {
 		seeded   int
 		wantMark bool
 	}{
 		{SearchLimit - 1, false},
+		{SearchLimit, false},
 		{SearchLimit + 1, true},
 	}
 	for _, fts := range []bool{true, false} {
@@ -678,7 +680,7 @@ func TestLookupContact_QuerySaysWhenItStops(t *testing.T) {
 				if listed := min(tt.seeded, SearchLimit); !strings.Contains(got, fmt.Sprintf("Found %d contact(s)", listed)) {
 					t.Errorf("query lookup does not list %d contacts:\n%s", listed, got)
 				}
-				for _, mark := range []string{fmt.Sprintf("Stopped at %d matches", SearchLimit), "full formatted name as name"} {
+				for _, mark := range []string{fmt.Sprintf("Stopped at %d matches; more contacts match", SearchLimit), "are listed first", "full formatted name as name"} {
 					if strings.Contains(got, mark) != tt.wantMark {
 						t.Errorf("query lookup of %d matches contains %q = %v, want %v:\n%s", tt.seeded, mark, !tt.wantMark, tt.wantMark, got)
 					}
@@ -688,8 +690,9 @@ func TestLookupContact_QuerySaysWhenItStops(t *testing.T) {
 	}
 }
 
+// TestLookupContact_NameReadsNamesQueryReadsText pins the split between
 // contact_lookup's two doors: a name no record holds is not found even
-// when notes and summaries mention it, query lists every record whose
+// when notes and summaries mention it, query lists the records whose
 // text does, and a first name two records share is an error naming
 // both contact_id values.
 func TestLookupContact_NameReadsNamesQueryReadsText(t *testing.T) {
