@@ -79,7 +79,7 @@ func custodyUnresolvedError(owner string, pinned bool, err error) error {
 	if !errors.As(err, &amb) {
 		return fmt.Errorf("check identity custody: %w", legacyOwnerUnresolvedError(owner, pinned, err))
 	}
-	return fmt.Errorf("check identity custody: nothing was changed, because %w. Until the operator does, no model-facing write creates a contact, sets a nickname, adds an address, number or notification routing fact, or forgets a contact, because the operator's own contact is one of these and protecting none of them would let such a write decide which one Thane takes as the operator; tell the operator",
+	return fmt.Errorf("check identity custody: nothing was changed, because %w. Until the operator does, no model-facing write creates a contact, sets a nickname, changes a given name, adds an address, number or notification routing fact, or forgets a contact, because the operator's own contact is one of these and protecting none of them would let such a write decide which one Thane takes as the operator; tell the operator",
 		legacyOwnerUnresolvedError(owner, pinned, err))
 }
 
@@ -229,7 +229,7 @@ func identityRefusal(targetName, targetZone string, created bool, violations []I
 		b.WriteString(" ha_companion_app is the Home Assistant device that receives a contact's notifications and answers their decision requests, and notification_preference picks the channel they arrive on.")
 	}
 	if c.names {
-		b.WriteString(" A name or nickname is what notifications, decision requests, lookups and conversation context find a contact by.")
+		b.WriteString(" A name, nickname or given name is what notifications, decision requests, lookups and conversation context find a contact by.")
 	}
 	b.WriteString(" They are operator-custodied where a change would move authority:")
 	items := make([]string, 0, len(violations))

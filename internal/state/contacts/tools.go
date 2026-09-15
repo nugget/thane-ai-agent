@@ -371,8 +371,9 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 //
 // operatorAttended reports that the turn is the operator's own message,
 // as tools.OperatorAttended decides it. It lifts only the rule that keeps
-// addresses, numbers, notification routing facts and nickname changes
-// off contacts above known and off the operator's own contact; the rules
+// addresses, numbers, notification routing facts and nickname and given
+// name changes off contacts above known and off the operator's own
+// contact; the rules
 // against a second holder of a value, or a second contact answering to
 // a name, that a contact with authority already has still apply.
 func (t *Tools) SaveContactFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance, operatorAttended bool) (string, error) {
@@ -481,10 +482,10 @@ func (t *Tools) saveContact(
 		return "", err
 	}
 
-	// Name claims and the nickname snapshot are read before the scalar
-	// updates below change contact.
+	// Name claims and the nickname and given-name snapshot are read
+	// before the scalar updates below change contact.
 	claims := saveClaims(args, contact, created)
-	snapshotNickname := contact.Nickname
+	snapshotNickname, snapshotGiven := contact.Nickname, contact.GivenName
 
 	changedFields := make(map[string]struct{})
 	contactChanged := created
@@ -520,6 +521,7 @@ func (t *Tools) saveContact(
 	guard := identityGuard{
 		snapshotZone:      contact.TrustZone,
 		snapshotNickname:  snapshotNickname,
+		snapshotGiven:     snapshotGiven,
 		liftTargetCustody: operatorAttended,
 		claims:            claims,
 	}
@@ -542,7 +544,7 @@ func (t *Tools) saveContact(
 			return "", identityRefusal(contact.FormattedName, contact.TrustZone, created, custody.Violations)
 		}
 		if errors.Is(err, errContactChangedConcurrently) {
-			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone, changed its nickname, or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
+			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone, changed its nickname or given name, or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
 		}
 		if created {
 			return "", fmt.Errorf("create contact: %w", err)
@@ -1629,7 +1631,7 @@ func (t *Tools) lazyCustodyOperatorID(ctx context.Context) func() (uuid.UUID, er
 func importCustody(existing, incoming *Contact, props []Property, operator func() (uuid.UUID, error)) (uuid.UUID, identityGuard, error) {
 	target, guard := uuid.Nil, identityGuard{snapshotZone: ZoneKnown}
 	if existing != nil {
-		target, guard.snapshotZone, guard.snapshotNickname = existing.ID, existing.TrustZone, existing.Nickname
+		target, guard.snapshotZone, guard.snapshotNickname, guard.snapshotGiven = existing.ID, existing.TrustZone, existing.Nickname, existing.GivenName
 	}
 	guard.claims = importClaims(existing, incoming)
 	custodied := hasCustodiedProperty(props)

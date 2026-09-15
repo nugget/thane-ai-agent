@@ -798,8 +798,8 @@ Configuration is deliberately the only place this binding can be made:
 bindings confer inherited trust, and neither they nor trust zones are
 writable through model-facing contact tools. The addresses and numbers,
 the notification routing facts (`notification_preference` and
-`ha_companion_app`), and the nickname of a contact above `known` or of the
-operator's contact are custody too: the operator sets them through CardDAV
+`ha_companion_app`), and the nickname and given name of a contact above
+`known` or of the operator's contact are custody too: the operator sets them through CardDAV
 or `/v1/contacts`, and `contact_save` adds or changes one only in the
 operator's own message (see
 [Contact Identity Custody](../understanding/trust-architecture.md#contact-identity-custody)).

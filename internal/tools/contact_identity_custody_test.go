@@ -170,6 +170,12 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 			"notification_preference or ha_companion_app", "changing the nickname", "only the first value",
 			"already goes by", "what to do",
 			"Outside the operator's own message it also refuses a new contact's name, or any contact's nickname, that one of those contacts answers to by its given name or the first word of its formatted name",
+			"changing the nickname or given name of such a contact, since lookups fall back to a given name",
+		}},
+		{"contact_save given_name", parameterDescription("contact_save", "given_name"), []string{
+			"lookups find the one contact whose given name or first word it is", "outside the operator's own message",
+			"a change to the given name of a contact above known or of the operator's own contact is refused",
+			"a change only in edge space or the case of ASCII letters is not a change",
 		}},
 		{"contact_save facts", parameterDescription("contact_save", "facts"), []string{
 			"letters, digits", "KEY and X-THANE-* keys are refused", "control characters", "above known", "already holds",

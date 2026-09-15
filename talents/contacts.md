@@ -334,7 +334,7 @@ When the legacy name fits several contacts (two at the same standing
 hold it, or several share it as a first name), `contact_owner` returns
 an error listing them with their `contact_id`s, not a record. Until
 the operator fixes it, `contact_save` refuses to create a contact, set
-a nickname, or add an address, number or routing fact, and
+a nickname or given name, or add an address, number or routing fact, and
 `contact_forget` refuses everything, because the operator's own contact
 is one of them and no write may decide which. Don't try to settle it
 with those tools; tell the operator to set
@@ -510,10 +510,12 @@ Smith") reaches that contact, not them. Before giving a contact a
 nickname, check with `contact_lookup` that no contact at its standing
 already goes by it.
 
-- **Changing the nickname** of a contact above `known` or of the
-  operator's own follows the first rule for addresses: only in the
-  operator's own message. A change only in the case of ASCII letters
-  is not a change.
+- **Changing the nickname or given name** of a contact above `known`
+  or of the operator's own follows the first rule for addresses: only
+  in the operator's own message. Lookups fall back to a given name, so
+  rewriting it would free that person's first name for another contact
+  to take. A change only in the case of ASCII letters is not a change,
+  and neither is edge space on a given name.
 - **A name or nickname someone with authority goes by.** In every
   turn, the operator's own included, `contact_save` refuses a new
   contact's name, or any contact's nickname, that an admin,

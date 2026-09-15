@@ -21,9 +21,12 @@ import (
 // common channel is legitimate.
 //
 // A name or nickname is what notifications, decision requests, lookups
-// and conversation context find a contact by. Changing the nickname of
-// a contact above known, or of the operator's own, falls under the same
-// target rule. In every turn, the operator's own included, no
+// and conversation context find a contact by. Changing the nickname or
+// the given name of a contact above known, or of the operator's own,
+// falls under the same target rule. A given name is a short form the
+// record answers to, so an unattended rewrite of it would free the name
+// for a known record to take exactly under the short-form rule below.
+// In every turn, the operator's own included, no
 // model-facing writer gives a new contact a formatted name, or any
 // contact a nickname, that an active contact above known or the
 // operator's own already goes by, compared the way ResolveContact
@@ -58,8 +61,9 @@ const (
 // Short forms, as [IdentityHolder.Property] names the field a holder
 // answers to a refused name claim by when it does not hold the name
 // exactly: its given name, or the first word of a formatted name of
-// more than one word. A violation's own Property is always the claim,
-// claimFN or claimNickname.
+// more than one word. A violation's own Property is the claim: claimFN,
+// claimNickname, or claimGivenName for a change to an existing
+// contact's given name, which has the target rule only.
 const (
 	claimGivenName   = "GIVEN_NAME"
 	claimFNFirstWord = "FN_FIRST_WORD"
@@ -157,8 +161,13 @@ func sqliteLowerEqual(a, b string) bool {
 
 // saveClaims returns the names a contact_save claims, read before the
 // save mutates contact: a new contact's formatted name and nickname, or
-// an existing contact's changed nickname. saveContact trims the name
-// and nickname first, so the value judged here is the value stored.
+// an existing contact's changed nickname and changed given name.
+// saveContact trims the name and nickname first, so the value judged
+// here is the value stored. The given name is stored as written, so it
+// is claimed whenever the scalar update would write it with a different
+// [nameKey], a blank value that erases the short form included; an edit
+// the key folds away, in edge space or ASCII case, changes no name the
+// record answers to.
 func saveClaims(args SaveContactArgs, contact *Contact, created bool) []Property {
 	var claims []Property
 	if created {
@@ -166,6 +175,9 @@ func saveClaims(args SaveContactArgs, contact *Contact, created bool) []Property
 	}
 	if strings.TrimSpace(args.Nickname) != "" && (created || !sqliteLowerEqual(args.Nickname, contact.Nickname)) {
 		claims = append(claims, Property{Property: claimNickname, Value: args.Nickname})
+	}
+	if !created && args.GivenName != "" && nameKey(args.GivenName) != nameKey(contact.GivenName) {
+		claims = append(claims, Property{Property: claimGivenName, Value: args.GivenName})
 	}
 	return claims
 }
@@ -185,13 +197,16 @@ func importClaims(existing, incoming *Contact) []Property {
 
 // isClaimProperty reports whether a violation is a name claim.
 func isClaimProperty(property string) bool {
-	return property == claimFN || property == claimNickname
+	return property == claimFN || property == claimNickname || property == claimGivenName
 }
 
 // claimArgument names the contact_save argument a name claim came from.
 func claimArgument(property string) string {
-	if property == claimFN {
+	switch property {
+	case claimFN:
 		return "name"
+	case claimGivenName:
+		return "given_name"
 	}
 	return "nickname"
 }
@@ -207,20 +222,29 @@ func hasClaimViolation(violations []IdentityViolation) bool {
 }
 
 // claimViolations applies the name rules to guard.claims: the target
-// rule to a nickname change on an existing target, then the holder rule
-// to every claim.
+// rule to a nickname or given-name change on an existing target, then
+// the holder rule to every formatted name and nickname claim.
+//
+// A given name gets the target rule alone. It is not a name another
+// record can be found by instead of the holder: a known record sharing
+// a first name with a custodied one leaves the name reaching neither,
+// and the short-form claim rule already stops a known record holding it
+// exactly. What the target rule stops is the custodied record losing
+// the short form, which is what would let such a claim through.
 func claimViolations(query queryFunc, target uuid.UUID, guard identityGuard) ([]IdentityViolation, error) {
 	var violations []IdentityViolation
 	for _, c := range guard.claims {
+		if c.Property == claimGivenName {
+			if reason := targetNameReason(target, guard); reason != "" {
+				violations = append(violations, IdentityViolation{Property: c.Property, Value: c.Value, Reason: reason})
+			}
+			continue
+		}
 		if strings.TrimSpace(c.Value) == "" {
 			continue
 		}
-		if c.Property == claimNickname && target != uuid.Nil {
-			reason := targetCustodyReason(target, guard)
-			if reason == "" && guard.operatorUnresolved && !guard.liftTargetCustody {
-				reason = IdentityReasonOperator
-			}
-			if reason != "" {
+		if c.Property == claimNickname {
+			if reason := targetNameReason(target, guard); reason != "" {
 				violations = append(violations, IdentityViolation{Property: c.Property, Value: c.Value, Reason: reason})
 				continue
 			}
@@ -234,6 +258,21 @@ func claimViolations(query queryFunc, target uuid.UUID, guard identityGuard) ([]
 		}
 	}
 	return violations, nil
+}
+
+// targetNameReason applies the target rule to a name change on an
+// existing target, or returns "" for a record being created. An import
+// card whose operator lookup failed counts every target as the
+// operator's, so the rule fails closed there.
+func targetNameReason(target uuid.UUID, guard identityGuard) string {
+	if target == uuid.Nil {
+		return ""
+	}
+	reason := targetCustodyReason(target, guard)
+	if reason == "" && guard.operatorUnresolved && !guard.liftTargetCustody {
+		reason = IdentityReasonOperator
+	}
+	return reason
 }
 
 // nameHolder returns the active record other than target, carrying

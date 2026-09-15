@@ -68,6 +68,8 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"an authority first name is custodied", "contacts_save", "Outside the operator's own message, `contact_save` also refuses a new contact's name, or any contact's nickname, that is the given name or the first word of the formatted name of an admin, household, trusted, or operator contact"},
 		{"a first-name takeover is why", "contacts_save", "A formatted name or nickname is found before any first name"},
 		{"the operator's message lifts the first-name rule", "contacts_save", "if the operator wants the other contact to go by that name, they say so in their own message"},
+		{"a custodied given name follows the target rule", "contacts_save", "**Changing the nickname or given name** of a contact above `known`"},
+		{"a given name is why", "contacts_save", "rewriting it would free that person's first name for another contact"},
 		{"a shared first name can still be saved", "contacts_save", "nothing stops a second contact with the same first name from being saved later"},
 		{"descriptions reach no one", "contacts_save", "addressed by a description (\"the plumber\") reaches no one"},
 		{"forget by ambiguous name removes nothing", "contacts_save", "resolves to neither and removes nothing"},

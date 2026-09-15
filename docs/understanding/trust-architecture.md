@@ -377,8 +377,8 @@ contact with authority and is still reported.
   or forgetting it, so the next start takes the first as the operator.
   Custody therefore keeps the resolver's error with the pin and refuses,
   in every turn, every write that needs the operator's record: creating a
-  contact, setting a nickname, adding an address, number or routing fact,
-  and forgetting any contact. The unpinned lookup fails closed the same
+  contact, setting a nickname or given name, adding an address, number or
+  routing fact, and forgetting any contact. The unpinned lookup fails closed the same
   way. `contact_owner` reports the candidates with their UUIDs instead of
   a missing contact, and the startup Warn names them; the fix is the
   operator's, `identity.operator_contact_id` or a name only their own
@@ -454,9 +454,13 @@ contact with authority and is still reported.
   "Bob" reaches a record whose whole formatted name is Bob, not a
   household Bob Smith without that nickname; the fork audit below
   reports that shape. Forgetting such a record, the only exact holder
-  of the name, leaves the name to the short-form step. A nickname change on a custodied target follows the
-  target rule and its lift; "changed" folds ASCII letters only, as SQLite
-  `LOWER` does, after trimming, so a case-only edit is not a change. In
+  of the name, leaves the name to the short-form step. A nickname or
+  given-name change on a custodied target follows the target rule and its
+  lift: a given name is a short form the record answers to, and an
+  unattended rewrite of it would free the name for a `known` record to
+  take exactly under the short-form rule below. "Changed" folds ASCII
+  letters only, as SQLite `LOWER` does, after trimming, so a case-only
+  edit is not a change. In
   every turn, no model writer gives a new contact a formatted name, or any
   contact a nickname, that another active contact above `known` or the
   operator's own already uses as its formatted name or nickname, compared
@@ -618,7 +622,8 @@ contact with authority and is still reported.
 A `contact_save` refusal saves nothing and emits no contact mutation. It
 logs one warning, `contact identity custody refused`, with the contact ID,
 zone, rule (`zone`, `operator`, or `holder`), properties (`EMAIL`, `TEL`,
-`IMPP`, a routing key, or `FN` or `NICKNAME` for a name), holder ID, and
+`IMPP`, a routing key, `FN` or `NICKNAME` for a name, or `GIVEN_NAME` for
+a given-name change), holder ID, and
 the turn's request, conversation, and loop IDs. Import drops the refused
 values, keeps the rest of the card, skips a card that would create a
 contact under a name or nickname a contact with authority goes by, or
@@ -628,15 +633,16 @@ preview), and counts the drops in its result, naming each skipped card;
 its rows carry the turn's provenance under the source
 `contact_import_vcf`. A forget refusal logs the same warning with the
 contact ID, zone, rule, and the turn's request, conversation, and loop
-IDs. The save also re-reads the contact's trust zone, nickname, and
-deleted state inside its transaction and aborts if any changed since the
-tool read the record, so a model save can no longer revert an operator's
-concurrent zone or nickname change or resurrect a deleted contact. Import
+IDs. The save also re-reads the contact's trust zone, nickname, given
+name, and deleted state inside its transaction and aborts if any changed
+since the tool read the record, so a model save can no longer revert an
+operator's concurrent zone, nickname or given-name change or resurrect a
+deleted contact. Import
 writes each card in one transaction that repeats the same re-read and the
 holder and target checks, so an operator write that lands between the
 import's check and its write cannot give a value a second holder: a newly
 refused value is dropped and counted, and a card whose merge target
-changed zone or nickname or was deleted, or whose name or nickname a
+changed zone, nickname or given name or was deleted, or whose name or nickname a
 contact with authority took meanwhile, writes nothing and is counted as
 skipped.
 
