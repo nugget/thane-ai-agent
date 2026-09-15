@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestSQLiteStoreConversationChannelBindingRoundTrip(t *testing.T) {
 	store, err := NewSQLiteStore(t.TempDir()+"/memory.db", 100)
@@ -22,7 +25,10 @@ func TestSQLiteStoreConversationChannelBindingRoundTrip(t *testing.T) {
 		t.Fatalf("BindConversationChannel: %v", err)
 	}
 
-	conv := store.GetConversation("signal-15551234567")
+	conv, err := store.GetConversation(context.Background(), "signal-15551234567")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if conv == nil {
 		t.Fatal("GetConversation() = nil, want conversation")
 	}
@@ -37,7 +43,10 @@ func TestSQLiteStoreConversationChannelBindingRoundTrip(t *testing.T) {
 		t.Fatalf("ChannelBinding.IsOwner = false, want true")
 	}
 
-	all := store.GetAllConversations()
+	all, err := store.GetAllConversations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(all) != 1 || all[0].Metadata == nil || all[0].Metadata.ChannelBinding == nil {
 		t.Fatalf("GetAllConversations() = %#v", all)
 	}

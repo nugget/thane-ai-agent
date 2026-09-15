@@ -183,7 +183,10 @@ func TestConversationSystemInjector(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 
-	msgs := mem.GetMessages("conv-1")
+	msgs, err := mem.GetMessages(context.Background(), "conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(msgs) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(msgs))
 	}
@@ -214,7 +217,10 @@ func TestConversationSystemInjector(t *testing.T) {
 		t.Fatalf("channel send = %#v", channelSender)
 	}
 
-	msgs = mem.GetMessages("conv-1")
+	msgs, err = mem.GetMessages(context.Background(), "conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(msgs) != 3 {
 		t.Fatalf("messages len after signal channel delivery = %d, want 3", len(msgs))
 	}
@@ -238,7 +244,10 @@ func TestConversationSystemInjector(t *testing.T) {
 		t.Fatalf("dispatch owu: %v", err)
 	}
 
-	msgs = mem.GetMessages("conv-1")
+	msgs, err = mem.GetMessages(context.Background(), "conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(msgs) != 4 {
 		t.Fatalf("messages len after owu channel delivery = %d, want 4", len(msgs))
 	}

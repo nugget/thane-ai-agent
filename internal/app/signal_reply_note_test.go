@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -44,7 +45,10 @@ func TestSignalReplyNoteRecorder(t *testing.T) {
 				t.Fatalf("record note: %v", err)
 			}
 
-			rows := store.GetMessages(tt.conversationID)
+			rows, err := store.GetMessages(context.Background(), tt.conversationID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(rows) != 1 {
 				t.Fatalf("rows = %+v, want exactly the note", rows)
 			}
@@ -58,8 +62,8 @@ func TestSignalReplyNoteRecorder(t *testing.T) {
 			if row.Content != tt.note {
 				t.Errorf("content = %q, want the note unchanged", row.Content)
 			}
-			if other := store.GetMessages("signal-other"); len(other) != 0 {
-				t.Errorf("note leaked into another conversation: %+v", other)
+			if other, err := store.GetMessages(context.Background(), "signal-other"); err != nil || len(other) != 0 {
+				t.Errorf("other conversation = %+v, error = %v; want no note", other, err)
 			}
 
 			rendered, ok := memory.FormatStoredHistoryMessage(row, time.Now())

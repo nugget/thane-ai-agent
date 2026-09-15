@@ -66,7 +66,10 @@ func TestConversationTranscript(t *testing.T) {
 				nowFunc: clock,
 			}
 
-			got := l.ConversationTranscript("test-conv")
+			got, err := l.ConversationTranscript(t.Context(), "test-conv")
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if tt.wantLen == -1 {
 				if got != "" {

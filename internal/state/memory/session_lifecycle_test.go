@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -44,7 +45,7 @@ func TestSessionCheckpointBookmarksPreservedRows(t *testing.T) {
 	if label != "before reset" || !reflect.DeepEqual(all, []string{before[0].ID, before[1].ID}) || !reflect.DeepEqual(active, []string{before[1].ID}) {
 		t.Fatalf("bookmark = %q %v %v", label, all, active)
 	}
-	if got := store.GetMessages("conv"); len(got) != 1 || got[0].ID != before[1].ID {
+	if got := mustReadMessages(t, store.GetMessages, "conv"); len(got) != 1 || got[0].ID != before[1].ID {
 		t.Fatalf("checkpoint changed active context: %+v", got)
 	}
 	if err := adapter.ResetSession("conv", "reset", ""); err != nil {
@@ -98,7 +99,7 @@ func TestSessionTransitionRollsBackBeforePublishing(t *testing.T) {
 			if got := adapter.ActiveSessionID("conv"); got != sid || callbackCount != 0 {
 				t.Fatalf("published failed transition: current=%q callbacks=%d", got, callbackCount)
 			}
-			if got := store.GetMessages("conv"); len(got) != len(messages) {
+			if got := mustReadMessages(t, store.GetMessages, "conv"); len(got) != len(messages) {
 				t.Fatalf("rollback lost active messages: %+v", got)
 			}
 			var claimed, bookmarks, sessions int
@@ -230,11 +231,11 @@ func TestSessionSplitRejectsCompactedSuffixWithoutChangingContext(t *testing.T) 
 	if _, err := store.DB().Exec(`UPDATE messages SET status = 'compacted' WHERE id = ?`, messages[1].ID); err != nil {
 		t.Fatal(err)
 	}
-	before := store.GetMessages("conv")
+	before := mustReadMessages(t, store.GetMessages, "conv")
 	if err := adapter.SplitSession("conv", messages[1].ID); err == nil {
 		t.Fatal("split accepted a retained compacted source without its summary")
 	}
-	if after := store.GetMessages("conv"); !reflect.DeepEqual(after, before) {
+	if after := mustReadMessages(t, store.GetMessages, "conv"); !reflect.DeepEqual(after, before) {
 		t.Fatalf("rejected split changed active context: before=%+v after=%+v", before, after)
 	}
 	if got := adapter.ActiveSessionID("conv"); got != sid {
@@ -254,14 +255,14 @@ func TestCompactionCannotRestoreClosedSessionContext(t *testing.T) {
 	if err := store.AddMessage("conv", "user", "old context", OriginChannel); err != nil {
 		t.Fatal(err)
 	}
-	messages := store.GetMessages("conv")
+	messages := mustReadMessages(t, store.GetMessages, "conv")
 	if err := adapter.ResetSession("conv", "reset", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ApplyCompaction("conv", []string{messages[0].ID}, "stale summary", time.Now()); err == nil {
+	if err := store.ApplyCompaction(context.Background(), "conv", []string{messages[0].ID}, "stale summary", time.Now()); err == nil {
 		t.Fatal("compaction revived closed session context")
 	}
-	if got := store.GetMessages("conv"); len(got) != 0 {
+	if got := mustReadMessages(t, store.GetMessages, "conv"); len(got) != 0 {
 		t.Fatalf("stale summary entered fresh session: %+v", got)
 	}
 	var status string

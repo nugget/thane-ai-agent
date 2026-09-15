@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -57,8 +58,8 @@ func TestMessageOriginRoundTrip(t *testing.T) {
 				path, mid.MidTurn, mid.Origin, OriginChannel)
 		}
 	}
-	check("GetMessages", store.GetMessages("conv-1"))
-	check("GetAllMessages", store.GetAllMessages("conv-1"))
+	check("GetMessages", mustReadMessages(t, store.GetMessages, "conv-1"))
+	check("GetAllMessages", mustReadMessages(t, store.GetAllMessages, "conv-1"))
 }
 
 // TestMessageOriginNullLegacyRow pins the read paths against a row whose
@@ -87,8 +88,8 @@ func TestMessageOriginNullLegacyRow(t *testing.T) {
 		}
 		t.Fatalf("%s: NULL-origin row dropped from the read (silent message loss)", path)
 	}
-	find("GetMessages", store.GetMessages("conv-1"))
-	find("GetAllMessages", store.GetAllMessages("conv-1"))
+	find("GetMessages", mustReadMessages(t, store.GetMessages, "conv-1"))
+	find("GetAllMessages", mustReadMessages(t, store.GetAllMessages, "conv-1"))
 }
 
 // TestMessageOriginInMemoryParity confirms the in-memory Store honors the
@@ -102,7 +103,7 @@ func TestMessageOriginInMemoryParity(t *testing.T) {
 		t.Fatalf("AddMidTurnMessage: %v", err)
 	}
 	byContent := make(map[string]Message)
-	for _, m := range s.GetMessages("c") {
+	for _, m := range mustReadMessages(t, s.GetMessages, "c") {
 		byContent[m.Content] = m
 	}
 	if got := byContent["from-channel"].Origin; got != OriginChannel {
@@ -125,19 +126,19 @@ func TestMessageOriginCompactionRows(t *testing.T) {
 	if err := store.AddMessage("conv-1", "user", "to be compacted", OriginChannel); err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
-	compacted := store.GetMessages("conv-1")
+	compacted := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(compacted) != 1 {
 		t.Fatalf("seed message missing")
 	}
 	summaryTS := time.Now().Add(-time.Minute)
-	if err := store.ApplyCompaction("conv-1", []string{compacted[0].ID}, CompactionSummaryPrefix+" the earlier exchange", summaryTS); err != nil {
+	if err := store.ApplyCompaction(context.Background(), "conv-1", []string{compacted[0].ID}, CompactionSummaryPrefix+" the earlier exchange", summaryTS); err != nil {
 		t.Fatalf("ApplyCompaction: %v", err)
 	}
 	if err := store.AddCompactionSummary("conv-1", CompactionSummaryPrefix+" session handoff"); err != nil {
 		t.Fatalf("AddCompactionSummary: %v", err)
 	}
 
-	for _, m := range store.GetMessages("conv-1") {
+	for _, m := range mustReadMessages(t, store.GetMessages, "conv-1") {
 		if m.Role == "system" && m.Origin != OriginInternal {
 			t.Errorf("compaction row %q origin = %q, want %q", m.Content, m.Origin, OriginInternal)
 		}

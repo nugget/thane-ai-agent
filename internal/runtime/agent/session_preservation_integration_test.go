@@ -19,8 +19,11 @@ func TestSessionLifecyclePreservesUnifiedHistory(t *testing.T) {
 				t.Parallel()
 				f := newSessionPreservationFixture(t, foreignKeys)
 				before := f.messageEvidence(t)
-				binding := f.mem.GetConversation(f.convID).Metadata.Clone()
-				var err error
+				original, err := f.mem.GetConversation(t.Context(), f.convID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				binding := original.Metadata.Clone()
 				switch operation {
 				case "reset":
 					err = f.loop.ResetConversation(f.convID)
@@ -61,9 +64,9 @@ func TestSessionLifecyclePreservesUnifiedHistory(t *testing.T) {
 				if len(after) != wantRows {
 					t.Errorf("message rows = %d, want %d; a lifecycle transition must not copy transcripts", len(after), wantRows)
 				}
-				conv := f.mem.GetConversation(f.convID)
-				if conv == nil || !reflect.DeepEqual(conv.Metadata, binding) {
-					t.Fatalf("conversation binding lost: %+v", conv)
+				conv, err := f.mem.GetConversation(t.Context(), f.convID)
+				if err != nil || conv == nil || !reflect.DeepEqual(conv.Metadata, binding) {
+					t.Fatalf("conversation binding lost: %+v, %v", conv, err)
 				}
 
 				prior, err := f.archive.GetSessionTranscript(f.priorSession)
@@ -78,7 +81,7 @@ func TestSessionLifecyclePreservesUnifiedHistory(t *testing.T) {
 					t.Errorf("searchable original rows = %d, want %d", indexed, len(before))
 				}
 
-				active := f.mem.GetMessages(f.convID)
+				active := mustMemoryMessages(t, f.mem, f.convID)
 				var wantIDs []string
 				switch operation {
 				case "reset":

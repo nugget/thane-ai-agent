@@ -191,9 +191,10 @@ type Response struct {
 
 // MemoryStore is the conversation memory backend required by the agent loop.
 // It manages per-conversation message history and token accounting so the
-// loop can build prompts and enforce context-window limits.
+// loop can build prompts and enforce context-window limits. Reads honor ctx
+// cancellation and distinguish unavailable data from successful empty results.
 type MemoryStore interface {
-	GetMessages(conversationID string) []memory.Message
+	GetMessages(ctx context.Context, conversationID string) ([]memory.Message, error)
 	// AddMessage records a message. origin is the provenance stamp for
 	// the row (memory.Origin* constants); callers pass "" when the
 	// enqueue site cannot know how the message entered the conversation.
@@ -203,7 +204,7 @@ type MemoryStore interface {
 	// identify the injection structurally rather than by substring-matching
 	// the rendered arrival marker. origin follows the AddMessage contract.
 	AddMidTurnMessage(conversationID, role, content, origin string) error
-	GetTokenCount(conversationID string) int
+	GetTokenCount(ctx context.Context, conversationID string) (int, error)
 	Clear(conversationID string) error
 	Stats() map[string]any
 }
@@ -227,7 +228,7 @@ type SessionToolCallRecorder interface {
 
 // Compactor handles conversation compaction.
 type Compactor interface {
-	NeedsCompaction(conversationID string) bool
+	NeedsCompaction(ctx context.Context, conversationID string) (bool, error)
 	Compact(ctx context.Context, conversationID string) error
 	// CompactionThreshold returns the token count at which compaction
 	// triggers.
@@ -1595,7 +1596,8 @@ func generateRequestID() string {
 // If stream is non-nil, tokens are pushed to it as they arrive. Response token
 // totals sum provider-reported usage across model calls. On failure Run returns
 // a nil response and an error; already-reported usage is still persisted and
-// published to request-scoped [usage.WithObserver] consumers.
+// published to request-scoped [usage.WithObserver] consumers. Required history
+// must be read successfully before new input is stored or a model is called.
 func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (resp *Response, err error) {
 	convID := req.ConversationID
 	if convID == "" {
@@ -1648,7 +1650,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"skip_context", req.SkipContext,
 		}
 		if !req.SkipContext {
-			attrs = append(attrs, "context_tokens", l.memory.GetTokenCount(convID))
+			if tokens, readErr := l.memory.GetTokenCount(ctx, convID); readErr != nil {
+				log.Warn("failed to read request completion context tokens", "error", readErr)
+			} else {
+				attrs = append(attrs, "context_tokens", tokens)
+			}
 		}
 		if resp != nil {
 			attrs = append(attrs,
@@ -1709,7 +1715,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// to avoid polluting conversation history.
 	var history []memory.Message
 	if !req.SkipContext {
-		history = l.memory.GetMessages(convID)
+		history, err = l.memory.GetMessages(ctx, convID)
+		if err != nil {
+			return nil, fmt.Errorf("read conversation history: %w", err)
+		}
 
 		// Per-message Origin overrides the request stamp so one turn can
 		// carry mixed provenance — a notify summary riding a mailbox
@@ -1847,7 +1856,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	channelBinding := req.ChannelBinding.Clone()
 	if channelBinding == nil {
-		channelBinding = l.conversationChannelBinding(convID)
+		channelBinding = l.conversationChannelBinding(ctx, convID)
 	}
 	// Inject subjects from the effective channel binding (request first,
 	// persisted conversation binding as fallback) so subject-aware
@@ -2659,31 +2668,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					}
 				}()
 			}
-			// Compaction.
-			if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
-				preTokens := l.memory.GetTokenCount(convID)
-				preMessages := len(l.memory.GetMessages(convID))
-				logging.Logger(iterCtx).Info("triggering compaction",
-					"tokens_before", preTokens,
-					"messages_before", preMessages,
-				)
-				go func() {
-					compactStart := time.Now()
-					if err := l.compactor.Compact(context.Background(), convID); err != nil {
-						log.Error("compaction failed", "error", err)
-					} else {
-						postTokens := l.memory.GetTokenCount(convID)
-						postMessages := len(l.memory.GetMessages(convID))
-						log.Info("compaction completed",
-							"tokens_after", postTokens,
-							"messages_after", postMessages,
-							"tokens_freed", preTokens-postTokens,
-							"messages_compacted", preMessages-postMessages,
-							"elapsed", time.Since(compactStart).Round(time.Second),
-						)
-					}
-				}()
-			}
+			l.maybeCompact(iterCtx, convID)
 		},
 	}
 
@@ -2703,7 +2688,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if err != nil {
 		if l.router != nil && routerDecision != nil {
 			latency := time.Since(startTime).Milliseconds()
-			l.router.RecordFailure(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), router.ClassifyResourceFailure(err))
+			tokens := l.routerContextTokens(ctx, convID, usageInfo.TokenCount)
+			l.router.RecordFailure(routerDecision.RequestID, latency, tokens, router.ClassifyResourceFailure(err))
 		}
 		return nil, err
 	}
@@ -2711,7 +2697,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Record router outcome.
 	if l.router != nil && routerDecision != nil {
 		latency := time.Since(startTime).Milliseconds()
-		l.router.RecordOutcome(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), true)
+		tokens := l.routerContextTokens(ctx, convID, usageInfo.TokenCount)
+		l.router.RecordOutcome(routerDecision.RequestID, latency, tokens, true)
 	}
 
 	// For exhausted runs, store the forced text in memory.
@@ -2779,17 +2766,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	return resp, nil
 }
 
-func (l *Loop) conversationChannelBinding(conversationID string) *memory.ChannelBinding {
+func (l *Loop) conversationChannelBinding(ctx context.Context, conversationID string) *memory.ChannelBinding {
 	if conversationID == "" || l.memory == nil {
 		return nil
 	}
 	var conv *memory.Conversation
+	var err error
 	switch store := l.memory.(type) {
 	case *memory.SQLiteStore:
-		conv = store.GetConversation(conversationID)
+		conv, err = store.GetConversation(ctx, conversationID)
 	case *memory.Store:
-		conv = store.GetConversation(conversationID)
+		conv, err = store.GetConversation(ctx, conversationID)
 	default:
+		return nil
+	}
+	if err != nil {
+		logging.Logger(ctx).Warn("failed to read conversation channel binding", "error", err)
 		return nil
 	}
 	if conv == nil || conv.Metadata == nil {
@@ -3273,13 +3265,16 @@ func (l *Loop) MemoryStats() map[string]any {
 	return l.memory.Stats()
 }
 
-// GetHistory returns the conversation messages for a given conversation.
-func (l *Loop) GetHistory(conversationID string) []memory.Message {
-	return l.memory.GetMessages(conversationID)
+// GetHistory returns the active conversation messages. A failed or canceled
+// read returns an error instead of empty or partial history.
+func (l *Loop) GetHistory(ctx context.Context, conversationID string) ([]memory.Message, error) {
+	return l.memory.GetMessages(ctx, conversationID)
 }
 
-func (l *Loop) GetTokenCount(conversationID string) int {
-	return l.memory.GetTokenCount(conversationID)
+// GetTokenCount returns the stored active-context token count. Zero is a
+// measured empty context only when the returned error is nil.
+func (l *Loop) GetTokenCount(ctx context.Context, conversationID string) (int, error) {
+	return l.memory.GetTokenCount(ctx, conversationID)
 }
 
 // GetContextWindow returns the context window size of the default model.
@@ -3373,13 +3368,13 @@ func (l *Loop) now() time.Time {
 }
 
 // getAllMessages prefers full-fidelity history over the active prompt window.
-func (l *Loop) getAllMessages(conversationID string) []memory.Message {
+func (l *Loop) getAllMessages(ctx context.Context, conversationID string) ([]memory.Message, error) {
 	if full, ok := l.memory.(interface {
-		GetAllMessages(string) []memory.Message
+		GetAllMessages(context.Context, string) ([]memory.Message, error)
 	}); ok {
-		return full.GetAllMessages(conversationID)
+		return full.GetAllMessages(ctx, conversationID)
 	}
-	return l.memory.GetMessages(conversationID)
+	return l.memory.GetMessages(ctx, conversationID)
 }
 
 // maxTranscriptBytes caps the transcript size returned by
@@ -3387,16 +3382,20 @@ func (l *Loop) getAllMessages(conversationID string) []memory.Message {
 const maxTranscriptBytes = 32 * 1024
 
 // ConversationTranscript returns a formatted text transcript of the
-// current in-memory conversation for the given ID. System and tool
+// stored conversation for the given ID. System and tool
 // messages are excluded to focus on user/assistant dialogue. Returns
 // an empty string if no user/assistant messages exist after filtering
 // (for example, when there are no messages or only system/tool
 // messages). The output is capped at [maxTranscriptBytes] to keep
-// downstream LLM prompts within reasonable context limits.
-func (l *Loop) ConversationTranscript(conversationID string) string {
-	messages := l.getAllMessages(conversationID)
+// downstream LLM prompts within reasonable context limits. Failed or canceled
+// reads return an error without a partial transcript.
+func (l *Loop) ConversationTranscript(ctx context.Context, conversationID string) (string, error) {
+	messages, err := l.getAllMessages(ctx, conversationID)
+	if err != nil {
+		return "", fmt.Errorf("read conversation transcript: %w", err)
+	}
 	if len(messages) == 0 {
-		return ""
+		return "", nil
 	}
 	now := l.now()
 	var b strings.Builder
@@ -3410,7 +3409,7 @@ func (l *Loop) ConversationTranscript(conversationID string) string {
 			break
 		}
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 // archiveAndEndSession closes a durable conversation during shutdown.

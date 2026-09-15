@@ -1,6 +1,7 @@
 package delegate
 
 import (
+	"context"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -30,7 +31,10 @@ func TestFinishLoopExecutionPreservesUnifiedTranscript(t *testing.T) {
 	if err := store.AddMessage(conversationID, "assistant", "delegate result preservationneedle", memory.OriginInternal); err != nil {
 		t.Fatal(err)
 	}
-	messages := store.GetMessages(conversationID)
+	messages, err := store.GetMessages(context.Background(), conversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	session, err := archive.StartSessionWithOptions(conversationID,
 		memory.WithParentSession("parent-session"), memory.WithParentToolCall("parent-call"))
 	if err != nil {
@@ -45,8 +49,8 @@ func TestFinishLoopExecutionPreservesUnifiedTranscript(t *testing.T) {
 	for range 2 {
 		executor.finishLoopExecution(prep)
 	}
-	if got := store.GetMessages(conversationID); len(got) != 0 {
-		t.Fatalf("finished delegate retained active context: %+v", got)
+	if got, err := store.GetMessages(context.Background(), conversationID); err != nil || len(got) != 0 {
+		t.Fatalf("finished delegate active context = %+v, error = %v; want empty", got, err)
 	}
 	transcript, err := archive.GetSessionTranscript(session.ID)
 	if err != nil || len(transcript) != 1 || transcript[0].ID != messages[0].ID || transcript[0].Content != messages[0].Content {

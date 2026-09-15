@@ -55,7 +55,12 @@ type mockMem struct {
 
 func newMockMem() *mockMem { return &mockMem{msgs: make(map[string][]memory.Message)} }
 
-func (m *mockMem) GetMessages(id string) []memory.Message { return m.msgs[id] }
+func (m *mockMem) GetMessages(ctx context.Context, id string) ([]memory.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.msgs[id], nil
+}
 func (m *mockMem) AddMessage(id, role, content, origin string) error {
 	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content, Origin: origin})
 	return nil
@@ -64,9 +69,11 @@ func (m *mockMem) AddMidTurnMessage(id, role, content, origin string) error {
 	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content, MidTurn: true, Origin: origin})
 	return nil
 }
-func (m *mockMem) GetTokenCount(string) int { return 0 }
-func (m *mockMem) Clear(id string) error    { m.msgs[id] = nil; return nil }
-func (m *mockMem) Stats() map[string]any    { return nil }
+func (m *mockMem) GetTokenCount(ctx context.Context, _ string) (int, error) {
+	return 0, ctx.Err()
+}
+func (m *mockMem) Clear(id string) error { m.msgs[id] = nil; return nil }
+func (m *mockMem) Stats() map[string]any { return nil }
 
 // toolNames extracts the function names from a tool definitions slice.
 func toolNames(defs []map[string]any) []string {
