@@ -54,6 +54,8 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"query says when it stops", "contacts_lookup", "Returns up to 50 matching contacts"},
 		{"query stops only when more match", "contacts_lookup", "says so when more match than it lists"},
 		{"ambiguity points at query for the rest", "contacts_lookup", "`query` set to that name lists every contact that fits ahead of any other match"},
+		{"ambiguity: query rows carry ids", "contacts_lookup", "ahead of any other match, each with its `contact_id`, so it reaches the ones the error left out while no more than 50 share the name"},
+		{"query rows carry ids", "contacts_lookup", "Each row carries the contact's `contact_id` and trust zone"},
 		{"routing shares the first-name rule", "contacts_save", "a first name two contacts share reaches neither"},
 		{"descriptions reach no one", "contacts_save", "addressed by a description (\"the plumber\") reaches no one"},
 		{"forget by ambiguous name removes nothing", "contacts_save", "resolves to neither and removes nothing"},
@@ -67,11 +69,12 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"recipients ignore free text", "notifications", "Notes, orgs, and AI summaries never resolve a recipient"},
 		{"recipient retry", "notifications", "send again with the full formatted name of the one you mean"},
 		{"recipients: the list is bounded", "notifications", "The error lists up to five of the contacts that share it"},
-		{"recipients: query finds the rest", "notifications", "`contact_lookup` with that first name as `query` lists ahead of any other match"},
+		{"recipients: query finds the rest", "notifications", "`contact_lookup` with that first name as `query` lists ahead of any other match while no more than 50 share it"},
 		{"trailhead: names only", "people-trailhead", "never through what a note says about someone"},
 		{"trailhead: exact holders need no error", "people-trailhead", "one is chosen without an error"},
 		{"trailhead: only the short-form case is an error", "people-trailhead", "A name is an error only when no contact holds it that way and several have it as a given name or first word"},
 		{"trailhead: carry the id", "people-trailhead", "the error lists up to five of them with their `contact_id`"},
+		{"trailhead: query lists the rest while they fit", "people-trailhead", "lists every one of them, each with its `contact_id`, ahead of any other match while no more than 50 share it"},
 	}
 	for _, tt := range present {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,6 +99,7 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"the error hands over every id", "hands you each `contact_id`"},
 		{"forget lists every id", "the error lists each `contact_id`"},
 		{"query stops at exactly 50", "says so when it stops at 50"},
+		{"query lists the rest without a bound", "name as `query` lists the rest"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {

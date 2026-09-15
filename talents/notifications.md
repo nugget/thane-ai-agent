@@ -90,8 +90,8 @@ settle *how*:
   reaches neither. The error lists up to five of the contacts that
   share it, each with its full formatted name, zone, and `contact_id`,
   and counts the rest, which `contact_lookup` with that first name as
-  `query` lists ahead of any other match; send again with the full
-  formatted name of the one you mean. Notes, orgs, and AI summaries never
+  `query` lists ahead of any other match while no more than 50 share
+  it; send again with the full formatted name of the one you mean. Notes, orgs, and AI summaries never
   resolve a recipient, so pass the person's exact contact name or
   nickname, not a description: a description reaches no one. The
   channel comes from the contact's facts: a

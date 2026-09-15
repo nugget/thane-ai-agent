@@ -41,7 +41,8 @@ is chosen without an error: the operator's own contact, else one above
 `known`. A name is an error only when no contact holds it that way and
 several have it as a given name or first word; the error lists up to
 five of them with their `contact_id`, and `contact_lookup` with that
-name as `query` lists the rest. Carry the one you mean forward rather
-than guessing. If the task spans
+name as `query` lists every one of them, each with its `contact_id`,
+ahead of any other match while no more than 50 share it. Carry the one
+you mean forward rather than guessing. If the task spans
 contact data plus another domain, delegate rather than serially
 loading many unrelated tags.

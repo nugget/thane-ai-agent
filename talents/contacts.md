@@ -219,9 +219,9 @@ lookup returns neither, whatever their zones, because a first name two
 people share does not say which one is meant. The error lists up to
 five of them, each with its formatted name, trust zone, `contact_id`,
 and the field it matched, and counts the rest; `query` set to that
-name lists every contact that fits ahead of any other match, so it
-reaches the ones the error left out while no more than 50 share the
-name. Retry with the full formatted name of the one you mean, or pass
+name lists every contact that fits ahead of any other match, each
+with its `contact_id`, so it reaches the ones the error left out while
+no more than 50 share the name. Retry with the full formatted name of the one you mean, or pass
 its `contact_id` to a tool that takes one; if the conversation does
 not settle which, ask rather than guess.
 
@@ -262,7 +262,9 @@ use the `key` + `value` filter below instead of `query`:
 
 Returns up to 50 matching contacts, those whose formatted name,
 nickname, given name, or first word the query is listed first, and
-says so when more match than it lists. Useful when the name in the
+says so when more match than it lists. Each row carries the contact's
+`contact_id` and trust zone, and a contact that answers to the query
+as a name also names the field it answers by. Useful when the name in the
 input is the person's company, their title, or a partial spelling. It is the
 only lookup that reads those text fields, and it returns a list to
 choose from, never an answer to who a name is.
