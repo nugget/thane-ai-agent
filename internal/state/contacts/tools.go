@@ -805,9 +805,9 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 			return fmt.Sprintf("No contacts matching %q", args.Query), nil
 		}
 		if truncated {
-			return formatContactList(contacts) + fmt.Sprintf("\nStopped at %d matches; more contacts match %q. Contacts whose formatted name, nickname, given name or first word it is are listed first. contact_lookup with a contact's full formatted name as name reaches one this list left out.\n", SearchLimit, args.Query), nil
+			return formatSearchResults(contacts, args.Query) + fmt.Sprintf("\nStopped at %d matches; more contacts match %q. Contacts whose formatted name, nickname, given name or first word it is are listed first. contact_lookup with a contact's full formatted name as name reaches one this list left out.\n", SearchLimit, args.Query), nil
 		}
-		return formatContactList(contacts), nil
+		return formatSearchResults(contacts, args.Query), nil
 	}
 
 	// List stats.
@@ -1926,14 +1926,40 @@ func formatContactList(contacts []*Contact) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d contact(s):\n\n", len(contacts)))
 	for _, c := range contacts {
-		sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
-		if c.Org != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
-		}
-		if c.AISummary != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
+		writeContactRow(&sb, c)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// formatSearchResults formats the contacts a query found. Each row
+// carries the contact's contact_id and trust zone, since a query is
+// where an ambiguous name sends the model to find the candidates the
+// error left out, and two of them can share a formatted name. A contact
+// that answers to the query as a name also names the field it answers
+// by, as the ambiguity error does.
+func formatSearchResults(contacts []*Contact, query string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d contact(s):\n\n", len(contacts)))
+	for _, c := range contacts {
+		writeContactRow(&sb, c)
+		sb.WriteString(fmt.Sprintf("\n  contact_id %s | trust zone %s", c.ID, c.TrustZone))
+		if field := NameMatchField(c, query); field != "" {
+			sb.WriteString(fmt.Sprintf(" | answers to %q by %s", query, field))
 		}
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// writeContactRow writes the one-line summary a contact list shows: the
+// formatted name, then the organization and AI summary when present.
+func writeContactRow(sb *strings.Builder, c *Contact) {
+	sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
+	if c.Org != "" {
+		sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
+	}
+	if c.AISummary != "" {
+		sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
+	}
 }

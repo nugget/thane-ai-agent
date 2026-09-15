@@ -21,6 +21,7 @@ func TestContactNameRuleTeachesResolution(t *testing.T) {
 		"Notes, AI summaries and organizations are never used to resolve a name",
 		"none is chosen", "lists up to five of them", "full formatted name, trust zone and contact_id",
 		"counts the rest, which contact_lookup with the name as query lists ahead of any other match",
+		"each with its contact_id, up to 50",
 	} {
 		if !strings.Contains(contactNameRule, want) {
 			t.Errorf("contactNameRule lacks %q: %s", want, contactNameRule)

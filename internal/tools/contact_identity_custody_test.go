@@ -183,6 +183,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 			"retry with the full formatted name", "never matches notes", "known duplicate", "contact_directory",
 			"lists up to five of them", "query set to the same name lists every contact that fits ahead of any other match",
 			fmt.Sprintf("lists up to %d matches, and says so when more match than it lists", contacts.SearchLimit),
+			"Each query row carries the contact's contact_id and trust zone",
 		}},
 		{"contact_lookup name", parameterDescription("contact_lookup", "name"), []string{
 			"formatted name or nickname", "given name or the first word", "exactly one contact must fit", "never used to resolve a name",
@@ -190,6 +191,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_lookup query", parameterDescription("contact_lookup", "query"), []string{
 			"given names", "notes", fmt.Sprintf("up to %d matching contacts", contacts.SearchLimit), "listed first", "when more match than it lists",
+			"Each row carries the contact's contact_id and trust zone",
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
 			"exactly one of name or contact_id", "as contact_lookup resolves it", "operator's own contact first, then one above known",

@@ -76,17 +76,19 @@ func (e *AmbiguousNameError) Error() string {
 }
 
 // continuation says where to find the more candidates the error leaves
-// out. [Store.Search] lists every contact that answers to a name ahead
-// of any other match, so a query by the name lists them all while there
-// are no more than SearchLimit; past that no lookup lists the rest, and
-// the error says so rather than send the model to a list that stops
-// short of the one it wants.
+// out. [Store.Search] lists up to SearchLimit contacts that answer to a
+// name ahead of any other match, and contact_lookup prints each one's
+// contact_id, so a query by the name lists them all while there are no
+// more than SearchLimit. Past that
+// the query lists only SearchLimit of them, and the error says so and
+// what to do when the one the model wants is not among them, rather
+// than send it to a list that may stop short of that contact.
 func (e *AmbiguousNameError) continuation(more int) string {
 	if e.Total <= SearchLimit {
-		return fmt.Sprintf("; and %d more not listed: contact_lookup with query set to %q lists all %d of them first, ahead of any other match, so find the one you mean there",
+		return fmt.Sprintf("; and %d more not listed: contact_lookup with query set to %q lists all %d of them first, ahead of any other match, each with its contact_id, so find the one you mean there",
 			more, echoForRefusal(e.Name), e.Total)
 	}
-	return fmt.Sprintf("; and %d more not listed: contact_lookup with query set to %q lists only %d of the %d, and no lookup lists the rest, so ask the operator for the full formatted name of the one you mean",
+	return fmt.Sprintf("; and %d more not listed: contact_lookup with query set to %q lists only %d of the %d, each with its contact_id, so the one you mean may not be among them; if it is not, ask the operator for its full formatted name",
 		more, echoForRefusal(e.Name), SearchLimit, e.Total)
 }
 

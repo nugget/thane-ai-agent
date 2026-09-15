@@ -408,10 +408,13 @@ contact with authority and is still reported.
   five with formatted name, zone, `contact_id` and the field matched,
   counting the rest and pointing at `contact_lookup`'s `query` to find
   them, because authority breaks ties among exact holders only.
-  `Store.Search` lists every contact that answers to a name by these
-  keys ahead of any other match, so that query reaches the rest while
-  no more than 50 (`SearchLimit`) share the name; past that the error
-  says no lookup lists them all. Notes, AI summaries, and organizations
+  `Store.Search` lists up to 50 contacts that answer to a name by these
+  keys ahead of any other match, and `contact_lookup` prints each
+  row's `contact_id` and zone, so that query reaches the rest while no
+  more than 50 (`SearchLimit`) share the name, even two whose names
+  differ only by edge space; past that the query lists only 50 of
+  them, and the error says so and to ask the operator for the full
+  formatted name of one it does not list. Notes, AI summaries, and organizations
   are never read: a word in one contact's note does not make that
   contact the person it names, and `Store.Search`, behind
   `contact_lookup`'s `query` and the contacts API, is the only path
