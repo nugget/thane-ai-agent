@@ -98,6 +98,10 @@ type accountView struct {
 	// pending_review when the account has a review pass.
 	reviewView
 
+	// labelsView adds labels and keywords when email.labels declares any
+	// and the account's access is not read.
+	labelsView
+
 	// DeniedRecipientDomains and AllowedRecipientDomains are the
 	// account's recipient-domain rules, shown so a refusal is never the
 	// first place the model learns them.
@@ -180,6 +184,7 @@ func (p *ContextProvider) buildContext(bound string, isAttended bool) (string, e
 		view.DraftsFolder = p.service.entryDraftsFolder(cfg)
 		view.filingView = p.service.newFilingView(cfg)
 		view.reviewView = p.service.newReviewView(cfg, now)
+		view.labelsView = p.service.newLabelsView(cfg)
 		if snap, ok := p.service.cachedFolders(cfg.Name); ok {
 			view.Folders, view.FoldersTruncated = folderViews(snap.Folders)
 			view.FoldersAsOf = promptfmt.FormatDeltaOnly(snap.At, now)

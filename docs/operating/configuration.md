@@ -453,6 +453,186 @@ carries. A loop that should only ever see one mailbox binds it with
 `bindings: {email_account: <name>}`; see
 [Loop Definitions](../reference/loop-definitions.md).
 
+### Labels
+
+```yaml
+email:
+  labels:
+    contact:
+      meaning: "The sender matches a contact record"
+      keyword: thane-contact
+      color: blue
+      apply: contact_matched
+```
+
+`labels` is a small vocabulary of marks the operator reads in their
+own mail client, declared once for the site and carried by the accounts
+whose `mailbox.labels` names them (below). A label is a meaning first.
+Its key is the name the model uses (lowercase letters, digits, `-`, and
+`_`, starting with a letter, at most 32 bytes), and `meaning`, which is
+required, is one sentence of at most 200 bytes that the model reads
+beside it. How a label shows on a message is presentation, and each
+label needs at least one of two:
+
+- `keyword` is an IMAP keyword such as `thane-contact`: printable ASCII
+  without spaces or any of `( ) { % * " \ ]`, at most 64 bytes, and
+  unique among the labels regardless of case. System flags (anything
+  beginning with `\`), anything beginning with `$`, which marks the
+  keywords clients and servers already give meaning to (`$Junk`,
+  `$Forwarded`, and the colour keywords `$MailFlagBit0` to
+  `$MailFlagBit2` among them), and the junk-filter keywords `Junk`,
+  `NonJunk`, and `NotJunk` are refused, so a label never tells a client
+  something it did not mean. Any client can search for a keyword;
+  whether it displays one depends on the client.
+- `color` is a flag colour, one of `red`, `orange`, `yellow`, `green`,
+  `blue`, `purple`, or `grey`, and each colour may belong to only one
+  label, because a message shows one. It is written as `\Flagged` plus
+  the colour keywords in the table below. A client that colours flags
+  shows the colour; every other client shows a plain flag.
+
+`apply` names a rule under which Thane applies the label itself, so the
+model never applies or removes it. The only rule is `contact_matched`:
+when the poller finds new mail in an account's INBOX whose sender
+matches exactly one contact record, at any trust zone, it applies the
+label before dispatching the message's wake. The contact directory
+decides, not the model. A label without `apply` is one the model may
+apply and remove with `email_mark`'s `label` argument. At most 8 labels
+may be declared, because every one is shown in every turn that carries
+the `email` tag. A missing meaning, a label with neither keyword nor
+colour, an invalid keyword, an unknown colour or rule, and a colour or
+keyword two labels share are refused at startup. Without `labels`, the
+default, Thane writes no label anywhere.
+
+An account carries only the labels its `mailbox.labels` names, whatever
+its `owner`:
+
+```yaml
+email:
+  accounts:
+    - name: personal
+      mailbox:
+        owner: operator
+        labels: [contact]
+```
+
+An account without `mailbox.labels`, the default, carries none: Thane
+writes no label there, its entry lists none, and `email_mark` and
+`email_search` refuse a label on it. Every name must be declared under
+`email.labels`, and an account whose `access` is `read`, which Thane
+never writes, may name none. Both are refused at startup.
+
+Every write adds or removes named flags (`+FLAGS` or `-FLAGS`) and
+never replaces a message's flags, and nothing marks mail seen. A colour
+is written only on a message without `\Flagged`: Thane adds `\Flagged`
+with the colour's keywords and removes any other colour keyword the
+message carries. A message already flagged, by the operator or for
+another label, keeps its flag and colour: a derived label still adds
+its keyword there, and `email_mark` refuses a label with a colour on
+it. The poller reads each message's flags just before writing it, and
+applies a derived label to a message at most once, so a mark the
+operator takes off stays off if the message is listed again. A failed
+write is logged and costs that message its label, never the poll or its
+wakes.
+
+Thane records what it set on each message (the keywords, the colour and
+its keywords, whether it set `\Flagged`, the derived labels the poller
+has applied, and the copy it marked: the folder, the folder's
+UIDVALIDITY, and the UID) in the operational state store, namespace
+`email_labels`, one record per account and Message-ID under a SHA-256
+key of the two, for 90 days after the last change. The record repeats
+the account and Message-ID, and one naming another message is never
+read as this one's. That record is the only thing that tells Thane's
+marks from the operator's. Removing a label touches only what it
+records, and a flag counts as Thane's only while it still carries
+exactly the colour Thane wrote, so a flag the operator recoloured or
+took off is theirs from then on; whenever Thane reads a message beside
+its record, it drops what the operator has taken back.
+
+What the record claims holds only on the copy Thane marked. Every other
+copy is the operator's: a second copy under the same Message-ID, such
+as a mailing list's copy beside a direct one or a byte-identical
+duplicate, and the same message once someone else moves it, since a
+move gives it a new UID. Thane writes no label on such a copy, claims
+nothing there, and never removes its marks, so a message the operator
+moves keeps Thane's marks as the operator's own. When `email_move`
+moves a message Thane marked and the server reports the new UIDs
+(COPYUID), the record follows the message to its new copy; without
+COPYUID the claim lapses the same way, and so it does when the same
+call moves another copy under the same Message-ID, because the IMAP
+library sorts the COPYUID sets and loses which new UID belongs to which
+copy. The wake's `flags` leave out
+what the record claims whether or not the account still carries the
+label, so taking a label off an account does not make the marks Thane
+already set read as someone's flag.
+
+When the model flags a message for the operator
+(`email_mark` flag `flagged`) and its flag is still the one Thane wrote,
+Thane removes that colour's keywords, so the flag loses the label's
+colour and reads as the operator's attention flag; the keyword stays.
+When the model removes `flagged` from such a message, the colour's
+keywords go with the flag. Once a record expires, Thane treats the
+marks as the operator's and leaves them in place. A message without a
+Message-ID gets no label.
+
+Thane knows only what it reads. A flag the operator takes off and later
+sets again in the same colour, with no read by Thane in between, still
+counts as Thane's, and a flag the operator sets in the moment between
+Thane reading a message and writing its colour takes Thane's colour.
+Closing both gaps would need the server's change sequence numbers
+(CONDSTORE), which Thane does not use.
+
+`email_search` finds a label by `label` when the label has a keyword
+and the account carries it, and its `flagged` and `unflagged` see a
+label's flag like any other. On an account whose labels include a
+colour, `flagged: true` therefore returns label flags beside attention
+flags. The model tells them apart by each row's `flag_label`, which
+Thane fills from its record: it names the label only when Thane wrote
+that flag, so an operator's flag in a label's colour still reads as
+theirs.
+
+Whether a label sticks is the server's call. Every read-write SELECT
+reports the folder's `PERMANENTFLAGS`, which Thane reads as `permanent`
+(the list includes `\*`, so new keywords stay), `session_only` (a list
+without `\*`), or `unsupported` (an empty or absent list, which Thane
+takes as keeping nothing rather than as keeping everything). Anywhere
+but `permanent`, Thane writes no keywords, colour keywords included,
+and logs that once per account and folder, and `email_mark` refuses a
+label that needs them; a label that is only a red colour needs none.
+
+The model sees the labels an account carries in its entry, as `labels`
+`[{label, meaning, shows_as, apply}]`, where `shows_as` reads like "blue
+flag and keyword thane-contact", and INBOX's verdict as `keywords` once
+a read-write SELECT of INBOX has reported it. List, search, and read
+results name the labels a message carries and, as `flag_label`, the
+label whose flag Thane wrote on it, beside the raw flags. A new-mail
+wake's `flags` never include a mark Thane set. An account that carries
+no label renders none of this. The built-in passes and the default
+handler are told how to read label flags only when some account
+carries a label with `apply`.
+
+#### One client's presentation: flag colours
+
+The colour keywords follow the encoding Apple Mail on macOS and iOS
+uses, and Apple Mail shows only `\Flagged` and its colour, not
+arbitrary keywords. For an operator who triages there, the colour is
+the label and the keyword is only for searching. Other clients show the
+same messages as flagged, and a client that displays keywords shows the
+keyword.
+
+| `color` | Written as `\Flagged` plus |
+|---|---|
+| `red` | no colour keyword |
+| `orange` | `$MailFlagBit0` |
+| `yellow` | `$MailFlagBit1` |
+| `green` | `$MailFlagBit0` and `$MailFlagBit1` |
+| `blue` | `$MailFlagBit2` |
+| `purple` | `$MailFlagBit0` and `$MailFlagBit2` |
+| `grey` | `$MailFlagBit1` and `$MailFlagBit2` |
+
+Avoid `red` for a label on such a client: a red flag is also how the
+operator's own plain flag reads, and it is what a label's flag becomes
+when the model flags the message for the operator.
+
 ## Signal Messaging
 
 ```yaml

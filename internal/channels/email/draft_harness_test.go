@@ -105,28 +105,13 @@ func (s *specialUseSession) divertMove(numSet imap.NumSet, dest string) (bool, e
 	return len(found.AllUIDs()) == 0, nil
 }
 
-// Store runs the server's one-shot store hook, whose error, if any, is
-// the answer in place of the store.
-func (s *specialUseSession) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *imap.StoreFlags, options *imap.StoreOptions) error {
-	s.mem.mu.Lock()
-	hook := s.mem.storeHook
-	s.mem.storeHook = nil
-	s.mem.mu.Unlock()
-	if hook != nil {
-		if err := hook(); err != nil {
-			return err
-		}
-	}
-	return s.Session.Store(w, numSet, flags, options)
-}
-
 // onNextStore runs hook once, before the next STORE any session makes;
 // an error it returns fails that STORE, as a dropped connection or a
-// server NO would.
+// server NO would. The session's Store is in labels_harness_test.go.
 func (m *memIMAP) onNextStore(hook func() error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.storeHook = hook
+	m.nextStoreHook = hook
 }
 
 // Expunge runs the server's one-shot expunge hook, then expunges.

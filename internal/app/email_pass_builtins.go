@@ -46,10 +46,14 @@ func emailPassDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 	var specs []looppkg.Spec
 	if triage {
-		specs = append(specs, emailOwnerTriageSpec())
+		spec := emailOwnerTriageSpec()
+		spec.Task = withLabelNote(spec.Task, emailTriageLabelNote, cfg)
+		specs = append(specs, spec)
 	}
 	if review {
-		specs = append(specs, emailDraftReviewSpec())
+		spec := emailDraftReviewSpec()
+		spec.Task = withLabelNote(spec.Task, emailReviewLabelNote, cfg)
+		specs = append(specs, spec)
 	}
 	return specs
 }

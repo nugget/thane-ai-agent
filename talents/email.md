@@ -39,10 +39,10 @@ audiences and trust models are different.
   Compose, reply, the trust-zone gating that protects against
   accidental sends to strangers.
 
-- **You want to move mail around the folder structure** — activate
-  `email_organize`. Mark as read/flagged, move between folders, file
-  obvious spam by role and undo a move. UIDs are folder-scoped; this
-  is where that bites.
+- **You want to mark or move mail** — activate `email_organize`. Mark
+  it read or flagged, apply a label the entry lists without `apply`,
+  move it between folders, file obvious spam by role, and undo a move.
+  UIDs are folder-scoped; this is where that bites.
 
 - **You want to improve or take back a draft you wrote** — activate
   `email_drafts` beside `email`; it is a capability tag with its own
@@ -55,35 +55,76 @@ audiences and trust models are different.
   shows a `review_loop`. Where it shows none, flag the message for the
   operator instead. See "Two passes over new mail" below.
 
+## Five questions before you act
+
+Every email decision turns on five questions, and the account's entry
+in the Email Accounts block answers most of them before you call
+anything:
+
+1. **Whose mailbox is it?** An entry showing `owner: operator` is the
+   operator's own inbox, and you are a guest in it: you help by
+   marking and drafting, never by clearing mail away, and what you
+   draft goes out as them. Any other account is one Thane keeps, and
+   you write as yourself. See "Whose mailbox".
+2. **Where may its mail go?** What you write is `sent`, `drafted`, or
+   `refused` by the account's policy and each recipient's trust zone,
+   and the entry says which zones go which way in this turn. Within the
+   account, `email_move` files only into the entry's `move_into`
+   folders, and spam only by `destination_role: "junk"`. Nothing about
+   one account's mail is ever written from another.
+3. **Draft, flag, or escalate?** Choose by who has to act. You draft
+   when a plain answer can be written from the message; the operator
+   gets a flag when only they can decide; a more capable pass gets the
+   message through `email_escalate` when the entry shows a
+   `review_loop` and you cannot do it well. Obvious spam goes to junk,
+   and everything else stays as it is. See "Two passes over new mail".
+4. **Is this draft mine?** Only while Go can prove it: a drafts-folder
+   row carrying `thane_draft`, or an `open` draft in `email_drafts`. A
+   draft the operator wrote or touched is theirs, whatever it answers.
+   See `email_drafts`.
+5. **What does this mark say?** A flag a row's `flag_label` names is
+   that label's mark; any other flag is someone's attention flag, most
+   often the operator's. A label whose entry shows `apply` is Go's to
+   set, never yours. See "Labels".
+
+Go refuses a call that gets the mechanical part of an answer wrong (a
+move outside `move_into`, a recipient the gate refuses, a draft tool on
+a draft that is not yours, a label Go applies), and nothing changes.
+What Go cannot check is the judgment: whose voice a message is in, who
+has to act, and what a flag is asking for. Spend your care there.
+
 ## Constants across all branches
 
-- **Which account am I in?** The Email Accounts block in your context
-  lists every mailbox this site has configured — its name, address,
-  the operator's description of what it is for, whether it can send,
-  and its folder names with their roles; an account the operator
-  marked also shows whose mailbox it is (`owner`), the name its mail
-  goes out under (`writes_as`), and its `voice` (see "Whose mailbox"
-  below). An account that limits where mail may be filed shows its
-  `junk_folder`, the `move_into` folders `email_move` accepts there,
-  and any `filing_note` the operator wrote; an operator mailbox shows
-  its `junk_folder` even when it allows every folder. An entry shows
-  `wake_loop` when the account's new mail wakes a loop other than its
-  owner's default, and `review_loop` with `pending_review` when the
-  account has a review pass (see "Two passes over new mail" below).
-  Every tool takes an
-  `account`. In a loop bound to one account, omitting `account`
-  resolves to that account and naming any other is refused; in an
-  unbound turn, omitting it means the primary account, which on a
-  multi-account site is usually the wrong one. A new-mail wake event
-  names its `account` and `folder` in metadata: pass both to every
-  call about that message. Its `flags`, present only when the message
-  has any, are the message's IMAP flags as the server spells them,
-  comma-separated, so `\Flagged` there means it is already flagged.
-- **Results are JSON, and every UID comes with its account and
-  folder.** A UID identifies a message *within one folder of one
-  account*; the same number means something else in another folder.
-  Read `account` and `folder` off the result and pass them back
-  rather than remembering a number on its own.
+- **Which account am I in?** The Email Accounts block lists every
+  mailbox this site has configured: its name, address, the operator's
+  description of what it is for, what it may do, and its folder names
+  with their roles. The rest of an entry appears only when it has
+  something to say. An account the operator marked shows whose mailbox
+  it is (`owner`), the name its mail goes out under (`writes_as`), and
+  its `voice` (see "Whose mailbox"). An account that limits where mail
+  may be filed shows its `junk_folder`, the `move_into` folders
+  `email_move` accepts there, and any `filing_note` the operator wrote;
+  an operator mailbox shows its `junk_folder` even when it allows every
+  folder (see `email_organize`). An entry shows `wake_loop` when the
+  account's new mail wakes a loop other than its owner's default, and
+  `review_loop` with `pending_review` when the account has a review
+  pass (see "Two passes over new mail"). It shows `labels` and
+  `keywords` when the account's mailbox carries labels (see "Labels").
+- **Every call names its account, and every UID its folder.** Every
+  tool takes an `account`. In a loop bound to one account, omitting
+  `account` resolves to that account and naming any other is refused;
+  in an unbound turn, omitting it means the primary account, which on
+  a multi-account site is usually the wrong one. Results are JSON, and
+  a UID identifies a message *within one folder of one account*; the
+  same number means something else in another folder, so read
+  `account` and `folder` off the result and pass them back rather than
+  remembering a number on its own. A new-mail wake event names its
+  `account` and `folder` in metadata: pass both to every call about
+  that message. Its `flags`, present only when the message has any,
+  are the message's IMAP flags as the server spells them,
+  comma-separated, without any mark that is still Thane's for a label
+  (see "Labels"), so `\Flagged` there is someone else's flag: the
+  message is already flagged.
 - **Every address comes with the directory's answer.** Each `from`,
   `to`, `cc`, and `reply_to` entry in a result is `{name, address,
   trust_zone, automated, contact, contact_status}`. `contact_status` is
@@ -118,46 +159,43 @@ audiences and trust models are different.
   shows `draft_gate: "relaxed"`, list mail that names the account's
   own address in its `to` or `cc` can be answered as a draft (see "A
   drafts-only account" in `email_respond`).
-- **Every outbound message gets a decision, and the result says
+- **Every message you write gets a decision, and the result says
   which way it went.** Each account carries a policy: `access`
   (`read`, `organize`, or `send`) is the most you may do there, and
-  `delivery` says where mail goes once every recipient has passed
-  the trust gate. `email_send` and `email_reply` end in one of three
+  `delivery` says where mail goes once every recipient has passed the
+  trust gate. `email_send` and `email_reply` end in one of three
   dispositions: `sent` (delivered by SMTP), `drafted` (held in the
   account's drafts folder for the operator to send from their own
   client; nothing has left the mailbox, so never resend it, and the
-  result's `draft_id` is how you change it later), or
-  `refused` (one sentence, then a `decision` JSON naming every
-  recipient at issue and its recovery; nothing was sent or drafted).
-  Under the default `by_trust_zone` delivery, `admin` and `household`
-  recipients send directly when the operator is present for the
-  turn, `trusted` recipients are drafted, blocked zones refuse the
-  whole message, and every other turn drafts everything. `attended` in
-  the Email Accounts block is the authority: it is true only when this
+  result's `draft_id` is how you change it later), or `refused` (one
+  sentence, then a `decision` JSON naming every recipient at issue and
+  its recovery; nothing was sent or drafted). Which way a message goes
+  depends on whether the operator is present, and `attended` in the
+  Email Accounts block is the authority: it is true only when this
   turn is the operator's own message (Thane's native API, or their own
   message in a conversation bound to their contact). A poller wake, a
-  review wake, a scheduled loop, a loop launched from the operator's conversation, and
-  a conversation with anyone else are all unattended. The block also
-  lists, per account, which zones it
-  `sends_directly_to`, `drafts_for`, and `refuses`, so read it before
-  composing rather than learning the answer from the result. Pass
-  `draft: true` to hold a message in the drafts folder on purpose.
-- **Recipients must be in the contact directory at a zone whose send
-  policy is not blocked.** The gate refuses the whole message on
-  *any* recipient at issue — a `known` contact, a stranger, an
-  `automated` mailbox whatever its record's zone, an address several
-  records share whose least privileged record is blocked, a directory
-  lookup that failed, or a domain the account's policy denies — and
-  the refusal's `decision.recipients` names each one with its
-  recovery: ask the operator to assign a zone, report a duplicate,
-  retry later, or drop the recipient. Only the operator can change a
-  zone. A contact you create starts at `known`, which is refused too,
-  and outside the operator's own message `contact_save` refuses to add
-  an address to a contact above `known` or one an elevated or operator
-  contact already holds (see the refusal section below). Nothing goes
-  to the rest. Confirm recipients via
+  review wake, a scheduled loop, a loop launched from the operator's
+  conversation, and a conversation with anyone else are all
+  unattended. The entry lists which zones the account
+  `sends_directly_to`, `drafts_for`, and `refuses` in this turn, so
+  read it before composing rather than learning the answer from the
+  result. Pass `draft: true` to hold a message in the drafts folder on
+  purpose.
+- **One recipient at issue refuses the whole message.** A recipient
+  must be in the contact directory at a zone whose send policy is not
+  blocked. A `known` contact, a stranger, an `automated` mailbox
+  whatever its record's zone, an address several records share whose
+  least privileged record is blocked, a directory lookup that failed,
+  or a domain the account's policy denies refuses the message, and
+  `decision.recipients` names each one with its recovery: ask the
+  operator to assign a zone, report a duplicate, retry later, or drop
+  the recipient. Nothing goes to the rest. Confirm recipients with
   `contact_lookup` before composing; the refusal after you've drafted
-  the body is annoying and avoidable. One kind of account asks less,
+  the body is annoying and avoidable. Only the operator can change a
+  zone, and `contact_save` is not a way to clear a refusal: a contact it
+  creates starts at `known`, and outside the operator's own message Go
+  refuses the additions that would lend a higher zone (see
+  `email_respond`). One kind of account asks less,
   and only ever drafts: where the entry shows `draft_gate: "relaxed"`,
   the operator sends every draft by hand, so a stranger, a `known`
   contact, or a shared address is drafted there rather than refused.
@@ -242,7 +280,10 @@ A message whose `flags` include `\Answered` has already been replied
 to, most often by the operator from another client, so neither pass
 drafts an answer to it: flag it if it still needs them, or leave it.
 The wake event carries the flags as the poll saw them, and `email_read`
-shows them as they are now.
+shows them as they are now. A draft is not an answer, and Thane cannot
+know when, or whether, the operator sends one, which is why `email_mark`
+refuses `answered` on an account whose `delivery` is `drafts`. So a
+missing `\Answered` does not show that a draft you wrote went unsent.
 
 An account whose entry shows `review_loop` has a second pass: that
 loop, which may run on a more capable model. It is woken by queued
@@ -302,6 +343,75 @@ included, and is null when it could not be counted, which is not zero.
 A message without a Message-ID cannot be queued, because the review
 pass finds a message by its Message-ID; flag it instead.
 
+## Labels
+
+A label is a mark with a meaning, which the operator reads in their
+own mail client. An account entry lists the labels its mailbox carries
+as `labels` `[{label, meaning, shows_as, apply}]`: `meaning` is what
+the label says about a message, `shows_as` how it appears there (an
+IMAP keyword, a flag colour, or both), and `apply`, present only on a
+label Go applies itself, the rule it applies it by. Each colour belongs
+to at most one label. An entry without `labels` means no label is
+written on that account, and `email_mark` and `email_search` refuse
+one there. A keyword in a message's `flags` that the entry's labels do
+not declare is the operator's or their client's, not a label.
+
+**A label with `apply` is Go's, never yours.** Go applies it from what
+it knows, not from anything you judge. Under `contact_matched`, when new
+mail reaches INBOX from a sender whose `contact_status` is `matched`,
+Go puts the label on before the wake is sent. The directory decides, so
+the label says only that the sender's address matches one contact
+record, at whatever zone, `known` included; it says nothing about who
+wrote the message or whether it matters. Never apply or remove such a
+label: `email_mark` refuses both, and there is nothing to fix. The wake
+event's `flags` never include a mark that is still Thane's; `email_read`,
+`email_list`, and `email_search` show the message as it is now, labels
+included.
+
+**A mark is Thane's only on the message Thane marked, in the folder
+Thane marked it in.** Go's record names that one message by its folder
+and UID. When the
+operator moves the message, or a second copy of it arrives under the
+same Message-ID, the marks that copy carries are the operator's: its
+row has no `flag_label`, flagging it clears no colour, and removing a
+label from it is refused. `email_move` keeps Go's record with the
+message when its result shows `destination_uids_known: true` and the
+call moved no other copy under the same Message-ID; otherwise the moved
+message's marks become the operator's the same way. This is
+deliberate: when Go cannot prove a mark is Thane's, the mark is the
+operator's, and nothing Thane does removes it.
+
+**A flag means one of two things, and the row says which.** A flag
+colour is `\Flagged` plus colour keywords: a client that colours flags
+shows the colour, and every other client shows a plain flag. Go writes
+a label's colour only on a message nobody has flagged, never over a
+flag someone else set or another label's. Where a row carries
+`flag_label`, its flag is the one Thane wrote for that label, as Go's
+own record shows: the label's mark, not a request for the operator's
+attention. Any other flag, whatever its colour, is someone's attention
+flag, most often the operator's. When the operator must act on a
+message whose row carries `flag_label`, flag it anyway with
+`email_mark` flag `flagged`: Go clears the colour Thane wrote, so the
+flag reads plain, as the operator's attention flag, and the result
+lists the message under `thane_color_cleared`. The label's keyword
+stays, so `labels` still says what it said. A colour anyone else set is
+never cleared. Removing `flagged` takes a flag away whoever set it, a
+label's included, with the colour keywords Thane wrote for it, so do
+that only when the operator asks.
+
+**`keywords` says whether INBOX keeps labels.** Every label except a
+bare red flag is written with IMAP keywords, and the server decides
+whether a keyword stays on a message. `keywords: "permanent"` means it
+does. `session_only` and `unsupported` mean it would not, so Go writes
+no keyword there, a label's colour keywords included, and `email_mark`
+refuses a label that needs one. The entry shows `keywords` once Thane
+has opened INBOX to change something since it started; its absence
+says nothing about the server.
+
+Applying a label that has no `apply` is under "Apply a label" in
+`email_organize`; reading `labels` and `flag_label` in results, and
+searching by label, are in `email_triage`.
+
 ## Cross-references
 
 - For grounding sender and recipient names in real records, bounce to
@@ -325,8 +435,6 @@ pass finds a message by its Message-ID; flag it instead.
   `request_human_decision` with the email summary in the body. On an
   operator mailbox a flag is usually enough: it is how the operator
   sees what needs them.
-- For handing a message to the account's review pass rather than to
-  the operator, see "Escalate or flag" above.
 - For editing drafts after they are written, which is its own pass
   and often a stronger model than the one that wrote them, bounce to
   `email_drafts`; a loop that does it carries both `email` and
@@ -382,7 +490,7 @@ calls it, so every destination is a folder name exactly as
 
 The result is `{account, folder, count, total_matched, truncated,
 messages:[{uid, from, to, cc, subject, date, message_id, flags,
-size, thane_draft}]}`, where every address is `{name, address, trust_zone,
+labels, flag_label, size, thane_draft}]}`, where every address is `{name, address, trust_zone,
 automated, contact, contact_status}` as described under the `email`
 trailhead (`automated` is present only on a no-reply, notification, or
 bounce address); `date` is a delta such as `-2h13m`. `limit` defaults to
@@ -394,6 +502,22 @@ with `addresses_omitted` counting the rest.
 read, skip what you have. The UIDs in the result are what you'll feed
 to `email_read`, `email_mark`, or `email_move` next, together with the
 `account` and `folder` beside them.
+
+`flags` are the message's IMAP flags as the server spells them:
+`\Seen` (read), `\Answered` (replied to), `\Flagged`, `\Draft`,
+`\Deleted`, and keywords, the colour keywords `$MailFlagBit0` to
+`$MailFlagBit2` among them. Where the account's entry lists `labels`,
+a row names the labels whose keyword it carries as `labels`, absent
+when it carries none; a label that shows only as a colour never
+appears there, because a colour alone cannot say who set it. A flagged
+row whose flag Thane wrote for a label names that label as
+`flag_label`. Go reads that from its own record of what it set, never
+from the colour, so an operator's flag in a label's colour carries no
+`flag_label`, and neither does a flag on a second copy of the message,
+or on one the operator moved after Thane marked it. The raw `flags`
+stay beside both. Read a flag through
+them: a flag with `flag_label` is that label's mark, and any other flag
+is someone's attention flag (see "Labels" in `email`).
 
 In the account's drafts folder, a row that is one of your own drafts
 still waiting for the operator carries `thane_draft {draft_id}`, and
@@ -422,11 +546,22 @@ folder:
 All criteria are optional and combine with AND: `query` (anywhere in
 the message), `from`, `to`, `subject` (header substrings), `since` and
 `before` (`YYYY-MM-DD`, RFC 3339, or a delta like `-7d`; IMAP compares
-dates, not times), `unseen`, `flagged`, and `message_id` or
-`in_reply_to` (an exact Message-ID without angle brackets, which is how
-you find an original message or an existing reply to it). A malformed
-date is an error, not silently ignored. Results have the same shape as
-`email_list`, newest first.
+dates, not times), `unseen`, `flagged` or `unflagged` (with or without
+`\Flagged`, whoever set it), `label` (a label the entry lists with a
+keyword, found by that keyword; offered only where one is listed), and
+`message_id` or `in_reply_to` (an exact Message-ID without angle
+brackets, which is how you find an original message or an existing
+reply to it). A malformed date is an error, not silently ignored, and
+so is an argument `email_search` does not take: the refusal names it
+and lists the arguments it does take, and nothing is searched, because
+a search that dropped a criterion would answer a different question.
+Results have the same shape as `email_list`, newest first.
+
+`flagged: true` finds a label's flag as well as an attention flag, so
+on an account whose labels have a colour, tell them apart by each row's
+`flag_label`. `unflagged: true` finds mail with no flag at all, neither
+an attention flag nor a label's. A `label` the account's entry does not
+list is refused, and nothing is searched.
 
 ## Read one in full
 
@@ -442,7 +577,8 @@ Once a UID looks worth reading, pull the body with `email_read`:
 
 The result is a JSON header object — `{account, folder, uid,
 message_id, in_reply_to, references, from, to, cc, reply_to, subject,
-date, flags, thane_draft, size, marked_seen, body_source, hidden_content,
+date, flags, labels, flag_label, thane_draft, size, marked_seen,
+body_source, hidden_content,
 body_truncated, attachments:[{filename, content_type, size, inline}],
 authentication:{method, status, verified}, auto_submitted, bulk}` — followed by a line
 containing only `---` and then the readable body. The body is the
@@ -468,9 +604,10 @@ fit and `body_truncated` says so, address lists stop at 25 with
 described with `attachments_omitted` counting the rest.
 `auto_submitted` and `bulk` appear only when the message's own headers
 claim it was sent automatically or to a list, as the `email` trailhead
-describes; ordinary mail carries neither. `thane_draft` appears on a
-message read from the drafts folder only when it is one of your own
-drafts, as in a list row.
+describes; ordinary mail carries neither. `labels` and `flag_label`
+are as in a list row, and `thane_draft` appears on a message read from
+the drafts folder only when it is one of your own drafts, as in a list
+row.
 Attachments are described, not downloaded. **Whether reading marks the
 message seen depends on whose mailbox it is.** `mark_seen` defaults to
 false on an operator mailbox (`owner: operator`, whose entry shows
@@ -535,8 +672,8 @@ the operator is not present, apart from the one list-mail case that
 - For drafting a response after reading, bounce to `email_respond`.
   Don't reach for `email_reply` from this branch's tools — re-activate
   email_respond first so its safety doctrine loads.
-- For moving a message after deciding what to do with it, bounce to
-  `email_organize`.
+- For flagging, labelling, or moving a message after deciding what to
+  do with it, bounce to `email_organize`.
 - For a drafts-folder row carrying `thane_draft`, bounce to
   `email_drafts`: reading one of your drafts beside the message it
   answers, and revising it, happen there.
@@ -903,7 +1040,7 @@ audience-wrong is a real leak.
 name: email_organize
 tags: [email_organize]
 kind: trailhead
-teaser: "Mark messages read/flagged, move them between folders, or file obvious spam — UIDs are folder-scoped."
+teaser: "Mark messages read/flagged or with a label, move them, or file obvious spam — UIDs are folder-scoped."
 ---
 
 # Organize
@@ -914,7 +1051,8 @@ they touched.
 
 ## Mark messages
 
-`email_mark` adds or removes a flag (`seen`, `flagged`, `answered`):
+`email_mark` adds or removes a flag (`seen`, `flagged`, `answered`),
+or a label (see "Apply a label" below):
 
 ```json
 {
@@ -930,7 +1068,8 @@ they touched.
 `true`.
 Single-message mode accepts `uid` (integer) instead of `uids` (array).
 The result is `{action: "flag_added" | "flag_removed", account, folder,
-flag, uids_affected, uids_not_found}`. A UID under `uids_not_found` no
+flag, uids_affected, uids_not_found, thane_color_cleared, note}`. A UID
+under `uids_not_found` no
 longer exists in that folder — it was moved or deleted since you listed
 it — so list again rather than retrying.
 
@@ -946,11 +1085,77 @@ shows `access: read` refuses both tools in this branch, and its
 `email_read` does not mark messages seen either; report the need
 rather than routing around it.
 
+Adding `flagged` to a message whose row carries `flag_label` also
+clears the colour Thane wrote for that label, so the flag reads as the
+operator's attention flag (see "Labels" in `email`). Removing `flagged`
+from such a message removes the colour's keywords with the flag, so
+none is left to colour a flag the operator sets later. Either way the
+result lists those messages under `thane_color_cleared`. When `note`
+says the colour could not be cleared, the flag is set but may still
+show the label's colour, so tell the operator if it matters. When the
+colour cannot be removed before a removal, the call is refused and the
+flag stays; retry it.
+
+`answered` says a message has been replied to. On an account whose
+`delivery` is `drafts`, `email_mark`
+refuses `answered`, adding or removing, and nothing changes: what
+Thane writes there is a draft, a draft is not an answer, and Thane
+cannot know when, or whether, the operator sends one.
+
 The account's drafts folder is never the `folder` of an `email_mark`
 call. It holds drafts waiting for the operator to send or discard,
 theirs and Thane's alike, so their flags are the operator's to change;
 the call is refused and nothing changes. To improve or take back one
 of your own drafts, use `email_drafts`.
+
+## Apply a label
+
+A label the entry lists without `apply` is one you may apply when its
+`meaning` fits the message; the operator reads it in their own client.
+Where the entry lists one, `email_mark` takes `label` in place of
+`flag`, one or the other per call:
+
+```json
+{
+  "account": "primary",
+  "uids": [4827],
+  "label": "<a label the Email Accounts entry lists without apply>",
+  "add": true,
+  "folder": "INBOX"
+}
+```
+
+Go writes the label's keyword, and its colour only on a message without
+a flag, and records what Thane set. A label the account's entry does
+not list is refused, and nothing changes. Three more refusals keep the
+call off marks that are not yours, so none of this is yours to judge:
+
+- A label with a colour is refused on a message that already carries
+  any flag but that label's own: the operator's, or the one Thane wrote
+  for another label, such as a label Go applies. That message is listed
+  under `refused` with its reason, nothing changes on it, and the rest
+  of the batch goes ahead.
+- Removing a label (`add: false`) removes only the keyword and flag
+  Thane recorded setting, whether Go or you set them. Anything else the
+  message carries for the label is the operator's: it stays, and the
+  message is listed under `refused`.
+- A label written with keywords is refused as a whole, and nothing
+  changes, in a folder whose server does not keep keywords; the refusal
+  quotes the server, and the entry's `keywords` shows INBOX's answer.
+  Only a bare red flag needs no keyword.
+
+A label whose entry shows `apply` is Go's, and `email_mark` refuses to
+apply or remove it. It also refuses a label on a message without a
+Message-ID, because Thane keeps its record of what it set by
+Message-ID, and on a copy of a message other than the one Thane's
+record describes: a second copy under the same Message-ID, or one
+someone else moved after Thane marked it, where Thane cannot tell its
+own marks from the operator's. The result is `{action: "label_added" | "label_removed" |
+"refused", account, folder, label, uids_affected, uids_not_found,
+refused:[{uid, reason}]}`, and `action` is `refused` only when every
+message found was refused. A refused message refuses the same way
+again, so do not retry it: flag it with `flag: "flagged"` if it needs
+the operator, or leave it.
 
 ## Move messages
 
@@ -1141,7 +1346,8 @@ is cut or absent, list the junk folder instead.
 ## Cross-references
 
 - For finding the messages to organize first, bounce to `email_triage`
-  — list or search produces the UIDs you'll feed here.
+  — list or search produces the UIDs you'll feed here, and its rows
+  show which labels and flags a message already carries.
 - For automating the organize step on an account Thane keeps (filing
   what a triage pass has handled, on a schedule), this is service-loop
   territory — `thane_loop_create` with `operation=service`; see

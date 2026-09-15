@@ -248,6 +248,17 @@ var nonToolTokens = map[string]struct{}{
 	// tool prefix (thane_now, thane_loop_create), but it is a result field,
 	// not a tool.
 	"thane_draft": {},
+
+	// Email label vocabulary and results (#1580): `contact_matched` is the
+	// one apply rule an email.labels entry names, `session_only` a
+	// PERMANENTFLAGS verdict the Email Accounts entry shows as keywords,
+	// and `thane_color_cleared` an email_mark result field. The matcher
+	// flags them because `contact_`, `session_`, and `thane_` are real
+	// tool prefixes; they are a config value, an enum value, and a result
+	// field, not tools.
+	"contact_matched":     {},
+	"session_only":        {},
+	"thane_color_cleared": {},
 }
 
 // loopRuntimeToolTokens are real tools that no catalog lists: loop-private

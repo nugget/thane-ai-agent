@@ -117,6 +117,10 @@ type Attachment struct {
 type Message struct {
 	Envelope
 
+	// UIDValidity is the UIDVALIDITY of the folder the message was read
+	// from, which with its UID names this copy of the message.
+	UIDValidity uint32 `json:"-"`
+
 	// References is the References header chain, oldest first.
 	References []string `json:"references,omitempty"`
 
@@ -307,9 +311,15 @@ type SearchOptions struct {
 	Since  time.Time
 	Before time.Time
 
-	// Unseen and Flagged restrict to messages with those flag states.
-	Unseen  bool
-	Flagged bool
+	// Unseen, Flagged, and Unflagged restrict to messages with those
+	// flag states.
+	Unseen    bool
+	Flagged   bool
+	Unflagged bool
+
+	// Keyword restricts to messages carrying this IMAP keyword, which is
+	// how a label is searched.
+	Keyword string
 
 	// MessageID and InReplyTo match those headers exactly (without
 	// angle brackets), which is how a caller finds an original message
@@ -450,17 +460,22 @@ type MoveOptions struct {
 
 // MoveResult reports a move. When DestUIDsKnown is true the server
 // returned COPYUID: UIDs lists the source UIDs it confirmed moving and
-// DestUIDs their new UIDs in the same order, so a requested UID missing
-// from UIDs was not in the folder and did not move. When it is false
+// DestUIDs their new UIDs, so a requested UID missing from UIDs was not
+// in the folder and did not move. go-imap sorts each COPYUID set as it
+// parses it, so both lists are ascending and pair a source UID with its
+// own new UID only when the server numbered the new copies in the order
+// of the old ones, which it need not do. When it is false
 // the server reported nothing, UIDs is the requested set, and which of
-// them moved is unknown.
+// them moved is unknown. SourceUIDValidity is the source folder's
+// UIDVALIDITY as the SELECT the move ran under reported it.
 type MoveResult struct {
-	SourceFolder    string   `json:"source_folder"`
-	Destination     string   `json:"destination"`
-	UIDs            []uint32 `json:"uids"`
-	DestUIDs        []uint32 `json:"dest_uids,omitempty"`
-	DestUIDValidity uint32   `json:"dest_uid_validity,omitempty"`
-	DestUIDsKnown   bool     `json:"dest_uids_known"`
+	SourceFolder      string   `json:"source_folder"`
+	SourceUIDValidity uint32   `json:"source_uid_validity,omitempty"`
+	Destination       string   `json:"destination"`
+	UIDs              []uint32 `json:"uids"`
+	DestUIDs          []uint32 `json:"dest_uids,omitempty"`
+	DestUIDValidity   uint32   `json:"dest_uid_validity,omitempty"`
+	DestUIDsKnown     bool     `json:"dest_uids_known"`
 }
 
 // AppendResult reports where an appended message landed. UID is zero

@@ -118,7 +118,13 @@ type messageSummaryView struct {
 	Date      string        `json:"date,omitempty"`
 	MessageID string        `json:"message_id,omitempty"`
 	Flags     []string      `json:"flags,omitempty"`
-	Size      uint32        `json:"size"`
+
+	// Labels names the labels the account carries whose keyword the
+	// message carries, and FlagLabel the label whose flag it shows, only
+	// when Thane's record says Thane wrote that flag (labels_view.go).
+	Labels    []string `json:"labels,omitempty"`
+	FlagLabel string   `json:"flag_label,omitempty"`
+	Size      uint32   `json:"size"`
 
 	// AddressesOmitted counts to and cc addresses past
 	// maxSummaryAddresses per list that the summary leaves out.
@@ -183,6 +189,8 @@ type readResponse struct {
 	Subject        string         `json:"subject"`
 	Date           string         `json:"date,omitempty"`
 	Flags          []string       `json:"flags,omitempty"`
+	Labels         []string       `json:"labels,omitempty"`
+	FlagLabel      string         `json:"flag_label,omitempty"`
 	Size           uint32         `json:"size"`
 	MarkedSeen     bool           `json:"marked_seen"`
 	BodySource     string         `json:"body_source,omitempty"`
@@ -335,6 +343,13 @@ type markResponse struct {
 	Flag         string   `json:"flag"`
 	UIDsAffected []uint32 `json:"uids_affected"`
 	UIDsNotFound []uint32 `json:"uids_not_found"`
+
+	// ThaneColorCleared lists the UIDs whose flag colour, written by
+	// Thane for a label, adding flagged turned into a plain flag.
+	ThaneColorCleared []uint32 `json:"thane_color_cleared,omitempty"`
+
+	// Note says what went wrong after the flag itself was set.
+	Note string `json:"note,omitempty"`
 }
 
 // moveResponse is the result of email_move.
