@@ -68,7 +68,7 @@ func (r *Registry) EnableCounterpartyTools(deps CounterpartyToolDeps) {
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Contact name (formatted name or nickname; resolved with the standard contact cascade).",
+					"description": "Contact name. " + contactNameRetryByID,
 				},
 				"contact_id": map[string]any{
 					"type":        "string",

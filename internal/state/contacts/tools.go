@@ -48,9 +48,13 @@ type Tools struct {
 	ownerContactName  string
 	// legacyOperatorID is the record the legacy owner name resolved to
 	// when the app pinned it; legacyOperatorPinned says it was pinned,
-	// since uuid.Nil is a valid pinned answer.
+	// since uuid.Nil is a valid pinned answer. legacyOperatorErr is why
+	// that resolution named no record: sql.ErrNoRows (or nil) when no
+	// contact answered to the name, an [AmbiguousNameError] when several
+	// did, or any other failure. Only the first means no operator.
 	legacyOperatorID     uuid.UUID
 	legacyOperatorPinned bool
+	legacyOperatorErr    error
 	ownerActivity        func() []OwnerChannelActivity
 	dossiersEnabled      bool
 	dossiersWritable     bool
@@ -118,17 +122,38 @@ func (t *Tools) SetOwnerContactName(name string) {
 }
 
 // ConfigureLegacyOperatorContactID pins, for identity custody and
-// contact_owner, the record the legacy owner name resolved to (uuid.Nil
-// when it resolved to none). The app passes the channel resolver's
-// cached answer, so custody, contact_owner and IsOwner agree on the
-// operator for the life of the process even if a later record comes to
-// match the name. Unpinned, both resolve the name on every call. A
-// configured operator_contact_id still takes precedence, for custody
-// and for the store's nickname ordering alike.
-func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID) {
+// contact_owner, the record the legacy owner name resolved to, or
+// uuid.Nil and the error ResolveContact returned when it resolved to
+// none. The app passes the channel resolver's cached answer, so
+// custody, contact_owner and IsOwner agree on the operator for the life
+// of the process even if a later record comes to match the name.
+// Unpinned, both resolve the name on every call. A configured
+// operator_contact_id still takes precedence, for custody and for the
+// store's nickname ordering alike.
+//
+// A name several contacts answer to pins no record, but it is not "no
+// operator": the operator is one of those contacts and the next start
+// could settle on any of them. So custody fails closed on it, as it
+// does when the unpinned lookup finds a tie, and contact_owner reports
+// the tie rather than absence.
+func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID, resolveErr error) {
 	t.legacyOperatorID = id
 	t.legacyOperatorPinned = true
+	t.legacyOperatorErr = nil
+	if id == uuid.Nil {
+		t.legacyOperatorErr = resolveErr
+	}
 	t.pinStoreOperator()
+}
+
+// legacyOperatorUnresolved returns the error that kept the pinned legacy
+// owner name from naming a record, or nil when it named one or named
+// none because no contact answers to it.
+func (t *Tools) legacyOperatorUnresolved() error {
+	if !t.legacyOperatorPinned || t.legacyOperatorID != uuid.Nil || errors.Is(t.legacyOperatorErr, sql.ErrNoRows) {
+		return nil
+	}
+	return t.legacyOperatorErr
 }
 
 // SetOwnerActivitySource configures a source of active owner-scoped
@@ -169,9 +194,14 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 	if name != "" && t.legacyOperatorPinned {
 		// The pinned record is the one IsOwner and custody treat as the
 		// operator, so contact_owner names it even after another record
-		// comes to match the name, and names none when none was pinned.
+		// comes to match the name, and names none when none was pinned,
+		// saying why: a name several contacts answer to is not a missing
+		// contact, and needs a different fix.
 		if t.legacyOperatorID == uuid.Nil {
-			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
+			if err := t.legacyOperatorUnresolved(); err != nil {
+				return nil, legacyOwnerUnresolvedError(name, true, err)
+			}
+			return nil, fmt.Errorf("configured legacy operator contact name %q not found: no active contact answered to it when Thane started, so no contact is the operator's own. Ask the operator to set identity.operator_contact_id to their contact's UUID, or to give their contact that name through CardDAV or the contacts API and restart Thane", name)
 		}
 		full, err := t.store.GetWithProperties(t.legacyOperatorID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -188,7 +218,7 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("resolve configured legacy operator contact name: %w", err)
+			return nil, legacyOwnerUnresolvedError(name, false, err)
 		}
 		full, err := t.store.GetWithProperties(c.ID)
 		if err != nil {
@@ -320,6 +350,10 @@ var saveContactKnownFields = map[string]bool{
 //     that an active contact above known or the operator's own already
 //     goes by. This rule holds in every turn, the operator's own message
 //     included;
+//   - outside the operator's own message, give a new contact a
+//     formatted name, or any contact a nickname, that such a contact
+//     answers to by its given name or the first word of its formatted
+//     name;
 //   - under the legacy owner-name selector, give a contact other than
 //     the operator's own the owner name.
 //
@@ -337,8 +371,9 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 //
 // operatorAttended reports that the turn is the operator's own message,
 // as tools.OperatorAttended decides it. It lifts only the rule that keeps
-// addresses, numbers, notification routing facts and nickname changes
-// off contacts above known and off the operator's own contact; the rules
+// addresses, numbers, notification routing facts and nickname and given
+// name changes off contacts above known and off the operator's own
+// contact; the rules
 // against a second holder of a value, or a second contact answering to
 // a name, that a contact with authority already has still apply.
 func (t *Tools) SaveContactFromModel(ctx context.Context, argsJSON string, provenance *PropertyProvenance, operatorAttended bool) (string, error) {
@@ -447,10 +482,10 @@ func (t *Tools) saveContact(
 		return "", err
 	}
 
-	// Name claims and the nickname snapshot are read before the scalar
-	// updates below change contact.
+	// Name claims and the nickname and given-name snapshot are read
+	// before the scalar updates below change contact.
 	claims := saveClaims(args, contact, created)
-	snapshotNickname := contact.Nickname
+	snapshotNickname, snapshotGiven := contact.Nickname, contact.GivenName
 
 	changedFields := make(map[string]struct{})
 	contactChanged := created
@@ -486,6 +521,7 @@ func (t *Tools) saveContact(
 	guard := identityGuard{
 		snapshotZone:      contact.TrustZone,
 		snapshotNickname:  snapshotNickname,
+		snapshotGiven:     snapshotGiven,
 		liftTargetCustody: operatorAttended,
 		claims:            claims,
 	}
@@ -508,7 +544,7 @@ func (t *Tools) saveContact(
 			return "", identityRefusal(contact.FormattedName, contact.TrustZone, created, custody.Violations)
 		}
 		if errors.Is(err, errContactChangedConcurrently) {
-			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone, changed its nickname, or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
+			return "", fmt.Errorf("%s changed while this contact_save was in flight: the operator reassigned its trust zone, changed its nickname or given name, or deleted it. Nothing was saved. Re-read it with contact_lookup and retry", contact.FormattedName)
 		}
 		if created {
 			return "", fmt.Errorf("create contact: %w", err)
@@ -749,7 +785,8 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	// Name lookup (formatted name or nickname, authority first, then search).
+	// Name lookup (formatted name or nickname, authority first, then the
+	// one contact whose given name or first word it is).
 	if args.Name != "" {
 		c, err := t.store.ResolveContact(args.Name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -796,14 +833,14 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 
 	// Search.
 	if args.Query != "" {
-		contacts, err := t.store.Search(args.Query)
+		contacts, truncated, err := t.store.search(context.Background(), args.Query)
 		if err != nil {
 			return "", fmt.Errorf("search: %w", err)
 		}
 		if len(contacts) == 0 {
-			return fmt.Sprintf("No contacts matching %q", args.Query), nil
+			return fmt.Sprintf("No contacts matching %q", clipSearchField(args.Query, searchFieldMaxBytes)), nil
 		}
-		return formatContactList(contacts), nil
+		return formatSearchResults(contacts, args.Query, truncated), nil
 	}
 
 	// List stats.
@@ -1381,7 +1418,7 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 		// A name or nickname an admin, household, trusted or operator
 		// contact goes by stays theirs: a new card claiming one is left
 		// out, and a merge leaves the nickname fill out, as does a merge
-		// into a contact whose nickname is operator custody.
+		// into such a contact with its nickname and given-name fills.
 		refusedNames, err := t.withoutAuthorityNameClaim(query, target, &guard, incoming)
 		if err != nil {
 			return "", stop(i, err)
@@ -1391,13 +1428,13 @@ func (t *Tools) importVCF(ctx context.Context, argsJSON string, provenance *Prop
 			if existing == nil {
 				skipped++
 				if args.DryRun {
-					fmt.Fprintf(&summary, "Would skip card %d: an admin, household, trusted or operator contact already goes by its name or nickname; import it under a fuller name or without that nickname\n", i+1)
+					fmt.Fprintf(&summary, "Would skip card %d: an admin, household, trusted or operator contact already goes by its name or nickname, or answers to it by its given name or first word; import it under a fuller name or without that nickname\n", i+1)
 				} else {
 					drops.nameTaken = append(drops.nameTaken, i+1)
 				}
 				continue
 			}
-			drops.naming++
+			drops.countNameFills(refusedNames)
 		}
 		props, refused, err := t.withoutCustodiedIdentity(ctx, target, guard, props)
 		if err != nil {
@@ -1591,7 +1628,7 @@ func (t *Tools) lazyCustodyOperatorID(ctx context.Context) func() (uuid.UUID, er
 func importCustody(existing, incoming *Contact, props []Property, operator func() (uuid.UUID, error)) (uuid.UUID, identityGuard, error) {
 	target, guard := uuid.Nil, identityGuard{snapshotZone: ZoneKnown}
 	if existing != nil {
-		target, guard.snapshotZone, guard.snapshotNickname = existing.ID, existing.TrustZone, existing.Nickname
+		target, guard.snapshotZone, guard.snapshotNickname, guard.snapshotGiven = existing.ID, existing.TrustZone, existing.Nickname, existing.GivenName
 	}
 	guard.claims = importClaims(existing, incoming)
 	custodied := hasCustodiedProperty(props)
@@ -1915,21 +1952,4 @@ func (t *Tools) formatOwnerActivitySummary() string {
 		return ""
 	}
 	return "Active owner channels:\n```json\n" + string(data) + "\n```"
-}
-
-// formatContactList formats multiple contacts for display.
-func formatContactList(contacts []*Contact) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d contact(s):\n\n", len(contacts)))
-	for _, c := range contacts {
-		sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
-		if c.Org != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
-		}
-		if c.AISummary != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }

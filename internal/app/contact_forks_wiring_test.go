@@ -143,7 +143,8 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 		identity := contactIdentityConfig{legacyOwnerContactName: "Carol"}
 		resolver := &contactChannelBindingResolver{store: store, legacyOwnerContactName: "Carol"}
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), store, identity, resolver.resolvedOperatorContactID())
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), store, identity, operatorID, resolveErr)
 		var info *auditLogRecord
 		for i := range capture.records {
 			if capture.records[i].level == slog.LevelInfo {
@@ -161,18 +162,99 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 
 	t.Run("a name that matches nothing warns", func(t *testing.T) {
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), store, contactIdentityConfig{legacyOwnerContactName: "Nobody"}, uuid.Nil)
-		if warns := capture.warns(); len(warns) != 1 || !strings.Contains(warns[0].msg, "matches no active contact") {
-			t.Errorf("warns = %+v, want one no-match Warn", warns)
+		resolver := &contactChannelBindingResolver{store: store, legacyOwnerContactName: "Nobody"}
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), store, contactIdentityConfig{legacyOwnerContactName: "Nobody"}, operatorID, resolveErr)
+		if warns := capture.warns(); len(warns) != 1 || !strings.Contains(warns[0].msg, "matches no active contact") || warns[0].attrs["error"] != "" {
+			t.Errorf("warns = %+v, want one no-match Warn with no resolver error", warns)
+		}
+	})
+
+	t.Run("a first name several records share warns with the candidates", func(t *testing.T) {
+		shared := newEmailIdentityStore(t)
+		var ids []string
+		for _, name := range []string{"Eve Alpha", "Eve Beta"} {
+			c, err := shared.Upsert(&contacts.Contact{FormattedName: name, TrustZone: contacts.ZoneKnown})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, c.ID.String())
+		}
+		resolver := &contactChannelBindingResolver{store: shared, legacyOwnerContactName: "Eve"}
+		capture := &auditLogCapture{}
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), shared, contactIdentityConfig{legacyOwnerContactName: "Eve"}, operatorID, resolveErr)
+		warns := capture.warns()
+		if len(warns) != 1 || !strings.Contains(warns[0].msg, "identity custody refuses") || !strings.Contains(warns[0].attrs["error"], `ambiguous contact "Eve"`) ||
+			!strings.Contains(warns[0].attrs["error"], ids[0]) || !strings.Contains(warns[0].attrs["error"], ids[1]) {
+			t.Errorf("warns = %+v, want one Warn carrying the ambiguity and both ids", warns)
+		}
+	})
+
+	t.Run("an exact tie at the same standing pins no operator and warns with both", func(t *testing.T) {
+		tied := newEmailIdentityStore(t)
+		var ids []string
+		for _, name := range []string{"Alice Adams", "Alice Baker"} {
+			c, err := tied.Upsert(&contacts.Contact{FormattedName: name, Nickname: "Boss", TrustZone: contacts.ZoneHousehold})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, c.ID.String())
+		}
+		resolver := &contactChannelBindingResolver{store: tied, legacyOwnerContactName: "Boss"}
+		operatorID, resolveErr := resolver.resolvedOperator()
+		if operatorID != uuid.Nil {
+			t.Fatalf("resolvedOperator = %s, want none: a tie must not pick an operator", operatorID)
+		}
+		capture := &auditLogCapture{}
+		logLegacyOperatorResolution(slog.New(capture), tied, contactIdentityConfig{legacyOwnerContactName: "Boss"}, operatorID, resolveErr)
+		warns := capture.warns()
+		if len(warns) != 1 || !strings.Contains(warns[0].msg, "identity custody refuses") || !strings.Contains(warns[0].attrs["error"], "at the same standing (above known) hold it exactly") ||
+			!strings.Contains(warns[0].attrs["error"], ids[0]) || !strings.Contains(warns[0].attrs["error"], ids[1]) {
+			t.Errorf("warns = %+v, want one Warn carrying the exact tie and both ids", warns)
+		}
+	})
+
+	t.Run("a first word names the field it matched", func(t *testing.T) {
+		single := newEmailIdentityStore(t)
+		bob, err := single.Upsert(&contacts.Contact{FormattedName: "Bob Stone", TrustZone: contacts.ZoneKnown})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolver := &contactChannelBindingResolver{store: single, legacyOwnerContactName: "Bob"}
+		capture := &auditLogCapture{}
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), single, contactIdentityConfig{legacyOwnerContactName: "Bob"}, operatorID, resolveErr)
+		var info *auditLogRecord
+		for i := range capture.records {
+			if capture.records[i].level == slog.LevelInfo {
+				info = &capture.records[i]
+			}
+		}
+		if info == nil || info.attrs["contact_id"] != bob.ID.String() || info.attrs["matched_by"] != contacts.NameFieldFormattedFirstWord {
+			t.Errorf("Info = %+v, want Bob Stone matched by %s", info, contacts.NameFieldFormattedFirstWord)
 		}
 	})
 
 	t.Run("a configured operator_contact_id logs nothing", func(t *testing.T) {
 		capture := &auditLogCapture{}
 		identity := contactIdentityConfig{operatorContactID: household.ID, legacyOwnerContactName: "Carol"}
-		logLegacyOperatorResolution(slog.New(capture), store, identity, household.ID)
+		logLegacyOperatorResolution(slog.New(capture), store, identity, household.ID, nil)
 		if len(capture.records) != 0 {
 			t.Errorf("records = %+v, want none", capture.records)
 		}
 	})
+}
+
+// TestSharedNameWarningSaysATieReachesNone pins the shared_name boot
+// Warn to resolution's band rule: a lookup reaches the member with the
+// most standing, and none when two share it, as two household records
+// nicknamed "Mom" do, so the Warn never tells the operator one of them
+// still gets the notifications.
+func TestSharedNameWarningSaysATieReachesNone(t *testing.T) {
+	warn := contactForkWarningByKind[contacts.ForkKindSharedName]
+	if !strings.Contains(warn, "reaches only the one with the most standing, or none of them when two or more share it") ||
+		strings.Contains(warn, "reaches only one of them") {
+		t.Errorf("shared_name Warn = %q, want the band rule", warn)
+	}
 }

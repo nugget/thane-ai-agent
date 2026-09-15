@@ -237,7 +237,10 @@ type contactChannelBindingResolver struct {
 
 	mu                      sync.Mutex
 	legacyOperatorContactID uuid.UUID
-	legacyOperatorCached    bool
+	// legacyOperatorErr is the error the cached resolution returned when
+	// it named no record (see resolvedOperator).
+	legacyOperatorErr    error
+	legacyOperatorCached bool
 }
 
 // ResolveChannelBinding returns a typed binding for the given
@@ -674,31 +677,45 @@ func resolveChannelBinding(store *contacts.Store, channel, address string, owner
 }
 
 func (r *contactChannelBindingResolver) resolvedOperatorContactID() uuid.UUID {
+	id, _ := r.resolvedOperator()
+	return id
+}
+
+// resolvedOperator returns the operator's record: the configured
+// operator_contact_id, or the record the legacy owner name resolved to
+// the first time it was asked, cached for the life of the process. When
+// the legacy name named no record it returns uuid.Nil with the error
+// ResolveContact returned, cached with it, so the contact tools can tell
+// a name several contacts answer to, where custody must fail closed,
+// from a name no contact answers to.
+func (r *contactChannelBindingResolver) resolvedOperator() (uuid.UUID, error) {
 	if r == nil {
-		return uuid.Nil
+		return uuid.Nil, nil
 	}
 	if r.operatorContactID != uuid.Nil {
-		return r.operatorContactID
+		return r.operatorContactID, nil
 	}
 	if r.store == nil {
-		return uuid.Nil
+		return uuid.Nil, nil
 	}
 	if strings.TrimSpace(r.legacyOwnerContactName) == "" {
-		return uuid.Nil
+		return uuid.Nil, nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.legacyOperatorCached {
-		return r.legacyOperatorContactID
+		return r.legacyOperatorContactID, r.legacyOperatorErr
 	}
 
 	operator, err := r.store.ResolveContact(r.legacyOwnerContactName)
 	if err == nil && operator != nil {
 		r.legacyOperatorContactID = operator.ID
+	} else {
+		r.legacyOperatorErr = err
 	}
 	r.legacyOperatorCached = true
-	return r.legacyOperatorContactID
+	return r.legacyOperatorContactID, r.legacyOperatorErr
 }
 
 func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerConfigured bool, ownerContactID uuid.UUID) bool {

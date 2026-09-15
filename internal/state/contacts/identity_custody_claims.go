@@ -21,13 +21,22 @@ import (
 // common channel is legitimate.
 //
 // A name or nickname is what notifications, decision requests, lookups
-// and conversation context find a contact by. Changing the nickname of
-// a contact above known, or of the operator's own, falls under the same
-// target rule. In every turn, the operator's own included, no
+// and conversation context find a contact by. Changing the nickname or
+// the given name of a contact above known, or of the operator's own,
+// falls under the same target rule. A given name is a short form the
+// record answers to, so an unattended rewrite of it would free the name
+// for a known record to take exactly under the short-form rule below.
+// In every turn, the operator's own included, no
 // model-facing writer gives a new contact a formatted name, or any
 // contact a nickname, that an active contact above known or the
 // operator's own already goes by, compared the way ResolveContact
-// compares them. These name claims ride on identityGuard.claims, so the
+// compares them. Where the target rule holds, outside the operator's
+// own message and on every import, the same goes for a name such a
+// contact answers to by a short form, its given name or the first word
+// of its formatted name (see name_keys.go): the record holding a name
+// exactly is the one resolution finds, so an exact claim on another
+// record's first name would take that name, and its notifications,
+// from it. These name claims ride on identityGuard.claims, so the
 // check runs inside the write's own transaction.
 
 // Routing fact keys, in the lowercase spelling contact_save stores and
@@ -48,6 +57,23 @@ const (
 	claimFN       = "FN"
 	claimNickname = "NICKNAME"
 )
+
+// Short forms, as [IdentityHolder.Property] names the field a holder
+// answers to a refused name claim by when it does not hold the name
+// exactly: its given name, or the first word of a formatted name of
+// more than one word. A violation's own Property is the claim: claimFN,
+// claimNickname, or claimGivenName for a change to an existing
+// contact's given name, which has the target rule only.
+const (
+	claimGivenName   = "GIVEN_NAME"
+	claimFNFirstWord = "FN_FIRST_WORD"
+)
+
+// isShortFormHolder reports whether a refused name claim's holder
+// answers to the name by a short form rather than holding it exactly.
+func isShortFormHolder(h *IdentityHolder) bool {
+	return h != nil && (h.Property == claimGivenName || h.Property == claimFNFirstWord)
+}
 
 // FactValues returns a contact fact's values the way notification
 // delivery reads them: props[key] first, then every other spelling of
@@ -113,8 +139,8 @@ func sameFactProperty(a, b string) bool {
 }
 
 // sqliteLower folds ASCII letters only, as SQLite's built-in LOWER
-// does. It trims nothing, because LOWER does not: a stored name with
-// edge space no longer matches a lookup for the bare name.
+// does. It trims nothing, because LOWER does not; [nameKey] trims edge
+// space first, as the resolver trims both sides before it compares.
 func sqliteLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {
@@ -125,17 +151,23 @@ func sqliteLower(s string) string {
 	return string(b)
 }
 
-// sqliteLowerEqual reports whether two names are the same to the
-// resolver's LOWER comparison, so an ASCII case-only edit is not a
-// change and any other edit, edge space included, is.
+// sqliteLowerEqual reports whether two names are the same to SQLite
+// LOWER without trimming, so an ASCII case-only edit is not a change
+// and any other edit, edge space included, is. Whether a record answers
+// to a name is the resolver's question, and [nameKey] answers it.
 func sqliteLowerEqual(a, b string) bool {
 	return sqliteLower(a) == sqliteLower(b)
 }
 
 // saveClaims returns the names a contact_save claims, read before the
 // save mutates contact: a new contact's formatted name and nickname, or
-// an existing contact's changed nickname. saveContact trims the name
-// and nickname first, so the value judged here is the value stored.
+// an existing contact's changed nickname and changed given name.
+// saveContact trims the name and nickname first, so the value judged
+// here is the value stored. The given name is stored as written, so it
+// is claimed whenever the scalar update would write it with a different
+// [nameKey], a blank value that erases the short form included; an edit
+// the key folds away, in edge space or ASCII case, changes no name the
+// record answers to.
 func saveClaims(args SaveContactArgs, contact *Contact, created bool) []Property {
 	var claims []Property
 	if created {
@@ -144,125 +176,29 @@ func saveClaims(args SaveContactArgs, contact *Contact, created bool) []Property
 	if strings.TrimSpace(args.Nickname) != "" && (created || !sqliteLowerEqual(args.Nickname, contact.Nickname)) {
 		claims = append(claims, Property{Property: claimNickname, Value: args.Nickname})
 	}
+	if !created && args.GivenName != "" && nameKey(args.GivenName) != nameKey(contact.GivenName) {
+		claims = append(claims, Property{Property: claimGivenName, Value: args.GivenName})
+	}
 	return claims
 }
 
 // importClaims returns the names one vCard card claims: a new
-// contact's formatted name and nickname, or the nickname a merge fills
-// into a contact that has none.
+// contact's formatted name and nickname, or what a merge fills into a
+// contact that has none of it: a nickname, and a given name, which is a
+// name the record then answers to (see mergeContact). A new contact's
+// given name is no claim, as on contact_save.
 func importClaims(existing, incoming *Contact) []Property {
 	if existing == nil {
 		return saveClaims(SaveContactArgs{Name: incoming.FormattedName, Nickname: incoming.Nickname}, nil, true)
 	}
-	if existing.Nickname != "" || strings.TrimSpace(incoming.Nickname) == "" {
-		return nil
+	var claims []Property
+	if existing.Nickname == "" && strings.TrimSpace(incoming.Nickname) != "" {
+		claims = append(claims, Property{Property: claimNickname, Value: incoming.Nickname})
 	}
-	return []Property{{Property: claimNickname, Value: incoming.Nickname}}
-}
-
-// isClaimProperty reports whether a violation is a name claim.
-func isClaimProperty(property string) bool {
-	return property == claimFN || property == claimNickname
-}
-
-// claimArgument names the contact_save argument a name claim came from.
-func claimArgument(property string) string {
-	if property == claimFN {
-		return "name"
+	if existing.GivenName == "" && nameKey(incoming.GivenName) != "" {
+		claims = append(claims, Property{Property: claimGivenName, Value: incoming.GivenName})
 	}
-	return "nickname"
-}
-
-// hasClaimViolation reports whether any violation is a name claim.
-func hasClaimViolation(violations []IdentityViolation) bool {
-	for _, v := range violations {
-		if isClaimProperty(v.Property) {
-			return true
-		}
-	}
-	return false
-}
-
-// claimViolations applies the name rules to guard.claims: the target
-// rule to a nickname change on an existing target, then the holder rule
-// to every claim.
-func claimViolations(query queryFunc, target uuid.UUID, guard identityGuard) ([]IdentityViolation, error) {
-	var violations []IdentityViolation
-	for _, c := range guard.claims {
-		if strings.TrimSpace(c.Value) == "" {
-			continue
-		}
-		if c.Property == claimNickname && target != uuid.Nil {
-			reason := targetCustodyReason(target, guard)
-			if reason == "" && guard.operatorUnresolved && !guard.liftTargetCustody {
-				reason = IdentityReasonOperator
-			}
-			if reason != "" {
-				violations = append(violations, IdentityViolation{Property: c.Property, Value: c.Value, Reason: reason})
-				continue
-			}
-		}
-		holder, err := nameHolder(query, target, guard, c.Value)
-		if err != nil {
-			return nil, err
-		}
-		if holder != nil {
-			violations = append(violations, IdentityViolation{Property: c.Property, Value: c.Value, Reason: IdentityReasonHolder, Holder: holder})
-		}
-	}
-	return violations, nil
-}
-
-// nameHolder returns the first active record other than target whose
-// formatted name or nickname matches name, compared as findByName and
-// findByNickname compare after trimming space from both sides, and that
-// carries authority: a zone other than known (a malformed zone counts)
-// or the operator's own record. Trimming the stored side as well keeps
-// protecting a name an authority record stores with edge space, which
-// the resolver would otherwise hand to a second record claiming the
-// bare name. When the operator could not be resolved, every holder
-// counts. Rows are read fully so no cursor stays open inside a
-// transaction.
-func nameHolder(query queryFunc, target uuid.UUID, guard identityGuard, name string) (*IdentityHolder, error) {
-	name = strings.TrimSpace(name)
-	rows, err := query(`
-		SELECT id, formatted_name, COALESCE(trust_zone, ''), COALESCE(nickname, '')
-		FROM contacts
-		WHERE deleted_at IS NULL
-		  AND id <> ?
-		  AND (LOWER(TRIM(formatted_name)) = LOWER(?) OR LOWER(TRIM(COALESCE(nickname, ''))) = LOWER(?))
-		ORDER BY formatted_name, id
-	`, target.String(), name, name)
-	if err != nil {
-		return nil, fmt.Errorf("find name holders: %w", err)
-	}
-	defer rows.Close()
-	var holders []IdentityHolder
-	for rows.Next() {
-		var id, nickname string
-		var h IdentityHolder
-		if err := rows.Scan(&id, &h.Name, &h.Zone, &nickname); err != nil {
-			return nil, fmt.Errorf("scan name holder: %w", err)
-		}
-		if h.ID, err = uuid.Parse(id); err != nil {
-			return nil, fmt.Errorf("parse name holder id %q: %w", id, err)
-		}
-		h.Property, h.Value = claimNickname, nickname
-		if sqliteLowerEqual(strings.TrimSpace(h.Name), name) {
-			h.Property, h.Value = claimFN, h.Name
-		}
-		holders = append(holders, h)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("find name holders: %w", err)
-	}
-	for _, h := range holders {
-		h.Operator = guard.operatorID != uuid.Nil && h.ID == guard.operatorID
-		if h.Zone != ZoneKnown || h.Operator || guard.operatorUnresolved {
-			return &h, nil
-		}
-	}
-	return nil, nil
+	return claims
 }
 
 // routingViolation applies the target rule to one routing fact. A new
@@ -385,25 +321,4 @@ func routingShadowNotes(props map[string][]string, inserted []Property) string {
 			key, echoForRefusal(shadowed[0]), more, uses, echoForRefusal(first[0]), key, echoForRefusal(first[0]))
 	}
 	return b.String()
-}
-
-// withoutAuthorityNameClaim applies the name rules to one vCard card
-// before its write. A new card whose name or nickname one of them
-// refuses is skipped whole; a merge leaves the refused nickname fill
-// out and drops its claim from guard. It returns the refused claims,
-// which the import counts and logs; applyContactImport rechecks the
-// kept claims inside the card's write.
-func (t *Tools) withoutAuthorityNameClaim(query queryFunc, target uuid.UUID, guard *identityGuard, incoming *Contact) ([]IdentityViolation, error) {
-	if len(guard.claims) == 0 {
-		return nil, nil
-	}
-	violations, err := claimViolations(query, target, *guard)
-	if err != nil {
-		return nil, fmt.Errorf("check name custody: %w", err)
-	}
-	if len(violations) > 0 && target != uuid.Nil {
-		incoming.Nickname = ""
-		guard.claims = nil
-	}
-	return violations, nil
 }

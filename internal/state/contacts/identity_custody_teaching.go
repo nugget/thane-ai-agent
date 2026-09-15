@@ -18,17 +18,27 @@ import (
 // resolver's cached answer, so custody protects exactly the contact
 // that carries IsOwner. Unpinned, the legacy name is resolved here with
 // the same ResolveContact the resolver uses. uuid.Nil means no operator
-// is configured; the sole-admin fallback is already custodied by its
-// zone. A resolution failure other than not-found, an ended ctx
-// included, fails closed.
+// is configured, or no contact answers to the legacy name; the
+// sole-admin fallback is already custodied by its zone.
+//
+// Any other resolution failure fails closed, pinned or not, an ended
+// ctx included. A legacy name several contacts answer to, as a tie or a
+// shared first name, is the case that matters: the operator is one of
+// those contacts and custody cannot tell which, and protecting none
+// would let an unattended write, a nickname change or a forget, decide
+// which of them the next start makes the operator, with every address a
+// write gave it.
 func (t *Tools) custodyOperatorID(ctx context.Context) (uuid.UUID, error) {
 	if t.operatorContactID != uuid.Nil {
 		return t.operatorContactID, nil
 	}
+	name := strings.TrimSpace(t.ownerContactName)
 	if t.legacyOperatorPinned {
+		if err := t.legacyOperatorUnresolved(); err != nil {
+			return uuid.Nil, custodyUnresolvedError(name, true, err)
+		}
 		return t.legacyOperatorID, nil
 	}
-	name := strings.TrimSpace(t.ownerContactName)
 	if name == "" {
 		return uuid.Nil, nil
 	}
@@ -37,9 +47,40 @@ func (t *Tools) custodyOperatorID(ctx context.Context) (uuid.UUID, error) {
 		return uuid.Nil, nil
 	}
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("check identity custody: resolve the configured operator contact: %w", err)
+		return uuid.Nil, custodyUnresolvedError(name, false, err)
 	}
 	return operator.ID, nil
+}
+
+// legacyOwnerUnresolvedError says why the legacy owner name named no
+// single contact, and how the operator fixes it. pinned says the name
+// was resolved when Thane started, so a fix takes a restart. A name
+// several contacts answer to lists them with their contact_id values,
+// without the retry an [AmbiguousNameError] ends with, since no tool
+// argument settles which contact is the operator's.
+func legacyOwnerUnresolvedError(owner string, pinned bool, err error) error {
+	when, restart := "now", ""
+	if pinned {
+		when, restart = "when Thane started", " and restart Thane"
+	}
+	var amb *AmbiguousNameError
+	if !errors.As(err, &amb) {
+		return fmt.Errorf("the name Thane recognizes the operator by (identity.owner_contact_name %q) could not be resolved %s: %w", echoForRefusal(owner), when, err)
+	}
+	return fmt.Errorf("the name Thane recognizes the operator by (identity.owner_contact_name %q) named no single contact %s, so Thane cannot tell which contact is the operator's own: %s. Ask the operator to set identity.operator_contact_id to their own contact's UUID, or to make their own contact the only one whose formatted name or nickname is that name, through CardDAV or the contacts API%s",
+		echoForRefusal(owner), when, amb.summary(), restart)
+}
+
+// custodyUnresolvedError is custody's refusal when the legacy owner name
+// names no single contact. Every write that needs the operator's record
+// is refused, which is every write custody guards.
+func custodyUnresolvedError(owner string, pinned bool, err error) error {
+	var amb *AmbiguousNameError
+	if !errors.As(err, &amb) {
+		return fmt.Errorf("check identity custody: %w", legacyOwnerUnresolvedError(owner, pinned, err))
+	}
+	return fmt.Errorf("check identity custody: nothing was changed, because %w. Until the operator does, no model-facing write creates a contact, sets a nickname, changes a given name, adds an address, number or notification routing fact, or forgets a contact, because the operator's own contact is one of these and protecting none of them would let such a write decide which one Thane takes as the operator; tell the operator",
+		legacyOwnerUnresolvedError(owner, pinned, err))
 }
 
 // legacyOwnerName returns the legacy owner name when it is the operator
@@ -54,7 +95,7 @@ func (t *Tools) legacyOwnerName() string {
 // claimsOwnerName reports whether any of names is the legacy owner name,
 // ignoring edge space and Unicode case. That matches more than the
 // resolver does, which is safe only where a match refuses a claim;
-// whether a record answers to the name uses [sqliteLowerEqual].
+// whether a record answers to the name uses the resolver's [nameKey].
 func claimsOwnerName(owner string, names ...string) bool {
 	if owner == "" {
 		return false
@@ -88,9 +129,12 @@ func (t *Tools) ownerNameClaimRefusal(ctx context.Context, args SaveContactArgs,
 		return fmt.Errorf("contact_save refused to create %q: %q %s If this is the operator, contact_owner returns their contact; save to it by its exact name. If it is someone else, save them under a fuller name without that nickname, or ask the operator to add the contact through CardDAV or the contacts API", args.Name, owner, why)
 	}
 	// Whether the record still answers to the owner name after the save
-	// is decided the way the resolver decides it, so neither edge space
-	// nor a Unicode case variant passes for the name.
-	stillAnswers := sqliteLowerEqual(args.Nickname, owner) || sqliteLowerEqual(contact.FormattedName, owner)
+	// is decided with the resolver's own key: both sides trimmed of edge
+	// space and folded as LOWER folds them. So a formatted name stored
+	// with edge space still answers, as the resolver finds it, and a
+	// Unicode case variant does not pass for the name.
+	ownerKey := nameKey(owner)
+	stillAnswers := nameKey(args.Nickname) == ownerKey || nameKey(contact.FormattedName) == ownerKey
 	if claimsOwnerName(owner, contact.Nickname) && strings.TrimSpace(args.Nickname) != "" && !stillAnswers {
 		return t.ownerNicknameReplacementRefusal(ctx, args, contact, owner)
 	}
@@ -129,6 +173,10 @@ func (t *Tools) ownerNicknameReplacementRefusal(ctx context.Context, args SaveCo
 type refusalClasses struct {
 	addresses, routing, names bool
 	target, addressHeld, name bool
+	// shortName marks a name claim refused because a contact with
+	// authority answers to the name by a short form, a rule the
+	// operator's own message lifts.
+	shortName bool
 }
 
 func classifyRefusal(violations []IdentityViolation) refusalClasses {
@@ -147,6 +195,8 @@ func classifyRefusal(violations []IdentityViolation) refusalClasses {
 		switch {
 		case v.Reason != IdentityReasonHolder:
 			c.target = true
+		case claim && isShortFormHolder(v.Holder):
+			c.shortName = true
 		case claim:
 			c.name = true
 		default:
@@ -179,7 +229,7 @@ func identityRefusal(targetName, targetZone string, created bool, violations []I
 		b.WriteString(" ha_companion_app is the Home Assistant device that receives a contact's notifications and answers their decision requests, and notification_preference picks the channel they arrive on.")
 	}
 	if c.names {
-		b.WriteString(" A name or nickname is what notifications, decision requests, lookups and conversation context find a contact by.")
+		b.WriteString(" A name, nickname or given name is what notifications, decision requests, lookups and conversation context find a contact by.")
 	}
 	b.WriteString(" They are operator-custodied where a change would move authority:")
 	items := make([]string, 0, len(violations))
@@ -202,6 +252,14 @@ func identityRefusal(targetName, targetZone string, created bool, violations []I
 		b.WriteString("A name or nickname an admin, household, trusted or operator contact goes by stays with that contact, in every turn: save this contact under a fuller name or without the nickname, or, if you meant that person, save to their contact by its exact name. ")
 	case c.name:
 		b.WriteString("A name or nickname an admin, household, trusted or operator contact goes by stays with that contact, in every turn: retry without the nickname, or with one no admin, household, trusted or operator contact goes by. ")
+	}
+	// Only a turn that is not the operator's own reaches the short-form
+	// rule, so this recovery may say so.
+	switch {
+	case c.shortName && created:
+		b.WriteString("A given name or first word an admin, household, trusted or operator contact answers to stays with that contact outside the operator's own message, and this turn is not one: save this contact under a fuller name (\"Bob Jones\", not \"Bob\") or without the nickname, or, if you meant that person, save to their contact by its exact name. If the operator wants this contact to go by it, ask them to say so in their own message, or to set it through CardDAV or the contacts API. ")
+	case c.shortName:
+		b.WriteString("A given name or first word an admin, household, trusted or operator contact answers to stays with that contact outside the operator's own message, and this turn is not one: retry without the nickname, or with one no admin, household, trusted or operator contact goes by or answers to. If the operator wants this contact to go by it, ask them to say so in their own message, or to set it through CardDAV or the contacts API. ")
 	}
 	if c.names {
 		b.WriteString("Retry without the refused values to save the rest")
@@ -235,6 +293,15 @@ func violationReason(v IdentityViolation, targetName, targetZone string) string 
 	}
 	name := echoForRefusal(h.Name)
 	if isClaimProperty(v.Property) {
+		switch h.Property {
+		case claimGivenName, claimFNFirstWord:
+			how := "by its given name"
+			if h.Property == claimFNFirstWord {
+				how = "as the first word of its formatted name"
+			}
+			return fmt.Sprintf("%s answers to %q %s (%s, %s%s); a contact with it as its formatted name or nickname would be found by that name instead of %s, and take the notifications, decision requests and context meant for %s",
+				name, echoForRefusal(h.Value), how, echoForRefusal(h.Zone), h.ID, operator, name, name)
+		}
 		return fmt.Sprintf("%s already goes by %q (%s, %s%s); a second contact answering to it would take the notifications, decision requests and context meant for %s",
 			name, echoForRefusal(h.Value), echoForRefusal(h.Zone), h.ID, operator, name)
 	}

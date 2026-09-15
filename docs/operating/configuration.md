@@ -733,7 +733,8 @@ record, or one with no real address or number of its own) that could be
 either of two people is listed with each. Different
 people who each answer to one formatted name or nickname, with no such
 sign between them, are one `shared_name` finding that names one record
-per person, since a lookup reaches only one of them. An email
+per person, since a lookup reaches only the one with the most standing,
+or none of them when two or more share it. An email
 address held by several records is a finding when a `known` record holds
 it or a holder has no other address of its own; a mailbox that records
 with authority share while each holds its own addresses is not. A phone
@@ -759,11 +760,19 @@ to a Home Assistant person, and copy a duplicate's addresses onto a record
 above `known` only in the operator's own message; no model-facing tool
 renames a contact, removes an address, or moves a person binding. Until
 the fix, a name lookup prefers the record with authority when both answer
-to the name as a formatted name or nickname, though a first name still
+to the name as a formatted name or nickname, and reaches neither when
+both stand alike (two `known` records, or two above `known`), though a
+first name still
 reaches a `known` record whose whole name it is, and
 `contact_dossier_write` will not start a second dossier for a name sibling
 that looks like the same person and has one (see
 [Contact Identity Custody](../understanding/trust-architecture.md#contact-identity-custody)).
+A name no record holds as a formatted name or nickname reaches the one
+record whose given name or first word it is, and none while several
+share it; notes and summaries never resolve a name. So forgetting a
+duplicate that is the only record holding a name exactly leaves that
+name to the first-name rule: give the record that stays the name as a
+nickname if lookups by it should keep reaching that record.
 
 ## Companion Apps
 
@@ -790,8 +799,8 @@ Configuration is deliberately the only place this binding can be made:
 bindings confer inherited trust, and neither they nor trust zones are
 writable through model-facing contact tools. The addresses and numbers,
 the notification routing facts (`notification_preference` and
-`ha_companion_app`), and the nickname of a contact above `known` or of the
-operator's contact are custody too: the operator sets them through CardDAV
+`ha_companion_app`), and the nickname and given name of a contact above
+`known` or of the operator's contact are custody too: the operator sets them through CardDAV
 or `/v1/contacts`, and `contact_save` adds or changes one only in the
 operator's own message (see
 [Contact Identity Custody](../understanding/trust-architecture.md#contact-identity-custody)).
@@ -799,7 +808,8 @@ Delivery reads each routing fact in any letter case, so a card line
 `HA_COMPANION_APP:mobile_app_bob_pixel` routes, and uses only its first
 value, so replacing a device means removing the old line. No model-facing
 tool gives another contact a name or nickname such a contact already goes
-by; sharing one on purpose is a card edit.
+by, or, outside the operator's own message, one that is such a contact's
+given name or first word; sharing one on purpose is a card edit.
 A malformed (non-UUID)
 value is rejected at config load; a UUID that matches no contact fails
 closed at render time — the devices degrade to account-only

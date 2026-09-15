@@ -88,8 +88,10 @@ ordinary documents instead.
   `contact_forget` will not remove such a contact. The first of those
   rules also covers the device and channel that carry such a contact's
   notifications, and its nickname, and no turn may give another contact
-  a name or nickname such a contact already goes by. `contacts_save`
-  carries the full rules and what to do when refused.
+  a name or nickname such a contact already goes by, nor, outside the
+  operator's own message, one that is such a contact's given name or
+  first word. `contacts_save` carries the full rules and what to do
+  when refused.
 
 - **Email results already carry the directory's answer.** Every
   address in an `email_list`, `email_search`, or `email_read` result
@@ -203,17 +205,49 @@ contact's formatted name or nickname, case-insensitive:
 }
 ```
 
-When several contacts answer to the name, you get one of them: the
-operator's own contact first, then a contact above `known`, then a
-formatted-name match before a nickname match, then the lowest ID. So
-a `known` contact whose formatted name or nickname a contact above
-`known` also goes by is never what that name returns. The lookup reads
-no given name or first word, though: `Bob` returns a `known` contact
+When several contacts hold the name as their formatted name or
+nickname, standing decides: the operator's own contact first, then a
+contact above `known`, then a `known` one. So a `known` contact whose
+formatted name or nickname a contact above `known` also goes by is
+never what that name returns. Two or more at the same standing are a
+tie, and the lookup returns none of them: two `known` contacts both
+nicknamed Ally, or a household Bob beside a trusted Robert nicknamed
+Bob, since both are above `known`. Holding the name as a formatted
+name does not beat holding it as a nickname, and no ID breaks the tie,
+because nothing in the records says which person is meant. The error
+lists them the way the first-name error below does, and the lookup
+tries no given name or first word after a tie. Retry with the full
+formatted name of the one you mean, unless that is the tied name
+itself: then only its `contact_id` tells it apart, so pass that to a
+tool that takes one, and otherwise ask the operator which contact
+should keep the name.
+
+Only when no contact holds the name that way does the lookup try each
+contact's given name and the first word of its formatted name, and
+then exactly one contact must fit: `Alice` returns Alice Jones when no
+other contact's given name or first word is Alice. When two or more
+fit, such as a household Dave Rivera and a `known` Dave Smith, the
+lookup returns neither, whatever their zones, because a first name two
+people share does not say which one is meant. The error lists up to
+five of them, each with its formatted name, trust zone, `contact_id`,
+and the field it matched, and counts the rest; `query` set to that
+name lists every contact that fits ahead of any other match, each
+with its `contact_id`, so it reaches the ones the error left out while
+no more than 50 share the name. Retry with the full formatted name of the one you mean, or pass
+its `contact_id` to a tool that takes one; if the conversation does
+not settle which, ask rather than guess.
+
+A whole name still beats a first name: `Bob` returns a `known` contact
 named just Bob, not a household Bob Smith. When a first name returns a
 `known` contact, check it against the `contact_directory` row of
 `system_health` before acting on it (see Duplicates in
-`contacts_save`). Only when no contact answers to the name does the
-lookup fall back to a search, which must match exactly one contact.
+`contacts_save`).
+
+A name is matched against those name fields and nothing else. A note,
+AI summary, or organization that mentions someone never makes that
+contact the person: "Dave's partner" in Carol's note does not make
+Carol the answer to `Dave`. To find contacts by what their text says,
+use `query`, below.
 
 Returns the contact record if found, including all facts, trust
 zone, origin policy, and metadata, and, when contact dossiers are
@@ -225,8 +259,9 @@ or a `key`/`value` filter, or decide to `contact_save` deliberately.
 ## You have partial information
 
 `contact_lookup` with `query` runs a full-text/LIKE search across
-the contact's text fields — `formatted_name`, `nickname`, `note`,
-`ai_summary`, `org`. **It does not search properties/facts** —
+the contact's text fields — `formatted_name`, `nickname`,
+`given_name`, `note`, `ai_summary`, `org`. **It does not search
+properties/facts** —
 the property store is keyed and queried separately. To match on a
 specific property value (e.g., "find the contact with this email"),
 use the `key` + `value` filter below instead of `query`:
@@ -237,8 +272,17 @@ use the `key` + `value` filter below instead of `query`:
 }
 ```
 
-Returns matching contacts ranked. Useful when the name in the input is
-the person's company, their title, or a partial spelling.
+Returns up to 50 matching contacts, those whose formatted name,
+nickname, given name, or first word the query is listed first, and
+says so when more match than it lists. Each row carries the contact's
+`contact_id` and trust zone, and a contact that answers to the query
+as a name also names the field it answers by. The list stays within
+16 KB: a name or organization over 256 bytes, or a summary over 512,
+is cut and ends with `…[cut]`, and rows past the limit are left off
+the end and counted, so narrow the query to list them. Useful when the name in the
+input is the person's company, their title, or a partial spelling. It is the
+only lookup that reads those text fields, and it returns a list to
+choose from, never an answer to who a name is.
 
 ## You know a property value
 
@@ -255,7 +299,8 @@ filter by key/value:
 The key is matched against vCard property names (`email` → `EMAIL`,
 `phone` → `TEL`, etc.) plus custom keys like `ha_companion_app` for
 ones without standard mappings. Both `key` and `value` are required;
-key alone is not a valid filter.
+key alone is not a valid filter. It returns up to 50 contacts whose
+value for that key contains `value`, within the same 16 KB as a query.
 
 ## You want to browse the directory
 
@@ -270,7 +315,11 @@ anchor — useful for "show me everyone" or "show me all orgs":
 ```
 
 `kind` is `individual` / `group` / `org` / `location`. Without `kind`,
-all types appear. Use `limit` to bound the result size.
+all types appear. Use `limit` to bound the result size. The list runs
+in formatted-name order, up to 100, and stays within 16 KB as a
+query's does: long fields are cut and end with `…[cut]`, and rows past
+the limit are left off the end and counted; reach those with
+`contact_lookup` by name or `query`.
 
 ## You need the host's operator
 
@@ -288,6 +337,17 @@ otherwise falls back to the sole `admin`-zone contact if exactly one
 exists. Right tool when the model needs to assert "this is the operator
 I'm talking to" or "what channels does the operator have active right
 now."
+
+When the legacy name fits several contacts (two at the same standing
+hold it, or several share it as a first name), `contact_owner` returns
+an error listing them with their `contact_id`s, not a record. Until
+the operator fixes it, `contact_save` refuses to create a contact, set
+a nickname or given name, or add an address, number or routing fact, and
+`contact_forget` refuses everything, because the operator's own contact
+is one of them and no write may decide which. Don't try to settle it
+with those tools; tell the operator to set
+`identity.operator_contact_id`, or to leave the name on their own
+contact only, and restart Thane.
 
 ## Cross-references
 
@@ -445,19 +505,31 @@ on whom.
 A name or nickname is how a person is found: notifications, decision
 requests, and lookups find the contact whose formatted name or
 nickname it is, the operator's own contact first, then one above
-`known`, then a formatted-name match before a nickname match, and
-search the text only when no contact answers to the name.
-Conversation context does the same when a channel has not bound the
-sender to a contact. A second contact answering to a person's name
-still splits them: between two `known` contacts it can take their
-notifications and decision requests, and a first name that is another
-contact's whole name ("Bob" beside "Bob Smith") reaches that contact,
-not them.
+`known`, and none of two or more at the same standing. Only when no
+contact holds the name that way do they take the one contact whose
+given name or first word it is, and a first name two contacts share
+reaches neither. Conversation context does the same when a channel has
+not bound the sender to a contact. A second contact answering to a
+person's name still splits them: a second contact at the same standing
+holding it exactly leaves the name reaching neither, so their
+notifications and decision requests by that name go nowhere, and a
+first name that is another contact's whole name ("Bob" beside "Bob
+Smith") reaches that contact, not them. Before giving a new contact
+its name, or any contact a nickname, check with `contact_lookup` that
+no contact at its standing already goes by it. A new contact starts at
+`known`, and `contact_save` matches an existing contact by formatted
+name only, so saving someone under a name a `known` contact has as
+its nickname creates a second contact, and the name then reaches
+neither.
 
-- **Changing the nickname** of a contact above `known` or of the
-  operator's own follows the first rule for addresses: only in the
-  operator's own message. A change only in the case of ASCII letters
-  is not a change.
+- **Changing the nickname or given name** of a contact above `known`
+  or of the operator's own follows the first rule for addresses: only
+  in the operator's own message. Lookups fall back to a given name, so
+  rewriting it would free that person's first name for another contact
+  to take. A change only in the case of ASCII letters is not a change,
+  and neither is edge space on a given name. `contact_import_vcf`
+  never fills either into such a contact, since a filled-in given name
+  is a new name lookups find that person by.
 - **A name or nickname someone with authority goes by.** In every
   turn, the operator's own included, `contact_save` refuses a new
   contact's name, or any contact's nickname, that an admin,
@@ -471,10 +543,26 @@ not them.
   since a fuller name there would create a second contact. Two people
   sharing a name or nickname on purpose is a card edit the operator
   makes.
-- **Descriptions are not names.** The text search also reaches a
-  contact through its note, org, and AI summary, which nothing
-  protects. Address a notification or decision request by the
-  person's exact name or nickname, never by a description.
+- **A first name someone with authority answers to.** Outside the
+  operator's own message, `contact_save` also refuses a new contact's
+  name, or any contact's nickname, that is the given name or the first
+  word of the formatted name of an admin, household, trusted, or
+  operator contact. A formatted name or nickname is found before any
+  first name, so saving a `known` Bob, or nicknaming someone Bob, while
+  a household Bob Smith has no nickname Bob would make that contact the
+  one "Bob" finds, and Bob Smith's notifications would go to it.
+  `contact_import_vcf` applies the same rule to every card. The refusal
+  names the contact and whether the name is its given name or first
+  word. Recover as above; if the operator wants the other contact to go
+  by that name, they say so in their own message.
+- **Descriptions are not names.** A contact's note, org, and AI
+  summary never resolve a name, so a notification or decision request
+  addressed by a description ("the plumber") reaches no one, not
+  whoever's note mentions it. Address one by the person's exact name
+  or nickname. A given name or first word works only while no other
+  contact has it, and nothing stops a second contact with the same
+  first name from being saved later, so a handle someone must always be
+  reachable by belongs in their formatted name or nickname.
 
 `kind` (individual, group, org, location) describes a contact and
 decides nothing: no gate, notification route, or operator check reads
@@ -612,9 +700,12 @@ exactly one of `name` or `contact_id`:
 }
 ```
 
-A name resolves once, the way `contact_lookup` resolves it. A
-`contact_id` is the canonical UUID of one active contact, lowercase
-with hyphens, and removes exactly that contact:
+A name resolves once, the way `contact_lookup` resolves it; a first
+name two contacts share resolves to neither and removes nothing, and
+the error lists up to five of their `contact_id` values. A
+`contact_id` is the canonical
+UUID of one active contact, lowercase with hyphens, and removes
+exactly that contact:
 
 ```json
 {
@@ -624,7 +715,7 @@ with hyphens, and removes exactly that contact:
 
 The result names what was removed, as
 `Forgot contact: Frank Smith (known, <uuid>)`; check it, because a
-nickname or search match can land on a record you did not mean.
+nickname or first-name match can land on a record you did not mean.
 
 It refuses, in every turn including the operator's own message, and
 whether you pass a name or a `contact_id`, a contact above `known`,
@@ -681,7 +772,11 @@ finding is one of:
   name or nickname with no sign between them of being one person, such
   as two people nicknamed "Mom". It names one contact per person; a
   person saved twice is also its own `name` finding. A name lookup
-  reaches only one of them.
+  reaches only the one with more standing (the operator's own, then
+  one above `known`), and neither when they stand alike, such as two
+  household contacts both nicknamed "Mom": then notifications and
+  decision requests by that name reach no one until the operator
+  renames one of them.
 - **`email`**: contacts that hold one address, in any case, when a
   `known` holder makes email read it at `known` for all of them, or a
   holder has no other address of its own. A mailbox that contacts with
@@ -727,7 +822,19 @@ that should go:
   saving them. If the duplicate has a dossier, read it with
   `contact_dossier_read` first, because no dossier tool reaches a
   forgotten contact. Then forget the duplicate, by `contact_id` when
-  its name resolves to the contact that stays. Last, fold the
+  its name resolves to the contact that stays. When the shared name
+  resolves to the duplicate itself, the duplicate is the only contact
+  holding that name exactly, as a bare "Dave" beside a household
+  "Dave Rivera" is, and the contact that stays answers to it only by
+  its given name or first word. Forgetting the duplicate leaves the
+  name to the first-name rule: "Dave" then reaches Dave Rivera only
+  while no other active contact has Dave as its given name or first
+  word, and no one once another does. Say so when you report the
+  forget, naming the contact that stays, so the operator can give it
+  the name as a nickname through CardDAV. A nickname on a contact
+  above `known` lands on the card in the operator's address book, so
+  set it yourself only when the operator asks in their own message.
+  Last, fold the
   duplicate's dossier claims and citations into the surviving
   contact's dossier with `contact_dossier_write`: an existing dossier
   updates as usual, and a first one for the survivor is refused only
@@ -896,7 +1003,8 @@ keeps the encoded vCard small enough to scan reliably. As with
   confirm each set is one person → `contact_save` on the canonical one to absorb
   facts → `contact_forget` on each `known`, unbound duplicate that is
   not the operator's, by `contact_id` when its name resolves to
-  another record. Custody refuses saving shared addresses onto a
+  another record (when it resolves to the duplicate itself, Duplicates
+  says what forgetting it does to that name). Custody refuses saving shared addresses onto a
   canonical record above `known` or the operator's outside the
   operator's own message, and refuses forgetting a duplicate that is
   above `known`, the operator's, or bound to a Home Assistant person;

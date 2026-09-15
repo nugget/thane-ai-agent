@@ -43,7 +43,7 @@ func TestImportDrops_NamesSkippedCards(t *testing.T) {
 		{
 			name:  "card under an authority contact's name",
 			drops: importDrops{nameTaken: []int{1, 5}},
-			want:  []string{"2 card(s) were skipped because an admin, household, trusted or operator contact already goes by their name or nickname: cards 1, 5.", "fuller name"},
+			want:  []string{"2 card(s) were skipped because an admin, household, trusted or operator contact already goes by their name or nickname, or answers to it by its given name or first word: cards 1, 5.", "fuller name"},
 			avoid: []string{"nickname(s) were not filled in"},
 		},
 		{

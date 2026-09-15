@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -168,6 +169,19 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 			"operator's own message", "already holds", "nothing is saved", "CardDAV",
 			"notification_preference or ha_companion_app", "changing the nickname", "only the first value",
 			"already goes by", "what to do",
+			"Outside the operator's own message it also refuses a new contact's name, or any contact's nickname, that one of those contacts answers to by its given name or the first word of its formatted name",
+			"changing the nickname or given name of such a contact, since lookups fall back to a given name",
+		}},
+		{"contact_save name", parameterDescription("contact_save", "name"), []string{
+			"matches an existing contact by formatted name only", "creates a new contact at known",
+			"two or more at the same standing holding one name are a tie that reaches none of them",
+			"a new contact named what a known contact already goes by, as its formatted name or nickname, makes that name reach neither",
+			"check with contact_lookup first",
+		}},
+		{"contact_save given_name", parameterDescription("contact_save", "given_name"), []string{
+			"lookups find the one contact whose given name or first word it is", "outside the operator's own message",
+			"a change to the given name of a contact above known or of the operator's own contact is refused",
+			"a change only in edge space or the case of ASCII letters is not a change",
 		}},
 		{"contact_save facts", parameterDescription("contact_save", "facts"), []string{
 			"letters, digits", "KEY and X-THANE-* keys are refused", "control characters", "above known", "already holds",
@@ -175,18 +189,42 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		}},
 		{"contact_save nickname", parameterDescription("contact_save", "nickname"), []string{
 			"formatted name or nickname", "operator's own contact wins, then one above known", "in every turn", "already goes by", "operator's own message", "above known",
+			"two or more at the same standing are a tie that reaches none of them", "makes the name reach neither",
+			"also refused when one of those contacts answers to it by its given name or the first word of its formatted name",
 		}},
 		{"contact_lookup", registry.Get("contact_lookup").Description, []string{
-			"formatted name or nickname", "operator's own contact wins, then one above known", "formatted-name match before a nickname match",
-			"search that must match exactly one contact", "known duplicate", "contact_directory",
+			"formatted name or nickname", "operator's own contact wins, then one above known",
+			"Two or more holders at the same standing, both above known or both known, are a tie: it returns none of them",
+			"whichever holds the name as a formatted name and whichever as a nickname", "tries no given name or first word",
+			"those holding it as a formatted name or nickname first", "only its contact_id tells it apart",
+			"given name and the first word", "exactly one contact must fit", "whatever their zones", "contact_id, trust zone and the field it matched",
+			"retry with the full formatted name", "never matches notes", "known duplicate", "contact_directory",
+			"lists up to five of them", "query set to the same name lists every contact that fits ahead of any other match",
+			fmt.Sprintf("lists up to %d matches, and says so when more match than it lists", contacts.SearchLimit),
+			"Each query row carries the contact's contact_id and trust zone",
+		}},
+		{"contact_lookup name", parameterDescription("contact_lookup", "name"), []string{
+			"formatted name or nickname", "given name or the first word", "exactly one contact must fit", "never used to resolve a name",
+			"retry with the full formatted name", "Use query",
+		}},
+		{"contact_lookup query", parameterDescription("contact_lookup", "query"), []string{
+			"given names", "notes", fmt.Sprintf("up to %d matching contacts", contacts.SearchLimit), "listed first", "when more match than it lists",
+			"Each row carries the contact's contact_id and trust zone",
 		}},
 		{"contact_forget", registry.Get("contact_forget").Description, []string{
 			"exactly one of name or contact_id", "as contact_lookup resolves it", "operator's own contact first, then one above known",
+			"none when two or more at the same standing hold it", "A name that resolves to none removes nothing",
 			"Forgot contact:", "above known", "operator's own contact", "Home Assistant person", "in every turn", "by name or by contact_id", "CardDAV",
-			"known duplicate", "with their UUIDs",
+			"known duplicate", "with their UUIDs", "no exact holder", "carry it as a nickname",
 		}},
 		{"contact_forget name", parameterDescription("contact_forget", "name"), []string{
-			"exactly one contact", "contact_lookup", "contact_id",
+			"exactly one contact", "contact_lookup", "never used to resolve a name", "retry with the contact_id",
+		}},
+		{"contact_export_vcf name", parameterDescription("contact_export_vcf", "name"), []string{
+			"\"self\"", "given name or the first word", "never used to resolve a name", "retry with the full formatted name",
+		}},
+		{"contact_export_vcf_qr name", parameterDescription("contact_export_vcf_qr", "name"), []string{
+			"\"self\"", "given name or the first word", "never used to resolve a name", "retry with the full formatted name",
 		}},
 		{"contact_forget contact_id", parameterDescription("contact_forget", "contact_id"), []string{
 			"Canonical UUID", "exactly one of name or contact_id", "known duplicate", "contact_directory", "same contacts by contact_id as by name",
@@ -194,6 +232,7 @@ func TestContactToolDescriptionsTeachIdentityCustody(t *testing.T) {
 		{"contact_import_vcf", registry.Get("contact_import_vcf").Description, []string{
 			"above known", "already holds", "no turn lifts", "CardDAV", "dry_run reports the same counts",
 			"NOTIFICATION_PREFERENCE and HA_COMPANION_APP", "already goes by", "changes its nickname",
+			"or answers to by its given name or the first word of its formatted name, is left out",
 		}},
 	}
 	for _, tc := range cases {

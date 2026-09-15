@@ -1021,7 +1021,7 @@ func TestLegacyOperatorPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools.SetOwnerContactName("Alice")
-	tools.ConfigureLegacyOperatorContactID(operator.ID)
+	tools.ConfigureLegacyOperatorContactID(operator.ID, nil)
 	seedContactAt(t, tools.store, "Alice", ZoneKnown)
 
 	_, err = modelSave(tools, `{"name":"Alice Operator","facts":{"phone":"+15559990000"}}`, false)
@@ -1038,7 +1038,7 @@ func TestLegacyOperatorPin(t *testing.T) {
 	t.Run("a pin to no record finds no operator", func(t *testing.T) {
 		tools := newTestTools(t)
 		tools.SetOwnerContactName("Alice")
-		tools.ConfigureLegacyOperatorContactID(uuid.Nil)
+		tools.ConfigureLegacyOperatorContactID(uuid.Nil, nil)
 		seedContactAt(t, tools.store, "Alice", ZoneKnown)
 		if out, err := tools.OwnerContact(""); err == nil || !strings.Contains(err.Error(), `"Alice" not found`) {
 			t.Errorf("contact_owner = %q, %v, want not found", out, err)

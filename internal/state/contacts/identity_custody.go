@@ -96,7 +96,8 @@ type IdentityViolation struct {
 
 	// Property is what the refused value would have set: EMAIL, TEL or
 	// IMPP for an address or number, the lowercase key for a routing
-	// fact, or FN or NICKNAME for a name claim.
+	// fact, FN or NICKNAME for a name claim, or GIVEN_NAME for a change
+	// to a given name.
 	Property string
 
 	// Value is the refused value.
@@ -128,7 +129,10 @@ type IdentityHolder struct {
 
 	// Property and Value are the row the holder carries, which may be
 	// an equivalent spelling of the refused value (TEL without '+' for
-	// a signal number, for example).
+	// a signal number, for example). For a name claim they are the
+	// field the holder answers to the name by and its stored value: FN
+	// or NICKNAME when it holds the name exactly, GIVEN_NAME or
+	// FN_FIRST_WORD when it answers by a short form.
 	Property string
 	Value    string
 }
@@ -147,9 +151,9 @@ func (e *IdentityCustodyError) Error() string {
 }
 
 // errContactChangedConcurrently reports that the record a model-facing
-// save read had its trust zone or nickname changed, or was deleted,
-// before the save committed, or that an import card's name was taken by
-// a contact with authority meanwhile. Nothing was written.
+// save read had its trust zone, nickname or given name changed, or was
+// deleted, before the save committed, or that an import card's name was
+// taken by a contact with authority meanwhile. Nothing was written.
 var errContactChangedConcurrently = errors.New("contact changed while the save was in flight")
 
 // identityGuard carries what a model-facing write needs to apply
@@ -170,8 +174,15 @@ type identityGuard struct {
 	// operator's nickname edit.
 	snapshotNickname string
 
+	// snapshotGiven is the target's given name as the writer read it,
+	// rechecked the same way, since a given name is a short form the
+	// record answers to and the target rule judges its change.
+	snapshotGiven string
+
 	// liftTargetCustody lifts the target rule for the operator's own
-	// contact_save turn. The holder rule still applies.
+	// contact_save turn, and with it the name rule for a name an
+	// authority record answers to only by a short form. The holder rule
+	// still applies, a name such a record holds exactly included.
 	liftTargetCustody bool
 
 	// claims are the names the write gives a record (see saveClaims),
@@ -198,8 +209,10 @@ type queryFunc func(query string, args ...any) (*sql.Rows, error)
 // Target rule: nothing is added to an existing record whose zone is not
 // known, or to the operator's record at any zone, unless the guard
 // lifts it. Holder rule: nothing is added that another active record
-// holds when that record is above known or is the operator's. Routing
-// facts get the target rule only.
+// holds when that record is above known or is the operator's; for a
+// name claim, where the target rule holds, that includes a name such a
+// record answers to by a short form (see nameHolder). Routing facts get
+// the target rule only.
 func identityViolations(query queryFunc, target uuid.UUID, guard identityGuard, props []Property) ([]IdentityViolation, error) {
 	violations, err := claimViolations(query, target, guard)
 	if err != nil {
@@ -372,20 +385,20 @@ func phoneEquivalents(number string) []Property {
 
 // checkSaveSnapshot re-reads the target inside the save transaction and
 // returns errContactChangedConcurrently when it is gone, soft-deleted,
-// or no longer at the zone or nickname the writer read. Without it the
-// snapshot re-upsert would revert a concurrent operator zone or
-// nickname change or resurrect a deleted contact.
+// or no longer at the zone, nickname or given name the writer read.
+// Without it the snapshot re-upsert would revert a concurrent operator
+// zone, nickname or given-name change or resurrect a deleted contact.
 func checkSaveSnapshot(tx *sql.Tx, id uuid.UUID, guard identityGuard) error {
 	var zone, deletedAt sql.NullString
-	var nickname string
-	err := tx.QueryRow(`SELECT trust_zone, deleted_at, COALESCE(nickname, '') FROM contacts WHERE id = ?`, id.String()).Scan(&zone, &deletedAt, &nickname)
+	var nickname, given string
+	err := tx.QueryRow(`SELECT trust_zone, deleted_at, COALESCE(nickname, ''), COALESCE(given_name, '') FROM contacts WHERE id = ?`, id.String()).Scan(&zone, &deletedAt, &nickname, &given)
 	if errors.Is(err, sql.ErrNoRows) {
 		return errContactChangedConcurrently
 	}
 	if err != nil {
 		return fmt.Errorf("re-read contact %s: %w", id, err)
 	}
-	if deletedAt.Valid || zone.String != guard.snapshotZone || nickname != guard.snapshotNickname {
+	if deletedAt.Valid || zone.String != guard.snapshotZone || nickname != guard.snapshotNickname || given != guard.snapshotGiven {
 		return errContactChangedConcurrently
 	}
 	return nil

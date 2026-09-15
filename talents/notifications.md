@@ -83,14 +83,21 @@ settle *how*:
   *outbound* tools (`send_notification`, `ha_notify`,
   `request_human_decision`, `request_human_escalation`) take a
   `recipient` and find the contact whose formatted name or
-  nickname it is (when several answer to it, the operator's own
-  contact first, then one above `known`, then a formatted-name match
-  before a nickname), and only when none does, a text search over
-  names, notes, orgs, and summaries. Pass
-  the person's exact contact name or nickname, not a description: a
-  description reaches only the search, which fails when it matches
-  more than one contact and is not protected the way names and
-  nicknames are. The channel comes from the contact's facts: a
+  nickname it is (when several hold it, the operator's own contact
+  first, then one above `known`; two or more at the same standing are
+  a tie that reaches none of them, with an error that lists them as
+  below). Only when none does, they take the one contact whose
+  given name or first word it is; a first name two contacts share
+  reaches neither. The error lists up to five of the contacts that
+  share it, each with its full formatted name, zone, and `contact_id`,
+  and counts the rest, which `contact_lookup` with that first name as
+  `query` lists ahead of any other match while no more than 50 share
+  it; send again with the full formatted name of the one you mean,
+  unless a tie leaves it no other name, and then ask the operator
+  which contact should keep the name. Notes, orgs, and AI summaries never
+  resolve a recipient, so pass the person's exact contact name or
+  nickname, not a description: a description reaches no one. The
+  channel comes from the contact's facts: a
   `notification_preference`, else a channel the person is active on
   now, else Home Assistant push when they have an `ha_companion_app`
   (`ha_notify` always uses Home Assistant push). Delivery reads each

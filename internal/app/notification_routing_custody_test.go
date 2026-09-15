@@ -119,6 +119,43 @@ func TestNotificationRoutingStaysWithTheOperator(t *testing.T) {
 	}
 }
 
+// TestTiedNicknameReachesNoOne pins a nickname two known contacts hold,
+// with no operator among them, at delivery and in conversation context:
+// the send fails before any device is called, naming both contacts, and
+// neither contact's context is attached. A lower id no longer decides
+// whose phone buzzes.
+func TestTiedNicknameReachesNoOne(t *testing.T) {
+	store := newEmailIdentityStore(t)
+	var seeded []*contacts.Contact
+	for _, s := range []struct{ name, device string }{{"Alice Adams", "mobile_app_alice"}, {"Bob Baker", "mobile_app_bob"}} {
+		c, err := store.UpsertWithProperties(&contacts.Contact{
+			FormattedName: s.name, Nickname: "Sam", Kind: "individual", TrustZone: contacts.ZoneKnown,
+		}, []contacts.Property{{Property: contacts.PropertyHACompanionApp, Value: s.device}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seeded = append(seeded, c)
+	}
+
+	ha := &routingCustodyHA{}
+	router := notifications.NewNotificationRouter(store, nil, slog.Default())
+	router.RegisterProvider(notifications.NewHAPushProvider(notifications.NewSender(ha, store, nil, "thane", slog.Default())))
+	err := router.Send(context.Background(), notifications.Notification{Recipient: "sam", Message: "door left open"})
+	var tie *contacts.AmbiguousNameError
+	if !errors.As(err, &tie) || !tie.ExactTie || len(ha.services) != 0 {
+		t.Fatalf("send to sam = %v, HA calls %v, want an exact tie and no call", err, ha.services)
+	}
+	for _, c := range seeded {
+		if !strings.Contains(err.Error(), c.ID.String()) {
+			t.Errorf("send error does not name %s:\n%v", c.FormattedName, err)
+		}
+	}
+	lookup := &contactNameLookup{store: store, logger: slog.Default()}
+	if cc := lookup.LookupContact(context.Background(), "Sam", "signal"); cc != nil {
+		t.Errorf("context for Sam = %+v, want none", cc)
+	}
+}
+
 // TestSharedNicknameReachesTheOperator pins operator-first nickname
 // resolution through the app's own wiring. An ordinary known contact
 // that already shares the operator's nickname, with the lower id, must

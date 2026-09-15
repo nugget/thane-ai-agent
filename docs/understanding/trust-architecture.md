@@ -368,7 +368,21 @@ contact with authority and is still reported.
   same reason `contact_save` refuses, in every turn, to replace the
   nickname through which the operator's own contact answers to the owner
   name; a case change is allowed, and so is any nickname when the
-  formatted name is itself the owner name.
+  formatted name is itself the owner name. When the startup resolution
+  finds several contacts answering to the name, two holding it exactly
+  at the same standing or several sharing it as a first name, it pins no
+  contact, but that is not "no operator": the operator's own contact is
+  one of them, and protecting none would let an unattended write plant an
+  address on one and then break the tie by changing the other's nickname
+  or forgetting it, so the next start takes the first as the operator.
+  Custody therefore keeps the resolver's error with the pin and refuses,
+  in every turn, every write that needs the operator's record: creating a
+  contact, setting a nickname or given name, adding an address, number or
+  routing fact, and forgetting any contact. The unpinned lookup fails closed the same
+  way. `contact_owner` reports the candidates with their UUIDs instead of
+  a missing contact, and the startup Warn names them; the fix is the
+  operator's, `identity.operator_contact_id` or a name only their own
+  contact holds, then a restart.
 - **Authority holders.** In every turn, no model writer adds a value that
   another active contact already holds when that contact is above `known`
   or is the operator's. Equivalence mirrors the resolver: email compares
@@ -394,44 +408,94 @@ contact with authority and is still reported.
   behind an existing value says in its result which value delivery still
   uses.
 - **Names.** `ResolveContact` finds, in one query, the active contacts
-  whose formatted name or nickname is the name, compared with `LOWER`,
-  and takes the first in this order: the pinned operator's own record at
-  any zone, then records above `known` (a malformed zone counts), then a
-  formatted-name match before a nickname match, then ID. Only when no
-  contact answers to the name does it fall back to a text search, which
-  must match exactly one contact. Notifications, decision requests,
+  whose formatted name or nickname is the name, both sides trimmed of
+  edge space and compared with `LOWER` as the fork audit folds them,
+  and ranks each holder by standing in three bands: the pinned
+  operator's own record at any zone, then records above `known` (a
+  malformed zone counts), then records at `known`. The one holder in the
+  highest band any holder reaches is the answer. Two or more distinct
+  holders in that band are an exact tie, an `AmbiguousNameError` with
+  `ExactTie` set that lists them as below, each with the field it holds
+  the name by, because whether a holder has the name as its formatted
+  name or its nickname, and which ID is lower, say nothing about which
+  person is meant. One record holding the name both ways is one holder,
+  and a tie is reported as itself, never merged with short-form
+  holders. Only when no
+  contact holds the name that way does it read the fork audit's short
+  forms, through the same `recordNameKeys` keys, reading the short
+  forms alone: a contact's given name and the first word of a formatted
+  name of more than one word, trimmed and folded the same way. Exactly
+  one active contact answering by a short form is the answer; two or
+  more are an `AmbiguousNameError` whatever their zones, naming up to
+  five with formatted name, zone, `contact_id` and the field matched,
+  counting the rest and pointing at `contact_lookup`'s `query` to find
+  them, because standing breaks ties only among exact holders in
+  different bands. `Store.Search` lists up to 50 contacts that answer to
+  a name by these keys ahead of any other match, in the order an
+  ambiguity lists them (exact holders first, by standing, then
+  short-form holders), so an exact tie's holders come first, and
+  `contact_lookup` prints each
+  row's `contact_id` and zone, so that query reaches the rest while no
+  more than 50 (`SearchLimit`) share the name, even two whose names
+  differ only by edge space; past that the query lists only 50 of
+  them, and the error says so and to ask the operator for the full
+  formatted name of one it does not list. Notes, AI summaries, and organizations
+  are never read: a word in one contact's note does not make that
+  contact the person it names, and `Store.Search`, behind
+  `contact_lookup`'s `query` and the contacts API, is the only path
+  that reads them, together with formatted names, nicknames, and given
+  names. Search reads one row past its limit, so it says it stopped
+  only when more contacts match than it lists. Notifications, decision requests,
   `contact_lookup`, `contact_whereabouts`, vCard export, and
   `contact_forget` by name use it, and so does channel context for a
   sender no channel bound to a contact. A `known` record whose formatted
   name is the nickname of a contact with authority therefore never
-  shadows that contact. Resolution reads no given name and no first
-  word, so "Bob" reaches a record whose whole formatted name is Bob, not
-  a household Bob Smith without that nickname; the fork audit below
-  reports that shape. A nickname change on a custodied target follows the
-  target rule and its lift; "changed" folds ASCII letters only, as SQLite
-  `LOWER` does, after trimming, so a case-only edit is not a change. In
+  shadows that contact. An exact holder always beats a short form, so
+  "Bob" reaches a record whose whole formatted name is Bob, not a
+  household Bob Smith without that nickname; the fork audit below
+  reports that shape. Forgetting such a record, the only exact holder
+  of the name, leaves the name to the short-form step. A nickname or
+  given-name change on a custodied target follows the target rule and its
+  lift: a given name is a short form the record answers to, and an
+  unattended rewrite of it would free the name for a `known` record to
+  take exactly under the short-form rule below. "Changed" folds ASCII
+  letters only, as SQLite `LOWER` does, after trimming, so a case-only
+  edit is not a change. In
   every turn, no model writer gives a new contact a formatted name, or any
   contact a nickname, that another active contact above `known` or the
   operator's own already uses as its formatted name or nickname, compared
-  with `LOWER` as the resolver compares them. The check runs in the
+  as the resolver compares them: trimmed of every edge space rune and
+  folded with `LOWER`. Outside the operator's own message, and on every
+  import, the same holds for a name such a contact answers to by a short
+  form, its given name or the first word of a formatted name of more
+  than one word: the claim would make the target an exact holder, which
+  resolution finds before any short form, so it would take that
+  contact's notifications. The refusal names the holder and the field it
+  answers by. The check runs in the
   write's own transaction, so an operator promotion cannot land between
   the check and the write. `contact_import_vcf` skips such a card, leaves
-  such a nickname off a merge, and never fills a nickname into a
-  custodied target; an import card that carries only names and cannot
-  resolve the operator counts every holder as one with authority.
-  `FindByNickname` orders a shared nickname the same way, without the
-  match-kind step. When `operator_contact_id` or the legacy owner name is
-  configured, the contact store learns the operator from the same pinned
-  record custody and `IsOwner` use, so notifications, lookups and context
-  all resolve a shared name alike. Under the sole-admin fallback nothing
-  is pinned, so a shared name orders by zone, then match kind, then ID.
-  The legacy owner name is itself resolved at startup, before any pin
-  exists, so it orders by zone and match kind alone: a `known` record
-  cannot take it from a record above `known` that goes by it as a
-  nickname. A
-  string that reaches a contact only through the search (its note, org,
-  or AI summary) is not protected, so the handle the operator is notified
-  by belongs in their formatted name or nickname.
+  such a nickname off a merge, and never fills a nickname or a given
+  name into a custodied target; an import card that carries only names
+  and cannot resolve the operator counts every holder as one with
+  authority.
+  `FindByNickname`, which no resolution path calls, orders a shared
+  nickname by the same bands and then takes the lowest ID. When
+  `operator_contact_id` or the legacy owner name is configured, the
+  contact store learns the operator from the same pinned record custody
+  and `IsOwner` use, so notifications, lookups and context all resolve a
+  shared name alike. Under the sole-admin fallback nothing is pinned, so
+  the admin stands with every other record above `known`, and a name it
+  shares exactly with one of them is a tie. The legacy owner name is
+  itself resolved at startup, before any pin exists, so it has two bands
+  only: a `known` record cannot take it from a record above `known` that
+  goes by it as a nickname, and two records at the same standing that
+  hold it pin no operator at all; startup warns with the tie and both
+  `contact_id` values, and `identity.operator_contact_id` is the fix. A
+  short form is protected less than a formatted name or nickname:
+  custody keeps a model writer from making another contact its exact
+  holder only outside the operator's own message, and any contact saved
+  with the same first name makes it ambiguous, so the handle the
+  operator is notified by belongs in their formatted name or nickname.
 - **Kind.** `kind` stays model-writable, so nothing may gate on it: no
   custody rule, notification route, or `IsOwner` decision reads it, and a
   test pins that changing it on the operator's contact moves neither.
@@ -477,9 +541,13 @@ contact with authority and is still reported.
   `name` finding listing exactly those records. Records that answer to the key
   as a formatted name or nickname, one with authority, that no person
   holds together are different people: the key's one `shared_name`
-  finding names one record per person, since a lookup reaches only one of
-  them. Short forms alone between different people are not reported,
-  because resolution reads no short forms. An email address held by
+  finding names one record per person, since a lookup reaches only the
+  one with the most standing, and none of them when two or more share it,
+  such as two household records. Short forms alone between different
+  people are not reported:
+  resolution takes a short form only when exactly one record answers to
+  it, so a first name two people share resolves to neither rather than
+  to the wrong one. An email address held by
   several records, compared case-insensitively, is an `email` finding when
   a holder is a `known` record other than the operator's, so the send
   gate reads the address at `known` for every holder, or when a holder
@@ -557,24 +625,27 @@ contact with authority and is still reported.
 A `contact_save` refusal saves nothing and emits no contact mutation. It
 logs one warning, `contact identity custody refused`, with the contact ID,
 zone, rule (`zone`, `operator`, or `holder`), properties (`EMAIL`, `TEL`,
-`IMPP`, a routing key, or `FN` or `NICKNAME` for a name), holder ID, and
+`IMPP`, a routing key, `FN` or `NICKNAME` for a name, or `GIVEN_NAME` for
+a given-name change), holder ID, and
 the turn's request, conversation, and loop IDs. Import drops the refused
 values, keeps the rest of the card, skips a card that would create a
-contact under a name or nickname a contact with authority goes by, leaves
-such a nickname off a merge, logs the same warning (marked `dry_run` for a
+contact under a name or nickname a contact with authority goes by, or
+answers to by its given name or first word, leaves such a nickname off a
+merge, logs the same warning (marked `dry_run` for a
 preview), and counts the drops in its result, naming each skipped card;
 its rows carry the turn's provenance under the source
 `contact_import_vcf`. A forget refusal logs the same warning with the
 contact ID, zone, rule, and the turn's request, conversation, and loop
-IDs. The save also re-reads the contact's trust zone, nickname, and
-deleted state inside its transaction and aborts if any changed since the
-tool read the record, so a model save can no longer revert an operator's
-concurrent zone or nickname change or resurrect a deleted contact. Import
+IDs. The save also re-reads the contact's trust zone, nickname, given
+name, and deleted state inside its transaction and aborts if any changed
+since the tool read the record, so a model save can no longer revert an
+operator's concurrent zone, nickname or given-name change or resurrect a
+deleted contact. Import
 writes each card in one transaction that repeats the same re-read and the
 holder and target checks, so an operator write that lands between the
 import's check and its write cannot give a value a second holder: a newly
 refused value is dropped and counted, and a card whose merge target
-changed zone or nickname or was deleted, or whose name or nickname a
+changed zone, nickname or given name or was deleted, or whose name or nickname a
 contact with authority took meanwhile, writes nothing and is counted as
 skipped.
 
@@ -594,7 +665,8 @@ The rules are forward-only. Addresses added to elevated contacts before
 they shipped keep matching, so reviewing them is the operator's job,
 through CardDAV or `/v1/contacts`. The same holds for routing facts and
 for a name or nickname two contacts already share, though name resolution
-now prefers the one with authority and the fork audit reports the shared
+now prefers the one with authority, reaches neither of two at the same
+standing, and the fork audit reports the shared
 names, addresses, and numbers involving one that can misroute. One change
 reaches
 existing rows at upgrade: delivery now reads every letter case of a

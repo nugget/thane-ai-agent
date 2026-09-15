@@ -22,7 +22,9 @@ const (
 	// of being one person, such as two people both nicknamed "Mom". It
 	// names one record per person; a copy that could be any of several
 	// people stands for itself only while one of them is not named. A
-	// name lookup reaches only one of them.
+	// name lookup reaches only the one with the most standing, as
+	// operator_order.go ranks it, and none of them when two or more
+	// share it, such as two household records.
 	ForkKindSharedName = "shared_name"
 	// ForkKindEmail is an email address two or more records hold, in a
 	// shape that misroutes mail (see [emailGroupMisroutes]).
@@ -113,9 +115,12 @@ type ContactForkAudit struct {
 //     is a [ForkKindName] finding. Records that answer to the key as a
 //     formatted name or nickname, one with authority, that no person
 //     holds together are the key's one [ForkKindSharedName] finding,
-//     naming a record per person, since a lookup reaches only one; a
-//     short form alone between different people is not reported,
-//     because name resolution reads no short forms.
+//     naming a record per person, since a lookup reaches only the one
+//     with the most standing, and none when two or more share it. A
+//     short form alone between different people is not reported:
+//     resolution takes a short form only when exactly one record
+//     answers to it, so a first name two people share reaches neither
+//     rather than the wrong one.
 //   - Email: an address held by two or more records, when
 //     [emailGroupMisroutes] says it can misroute mail.
 //   - Phone: a number held by two or more records as IMPP signal: or as
