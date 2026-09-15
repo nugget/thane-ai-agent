@@ -218,7 +218,8 @@ fit, such as a household Dave Rivera and a `known` Dave Smith, the
 lookup returns neither, whatever their zones, because a first name two
 people share does not say which one is meant. The error lists each
 with its formatted name, trust zone, `contact_id`, and the field it
-matched. Retry with the full formatted name of the one you mean, or
+matched. It lists at most five; when more fit, it counts the rest and
+points you at `query` to find the one you mean among them. Retry with the full formatted name of the one you mean, or
 pass its `contact_id` to a tool that takes one; if the conversation
 does not settle which, ask rather than guess.
 
@@ -256,7 +257,8 @@ use the `key` + `value` filter below instead of `query`:
 }
 ```
 
-Returns matching contacts ranked. Useful when the name in the input is
+Returns up to 50 matching contacts, and says so when it stops at 50,
+because other contacts may match too. Useful when the name in the input is
 the person's company, their title, or a partial spelling. It is the
 only lookup that reads those text fields, and it returns a list to
 choose from, never an answer to who a name is.

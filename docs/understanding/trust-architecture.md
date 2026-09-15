@@ -394,18 +394,20 @@ contact with authority and is still reported.
   behind an existing value says in its result which value delivery still
   uses.
 - **Names.** `ResolveContact` finds, in one query, the active contacts
-  whose formatted name or nickname is the name, compared with `LOWER`,
+  whose formatted name or nickname is the name, both sides trimmed of
+  edge space and compared with `LOWER` as the fork audit folds them,
   and takes the first in this order: the pinned operator's own record at
   any zone, then records above `known` (a malformed zone counts), then a
   formatted-name match before a nickname match, then ID. Only when no
   contact holds the name that way does it read the fork audit's short
-  forms, through the same `recordNameKeys` and `answersTo` code: a
-  contact's given name and the first word of a formatted name of more
-  than one word, trimmed and folded the same way. Exactly one active
-  contact answering by a short form is the answer; two or more are an
-  `AmbiguousNameError` whatever their zones, naming up to five with
-  formatted name, zone, `contact_id` and the field matched and counting
-  the rest, because authority breaks ties among exact holders only.
+  forms, through the same `recordNameKeys` keys, reading the short
+  forms alone: a contact's given name and the first word of a formatted
+  name of more than one word, trimmed and folded the same way. Exactly
+  one active contact answering by a short form is the answer; two or
+  more are an `AmbiguousNameError` whatever their zones, naming up to
+  five with formatted name, zone, `contact_id` and the field matched,
+  counting the rest and pointing at `contact_lookup`'s `query` to find
+  them, because authority breaks ties among exact holders only.
   Notes, AI summaries, and organizations are never read: a word in one
   contact's note does not make that contact the person it names, and
   `Store.Search`, behind `contact_lookup`'s `query` and the contacts API,

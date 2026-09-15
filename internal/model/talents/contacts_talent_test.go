@@ -48,6 +48,8 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"ambiguity names the retry", "contacts_lookup", "Retry with the full formatted name of the one you mean"},
 		{"a note does not make the person", "contacts_lookup", "never makes that contact the person"},
 		{"query is the text door", "contacts_lookup", "It is the only lookup that reads those text fields"},
+		{"query says when it stops", "contacts_lookup", "Returns up to 50 matching contacts, and says so when it stops at 50"},
+		{"ambiguity points at query for the rest", "contacts_lookup", "points you at `query` to find the one you mean among them"},
 		{"routing shares the first-name rule", "contacts_save", "a first name two contacts share reaches neither"},
 		{"descriptions reach no one", "contacts_save", "addressed by a description (\"the plumber\") reaches no one"},
 		{"forget by ambiguous name removes nothing", "contacts_save", "resolves to neither and removes nothing"},

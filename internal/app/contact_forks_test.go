@@ -213,10 +213,16 @@ func TestLogContactForkFindings(t *testing.T) {
 // TestContactForkRemedy_NameWarnsOfTheOnlyExactHolder pins that the
 // name remedy says what forgetting the one record that holds a name
 // exactly does to it: the name falls to the one record whose given name
-// or first word it is, so the record that keeps it needs the nickname.
+// or first word it is, so the record that keeps it needs the nickname,
+// which the operator gives and Thane sets only when the operator asks in
+// their own message.
 func TestContactForkRemedy_NameWarnsOfTheOnlyExactHolder(t *testing.T) {
 	remedy := contactForkRemedy(contacts.ForkKindName)
-	for _, want := range []string{"Forgetting the only record whose formatted name or nickname is the name", "given name or first word", "as a nickname"} {
+	for _, want := range []string{
+		"Forgetting the only record whose formatted name or nickname is the name", "given name or first word",
+		"the operator gives the record that keeps it the name as a nickname through CardDAV or /v1/contacts",
+		"Thane sets that nickname only when the operator asks in their own message",
+	} {
 		if !strings.Contains(remedy, want) {
 			t.Errorf("name remedy = %q, want %q", remedy, want)
 		}
