@@ -95,7 +95,8 @@ func TestServiceRegistersEveryToolThroughTheProvider(t *testing.T) {
 	reg := tools.NewEmptyRegistry()
 	reg.RegisterProvider(provider)
 
-	want := []string{"email_list", "email_read", "email_folders", "email_search", "email_mark", "email_send", "email_reply", "email_move"}
+	want := []string{"email_list", "email_read", "email_folders", "email_search", "email_mark", "email_send", "email_reply", "email_move",
+		"email_drafts", "email_draft_get", "email_draft_revise", "email_draft_withdraw"}
 	for _, name := range want {
 		tool := reg.Get(name)
 		if tool == nil {

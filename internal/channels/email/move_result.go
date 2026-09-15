@@ -54,10 +54,7 @@ func batchProblem(tool string, n int, outcome string) string {
 // clipField cuts s to at most maxMoveFieldOutput bytes on a rune
 // boundary, ending a cut value with fieldCutMarker.
 func clipField(s string) string {
-	if len(s) <= maxMoveFieldOutput {
-		return s
-	}
-	return truncateUTF8(s, maxMoveFieldOutput-len(fieldCutMarker)) + fieldCutMarker
+	return clipTo(s, maxMoveFieldOutput)
 }
 
 // marshalMoveResponse renders an email_move result within

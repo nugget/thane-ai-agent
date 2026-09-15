@@ -3,6 +3,7 @@ package email
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -122,6 +123,10 @@ type messageSummaryView struct {
 	// AddressesOmitted counts to and cc addresses past
 	// maxSummaryAddresses per list that the summary leaves out.
 	AddressesOmitted int `json:"addresses_omitted,omitempty"`
+
+	// ThaneDraft marks a drafts-folder row that is one of Thane's open
+	// drafts (draft_annotate.go).
+	ThaneDraft *thaneDraftRef `json:"thane_draft,omitempty"`
 }
 
 // listResponse is the result of email_list and email_search.
@@ -201,6 +206,10 @@ type readResponse struct {
 	// AddressesOmitted counts to, cc, and reply_to addresses past
 	// maxHeaderAddresses per list that the header leaves out.
 	AddressesOmitted int `json:"addresses_omitted,omitempty"`
+
+	// ThaneDraft marks a message read from the drafts folder that is one
+	// of Thane's open drafts (draft_annotate.go).
+	ThaneDraft *thaneDraftRef `json:"thane_draft,omitempty"`
 }
 
 // hiddenContent says that an HTML body's own markup hid something from
@@ -386,11 +395,16 @@ type sendResponse struct {
 	SentFolder     string `json:"sent_folder,omitempty"`
 	SentFolderCopy string `json:"sent_folder_copy,omitempty"`
 
-	DraftsFolder string   `json:"drafts_folder,omitempty"`
-	DraftUID     uint32   `json:"draft_uid,omitempty"`
-	Signed       bool     `json:"signed"`
-	Note         string   `json:"note,omitempty"`
-	Decision     Decision `json:"decision"`
+	DraftsFolder string `json:"drafts_folder,omitempty"`
+	DraftUID     uint32 `json:"draft_uid,omitempty"`
+
+	// DraftID is the draft ledger's id for a drafted message, the key
+	// the email_drafts tools take.
+	DraftID string `json:"draft_id,omitempty"`
+
+	Signed   bool     `json:"signed"`
+	Note     string   `json:"note,omitempty"`
+	Decision Decision `json:"decision"`
 }
 
 // newSendResponse renders a delivered or drafted outcome.
@@ -408,11 +422,21 @@ func newSendResponse(outcome SendOutcome, subject, inReplyTo string) sendRespons
 		SentFolderCopy: outcome.SentFolderCopy,
 		DraftsFolder:   outcome.DraftsFolder,
 		DraftUID:       outcome.DraftUID,
+		DraftID:        outcome.DraftID,
 		Signed:         outcome.Signed,
 		Decision:       outcome.Decision,
 	}
-	if resp.Disposition == DispositionDrafted {
+	switch {
+	case resp.Disposition == DispositionDrafted:
 		resp.Note = "Held in " + outcome.DraftsFolder + " for the operator to send from their own client; nothing has left the mailbox. Do not resend it."
+		if outcome.DraftID != "" {
+			resp.Note += " To change it while it is still Thane's, pass draft_id " + outcome.DraftID + " to email_draft_revise, or to email_draft_withdraw to withdraw it (email_drafts capability tag)."
+		}
+		if outcome.DraftUntracked {
+			resp.Note += " The draft ledger could not record it, so it has no draft_id, no draft tool can change it, and it reads as a draft Thane did not write; do not draft this message again, and tell the operator it is waiting there."
+		}
+	case resp.Disposition == DispositionSent && len(outcome.OpenDraftIDs) > 0:
+		resp.Note = fmt.Sprintf("This reply was sent, and Thane's open draft %s still answers the same message in the drafts folder, where the operator could send it as a second answer; withdraw it with email_draft_withdraw (email_drafts capability tag) unless the operator wants it kept.", strings.Join(outcome.OpenDraftIDs, ", "))
 	}
 	return resp
 }

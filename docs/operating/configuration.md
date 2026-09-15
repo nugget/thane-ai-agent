@@ -194,13 +194,34 @@ refuse to act in the drafts folder only once one is known, so on a
 server without special-use attributes set `drafts_folder` to keep those
 guards in force.
 
+Thane records each draft it writes in a draft ledger in the operational
+state store; nothing configures it. An entry holds the draft's
+UIDVALIDITY, UID, and Message-ID, the message it answers, and a short
+revision history. The `email_drafts` tools use it to revise or withdraw
+a draft while it is still Thane's, meaning the drafts folder still
+holds it at that UID with that Message-ID, not marked `\Deleted`. An edit in the operator's
+own client stores the draft anew under another UID, and from then on it
+is the operator's: no tool touches it again. Revising needs a server
+that advertises UIDPLUS or IMAP4rev2; without either, revision is
+refused. Thane keeps one draft per message: a second draft answering a
+message while Thane's first is still open is refused, and on an
+operator mailbox so is a draft answering a message when the drafts
+folder already holds a reply to it that is not one of Thane's open
+drafts, most likely the operator's own. Each account keeps at most 200
+entries, forgetting closed ones first and never an open one, so a new
+draft is refused while 200 are open; an entry that has closed is
+forgotten 14 days later.
+
 `junk_folder` and `trash_folder` name, exactly, the folders that hold
 spam and deleted mail, for a server that marks no folder with the
 `\Junk` or `\Trash` special-use attribute; leave them empty to use the
 folder the server marks. They are what `email_move`'s
 `destination_role: junk` and `destination_role: trash` resolve to
 first, and a role that neither a key nor the server answers is refused
-by name rather than guessed.
+by name rather than guessed. The trash folder is also where
+`email_draft_withdraw` moves a draft Thane withdraws, whatever
+`move_into` lists; with no trash folder known, the withdrawal is
+refused and the draft stays where it is.
 `denied_recipient_domains` refuses recipients at those domains and their
 subdomains regardless of trust zone, and `allowed_recipient_domains`,
 when set, refuses every domain outside it. An automated-looking

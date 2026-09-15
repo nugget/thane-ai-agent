@@ -66,6 +66,8 @@ func TestEmailDefaultHandlerTaskBranchesOnMailboxOwner(t *testing.T) {
 		{"other accounts section", "### Every other account"},
 		{"step 5 says policy can refuse", "The policy can also refuse it"},
 		{"step 5 forbids another account", "do not write the message from another account"},
+		{"step 5 leaves an open draft alone", "email_reply also refuses, with route draft_open, a reply to a message one of your earlier drafts already answers"},
+		{"step 5 forbids a second answer by email_send", "do not write the answer again with email_send"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

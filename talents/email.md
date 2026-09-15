@@ -3,7 +3,7 @@ name: email
 tags: [email]
 kind: trailhead
 teaser: "Open for inbox work — triaging what arrived, drafting a response, or organizing what's there."
-next_tags: [email_triage, email_respond, email_organize]
+next_tags: [email_triage, email_respond, email_organize, email_drafts]
 ---
 
 # Email
@@ -43,6 +43,12 @@ audiences and trust models are different.
   `email_organize`. Mark as read/flagged, move between folders, file
   obvious spam by role and undo a move. UIDs are folder-scoped; this
   is where that bites.
+
+- **You want to improve or take back a draft you wrote** — activate
+  `email_drafts` beside `email`; it is a capability tag with its own
+  tools. List your drafts still waiting for the operator, read one
+  beside the message it answers, revise it for accuracy and tone, or
+  withdraw it. A draft the operator has touched is theirs.
 
 ## Constants across all branches
 
@@ -108,7 +114,8 @@ audiences and trust models are different.
   the trust gate. `email_send` and `email_reply` end in one of three
   dispositions: `sent` (delivered by SMTP), `drafted` (held in the
   account's drafts folder for the operator to send from their own
-  client; nothing has left the mailbox, so never resend it), or
+  client; nothing has left the mailbox, so never resend it, and the
+  result's `draft_id` is how you change it later), or
   `refused` (one sentence, then a `decision` JSON naming every
   recipient at issue and its recovery; nothing was sent or drafted).
   Under the default `by_trust_zone` delivery, `admin` and `household`
@@ -149,7 +156,9 @@ audiences and trust models are different.
 - **Sent mail is irreversible; drafted mail is not.** There is no
   "unsend" for a `sent` disposition, and a message sent to the wrong
   audience is permanent. A `drafted` message stays reversible until
-  the operator sends it. When uncertain about the recipient list or
+  the operator sends it: while it is still yours, the `email_drafts`
+  tools revise its body or withdraw it, and once the operator has
+  touched it, it is theirs to change. When uncertain about the recipient list or
   the body's tone, send with `draft: true` so the operator reviews it
   in the drafts folder; don't reach for a direct send as an optimistic
   move.
@@ -181,6 +190,15 @@ you do not help file it: the entry's `move_into` lists the only
 folders mail may move into, which unless the operator configured more
 is the junk folder alone, and any other move is refused in every turn.
 
+Their drafts folder is theirs as well. A draft you did not write is
+never yours to touch, whatever it answers; in list, search, and read
+results there, only your own drafts carry `thane_draft`. When the
+drafts folder already holds a reply to a message that is not one of
+your open drafts, most likely the operator's own start on one,
+`email_reply` refuses to draft another answer to it
+(`operator_reply_started`; see "One draft per message" in
+`email_respond`), because their draft comes first.
+
 Anything drafted from an operator mailbox goes out as the operator
 when they send it, so write it as them: in the name `writes_as` shows
 and the `voice` the entry gives, in the first person. Never sign it
@@ -207,6 +225,10 @@ another.
 - For escalation when an email needs human attention (sensitive thread,
   legal/financial content), bounce to `notifications` —
   `request_human_decision` with the email summary in the body.
+- For editing drafts after they are written, which is its own pass
+  and often a stronger model than the one that wrote them, bounce to
+  `email_drafts`; a loop that does it carries both `email` and
+  `email_drafts`.
 
 ---
 name: email_triage
@@ -258,7 +280,7 @@ calls it, so every destination is a folder name exactly as
 
 The result is `{account, folder, count, total_matched, truncated,
 messages:[{uid, from, to, cc, subject, date, message_id, flags,
-size}]}`, where every address is `{name, address, trust_zone,
+size, thane_draft}]}`, where every address is `{name, address, trust_zone,
 automated, contact, contact_status}` as described under the `email`
 trailhead (`automated` is present only on a no-reply, notification, or
 bounce address); `date` is a delta such as `-2h13m`. `limit` defaults to
@@ -270,6 +292,14 @@ with `addresses_omitted` counting the rest.
 read, skip what you have. The UIDs in the result are what you'll feed
 to `email_read`, `email_mark`, or `email_move` next, together with the
 `account` and `folder` beside them.
+
+In the account's drafts folder, a row that is one of your own drafts
+still waiting for the operator carries `thane_draft {draft_id}`, and
+only when both its UID and its Message-ID match what Thane recorded.
+The `draft_id` is what the `email_drafts` tools take. A row without
+`thane_draft` is not one of your open drafts: most likely the
+operator's own, or a draft that stopped being yours when they touched
+it. Treat it as theirs; no tool edits it.
 
 ## Search across content
 
@@ -310,7 +340,7 @@ Once a UID looks worth reading, pull the body with `email_read`:
 
 The result is a JSON header object — `{account, folder, uid,
 message_id, in_reply_to, references, from, to, cc, reply_to, subject,
-date, flags, size, marked_seen, body_source, hidden_content,
+date, flags, thane_draft, size, marked_seen, body_source, hidden_content,
 body_truncated, attachments:[{filename, content_type, size, inline}],
 authentication:{method, status, verified}, auto_submitted, bulk}` — followed by a line
 containing only `---` and then the readable body. The body is the
@@ -336,7 +366,9 @@ fit and `body_truncated` says so, address lists stop at 25 with
 described with `attachments_omitted` counting the rest.
 `auto_submitted` and `bulk` appear only when the message's own headers
 claim it was sent automatically or to a list, as the `email` trailhead
-describes; ordinary mail carries neither.
+describes; ordinary mail carries neither. `thane_draft` appears on a
+message read from the drafts folder only when it is one of your own
+drafts, as in a list row.
 Attachments are described, not downloaded. **Whether reading marks the
 message seen depends on whose mailbox it is.** `mark_seen` defaults to
 false on an operator mailbox (`owner: operator`, whose entry shows
@@ -403,6 +435,9 @@ the operator is not present, apart from the one list-mail case that
   email_respond first so its safety doctrine loads.
 - For moving a message after deciding what to do with it, bounce to
   `email_organize`.
+- For a drafts-folder row carrying `thane_draft`, bounce to
+  `email_drafts`: reading one of your drafts beside the message it
+  answers, and revising it, happen there.
 
 ---
 name: email_respond
@@ -454,7 +489,7 @@ allowed ones and skip the others." On an account whose entry shows
 account" below), but whatever is still refused there
 refuses the whole message too. The result is `{disposition,
 account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy,
-drafts_folder, draft_uid, signed, note, decision}`, and
+drafts_folder, draft_uid, draft_id, signed, note, decision}`, and
 `disposition` is one of three:
 
 - **`sent`** — SMTP accepted the message; `sent_folder_copy` is `stored`
@@ -481,9 +516,14 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   (you asked), or `personally_addressed_list_reply` (list mail
   addressed to the account; see "A drafts-only account"). A recipient
   drafted only because the account's draft gate is relaxed shows
-  `gating: "draft_only"` in `decision.recipients`. Tell the person you are talking to, if any, that the
-  message awaits the operator; do not resend it, and do not try to
-  send it "properly" from another account.
+  `gating: "draft_only"` in `decision.recipients`. `draft_id` is the
+  draft's key in Thane's draft ledger: while the draft is still yours,
+  `email_draft_revise` changes its body and `email_draft_withdraw`
+  takes it back (both under `email_drafts`), and `draft_uid` is absent
+  when the server did not report the draft's UID. Tell the person you
+  are talking to, if any, that the message awaits the operator. Never
+  resend it, and never write a second draft to change it; revise the
+  one you have. Do not try to send it "properly" from another account.
 - **`refused`** — nothing was sent or drafted. The error is one
   sentence followed by the `decision` JSON; `decision.route` is
   `access` (the account cannot write mail; the message belongs to
@@ -504,9 +544,16 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   recovery is the operator assigning a zone, an `automated` mailbox or
   a denied domain to drop, a duplicate to report, or a `lookup_failed`
   to retry later),
-  `inspector` (a Go-side review objected to the message itself), or
+  `inspector` (a Go-side review objected to the message itself),
   `recipient_limit` (more than 50 addresses in `to` and `cc`
-  together). A refusal is a decision, not a transient
+  together), `draft_open` (one of your drafts already answers the
+  message; revise that one), `operator_reply_started` (on an
+  operator mailbox, a reply that is not one of your open drafts is
+  already there, most likely the operator's; leave it to them), or
+  `draft_limit` (the account already has 200 of your drafts open, the
+  most Thane tracks; tell the operator they are waiting). The
+  `draft_open` and `operator_reply_started` refusals are explained
+  under "One draft per message" below. A refusal is a decision, not a transient
   error: change the recipient list or the message, or report it.
 
 When the result reports a refusal, the right move is usually
@@ -579,6 +626,39 @@ just took the UID from, each with its `trust_zone` and
 not change the original's seen state. The result has the same shape as
 `email_send` with `in_reply_to` set.
 
+## One draft per message
+
+A message gets one draft answering it at a time, because two would
+leave the operator two answers to choose between. When a reply would
+be drafted while one of your drafts answering the same message is
+still yours, `email_reply` refuses it with `decision.route`
+`draft_open`, and the sentence names that draft's `draft_id`. Change
+the existing draft with `email_draft_revise` instead (activate
+`email_drafts`). When a fresh draft is genuinely wanted, for example
+one to a different audience, which a revision cannot change, withdraw
+the old one with `email_draft_withdraw` first and then reply. Go
+checks the drafts folder before it decides, so a draft the operator
+has since sent, discarded, or taken over no longer counts.
+
+On an operator mailbox the operator comes first. When the drafts
+folder already holds a reply to the same message that is not one of
+your open drafts, `email_reply` refuses with `decision.route`
+`operator_reply_started`: most likely the operator has begun their own
+answer. Go cannot tell their draft from one of yours it no longer
+tracks, so tell the operator a draft answering the message is already
+there rather than that they started one.
+Leave their draft alone and write no second one beside it; if you have
+something to add, tell the operator. Nothing is sent or drafted either
+way. `draft: true` does not clear either refusal, and writing the
+answer fresh with `email_send` to avoid the check would put the second
+answer in front of the operator all the same, so don't.
+
+The check guards drafting only. When a reply is sent directly while
+one of your drafts answering the same message is still open, the
+result's `note` names that `draft_id`: withdraw it with
+`email_draft_withdraw` unless the operator wants it kept, so they do
+not send it as a second answer.
+
 ## A drafts-only account
 
 An account whose Email Accounts entry shows `draft_gate: "relaxed"`
@@ -615,7 +695,10 @@ record, a `known` contact, or a shared address), and why you drafted
 it. Their review is the only check
 between that message and someone the directory does not vouch for, so
 write nothing to such a recipient that you would not send them
-yourself.
+yourself. Until they send it, the draft can still be improved: while
+it is yours, a later pass can revise it for accuracy and tone through
+`email_drafts`, but it may be sent before any such pass comes, so
+write it finished the first time.
 
 **List mail addressed to the account.** On the same accounts, one
 reply that would otherwise be an automatic response is drafted: a
@@ -661,6 +744,8 @@ once more with their finger on the button. The draft carries no audit
 under the account's own From, so what goes out is exactly what you
 composed and nothing Thane adds rides along. Whose voice to write it
 in follows the account's owner, as "Whose mailbox" in `email` says.
+The result's `draft_id` is how you, or a later pass, find the draft
+again and change it (see `email_drafts`).
 
 ## When no folder holds drafts
 
@@ -701,6 +786,8 @@ audience-wrong is a real leak.
 - For high-stakes outgoing mail (sensitive, legal, ambiguous tone),
   send with `draft: true`, so the operator reads it once more in
   the drafts folder before it goes.
+- For changing or withdrawing a draft you already wrote, bounce to
+  `email_drafts`; the drafted result's `draft_id` is its key there.
 - For the loop shape that reads incoming mail and decides whether to
   reply, see `loops_examples_curate` — a `thane_loop_create` with
   `operation=service` is the right vehicle when "every morning"
@@ -756,7 +843,8 @@ rather than routing around it.
 The account's drafts folder is never the `folder` of an `email_mark`
 call. It holds drafts waiting for the operator to send or discard,
 theirs and Thane's alike, so their flags are the operator's to change;
-the call is refused and nothing changes.
+the call is refused and nothing changes. To improve or take back one
+of your own drafts, use `email_drafts`.
 
 ## Move messages
 
@@ -808,7 +896,9 @@ The account's drafts folder is neither a destination nor a source. It
 holds drafts waiting for the operator to send or discard: a message
 moved in would look like one Thane composed for them, and one moved out
 would take a draft away from them. Either move is refused and nothing
-changes.
+changes. Taking back one of your own drafts is `email_draft_withdraw`'s
+job (under `email_drafts`), which moves it to the trash folder only
+after proving it is still yours.
 
 ## UIDs are folder-scoped — and the result tells you the new ones
 
@@ -957,3 +1047,243 @@ is cut or absent, list the junk folder instead.
   server-side, not Thane-managed. On an operator mailbox that move is
   refused unless the entry's `move_into` lists the trash folder, so
   delete only what the operator asks you to, and only there.
+
+---
+name: email_drafts
+tags: [email_drafts]
+kind: trailhead
+teaser: "Your drafts still waiting for the operator — find one, read it beside the message it answers, revise it for accuracy and tone, or withdraw it."
+---
+
+# Your drafts in flight
+
+A draft you write is in flight until the operator sends it or discards
+it from their own client. Until then it sits in the account's drafts
+folder, and Thane's draft ledger remembers it under a `draft_id`, the
+key every tool here takes; the `email_reply` or `email_send` result
+that drafted it returned that `draft_id`. Nothing here sends. The
+operator reads and sends every draft by hand, so all you can do to a
+draft in flight is make it a better message for them to send, or take
+it back.
+
+Carry `email` beside `email_drafts`. The Email Accounts block, which
+shows each account's `owner`, `writes_as`, and `voice`, comes with the
+`email` tag; `email_draft_get` repeats all three for the draft's own
+account.
+
+## Yours until the operator touches it
+
+A draft is yours only while Go can prove it: the drafts folder still
+holds it at the UID Thane recorded, under the same UIDVALIDITY, with the
+Message-ID Thane wrote. IMAP never changes a stored message under its
+UID, so a draft that passes that check is exactly what Thane wrote.
+When the operator edits a draft in their client, the client stores a
+new copy under another UID, and from then on the draft is theirs: no
+tool here touches it, and nothing you do should put your version back.
+
+A draft the operator wrote is never yours, whatever it says or answers.
+In the drafts folder, `email_list`, `email_search`, and `email_read`
+mark your open drafts with `thane_draft {draft_id}`, and only when both
+the UID and the Message-ID match. A row without `thane_draft` is not
+one of your open drafts: treat it as the operator's, even when it
+answers a message you drafted for. Every
+tool here refuses a `draft_id` the ledger does not hold, so there is
+no way to act on a draft Thane did not write, and no reason to look
+for one.
+
+## Find it, and read it beside what it answers
+
+`email_drafts` lists the ledger after checking each open draft against
+its account's drafts folder:
+
+```json
+{
+  "account": "primary"
+}
+```
+
+Omit `account` to list every account you may reach; a loop bound to
+one account sees only that one. Each row is `{draft_id, account, stage,
+closed_reason, subject, to, original:{from, subject, message_id},
+revisions, last_revised:{by, at}}`, newest first. `stage` is `open`
+(still yours), `gone` (no longer yours; `closed_reason` says why), or
+`withdrawn` (you took it back). Only open drafts are listed unless you
+pass `include_closed: true`. `revisions` counts the revisions applied
+since the draft was written, and `last_revised` says who wrote the
+current version and when: `operator` when Thane wrote it in a turn the
+operator was present for, otherwise the name of the loop that wrote
+it. `operator`
+there means the operator's turn, not the operator's client; a draft
+the operator edited themselves is no longer open. An account whose
+drafts folder could not be checked is listed under `errors` with its
+drafts left out, so a missing account is not an account with no
+drafts; try again later.
+
+Read one with `email_draft_get`:
+
+```json
+{
+  "draft_id": "<a draft_id from email_drafts>"
+}
+```
+
+The result is a JSON header, a line containing only `---`, the draft's
+plain-text part (the body you wrote, with its markdown formatting
+removed), another `---` line, and the
+body of the message it answers, found by its Message-ID. Neither read
+marks anything seen. The header carries the recipients, the subject,
+the `history` of versions as `[{by, at, note}]`, the original's `from`
+with the directory's answer about the sender, and the account's
+`owner`, `writes_as`, and `voice`. When the original has moved,
+`original.found` is false; `email_search` with its `message_id` finds
+it. Read both bodies before you change a word, because accuracy is
+judged against what the original actually says, not against what the
+draft assumed it said.
+
+## Revise it for accuracy and tone
+
+`email_draft_revise` replaces a draft's body:
+
+```json
+{
+  "draft_id": "<the draft_id>",
+  "body": "Hi Alice,\n\nThursday works for me. I'll bring the signed copy.\n\nBob",
+  "note": "Changed Tuesday to Thursday, the day Alice's message asks for."
+}
+```
+
+Revise for two things. Accuracy: every fact, date, name, figure, and
+commitment in the draft should match the original and what you know,
+and the draft should answer what was actually asked. Tone: the draft
+goes out under the account's `writes_as` and in its `voice`, so on an
+operator mailbox it reads as the operator, in the first person, never
+signed with your name and never mentioning an assistant (see "Whose
+mailbox" in `email`). The operator presses send on exactly this body,
+so the new body is a finished message too: a note to the operator or
+to a later editor belongs in your report, never in the draft.
+
+Only the body changes. Recipients, subject, and threading stay exactly
+as they were drafted, and the tool takes no argument for them; a draft
+that needs a different audience or subject is withdrawn, not revised.
+`body` is markdown and replaces the whole old body, so carry over
+everything that should stay, greeting and sign-off included. The body
+`email_draft_get` shows is the plain-text rendering, so put back any
+markdown formatting you want to keep. `note` goes into the draft's
+history: one sentence on what changed and why.
+
+The result is `{action: "revised", draft_id, account, drafts_folder,
+uid, message_id, replaced_uid, revision, subject, to, cc, note}`. The
+`draft_id` stays the same across revisions, while `uid` and
+`message_id` belong to the new version: Go stores each version as a new
+message under a fresh Message-ID and removes the old one alone. Keep
+track of a draft by its `draft_id`, never by a UID you saw earlier.
+
+A draft that is already right needs no call. Nothing records that a
+draft was read or approved, and there is no approve step: the operator
+sending it is the only approval there is. Revising with an unchanged
+body only replaces the message in the operator's drafts folder for
+nothing.
+
+## Withdraw it
+
+`email_draft_withdraw` moves a draft to the account's trash folder, and
+its entry becomes `withdrawn`:
+
+```json
+{
+  "draft_id": "<the draft_id>",
+  "reason": "Alice cancelled the meeting in a later message, so this reply is moot."
+}
+```
+
+Withdraw a draft that should not be sent at all: the message no longer
+needs this answer (a later message settled it, or it turned out to be
+a notice nobody answers), or the answer needs something a revision
+cannot change, such as a different audience or subject, so the draft
+must go before a new reply is written. Go finds the trash folder by
+its role, from the account's `trash_folder` or the folder the server
+marks, and the account's `move_into` does not apply, because taking
+back your own draft is not filing. When no folder has the trash role,
+the draft stays where it is and the refusal (`no_trash_folder`) names
+the gap, which only the operator can close; tell them the draft should
+not be sent. An account whose `access` is `read` refuses withdrawal.
+
+The result's `action` is `withdrawn` only when the server reported
+that the move carried this draft into the trash. `unconfirmed` means
+the server accepted the move without that report: the draft is still
+in the drafts folder, or it is gone from there, most likely because the
+operator sent or discarded it first. A copy of it in the trash proves
+nothing, since the operator's client may have filed it there. Its entry
+is not marked withdrawn, and `note` says which. Never report an
+unconfirmed draft as withdrawn or promise it will not be sent; tell the
+operator it should not go out, so they can check.
+
+## Gone and held: hands off
+
+A refusal from these tools is one sentence followed by `{action:
+"refused", reason, draft_id, account, stage, closed_reason}`, and
+nothing in the mailbox changed. Two reasons mean the draft has left
+your hands, and they outrank everything else here:
+
+- `held`: the operator has taken the draft over. They edited it in
+  their client (`closed_reason` `operator_took_over`), or touched it
+  while your revision ran (`operator_touched_during_revision`), in
+  which case Go removed your new version again.
+- `gone`: the draft is no longer yours. The operator sent or discarded
+  it (`vanished`, or `marked_deleted` when their client flagged it
+  `\Deleted` and has not expunged it yet), or the drafts folder
+  changed under it
+  (`uid_validity_changed`, `folder_changed`, `no_drafts_folder`,
+  `message_id_changed`), so Go can no longer prove which message is
+  the one Thane wrote.
+
+Either way, leave it. The operator has taken it over, or it is out of
+your reach. Never write it again as a new draft and never try to
+restore your version: whatever the operator did was their decision,
+and a second copy would put two answers in front of them. If what you
+meant to change still matters, tell the operator in your report.
+
+The other reasons are plainer. `withdrawn` means you already withdrew
+it. `no_uidplus` means the server lacks the UIDPLUS extension a safe
+replacement or a confirmed withdrawal needs, or never reported the
+draft's UID; retrying fails the same way, so tell the operator what you
+would change, or that the draft should not be sent. `inspector` means the outbound inspector
+objected to the new body. `access` means the account can no longer
+write mail.
+
+## A first draft, then an edit
+
+Drafting can come in two passes. A first pass, often a free local
+model, reads new mail and writes the reply as a draft. A later pass on
+a stronger model, a loop carrying `email` and `email_drafts`, then
+edits those drafts for accuracy and tone before the operator gets to
+them. Neither pass sends, and neither records a review.
+
+If you are the first pass, write the finished message anyway, because
+the operator may send it before any edit comes. If you are the editing
+pass:
+
+1. Call `email_drafts` for the account. A draft whose `revisions` is
+   above 0 has already had an edit; look at it again only when
+   something new bears on it, such as a later message in the thread.
+2. Read each draft you are editing with `email_draft_get`, and check it
+   against the original and against the account's `writes_as` and
+   `voice`.
+3. Revise only what is wrong, with a `note` saying what you changed.
+   Leave a draft that is right alone.
+4. Withdraw a draft whose message no longer needs an answer, or whose
+   audience or subject is wrong. If a different answer is still
+   wanted, write it afterwards with `email_reply`; while the old draft
+   is open, `email_reply` refuses a second one (`draft_open`, see
+   `email_respond`).
+5. Leave anything `gone` or `held`, and report to the operator what you
+   changed and what you could not.
+
+## Cross-references
+
+- For writing a first draft, and the two refusals that keep one draft
+  per message, bounce to `email_respond`.
+- For whose name and voice a draft goes out in, see "Whose mailbox" in
+  `email`.
+- For finding an original that has moved, `email_search` with its
+  `message_id` (see `email_triage`).

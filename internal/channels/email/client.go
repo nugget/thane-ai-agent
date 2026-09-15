@@ -376,6 +376,13 @@ func (c *Client) AppendMessage(ctx context.Context, folder string, msg []byte, f
 	if err := c.ensureConnected(ctx); err != nil {
 		return AppendResult{}, err
 	}
+	return c.appendLocked(ctx, folder, msg, flags)
+}
+
+// appendLocked is [Client.AppendMessage] for a caller that already
+// holds c.mu and has called ensureConnected, which is how a draft
+// revision appends its new version without letting go of the lock.
+func (c *Client) appendLocked(ctx context.Context, folder string, msg []byte, flags []imap.Flag) (AppendResult, error) {
 	folder = normalizeFolder(folder)
 
 	opts := &imap.AppendOptions{

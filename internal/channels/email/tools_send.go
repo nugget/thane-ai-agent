@@ -125,6 +125,8 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 		Draft:              toolargs.Bool(args, "draft"),
 		Original:           original.HeaderMarks,
 		OriginalRecipients: slices.Concat(original.To, original.Cc),
+		OriginalEnvelope:   &original.Envelope,
+		OriginalFolder:     opts.Folder,
 	})
 	if err != nil {
 		return "", err

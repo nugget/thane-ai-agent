@@ -91,6 +91,11 @@ job:
   the human-egress tools the core loop calls *after* it decides to
   escalate; granting it to a non-core service or delegate loop
   bypasses that boundary, not strengthens it.
+- **Draft-editing loop** — `email` and `email_drafts`. `email_drafts`
+  holds the tools that revise and withdraw drafts Thane wrote, and
+  `email` carries the Email Accounts block with each account's
+  `writes_as` and `voice`. A loop that only triages or writes first
+  drafts leaves `email_drafts` off, so it never sees the edit tools.
 
 Whether omitting `tags:` differs from passing `tags: []` depends on
 which loop family is doing the launching:

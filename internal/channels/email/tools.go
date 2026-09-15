@@ -49,7 +49,9 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_list", acct.Name, listed.Folder, fmt.Sprintf("%d of %d", len(listed.Envelopes), listed.TotalMatched))
-	return marshalListResponse(newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now()))
+	resp := newListResponse(acct.Name, listed, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
+	t.service.draftIndexFor(ctx, acct, listed.Folder).annotate(&resp)
+	return marshalListResponse(resp)
 }
 
 // HandleRead reads a single message by UID.
@@ -89,6 +91,7 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 	t.service.recordOp("email_read", acct.Name, folder, strconv.FormatUint(uint64(uid), 10))
 	header := newReadResponse(acct.Name, folder, msg, markSeen, auth, newIdentityLookup(ctx, t.contacts, t.logger), time.Now())
 	header.AccessNote = accessNote
+	header.ThaneDraft = t.service.draftIndexFor(ctx, acct, folder).refRow(msg.UID, msg.MessageID, msg.Flags)
 	return renderRead(header, msg)
 }
 
@@ -197,7 +200,9 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
 	}
 	t.service.recordOp("email_search", acct.Name, found.Folder, fmt.Sprintf("%d matched", found.TotalMatched))
-	return marshalListResponse(newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now))
+	resp := newListResponse(acct.Name, found, newIdentityLookup(ctx, t.contacts, t.logger), now)
+	t.service.draftIndexFor(ctx, acct, found.Folder).annotate(&resp)
+	return marshalListResponse(resp)
 }
 
 // parseSearchDate accepts the shapes a model plausibly sends for a
