@@ -1917,10 +1917,15 @@ func (s *Server) handleArchiveMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if from.After(to) {
+		s.errorResponse(w, http.StatusBadRequest, "from must not be after to")
+		return
+	}
+
 	convID := r.URL.Query().Get("conversation_id")
 	limit := parseIntParam(r, "limit", 500)
 
-	messages, err := s.archiveStore.GetMessagesByTimeRange(from, to, convID, limit)
+	messages, err := s.archiveStore.GetMessagesByTimeRange(r.Context(), from, to, convID, limit)
 	if err != nil {
 		s.errorResponse(w, http.StatusInternalServerError, "query: "+err.Error())
 		return

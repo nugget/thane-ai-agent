@@ -361,7 +361,8 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 			"min_time / max_time accept either RFC3339 absolute timestamps or signed " +
 			"deltas (\"-1800s\" = 30 minutes ago). min_messages acts as a floor: set it " +
 			"to 50 and you'll get at least 50 of the most recent messages even on a quiet " +
-			"conversation, regardless of min_time. Filter to one conversation_id or omit " +
+			"conversation, regardless of min_time, subject to max_messages and the output size cap. " +
+			"Filter to one conversation_id or omit " +
 			"it for everything. Crosses session boundaries — sessions are an internal " +
 			"abstraction here; this tool just gives you the messages. Returns JSON with " +
 			"delta-second timestamps and originating session IDs.",
@@ -389,7 +390,8 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				},
 				"max_messages": map[string]any{
 					"type":        "number",
-					"description": "Cap on results. Default: 200.",
+					"description": "Cap on results. Default: 200; maximum: 1000. The floor cannot exceed this cap.",
+					"maximum":     memory.MaxArchiveRangeMessages,
 				},
 				"exclude_session_id": map[string]any{
 					"type": "string",
@@ -398,7 +400,7 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				},
 			},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			now := time.Now()
 			opts := memory.RangeOptions{}
 
@@ -423,13 +425,13 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				opts.To = t
 			}
 			if n, ok := args["min_messages"].(float64); ok && n > 0 {
-				opts.MinMessages = int(n)
+				opts.MinMessages = int(min(n, float64(memory.MaxArchiveRangeMessages)))
 			}
 			if n, ok := args["max_messages"].(float64); ok && n > 0 {
-				opts.MaxMessages = int(n)
+				opts.MaxMessages = int(min(n, float64(memory.MaxArchiveRangeMessages)))
 			}
 
-			messages, truncated, err := store.GetMessagesInRange(opts)
+			messages, truncated, err := store.GetMessagesInRange(ctx, opts)
 			if err != nil {
 				return "", fmt.Errorf("archive range: %w", err)
 			}

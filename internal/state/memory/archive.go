@@ -2503,44 +2503,22 @@ func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]Message, error)
 	return s.scanMessages(rows)
 }
 
-// GetMessagesByTimeRange returns archived messages within a time range.
-func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID string, limit int) ([]Message, error) {
+// MaxArchiveRangeMessages is the hard row limit for archive time-range queries.
+// HTTP queries default to 500 rows; model-context queries default to 200.
+const MaxArchiveRangeMessages = 1000
+
+// GetMessagesByTimeRange returns the oldest messages in the inclusive time
+// range, ordered by instant then message ID. It includes every message status
+// in the unified store, optionally restricted to conversationID. Non-positive
+// limit uses 500; limits above MaxArchiveRangeMessages are clamped. Timestamp
+// layouts and time zones do not affect filtering or ordering. Cancellation and
+// invalid stored timestamps are returned as errors, never partial success.
+func (s *ArchiveStore) GetMessagesByTimeRange(ctx context.Context, from, to time.Time, conversationID string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 500
 	}
-
-	cols := s.msgSelectCols()
-	table := s.msgTableName
-	var query string
-	var args []any
-
-	if conversationID != "" {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			WHERE conversation_id = ? AND timestamp >= ? AND timestamp <= ?
-			ORDER BY timestamp ASC
-			LIMIT ?
-		`, cols, table)
-		args = []any{conversationID, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
-	} else {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			WHERE timestamp >= ? AND timestamp <= ?
-			ORDER BY timestamp ASC
-			LIMIT ?
-		`, cols, table)
-		args = []any{from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
-	}
-
-	rows, err := s.msgDB().Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query by time range: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanMessages(rows)
+	limit = min(limit, MaxArchiveRangeMessages)
+	return s.queryMessagesRange(ctx, messageRangeQuery{from: &from, to: &to, conversationID: conversationID, limit: limit})
 }
 
 // RangeOptions configures [ArchiveStore.GetMessagesInRange]. All fields
@@ -2549,63 +2527,69 @@ func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID
 type RangeOptions struct {
 	// ConversationID restricts the result to a single conversation when
 	// non-empty. Empty matches all conversations.
-	ConversationID string
+	ConversationID string `json:"conversation_id,omitempty"`
 
 	// ExcludeSessionID drops messages from the named session when
 	// non-empty. Useful for system-prompt context providers that want
 	// archived/older messages but not the active session's currently
 	// in-memory rows (which the model already sees in its working
 	// message list).
-	ExcludeSessionID string
+	ExcludeSessionID string `json:"exclude_session_id,omitempty"`
 
 	// From is the earliest timestamp to include (inclusive). Zero means
 	// unbounded — combined with MinMessages, this is how the "give me at
 	// least N most-recent messages regardless of age" query is expressed.
-	From time.Time
+	From time.Time `json:"from,omitzero"`
 
 	// To is the latest timestamp to include (inclusive). Zero is treated
 	// as time.Now() at query time.
-	To time.Time
+	To time.Time `json:"to,omitzero"`
 
-	// MinMessages is a floor: ensure at least this many of the most
-	// recent (≤ To) messages are returned, even when fewer fall inside
-	// [From, To]. Zero disables the floor. Useful for "last X minutes
-	// OR Y messages, whichever is more" without two callsite queries.
-	MinMessages int
+	// MinMessages widens the window to older matching history when fewer
+	// than this many messages fall inside [From, To], subject to the
+	// MaxMessages cap and available history. Zero disables the floor.
+	// Useful for "last X minutes OR Y messages, whichever is more".
+	MinMessages int `json:"min_messages,omitempty"`
 
 	// MaxMessages caps the result. Non-positive uses the default of 200.
+	// Values above MaxArchiveRangeMessages are clamped; the floor cannot
+	// exceed this cap.
 	// When the cap clips the result, the second return value of
 	// GetMessagesInRange is true.
-	MaxMessages int
+	MaxMessages int `json:"max_messages,omitempty"`
 }
 
 // GetMessagesInRange returns archived messages bounded by time, with an
-// optional MinMessages floor that guarantees a useful tail even on quiet
-// conversations. Results are ordered chronologically (oldest first).
-// The boolean return is true when MaxMessages clipped the result.
-func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, error) {
+// optional MinMessages floor, limited by the effective MaxMessages cap. It
+// selects the newest matching messages and returns them ordered by instant then
+// message ID (oldest first), including all statuses in the unified store. Bounds
+// are inclusive and exact to the nanosecond across supported layouts and zones.
+// The boolean return is true when the cap clipped the result. Cancellation and
+// invalid stored timestamps are errors, never partial success.
+func (s *ArchiveStore) GetMessagesInRange(ctx context.Context, opts RangeOptions) ([]Message, bool, error) {
 	maxN := opts.MaxMessages
 	if maxN <= 0 {
 		maxN = 200
 	}
-	to := opts.To
-	if to.IsZero() {
-		to = time.Now()
+	maxN = min(maxN, MaxArchiveRangeMessages)
+	if opts.To.IsZero() {
+		opts.To = time.Now()
 	}
-	from := opts.From
-	if from.IsZero() {
-		from = time.Unix(0, 0)
+
+	query := messageRangeQuery{
+		to:               &opts.To,
+		conversationID:   opts.ConversationID,
+		excludeSessionID: opts.ExcludeSessionID,
+		limit:            maxN + 1,
+		newest:           true,
 	}
-	// NOTE: query bounds are formatted with their callsite zone offset
-	// (see queryMessagesDesc). Stored timestamps preserve the offset
-	// they were written in, so lexical SQL compares assume same-zone
-	// reads and writes. Cross-zone correctness would need either a
-	// stored-timestamp normalization migration or datetime()-based
-	// SQL compares, both out of scope here. See PR #761 review.
+	if !opts.From.IsZero() {
+		query.from = &opts.From
+	}
 
 	// Step 1: most recent messages within [from, to], DESC. Ask for one
 	// more than the cap so we can detect truncation.
-	msgs, err := s.queryMessagesDesc(opts.ConversationID, opts.ExcludeSessionID, from, to, maxN+1)
+	msgs, err := s.queryMessagesRange(ctx, query)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2619,8 +2603,9 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 	// messages. MinMessages is a floor ("at least this many"), not a
 	// cap — when it triggers we still return up to MaxMessages so the
 	// model gets useful context, not exactly MinMessages.
-	if opts.MinMessages > 0 && len(msgs) < opts.MinMessages {
-		floor, err := s.queryMessagesDesc(opts.ConversationID, opts.ExcludeSessionID, time.Unix(0, 0), to, maxN+1)
+	if !opts.From.IsZero() && opts.MinMessages > 0 && len(msgs) < min(opts.MinMessages, maxN) {
+		query.from = nil
+		floor, err := s.queryMessagesRange(ctx, query)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2689,47 +2674,63 @@ func (s *ArchiveStore) RecentContactTimes(conversationID string, limit int) ([]t
 	return out, rows.Err()
 }
 
-func (s *ArchiveStore) queryMessagesDesc(conversationID, excludeSessionID string, from, to time.Time, limit int) ([]Message, error) {
-	cols := s.msgSelectCols()
-	table := s.msgTableName
-	// Bind time.Time directly rather than pre-formatting. The unified
-	// messages table stores timestamps in the form go-sqlite3 emits
-	// when binding a time.Time value — see [database.SQLiteTimestampLayout]
-	// and [database.FormatTimestamp]. Mixing that with time.RFC3339Nano
-	// produces silent lexical mismatches: " " (0x20) < "T" (0x54), so
-	// at the same instant the space-form row reads as "less than" the
-	// T-form bound and the lower edge of the window drops out. Binding
-	// the value round-trips through the driver's native format and
-	// keeps the lexical compare correct.
-	clauses := []string{"timestamp >= ?", "timestamp <= ?"}
-	args := []any{from, to}
-	if conversationID != "" {
-		clauses = append(clauses, "conversation_id = ?")
-		args = append(args, conversationID)
-	}
-	if excludeSessionID != "" {
-		// `session_id != ?` would silently drop rows whose session_id
-		// is NULL — SQL three-valued logic returns NULL on `NULL != x`
-		// and the WHERE clause treats that as false. The unified
-		// messages table has nullable session_id (rows can predate
-		// session-stamping), so we want NULL rows preserved and only
-		// the named session excluded.
-		clauses = append(clauses, "(session_id IS NULL OR session_id != ?)")
-		args = append(args, excludeSessionID)
-	}
-	args = append(args, limit)
+// Pointer bounds distinguish an omitted bound from the valid year-one zero
+// instant accepted by the HTTP range contract.
+type messageRangeQuery struct {
+	from, to         *time.Time
+	conversationID   string
+	excludeSessionID string
+	limit            int
+	newest           bool
+}
 
+// queryMessagesRange owns range filtering and deterministic selection for both
+// archive readers. Normalizing on read preserves historical timestamp bytes and
+// exact sub-millisecond boundaries. This expression requires scanning candidate
+// rows; QueryContext makes that work cancellable. Do not replace it with SQLite
+// strftime: its millisecond rounding changes inclusive boundaries.
+func (s *ArchiveStore) queryMessagesRange(ctx context.Context, q messageRangeQuery) ([]Message, error) {
+	if q.from != nil && q.to != nil && q.from.After(*q.to) {
+		return nil, fmt.Errorf("from must not be after to")
+	}
+	clauses := []string{"1 = 1"}
+	var args []any
+	if q.conversationID != "" {
+		clauses = append(clauses, "conversation_id = @conversation")
+		args = append(args, sql.Named("conversation", q.conversationID))
+	}
+	if q.excludeSessionID != "" {
+		// Keep unclaimed unified rows: SQL NULL != id does not match.
+		clauses = append(clauses, "(session_id IS NULL OR session_id != @excluded_session)")
+		args = append(args, sql.Named("excluded_session", q.excludeSessionID))
+	}
+	key := "thane_timestamp_key(timestamp)"
+	if len(clauses) > 1 {
+		// SQLite may evaluate timestamp predicates before other filters.
+		// CASE is lazy, so malformed timestamps outside the requested
+		// conversation/session scope cannot fail this query.
+		key = "CASE WHEN " + strings.Join(clauses, " AND ") + " THEN " + key + " END"
+	}
+	if q.from != nil {
+		clauses = append(clauses, key+" >= @from_time")
+		args = append(args, sql.Named("from_time", database.TimestampKey(*q.from)))
+	}
+	if q.to != nil {
+		clauses = append(clauses, key+" <= @to_time")
+		args = append(args, sql.Named("to_time", database.TimestampKey(*q.to)))
+	}
+	order := "ASC"
+	if q.newest {
+		order = "DESC"
+	}
+	args = append(args, sql.Named("limit", q.limit))
 	query := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		WHERE %s
-		ORDER BY timestamp DESC
-		LIMIT ?
-	`, cols, table, strings.Join(clauses, " AND "))
-
-	rows, err := s.msgDB().Query(query, args...)
+		SELECT %s FROM %s WHERE %s
+		ORDER BY %s %s, id %s LIMIT @limit
+	`, s.msgSelectCols(), s.msgTableName, strings.Join(clauses, " AND "), key, order, order)
+	rows, err := s.msgDB().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query messages desc: %w", err)
+		return nil, fmt.Errorf("query messages by time range: %w", err)
 	}
 	defer rows.Close()
 	return s.scanMessages(rows)
@@ -3023,6 +3024,9 @@ func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
 		}
 
 		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read messages: %w", err)
 	}
 	return messages, nil
 }

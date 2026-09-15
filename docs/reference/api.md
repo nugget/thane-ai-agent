@@ -146,6 +146,15 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/archive/stats` | Archive statistics. |
 | `POST` | `/v1/archive/contact-dossier-backfill` | Advance one bounded page of the durable, one-time contact-dossier backfill (`?limit`, default 50, max 200). |
 
+`GET /v1/archive/messages` requires inclusive `from` and `to` RFC3339
+bounds (fractional seconds and time-zone offsets are supported). It returns
+the oldest matching messages, ordered by instant and then message ID, with
+`messages`, `count`, and the original `from`/`to` values. Use `conversation_id`
+to scope the query. `limit` defaults to 500 and is capped at 1000; non-positive
+values use the default. Reversed bounds return 400. In the unified store,
+active, compacted, and archived messages are all eligible. Large global ranges
+scan historical timestamp formats; cancelling the request cancels the query.
+
 The backfill endpoint is an operator operation (`archive:write` in the native
 API contract), not a model tool or an autonomous-loop behavior. It freezes a
 cutoff on its first call, pages active contact subjects and then historical

@@ -68,6 +68,15 @@ These tools load on every turn regardless of active tags.
 | `archive_session_transcript` | Retrieve a full session transcript. |
 | `archive_range` | Retrieve archived messages by time range or message-count floor. |
 
+`archive_range` selects the newest messages matching inclusive time bounds and
+returns them oldest first, breaking equal-time ties by message ID. Bounds accept
+RFC3339 timestamps or signed deltas and compare exact instants across time zones.
+`max_messages` defaults to 200 and is capped at 1000. If `min_messages` cannot be
+met within the window, retrieval extends before `min_time`, up to that cap. The
+floor remains subject to available history and the tool's output size limit;
+`truncated` reports clipping. `archive_session_transcript` and session exports
+retain their separate whole-session retrieval contract.
+
 ## `session` — conversation lifecycle
 
 | Tool | Description |

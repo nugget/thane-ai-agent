@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -423,7 +424,7 @@ func TestGetMessagesByTimeRange(t *testing.T) {
 	// Query a 5-minute window (should get messages 2-6)
 	from := base.Add(2 * time.Minute)
 	to := base.Add(6 * time.Minute)
-	results, err := store.GetMessagesByTimeRange(from, to, "conv-1", 100)
+	results, err := store.GetMessagesByTimeRange(context.Background(), from, to, "conv-1", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1809,7 +1810,7 @@ func TestGetMessagesInRange_TimeWindow(t *testing.T) {
 		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
 		From:           base.Add(2 * time.Minute),
 		To:             base.Add(6 * time.Minute),
@@ -1841,7 +1842,7 @@ func TestGetMessagesInRange_MinMessagesFloorBeyondWindow(t *testing.T) {
 	// not "exactly 5" — once the floor triggers, return up to
 	// MaxMessages (default 200), so the model gets useful context
 	// rather than the bare minimum.
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
 		From:           base.Add(9 * time.Minute),
 		To:             base.Add(20 * time.Minute),
@@ -1869,7 +1870,7 @@ func TestGetMessagesInRange_MaxMessagesCap(t *testing.T) {
 		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
 		To:             base.Add(20 * time.Minute),
 		MaxMessages:    5,
@@ -1896,7 +1897,7 @@ func TestGetMessagesInRange_AllConversations(t *testing.T) {
 	insert("conv-a", "sa", "user", "a-first", base.Add(1*time.Minute))
 	insert("conv-b", "sb", "user", "b-first", base.Add(2*time.Minute))
 
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		To: base.Add(10 * time.Minute),
 	})
 	if err != nil {
@@ -1920,7 +1921,7 @@ func TestGetMessagesInRange_FloorReportsTruncation(t *testing.T) {
 
 	// Tight in-window query returns 1 msg → floor path runs. MaxMessages=5
 	// caps the floor result; with 20 messages available, truncated=true.
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
 		From:           base.Add(19 * time.Minute),
 		To:             base.Add(30 * time.Minute),
@@ -1967,7 +1968,7 @@ func TestGetMessagesInRange_UnifiedTableSpaceFormat(t *testing.T) {
 	// Wide-open window. Pre-fix this would return zero rows on a
 	// production-shape store because the query bounds were T-format
 	// while the rows were space-format.
-	got, _, err := archiveStore.GetMessagesInRange(RangeOptions{
+	got, _, err := archiveStore.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
 		From:           time.Now().Add(-1 * time.Hour),
 		To:             time.Now().Add(1 * time.Hour),
@@ -1987,7 +1988,7 @@ func TestGetMessagesInRange_ExcludeSessionID(t *testing.T) {
 	insert("conv-1", "active", "user", "active-msg", base.Add(1*time.Minute))
 	insert("conv-1", "archived", "user", "archived-msg", base.Add(2*time.Minute))
 
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID:   "conv-1",
 		ExcludeSessionID: "active",
 		To:               base.Add(10 * time.Minute),
@@ -2015,7 +2016,7 @@ func TestGetMessagesInRange_ExcludeSessionIDFloorPath(t *testing.T) {
 	}
 
 	// Tight window forces floor; floor must also honor the exclusion.
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID:   "conv-1",
 		ExcludeSessionID: "active",
 		From:             base.Add(100 * time.Minute),
@@ -2056,7 +2057,7 @@ func TestGetMessagesInRange_ExcludeSessionIDPreservesNullRows(t *testing.T) {
 		t.Fatalf("insert null-session row: %v", err)
 	}
 
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID:   "conv-1",
 		ExcludeSessionID: "active",
 		To:               base.Add(10 * time.Minute),

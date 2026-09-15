@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -376,5 +377,14 @@ func TestArchiveSearchTool_NeverEmptyWhenResultsExist(t *testing.T) {
 	totalHits := len(parsed.Messages) + len(parsed.Sessions) + len(parsed.WorkingMemory)
 	if totalHits == 0 {
 		t.Fatalf("results empty across all surfaces despite real matches existing — regression of the production bug:\n%s", out)
+	}
+}
+
+func TestArchiveRangeTool_Cancellation(t *testing.T) {
+	r, _, _ := newArchiveTestRegistry(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if result, err := r.Get("archive_range").Handler(ctx, map[string]any{}); !errors.Is(err, context.Canceled) || result != "" {
+		t.Fatalf("canceled archive range = %q, %v", result, err)
 	}
 }
