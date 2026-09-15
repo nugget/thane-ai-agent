@@ -334,6 +334,9 @@ func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []llm
 }
 
 // ChatStream sends a chat request, optionally streaming tokens via callback.
+// Streaming success requires the provider's message_stop completion event.
+// On error, a non-nil response carries only usage already reported by the
+// provider; it is not a completed assistant response.
 func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	// A billing-blocked account fails fast without an HTTP round-trip
 	// (one probe per interval keeps recovery detection alive): the
@@ -578,7 +581,9 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader, upstreamRequestID string, log *slog.Logger, started time.Time) (*llm.ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		partial := convertFromAnthropic(&resp)
+		partial.UpstreamRequestID = upstreamRequestID
+		return usageOnlyResponse(partial), fmt.Errorf("decode response: %w", err)
 	}
 	result := convertFromAnthropic(&resp)
 	result.UpstreamRequestID = upstreamRequestID
@@ -614,6 +619,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		stopReason     string
 		usage          anthropicUsage
 		model          string
+		messageStopped bool
 	)
 
 	for scanner.Scan() {
@@ -705,11 +711,10 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			if event.Usage != nil {
 				usage.OutputTokens = event.Usage.OutputTokens
 			}
-		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read stream: %w", err)
+		case "message_stop":
+			messageStopped = true
+		}
 	}
 
 	resp := &llm.ChatResponse{
@@ -719,7 +724,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done:                     true,
+		Done:                     messageStopped,
 		UpstreamRequestID:        upstreamRequestID,
 		InputTokens:              usage.InputTokens,
 		OutputTokens:             usage.OutputTokens,
@@ -731,6 +736,13 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		resp.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
 	}
 	resp.StopReason = stopReason
+
+	if err := scanner.Err(); err != nil {
+		return usageOnlyResponse(resp), fmt.Errorf("read stream: %w", err)
+	}
+	if !messageStopped {
+		return usageOnlyResponse(resp), fmt.Errorf("read stream: truncated response without message_stop")
+	}
 
 	attrs := []any{
 		"model", resp.Model,

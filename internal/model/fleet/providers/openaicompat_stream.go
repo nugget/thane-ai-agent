@@ -47,6 +47,18 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		firstToken     time.Time
 	)
 
+	partialUsage := func() *llm.ChatResponse {
+		id := upstreamID
+		if trace.upstreamID != "" {
+			id = trace.upstreamID
+		}
+		return usageOnlyResponse(&llm.ChatResponse{
+			Model: model, CreatedAt: createdAt, UpstreamRequestID: id,
+			StopReason:  finishReason,
+			InputTokens: usage.PromptTokens, OutputTokens: usage.CompletionTokens,
+		})
+	}
+
 	processEvent := func(data string) error {
 		if data == "" {
 			return nil
@@ -63,10 +75,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		}
 
 		var chunk openAICompatChatResponse
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return fmt.Errorf("decode stream chunk: %w", err)
-		}
-		chunks++
+		decodeErr := json.Unmarshal([]byte(data), &chunk)
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
@@ -77,8 +86,22 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 			createdAt = time.Unix(chunk.Created, 0).UTC()
 		}
 		if chunk.Usage != nil {
-			usage = *chunk.Usage
+			if decodeErr != nil {
+				// A failed decode leaves omitted or invalid fields at zero.
+				// Keep prior evidence and accept only increases from the
+				// counters that decoded; complete frames retain their normal
+				// replacement semantics below.
+				usage.PromptTokens = max(usage.PromptTokens, chunk.Usage.PromptTokens)
+				usage.CompletionTokens = max(usage.CompletionTokens, chunk.Usage.CompletionTokens)
+				usage.TotalTokens = max(usage.TotalTokens, chunk.Usage.TotalTokens)
+			} else {
+				usage = *chunk.Usage
+			}
 		}
+		if decodeErr != nil {
+			return fmt.Errorf("decode stream chunk: %w", decodeErr)
+		}
+		chunks++
 		for _, choice := range chunk.Choices {
 			// The terminating frame carries finish_reason with an empty
 			// delta, so read it before the delta guard skips the choice.
@@ -154,7 +177,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 				break
 			}
 			if err != nil {
-				return nil, err
+				return partialUsage(), err
 			}
 		case strings.HasPrefix(line, "data:"):
 			eventLines = append(eventLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
@@ -164,17 +187,17 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read stream: %w", err)
+		return partialUsage(), fmt.Errorf("read stream: %w", err)
 	}
 	if len(eventLines) > 0 {
 		if err := processEvent(strings.Join(eventLines, "\n")); err != nil && err != io.EOF {
-			return nil, err
+			return partialUsage(), err
 		}
 	}
 
 	toolCalls, err := decodeOpenAICompatToolCalls(toolAcc)
 	if err != nil {
-		return nil, err
+		return partialUsage(), err
 	}
 
 	// Frame count is not evidence of a completion. A role-only opening
@@ -212,7 +235,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 			attrs = append(attrs, "first_token_ms", firstToken.Sub(trace.started).Milliseconds())
 		}
 		trace.log.Debug("stream refused as not-a-completion", attrs...)
-		return nil, refusal
+		return partialUsage(), refusal
 	}
 	if strings.TrimSpace(contentBuilder.String()) == "" && len(toolCalls) == 0 {
 		silentClose := !done && finishReason == ""
@@ -257,7 +280,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	result.Message.Content = contentBuilder.String()
 	result.Message.ToolCalls = toolCalls
 	if err := applyTextToolFallback(result, validToolNames); err != nil {
-		return nil, err
+		return partialUsage(), err
 	}
 
 	attrs := []any{

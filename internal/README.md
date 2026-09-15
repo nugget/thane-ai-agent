@@ -105,7 +105,7 @@ Cross-cutting process, storage, scheduling, and operational substrate.
 | `platform/scheduler/` | Time-based task scheduling |
 | `platform/usage/` | LLM token usage and cost accounting |
 | `platform/telemetry/` | Runtime telemetry collection |
-| `platform/checkpoint/` | State snapshots for crash recovery |
+| `platform/checkpoint/` | Diagnostic snapshots of selected state |
 | `platform/buildinfo/` | Build metadata injected via ldflags |
 | `platform/provenance/` | Tool-call and content provenance helpers |
 

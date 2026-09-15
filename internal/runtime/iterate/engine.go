@@ -592,6 +592,8 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		partial.InputTokens += resp.InputTokens
 		partial.OutputTokens += resp.OutputTokens
 		partial.CacheCreationInputTokens += resp.CacheCreationInputTokens
+		partial.CacheCreation5mInputTokens += resp.CacheCreation5mInputTokens
+		partial.CacheCreation1hInputTokens += resp.CacheCreation1hInputTokens
 		partial.CacheReadInputTokens += resp.CacheReadInputTokens
 		messages = append(messages, resp.Message)
 

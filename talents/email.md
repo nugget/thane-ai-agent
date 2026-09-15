@@ -102,7 +102,9 @@ has to act, and what a flag is asking for. Spend your care there.
 - **Which account am I in?** The Email Accounts block lists every
   mailbox this site has configured: its name, address, the operator's
   description of what it is for, what it may do, and its folder names
-  with their roles. The rest of an entry appears only when it has
+  with their roles. In a loop bound to one account it lists only that
+  account, and its entry shows `bound: true`: the site's other
+  accounts are hidden from you, not missing. The rest of an entry appears only when it has
   something to say. An account the operator marked shows whose mailbox
   it is (`owner`), the name its mail goes out under (`writes_as`), and
   its `voice` (see "Whose mailbox"). An account that limits where mail
@@ -110,11 +112,12 @@ has to act, and what a flag is asking for. Spend your care there.
   `email_move` accepts there in a turn the operator is not present for,
   and any `filing_note` the operator wrote;
   an operator mailbox shows its `junk_folder` even when it allows every
-  folder (see `email_organize`). An entry shows `wake_loop` when the
-  account's new mail wakes a loop other than its owner's default, and
-  `review_loop` with `pending_review` when the account has a review
-  pass (see "Two passes over new mail"). It shows `labels` and
-  `keywords` when the account's mailbox carries labels (see "Labels").
+  folder (see `email_organize`). While this site polls for new mail,
+  every entry shows `wake_loop`, the loop the account's new mail wakes;
+  an entry also shows `review_loop` with `pending_review` when the
+  account has a review pass (see "Two passes over new mail"). It shows
+  `labels` and `keywords` when the account's mailbox carries labels
+  (see "Labels").
 - **Every call names its account, and every UID its folder.** Every
   tool takes an `account`. In a loop bound to one account, omitting
   `account` resolves to that account and naming any other is refused;
@@ -273,12 +276,16 @@ another.
 ## Two passes over new mail
 
 Each new message on an account wakes one loop, the account's wake
-loop, with one event per message. On an operator mailbox that loop is
-the triage pass unless the operator chose another; on every other
-account it is the default handler. The entry shows `wake_loop` only
-when the operator chose a loop other than the owner's default. Which
-loop mail wakes, and whether a review pass follows, is the operator's
-configuration, and no tool changes it.
+loop, with one event per message, and the entry names that loop as
+`wake_loop`. Unless the operator chose another, it is
+`email-owner-triage`, the triage pass, on an operator mailbox, and
+`email-default-handler`, the default handler, on every other account.
+Every entry shows `wake_loop` while this site polls for new mail, so
+read the loop from it rather than working it out from `owner`. An
+entry without `wake_loop` is on a site that does not poll for mail,
+and no loop sees new mail there. Which loop mail wakes, and whether a
+review pass follows, is the operator's configuration, and no tool
+changes it.
 
 The triage pass does exactly one thing per message, the least that
 serves the operator: it files obvious spam into junk, flags what needs
@@ -297,9 +304,14 @@ refuses `answered` on an account whose `delivery` is `drafts`. So a
 missing `\Answered` does not show that a draft you wrote went unsent.
 
 An account whose entry shows `review_loop` has a second pass: that
-loop, which may run on a more capable model. It is woken by queued
-work, never by the mail itself or by a timer, and only while work
-waits. Two things queue work for it, each keyed so that queueing the
+loop, which may run on a more capable model. An entry without
+`review_loop` has no review pass on that account. Do not judge from
+the entries whether a review loop runs on this site, because a loop
+bound to one account sees only that account's entry: `loop_status`
+(in the `loops` tag) lists the loops that are running, and the
+built-in review loop, `email-draft-review`, is among them when any
+account names it as its `review_loop`. A review loop is woken by queued work, never by
+the mail itself or by a timer, and only while work waits. Two things queue work for it, each keyed so that queueing the
 same thing again replaces the item already waiting instead of adding a
 second:
 
