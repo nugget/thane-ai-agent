@@ -50,6 +50,11 @@ audiences and trust models are different.
   beside the message it answers, revise it for accuracy and tone, or
   withdraw it. A draft the operator has touched is theirs.
 
+- **You want a more capable pass to look at a message** — call
+  `email_escalate`, which comes with `email`, on an account whose entry
+  shows a `review_loop`. Where it shows none, flag the message for the
+  operator instead. See "Two passes over new mail" below.
+
 ## Constants across all branches
 
 - **Which account am I in?** The Email Accounts block in your context
@@ -61,13 +66,19 @@ audiences and trust models are different.
   below). An account that limits where mail may be filed shows its
   `junk_folder`, the `move_into` folders `email_move` accepts there,
   and any `filing_note` the operator wrote; an operator mailbox shows
-  its `junk_folder` even when it allows every folder. Every tool takes an
+  its `junk_folder` even when it allows every folder. An entry shows
+  `wake_loop` when the account's new mail wakes a loop other than its
+  owner's default, and `review_loop` with `pending_review` when the
+  account has a review pass (see "Two passes over new mail" below).
+  Every tool takes an
   `account`. In a loop bound to one account, omitting `account`
   resolves to that account and naming any other is refused; in an
   unbound turn, omitting it means the primary account, which on a
   multi-account site is usually the wrong one. A new-mail wake event
   names its `account` and `folder` in metadata: pass both to every
-  call about that message.
+  call about that message. Its `flags`, present only when the message
+  has any, are the message's IMAP flags as the server spells them,
+  comma-separated, so `\Flagged` there means it is already flagged.
 - **Results are JSON, and every UID comes with its account and
   folder.** A UID identifies a message *within one folder of one
   account*; the same number means something else in another folder.
@@ -125,7 +136,7 @@ audiences and trust models are different.
   the Email Accounts block is the authority: it is true only when this
   turn is the operator's own message (Thane's native API, or their own
   message in a conversation bound to their contact). A poller wake, a
-  scheduled loop, a loop launched from the operator's conversation, and
+  review wake, a scheduled loop, a loop launched from the operator's conversation, and
   a conversation with anyone else are all unattended. The block also
   lists, per account, which zones it
   `sends_directly_to`, `drafts_for`, and `refuses`, so read it before
@@ -210,21 +221,112 @@ one. Either way the message belongs to its account: an account that
 cannot compose is reported, never worked around by writing from
 another.
 
+## Two passes over new mail
+
+Each new message on an account wakes one loop, the account's wake
+loop, with one event per message. On an operator mailbox that loop is
+the triage pass unless the operator chose another; on every other
+account it is the default handler. The entry shows `wake_loop` only
+when the operator chose a loop other than the owner's default. Which
+loop mail wakes, and whether a review pass follows, is the operator's
+configuration, and no tool changes it.
+
+The triage pass does exactly one thing per message, the least that
+serves the operator: it files obvious spam into junk, flags what needs
+them, drafts a plain answer where the account can draft, hands the
+message on with `email_escalate`, or leaves it alone. It prefers a
+local model, so its job is to do the plain part well and hand on the
+rest, not to attempt everything.
+
+A message whose `flags` include `\Answered` has already been replied
+to, most often by the operator from another client, so neither pass
+drafts an answer to it: flag it if it still needs them, or leave it.
+The wake event carries the flags as the poll saw them, and `email_read`
+shows them as they are now.
+
+An account whose entry shows `review_loop` has a second pass: that
+loop, which may run on a more capable model. It is woken by queued
+work, never by the mail itself or by a timer, and only while work
+waits. Two things queue work for it, each keyed so that queueing the
+same thing again replaces the item already waiting instead of adding a
+second:
+
+- every draft written on the account in a turn the operator is not
+  present for, by any loop but the review loop itself, as
+  `draft:<draft_id>`. Go queues it as the draft is written, so a pass
+  that drafts has nothing more to do;
+- every message a pass hands over with `email_escalate`, as
+  `message:<account>:<message_id>`, keyed by Message-ID rather than
+  UID.
+
+The entry's `pending_review` counts the account's queued work, and
+`pending_review_as_of` says when it was counted: at the last poll or
+the last time work was queued, not now. Nothing about review is
+written to the mailbox or the draft ledger. There is no marker on the
+message, no stage on the draft, and no record that a draft was
+reviewed or approved. The operator may send a draft before the review
+pass reaches it, which is why every first draft is written finished.
+What the review pass does with each queued item is under "A first
+draft, then an edit" in `email_drafts`, which it carries.
+
+### Escalate or flag
+
+`email_escalate` hands a message to a more capable model, and
+`email_mark` flag `flagged` hands it to the operator. Choose by who has
+to act:
+
+- **Escalate** when the entry shows a `review_loop` and you cannot
+  judge the message, or its answer needs more than you can do well
+  here: facts to check, a careful or sensitive reply, something to
+  weigh. `reason` is one sentence, at most 500 bytes, on what the
+  review pass must look at; it reads the reason beside the message.
+- **Flag** when the operator must act on it: a decision, a commitment,
+  a fact, or a permission only they have. A more capable model has
+  none of those either, so escalating such a message only delays the
+  flag.
+- **Flag** on an account whose entry shows no `review_loop`. There is
+  no review pass to hand to, so `email_escalate` is refused there with
+  nothing queued, and the refusal gives the `email_mark` call to make
+  instead.
+
+Two cases never need an escalation. A message you just drafted an
+answer to is already queued through its draft. And the review pass
+itself never escalates: no pass comes after it, so the call is
+refused.
+
+Escalating changes nothing in the mailbox: the message stays where it
+is, unread if it was, with no mark of having been handed on. The
+result is `{queued: true, subject, pending_for_review}`;
+`pending_for_review` counts the account's queued work, this message
+included, and is null when it could not be counted, which is not zero.
+A message without a Message-ID cannot be queued, because the review
+pass finds a message by its Message-ID; flag it instead.
+
 ## Cross-references
 
 - For grounding sender and recipient names in real records, bounce to
   `contacts` (`contact_lookup`). Required reading before `email_send`
   unless you're certain every recipient is already in the directory.
-- For high-volume triage loops (digest every morning, watch for
+- For scheduled work over mail (a digest every morning, a watch for
   specific senders), the right shape is usually `thane_loop_create`
   with `operation=service` rather than a synchronous email turn. Bind
   the loop to one mailbox with `bindings: {email_account: "<name>"}`
   when it should only ever see that account. The managed output
-  document is optional, so a triage loop can run without maintaining
-  one. See `loops_examples_curate` for the pattern.
-- For escalation when an email needs human attention (sensitive thread,
+  document is optional, so such a loop can run without maintaining
+  one. See `loops_examples_curate` for the pattern. Do not build one
+  to triage new mail message by message: each account's wake loop
+  already does that (see "Two passes over new mail"), and a second
+  loop would handle every message twice. When the routing should
+  change, tell the operator; `wake_loop` and `review_loop` are their
+  configuration.
+- For escalation to a person when an email needs human attention that
+  cannot wait for the operator to see a flag (sensitive thread,
   legal/financial content), bounce to `notifications` —
-  `request_human_decision` with the email summary in the body.
+  `request_human_decision` with the email summary in the body. On an
+  operator mailbox a flag is usually enough: it is how the operator
+  sees what needs them.
+- For handing a message to the account's review pass rather than to
+  the operator, see "Escalate or flag" above.
 - For editing drafts after they are written, which is its own pass
   and often a stronger model than the one that wrote them, bounce to
   `email_drafts`; a loop that does it carries both `email` and
@@ -522,6 +624,10 @@ drafts_folder, draft_uid, draft_id, signed, note, decision}`, and
   are talking to, if any, that the message awaits the operator. Never
   resend it, and never write a second draft to change it; revise the
   one you have. Do not try to send it "properly" from another account.
+  On an account whose entry shows a `review_loop`, a draft written in a
+  turn the operator is not present for is also queued for that review
+  pass, which may revise or withdraw it. The result does not say so,
+  and nothing more is needed from you.
 - **`refused`** — nothing was sent or drafted. The error is one
   sentence followed by the `decision` JSON; `decision.route` is
   `access` (the account cannot write mail; the message belongs to
@@ -1242,27 +1348,101 @@ Drafting can come in two passes. A first pass, often a free local
 model, reads new mail and writes the reply as a draft. A later pass on
 a stronger model, a loop carrying `email` and `email_drafts`, then
 edits those drafts for accuracy and tone before the operator gets to
-them. Neither pass sends, and neither records a review.
+them. Neither pass sends, and neither records a review: the operator
+sending a draft is the only approval there is.
 
 If you are the first pass, write the finished message anyway, because
-the operator may send it before any edit comes. If you are the editing
-pass:
+the operator may send it before any edit comes. On an account whose
+Email Accounts entry shows a `review_loop`, a draft you write while the
+operator is not present is queued for that loop as it is written, so
+there is nothing to hand over; `email_escalate` is for a message you
+did not answer (see "Two passes over new mail" in `email`).
+
+If you are the editing pass, edit each draft the same way, however it
+reached you:
+
+1. Read it with `email_draft_get`, and check it against the original
+   and against the account's `writes_as` and `voice`.
+2. Revise only what is wrong, with a `note` saying what you changed.
+   Leave a draft that is right alone.
+3. Withdraw a draft whose message no longer needs an answer, or needs
+   one only the operator can give, or whose audience or subject is
+   wrong. If a different answer is still wanted, write it afterwards
+   with `email_reply`; while the old draft is open, `email_reply`
+   refuses a second one (`draft_open`, see `email_respond`). When the
+   operator must act on the message, flag it: find its UID with
+   `email_search {account, folder, message_id}`, taking the folder and
+   `message_id` from the draft's `original`, then `email_mark` flag
+   `flagged`.
+4. Leave anything `gone` or `held`.
+
+### When your work comes from a queue
+
+The loop an account names as its `review_loop` is woken only when its
+queue holds work, and the wake's summary says how many drafts and
+messages wait. It carries `queue_pull`, `queue_ack`, and `queue_defer`
+over its own queue. Take work only from the queue, never from
+`email_drafts`: the ledger lists every open draft, including the ones
+already reviewed and the ones written in the operator's own turn,
+because nothing records a review.
+
+1. Call `queue_pull` once, with a `limit` you can finish in this wake,
+   at most 10. Each item has a `subject` and a `summary`, compact JSON
+   naming the `account` and what waits. A second pull in the same wake
+   is refused, and what you do not pull waits for the next.
+2. For a `draft:<draft_id>` subject, edit the draft as the steps above
+   say. The summary carries its `draft_id`, its `message_subject` (the
+   message's Subject header; the item's own `subject` is the queue key
+   `queue_ack` takes), and `drafted_by`, the loop that wrote it.
+3. For a `message:<account>:<message_id>` subject, the summary carries
+   the `folder` the message was in and the `reason` the earlier pass
+   gave. Find it with `email_search {account, folder, message_id}`, and
+   search INBOX the same way when that folder no longer holds it; a
+   message in neither has moved on, and there is nothing left to do.
+   Read it with `email_read` and `mark_seen: false`, and weigh the
+   reason. If its `flags` include `\Answered`, someone has already
+   replied, most often the operator, so do not draft: flag it if it
+   still needs them, or leave it. Otherwise do one thing: draft an
+   answer with `email_reply` and
+   `draft: true` where the entry shows `access: "send"` and a
+   `drafts_folder`, file obvious spam with `destination_role: "junk"`
+   (see `email_organize`), flag it for the operator, or leave it. A
+   draft you write here is not queued back to you, so write it
+   finished.
+4. Call `queue_ack` for each subject once its outcome is written: the
+   revise, withdraw, reply, move, or flag answered, or you decided to
+   leave the item. A refusal you cannot act on, such as `gone`, `held`,
+   or `draft_open`, is an outcome too. Acknowledging removes the item
+   for good, so never acknowledge before the call that settles it has
+   answered; and never leave a settled item unacknowledged, because it
+   comes back on the next wake and costs a second review.
+5. Call `queue_defer` instead only when the account's mailbox could
+   not be reached at all, a connection failure rather than a missing
+   message: the item stays queued behind the rest for a later wake.
+   Doubt is not a reason to defer. Decide, or leave the item and
+   acknowledge it.
+6. When `queue_ack` answers `retained_newer`, the same subject was
+   queued again while you worked, most often a message escalated a
+   second time with a new reason. The newer item stays queued and
+   wakes you again; leave it for then.
+7. Stop after this batch. Work still queued wakes you again. Nothing
+   you do adds to the queue: you have no tool that queues work, and
+   `email_escalate` is refused from the review pass.
+
+What the operator must know reaches them as a flag on the message it
+concerns; do not mail them to get their attention.
+
+### When you work from the ledger
+
+A loop that edits drafts without a queue, such as one the operator
+built for an account with no `review_loop`, finds its work in the
+ledger:
 
 1. Call `email_drafts` for the account. A draft whose `revisions` is
    above 0 has already had an edit; look at it again only when
    something new bears on it, such as a later message in the thread.
-2. Read each draft you are editing with `email_draft_get`, and check it
-   against the original and against the account's `writes_as` and
-   `voice`.
-3. Revise only what is wrong, with a `note` saying what you changed.
-   Leave a draft that is right alone.
-4. Withdraw a draft whose message no longer needs an answer, or whose
-   audience or subject is wrong. If a different answer is still
-   wanted, write it afterwards with `email_reply`; while the old draft
-   is open, `email_reply` refuses a second one (`draft_open`, see
-   `email_respond`).
-5. Leave anything `gone` or `held`, and report to the operator what you
-   changed and what you could not.
+2. Edit each draft you choose as the steps above say.
+3. Report to the operator what you changed and what you could not.
 
 ## Cross-references
 

@@ -128,6 +128,11 @@ var nonToolTokens = map[string]struct{}{
 	// Appears in talent prose describing routing, not as a tool call.
 	"wake_loop": {},
 
+	// Email account routing field (mailbox.review_loop), shown in the
+	// Email Accounts block beside wake_loop. The loop an account's mail
+	// is reviewed by, not a tool.
+	"review_loop": {},
+
 	// MQTT wake payload field (#1033 self-addressing): an automation
 	// publishes {"target_loop": "<definition name>"} to re-address a
 	// wake. A message field, not a tool.
@@ -245,6 +250,20 @@ var nonToolTokens = map[string]struct{}{
 	"thane_draft": {},
 }
 
+// loopRuntimeToolTokens are real tools that no catalog lists: loop-private
+// runtime tools generated for one consumer loop at hydration
+// (internal/app/loop_queue_tools.go) and advertised only on that loop's
+// iterations. The email talents teach the review loop an account names as
+// its review_loop to drain its queue with them (#1580). They are exempt
+// because they exist outside the catalog, not because they are not tools.
+// queue_enqueue is deliberately absent: the email review loop does not
+// carry it, so a talent teaching it should fail this test.
+var loopRuntimeToolTokens = map[string]struct{}{
+	"queue_pull":  {},
+	"queue_ack":   {},
+	"queue_defer": {},
+}
+
 // TestRepoTalentToolReferences pins backticked tool-name references in
 // talent prose against the compiled tool catalog. A reference like
 // `email_compose` or `watch_entity` is a hallucination magnet — the
@@ -296,6 +315,9 @@ func TestRepoTalentToolReferences(t *testing.T) {
 				continue
 			}
 			if _, ok := nonToolTokens[token]; ok {
+				continue
+			}
+			if _, ok := loopRuntimeToolTokens[token]; ok {
 				continue
 			}
 			if _, ok := knownTags[token]; ok {

@@ -47,9 +47,15 @@ See [MQTT](../operating/mqtt.md) for setup details.
 
 The `email-poller` service loop checks every configured account's INBOX at
 `email.poll_interval` and dispatches each new message as one event to the
-`email-default-handler` loop (an event-driven built-in). Each event's
+account's wake loop: its `mailbox.wake_loop`, which defaults to the
+built-in `email-owner-triage` on an account with `mailbox.owner: operator`
+and to the built-in `email-default-handler` everywhere else. Both are
+event-driven; a `wake_loop` naming anything that is not an event-driven
+definition stops startup. Each event's
 metadata names the `account`, `folder`, and `uid` of the message, its
-`message_id`, the sender (`from`, `from_address`, `from_name`), and the
+`message_id`, `flags` (the message's IMAP flags as the server spells
+them, comma-separated, and absent when it has none), the sender (`from`,
+`from_address`, `from_name`), and the
 contact directory's answer about the sender: `contact_status`
 (`matched`, `unmatched`, `ambiguous`, or `lookup_failed`), the effective
 `trust_zone` (`unknown` for a stranger, the least privileged candidate's
@@ -69,6 +75,24 @@ event. After each delivered batch the poller records an inbound
 interaction on every matched contact, once per contact at the newest
 message's date, bounded by the time the batch was received so a forged
 future Date cannot pin the record.
+
+After every poll, and after the poll's wakes are delivered, the poller
+reconciles the draft ledger of each account with an open Thane draft, so
+a draft the operator sent, edited, or discarded closes within one poll,
+and recounts each review loop's queued work for the Email Accounts block.
+
+An account with a `mailbox.review_loop` has a second, uncoupled pass.
+A draft written on it in a turn the operator is not present for, by any
+loop but the review loop itself, is queued in the review loop's
+loopqueue partition as `draft:<draft_id>`, and `email_escalate` queues a
+message as `message:<account>:<message_id>`; queueing the same subject
+again coalesces. The review loop is woken with an `email_review` event
+(`drafts`, `messages`, and `pending` counts in its metadata) once queued
+work has waited `review_delay`, never later than `review_max_wait` after
+the first of a burst, again at boot for work queued before a restart,
+and again by the poller when work an earlier wake left has waited
+`review_delay`. An empty queue never wakes it. It carries `queue_pull`,
+`queue_ack`, and `queue_defer` over its own partition.
 
 High-water marks are stored in the operational state KV store (opstate)
 as `{uidvalidity, uid}` per account, not in prompt context. The poller
