@@ -39,7 +39,7 @@ func (r *Registry) registerNotificationTools() {
 			"properties": map[string]any{
 				"recipient": map[string]any{
 					"type":        "string",
-					"description": "Contact name of the notification recipient",
+					"description": "Contact name of the notification recipient. " + contactNameRetryByName,
 				},
 				"message": map[string]any{
 					"type":        "string",
@@ -232,7 +232,7 @@ func (r *Registry) registerGenericNotificationTools() {
 			"properties": map[string]any{
 				"recipient": map[string]any{
 					"type":        "string",
-					"description": "Contact name of the notification recipient",
+					"description": "Contact name of the notification recipient. " + contactNameRetryByName,
 				},
 				"message": map[string]any{
 					"type":        "string",
@@ -266,7 +266,7 @@ func (r *Registry) registerGenericNotificationTools() {
 			"properties": map[string]any{
 				"recipient": map[string]any{
 					"type":        "string",
-					"description": "Contact name of the notification recipient",
+					"description": "Contact name of the notification recipient. " + contactNameRetryByName,
 				},
 				"message": map[string]any{
 					"type":        "string",

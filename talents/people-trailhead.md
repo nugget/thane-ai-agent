@@ -33,5 +33,10 @@ Choose the next move deliberately:
   entries — activate `companion`.
 
 Prefer stable identifiers like exact names plus durable properties over
-guessing from memory alone. If the task spans contact data plus another
-domain, delegate rather than serially loading many unrelated tags.
+guessing from memory alone. A name finds a person only through their
+name fields (formatted name, nickname, or a first name no other
+contact has), never through what a note says about someone. When a
+name fits several people, the error hands you each `contact_id`; carry
+the one you mean forward rather than guessing. If the task spans
+contact data plus another domain, delegate rather than serially
+loading many unrelated tags.
