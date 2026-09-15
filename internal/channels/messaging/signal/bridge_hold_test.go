@@ -414,11 +414,54 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 					Content:   "Sent the heads-up; nothing more for the thread.",
 					RequestID: "req-hold-sent",
 					ToolsUsed: map[string]int{"signal_send_message": 1, HoldReplyToolName: 1},
+					ToolOutcomes: map[string]loop.ToolOutcome{
+						"signal_send_message": {Calls: 1, Successes: 1},
+						HoldReplyToolName:     {Calls: 1, Successes: 1},
+					},
 				}
 			},
 			want: outcome{
 				note:      &signalReplyNote{Kind: replyNoteHeld, Reason: reason, SignalMessageSent: boolPtr(true), FinalTextWithheld: true},
 				sameLine:  []string{`"msg":"signal reply held"`, `"signal_message_sent":true`},
+				forbidLog: []string{"signal reply already sent by agent tool call"},
+			},
+		},
+		{
+			name: "a hold after a failed signal_send_message records no send",
+			script: func(t *testing.T, ctx context.Context, req loop.Request, _ *[]string) *loop.Response {
+				// The send tool returned an error, so nothing reached the
+				// thread; the held note must not claim it did.
+				if _, err := callRuntimeTool(ctx, req, HoldReplyToolName, map[string]any{"reason": reason}); err != nil {
+					t.Fatalf("hold: %v", err)
+				}
+				return &loop.Response{
+					RequestID: "req-hold-send-failed",
+					ToolsUsed: map[string]int{"signal_send_message": 1, HoldReplyToolName: 1},
+					ToolOutcomes: map[string]loop.ToolOutcome{
+						"signal_send_message": {Calls: 1, Failures: 1},
+						HoldReplyToolName:     {Calls: 1, Successes: 1},
+					},
+				}
+			},
+			want: outcome{
+				note:     &signalReplyNote{Kind: replyNoteHeld, Reason: reason, SignalMessageSent: boolPtr(false)},
+				sameLine: []string{`"msg":"signal reply held"`, `"signal_message_sent":false`},
+			},
+		},
+		{
+			name: "a failed signal_send_message on a wake is not a delivery",
+			script: func(t *testing.T, ctx context.Context, req loop.Request, _ *[]string) *loop.Response {
+				return &loop.Response{
+					RequestID: "req-send-failed",
+					ToolsUsed: map[string]int{"signal_send_message": 1},
+					ToolOutcomes: map[string]loop.ToolOutcome{
+						"signal_send_message": {Calls: 1, Failures: 1},
+					},
+				}
+			},
+			want: outcome{
+				note:      &signalReplyNote{Kind: replyNoteNotSent, SignalMessageSent: boolPtr(false), Cause: "no final text"},
+				logs:      []string{"signal wake reply not sent"},
 				forbidLog: []string{"signal reply already sent by agent tool call"},
 			},
 		},

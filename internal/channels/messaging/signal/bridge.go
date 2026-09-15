@@ -1221,7 +1221,11 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		b.finishHeldReply(log, req, resp, reason, nil)
 		return resp, nil
 	}
-	if agentAlreadySent(resp.ToolsUsed) {
+	// On a wake turn only a delivered send stands in for the reply: a
+	// signal_send_message call that failed sent nothing, so the turn goes
+	// on to the wake's no-delivery handling and its note. Ordinary turns
+	// keep the rule that any call stands in for the reply.
+	if agentAlreadySent(resp.ToolsUsed) && (!wake || sendToolDelivered(resp)) {
 		log.Info("signal reply already sent by agent tool call")
 		return resp, nil
 	}
@@ -1274,7 +1278,7 @@ func (b *Bridge) finishHeldReply(log *slog.Logger, req loop.Request, resp *loop.
 		note.RunFailed = true
 		attrs = append(attrs, "error", runErr)
 	} else {
-		sent := agentAlreadySent(resp.ToolsUsed)
+		sent := sendToolDelivered(resp)
 		note.SignalMessageSent = &sent
 		attrs = append(attrs, "signal_message_sent", sent)
 	}
@@ -1304,7 +1308,8 @@ func (b *Bridge) finishUndeliverableWakeReply(log *slog.Logger, req loop.Request
 	case runtimeText:
 		cause = "the wake turn ended with no reply text and no " + HoldReplyToolName + " call; the runtime's empty-response placeholder stored above was not sent"
 	}
-	// This gate runs only after agentAlreadySent found no send.
+	// This gate runs only after the turn delivered nothing through
+	// signal_send_message (sendToolDelivered).
 	sent := false
 	b.recordReplyNote(log, req.ConversationID, signalReplyNote{
 		Kind:              replyNoteNotSent,
@@ -1730,6 +1735,23 @@ func copyFile(src, dst string) error {
 func agentAlreadySent(toolsUsed map[string]int) bool {
 	for name, count := range toolsUsed {
 		if count > 0 && strings.HasSuffix(name, "signal_send_message") {
+			return true
+		}
+	}
+	return false
+}
+
+// sendToolDelivered reports whether signal_send_message delivered a
+// message this turn. It reads the runner's per-tool tally, so a call
+// that returned an error is not a delivery. A runner that returns no
+// tally leaves only the call count, and then any call counts, as
+// [agentAlreadySent] reads it.
+func sendToolDelivered(resp *loop.Response) bool {
+	if resp.ToolOutcomes == nil {
+		return agentAlreadySent(resp.ToolsUsed)
+	}
+	for name, outcome := range resp.ToolOutcomes {
+		if outcome.Successes > 0 && strings.HasSuffix(name, "signal_send_message") {
 			return true
 		}
 	}
