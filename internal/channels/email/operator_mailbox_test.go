@@ -491,7 +491,7 @@ func TestModelFacingEmailTextNamesNoSiteFolder(t *testing.T) {
 	relaxed := AccountConfig{Name: "a", DefaultFrom: "a@example.com", Policy: PolicyConfig{Access: AccessSend, Delivery: DeliveryDrafts}}
 	walk("noDraftsFolderReason", noDraftsFolderReason(relaxed, false))
 	walk("noDraftsFolderReason requested", noDraftsFolderReason(relaxed, true))
-	for _, marks := range []HeaderMarks{{Bulk: true}, {Bulk: true, junkOnly: true}, {AutoSubmitted: AutoSubmittedReplied}} {
+	for _, marks := range []HeaderMarks{{Bulk: true}, {Bulk: true, listReplyBar: listReplyBarJunk}, {Bulk: true, listReplyBar: listReplyBarListFields}, {AutoSubmitted: AutoSubmittedReplied}} {
 		walk("automaticResponseReason", automaticResponseReason(marks, listReplyGap(relaxed, marks)))
 	}
 	for _, status := range []ContactStatus{ContactUnmatched, ContactMatched, ContactAmbiguous} {

@@ -115,14 +115,15 @@ func withoutDraftOnlyNames(addrs []string, assessments []RecipientAssessment) []
 
 // personallyAddressedListReply reports whether an unattended reply to a
 // marked original may be drafted anyway: the account's draft gate is
-// relaxed, the original is bulk mail a person sent (not auto_submitted,
-// and not marked by Precedence junk alone, the mark classic
-// autoresponders put on their replies), and its own To or Cc names the
-// account's address. A person answers list mail addressed to them. Mail
-// that reached the account only through a list address, or that a
-// machine sent, stays an automatic response.
+// relaxed, the original is mail a list distributed and a person sent
+// (List-Id or Precedence bulk or list; not auto_submitted, not marked
+// Precedence junk, and not marked by List-* fields alone, see
+// [HeaderMarks.listReplyBar]), and its own To or Cc names the account's
+// address. A person answers list mail addressed to them. Mail that
+// reached the account only through a list address, or that a machine
+// sent, stays an automatic response.
 func personallyAddressedListReply(cfg AccountConfig, original HeaderMarks, originalRecipients []Address) bool {
-	if !cfg.RelaxedDraftGate() || !original.Bulk || original.AutoSubmitted != "" || original.junkOnly {
+	if !cfg.RelaxedDraftGate() || !original.Bulk || original.AutoSubmitted != "" || original.listReplyBar != "" {
 		return false
 	}
 	own := Address{Address: accountAddress(cfg)}.Key()
@@ -143,8 +144,10 @@ func listReplyGap(cfg AccountConfig, original HeaderMarks) string {
 	switch {
 	case original.AutoSubmitted != "":
 		return ", and this drafts-only account drafts such a reply only for list or bulk mail a person sent, never for an automatic reply, bounce, or notification"
-	case original.junkOnly:
-		return ", and this drafts-only account drafts such a reply only for list or bulk mail a person sent, never for mail whose one bulk mark is Precedence junk, which automatic replies such as out-of-office notices carry"
+	case original.listReplyBar == listReplyBarJunk:
+		return ", and this drafts-only account drafts such a reply only for list or bulk mail a person sent, never for mail marked Precedence junk, which automatic replies such as out-of-office notices carry"
+	case original.listReplyBar == listReplyBarListFields:
+		return ", and this drafts-only account drafts such a reply only for mail a list distributed, which List-Id or Precedence bulk or list marks, never for mail whose only list marks are fields such as List-Unsubscribe that a sender adds to its own mailings"
 	}
 	return ", and this drafts-only account drafts a reply to list or bulk mail only when the original names this account's own address in its to or cc, which this one does not"
 }

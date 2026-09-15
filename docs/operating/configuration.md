@@ -234,16 +234,17 @@ automatic or bulk (an `Auto-Submitted` value other than `no`, a
 in every turn the operator is not present for, whatever the
 `delivery` mode and even when a draft was requested, and the
 operator's own turn replies as usual. The one exception is on an
-account with a relaxed `draft_gate`: an unattended reply to mail marked
-bulk and not `Auto-Submitted`, whose own `To` or `Cc` holds the
+account with a relaxed `draft_gate`: an unattended reply to list mail, marked by a
+`List-Id` or a `Precedence` of `bulk` or `list` and not `Auto-Submitted`, whose own `To` or `Cc` holds the
 account's address (its `default_from`, else its IMAP username when that
 is an address, compared without regard to case), is drafted with route
 `personally_addressed_list_reply`, because a person on a list answers
 mail addressed to them. List mail that reached the account only through
 the list's address stays refused, and so does anything
-`Auto-Submitted` (automatic replies, bounces, notifications) and mail
-whose only bulk mark is `Precedence: junk`, which classic
-autoresponders set without `Auto-Submitted`; an alias
+`Auto-Submitted` (automatic replies, bounces, notifications), mail
+marked `Precedence: junk`, which classic autoresponders set without
+`Auto-Submitted`, and mail whose only list marks are `List-*` fields
+such as `List-Unsubscribe`; an alias
 or plus address of the account does not count as its address. Every send ends in one of
 three dispositions, `sent`, `drafted`, or `refused`, and the tool result
 or refusal carries the decision that produced it.

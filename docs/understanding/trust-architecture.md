@@ -307,15 +307,17 @@ for, would be an automatic response, so the send decision refuses it
 with route `automatic_response` in every delivery mode, a requested
 draft included, before any recipient is assessed; nothing is sent or
 drafted. The one exception only drafts. On an account with a relaxed
-draft gate, a reply to mail marked `bulk` and not `auto_submitted`,
-whose own To or Cc holds the account's address, is drafted with route
+draft gate, a reply to list mail, marked by a `List-Id` or a `Precedence` of
+`bulk` or `list` and not `auto_submitted`, whose own To or Cc holds the account's address, is drafted with route
 `personally_addressed_list_reply`: a person on a list answers mail
 addressed to them, the operator sends the draft by hand, and its
 recipients still pass the gate. Mail that reached the account only
 through a list address stays refused, and so does anything
-`auto_submitted` or whose only bulk mark is `Precedence: junk`, which
-classic autoresponders set without `Auto-Submitted`, because answering
-an automatic reply, a bounce, or a notification is pointless. The operator's own turn replies as usual. Every reply to
+`auto_submitted` or marked `Precedence: junk`, which classic
+autoresponders set without `Auto-Submitted`, because answering an
+automatic reply, a bounce, or a notification is pointless, and so does
+mail whose only list marks are `List-*` fields such as
+`List-Unsubscribe`, which a sender adds to its own mailings. The operator's own turn replies as usual. Every reply to
 marked mail that gets past the account's access check records the
 marks as `original` in its decision, and the decision log line carries
 them as `original_auto_submitted` and `original_bulk`; a reply from an

@@ -52,13 +52,24 @@ type HeaderMarks struct {
 	// a heuristic; bulk and junk are de facto convention (RFC 2076).
 	Bulk bool `json:"bulk,omitempty"`
 
-	// junkOnly reports that a Precedence of junk is the message's only
-	// bulk mark: it carries no list field and no Precedence of bulk or
-	// list. Classic vacation-style autoresponders mark their replies
-	// that way and set no Auto-Submitted, so the list-mail rule treats
-	// such a message as automatic. It is never rendered.
-	junkOnly bool
+	// listReplyBar names why bulk mail cannot take the list-mail rule,
+	// or is empty when it can or the message is not bulk. The rule is
+	// for mail a list distributed, which List-Id or a Precedence of bulk
+	// or list marks. A Precedence of junk bars it whatever else the
+	// message carries, because classic vacation-style autoresponders
+	// mark their replies that way and set no Auto-Submitted. The RFC 2369
+	// List-* fields alone bar it too, because a sender adds
+	// List-Unsubscribe and its kin to its own mailings. It is never
+	// rendered.
+	listReplyBar string
 }
+
+// Reasons bulk mail cannot take the list-mail rule, for
+// [HeaderMarks.listReplyBar].
+const (
+	listReplyBarJunk       = "precedence_junk"
+	listReplyBarListFields = "list_fields_only"
+)
 
 // Marked reports whether the message carries either mark.
 func (m HeaderMarks) Marked() bool {
@@ -114,22 +125,30 @@ func headerMarks(raw []byte) (HeaderMarks, error) {
 			break
 		}
 	}
-	listed, junk := false, false
+	// distributed is a List-Id or a Precedence of bulk or list, the
+	// marks of mail a list sent out; listFields is any other RFC 2369
+	// List-* field, which a sender may add to its own mailings.
+	distributed, listFields, junk := h.Has("List-Id"), false, false
 	for _, field := range listHeaderFields {
-		if h.Has(field) {
-			listed = true
+		if field != "List-Id" && h.Has(field) {
+			listFields = true
 		}
 	}
 	for _, v := range h.Values("Precedence") {
 		switch headerKeyword(v) {
 		case "bulk", "list":
-			listed = true
+			distributed = true
 		case "junk":
 			junk = true
 		}
 	}
-	marks.Bulk = listed || junk
-	marks.junkOnly = junk && !listed
+	marks.Bulk = distributed || listFields || junk
+	switch {
+	case junk:
+		marks.listReplyBar = listReplyBarJunk
+	case listFields && !distributed:
+		marks.listReplyBar = listReplyBarListFields
+	}
 	return marks, err
 }
 
