@@ -1453,6 +1453,21 @@ compaction:
 #         these domains and their subdomains; every other recipient is
 #         refused. Empty means no limit.
 #         allowed_recipient_domains: []
+#       Mailbox says whose mailbox this is and how its mail should sound.
+#       mailbox:
+#         Owner is whose mailbox this is: "assistant" (default) for a
+#         mailbox Thane keeps, or "operator" for the operator's own inbox,
+#         which Thane helps with but does not own. On an operator mailbox,
+#         email_read leaves mail unread unless the call asks otherwise, and
+#         a turn the operator is not present for cannot mark mail seen,
+#         whether by reading it or with email_mark. Any other value is
+#         refused.
+#         owner: assistant
+#         Voice is an operator-authored note, at most 500 bytes, on how mail
+#         written from this account should sound, for example "first person
+#         as Alice; brief; sign with her first name only". It is shown to
+#         the model in the account's Email Accounts entry.
+#         voice: ""
 #     - # Name is the short identifier tools and loop bindings use for this
 #       account (for example "personal" or "packages"). Required and unique.
 #       name: packages
@@ -1549,6 +1564,21 @@ compaction:
 #         these domains and their subdomains; every other recipient is
 #         refused. Empty means no limit.
 #         allowed_recipient_domains: []
+#       Mailbox says whose mailbox this is and how its mail should sound.
+#       mailbox:
+#         Owner is whose mailbox this is: "assistant" (default) for a
+#         mailbox Thane keeps, or "operator" for the operator's own inbox,
+#         which Thane helps with but does not own. On an operator mailbox,
+#         email_read leaves mail unread unless the call asks otherwise, and
+#         a turn the operator is not present for cannot mark mail seen,
+#         whether by reading it or with email_mark. Any other value is
+#         refused.
+#         owner: assistant
+#         Voice is an operator-authored note, at most 500 bytes, on how mail
+#         written from this account should sound, for example "first person
+#         as Alice; brief; sign with her first name only". It is shown to
+#         the model in the account's Email Accounts entry.
+#         voice: ""
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:

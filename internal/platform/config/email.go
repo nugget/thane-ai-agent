@@ -108,6 +108,9 @@ type EmailAccountConfig struct {
 	// Policy is what the model may do with this account beyond reading
 	// it, and where the mail it writes goes.
 	Policy EmailPolicyConfig `yaml:"policy"`
+
+	// Mailbox says whose mailbox this is and how its mail should sound.
+	Mailbox EmailMailboxConfig `yaml:"mailbox"`
 }
 
 // EmailPolicyConfig is one account's access level and delivery policy.
@@ -357,6 +360,7 @@ func (c *EmailConfig) ApplyDefaults() {
 		acct.Policy.Delivery = acct.DeliveryMode()
 		acct.Policy.DeniedRecipientDomains = normalizeDomains(acct.Policy.DeniedRecipientDomains)
 		acct.Policy.AllowedRecipientDomains = normalizeDomains(acct.Policy.AllowedRecipientDomains)
+		acct.Mailbox.Owner = acct.MailboxOwner()
 	}
 }
 
@@ -415,6 +419,9 @@ func (c EmailConfig) Validate() error {
 			}
 		}
 		if err := a.validatePolicy(i); err != nil {
+			return err
+		}
+		if err := a.validateMailbox(i); err != nil {
 			return err
 		}
 	}

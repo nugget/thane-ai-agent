@@ -1,6 +1,9 @@
 package email
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -8,6 +11,40 @@ import (
 // defaultOpLogSize is the number of recent operations retained for the
 // Email Accounts context block.
 const defaultOpLogSize = 20
+
+// maxOpRefUIDs caps the UIDs one operation reference lists, so a bulk
+// move cannot crowd the Email Accounts block.
+const maxOpRefUIDs = 10
+
+// moveOperationRef is the reference a move records: how many messages
+// went where, their source UIDs, and their UIDs in the destination, so
+// a later turn can undo the move or act on the moved messages without
+// listing the destination first.
+func moveOperationRef(result MoveResult) string {
+	ref := fmt.Sprintf("%d to %s; uids %s", len(result.UIDs), result.Destination, joinOpRefUIDs(result.UIDs))
+	if !result.DestUIDsKnown {
+		return ref + "; destination_uids unknown, list " + result.Destination + " to find them"
+	}
+	return ref + "; destination_uids " + joinOpRefUIDs(result.DestUIDs)
+}
+
+// joinOpRefUIDs renders UIDs comma-separated, at most maxOpRefUIDs of
+// them, counting the rest.
+func joinOpRefUIDs(uids []uint32) string {
+	if len(uids) == 0 {
+		return "none"
+	}
+	shown := uids[:min(len(uids), maxOpRefUIDs)]
+	parts := make([]string, len(shown))
+	for i, uid := range shown {
+		parts[i] = strconv.FormatUint(uint64(uid), 10)
+	}
+	out := strings.Join(parts, ",")
+	if rest := len(uids) - len(shown); rest > 0 {
+		out += fmt.Sprintf(" and %d more", rest)
+	}
+	return out
+}
 
 // Operation records one successful email tool invocation: enough for
 // the next turn to see what the mailbox was just asked to do without

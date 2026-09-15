@@ -51,11 +51,11 @@ type SendOutcome struct {
 }
 
 // Send is the one path every outbound message takes: the account's
-// access level, the audit copy, the recipient trust gate and domain
-// rules, the delivery decision, the inspector, composition, signing,
-// and delivery to SMTP or to the Drafts folder. A refusal is a
-// [*PolicyRefusal] carrying the decision; any other error is a fault
-// in delivery after the decision was made.
+// access level, the recipient trust gate and domain rules, the delivery
+// decision, the audit copy on mail that will be sent, the inspector,
+// composition, signing, and delivery to SMTP or to the drafts folder.
+// A refusal is a [*PolicyRefusal] carrying the decision; any other
+// error is a fault in delivery after the decision was made.
 func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error) {
 	cfg := req.Account.Config
 	decision := Decision{
@@ -91,11 +91,6 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
 
-	bcc, err := s.auditCopy(req.To, req.Cc)
-	if err != nil {
-		return SendOutcome{}, err
-	}
-
 	trust := CheckRecipientTrust(ctx, s.contacts, slices.Concat(req.To, req.Cc))
 	applyDomainRules(&trust, cfg.Policy)
 	if trust.Assessments != nil {
@@ -111,20 +106,32 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 	if decision.Disposition == DispositionSent && !cfg.SMTPConfigured() {
 		decision.Disposition = DispositionRefused
 		decision.Route = RouteNoSMTP
-		decision.Reason = fmt.Sprintf("Email not sent: account %q has no smtp configured, so it can only draft; retry with draft: true or use an account that can send.", cfg.Name)
+		decision.Reason = fmt.Sprintf("Email not sent: account %q has no smtp configured, so it can only draft; retry with draft: true, and do not write the message from any other account.", cfg.Name)
 		return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 	}
 
+	// The audit copy rides only mail Thane delivers. A draft carries
+	// none on any account: the operator sends it from their own client,
+	// and a Bcc left in its header would copy the audit sink on mail the
+	// operator, not Thane, chose to deliver.
+	var bcc []string
+	if decision.Disposition == DispositionSent {
+		auditBcc, err := s.auditCopy(req.To, req.Cc)
+		if err != nil {
+			return SendOutcome{}, err
+		}
+		bcc = auditBcc
+	}
+
 	composed, err := ComposeMessage(ComposeOptions{
-		From:        cfg.DefaultFrom,
-		To:          req.To,
-		Cc:          req.Cc,
-		Bcc:         bcc,
-		BccInHeader: decision.Disposition == DispositionDrafted,
-		Subject:     req.Subject,
-		Body:        req.Body,
-		InReplyTo:   req.InReplyTo,
-		References:  req.References,
+		From:       cfg.DefaultFrom,
+		To:         req.To,
+		Cc:         req.Cc,
+		Bcc:        bcc,
+		Subject:    req.Subject,
+		Body:       req.Body,
+		InReplyTo:  req.InReplyTo,
+		References: req.References,
 	})
 	if err != nil {
 		err = fmt.Errorf("compose message: %w", err)
@@ -335,7 +342,7 @@ func accessRefusalSentence(cfg AccountConfig) string {
 	if !cfg.SMTPConfigured() {
 		why = "it has no smtp configured and " + why
 	}
-	return fmt.Sprintf("Email account %q cannot send or draft mail: %s. Use an account whose Email Accounts entry shows access \"send\", or report that this one cannot.", cfg.Name, why)
+	return fmt.Sprintf("Email account %q cannot send or draft mail: %s. The message belongs to this mailbox and must not be written from any other account; report that this account cannot compose.", cfg.Name, why)
 }
 
 // trustRefusalSentence names the recipients the gate refused.

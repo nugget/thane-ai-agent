@@ -415,6 +415,7 @@ func ExampleConfig() *Config {
 						Delivery:               EmailDeliveryByTrustZone,
 						DeniedRecipientDomains: []string{"example.org"},
 					},
+					Mailbox: EmailMailboxConfig{Owner: EmailMailboxOwnerAssistant},
 				},
 				{
 					Name:        "packages",
@@ -426,7 +427,8 @@ func ExampleConfig() *Config {
 						Password: "your-email-password",
 						TLS:      &imapTLS,
 					},
-					Policy: EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone},
+					Policy:  EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone},
+					Mailbox: EmailMailboxConfig{Owner: EmailMailboxOwnerAssistant},
 				},
 			},
 		},

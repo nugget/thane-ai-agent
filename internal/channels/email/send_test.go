@@ -53,8 +53,8 @@ func refusalOf(t *testing.T, err error) *PolicyRefusal {
 // TestByTrustZoneRoutesEachRecipientClass pins the default delivery
 // mode end to end: an admin recipient sends directly when attended,
 // drafts when unattended, and a trusted recipient drafts either way;
-// the draft carries the Draft flag and the audit Bcc in its header,
-// and nothing reaches SMTP.
+// the draft carries the Draft flag and no audit Bcc, and nothing
+// reaches SMTP.
 func TestByTrustZoneRoutesEachRecipientClass(t *testing.T) {
 	svc, imap, smtp := policyService(t, ServiceDependencies{Contacts: identityStub()}, func(cfg *Config) {
 		cfg.BccOwner = "Audit <audit@example.com>"
@@ -110,8 +110,8 @@ func TestByTrustZoneRoutesEachRecipientClass(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read draft: %v", err)
 		}
-		if !strings.Contains(string(msg.raw), "Bcc: \"Audit\" <audit@example.com>") {
-			t.Errorf("a draft must carry the audit Bcc in its header so the operator's client sends it:\n%s", msg.raw)
+		if strings.Contains(string(msg.raw), "Bcc:") || strings.Contains(string(msg.raw), "audit@example.com") {
+			t.Errorf("a draft goes out in the operator's name from their own client and must carry no audit Bcc:\n%s", msg.raw)
 		}
 	}
 	_ = imap
