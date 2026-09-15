@@ -321,7 +321,7 @@ reads without marking messages seen and refuses flags and moves.
 **Review queue.** An account with `mailbox.review_loop` feeds that loop
 through the loopqueue store, in the partition named after the loop. A
 draft written on the account in a turn the operator is not present
-for, by any loop but the review loop, queues `draft:<draft_id>`, and
+for, by any loop but the review loop, queues `draft:<account>:<draft_id>`, and
 `email_escalate` queues `message:<account>:<message_id>`; queueing a
 subject again coalesces with the waiting item. Each item's `source` is
 `email_review` and its summary is compact JSON: `{account, draft_id,

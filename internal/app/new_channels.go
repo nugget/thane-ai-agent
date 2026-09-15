@@ -244,9 +244,12 @@ func (a *App) initChannels(s *newState) error {
 		a.emailService = svc
 		// Review loops wake on queued review work; arm before any
 		// traffic, and sweep once the loops are running (new_servers).
+		// The waker stops before the service closes (LIFO), taking its
+		// recheck timers and wake workers with it.
 		a.emailReviewWake = newEmailReviewWaker(a.loopQueue, a.messageBus, svc.AccountsInConfigOrder(), a.logger)
 		a.emailReviewWake.arm()
 		a.onClose("email", svc.Close)
+		a.onClose("email-review-wake", a.emailReviewWake.stop)
 		a.loop.Tools().RegisterProvider(svc.ToolProvider())
 
 		// Register each account with connwatch for health monitoring.

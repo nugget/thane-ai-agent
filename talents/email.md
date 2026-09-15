@@ -253,7 +253,7 @@ second:
 
 - every draft written on the account in a turn the operator is not
   present for, by any loop but the review loop itself, as
-  `draft:<draft_id>`. Go queues it as the draft is written, so a pass
+  `draft:<account>:<draft_id>`. Go queues it as the draft is written, so a pass
   that drafts has nothing more to do;
 - every message a pass hands over with `email_escalate`, as
   `message:<account>:<message_id>`, keyed by Message-ID rather than
@@ -1405,7 +1405,7 @@ because nothing records a review.
    at most 10. Each item has a `subject` and a `summary`, compact JSON
    naming the `account` and what waits. A second pull in the same wake
    is refused, and what you do not pull waits for the next.
-2. For a `draft:<draft_id>` subject, edit the draft as the steps above
+2. For a `draft:<account>:<draft_id>` subject, edit the draft as the steps above
    say. The summary carries its `draft_id`, its `message_subject` (the
    message's Subject header; the item's own `subject` is the queue key
    `queue_ack` takes), and `drafted_by`, the loop that wrote it.

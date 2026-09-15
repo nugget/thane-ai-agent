@@ -2,11 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,12 +22,36 @@ import (
 // unattended turn wrote, a message email_escalate handed over), and this
 // file turns that durable work into wakes: a debounced wake on enqueue
 // shaped by the account's review_delay and review_max_wait, a boot sweep
-// for work queued before a restart, and a re-wake from the email
-// poller for work a wake left behind. A wake is sent only while the
-// partition holds work, so an idle queue never wakes the loop.
+// for work queued before a restart, and a recheck review_delay after
+// every wake for work that wake left behind (email_review_recheck.go),
+// whether or not mail is polled. A wake is sent only while the partition
+// holds work, so an idle queue never wakes the loop.
 
 // emailReviewWakeSource names the producer on review wakes.
 const emailReviewWakeSource = "email_review"
+
+// The wake counts what waits by each queued item's subject, which the
+// email service keys by kind: draft:<account>:<draft_id> and
+// message:<account>:<message_id>.
+const (
+	// emailReviewSubjectDraft starts the subject of a queued draft.
+	emailReviewSubjectDraft = "draft:"
+	// emailReviewSubjectMessage starts the subject of an escalated message.
+	emailReviewSubjectMessage = "message:"
+)
+
+// Why a wake attempt runs, as its log lines name it.
+const (
+	// emailReviewReasonEnqueue is the debounced fire after an enqueue.
+	emailReviewReasonEnqueue = "enqueue"
+	// emailReviewReasonBootSweep is the sweep once the loops have started.
+	emailReviewReasonBootSweep = "boot_sweep"
+	// emailReviewReasonLeftover is the recheck after a wake.
+	emailReviewReasonLeftover = "leftover_work"
+	// emailReviewReasonRetry is the recheck after an attempt that could
+	// not read the queue.
+	emailReviewReasonRetry = "retry"
+)
 
 // emailReviewQueueToolNames are the queue tools a review loop carries:
 // it drains, acknowledges, and defers its own queue, and never enqueues
@@ -61,14 +85,20 @@ func emailReviewLoops(accounts []config.EmailAccountConfig) map[string]emailRevi
 	return loops
 }
 
+// emailReviewDue decides whether a wake is due for a review loop, given
+// its pending work split at the mark of its last wake. Caller holds
+// w.mu.
+type emailReviewDue func(name string, split loopqueue.PendingSplit) bool
+
 // emailReviewWaker wakes each review loop while its queue holds work.
 //
 // Three paths wake a loop: the debounced fire after an enqueue, the boot
-// sweep, and the re-wake after a poll. mu serializes them, so two never
-// announce the same work at once, and every wake records what it
-// announced: each pending item's subject and receipt. A coalesced
-// enqueue gives its item a new receipt, so it is new work again; a
-// deferral keeps the receipt, so a deferred item stays announced.
+// sweep, and the recheck after a wake. mu serializes them, so two never
+// announce the same work at once, and every wake records the queue mark
+// it announced up to. A coalesced enqueue gives its item a receipt after
+// that mark, so it is new work again; a deferral keeps the receipt, so a
+// deferred item stays announced. Every read is an aggregate over the
+// partition, so however large a backlog grows, a wake loads none of it.
 type emailReviewWaker struct {
 	queue  *loopqueue.Store
 	bus    *messages.Bus
@@ -76,9 +106,28 @@ type emailReviewWaker struct {
 	loops  map[string]emailReviewTiming
 	now    func() time.Time
 
-	mu        sync.Mutex
-	lastWake  map[string]time.Time
-	announced map[string]map[string]string // loop -> subject -> receipt
+	// wakeTimeout bounds each wake attempt from its start, the wait for
+	// mu included, the way queueWakeDeliveryTimeout bounds each hop of
+	// the queued wake dispatcher, so a queue read or a delivery that
+	// does not return holds neither the attempt nor mu past it.
+	wakeTimeout time.Duration
+	// recheckFloor is the shortest time from a wake to its recheck.
+	recheckFloor time.Duration
+
+	mu       sync.Mutex
+	lastWake map[string]time.Time
+	marks    map[string]string // loop -> the queue mark its last wake announced up to
+
+	// life is cancelled by stop, and every worker's attempt runs under
+	// it. lifeMu guards stopped and rechecks, and orders launches
+	// before stop's wait for the workers (email_review_recheck.go).
+	life       context.Context
+	stopLife   context.CancelFunc
+	lifeMu     sync.Mutex
+	stopped    bool
+	rechecks   map[string]*emailReviewRecheck
+	recheckGen uint64
+	workers    sync.WaitGroup
 }
 
 // newEmailReviewWaker returns the waker for the review loops the
@@ -92,14 +141,20 @@ func newEmailReviewWaker(queue *loopqueue.Store, bus *messages.Bus, accounts []c
 	if logger == nil {
 		logger = slog.Default()
 	}
+	life, stopLife := context.WithCancel(context.Background())
 	return &emailReviewWaker{
-		queue:     queue,
-		bus:       bus,
-		logger:    logger,
-		loops:     loops,
-		now:       time.Now,
-		lastWake:  make(map[string]time.Time),
-		announced: make(map[string]map[string]string),
+		queue:        queue,
+		bus:          bus,
+		logger:       logger,
+		loops:        loops,
+		now:          time.Now,
+		wakeTimeout:  queueWakeDeliveryTimeout,
+		recheckFloor: emailReviewRecheckFloor,
+		lastWake:     make(map[string]time.Time),
+		marks:        make(map[string]string),
+		life:         life,
+		stopLife:     stopLife,
+		rechecks:     make(map[string]*emailReviewRecheck),
 	}
 }
 
@@ -115,9 +170,9 @@ func (w *emailReviewWaker) names() []string {
 
 // arm registers a debounced wake on enqueue for every review loop. The
 // fire callback must not block (loopqueue contract), so it hands the
-// wake to a goroutine. A fire wakes the loop only for work no wake has
-// announced yet: a boot sweep or a re-wake that ran while the debounce
-// was pending already told the loop about it.
+// wake to a worker (launch). A fire wakes the loop only for work no wake
+// has announced yet: a boot sweep or a recheck that ran while the
+// debounce was pending already told the loop about it.
 func (w *emailReviewWaker) arm() {
 	if w == nil {
 		return
@@ -125,118 +180,102 @@ func (w *emailReviewWaker) arm() {
 	for _, name := range w.names() {
 		timing := w.loops[name]
 		w.queue.SetWakeOnEnqueue(name, timing.delay, timing.maxWait, func() {
-			go w.wakeFor(context.Background(), name, "enqueue", w.hasNewWork)
+			w.launch(name, emailReviewReasonEnqueue, w.hasNewWork)
 		})
 		w.logger.Info("email review loop armed to wake on queued work",
 			"review_loop", name, "review_delay", timing.delay, "review_max_wait", timing.maxWait)
 	}
 }
 
-// Sweep wakes every review loop whose queue holds work. It runs once at
-// boot, after the loops have started, because a debounce pending when
-// the process stopped did not survive it.
+// Sweep wakes every review loop whose queue holds work no wake has
+// announced, which at boot is all of it. It runs once, after the loops
+// have started, because a debounce pending when the process stopped did
+// not survive it; a debounce that fired between the loops starting and
+// the sweep has already announced its work, so the sweep does not
+// announce it again.
 func (w *emailReviewWaker) Sweep(ctx context.Context) {
 	if w == nil {
 		return
 	}
 	for _, name := range w.names() {
-		w.wakeFor(ctx, name, "boot_sweep", nil)
+		w.wakeFor(ctx, name, emailReviewReasonBootSweep, w.hasNewWork)
 	}
 }
 
-// resweep wakes a review loop again for work its last wake announced
-// and left in the queue, such as a batch larger than one queue_pull or
-// an item it deferred, once review_delay has passed since that wake.
-// Work queued after the last wake is not leftover: it waits out its own
-// debounce, bounded by review_max_wait, so a steady stream of new work
-// is never woken early by a poll. The email poller calls it after every
-// poll.
-func (w *emailReviewWaker) resweep(ctx context.Context) {
-	if w == nil {
-		return
-	}
-	for _, name := range w.names() {
-		w.wakeFor(ctx, name, "leftover_work", w.leftoverDue)
-	}
-}
-
-// hasNewWork reports whether any pending item is one the loop's last
-// wake did not announce, or announced under an older receipt. Caller
-// holds w.mu.
-func (w *emailReviewWaker) hasNewWork(name string, items []loopqueue.Item) bool {
-	announced := w.announced[name]
-	for _, item := range items {
-		if receipt, ok := announced[item.DedupKey]; !ok || receipt != item.Receipt {
-			return true
-		}
-	}
-	return false
-}
-
-// leftoverDue reports whether review_delay has passed since the loop's
-// last wake and some item that wake announced still waits unchanged.
+// hasNewWork reports whether some pending item was enqueued, or
+// enqueued again, after the loop's last wake announced its queue.
 // Caller holds w.mu.
-func (w *emailReviewWaker) leftoverDue(name string, items []loopqueue.Item) bool {
+func (w *emailReviewWaker) hasNewWork(_ string, split loopqueue.PendingSplit) bool {
+	return split.Since > 0
+}
+
+// leftoverDue reports whether the recheck interval has passed since the
+// loop's last wake and some item that wake announced still waits
+// unchanged: a batch larger than one queue_pull, an item the loop
+// deferred, or a wake the bus did not deliver. Work queued after that
+// wake is not leftover: it waits out its own debounce, bounded by
+// review_max_wait, so a steady stream of new work is never woken early.
+// Caller holds w.mu.
+func (w *emailReviewWaker) leftoverDue(name string, split loopqueue.PendingSplit) bool {
 	last, woke := w.lastWake[name]
-	if !woke || w.now().Sub(last) < w.loops[name].delay {
-		return false
-	}
-	announced := w.announced[name]
-	for _, item := range items {
-		if receipt, ok := announced[item.DedupKey]; ok && receipt == item.Receipt {
-			return true
-		}
-	}
-	return false
+	return woke && split.Through > 0 && w.now().Sub(last) >= w.recheckInterval(name)
 }
 
 // wakeFor sends one wake to a review loop whose queue holds work that
-// due approves (nil approves any), naming how many drafts and messages
-// wait, and sends nothing for an empty queue. The wake records what it
-// announced before it is sent, so a wake the bus cannot deliver is
-// retried by the next re-wake once review_delay has passed.
-func (w *emailReviewWaker) wakeFor(ctx context.Context, name, reason string, due func(string, []loopqueue.Item) bool) {
+// due approves, naming how many drafts and messages wait, and sends
+// nothing for an empty queue. wakeTimeout bounds the
+// whole attempt, starting before it waits for mu. A wake records what
+// it announced and arms the loop's recheck before it is sent, so a wake
+// the bus cannot deliver is retried at that recheck; an attempt that
+// cannot read the queue in time is logged and retried at the recheck
+// floor (wakeNotRead).
+func (w *emailReviewWaker) wakeFor(ctx context.Context, name, reason string, due emailReviewDue) {
+	ctx, cancel := context.WithTimeout(ctx, w.wakeTimeout)
+	defer cancel()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	items, err := w.queue.PeekAll(ctx, name)
-	if err != nil {
-		w.logger.Warn("email review queue not read for wake", "review_loop", name, "reason", reason, "error", err)
+	if err := ctx.Err(); err != nil {
+		w.wakeNotRead(name, reason, due, err)
 		return
 	}
-	if len(items) == 0 {
+	split, err := w.queue.SplitPending(ctx, name, w.marks[name])
+	if err != nil {
+		w.wakeNotRead(name, reason, due, err)
+		return
+	}
+	if split.Pending() == 0 {
+		w.disarmRecheck(name)
 		w.logger.Debug("email review queue empty; loop not woken", "review_loop", name, "reason", reason)
 		return
 	}
-	if due != nil && !due(name, items) {
-		w.logger.Debug("email review work already announced; loop not woken", "review_loop", name, "reason", reason, "pending", len(items))
+	if !due(name, split) {
+		w.keepLeftoverRecheck(name, split)
+		w.logger.Debug("email review wake not due; loop not woken", "review_loop", name, "reason", reason,
+			"announced", split.Through, "since_last_wake", split.Since)
 		return
 	}
-	drafts, msgs := 0, 0
-	announced := make(map[string]string, len(items))
-	for _, item := range items {
-		announced[item.DedupKey] = item.Receipt
-		switch {
-		case strings.HasPrefix(item.DedupKey, "draft:"):
-			drafts++
-		case strings.HasPrefix(item.DedupKey, "message:"):
-			msgs++
-		}
+	kinds, pending, err := w.queue.PendingCountsByKeyPrefix(ctx, name, []string{emailReviewSubjectDraft, emailReviewSubjectMessage})
+	if err != nil {
+		w.wakeNotRead(name, reason, due, err)
+		return
 	}
+	drafts, msgs := kinds[emailReviewSubjectDraft], kinds[emailReviewSubjectMessage]
 	now := w.now()
 	w.lastWake[name] = now
-	w.announced[name] = announced
+	w.marks[name] = split.Mark
+	w.armRecheck(name, emailReviewReasonLeftover, w.recheckInterval(name), w.leftoverDue)
 
 	event := messages.LoopEventPayload{
 		Source:     emailReviewWakeSource,
 		Type:       "review_pending",
 		ID:         fmt.Sprintf("email-review-%s-%d", name, now.UnixMilli()),
 		Title:      "Email review queue",
-		Summary:    emailReviewWakeSummary(drafts, msgs, len(items)),
+		Summary:    emailReviewWakeSummary(drafts, msgs, pending),
 		ObservedAt: now,
 		Metadata: map[string]string{
 			"drafts":   strconv.Itoa(drafts),
 			"messages": strconv.Itoa(msgs),
-			"pending":  strconv.Itoa(len(items)),
+			"pending":  strconv.Itoa(pending),
 		},
 	}
 	env, err := messages.NewEventSourceEnvelope(
@@ -249,13 +288,28 @@ func (w *emailReviewWaker) wakeFor(ctx context.Context, name, reason string, due
 		w.logger.Warn("email review wake not built", "review_loop", name, "reason", reason, "error", err)
 		return
 	}
-	deliveryCtx, cancel := context.WithTimeout(ctx, queueWakeDeliveryTimeout)
-	defer cancel()
-	if _, err := w.bus.Send(deliveryCtx, env); err != nil {
-		w.logger.Warn("email review wake not delivered", "review_loop", name, "reason", reason, "drafts", drafts, "messages", msgs, "error", err)
+	if _, err := w.bus.Send(ctx, env); err != nil {
+		w.logger.Warn("email review wake not delivered; retrying at the recheck", "review_loop", name, "reason", reason,
+			"drafts", drafts, "messages", msgs, "retry_in", w.recheckInterval(name), "error", err)
 		return
 	}
-	w.logger.Info("email review loop woken", "review_loop", name, "reason", reason, "drafts", drafts, "messages", msgs, "pending", len(items))
+	w.logger.Info("email review loop woken", "review_loop", name, "reason", reason, "drafts", drafts, "messages", msgs, "pending", pending)
+}
+
+// wakeNotRead logs an attempt that could not read name's queue, in time
+// or at all, and retries it once the recheck floor has passed, not a
+// whole review_delay later, so a stalled store holds a due wake back by
+// about the floor. The retry is still for the work the attempt was after
+// and for any announced work left since. An attempt cancelled by
+// shutdown is not retried. Caller holds w.mu.
+func (w *emailReviewWaker) wakeNotRead(name, reason string, due emailReviewDue, err error) {
+	if errors.Is(err, context.Canceled) {
+		w.logger.Debug("email review wake cancelled", "review_loop", name, "reason", reason, "error", err)
+		return
+	}
+	w.logger.Warn("email review queue not read for wake; retrying", "review_loop", name, "reason", reason,
+		"retry_in", w.recheckFloor, "error", err)
+	w.armRecheck(name, emailReviewReasonRetry, w.recheckFloor, eitherDue(due, w.leftoverDue))
 }
 
 // emailReviewWakeSummary says what waits, in the words the review task
