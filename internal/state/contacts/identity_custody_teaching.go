@@ -18,17 +18,27 @@ import (
 // resolver's cached answer, so custody protects exactly the contact
 // that carries IsOwner. Unpinned, the legacy name is resolved here with
 // the same ResolveContact the resolver uses. uuid.Nil means no operator
-// is configured; the sole-admin fallback is already custodied by its
-// zone. A resolution failure other than not-found, an ended ctx
-// included, fails closed.
+// is configured, or no contact answers to the legacy name; the
+// sole-admin fallback is already custodied by its zone.
+//
+// Any other resolution failure fails closed, pinned or not, an ended
+// ctx included. A legacy name several contacts answer to, as a tie or a
+// shared first name, is the case that matters: the operator is one of
+// those contacts and custody cannot tell which, and protecting none
+// would let an unattended write, a nickname change or a forget, decide
+// which of them the next start makes the operator, with every address a
+// write gave it.
 func (t *Tools) custodyOperatorID(ctx context.Context) (uuid.UUID, error) {
 	if t.operatorContactID != uuid.Nil {
 		return t.operatorContactID, nil
 	}
+	name := strings.TrimSpace(t.ownerContactName)
 	if t.legacyOperatorPinned {
+		if err := t.legacyOperatorUnresolved(); err != nil {
+			return uuid.Nil, custodyUnresolvedError(name, true, err)
+		}
 		return t.legacyOperatorID, nil
 	}
-	name := strings.TrimSpace(t.ownerContactName)
 	if name == "" {
 		return uuid.Nil, nil
 	}
@@ -37,9 +47,40 @@ func (t *Tools) custodyOperatorID(ctx context.Context) (uuid.UUID, error) {
 		return uuid.Nil, nil
 	}
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("check identity custody: resolve the configured operator contact: %w", err)
+		return uuid.Nil, custodyUnresolvedError(name, false, err)
 	}
 	return operator.ID, nil
+}
+
+// legacyOwnerUnresolvedError says why the legacy owner name named no
+// single contact, and how the operator fixes it. pinned says the name
+// was resolved when Thane started, so a fix takes a restart. A name
+// several contacts answer to lists them with their contact_id values,
+// without the retry an [AmbiguousNameError] ends with, since no tool
+// argument settles which contact is the operator's.
+func legacyOwnerUnresolvedError(owner string, pinned bool, err error) error {
+	when, restart := "now", ""
+	if pinned {
+		when, restart = "when Thane started", " and restart Thane"
+	}
+	var amb *AmbiguousNameError
+	if !errors.As(err, &amb) {
+		return fmt.Errorf("the name Thane recognizes the operator by (identity.owner_contact_name %q) could not be resolved %s: %w", echoForRefusal(owner), when, err)
+	}
+	return fmt.Errorf("the name Thane recognizes the operator by (identity.owner_contact_name %q) named no single contact %s, so Thane cannot tell which contact is the operator's own: %s. Ask the operator to set identity.operator_contact_id to their own contact's UUID, or to make their own contact the only one whose formatted name or nickname is that name, through CardDAV or the contacts API%s",
+		echoForRefusal(owner), when, amb.summary(), restart)
+}
+
+// custodyUnresolvedError is custody's refusal when the legacy owner name
+// names no single contact. Every write that needs the operator's record
+// is refused, which is every write custody guards.
+func custodyUnresolvedError(owner string, pinned bool, err error) error {
+	var amb *AmbiguousNameError
+	if !errors.As(err, &amb) {
+		return fmt.Errorf("check identity custody: %w", legacyOwnerUnresolvedError(owner, pinned, err))
+	}
+	return fmt.Errorf("check identity custody: nothing was changed, because %w. Until the operator does, no model-facing write creates a contact, sets a nickname, adds an address, number or notification routing fact, or forgets a contact, because the operator's own contact is one of these and protecting none of them would let such a write decide which one Thane takes as the operator; tell the operator",
+		legacyOwnerUnresolvedError(owner, pinned, err))
 }
 
 // legacyOwnerName returns the legacy owner name when it is the operator

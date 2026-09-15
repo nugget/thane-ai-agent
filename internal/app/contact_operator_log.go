@@ -22,12 +22,15 @@ const legacyOperatorRemedy = "set identity.operator_contact_id to the operator's
 // nickname; custody, IsOwner and name resolution then treat that record
 // as the operator's for the life of the process. The line names the
 // record and the name field the name matched, as [contacts.NameMatchField]
-// names it. When no record was chosen it warns, with the resolver's
-// error when the name fits several records and names none of them: two
-// that hold it exactly at the same standing, or several that share it
-// as a first name. It logs nothing when identity.operator_contact_id is
-// configured or no legacy name is.
-func logLegacyOperatorResolution(logger *slog.Logger, store *contacts.Store, identity contactIdentityConfig, operatorID uuid.UUID) {
+// names it. When no record was chosen it warns with resolveErr, the
+// error the resolution the contact tools pinned returned, so the line
+// reports exactly why no operator is pinned. A name that fits several
+// records, two that hold it exactly at the same standing or several
+// that share it as a first name, is a different fix from a name no
+// record holds, and custody refuses every write it guards until it is
+// fixed, so the line says which it was. It logs nothing when
+// identity.operator_contact_id is configured or no legacy name is.
+func logLegacyOperatorResolution(logger *slog.Logger, store *contacts.Store, identity contactIdentityConfig, operatorID uuid.UUID, resolveErr error) {
 	name := strings.TrimSpace(identity.legacyOwnerContactName)
 	if logger == nil || store == nil || identity.operatorContactID != uuid.Nil || name == "" {
 		return
@@ -35,12 +38,12 @@ func logLegacyOperatorResolution(logger *slog.Logger, store *contacts.Store, ide
 	clippedName := clipDirectoryFieldTo(name, maxForkFieldBytes)
 	if operatorID == uuid.Nil {
 		attrs := []any{"owner_contact_name", clippedName, "remedy", legacyOperatorRemedy}
-		// A name several records share, exactly or as a first name, is a
-		// different fix from a name no record holds, so say which it was.
-		if _, err := store.ResolveContact(name); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			attrs = append(attrs, "error", err)
+		if resolveErr == nil || errors.Is(resolveErr, sql.ErrNoRows) {
+			logger.Warn("legacy owner contact name matches no active contact, so no operator contact is pinned", attrs...)
+			return
 		}
-		logger.Warn("legacy owner contact name matches no active contact, or matches several and names none of them, so no operator contact is pinned", attrs...)
+		attrs = append(attrs, "error", resolveErr)
+		logger.Warn("legacy owner contact name names no single active contact, so no operator contact is pinned and identity custody refuses every model-facing write it guards until the operator fixes it", attrs...)
 		return
 	}
 	operator, err := store.Get(operatorID)

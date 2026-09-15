@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
@@ -94,4 +96,73 @@ func TestConfigureContactToolsOperatorPinsLegacyResolution(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Alice Operator is the operator's own contact") {
 		t.Errorf("custody must protect the record the resolver marks IsOwner: %v", err)
 	}
+}
+
+// TestConfigureContactToolsOperatorTiedLegacyNameFailsClosed pins the
+// startup wiring when the legacy owner name ties two known records. The
+// resolver marks neither IsOwner, and the tools pin that with the tie,
+// so custody refuses the chain that would otherwise choose the next
+// start's operator: an address planted on one holder, then the other
+// holder's nickname changed or the other holder forgotten. contact_owner
+// reports the tie rather than a missing contact. The control pins the
+// same Nil with no reason, which is what the wiring used to pass, and
+// shows the plant would then land.
+func TestConfigureContactToolsOperatorTiedLegacyNameFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	seed := func(t *testing.T) (*contacts.Store, *contacts.Contact, *contacts.Contact) {
+		t.Helper()
+		store := newEmailIdentityStore(t)
+		var tied []*contacts.Contact
+		for _, name := range []string{"Alice Adams", "Alice Baker"} {
+			c, err := store.UpsertWithProperties(&contacts.Contact{FormattedName: name, Nickname: "Boss", Kind: "individual", TrustZone: contacts.ZoneKnown}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tied = append(tied, c)
+		}
+		return store, tied[0], tied[1]
+	}
+	save := func(tools *contacts.Tools, args string) error {
+		_, err := tools.SaveContactFromModel(ctx, args, &contacts.PropertyProvenance{Source: "contact_save", RequestID: "r_tie"}, false)
+		return err
+	}
+
+	store, adams, baker := seed(t)
+	resolver := &contactChannelBindingResolver{store: store, legacyOwnerContactName: "Boss"}
+	tools := contacts.NewTools(store, nil)
+	configureContactToolsOperator(tools, resolver, contactIdentityConfig{legacyOwnerContactName: "Boss"})
+	for _, c := range []*contacts.Contact{adams, baker} {
+		if resolver.isOperator(c) {
+			t.Errorf("%s is IsOwner under a tie", c.FormattedName)
+		}
+	}
+
+	const refused = "check identity custody: nothing was changed"
+	if err := save(tools, `{"name":"Alice Adams","facts":{"email":"mallory@example.com"}}`); err == nil || !strings.Contains(err.Error(), refused) {
+		t.Errorf("an address on a tied holder = %v, want the custody refusal", err)
+	}
+	if err := save(tools, `{"name":"Alice Baker","nickname":"Bee"}`); err == nil || !strings.Contains(err.Error(), refused) {
+		t.Errorf("breaking the tie by nickname = %v, want the custody refusal", err)
+	}
+	if _, err := tools.ForgetContactFromModel(ctx, `{"contact_id":"`+baker.ID.String()+`"}`, nil); err == nil || !strings.Contains(err.Error(), refused) {
+		t.Errorf("breaking the tie by forget = %v, want the custody refusal", err)
+	}
+	var tie *contacts.AmbiguousNameError
+	if _, err := store.ResolveContact("Boss"); !errors.As(err, &tie) || !tie.ExactTie || tie.Total != 2 {
+		t.Errorf("ResolveContact(Boss) = %v, want the tie intact for the next start", err)
+	}
+	if _, err := tools.OwnerContact(""); err == nil || strings.Contains(err.Error(), "not found") ||
+		!strings.Contains(err.Error(), adams.ID.String()) || !strings.Contains(err.Error(), baker.ID.String()) {
+		t.Errorf("contact_owner = %v, want the tie with both contact_ids", err)
+	}
+
+	t.Run("control: a pin without its reason lets the plant through", func(t *testing.T) {
+		store, _, _ := seed(t)
+		tools := contacts.NewTools(store, nil)
+		tools.SetOwnerContactName("Boss")
+		tools.ConfigureLegacyOperatorContactID(uuid.Nil, nil)
+		if err := save(tools, `{"name":"Alice Adams","facts":{"email":"mallory@example.com"}}`); err != nil {
+			t.Errorf("control save = %v, want it to land when the tie is flattened to no operator", err)
+		}
+	})
 }

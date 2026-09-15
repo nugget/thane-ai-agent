@@ -33,7 +33,10 @@ import (
 // is pinned, so the admin the resolver marks IsOwner stands with every
 // other contact above known, and a name it shares with one of them is
 // a tie. The legacy owner name itself is resolved before any pin
-// exists, so it has two bands only, and a tie there pins no operator.
+// exists, so it has two bands only. A tie there pins no operator, but
+// it is not "no operator": custody then refuses every write it guards
+// (see [Tools.custodyOperatorID]), so no write can settle which of the
+// tied records the next start takes as the operator.
 
 // authorityOrderSQL is an ORDER BY term that puts the pinned operator's
 // record first, then records above known (or with a malformed zone),
@@ -129,8 +132,9 @@ func (s *Store) operatorOrderID() string {
 // pinnedOperatorID is the operator record the tools were configured
 // with, chosen exactly as [Tools.custodyOperatorID] chooses it: the
 // configured operator_contact_id, then the pinned legacy owner record.
-// It is uuid.Nil when neither is configured, and when the legacy owner
-// name is unpinned, since that is resolved again on every call.
+// It is uuid.Nil when neither is configured, when the legacy owner name
+// named no record at startup, and when it is unpinned, since that is
+// resolved again on every call.
 func (t *Tools) pinnedOperatorID() uuid.UUID {
 	if t.operatorContactID != uuid.Nil {
 		return t.operatorContactID

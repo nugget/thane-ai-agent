@@ -143,7 +143,8 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 		identity := contactIdentityConfig{legacyOwnerContactName: "Carol"}
 		resolver := &contactChannelBindingResolver{store: store, legacyOwnerContactName: "Carol"}
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), store, identity, resolver.resolvedOperatorContactID())
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), store, identity, operatorID, resolveErr)
 		var info *auditLogRecord
 		for i := range capture.records {
 			if capture.records[i].level == slog.LevelInfo {
@@ -161,7 +162,9 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 
 	t.Run("a name that matches nothing warns", func(t *testing.T) {
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), store, contactIdentityConfig{legacyOwnerContactName: "Nobody"}, uuid.Nil)
+		resolver := &contactChannelBindingResolver{store: store, legacyOwnerContactName: "Nobody"}
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), store, contactIdentityConfig{legacyOwnerContactName: "Nobody"}, operatorID, resolveErr)
 		if warns := capture.warns(); len(warns) != 1 || !strings.Contains(warns[0].msg, "matches no active contact") || warns[0].attrs["error"] != "" {
 			t.Errorf("warns = %+v, want one no-match Warn with no resolver error", warns)
 		}
@@ -179,9 +182,10 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 		}
 		resolver := &contactChannelBindingResolver{store: shared, legacyOwnerContactName: "Eve"}
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), shared, contactIdentityConfig{legacyOwnerContactName: "Eve"}, resolver.resolvedOperatorContactID())
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), shared, contactIdentityConfig{legacyOwnerContactName: "Eve"}, operatorID, resolveErr)
 		warns := capture.warns()
-		if len(warns) != 1 || !strings.Contains(warns[0].attrs["error"], `ambiguous contact "Eve"`) ||
+		if len(warns) != 1 || !strings.Contains(warns[0].msg, "identity custody refuses") || !strings.Contains(warns[0].attrs["error"], `ambiguous contact "Eve"`) ||
 			!strings.Contains(warns[0].attrs["error"], ids[0]) || !strings.Contains(warns[0].attrs["error"], ids[1]) {
 			t.Errorf("warns = %+v, want one Warn carrying the ambiguity and both ids", warns)
 		}
@@ -198,14 +202,14 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 			ids = append(ids, c.ID.String())
 		}
 		resolver := &contactChannelBindingResolver{store: tied, legacyOwnerContactName: "Boss"}
-		operatorID := resolver.resolvedOperatorContactID()
+		operatorID, resolveErr := resolver.resolvedOperator()
 		if operatorID != uuid.Nil {
-			t.Fatalf("resolvedOperatorContactID = %s, want none: a tie must not pick an operator", operatorID)
+			t.Fatalf("resolvedOperator = %s, want none: a tie must not pick an operator", operatorID)
 		}
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), tied, contactIdentityConfig{legacyOwnerContactName: "Boss"}, operatorID)
+		logLegacyOperatorResolution(slog.New(capture), tied, contactIdentityConfig{legacyOwnerContactName: "Boss"}, operatorID, resolveErr)
 		warns := capture.warns()
-		if len(warns) != 1 || !strings.Contains(warns[0].attrs["error"], "at the same standing (above known) hold it exactly") ||
+		if len(warns) != 1 || !strings.Contains(warns[0].msg, "identity custody refuses") || !strings.Contains(warns[0].attrs["error"], "at the same standing (above known) hold it exactly") ||
 			!strings.Contains(warns[0].attrs["error"], ids[0]) || !strings.Contains(warns[0].attrs["error"], ids[1]) {
 			t.Errorf("warns = %+v, want one Warn carrying the exact tie and both ids", warns)
 		}
@@ -219,7 +223,8 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 		}
 		resolver := &contactChannelBindingResolver{store: single, legacyOwnerContactName: "Bob"}
 		capture := &auditLogCapture{}
-		logLegacyOperatorResolution(slog.New(capture), single, contactIdentityConfig{legacyOwnerContactName: "Bob"}, resolver.resolvedOperatorContactID())
+		operatorID, resolveErr := resolver.resolvedOperator()
+		logLegacyOperatorResolution(slog.New(capture), single, contactIdentityConfig{legacyOwnerContactName: "Bob"}, operatorID, resolveErr)
 		var info *auditLogRecord
 		for i := range capture.records {
 			if capture.records[i].level == slog.LevelInfo {
@@ -234,7 +239,7 @@ func TestLogLegacyOperatorResolution(t *testing.T) {
 	t.Run("a configured operator_contact_id logs nothing", func(t *testing.T) {
 		capture := &auditLogCapture{}
 		identity := contactIdentityConfig{operatorContactID: household.ID, legacyOwnerContactName: "Carol"}
-		logLegacyOperatorResolution(slog.New(capture), store, identity, household.ID)
+		logLegacyOperatorResolution(slog.New(capture), store, identity, household.ID, nil)
 		if len(capture.records) != 0 {
 			t.Errorf("records = %+v, want none", capture.records)
 		}

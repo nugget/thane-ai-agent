@@ -48,9 +48,13 @@ type Tools struct {
 	ownerContactName  string
 	// legacyOperatorID is the record the legacy owner name resolved to
 	// when the app pinned it; legacyOperatorPinned says it was pinned,
-	// since uuid.Nil is a valid pinned answer.
+	// since uuid.Nil is a valid pinned answer. legacyOperatorErr is why
+	// that resolution named no record: sql.ErrNoRows (or nil) when no
+	// contact answered to the name, an [AmbiguousNameError] when several
+	// did, or any other failure. Only the first means no operator.
 	legacyOperatorID     uuid.UUID
 	legacyOperatorPinned bool
+	legacyOperatorErr    error
 	ownerActivity        func() []OwnerChannelActivity
 	dossiersEnabled      bool
 	dossiersWritable     bool
@@ -118,17 +122,38 @@ func (t *Tools) SetOwnerContactName(name string) {
 }
 
 // ConfigureLegacyOperatorContactID pins, for identity custody and
-// contact_owner, the record the legacy owner name resolved to (uuid.Nil
-// when it resolved to none). The app passes the channel resolver's
-// cached answer, so custody, contact_owner and IsOwner agree on the
-// operator for the life of the process even if a later record comes to
-// match the name. Unpinned, both resolve the name on every call. A
-// configured operator_contact_id still takes precedence, for custody
-// and for the store's nickname ordering alike.
-func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID) {
+// contact_owner, the record the legacy owner name resolved to, or
+// uuid.Nil and the error ResolveContact returned when it resolved to
+// none. The app passes the channel resolver's cached answer, so
+// custody, contact_owner and IsOwner agree on the operator for the life
+// of the process even if a later record comes to match the name.
+// Unpinned, both resolve the name on every call. A configured
+// operator_contact_id still takes precedence, for custody and for the
+// store's nickname ordering alike.
+//
+// A name several contacts answer to pins no record, but it is not "no
+// operator": the operator is one of those contacts and the next start
+// could settle on any of them. So custody fails closed on it, as it
+// does when the unpinned lookup finds a tie, and contact_owner reports
+// the tie rather than absence.
+func (t *Tools) ConfigureLegacyOperatorContactID(id uuid.UUID, resolveErr error) {
 	t.legacyOperatorID = id
 	t.legacyOperatorPinned = true
+	t.legacyOperatorErr = nil
+	if id == uuid.Nil {
+		t.legacyOperatorErr = resolveErr
+	}
 	t.pinStoreOperator()
+}
+
+// legacyOperatorUnresolved returns the error that kept the pinned legacy
+// owner name from naming a record, or nil when it named one or named
+// none because no contact answers to it.
+func (t *Tools) legacyOperatorUnresolved() error {
+	if !t.legacyOperatorPinned || t.legacyOperatorID != uuid.Nil || errors.Is(t.legacyOperatorErr, sql.ErrNoRows) {
+		return nil
+	}
+	return t.legacyOperatorErr
 }
 
 // SetOwnerActivitySource configures a source of active owner-scoped
@@ -169,9 +194,14 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 	if name != "" && t.legacyOperatorPinned {
 		// The pinned record is the one IsOwner and custody treat as the
 		// operator, so contact_owner names it even after another record
-		// comes to match the name, and names none when none was pinned.
+		// comes to match the name, and names none when none was pinned,
+		// saying why: a name several contacts answer to is not a missing
+		// contact, and needs a different fix.
 		if t.legacyOperatorID == uuid.Nil {
-			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
+			if err := t.legacyOperatorUnresolved(); err != nil {
+				return nil, legacyOwnerUnresolvedError(name, true, err)
+			}
+			return nil, fmt.Errorf("configured legacy operator contact name %q not found: no active contact answered to it when Thane started, so no contact is the operator's own. Ask the operator to set identity.operator_contact_id to their contact's UUID, or to give their contact that name through CardDAV or the contacts API and restart Thane", name)
 		}
 		full, err := t.store.GetWithProperties(t.legacyOperatorID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -188,7 +218,7 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 			return nil, fmt.Errorf("configured legacy operator contact name %q not found", name)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("resolve configured legacy operator contact name: %w", err)
+			return nil, legacyOwnerUnresolvedError(name, false, err)
 		}
 		full, err := t.store.GetWithProperties(c.ID)
 		if err != nil {

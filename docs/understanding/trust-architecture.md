@@ -368,7 +368,21 @@ contact with authority and is still reported.
   same reason `contact_save` refuses, in every turn, to replace the
   nickname through which the operator's own contact answers to the owner
   name; a case change is allowed, and so is any nickname when the
-  formatted name is itself the owner name.
+  formatted name is itself the owner name. When the startup resolution
+  finds several contacts answering to the name, two holding it exactly
+  at the same standing or several sharing it as a first name, it pins no
+  contact, but that is not "no operator": the operator's own contact is
+  one of them, and protecting none would let an unattended write plant an
+  address on one and then break the tie by changing the other's nickname
+  or forgetting it, so the next start takes the first as the operator.
+  Custody therefore keeps the resolver's error with the pin and refuses,
+  in every turn, every write that needs the operator's record: creating a
+  contact, setting a nickname, adding an address, number or routing fact,
+  and forgetting any contact. The unpinned lookup fails closed the same
+  way. `contact_owner` reports the candidates with their UUIDs instead of
+  a missing contact, and the startup Warn names them; the fix is the
+  operator's, `identity.operator_contact_id` or a name only their own
+  contact holds, then a restart.
 - **Authority holders.** In every turn, no model writer adds a value that
   another active contact already holds when that contact is above `known`
   or is the operator's. Equivalence mirrors the resolver: email compares

@@ -474,7 +474,7 @@ func TestFindByNickname_OperatorFirst(t *testing.T) {
 		{"operator_contact_id", func(tools *Tools, operator *Contact) { tools.ConfigureOperatorContactID(operator.ID) }},
 		{"pinned legacy owner", func(tools *Tools, operator *Contact) {
 			tools.SetOwnerContactName(operator.FormattedName)
-			tools.ConfigureLegacyOperatorContactID(operator.ID)
+			tools.ConfigureLegacyOperatorContactID(operator.ID, nil)
 		}},
 	}
 	for _, sel := range selectors {
@@ -518,7 +518,7 @@ func TestFindByNickname_OperatorFirst(t *testing.T) {
 		household := seedNicknameAt(t, tools.store, "Hana Household", "boss", ZoneHousehold)
 		operator := seedNicknameAt(t, tools.store, "Alice Operator", "boss", ZoneKnown)
 		tools.ConfigureOperatorContactID(operator.ID)
-		tools.ConfigureLegacyOperatorContactID(household.ID)
+		tools.ConfigureLegacyOperatorContactID(household.ID, nil)
 		if got, err := tools.store.ResolveContact("boss"); err != nil || got.ID != operator.ID {
 			t.Errorf("ResolveContact = %+v, %v, want Alice Operator", got, err)
 		}
@@ -529,7 +529,7 @@ func TestFindByNickname_OperatorFirst(t *testing.T) {
 		household := seedNicknameAt(t, tools.store, "Hana Household", "boss", ZoneHousehold)
 		seedNicknameAt(t, tools.store, "Kim Known", "boss", ZoneKnown)
 		tools.SetOwnerContactName("Nobody")
-		tools.ConfigureLegacyOperatorContactID(uuid.Nil)
+		tools.ConfigureLegacyOperatorContactID(uuid.Nil, nil)
 		if got, err := tools.store.ResolveContact("boss"); err != nil || got.ID != household.ID {
 			t.Errorf("ResolveContact = %+v, %v, want Hana Household", got, err)
 		}
@@ -865,7 +865,7 @@ func TestLegacyOwnerName_ResolverParity(t *testing.T) {
 		operator := seedContactAt(t, tools.store, "Alice Operator", ZoneKnown)
 		bob := seedNicknameAt(t, tools.store, "Bob Known", "nugget ", ZoneKnown)
 		tools.SetOwnerContactName("nugget")
-		tools.ConfigureLegacyOperatorContactID(operator.ID)
+		tools.ConfigureLegacyOperatorContactID(operator.ID, nil)
 		_, err := modelSave(tools, `{"name":"Bob Known","nickname":"nugget"}`, true)
 		requireContains(t, err, `refused nickname "nugget" for Bob Known`, "Nothing was saved")
 		if got, _ := tools.store.Get(bob.ID); got.Nickname != "nugget " {

@@ -105,7 +105,9 @@ func applyContactIdentityConfig(cfg *config.Config, store *contacts.Store, logge
 // through the channel resolver's own cache and before any model turn can
 // create a contact, and pins that record for identity custody, so
 // custody protects exactly the contact the resolver marks IsOwner for
-// the life of the process.
+// the life of the process. When the name named no record it pins that
+// too, with the reason, so custody fails closed on a name several
+// contacts answer to and contact_owner reports it as that.
 func configureContactToolsOperator(contactTools *contacts.Tools, resolver *contactChannelBindingResolver, identity contactIdentityConfig) {
 	if identity.operatorContactID != uuid.Nil {
 		contactTools.ConfigureOperatorContactID(identity.operatorContactID)
@@ -115,7 +117,7 @@ func configureContactToolsOperator(contactTools *contacts.Tools, resolver *conta
 	}
 	contactTools.SetOwnerContactName(identity.legacyOwnerContactName)
 	if identity.operatorContactID == uuid.Nil {
-		contactTools.ConfigureLegacyOperatorContactID(resolver.resolvedOperatorContactID())
+		contactTools.ConfigureLegacyOperatorContactID(resolver.resolvedOperator())
 	}
 }
 
@@ -188,7 +190,8 @@ func (a *App) initChannels(s *newState) error {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
 	}
 	configureContactToolsOperator(contactTools, a.contactBindingResolver, contactIdentity)
-	logLegacyOperatorResolution(a.logger, contactStore, contactIdentity, a.contactBindingResolver.resolvedOperatorContactID())
+	operatorID, operatorErr := a.contactBindingResolver.resolvedOperator()
+	logLegacyOperatorResolution(a.logger, contactStore, contactIdentity, operatorID, operatorErr)
 	ownerActivity := (&ownerChannelActivityAdapter{
 		loops: &channelLoopAdapter{registry: a.loopRegistry},
 	}).ActiveOwnerChannels

@@ -69,6 +69,21 @@ type AmbiguousNameError struct {
 // ways to name one of them instead.
 func (e *AmbiguousNameError) Error() string {
 	var b strings.Builder
+	b.WriteString(e.summary())
+	b.WriteString(". Retry with the contact_id of the one you mean where the tool takes contact_id, or with that contact's full formatted name where it takes only a name")
+	if e.ExactTie {
+		b.WriteString("; when the one you mean has this name as its formatted name, only its contact_id tells it apart, so where the tool takes only a name, ask the operator which of them should keep the name")
+	}
+	return b.String()
+}
+
+// summary says why the name resolves to none of the contacts, names
+// each listed candidate with its contact_id, zone and the field it
+// matched, and says where to find the ones it leaves out. It omits the
+// retry Error ends with, for a caller whose next move is not a retry by
+// name or contact_id, such as the legacy owner name.
+func (e *AmbiguousNameError) summary() string {
+	var b strings.Builder
 	if e.ExactTie {
 		fmt.Fprintf(&b, "ambiguous contact %q: %d active contacts at the same standing (%s) hold it exactly as a formatted name or nickname, and no contact with more authority holds it, so it resolves to none of them: ",
 			echoForRefusal(e.Name), e.Total, e.tiedStanding())
@@ -84,10 +99,6 @@ func (e *AmbiguousNameError) Error() string {
 	}
 	if more := e.Total - len(e.Candidates); more > 0 {
 		b.WriteString(e.continuation(more))
-	}
-	b.WriteString(". Retry with the contact_id of the one you mean where the tool takes contact_id, or with that contact's full formatted name where it takes only a name")
-	if e.ExactTie {
-		b.WriteString("; when the one you mean has this name as its formatted name, only its contact_id tells it apart, so where the tool takes only a name, ask the operator which of them should keep the name")
 	}
 	return b.String()
 }

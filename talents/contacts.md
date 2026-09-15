@@ -330,6 +330,17 @@ exists. Right tool when the model needs to assert "this is the operator
 I'm talking to" or "what channels does the operator have active right
 now."
 
+When the legacy name fits several contacts (two at the same standing
+hold it, or several share it as a first name), `contact_owner` returns
+an error listing them with their `contact_id`s, not a record. Until
+the operator fixes it, `contact_save` refuses to create a contact, set
+a nickname, or add an address, number or routing fact, and
+`contact_forget` refuses everything, because the operator's own contact
+is one of them and no write may decide which. Don't try to settle it
+with those tools; tell the operator to set
+`identity.operator_contact_id`, or to leave the name on their own
+contact only, and restart Thane.
+
 ## Cross-references
 
 - If lookup returns no match and you want to create the contact,
