@@ -33,7 +33,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_move",
-		Description:          "Move or rename a managed markdown document to a new semantic ref. Use when the document should live under a new root or path without dropping down to raw file operations. A document its root accepts only through a narrower owning tool, such as a contact dossier owned by contact_dossier_write, is refused with an error naming that tool, and nothing moves.",
+		Description:          "Move or rename a managed markdown document to a new semantic ref. Use when the document should live under a new root or path without dropping down to raw file operations. A document its root accepts only through a narrower owning tool, such as a contact dossier owned by contact_dossier_write, is refused with an error naming that tool, and nothing moves. The same refusal covers overwriting such a document at destination_ref, and moving a document whose managed_by names such a tool into the root that owner keeps.",
 		ContentResolveExempt: []string{"ref", "destination_ref", "overwrite"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -74,7 +74,7 @@ func registerDocumentLifecycleTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_copy",
-		Description:          "Copy one managed markdown document to a new semantic ref while keeping the source intact. Use for branching, templating, or creating a variant without leaving the document abstraction.",
+		Description:          "Copy one managed markdown document to a new semantic ref while keeping the source intact. Use for branching, templating, or creating a variant without leaving the document abstraction. Copying onto a document its root accepts only through a narrower owning tool, such as a contact dossier owned by contact_dossier_write, or copying a document whose managed_by names such a tool into the root that owner keeps, is refused with an error naming that tool, and nothing is written.",
 		ContentResolveExempt: []string{"ref", "destination_ref", "overwrite"},
 		Parameters: map[string]any{
 			"type": "object",

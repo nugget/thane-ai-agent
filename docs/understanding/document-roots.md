@@ -746,7 +746,12 @@ Contact lifecycle does not rename or silently erase this history:
   document stamped with an owner narrower than `doc_write` in a root whose
   write validator enforces a domain contract, because a generic delete would
   retire the document without its owner and a move would carry it out of the
-  validated root. Retiring or relocating a managed dossier is an operator
+  validated root. `doc_move` and `doc_copy` also refuse to overwrite such a
+  document, and refuse to write a document stamped with such an owner into
+  that root from elsewhere: the validator checks content only, so a copy saved
+  before the owner's last write would pass it and roll the dossier back, and
+  the owner's operator-only gate and read-before-write check would never run.
+  Retiring, relocating, or restoring a managed dossier is an operator
   action in the root's Git repository, where it remains a signed change;
   forgetting or merging a structured contact never performs that step
   automatically. A legacy dossier stamped `managed_by: doc_write`, or not

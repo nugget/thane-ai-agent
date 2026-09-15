@@ -594,10 +594,13 @@ that should be gone, not things that should be quiet.
 
 Neither tool touches a document its root accepts only through a
 narrower owner, such as a contact dossier owned by
-`contact_dossier_write`: the call is refused, names the owning tool, and
-changes nothing. Change what such a document says through its owner. If
-it should be retired or relocated, that is the operator's call, so
-report it rather than looking for another door.
+`contact_dossier_write`. Nor does `doc_move` or `doc_copy` overwrite
+one, or carry a document stamped with such an owner into that root
+from elsewhere, such as a copy saved before the owner's last write: the
+call is refused, names the owning tool, and changes nothing. Change
+what such a document says through its owner. If it should be retired,
+relocated, or brought back to an earlier version, that is the
+operator's call, so report it rather than looking for another door.
 
 ---
 name: documents_curate

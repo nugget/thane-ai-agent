@@ -311,8 +311,8 @@ wake lands it.
 | `doc_write` | Create, self-migrate, or update a normal managed document from status-line, optional teaser/digest, and full projections; Go validates and renders its private storage codec atomically. New `dossiers:` targets must be direct children. |
 | `doc_body_write` | Write one undifferentiated Markdown body for the unusual document that intentionally has no projection ladder. It cannot create a nested `dossiers:` target. |
 | `doc_edit` | Targeted edit within an ordinary document, with automatic stale-write protection; faceted and contract-owned documents use their returned `write_tool`. |
-| `doc_copy` | Copy a document to another location. |
-| `doc_move` | Move or rename a document; refuses, naming the owning tool, a document its root accepts only through a narrower owner (a contact dossier). |
+| `doc_copy` | Copy a document to another location; refuses, naming the owning tool, to overwrite a document its root accepts only through a narrower owner (a contact dossier), or to copy a document stamped with such an owner into that root. |
+| `doc_move` | Move or rename a document; refuses, naming the owning tool, a document its root accepts only through a narrower owner (a contact dossier), and refuses to overwrite one or to move a document stamped with such an owner into that root. |
 | `doc_delete` | Delete a document; refuses, naming the owning tool, a document its root accepts only through a narrower owner (a contact dossier). |
 | `doc_copy_section` | Copy one named section into an ordinary destination; faceted destinations reject partial mutation. |
 | `doc_move_section` | Move one named section between ordinary documents; faceted sources or destinations reject partial mutation. |

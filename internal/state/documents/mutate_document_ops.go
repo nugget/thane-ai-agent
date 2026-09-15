@@ -164,6 +164,11 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 	if err := s.refuseManagedLifecycle("doc_move", args.Ref, srcRoot, sourceRecord); err != nil {
 		return nil, err
 	}
+	if err := s.refuseManagedTransfer("doc_move", args.Ref, sourceRecord, transferDestination{
+		ref: args.DestinationRef, root: dstRoot, relPath: dstRelPath, absPath: dstAbsPath,
+	}); err != nil {
+		return nil, err
+	}
 
 	destinationExists := false
 	var originalDestinationRaw []byte
@@ -249,6 +254,11 @@ func (s *Store) Copy(ctx context.Context, args CopyArgs) (*CopyResult, error) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
 		}
 		return nil, fmt.Errorf("read source document: %w", err)
+	}
+	if err := s.refuseManagedTransfer("doc_copy", args.Ref, sourceRecord, transferDestination{
+		ref: args.DestinationRef, root: dstRoot, relPath: dstRelPath, absPath: dstAbsPath,
+	}); err != nil {
+		return nil, err
 	}
 
 	destinationExists := false
