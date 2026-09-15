@@ -49,10 +49,10 @@ activates the `email` tag.
 
 ### Checkpoint
 
-A full state snapshot of conversations and metadata, persisted to SQLite.
-Triggered by message count threshold, graceful shutdown, or manual request.
-Checkpoints enable crash recovery — the agent resumes exactly where it left
-off.
+A diagnostic snapshot of selected conversation, fact, and task state,
+persisted to SQLite. Created by manual request, before model failover, or
+during graceful shutdown. Snapshots are incomplete and cannot restore agent
+state. Durable state stores provide persistence across restarts.
 See [Memory](memory.md).
 
 ### Compaction

@@ -447,8 +447,10 @@ drafting on its own account only.
 
 The built-in passes are registered only when an account routes to
 them, and a core `loops/` document or `loops.definitions` entry of the
-same name replaces one. The model sees `wake_loop` in the account's
-Email Accounts entry only when it differs from the owner's default.
+same name replaces one. While mail is polled, the model sees
+`wake_loop`, the loop the account's new mail wakes, in every account's
+Email Accounts entry, the owner's default included; with polling off
+no entry shows it, because no loop is woken.
 Whenever a review loop is set, it sees `review_loop` with
 `pending_review`, the count of the account's queued review work, and
 `pending_review_as_of`, when that was counted at the last poll or

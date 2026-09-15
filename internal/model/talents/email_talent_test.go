@@ -379,8 +379,10 @@ func TestEmailTalentTeachesDraftEditPath(t *testing.T) {
 }
 
 // TestEmailTalentTeachesTwoPasses pins the slice 5 teaching: the wake
-// loop and the review loop in the entry, what queues review work and
-// that nothing records it, escalate versus flag, the review pass's
+// loop and the review loop in the entry, that a bound loop's narrowed
+// block cannot say which review loops run (loop_status can), what
+// queues review work and that nothing records it, escalate versus
+// flag, the review pass's
 // queue procedure with its queue_ack and queue_defer discipline, and the
 // border lines that keep a loop from triaging mail twice. It also pins
 // that nothing teaches a review marker, a local-only requirement, or a
@@ -393,13 +395,19 @@ func TestEmailTalentTeachesTwoPasses(t *testing.T) {
 		want   string
 	}{
 		{"shape bullet names escalate", "email", "**You want a more capable pass to look at a message** — call `email_escalate`"},
-		{"entry shows routing", "email", "An entry shows `wake_loop` when the account's new mail wakes a loop other than its owner's default, and `review_loop` with `pending_review`"},
+		{"entry shows routing", "email", "While this site polls for new mail, every entry shows `wake_loop`, the loop the account's new mail wakes; an entry also shows `review_loop` with `pending_review`"},
+		{"wake loop defaults named", "email", "Unless the operator chose another, it is `email-owner-triage`, the triage pass, on an operator mailbox, and `email-default-handler`, the default handler, on every other account."},
+		{"read the wake loop off the entry", "email", "Every entry shows `wake_loop` while this site polls for new mail, so read the loop from it rather than working it out from `owner`."},
+		{"no wake_loop means no polling", "email", "An entry without `wake_loop` is on a site that does not poll for mail, and no loop sees new mail there."},
+		{"no review_loop means no review pass there", "email", "An entry without `review_loop` has no review pass on that account."},
+		{"review loops are read from loop_status", "email", "Do not judge from the entries whether a review loop runs on this site, because a loop bound to one account sees only that account's entry: `loop_status` (in the `loops` tag) lists the loops that are running, and the built-in review loop, `email-draft-review`, is among them when any account names it as its `review_loop`."},
+		{"bound block narrows", "email", "In a loop bound to one account it lists only that account, and its entry shows `bound: true`: the site's other accounts are hidden from you, not missing."},
 		{"wake metadata flags", "email", "so `\\Flagged` there is someone else's flag: the message is already flagged"},
 		{"review wake is unattended", "email", "A poller wake, a review wake, a scheduled loop"},
 		{"passes section", "email", "## Two passes over new mail"},
 		{"routing is configuration", "email", "is the operator's configuration, and no tool changes it"},
 		{"triage does one thing", "email", "The triage pass does exactly one thing per message"},
-		{"review woken by queued work", "email", "It is woken by queued work, never by the mail itself or by a timer, and only while work waits."},
+		{"review woken by queued work", "email", "A review loop is woken by queued work, never by the mail itself or by a timer, and only while work waits."},
 		{"drafts queue themselves", "email", "by any loop but the review loop itself, as `draft:<account>:<draft_id>`"},
 		{"escalations queue by message id", "email", "as `message:<account>:<message_id>`, keyed by Message-ID rather than UID"},
 		{"queueing coalesces", "email", "replaces the item already waiting instead of adding a second"},
@@ -450,6 +458,9 @@ func TestEmailTalentTeachesTwoPasses(t *testing.T) {
 		{"a queue tool the review loop lacks", "queue_enqueue"},
 		{"curators are not named", "curator"},
 		{"the old coupling paragraph", "the coupling is a queue"},
+		{"wake_loop hidden at the owner's default", "only when the operator chose a loop other than the owner's default"},
+		{"wake_loop shown only off the default", "wakes a loop other than its owner's default"},
+		{"review loop judged from the visible entries", "is added only on a site where some entry shows"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {

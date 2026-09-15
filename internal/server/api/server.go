@@ -65,9 +65,9 @@ type DependencyStatus struct {
 // HealthStatusFunc returns dependency health information for the /health endpoint.
 type HealthStatusFunc func() map[string]DependencyStatus
 
-// TokenObserver is notified after each LLM completion with the token
-// counts from that request. Implementations must be safe for
-// concurrent use.
+// TokenObserver receives each model call's reported token counts, including
+// usage reported with an error. Implementations must return promptly and be
+// safe for concurrent use.
 type TokenObserver interface {
 	OnTokens(inputTokens, outputTokens int)
 }
@@ -253,14 +253,16 @@ func (s *Server) DashboardSnapshot() SessionStatsSnapshot {
 	return snap
 }
 
-// LastRequest returns when the most recent LLM request completed.
-// Returns the zero value if no requests have been recorded. This
+// LastRequest returns when the most recent API request succeeded.
+// Returns the zero value if no requests have succeeded. This
 // method is safe for concurrent use.
 func (s *Server) LastRequest() time.Time {
 	return s.stats.LastRequest()
 }
 
-// SessionStats tracks token usage and cost for the current session.
+// SessionStats tracks API usage since server startup. Usage totals include
+// provider-reported calls from failed requests; TotalRequests counts successful
+// API requests, while each breakdown's TotalRecords counts reported model calls.
 type SessionStats struct {
 	TotalInputTokens              int64     `json:"total_input_tokens"`
 	TotalOutputTokens             int64     `json:"total_output_tokens"`
@@ -275,49 +277,48 @@ type SessionStats struct {
 	ByUpstreamModel               map[string]usage.Summary
 	ByProvider                    map[string]usage.Summary
 	ByResource                    map[string]usage.Summary
-	pricing                       map[string]config.PricingEntry
 	mu                            sync.Mutex
 }
 
-// Record accumulates token usage and cost for a model. Cost is computed
-// from the config-driven pricing table.
-func (s *SessionStats) Record(identity usage.ModelIdentity, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
+// RecordCall accumulates one priced, provider-reported model call, including
+// usage from calls in failed requests. It preserves the record's cost and
+// deployment attribution without changing the successful-request count.
+func (s *SessionStats) RecordCall(rec usage.Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.TotalInputTokens += int64(inputTokens)
-	s.TotalOutputTokens += int64(outputTokens)
-	s.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
-	s.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
-	s.TotalRequests++
-	s.LastRequestAt = time.Now()
-	cost := usage.ComputeDetailedCostForIdentity(identity, inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, s.pricing)
-	s.EstimatedCostUSD += cost
-	recordSessionUsageSummary(s.ByModel, identity.Model, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
-	recordSessionUsageSummary(s.ByUpstreamModel, identity.UpstreamModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
-	recordSessionUsageSummary(s.ByProvider, identity.Provider, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
-	recordSessionUsageSummary(s.ByResource, identity.Resource, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	s.TotalInputTokens += int64(rec.InputTokens)
+	s.TotalOutputTokens += int64(rec.OutputTokens)
+	s.TotalCacheCreationInputTokens += int64(rec.CacheCreationInputTokens)
+	s.TotalCacheReadInputTokens += int64(rec.CacheReadInputTokens)
+	s.EstimatedCostUSD += rec.CostUSD
+	recordSessionUsageSummary(s.ByModel, rec.Model, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
+	recordSessionUsageSummary(s.ByUpstreamModel, rec.UpstreamModel, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
+	recordSessionUsageSummary(s.ByProvider, rec.Provider, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
+	recordSessionUsageSummary(s.ByResource, rec.Resource, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
 }
 
-// LastRequest returns when the most recent LLM request completed.
-// Returns the zero value if no requests have been recorded.
+// Request completion is separate from billable calls: retries and failed turns
+// can incur usage without producing another successful API response.
+func (s *SessionStats) recordRequest() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TotalRequests++
+	s.LastRequestAt = time.Now()
+}
+
+// LastRequest returns when the most recent API request succeeded.
+// It is zero until the first successful request, even if failed calls used tokens.
 func (s *SessionStats) LastRequest() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.LastRequestAt
 }
 
-// recordUsage records token usage in session stats and notifies the
-// token observer (if set) so external consumers (e.g., the MQTT daily
-// token accumulator) are updated.
-func (s *Server) recordUsage(model string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
-	var cat *fleet.Catalog
-	if s.modelRegistry != nil {
-		cat = s.modelRegistry.Catalog()
-	}
-	identity := usage.ResolveModelIdentity(model, cat)
-	s.stats.Record(identity, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens)
+// Notify outside the stats lock so observers can safely read the updated totals.
+func (s *Server) observeUsage(rec usage.Record) {
+	s.stats.RecordCall(rec)
 	if s.tokenObserver != nil {
-		s.tokenObserver.OnTokens(inputTokens, outputTokens)
+		s.tokenObserver.OnTokens(rec.InputTokens, rec.OutputTokens)
 	}
 }
 
@@ -328,7 +329,9 @@ func (s *SessionStats) SetBalance(balance float64) {
 	s.BalanceSetAt = time.Now().UTC().Format(time.RFC3339)
 }
 
-// SessionStatsSnapshot is a copy-safe snapshot of session stats.
+// SessionStatsSnapshot is a copy-safe snapshot of server-lifetime API usage.
+// TotalRequests counts successful requests. The usage totals and breakdowns
+// include every reported model call, including calls from failed requests.
 type SessionStatsSnapshot struct {
 	TotalInputTokens              int64 `json:"total_input_tokens"`
 	TotalOutputTokens             int64 `json:"total_output_tokens"`
@@ -409,14 +412,13 @@ func cloneSessionUsageMap(src map[string]usage.Summary) map[string]usage.Summary
 	return dst
 }
 
-// NewServer creates a new API server. The pricing map drives cost
-// estimation in session stats; pass nil for zero-cost defaults.
+// NewServer creates a new API server. Live model-call costs and attribution
+// come from the agent's priced usage records.
 func NewServer(
 	address string,
 	port int,
 	loop *agent.Loop,
 	rtr *router.Router,
-	pricing map[string]config.PricingEntry,
 	registry *fleet.Registry,
 	usageStore *usage.Store,
 	persistPolicy func(string, fleet.DeploymentPolicy) error,
@@ -438,7 +440,6 @@ func NewServer(
 		deleteModelRegistryResourcePolicy:  deleteResourcePolicy,
 		logger:                             logger,
 		stats: &SessionStats{
-			pricing:         pricing,
 			ByModel:         make(map[string]usage.Summary),
 			ByUpstreamModel: make(map[string]usage.Summary),
 			ByProvider:      make(map[string]usage.Summary),
@@ -791,6 +792,7 @@ func (s *Server) runChatLoop(ctx context.Context, req *agent.Request, streamCall
 	if s.launchChatLoop == nil {
 		return nil, fmt.Errorf("api chat loop launcher is not configured")
 	}
+	ctx = usage.WithObserver(ctx, s.observeUsage)
 
 	loopReq := loopRequestFromAgent(req)
 	if loopReq.RoutingFactors == nil {
@@ -829,6 +831,7 @@ func (s *Server) runChatLoop(ctx context.Context, req *agent.Request, streamCall
 	if result.Response == nil {
 		return nil, fmt.Errorf("api chat loop returned no response")
 	}
+	s.stats.recordRequest()
 	return agentResponseFromLoop(result.Response), nil
 }
 
@@ -875,9 +878,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, code, message)
 		return
 	}
-
-	// Record usage stats
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	// Format as OpenAI response
 	completion := ChatCompletionResponse{
@@ -959,9 +959,6 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusInternalServerError, "agent error: "+err.Error())
 		return
 	}
-
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
-
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, SimpleChatResponse{
 		Response:       resp.Content,
@@ -1082,9 +1079,6 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	if !streamed && resp.Content != "" {
 		streamCallback(agent.StreamEvent{Kind: agent.KindToken, Token: resp.Content})
 	}
-
-	// Record usage stats
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	// Update model name and send final chunk
 	modelName = resp.Model
@@ -1581,24 +1575,14 @@ func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request)
 	}
 
 	idStr := r.PathValue("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
+	if _, err := uuid.Parse(idStr); err != nil {
 		s.errorResponse(w, http.StatusBadRequest, "invalid checkpoint id")
 		return
 	}
 
-	if err := s.checkpointer.Restore(id); err != nil {
-		s.logger.Error("checkpoint restore failed", "error", err, "id", idStr)
-		s.errorResponse(w, http.StatusInternalServerError, "failed to restore checkpoint")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"status":  "restored",
-		"id":      idStr,
-		"message": "checkpoint restored successfully",
-	}, s.logger)
+	// Keep the route explicit for existing clients, without implying that
+	// loading a diagnostic snapshot can recover live application state.
+	s.errorResponse(w, http.StatusNotImplemented, checkpoint.ErrRestoreUnsupported.Error())
 }
 
 // History endpoints
@@ -1917,10 +1901,15 @@ func (s *Server) handleArchiveMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if from.After(to) {
+		s.errorResponse(w, http.StatusBadRequest, "from must not be after to")
+		return
+	}
+
 	convID := r.URL.Query().Get("conversation_id")
 	limit := parseIntParam(r, "limit", 500)
 
-	messages, err := s.archiveStore.GetMessagesByTimeRange(from, to, convID, limit)
+	messages, err := s.archiveStore.GetMessagesByTimeRange(r.Context(), from, to, convID, limit)
 	if err != nil {
 		s.errorResponse(w, http.StatusInternalServerError, "query: "+err.Error())
 		return

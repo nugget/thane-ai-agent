@@ -50,7 +50,10 @@ func TestRecordUsage_WarnsOncePerUnpricedPaidModel(t *testing.T) {
 				pricing:    pricing,
 			}
 			for _, model := range tt.models {
-				l.recordUsage(context.Background(), &Request{}, model, 1000, 100, 0, 0, 0, 0, "conv", "session", "r_test", "")
+				l.recordUsage(context.Background(), l.makeUsageRecord(&Request{}, usage.Record{
+					Model: model, InputTokens: 1000, OutputTokens: 100,
+					ConversationID: "conv", SessionID: "session", RequestID: "r_test",
+				}))
 			}
 
 			if got := strings.Count(logBuf.String(), warnMsg); got != tt.wantWarns {

@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -376,5 +378,70 @@ func TestArchiveSearchTool_NeverEmptyWhenResultsExist(t *testing.T) {
 	totalHits := len(parsed.Messages) + len(parsed.Sessions) + len(parsed.WorkingMemory)
 	if totalHits == 0 {
 		t.Fatalf("results empty across all surfaces despite real matches existing — regression of the production bug:\n%s", out)
+	}
+}
+
+func TestArchiveRangeTool_Cancellation(t *testing.T) {
+	r, _, _ := newArchiveTestRegistry(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if result, err := r.Get("archive_range").Handler(ctx, map[string]any{}); !errors.Is(err, context.Canceled) || result != "" {
+		t.Fatalf("canceled archive range = %q, %v", result, err)
+	}
+}
+
+func TestArchiveRangeTool_ExplicitZeroBounds(t *testing.T) {
+	r, _, insert := newArchiveTestRegistry(t)
+	zero := time.Time{}
+	insert("conv", "session", "user", "before zero", zero.Add(-time.Nanosecond))
+	insert("conv", "session", "user", "zero", zero)
+	insert("conv", "session", "user", "after zero", zero.Add(time.Nanosecond))
+	insert("conv", "session", "user", "modern", time.Now().Add(-time.Minute))
+	insert("conv", "session", "user", "future", time.Now().Add(24*time.Hour))
+	for _, tc := range []struct {
+		name, minTime, maxTime string
+		floor                  float64
+		want                   []string
+		wantError              bool
+	}{
+		{name: "omitted bounds", want: []string{"before zero", "zero", "after zero", "modern"}},
+		{name: "explicit minimum", minTime: "0001-01-01T00:00:00Z", want: []string{"zero", "after zero", "modern"}},
+		{name: "explicit maximum", maxTime: "0001-01-01T00:00:00Z", want: []string{"before zero", "zero"}},
+		{name: "exact zero", minTime: "0001-01-01T00:00:00Z", maxTime: "0001-01-01T00:00:00Z", want: []string{"zero"}},
+		{name: "zero minimum floor", minTime: "0001-01-01T00:00:00Z", maxTime: "0001-01-01T00:00:00Z", floor: 2, want: []string{"before zero", "zero"}},
+		{name: "reversed zero minimum", minTime: "0001-01-01T00:00:00Z", maxTime: "0000-12-31T23:59:59.999999999Z", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"conversation_id": "conv", "min_messages": tc.floor}
+			if tc.minTime != "" {
+				args["min_time"] = tc.minTime
+			}
+			if tc.maxTime != "" {
+				args["max_time"] = tc.maxTime
+			}
+			out, err := r.Get("archive_range").Handler(context.Background(), args)
+			if tc.wantError {
+				if err == nil || out != "" {
+					t.Fatalf("reversed range = %q, %v, want error", out, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parsed struct {
+				Messages []memory.MessageView `json:"messages"`
+			}
+			if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, message := range parsed.Messages {
+				got = append(got, message.Content)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("messages = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

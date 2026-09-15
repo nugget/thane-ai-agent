@@ -18,7 +18,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
-// Record represents a single LLM interaction's token usage and cost.
+// Record represents one model call's provider-reported token usage and cost.
+// A request can produce multiple records when it iterates, retries, or changes
+// models. Failed requests retain any usage already reported by the provider;
+// a call without reported usage does not imply a zero-cost successful call.
 type Record struct {
 	ID             string
 	Timestamp      time.Time
@@ -61,7 +64,9 @@ type ModelIdentity struct {
 	Provider      string
 }
 
-// Summary holds aggregated token usage and cost totals.
+// Summary holds aggregated token usage and cost totals. TotalRecords counts
+// usage records, not distinct logical requests. New agent records represent
+// individual model calls; older records can aggregate several iterations.
 type Summary struct {
 	TotalRecords                  int     `json:"total_records"`
 	TotalInputTokens              int64   `json:"total_input_tokens"`

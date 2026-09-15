@@ -68,6 +68,17 @@ These tools load on every turn regardless of active tags.
 | `archive_session_transcript` | Retrieve a full session transcript. |
 | `archive_range` | Retrieve archived messages by time range or message-count floor. |
 
+`archive_range` selects the newest messages matching inclusive time bounds and
+returns them oldest first, breaking equal-time ties by message ID. Bounds accept
+RFC3339 timestamps or signed deltas and compare exact instants across time zones.
+Omitted `min_time` is unbounded and omitted `max_time` defaults to now; explicit
+timestamps, including `0001-01-01T00:00:00Z`, remain exact bounds.
+`max_messages` defaults to 200 and is capped at 1000. If `min_messages` cannot be
+met within the window, retrieval extends before `min_time`, up to that cap. The
+floor remains subject to available history and the tool's output size limit;
+`truncated` reports clipping. `archive_session_transcript` and session exports
+retain their separate whole-session retrieval contract.
+
 ## `session` — conversation lifecycle
 
 | Tool | Description |
@@ -312,9 +323,10 @@ not present for when it limits that (`junk_folder`, `move_into`, and
 any `filing_note`), whether it may
 hand mail to SMTP itself, whether this turn is `attended`, which trust
 zones it sends directly to, drafts for, and refuses this turn, and its
-cached folder names with roles. An account whose new mail wakes a loop
-other than its owner's default shows `wake_loop`, and one with a review
-pass shows `review_loop`, `pending_review` (the account's queued review
+cached folder names with roles. While mail is polled, every account
+shows `wake_loop`, the loop its new mail wakes, its owner's default
+included; with polling off none does. An account with a review pass
+shows `review_loop`, `pending_review` (the account's queued review
 work, counted by the poller and on each enqueue, never at render), and
 `pending_review_as_of`. An account whose `mailbox.labels` names labels
 shows them as `labels` `[{label, meaning, shows_as, apply}]`, and
@@ -715,7 +727,7 @@ and pinning a loop definition is `loop_definition_update` under `loops`.
 | Tool | Description |
 |------|-------------|
 | `get_version` | Agent version, build info, and commit SHA. |
-| `cost_summary` | Aggregated token usage and cost (uses `usage.Summary`, including `cache_hit_rate`). |
+| `cost_summary` | Aggregated token usage and cost, counting usage records rather than logical requests. New agent records represent model calls; older rows may aggregate iterations (uses `usage.Summary`, including `cache_hit_rate`). |
 | `logs_query` | Query the structured log index with attribute filters. |
 | `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, per-partition queue depths, a 24h telemetry rollup, the deploy story (running vs previous version, recent boots), and the process's own WARN/ERROR rates. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |
