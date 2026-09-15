@@ -58,11 +58,17 @@ So if anything here resolves, closes, or changes the standing of something you t
 // coreAttentionSignalWakeInstruction frames a loop-bus wake delivered
 // to a Signal owner loop. Two decisions live in this turn and the
 // prompt keeps them apart: what the requesting loop is owed, and what
-// (if anything) the person on the thread should see. The empty-final-
-// response mechanic is scoped explicitly to the second, because read
-// as a statement about the whole turn it licenses exactly the silence
-// this prompt exists to prevent.
-const coreAttentionSignalWakeInstruction = "A loop woke you through the loop bus. Read the notification(s) and act on what they need: when one asks for a determination, reaching it and sending it back to the requester with loop_wake (its reply_to.loop_id) is the work of this turn, not an optional courtesy.\n\nWhether anything reaches the person on this Signal thread is a separate decision, and yours to make. Your final response text is that Signal message — leave it empty when nothing should reach them right now. An empty final response ends only the Signal message. It never stands in for a reply a requesting loop is owed."
+// (if anything) the person on the thread should see. The hold is scoped
+// explicitly to the second, because read as a statement about the whole
+// turn it would license exactly the unanswered requester this prompt
+// exists to prevent.
+//
+// The "no message" outcome is an explicit call to signal_hold_reply
+// rather than an empty final response: the engine nudges an empty
+// ending and then substitutes fallback text, so an absence always
+// reached the person as a message — and a model trying to express one
+// wrote a stage direction that was delivered verbatim.
+const coreAttentionSignalWakeInstruction = "A loop woke you through the loop bus. Read the notification(s) and act on what they need: when one asks for a determination, reaching it and sending it back to the requester with loop_wake (its reply_to.loop_id) is the work of this turn, not an optional courtesy.\n\nWhether anything reaches the person on this Signal thread is a separate decision, and yours to make. Your final response text is delivered to them as a Signal message, word for word, so a note to yourself or a stage direction arrives as a message too. When nothing should reach them right now, call signal_hold_reply with your reason; it is the only way this turn ends without messaging them. Holding the Signal message never stands in for a reply a requesting loop is owed."
 
 // CoreAttentionSignalWakePrompt returns the model-facing prompt used when a
 // Signal owner loop is woken by a core-attention notification.

@@ -75,17 +75,6 @@ func newTestRouter() *router.Router {
 	})
 }
 
-func newTestStore(t *testing.T) *ArchiveStore {
-	t.Helper()
-	dbPath := t.TempDir() + "/test-archive.db"
-	store, err := NewArchiveStore(dbPath, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-	return store
-}
-
 // createUnsummarizedSession creates an ended session with messages but no metadata.
 func createUnsummarizedSession(t *testing.T, store *ArchiveStore, convID string) *Session {
 	t.Helper()
@@ -106,7 +95,7 @@ func createUnsummarizedSession(t *testing.T, store *ArchiveStore, convID string)
 			ArchiveReason:  "test",
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +106,7 @@ func createUnsummarizedSession(t *testing.T, store *ArchiveStore, convID string)
 }
 
 func TestWorker_StartupScan(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -156,7 +145,7 @@ func TestWorker_StartupScan(t *testing.T) {
 }
 
 func TestWorker_PeriodicScan(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -194,7 +183,7 @@ func TestWorker_PeriodicScan(t *testing.T) {
 }
 
 func TestWorker_SkipsSummarizedSessions(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -228,7 +217,7 @@ func TestWorker_SkipsSummarizedSessions(t *testing.T) {
 }
 
 func TestWorker_GracefulShutdown(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -260,7 +249,7 @@ func TestWorker_GracefulShutdown(t *testing.T) {
 }
 
 func TestWorker_LLMFailureContinues(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	failing := &failingLLMClient{}
 	rtr := newTestRouter()
 
@@ -297,7 +286,7 @@ func TestWorker_LLMFailureContinues(t *testing.T) {
 }
 
 func TestWorker_ClosesOrphanedSessions(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -317,7 +306,7 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 			ArchiveReason:  "test",
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -370,7 +359,7 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 // all). That contract turned out to break catch-up entirely — see
 // the issue's Finding 3b diagnosis.
 func TestWorker_ZeroMessageSessionMarkedEmpty(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -530,7 +519,7 @@ func TestParseMetadataResponse_InvalidJSON(t *testing.T) {
 }
 
 func TestWorker_ClosesIdleSessions(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -551,7 +540,7 @@ func TestWorker_ClosesIdleSessions(t *testing.T) {
 			ArchiveReason:  "test",
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -591,7 +580,7 @@ func TestWorker_ClosesIdleSessions(t *testing.T) {
 }
 
 func TestWorker_SkipsActiveSessionsWithinTimeout(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -611,7 +600,7 @@ func TestWorker_SkipsActiveSessionsWithinTimeout(t *testing.T) {
 			ArchiveReason:  "test",
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -645,7 +634,7 @@ func TestWorker_SkipsActiveSessionsWithinTimeout(t *testing.T) {
 }
 
 func TestWorker_IdleTimeoutDisabledWhenZero(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -665,7 +654,7 @@ func TestWorker_IdleTimeoutDisabledWhenZero(t *testing.T) {
 			ArchiveReason:  "test",
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -717,7 +706,7 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 // effect, not a short-circuit). markEmpty still runs for zero-message
 // sessions (SQL-only, no model needed).
 func TestWorker_ArchivistEnqueueStillSummarizes(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
@@ -797,7 +786,7 @@ func TestWorker_ArchivistEnqueueStillSummarizes(t *testing.T) {
 // still generates the session's metadata. The enqueue is best-effort;
 // it must never block summarization (#1024).
 func TestWorker_ArchivistEnqueueFailureStillSummarizes(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestArchiveStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 	createUnsummarizedSession(t, store, "conv-fallback")
@@ -873,7 +862,7 @@ func TestSummarizeSessionReportsRouterOutcomes(t *testing.T) {
 	}
 
 	t.Run("success records outcome", func(t *testing.T) {
-		store := newTestStore(t)
+		store := newTestArchiveStore(t)
 		rtr := newResourceTestRouter()
 		sess := createUnsummarizedSession(t, store, "conv-outcome-ok")
 		w := NewSummarizerWorker(store, &mockLLMClient{}, rtr, slog.Default(), cfg)
@@ -890,7 +879,7 @@ func TestSummarizeSessionReportsRouterOutcomes(t *testing.T) {
 	})
 
 	t.Run("connection failure records failure and cools resource", func(t *testing.T) {
-		store := newTestStore(t)
+		store := newTestArchiveStore(t)
 		rtr := newResourceTestRouter()
 		sess := createUnsummarizedSession(t, store, "conv-outcome-down")
 		w := NewSummarizerWorker(store, &unreachableLLMClient{}, rtr, slog.Default(), cfg)
@@ -911,7 +900,7 @@ func TestSummarizeSessionReportsRouterOutcomes(t *testing.T) {
 	})
 
 	t.Run("application error records failure without cooldown", func(t *testing.T) {
-		store := newTestStore(t)
+		store := newTestArchiveStore(t)
 		rtr := newResourceTestRouter()
 		sess := createUnsummarizedSession(t, store, "conv-outcome-apperr")
 		w := NewSummarizerWorker(store, &failingLLMClient{}, rtr, slog.Default(), cfg)

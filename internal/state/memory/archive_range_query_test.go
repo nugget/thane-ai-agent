@@ -13,77 +13,68 @@ import (
 )
 
 func TestArchiveRangeMixedTimestamps(t *testing.T) {
-	for _, unified := range []bool{false, true} {
-		t.Run(fmt.Sprintf("unified=%t", unified), func(t *testing.T) {
-			var store *ArchiveStore
-			if unified {
-				store, _ = newRangeTestStore(t)
-			} else {
-				store = newTestArchiveStore(t)
+	store := newTestArchiveStore(t)
+	seed := func(id, conv, timestamp string) {
+		t.Helper()
+		_, err := store.db.Exec(`INSERT INTO messages
+			(id, conversation_id, session_id, role, content, timestamp, archived_at, archive_reason)
+			VALUES (?, ?, 'session', 'user', ?, ?, ?, 'test')`,
+			id, conv, id, timestamp, "2026-09-15T12:00:00Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Deliberately out of timestamp and ID order. Fractional boundaries
+	// differ by one nanosecond, and offsets cross a UTC date boundary.
+	seed("c", "conv", "2026-09-15 00:00:00.123456789+00:00")
+	seed("f", "conv", "2026-09-15T00:00:01Z")
+	seed("a", "conv", "2026-09-14T19:00:00.123456788-05:00")
+	seed("b", "conv", "2026-09-15T05:30:00.123456789+05:30")
+	seed("d", "conv", "2026-09-14 19:00:00.123456790 -0500 CDT")
+	seed("e", "conv", "2026-09-15 00:00:00.999999999")
+	seed("other", "other", "2026-09-15T00:00:00.123456789Z")
+	from := time.Date(2026, 9, 15, 0, 0, 0, 123456789, time.UTC)
+	to := from.Add(time.Nanosecond)
+	for _, tc := range []struct {
+		name     string
+		from, to time.Time
+		want     []string
+	}{
+		{"inclusive", from.In(time.FixedZone("west", -7*3600)), to, []string{"b", "c", "d"}},
+		{"same instant", from, from, []string{"b", "c"}},
+		{"whole second", from.Truncate(time.Second), from.Truncate(time.Second).Add(time.Second), []string{"a", "b", "c", "d", "e", "f"}},
+		{"empty", to.Add(time.Nanosecond), to.Add(2 * time.Nanosecond), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldest, err := store.GetMessagesByTimeRange(context.Background(), tc.from, tc.to, "conv", 100)
+			if err != nil {
+				t.Fatal(err)
 			}
-			seed := func(id, conv, timestamp string) {
-				t.Helper()
-				_, err := store.msgDB().Exec(fmt.Sprintf(`INSERT INTO %s
-					(id, conversation_id, session_id, role, content, timestamp, archived_at, archive_reason)
-					VALUES (?, ?, 'session', 'user', ?, ?, ?, 'test')`, store.msgTableName),
-					id, conv, id, timestamp, "2026-09-15T12:00:00Z")
-				if err != nil {
-					t.Fatal(err)
+			newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(tc.from), To: timePointer(tc.to), ConversationID: "conv"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if truncated {
+				t.Fatal("unexpected truncation")
+			}
+			for _, got := range [][]Message{oldest, newest} {
+				var ids []string
+				for _, msg := range got {
+					ids = append(ids, msg.ID)
+				}
+				if !slices.Equal(ids, tc.want) {
+					t.Fatalf("IDs = %v, want %v", ids, tc.want)
 				}
 			}
-			// Deliberately out of timestamp and ID order. Fractional boundaries
-			// differ by one nanosecond, and offsets cross a UTC date boundary.
-			seed("c", "conv", "2026-09-15 00:00:00.123456789+00:00")
-			seed("f", "conv", "2026-09-15T00:00:01Z")
-			seed("a", "conv", "2026-09-14T19:00:00.123456788-05:00")
-			seed("b", "conv", "2026-09-15T05:30:00.123456789+05:30")
-			seed("d", "conv", "2026-09-14 19:00:00.123456790 -0500 CDT")
-			seed("e", "conv", "2026-09-15 00:00:00.999999999")
-			seed("other", "other", "2026-09-15T00:00:00.123456789Z")
-			from := time.Date(2026, 9, 15, 0, 0, 0, 123456789, time.UTC)
-			to := from.Add(time.Nanosecond)
-			for _, tc := range []struct {
-				name     string
-				from, to time.Time
-				want     []string
-			}{
-				{"inclusive", from.In(time.FixedZone("west", -7*3600)), to, []string{"b", "c", "d"}},
-				{"same instant", from, from, []string{"b", "c"}},
-				{"whole second", from.Truncate(time.Second), from.Truncate(time.Second).Add(time.Second), []string{"a", "b", "c", "d", "e", "f"}},
-				{"empty", to.Add(time.Nanosecond), to.Add(2 * time.Nanosecond), nil},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					oldest, err := store.GetMessagesByTimeRange(context.Background(), tc.from, tc.to, "conv", 100)
-					if err != nil {
-						t.Fatal(err)
-					}
-					newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(tc.from), To: timePointer(tc.to), ConversationID: "conv"})
-					if err != nil {
-						t.Fatal(err)
-					}
-					if truncated {
-						t.Fatal("unexpected truncation")
-					}
-					for _, got := range [][]Message{oldest, newest} {
-						var ids []string
-						for _, msg := range got {
-							ids = append(ids, msg.ID)
-						}
-						if !slices.Equal(ids, tc.want) {
-							t.Fatalf("IDs = %v, want %v", ids, tc.want)
-						}
-					}
-				})
-			}
-			oldest, err := store.GetMessagesByTimeRange(context.Background(), from, to, "conv", 1)
-			if err != nil || len(oldest) != 1 || oldest[0].ID != "b" {
-				t.Fatalf("oldest = %v, %v", oldest, err)
-			}
-			newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(from), To: timePointer(to), ConversationID: "conv", MaxMessages: 2})
-			if err != nil || !truncated || len(newest) != 2 || newest[0].ID != "c" || newest[1].ID != "d" {
-				t.Fatalf("newest = %v, truncated=%t, %v", newest, truncated, err)
-			}
 		})
+	}
+	oldest, err := store.GetMessagesByTimeRange(context.Background(), from, to, "conv", 1)
+	if err != nil || len(oldest) != 1 || oldest[0].ID != "b" {
+		t.Fatalf("oldest = %v, %v", oldest, err)
+	}
+	newest, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{From: timePointer(from), To: timePointer(to), ConversationID: "conv", MaxMessages: 2})
+	if err != nil || !truncated || len(newest) != 2 || newest[0].ID != "c" || newest[1].ID != "d" {
+		t.Fatalf("newest = %v, truncated=%t, %v", newest, truncated, err)
 	}
 }
 
@@ -147,8 +138,8 @@ func TestArchiveRangeCancellationAndInvalidBounds(t *testing.T) {
 			}
 			// With the only connection held, cancellation must interrupt the
 			// wait for it, rather than waiting for database work to finish.
-			store.msgDB().SetMaxOpenConns(1)
-			conn, err := store.msgDB().Conn(context.Background())
+			store.db.SetMaxOpenConns(1)
+			conn, err := store.db.Conn(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -168,7 +159,7 @@ func TestArchiveRangeCancellationAndInvalidBounds(t *testing.T) {
 
 func TestArchiveRangeRejectsMalformedTimestamp(t *testing.T) {
 	store, _ := newRangeTestStore(t)
-	_, err := store.msgDB().Exec(`INSERT INTO messages (id, conversation_id, role, content, timestamp) VALUES ('bad', 'conv', 'user', 'bad', 'not a timestamp')`)
+	_, err := store.db.Exec(`INSERT INTO messages (id, conversation_id, role, content, timestamp) VALUES ('bad', 'conv', 'user', 'bad', 'not a timestamp')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +221,7 @@ func TestArchiveRangeDoesNotReadExcludedMalformedTimestamps(t *testing.T) {
 	store, insert := newRangeTestStore(t)
 	now := time.Now()
 	insert("conv", "kept", "user", "valid", now)
-	_, err := store.msgDB().Exec(`INSERT INTO messages (id, conversation_id, session_id, role, content, timestamp)
+	_, err := store.db.Exec(`INSERT INTO messages (id, conversation_id, session_id, role, content, timestamp)
 		VALUES ('excluded', 'conv', 'excluded', 'user', 'bad', 'invalid'), ('other', 'other', 'kept', 'user', 'bad', 'invalid')`)
 	if err != nil {
 		t.Fatal(err)

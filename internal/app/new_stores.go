@@ -398,7 +398,7 @@ func (a *App) initStores(s *newState) error {
 	a.wmStore = wmStore
 	logger.Info("working memory store initialized")
 
-	archiveAdapter := memory.NewArchiveAdapter(archiveStore, mem, mem, logger)
+	archiveAdapter := memory.NewArchiveAdapter(archiveStore, mem, logger)
 	a.archiveAdapter = archiveAdapter
 
 	// --- Model router ---

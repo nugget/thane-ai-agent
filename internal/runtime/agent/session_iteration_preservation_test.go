@@ -35,7 +35,7 @@ func TestSessionLifecycleIterationsKeepOriginatingSession(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				adapter := memory.NewArchiveAdapter(archive, store, store, logger)
+				adapter := memory.NewArchiveAdapter(archive, store, logger)
 				const conversationID = "iteration-preservation"
 				if err := store.AddMessage(conversationID, "user", "Original source evidence.", memory.OriginChannel); err != nil {
 					t.Fatal(err)

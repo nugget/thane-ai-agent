@@ -2,530 +2,252 @@ package agent
 
 import (
 	"log/slog"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// mockArchiver records session lifecycle calls for testing.
-type mockArchiver struct {
-	archived     []archivedCall
-	sessions     []sessionCall
-	activeID     string
-	startedAt    time.Time
-	sessionCount int
-}
-
-type archivedCall struct {
-	conversationID string
-	messages       []memory.Message
-	reason         string
-}
-
-type sessionCall struct {
-	action string // "start", "end"
-	id     string
-	reason string
-}
-
-func (m *mockArchiver) ArchiveConversation(convID string, msgs []memory.Message, reason string) error {
-	m.archived = append(m.archived, archivedCall{convID, msgs, reason})
-	return nil
-}
-
-func (m *mockArchiver) StartSession(convID string) (string, error) {
-	m.sessionCount++
-	id := "session-" + convID
-	m.activeID = id
-	m.sessions = append(m.sessions, sessionCall{"start", id, ""})
-	return id, nil
-}
-
-func (m *mockArchiver) EndSession(sessionID, reason string) error {
-	m.sessions = append(m.sessions, sessionCall{"end", sessionID, reason})
-	m.activeID = ""
-	return nil
-}
-
-func (m *mockArchiver) ActiveSessionID(string) string {
-	return m.activeID
-}
-
-func (m *mockArchiver) EnsureSession(convID string) string {
-	if m.activeID != "" {
-		return m.activeID
-	}
-	id, _ := m.StartSession(convID)
-	return id
-}
-
-func (m *mockArchiver) ArchiveIterations([]memory.ArchivedIteration) error { return nil }
-
-func (m *mockArchiver) LinkPendingIterationToolCalls(string) error { return nil }
-
-func (m *mockArchiver) OnMessage(string) {}
-
-func (m *mockArchiver) ActiveSessionStartedAt(string) time.Time {
-	return m.startedAt
-}
-
-// mockMemWithCompaction extends mockMem with AddCompactionSummary support.
-type mockMemWithCompaction struct {
-	*mockMem
-	summaries []compactionSummary
-}
-
-type compactionSummary struct {
-	conversationID string
-	summary        string
-}
-
-func newMockMemWithCompaction() *mockMemWithCompaction {
-	return &mockMemWithCompaction{mockMem: newMockMem()}
-}
-
-func (m *mockMemWithCompaction) AddCompactionSummary(convID, summary string) error {
-	m.summaries = append(m.summaries, compactionSummary{convID, summary})
-	// Also add as a message so GetMessages sees it.
-	return m.AddMessage(convID, "system", summary, "")
-}
-
-func (m *mockMemWithCompaction) GetAllMessages(convID string) []memory.Message {
-	return m.GetMessages(convID)
-}
-
-// newTestLoop creates a Loop with mocks suitable for session management tests.
 func newTestLoop(mem MemoryStore, archiver SessionArchiver) *Loop {
-	return &Loop{
-		logger:   slog.Default(),
-		memory:   mem,
-		archiver: archiver,
+	return &Loop{logger: slog.Default(), memory: mem, archiver: archiver}
+}
+
+func newSessionTestLoop(t *testing.T) (*Loop, *memory.SQLiteStore, *memory.ArchiveStore) {
+	t.Helper()
+	mem, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "thane.db"), 100)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := mem.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	archive, err := memory.NewArchiveStoreFromDB(mem.DB(), nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTestLoop(mem, memory.NewArchiveAdapter(archive, mem, slog.Default())), mem, archive
 }
 
 func TestCloseSession(t *testing.T) {
-	tests := []struct {
-		name         string
-		messages     []memory.Message
-		reason       string
-		carryForward string
-		wantArchived int
-		wantReason   string
-		wantHandoff  bool
-	}{
-		{
-			name: "basic close with carry-forward",
-			messages: []memory.Message{
-				{Role: "user", Content: "hello"},
-				{Role: "assistant", Content: "hi there"},
-			},
-			reason:       "topic change",
-			carryForward: "User was discussing greetings.",
-			wantArchived: 1,
-			wantReason:   "topic change",
-			wantHandoff:  true,
-		},
-		{
-			name: "close with empty reason defaults",
-			messages: []memory.Message{
-				{Role: "user", Content: "test"},
-			},
-			reason:       "",
-			carryForward: "Notes here.",
-			wantArchived: 1,
-			wantReason:   "close",
-			wantHandoff:  true,
-		},
-		{
-			name: "close with empty carry-forward",
-			messages: []memory.Message{
-				{Role: "user", Content: "bye"},
-			},
-			reason:       "done",
-			carryForward: "",
-			wantArchived: 1,
-			wantReason:   "done",
-			wantHandoff:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mem := newMockMemWithCompaction()
-			archiver := &mockArchiver{activeID: "old-session"}
-			loop := newTestLoop(mem, archiver)
-
-			// Seed messages.
-			for _, m := range tt.messages {
-				_ = mem.AddMessage("conv1", m.Role, m.Content, "")
-			}
-
-			err := loop.CloseSession("conv1", tt.reason, tt.carryForward)
-			if err != nil {
-				t.Fatalf("CloseSession() error: %v", err)
-			}
-
-			// Verify archive was called.
-			if len(archiver.archived) != tt.wantArchived {
-				t.Errorf("archived calls = %d, want %d", len(archiver.archived), tt.wantArchived)
-			}
-			if len(archiver.archived) > 0 && archiver.archived[0].reason != tt.wantReason {
-				t.Errorf("archive reason = %q, want %q", archiver.archived[0].reason, tt.wantReason)
-			}
-
-			// Verify old session ended.
-			endCalls := filterSessions(archiver.sessions, "end")
-			if len(endCalls) != 1 {
-				t.Errorf("end session calls = %d, want 1", len(endCalls))
-			}
-
-			// Verify new session started.
-			startCalls := filterSessions(archiver.sessions, "start")
-			if len(startCalls) != 1 {
-				t.Errorf("start session calls = %d, want 1", len(startCalls))
-			}
-
-			// Verify carry-forward injection.
-			if tt.wantHandoff {
-				if len(mem.summaries) != 1 {
-					t.Fatalf("summaries = %d, want 1", len(mem.summaries))
-				}
-				if !strings.Contains(mem.summaries[0].summary, "[Session Handoff]") {
-					t.Errorf("summary missing [Session Handoff] prefix: %q", mem.summaries[0].summary)
-				}
-				if !strings.Contains(mem.summaries[0].summary, tt.carryForward) {
-					t.Errorf("summary missing carry-forward content")
-				}
-			} else {
-				if len(mem.summaries) != 0 {
-					t.Errorf("summaries = %d, want 0 (no carry-forward)", len(mem.summaries))
+	for _, tc := range []struct{ name, reason, carryForward, wantReason string }{
+		{"carry forward", "topic change", "User was discussing greetings.", "topic change"},
+		{"default reason", "", "Notes here.", "close"},
+		{"no handoff", "done", "", "done"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, mem, archive := newSessionTestLoop(t)
+			oldID := loop.archiver.EnsureSession("conv1")
+			for _, content := range []string{"hello", "hi there"} {
+				if err := mem.AddMessage("conv1", "user", content, memory.OriginChannel); err != nil {
+					t.Fatal(err)
 				}
 			}
-
-			// Verify old messages were cleared (only carry-forward remains, if any).
-			msgs := mem.GetMessages("conv1")
-			for _, m := range msgs {
-				if m.Role != "system" {
-					t.Errorf("non-system message survived close: role=%s content=%q", m.Role, m.Content)
+			before := mem.GetMessages("conv1")
+			if err := loop.CloseSession("conv1", tc.reason, tc.carryForward); err != nil {
+				t.Fatal(err)
+			}
+			closed, err := archive.GetSession(oldID)
+			if err != nil || closed.EndedAt == nil || closed.EndReason != tc.wantReason {
+				t.Fatalf("closed session=%+v error=%v", closed, err)
+			}
+			if current := loop.archiver.ActiveSessionID("conv1"); current == "" || current == oldID {
+				t.Fatalf("missing successor: %q", current)
+			}
+			transcript, err := archive.GetSessionTranscript(oldID)
+			if err != nil || len(transcript) != len(before) {
+				t.Fatalf("transcript=%+v error=%v", transcript, err)
+			}
+			for i, msg := range before {
+				if transcript[i].ID != msg.ID || transcript[i].Content != msg.Content || transcript[i].Origin != msg.Origin {
+					t.Fatalf("original row changed: %+v -> %+v", msg, transcript[i])
 				}
+			}
+			active := mem.GetMessages("conv1")
+			if tc.carryForward == "" {
+				if len(active) != 0 {
+					t.Fatalf("unexpected active messages: %+v", active)
+				}
+			} else if len(active) != 1 || active[0].Role != "system" || active[0].Content != "[Session Handoff]\n"+tc.carryForward {
+				t.Fatalf("handoff=%+v", active)
 			}
 		})
-	}
-}
-
-func TestCloseSession_ClearsPersistedCapabilityTags(t *testing.T) {
-	mem := newMockMemWithCompaction()
-	archiver := &mockArchiver{activeID: "old-session"}
-	loop := newTestLoop(mem, archiver)
-	store := newTestCapStore(t)
-	loop.SetCapabilityTagStore(store)
-
-	if err := store.SaveTags("conv1", []string{"forge", "web"}); err != nil {
-		t.Fatalf("SaveTags() error: %v", err)
-	}
-	if err := mem.AddMessage("conv1", "user", "hello", ""); err != nil {
-		t.Fatalf("AddMessage() error: %v", err)
-	}
-
-	if err := loop.CloseSession("conv1", "topic change", "Carry this forward."); err != nil {
-		t.Fatalf("CloseSession() error: %v", err)
-	}
-
-	tags, err := store.LoadTags("conv1")
-	if err != nil {
-		t.Fatalf("LoadTags() error: %v", err)
-	}
-	if tags != nil {
-		t.Fatalf("persisted tags = %#v, want cleared after session close", tags)
 	}
 }
 
 func TestCheckpointSession(t *testing.T) {
-	tests := []struct {
-		name       string
-		messages   []memory.Message
-		label      string
-		wantReason string
-		wantErr    bool
+	for _, tc := range []struct {
+		name, label string
+		empty       bool
 	}{
-		{
-			name: "basic checkpoint",
-			messages: []memory.Message{
-				{Role: "user", Content: "hello"},
-				{Role: "assistant", Content: "hi"},
-			},
-			label:      "pre-refactor",
-			wantReason: "checkpoint:pre-refactor",
-		},
-		{
-			name: "checkpoint with empty label",
-			messages: []memory.Message{
-				{Role: "user", Content: "test"},
-			},
-			label:      "",
-			wantReason: "checkpoint",
-		},
-		{
-			name:     "checkpoint with no messages fails",
-			messages: nil,
-			label:    "empty",
-			wantErr:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mem := newMockMemWithCompaction()
-			archiver := &mockArchiver{activeID: "active-session"}
-			loop := newTestLoop(mem, archiver)
-
-			for _, m := range tt.messages {
-				_ = mem.AddMessage("conv1", m.Role, m.Content, "")
+		{"labeled", "pre-refactor", false}, {"unlabeled", "", false}, {"empty", "empty", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, mem, archive := newSessionTestLoop(t)
+			sid := loop.archiver.EnsureSession("conv1")
+			if !tc.empty {
+				if err := mem.AddMessage("conv1", "user", "checkpoint evidence", memory.OriginChannel); err != nil {
+					t.Fatal(err)
+				}
 			}
-
-			err := loop.CheckpointSession("conv1", tt.label)
-			if tt.wantErr {
+			before := mem.GetMessages("conv1")
+			err := loop.CheckpointSession("conv1", tc.label)
+			if tc.empty {
 				if err == nil {
-					t.Fatal("expected error, got nil")
+					t.Fatal("empty checkpoint succeeded")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("CheckpointSession() error: %v", err)
+				t.Fatal(err)
 			}
-
-			// Verify archive was called with checkpoint reason.
-			if len(archiver.archived) != 1 {
-				t.Fatalf("archived calls = %d, want 1", len(archiver.archived))
+			if after := mem.GetMessages("conv1"); !reflect.DeepEqual(before, after) {
+				t.Fatalf("checkpoint changed active messages: %+v -> %+v", before, after)
 			}
-			if archiver.archived[0].reason != tt.wantReason {
-				t.Errorf("archive reason = %q, want %q", archiver.archived[0].reason, tt.wantReason)
+			session, err := archive.GetSession(sid)
+			if err != nil || session.EndedAt != nil || loop.archiver.ActiveSessionID("conv1") != sid {
+				t.Fatalf("checkpoint closed session: %+v error=%v", session, err)
 			}
-
-			// Verify session was NOT ended (checkpoint doesn't end sessions).
-			endCalls := filterSessions(archiver.sessions, "end")
-			if len(endCalls) != 0 {
-				t.Errorf("end session calls = %d, want 0 (checkpoint should not end session)", len(endCalls))
+			var label string
+			if err := mem.DB().QueryRow(`SELECT label FROM session_checkpoints WHERE session_id = ?`, sid).Scan(&label); err != nil {
+				t.Fatal(err)
 			}
-
-			// Verify messages are still in memory (checkpoint doesn't clear).
-			msgs := mem.GetMessages("conv1")
-			if len(msgs) != len(tt.messages) {
-				t.Errorf("messages after checkpoint = %d, want %d", len(msgs), len(tt.messages))
+			if label != tc.label {
+				t.Fatalf("checkpoint label=%q want=%q", label, tc.label)
 			}
 		})
-	}
-}
-
-func TestCheckpointSession_NoArchiver(t *testing.T) {
-	mem := newMockMemWithCompaction()
-	loop := newTestLoop(mem, nil) // no archiver
-
-	err := loop.CheckpointSession("conv1", "test")
-	if err == nil {
-		t.Fatal("expected error when no archiver configured")
 	}
 }
 
 func TestSplitSession(t *testing.T) {
-	tests := []struct {
-		name          string
-		messages      []memory.Message
-		atIndex       int
-		atMessage     string
-		wantPreSplit  int
-		wantPostSplit int
-		wantErr       bool
-		errContains   string
+	for _, tc := range []struct {
+		name           string
+		count, atIndex int
+		atMessage      string
+		prefix         int
+		errorText      string
 	}{
-		{
-			name: "split by negative index",
-			messages: []memory.Message{
-				{Role: "user", Content: "msg1"},
-				{Role: "assistant", Content: "msg2"},
-				{Role: "user", Content: "msg3"},
-				{Role: "assistant", Content: "msg4"},
-				{Role: "user", Content: "msg5"},
-			},
-			atIndex:       -2,
-			wantPreSplit:  3,
-			wantPostSplit: 2,
-		},
-		{
-			name: "split by message content",
-			messages: []memory.Message{
-				{Role: "user", Content: "let's talk about weather"},
-				{Role: "assistant", Content: "sure, it's sunny"},
-				{Role: "user", Content: "now let's discuss cooking"},
-				{Role: "assistant", Content: "great topic"},
-			},
-			atMessage:     "discuss cooking",
-			wantPreSplit:  2,
-			wantPostSplit: 2,
-		},
-		{
-			name: "split at -1 keeps only last message",
-			messages: []memory.Message{
-				{Role: "user", Content: "old"},
-				{Role: "assistant", Content: "also old"},
-				{Role: "user", Content: "newest"},
-			},
-			atIndex:       -1,
-			wantPreSplit:  2,
-			wantPostSplit: 1,
-		},
-		{
-			name: "index out of range",
-			messages: []memory.Message{
-				{Role: "user", Content: "only one"},
-			},
-			atIndex:     -5,
-			wantErr:     true,
-			errContains: "out of range",
-		},
-		{
-			name: "no matching message",
-			messages: []memory.Message{
-				{Role: "user", Content: "hello"},
-				{Role: "assistant", Content: "hi"},
-			},
-			atMessage:   "nonexistent content",
-			wantErr:     true,
-			errContains: "no message found",
-		},
-		{
-			name:     "empty messages",
-			messages: nil,
-			atIndex:  -1,
-			wantErr:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mem := newMockMemWithCompaction()
-			archiver := &mockArchiver{activeID: "active-session"}
-			loop := newTestLoop(mem, archiver)
-
-			for _, m := range tt.messages {
-				_ = mem.AddMessage("conv1", m.Role, m.Content, "")
-			}
-
-			err := loop.SplitSession("conv1", tt.atIndex, tt.atMessage)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
+		{"negative index", 5, -2, "", 3, ""},
+		{"content match", 5, 0, "msg3", 2, ""},
+		{"last message", 3, -1, "", 2, ""},
+		{"out of range", 1, -5, "", 0, "out of range"},
+		{"no match", 2, 0, "missing", 0, "no message found"},
+		{"empty", 0, -1, "", 0, "no messages"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, mem, archive := newSessionTestLoop(t)
+			sid := loop.archiver.EnsureSession("conv1")
+			for i := range tc.count {
+				content := "msg" + string(rune('1'+i))
+				if err := mem.AddMessage("conv1", "user", content, memory.OriginChannel); err != nil {
+					t.Fatal(err)
 				}
-				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
+			}
+			before := mem.GetMessages("conv1")
+			err := loop.SplitSession("conv1", tc.atIndex, tc.atMessage)
+			if tc.errorText != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.errorText) {
+					t.Fatalf("error=%v want %q", err, tc.errorText)
+				}
+				if after := mem.GetMessages("conv1"); !reflect.DeepEqual(before, after) {
+					t.Fatal("failed split changed messages")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("SplitSession() error: %v", err)
+				t.Fatal(err)
 			}
-
-			// Verify pre-split messages were archived.
-			if len(archiver.archived) != 1 {
-				t.Fatalf("archived calls = %d, want 1", len(archiver.archived))
+			closed, err := archive.GetSession(sid)
+			if err != nil || closed.EndedAt == nil || closed.EndReason != "split" {
+				t.Fatalf("closed session=%+v error=%v", closed, err)
 			}
-			if len(archiver.archived[0].messages) != tt.wantPreSplit {
-				t.Errorf("archived messages = %d, want %d", len(archiver.archived[0].messages), tt.wantPreSplit)
+			transcript, err := archive.GetSessionTranscript(sid)
+			if err != nil || len(transcript) != tc.prefix {
+				t.Fatalf("prefix=%+v error=%v", transcript, err)
 			}
-			if archiver.archived[0].reason != "split" {
-				t.Errorf("archive reason = %q, want %q", archiver.archived[0].reason, "split")
+			active := mem.GetMessages("conv1")
+			if len(active) != tc.count-tc.prefix {
+				t.Fatalf("suffix=%+v", active)
 			}
-
-			// Verify old session ended.
-			endCalls := filterSessions(archiver.sessions, "end")
-			if len(endCalls) != 1 {
-				t.Errorf("end session calls = %d, want 1", len(endCalls))
+			for i, message := range append(transcript, active...) {
+				if message.ID != before[i].ID || message.Content != before[i].Content || !message.Timestamp.Equal(before[i].Timestamp) {
+					t.Fatalf("split rewrote row: %+v -> %+v", before[i], message)
+				}
 			}
-
-			// Verify new session started.
-			startCalls := filterSessions(archiver.sessions, "start")
-			if len(startCalls) != 1 {
-				t.Errorf("start session calls = %d, want 1", len(startCalls))
-			}
-
-			// Verify post-split messages retained in memory.
-			msgs := mem.GetMessages("conv1")
-			if len(msgs) != tt.wantPostSplit {
-				t.Errorf("messages after split = %d, want %d", len(msgs), tt.wantPostSplit)
+			if current := loop.archiver.ActiveSessionID("conv1"); current == "" || current == sid {
+				t.Fatalf("missing split successor: %q", current)
 			}
 		})
 	}
 }
 
-func TestSplitSession_ClearsPersistedCapabilityTags(t *testing.T) {
-	mem := newMockMemWithCompaction()
-	archiver := &mockArchiver{activeID: "active-session"}
-	loop := newTestLoop(mem, archiver)
-	store := newTestCapStore(t)
-	loop.SetCapabilityTagStore(store)
-
-	if err := store.SaveTags("conv1", []string{"forge", "web"}); err != nil {
-		t.Fatalf("SaveTags() error: %v", err)
-	}
-	for _, m := range []memory.Message{
-		{Role: "user", Content: "msg1"},
-		{Role: "assistant", Content: "msg2"},
-		{Role: "user", Content: "msg3"},
-	} {
-		if err := mem.AddMessage("conv1", m.Role, m.Content, ""); err != nil {
-			t.Fatalf("AddMessage() error: %v", err)
-		}
-	}
-
-	if err := loop.SplitSession("conv1", -1, ""); err != nil {
-		t.Fatalf("SplitSession() error: %v", err)
-	}
-
-	tags, err := store.LoadTags("conv1")
-	if err != nil {
-		t.Fatalf("LoadTags() error: %v", err)
-	}
-	if tags != nil {
-		t.Fatalf("persisted tags = %#v, want cleared after session split", tags)
-	}
-}
-
-func TestResetConversation_ClearsPersistedCapabilityTags(t *testing.T) {
-	mem := newMockMemWithCompaction()
-	archiver := &mockArchiver{activeID: "old-session"}
-	loop := newTestLoop(mem, archiver)
-	store := newTestCapStore(t)
-	loop.SetCapabilityTagStore(store)
-
-	if err := store.SaveTags("conv1", []string{"forge"}); err != nil {
-		t.Fatalf("SaveTags() error: %v", err)
-	}
-	if err := mem.AddMessage("conv1", "user", "hello", ""); err != nil {
-		t.Fatalf("AddMessage() error: %v", err)
-	}
-
-	if err := loop.ResetConversation("conv1"); err != nil {
-		t.Fatalf("ResetConversation() error: %v", err)
-	}
-
-	tags, err := store.LoadTags("conv1")
-	if err != nil {
-		t.Fatalf("LoadTags() error: %v", err)
-	}
-	if tags != nil {
-		t.Fatalf("persisted tags = %#v, want cleared after conversation reset", tags)
+func TestSessionTransitionsClearPersistedCapabilityTags(t *testing.T) {
+	for _, operation := range []string{"close", "split", "reset"} {
+		t.Run(operation, func(t *testing.T) {
+			loop, mem, _ := newSessionTestLoop(t)
+			store := newTestCapStore(t)
+			loop.SetCapabilityTagStore(store)
+			if err := store.SaveTags("conv1", []string{"forge", "web"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, content := range []string{"first", "second", "third"} {
+				if err := mem.AddMessage("conv1", "user", content, memory.OriginChannel); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			switch operation {
+			case "close":
+				err = loop.CloseSession("conv1", "topic change", "Carry this forward.")
+			case "split":
+				err = loop.SplitSession("conv1", -1, "")
+			case "reset":
+				err = loop.ResetConversation("conv1")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			tags, err := store.LoadTags("conv1")
+			if err != nil || len(tags) != 0 {
+				t.Fatalf("tags=%v error=%v", tags, err)
+			}
+		})
 	}
 }
 
-func TestSplitSession_NoArchiver(t *testing.T) {
-	mem := newMockMemWithCompaction()
-	loop := newTestLoop(mem, nil)
-
-	err := loop.SplitSession("conv1", -1, "")
-	if err == nil {
-		t.Fatal("expected error when no archiver configured")
+func TestSessionOperationsWithoutArchiver(t *testing.T) {
+	for _, operation := range []string{"checkpoint", "split", "reset", "close"} {
+		t.Run(operation, func(t *testing.T) {
+			mem := memory.NewStore(100) // Same ephemeral backend used by thane ask.
+			loop := newTestLoop(mem, nil)
+			if err := mem.AddMessage("conv1", "user", "one-shot context", ""); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch operation {
+			case "checkpoint":
+				err = loop.CheckpointSession("conv1", "test")
+			case "split":
+				err = loop.SplitSession("conv1", -1, "")
+			case "reset":
+				err = loop.ResetConversation("conv1")
+			case "close":
+				err = loop.CloseSession("conv1", "done", "")
+			}
+			if operation == "checkpoint" || operation == "split" {
+				if err == nil || !strings.Contains(err.Error(), "no archiver") {
+					t.Fatalf("error=%v want missing archiver", err)
+				}
+				if len(mem.GetMessages("conv1")) != 1 {
+					t.Fatal("unsupported durable operation changed ephemeral context")
+				}
+			} else if err != nil || len(mem.GetMessages("conv1")) != 0 {
+				t.Fatalf("ephemeral reset: error=%v messages=%v", err, mem.GetMessages("conv1"))
+			}
+		})
 	}
 }
 
@@ -572,15 +294,4 @@ func TestFindSplitPoint(t *testing.T) {
 			}
 		})
 	}
-}
-
-// filterSessions returns session calls matching the given action.
-func filterSessions(calls []sessionCall, action string) []sessionCall {
-	var filtered []sessionCall
-	for _, c := range calls {
-		if c.action == action {
-			filtered = append(filtered, c)
-		}
-	}
-	return filtered
 }

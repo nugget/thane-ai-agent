@@ -174,7 +174,7 @@ func filterWorkingMemoryMatchesByConversation(matches []WorkingMemoryMatch, conv
 // sessions table's distilled columns. Indexes title, summary, and
 // tags so a single query against a household-vocabulary phrase can
 // reach the summarizer's per-session output. Held alongside the
-// raw-message index [ArchiveStore.msgFTSName].
+// raw-message messages_fts index.
 const sessionsFTSTable = "sessions_fts"
 
 // workingMemoryFTSTable is the FTS5 virtual table name covering

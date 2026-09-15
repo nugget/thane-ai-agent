@@ -90,7 +90,8 @@ type VisionAnalyzer interface {
 	Analyze(ctx context.Context, rec *attachments.Record) (string, error)
 }
 
-// BridgeConfig holds the dependencies for a Bridge.
+// BridgeConfig holds the dependencies for a Bridge. Client, Runner, Registry,
+// and Mailbox are required by [Bridge.Register].
 type BridgeConfig struct {
 	Client           *Client
 	Runner           AgentRunner
@@ -103,9 +104,16 @@ type BridgeConfig struct {
 	Attachments      AttachmentConfig                                                  // attachment storage configuration
 	AttachmentStore  *attachments.Store                                                // content-addressed store; nil = legacy copy
 	VisionAnalyzer   VisionAnalyzer                                                    // nil disables vision analysis
-	Registry         *loop.Registry                                                    // loop registry for dashboard visibility
+	Registry         *loop.Registry                                                    // owns parent and per-sender loops
 	Mailbox          *loop.Mailbox                                                     // durable data-plane inbox for per-sender loops
 	EventBus         *events.Bus                                                       // event bus for in-flight events
+
+	// RecordNote stores a system-authored note in a Signal conversation's
+	// history. The bridge uses it to record that a loop-notification wake
+	// sent nothing (held, or no deliverable reply), so later turns read a
+	// decision rather than an unsent final text posing as a delivered one.
+	// Nil disables the notes; the send decision itself is unaffected.
+	RecordNote func(conversationID, note string) error
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
@@ -119,6 +127,7 @@ type Bridge struct {
 	routing          config.SignalRoutingConfig
 	resolver         ContactResolver
 	bindConversation func(conversationID string, binding *memory.ChannelBinding) error
+	recordNote       func(conversationID, note string) error
 	attachments      AttachmentConfig
 	attachmentStore  *attachments.Store
 	visionAnalyzer   VisionAnalyzer
@@ -134,7 +143,8 @@ type Bridge struct {
 	parentID      string                 // loop ID of the parent signal node
 }
 
-// NewBridge creates a Signal message bridge.
+// NewBridge creates a Signal message bridge. Call [Bridge.Register] to validate
+// its execution dependencies and begin receiving messages.
 func NewBridge(cfg BridgeConfig) *Bridge {
 	logger := cfg.Logger
 	if logger == nil {
@@ -162,6 +172,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		routing:          cfg.Routing,
 		resolver:         cfg.Resolver,
 		bindConversation: cfg.BindConversation,
+		recordNote:       cfg.RecordNote,
 		attachments:      cfg.Attachments,
 		attachmentStore:  cfg.AttachmentStore,
 		visionAnalyzer:   cfg.VisionAnalyzer,
@@ -187,14 +198,20 @@ func (b *Bridge) LastInboundTimestamp(sender string) (int64, bool) {
 // Register spawns the parent signal loop and returns. Inbound messages
 // are received event-driven via the signal-cli client and dispatched
 // to per-sender child loops. Returns an error if the parent loop
-// cannot be started.
-//
-// If no registry is configured, Register falls back to the legacy
-// blocking Start() behavior.
+// cannot be started or Client, Runner, Registry, or Mailbox is missing.
+// Every inbound turn is durably queued before its read receipt is sent.
 func (b *Bridge) Register(ctx context.Context) error {
+	if b.client == nil {
+		return fmt.Errorf("signal client is required")
+	}
+	if b.runner == nil {
+		return fmt.Errorf("signal runner is required")
+	}
 	if b.registry == nil {
-		go b.Start(ctx)
-		return nil
+		return fmt.Errorf("signal loop registry is required")
+	}
+	if b.mailbox == nil {
+		return fmt.Errorf("signal durable mailbox is required")
 	}
 
 	parentID, err := b.registry.SpawnLoopUnderParentOrCore(ctx, loop.Config{
@@ -236,30 +253,6 @@ func (b *Bridge) Register(ctx context.Context) error {
 	return nil
 }
 
-// Start receives messages from the signal-cli client and routes them
-// through the agent loop until ctx is cancelled. This is the legacy
-// blocking path; prefer Register() for loop-integrated operation.
-func (b *Bridge) Start(ctx context.Context) {
-	b.logger.Info("signal bridge started")
-
-	for {
-		select {
-		case <-ctx.Done():
-			b.logger.Info("signal bridge shutting down")
-			return
-		case env, ok := <-b.client.Messages():
-			if !ok {
-				b.logger.Info("signal message channel closed, bridge stopping")
-				return
-			}
-
-			if err := b.dispatch(ctx, env); err != nil {
-				b.logger.Error("signal dispatch error", "error", err)
-			}
-		}
-	}
-}
-
 // dispatch is the parent loop handler. It filters envelopes
 // (empty source, reactions, no content, rate limits) and fans out
 // valid messages to per-sender child loop mailboxes.
@@ -286,7 +279,7 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 	// text. Intercept them before the content filter.
 	if env.DataMessage != nil && env.DataMessage.Reaction != nil {
 		if env.DataMessage.Reaction.IsRemove {
-			b.handleReaction(ctx, env)
+			b.logReactionRemoval(env)
 			if summary != nil {
 				summary["action"] = "reaction_removed"
 				summary["sender"] = env.Source
@@ -389,18 +382,8 @@ func (b *Bridge) enqueueSenderEnvelope(ctx context.Context, env *Envelope) bool 
 		return false
 	}
 	if b.registry == nil || b.mailbox == nil {
-		// Legacy path with no durable mailbox: run the turn inline and
-		// only report success when it actually handled the message, so
-		// the caller does not send a read receipt for a turn we could
-		// not process (there is no queue here to retry from).
-		if err := b.handleEnvelope(ctx, env, nil); err != nil {
-			b.logger.Warn("signal legacy turn failed, not acking message",
-				"sender", env.Source,
-				"error", err,
-			)
-			return false
-		}
-		return true
+		b.logger.Error("signal message cannot be queued without a registry and durable mailbox", "sender", env.Source)
+		return false
 	}
 	payload, err := json.Marshal(env)
 	if err != nil {
@@ -629,55 +612,15 @@ func firstSignalMailboxSender(items []loop.MailboxItem) string {
 	return ""
 }
 
-// handleMessage processes a single inbound Signal message through the
-// loop-facing request path. The progressFn, if non-nil, is used by the
-// legacy no-registry path to forward in-flight events to loop telemetry.
-func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
-	_ = b.handleEnvelope(ctx, env, progressFn)
-}
-
-// handleReaction processes an inbound emoji reaction. Reaction
-// removals are logged but do not wake the agent. Non-removal
-// reactions are forwarded to the agent loop with contextual hints.
-func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
-	sender := env.Source
+// logReactionRemoval records removals without creating a turn or waking the agent.
+func (b *Bridge) logReactionRemoval(env *Envelope) {
 	reaction := signalReactionEvent(env)
-
-	if reaction.Removed {
-		b.logger.Info("signal reaction removed",
-			"sender", sender,
-			"emoji", reaction.Emoji,
-			"target_author", reaction.TargetAuthor,
-			"target_timestamp", reaction.TargetTimestamp,
-		)
-		return
-	}
-
-	_ = b.handleEnvelope(ctx, env, nil)
-}
-
-// handleEnvelope prepares and runs one Signal turn on the legacy
-// no-mailbox path. It returns an error when the turn could not be
-// prepared or the runner failed, so callers gate the read receipt on
-// actual handling instead of acking a message they could not process.
-// A nil turn (nothing to answer) is a successful no-op.
-func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) error {
-	turn, err := b.prepareSignalTurn(ctx, env)
-	if err != nil {
-		b.logger.Error("signal turn preparation failed", "error", err)
-		return err
-	}
-	if turn == nil {
-		return nil
-	}
-	req := turn.Request
-	if progressFn != nil {
-		req.OnProgress = progressFn
-	}
-	if _, err := (signalResponseRunner{bridge: b, runner: b.runner}).Run(ctx, req, nil); err != nil {
-		return err
-	}
-	return nil
+	b.logger.Info("signal reaction removed",
+		"sender", env.Source,
+		"emoji", reaction.Emoji,
+		"target_author", reaction.TargetAuthor,
+		"target_timestamp", reaction.TargetTimestamp,
+	)
 }
 
 // buildSignalTurn routes one iteration of a Signal sender loop to the
@@ -733,25 +676,6 @@ func mergeInitialTags(own, wake []string) []string {
 		merged = append(merged, t)
 	}
 	return merged
-}
-
-func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {
-	if env == nil || env.DataMessage == nil {
-		return nil, nil
-	}
-	if env.DataMessage.Reaction != nil {
-		if env.DataMessage.Reaction.IsRemove {
-			b.handleReaction(ctx, env)
-			return nil, nil
-		}
-		return b.prepareReactionTurn(ctx, env)
-	}
-	scaffold := b.prepareSignalTurnScaffold(env.Source)
-	msg, summary, ok, err := b.renderEnvelope(ctx, scaffold, env)
-	if err != nil || !ok {
-		return nil, err
-	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary, memory.OriginChannel), nil
 }
 
 func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, items []loop.MailboxItem, notifies []messages.Envelope) (*loop.AgentTurn, error) {
@@ -874,14 +798,25 @@ func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string,
 	// it channel would render the contact branch of the timing
 	// narrative and advance the previous contact — a wake erasing the
 	// very silence it is asking the model to weigh.
+	//
+	// fallback_suppressed is enforced at the send gate, not here: the
+	// request keeps the interactive fallback (an empty FallbackContent
+	// cannot survive the loop's firstNonEmpty merge), and the response
+	// runner refuses to deliver that placeholder, or any other text the
+	// runtime wrote in the model's place, on a turn that offers the hold
+	// tool.
 	turn := b.agentTurn(convID, channelBinding, content, opts, map[string]any{
 		"event_type":          "loop_notification",
 		"sender":              sender,
 		"notification_count":  len(envs),
 		"core_attention_wake": true,
 		"fallback_suppressed": true,
+		"reply_hold_offered":  true,
 	}, memory.OriginWake)
-	turn.Request.FallbackContent = ""
+	// The hold tool is what lets this turn end without messaging the
+	// person on the thread; it is offered here and on no other turn
+	// shape, because every other shape answers something they sent.
+	turn.Request.RuntimeTools = append(turn.Request.RuntimeTools, holdReplyRuntimeTool())
 
 	log := b.logger.With(
 		"subsystem", logging.SubsystemSignal,
@@ -969,7 +904,7 @@ func (b *Bridge) renderEnvelope(ctx context.Context, scaffold signalTurnScaffold
 	}
 	if env.DataMessage.Reaction != nil {
 		if env.DataMessage.Reaction.IsRemove {
-			b.handleReaction(ctx, env)
+			b.logReactionRemoval(env)
 			return loop.Message{}, nil, false, nil
 		}
 		return b.renderReactionEnvelope(scaffold, env)
@@ -1063,20 +998,6 @@ func intSummary(summary map[string]any, key string) int {
 	return 0
 }
 
-func (b *Bridge) prepareReactionTurn(_ context.Context, env *Envelope) (*loop.AgentTurn, error) {
-	scaffold := b.prepareSignalTurnScaffold(env.Source)
-	reaction := signalReactionEvent(env)
-	hints := reaction.Hints()
-	hints["source"] = "signal"
-	hints["sender"] = env.Source
-	scaffold.opts = b.requestOptions(env.Source, hints)
-	msg, summary, ok, err := b.renderReactionEnvelope(scaffold, env)
-	if err != nil || !ok {
-		return nil, err
-	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary, memory.OriginChannel), nil
-}
-
 func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, content string, opts router.RequestOptions, summary map[string]any, origin string) *loop.AgentTurn {
 	return b.agentTurnMessages(convID, binding, []loop.Message{{Role: "user", Content: content}}, opts, summary, origin)
 }
@@ -1142,6 +1063,15 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 	defer cancel()
 	runCtx = logging.WithLogger(runCtx, log)
 
+	// A turn that offers the hold tool is a loop-notification wake. The
+	// hold recorder rides the run context so the tool handler can mark
+	// the turn held; nil on every other turn.
+	var hold *replyHold
+	if offersReplyHold(req.RuntimeTools) {
+		hold = &replyHold{}
+		runCtx = withReplyHold(runCtx, hold)
+	}
+
 	indicator := b.activityIndicator(sender)
 	stopActivity := indicator.Begin(runCtx)
 	resp, err := r.runner.Run(runCtx, req, stream)
@@ -1165,9 +1095,18 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		} else {
 			log.Error("signal agent run failed", "error", err)
 		}
+		// A hold made before the failure is still the model's decision
+		// about the thread. Nothing is sent either way, but without the
+		// held line and note the turn reads as a plain failed run.
+		if reason, held := hold.heldReason(); held {
+			b.finishHeldReply(log, req, resp, reason, err)
+		}
 		return resp, err
 	}
-	if strings.TrimSpace(resp.Content) == "" && req.FallbackContent != "" {
+	wake := hold != nil
+	// A wake turn never gets the interactive fallback: "please try again"
+	// answers a request nobody on the thread made.
+	if !wake && strings.TrimSpace(resp.Content) == "" && req.FallbackContent != "" {
 		resp.Content = req.FallbackContent
 	}
 
@@ -1176,8 +1115,23 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		"model", resp.Model,
 	)
 
-	if agentAlreadySent(resp.ToolsUsed) {
+	// The hold is checked before anything reads the final text: a held
+	// turn sends nothing whatever the text says, including text the
+	// engine's empty-response nudge coaxed out after the hold.
+	if reason, held := hold.heldReason(); held {
+		b.finishHeldReply(log, req, resp, reason, nil)
+		return resp, nil
+	}
+	// On a wake turn only a delivered send stands in for the reply: a
+	// signal_send_message call that failed sent nothing, so the turn goes
+	// on to the wake's no-delivery handling and its note. Ordinary turns
+	// keep the rule that any call stands in for the reply.
+	if agentAlreadySent(resp.ToolsUsed) && (!wake || sendToolDelivered(resp)) {
 		log.Info("signal reply already sent by agent tool call")
+		return resp, nil
+	}
+	if wake && (strings.TrimSpace(resp.Content) == "" || runtimeWroteFinalText(resp, req.FallbackContent)) {
+		b.finishUndeliverableWakeReply(log, req, resp)
 		return resp, nil
 	}
 	if resp.Content == "" || sender == "" {
@@ -1198,6 +1152,86 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 
 	log.Info("signal reply sent")
 	return resp, nil
+}
+
+// finishHeldReply closes a turn the model held with signal_hold_reply:
+// one Info line keyed to the turn, then a conversation note. The log
+// carries the discarded text's length, never its content — the text is
+// already in the conversation store, and the log is not a second copy.
+//
+// runErr is the agent run's error when the run failed after the hold. A
+// failed run returns no tool tally, so whether signal_send_message
+// delivered anything is left unrecorded rather than guessed.
+func (b *Bridge) finishHeldReply(log *slog.Logger, req loop.Request, resp *loop.Response, reason string, runErr error) {
+	discarded := strings.TrimSpace(resp.Content)
+	note := signalReplyNote{
+		Kind:              replyNoteHeld,
+		Reason:            reason,
+		FinalTextWithheld: discarded != "",
+	}
+	attrs := []any{
+		"reason", reason,
+		"discarded_text_len", len(discarded),
+		"loop_id", req.RoutingFactors["loop_id"],
+		"loop_name", req.RoutingFactors["loop_name"],
+	}
+	if runErr != nil {
+		note.RunFailed = true
+		attrs = append(attrs, "error", runErr)
+	} else {
+		sent := sendToolDelivered(resp)
+		note.SignalMessageSent = &sent
+		attrs = append(attrs, "signal_message_sent", sent)
+	}
+	log.Info("signal reply held", attrs...)
+	b.recordReplyNote(log, req.ConversationID, note)
+}
+
+// finishUndeliverableWakeReply closes a wake turn that ended with neither
+// a hold nor text the model wrote: an empty final text, one of the
+// runtime's placeholders, or the text of a timeout-recovered turn.
+// Nothing is sent. It is a Warn because the model skipped the contract
+// the wake prompt states — a deliberate "nothing to send" is a hold — or
+// timed out before it could keep it.
+func (b *Bridge) finishUndeliverableWakeReply(log *slog.Logger, req loop.Request, resp *loop.Response) {
+	runtimeText := runtimeWroteFinalText(resp, req.FallbackContent)
+	log.Warn("signal wake reply not sent: turn ended without reply text or a hold",
+		"runtime_fallback", runtimeText,
+		"finish_reason", resp.FinishReason,
+		"response_len", len(resp.Content),
+		"loop_id", req.RoutingFactors["loop_id"],
+		"loop_name", req.RoutingFactors["loop_name"],
+	)
+	cause := "the wake turn ended with no final text and no " + HoldReplyToolName + " call"
+	switch {
+	case resp.FinishReason == finishReasonTimeoutRecovery:
+		cause = "the wake turn's model call timed out before it wrote a reply or made a " + HoldReplyToolName + " call; the runtime's timeout text stored above was not sent"
+	case runtimeText:
+		cause = "the wake turn ended with no reply text and no " + HoldReplyToolName + " call; the runtime's empty-response placeholder stored above was not sent"
+	}
+	// This gate runs only after the turn delivered nothing through
+	// signal_send_message (sendToolDelivered).
+	sent := false
+	b.recordReplyNote(log, req.ConversationID, signalReplyNote{
+		Kind:              replyNoteNotSent,
+		SignalMessageSent: &sent,
+		Cause:             cause,
+		FinalTextWithheld: runtimeText && strings.TrimSpace(resp.Content) != "",
+	})
+}
+
+func (b *Bridge) recordReplyNote(log *slog.Logger, conversationID string, note signalReplyNote) {
+	if b.recordNote == nil || conversationID == "" {
+		return
+	}
+	body, err := json.Marshal(note)
+	if err != nil {
+		log.Warn("failed to encode signal reply note", "kind", note.Kind, "error", err)
+		return
+	}
+	if err := b.recordNote(conversationID, string(body)); err != nil {
+		log.Warn("failed to record signal reply note in conversation history", "kind", note.Kind, "error", err)
+	}
 }
 
 func (b *Bridge) activityIndicator(recipient string) messages.ActivityIndicator {
@@ -1384,13 +1418,6 @@ func formatMessage(env *Envelope, attachmentDescs []string) string {
 
 	sb.WriteString(env.DataMessage.Message)
 	return sb.String()
-}
-
-// formatReaction builds the user-facing message content for a
-// reaction envelope. The output identifies the sender, the emoji,
-// and the target message timestamp.
-func formatReaction(env *Envelope) string {
-	return signalReactionEvent(env).Prompt()
 }
 
 func signalReactionEvent(env *Envelope) messages.ReactionEvent {
@@ -1602,6 +1629,23 @@ func copyFile(src, dst string) error {
 func agentAlreadySent(toolsUsed map[string]int) bool {
 	for name, count := range toolsUsed {
 		if count > 0 && strings.HasSuffix(name, "signal_send_message") {
+			return true
+		}
+	}
+	return false
+}
+
+// sendToolDelivered reports whether signal_send_message delivered a
+// message this turn. It reads the runner's per-tool tally, so a call
+// that returned an error is not a delivery. A runner that returns no
+// tally leaves only the call count, and then any call counts, as
+// [agentAlreadySent] reads it.
+func sendToolDelivered(resp *loop.Response) bool {
+	if resp.ToolOutcomes == nil {
+		return agentAlreadySent(resp.ToolsUsed)
+	}
+	for name, outcome := range resp.ToolOutcomes {
+		if outcome.Successes > 0 && strings.HasSuffix(name, "signal_send_message") {
 			return true
 		}
 	}
