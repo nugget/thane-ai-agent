@@ -136,13 +136,10 @@ func (a *App) initServers(s *newState) error {
 	a.wireProviderBillingAttention()
 
 	// --- Checkpointer ---
-	// Periodically snapshots application state (conversations, facts,
-	// scheduled tasks) to enable crash recovery. Also creates a snapshot
-	// on clean shutdown and before model failover. Shares thane.db.
-	checkpointCfg := checkpoint.Config{
-		PeriodicMessages: 50, // Snapshot every 50 messages
-	}
-	checkpointer, err := checkpoint.NewCheckpointer(a.mem.DB(), checkpointCfg, logger)
+	// Captures diagnostic state on manual requests, clean shutdown, and
+	// model failover. Restart persistence comes from the underlying stores;
+	// these snapshots are incomplete and cannot restore application state.
+	checkpointer, err := checkpoint.NewCheckpointer(a.mem.DB(), logger)
 	if err != nil {
 		return fmt.Errorf("create checkpointer: %w", err)
 	}
@@ -212,7 +209,7 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.SetCheckpointer(checkpointer)
 	a.loop.SetFailoverHandler(checkpointer)
-	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)
+	logger.Info("checkpoint snapshots enabled", "triggers", []string{"manual", "pre-failover", "shutdown"})
 
 	checkpointer.LogStartupStatus()
 
