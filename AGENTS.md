@@ -145,8 +145,9 @@ Model-facing context and tool authoring have their own conventions; see
   history with compaction, session archives with FTS5 search.
 - **connwatch**: Background health monitoring for external services (HA,
   Ollama, email) with exponential backoff reconnection.
-- **Checkpoint/restore**: Conversations survive restarts via SQLite state
-  snapshots.
+- **Persistence and snapshots**: SQLite state stores preserve conversations
+  across restarts. Checkpoint snapshots capture selected diagnostic state;
+  restoration is unsupported.
 
 See [docs/understanding/architecture.md](docs/understanding/architecture.md)
 for the full picture.

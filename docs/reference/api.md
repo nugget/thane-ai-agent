@@ -172,11 +172,16 @@ cadence.
 | `GET` | `/v1/checkpoints` | List checkpoints. |
 | `GET` | `/v1/checkpoints/{id}` | Get checkpoint metadata/detail. |
 | `DELETE` | `/v1/checkpoints/{id}` | Delete a checkpoint. |
-| `POST` | `/v1/checkpoints/{id}/restore` | Restore from a checkpoint. |
+| `POST` | `/v1/checkpoints/{id}/restore` | Unsupported; returns 501 for a valid checkpoint UUID when checkpointing is configured. |
 | `GET` | `/v1/realtime/ws` | First-party realtime WebSocket (canonical). |
 | `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `POST` | `/v1/companion/observations` | Submit a bounded latest-value observation batch from an authenticated companion. |
+
+Checkpoint snapshots capture selected diagnostic state, not a complete backup.
+They can be created and inspected, but cannot restore live state. Restore
+requests return 400 for a malformed UUID or 503 when checkpointing is not
+configured. A valid UUID returns 501 whether or not the snapshot exists.
 
 During the realtime handshake, the pre-authentication `auth_required.version`
 field identifies the companion protocol version. After successful

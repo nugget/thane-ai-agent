@@ -1581,24 +1581,14 @@ func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request)
 	}
 
 	idStr := r.PathValue("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
+	if _, err := uuid.Parse(idStr); err != nil {
 		s.errorResponse(w, http.StatusBadRequest, "invalid checkpoint id")
 		return
 	}
 
-	if err := s.checkpointer.Restore(id); err != nil {
-		s.logger.Error("checkpoint restore failed", "error", err, "id", idStr)
-		s.errorResponse(w, http.StatusInternalServerError, "failed to restore checkpoint")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"status":  "restored",
-		"id":      idStr,
-		"message": "checkpoint restored successfully",
-	}, s.logger)
+	// Keep the route explicit for existing clients, without implying that
+	// loading a diagnostic snapshot can recover live application state.
+	s.errorResponse(w, http.StatusNotImplemented, checkpoint.ErrRestoreUnsupported.Error())
 }
 
 // History endpoints
