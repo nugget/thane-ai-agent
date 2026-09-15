@@ -13,6 +13,10 @@ import (
 // stopped at SearchLimit, as it read before the result had a budget.
 const stopNoteFormat = "\nStopped at %d matches; more contacts match %q. Contacts whose formatted name, nickname, given name or first word it is are listed first. contact_lookup with a contact's full formatted name as name reaches one this list left out.\n"
 
+// listNoteFormat is the note a kind, key/value or contact_list result
+// ends with when it left rows off to stay within searchResultMaxBytes.
+const listNoteFormat = "\nListed %d of the %d contacts found; the last %d are left off to keep this result within 16 KB. Rows run in formatted-name order; contact_lookup by name, or with a query, reaches the ones left off.\n"
+
 // longSearchContacts returns n contacts, none answering to "Dave" as a
 // name, whose formatted names run past nameBytes and whose AI summaries
 // are summaryBytes long.
@@ -197,6 +201,136 @@ func TestLookupContact_QueryStaysWithinBudget(t *testing.T) {
 			}
 			if want := fmt.Sprintf("No contacts matching %q", strings.Repeat("q", searchFieldMaxBytes-len(searchCutMarker))+searchCutMarker); got != want {
 				t.Errorf("result = %.300q, want %.300q", got, want)
+			}
+		})
+	}
+}
+
+// TestFormatContactList_Budget pins a kind, key/value or contact_list
+// result within searchResultMaxBytes: rows that would pass it are left
+// off the end in the order the store returned them, and the result says
+// how many it lists, how many it left off and how to reach them.
+func TestFormatContactList_Budget(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		n, nameBytes, summaries int
+	}{
+		{name: "100 rows with long names and summaries", n: 100, nameBytes: 300, summaries: 600},
+		{name: "100 ordinary rows", n: 100, nameBytes: 20, summaries: 300},
+		{name: "50 ordinary rows", n: 50, nameBytes: 20, summaries: 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contacts := longSearchContacts(tc.n, tc.nameBytes, tc.summaries)
+			got := formatContactList(contacts)
+			if len(got) > searchResultMaxBytes {
+				t.Errorf("result is %d bytes, over the %d budget", len(got), searchResultMaxBytes)
+			}
+			if !utf8.ValidString(got) {
+				t.Error("result is not valid UTF-8")
+			}
+			if !strings.HasPrefix(got, fmt.Sprintf("Found %d contact(s):\n\n", tc.n)) {
+				t.Errorf("result does not open with the count found:\n%.200s", got)
+			}
+			listed := strings.Count(got, "\n**")
+			if listed == 0 || listed >= tc.n {
+				t.Fatalf("listed %d of %d rows, want some left off", listed, tc.n)
+			}
+			for i := range contacts {
+				if want := i < listed; strings.Contains(got, fmt.Sprintf("\n**%03d ", i)) != want {
+					t.Errorf("row %d in the result = %v, want %v", i, !want, want)
+				}
+			}
+			if tail := fmt.Sprintf(listNoteFormat, listed, tc.n, tc.n-listed); !strings.HasSuffix(got, tail) {
+				t.Errorf("result does not end with %q:\n...%s", tail, got[max(len(got)-600, 0):])
+			}
+		})
+	}
+}
+
+// TestFormatContactList_ClipsLongFields pins a single pathological row
+// in a kind, key/value or contact_list result: its name, organization
+// and summary are each cut on a rune boundary and marked, as a query
+// row's are.
+func TestFormatContactList_ClipsLongFields(t *testing.T) {
+	c := &Contact{
+		ID:            uuid.New(),
+		FormattedName: strings.Repeat("€", 1000),
+		Org:           strings.Repeat("é", 500),
+		AISummary:     "x" + strings.Repeat("日", 2000),
+		TrustZone:     ZoneTrusted,
+	}
+	got := formatContactList([]*Contact{c})
+	want := fmt.Sprintf("Found 1 contact(s):\n\n**%s** (%s) — %s\n",
+		strings.Repeat("€", 82)+searchCutMarker, strings.Repeat("é", 124)+searchCutMarker, "x"+strings.Repeat("日", 167)+searchCutMarker)
+	if got != want {
+		t.Errorf("result =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestFormatContactList_SmallResultUnchanged pins that a kind, key/value
+// or contact_list result within every bound renders byte for byte as it
+// did before the budget.
+func TestFormatContactList_SmallResultUnchanged(t *testing.T) {
+	alice := &Contact{ID: uuid.New(), FormattedName: "Alice Rivera", Org: "Acme", AISummary: "Backend developer", TrustZone: ZoneHousehold}
+	bob := &Contact{ID: uuid.New(), FormattedName: "Bob Stone", TrustZone: ZoneKnown}
+	want := "Found 2 contact(s):\n\n**Alice Rivera** (Acme) — Backend developer\n**Bob Stone**\n"
+	if got := formatContactList([]*Contact{alice, bob}); got != want {
+		t.Errorf("result =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestContactLists_StayWithinBudget pins the budget through every tool
+// path that lists contacts without a query: contact_lookup by kind and
+// by key/value, and contact_list with and without kind. A hundred
+// individuals with sentence-long summaries pass 16 KB unbounded, and so
+// does one contact whose AI summary alone is 20 KB.
+func TestContactLists_StayWithinBudget(t *testing.T) {
+	tools := newTestTools(t)
+	summary := strings.Repeat("a quiet neighbour who waters the plants; ", 8)
+	for i := range 100 {
+		if _, err := tools.store.UpsertWithProperties(&Contact{
+			FormattedName: fmt.Sprintf("Neighbour %03d", i), Kind: "individual", TrustZone: ZoneKnown, AISummary: summary,
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tools.store.UpsertWithProperties(&Contact{
+		FormattedName: "Bob Big", Kind: "org", TrustZone: ZoneKnown, AISummary: strings.Repeat("b", 20<<10),
+	}, []Property{{Property: "EMAIL", Value: "bob@example.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		call  func() (string, error)
+		found int
+	}{
+		{"contact_lookup by kind", func() (string, error) { return tools.LookupContact(`{"kind":"individual"}`) }, 100},
+		{"contact_lookup by key/value", func() (string, error) {
+			return tools.LookupContact(`{"key":"email","value":"bob@example.com"}`)
+		}, 1},
+		{"contact_list", func() (string, error) { return tools.ListContacts(`{}`) }, 100},
+		{"contact_list by kind", func() (string, error) { return tools.ListContacts(`{"kind":"individual"}`) }, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.call()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) > searchResultMaxBytes {
+				t.Errorf("result is %d bytes, over the %d budget", len(got), searchResultMaxBytes)
+			}
+			if !strings.HasPrefix(got, fmt.Sprintf("Found %d contact(s):\n\n", tc.found)) {
+				t.Errorf("result does not open with the count found:\n%.200s", got)
+			}
+			listed := strings.Count(got, "\n**")
+			if tc.found == 1 {
+				if listed != 1 || !strings.Contains(got, searchCutMarker) || len(got) > 2<<10 {
+					t.Errorf("one long row renders as %d bytes, %d rows:\n%.300s", len(got), listed, got)
+				}
+				return
+			}
+			if tail := fmt.Sprintf(listNoteFormat, listed, tc.found, tc.found-listed); listed >= tc.found || !strings.HasSuffix(got, tail) {
+				t.Errorf("result lists %d rows without ending %q:\n...%s", listed, tail, got[max(len(got)-600, 0):])
 			}
 		})
 	}

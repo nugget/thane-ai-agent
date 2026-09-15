@@ -1953,14 +1953,3 @@ func (t *Tools) formatOwnerActivitySummary() string {
 	}
 	return "Active owner channels:\n```json\n" + string(data) + "\n```"
 }
-
-// formatContactList formats multiple contacts for display.
-func formatContactList(contacts []*Contact) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d contact(s):\n\n", len(contacts)))
-	for _, c := range contacts {
-		writeContactRow(&sb, c.FormattedName, c.Org, c.AISummary)
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}

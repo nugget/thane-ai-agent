@@ -62,6 +62,8 @@ func TestPeopleTalentsTeachNameResolution(t *testing.T) {
 		{"ambiguity: query rows carry ids", "contacts_lookup", "ahead of any other match, each with its `contact_id`, so it reaches the ones the error left out while no more than 50 share the name"},
 		{"query rows carry ids", "contacts_lookup", "Each row carries the contact's `contact_id` and trust zone"},
 		{"query stays within its budget", "contacts_lookup", "rows past the limit are left off"},
+		{"a key/value list stays within its budget", "contacts_lookup", "within the same 16 KB as a query"},
+		{"a browse list stays within its budget", "contacts_lookup", "stays within 16 KB as a query's does"},
 		{"routing shares the first-name rule", "contacts_save", "a first name two contacts share reaches neither"},
 		{"routing reaches no tied holder", "contacts_save", "and none of two or more at the same standing"},
 		{"a same-standing nickname splits both", "contacts_save", "a second contact at the same standing holding it exactly leaves the name reaching neither"},

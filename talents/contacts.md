@@ -299,7 +299,8 @@ filter by key/value:
 The key is matched against vCard property names (`email` → `EMAIL`,
 `phone` → `TEL`, etc.) plus custom keys like `ha_companion_app` for
 ones without standard mappings. Both `key` and `value` are required;
-key alone is not a valid filter.
+key alone is not a valid filter. It returns up to 50 contacts whose
+value for that key contains `value`, within the same 16 KB as a query.
 
 ## You want to browse the directory
 
@@ -314,7 +315,11 @@ anchor — useful for "show me everyone" or "show me all orgs":
 ```
 
 `kind` is `individual` / `group` / `org` / `location`. Without `kind`,
-all types appear. Use `limit` to bound the result size.
+all types appear. Use `limit` to bound the result size. The list runs
+in formatted-name order, up to 100, and stays within 16 KB as a
+query's does: long fields are cut and end with `…[cut]`, and rows past
+the limit are left off the end and counted; reach those with
+`contact_lookup` by name or `query`.
 
 ## You need the host's operator
 

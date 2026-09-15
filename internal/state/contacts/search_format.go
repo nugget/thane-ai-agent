@@ -6,14 +6,16 @@ import (
 	"unicode/utf8"
 )
 
-// A query result is model-facing, and nothing bounds the length of a
-// contact's name, organization or AI summary, so contact_lookup's query
-// result holds to the 16 KB ceiling the repository's other search
-// results hold to (the document tools' and email's). A long field is
-// cut on a rune boundary and ends with searchCutMarker, as email cuts
-// one, and the rows that would pass the ceiling are left off the end of
-// the list and counted. A listed row is never cut short, so its
-// contact_id and trust zone are always whole.
+// A contact list result is model-facing, and nothing bounds the length
+// of a contact's name, organization or AI summary, so every list of
+// contacts a tool returns (contact_lookup's query, kind and key/value
+// results, and contact_list's) holds to the 16 KB ceiling the
+// repository's other search results hold to (the document tools' and
+// email's). A long field is cut on a rune boundary and ends with
+// searchCutMarker, as email cuts one, and the rows that would pass the
+// ceiling are left off the end of the list and counted. A listed row is
+// never cut short, so a query row's contact_id and trust zone are always
+// whole.
 const (
 	// searchResultMaxBytes bounds the whole result, notes included.
 	searchResultMaxBytes = 16 << 10
@@ -27,6 +29,17 @@ const (
 
 	// searchCutMarker ends a field cut to its bound.
 	searchCutMarker = "…[cut]"
+)
+
+// The last sentence of the note that counts the rows a result left off,
+// saying how to reach them.
+const (
+	// queryReach ends a query result's note.
+	queryReach = "Narrow the query, or look one up by its full formatted name as name, to reach them."
+
+	// listReach ends the note of a kind, key/value or contact_list
+	// result, whose rows run in formatted-name order.
+	listReach = "Rows run in formatted-name order; contact_lookup by name, or with a query, reaches the ones left off."
 )
 
 // clipSearchField cuts s to at most limit bytes on a rune boundary,
@@ -58,36 +71,57 @@ func formatSearchResults(contacts []*Contact, query string, truncated bool) stri
 	if truncated {
 		stop = fmt.Sprintf("\nStopped at %d matches; more contacts match %q. Contacts whose formatted name, nickname, given name or first word it is are listed first. contact_lookup with a contact's full formatted name as name reaches one this list left out.\n", SearchLimit, echo)
 	}
+	row := func(c *Contact) string { return searchRow(c, query, echo) }
+	return formatBudgetedList(contacts, row, queryReach, stop)
+}
+
+// formatContactList formats the contacts a kind, key/value or
+// contact_list lookup returned, one summary line each, in the order the
+// store returned them, within searchResultMaxBytes.
+func formatContactList(contacts []*Contact) string {
+	row := func(c *Contact) string {
+		var sb strings.Builder
+		writeContactRow(&sb, c)
+		sb.WriteString("\n")
+		return sb.String()
+	}
+	return formatBudgetedList(contacts, row, listReach, "")
+}
+
+// formatBudgetedList writes the count found, then each contact's row in
+// order while the result stays within searchResultMaxBytes, then a note
+// counting the rows left off, ending with reach, then tail. Room is kept
+// for tail and for the note that would count the rows after each row, so
+// both always fit once a row does not.
+func formatBudgetedList(contacts []*Contact, row func(*Contact) string, reach, tail string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Found %d contact(s):\n\n", len(contacts))
 	listed := 0
 	for _, c := range contacts {
-		row := searchRow(c, query, echo)
-		// Room is kept for the note that would count the rows after this
-		// one, so the note always fits once a row does not.
+		r := row(c)
 		note := ""
 		if listed+1 < len(contacts) {
-			note = omittedRowsNote(listed+1, len(contacts))
+			note = omittedRowsNote(listed+1, len(contacts), reach)
 		}
-		if sb.Len()+len(row)+len(note)+len(stop) > searchResultMaxBytes {
+		if sb.Len()+len(r)+len(note)+len(tail) > searchResultMaxBytes {
 			break
 		}
-		sb.WriteString(row)
+		sb.WriteString(r)
 		listed++
 	}
 	if listed < len(contacts) {
-		sb.WriteString(omittedRowsNote(listed, len(contacts)))
+		sb.WriteString(omittedRowsNote(listed, len(contacts), reach))
 	}
-	sb.WriteString(stop)
+	sb.WriteString(tail)
 	return sb.String()
 }
 
-// omittedRowsNote says how many of the contacts found a query result
-// lists, and that the rest were left off its end to stay within
-// searchResultMaxBytes.
-func omittedRowsNote(listed, found int) string {
-	return fmt.Sprintf("\nListed %d of the %d contacts found; the last %d are left off to keep this result within %d KB. Narrow the query, or look one up by its full formatted name as name, to reach them.\n",
-		listed, found, found-listed, searchResultMaxBytes>>10)
+// omittedRowsNote says how many of the contacts found a result lists,
+// and that the rest were left off its end to stay within
+// searchResultMaxBytes, then how to reach them.
+func omittedRowsNote(listed, found int, reach string) string {
+	return fmt.Sprintf("\nListed %d of the %d contacts found; the last %d are left off to keep this result within %d KB. %s\n",
+		listed, found, found-listed, searchResultMaxBytes>>10, reach)
 }
 
 // searchRow renders one query row: the contact's one-line summary with
@@ -96,10 +130,7 @@ func omittedRowsNote(listed, found int) string {
 // the result quotes it.
 func searchRow(c *Contact, query, echo string) string {
 	var sb strings.Builder
-	writeContactRow(&sb,
-		clipSearchField(c.FormattedName, searchFieldMaxBytes),
-		clipSearchField(c.Org, searchFieldMaxBytes),
-		clipSearchField(c.AISummary, searchSummaryMaxBytes))
+	writeContactRow(&sb, c)
 	fmt.Fprintf(&sb, "\n  contact_id %s | trust zone %s", c.ID, c.TrustZone)
 	if field := NameMatchField(c, query); field != "" {
 		fmt.Fprintf(&sb, " | answers to %q by %s", echo, field)
@@ -109,13 +140,14 @@ func searchRow(c *Contact, query, echo string) string {
 }
 
 // writeContactRow writes the one-line summary a contact list shows: the
-// formatted name, then the organization and AI summary when present.
-func writeContactRow(sb *strings.Builder, name, org, summary string) {
-	fmt.Fprintf(sb, "**%s**", name)
-	if org != "" {
-		fmt.Fprintf(sb, " (%s)", org)
+// formatted name, then the organization and AI summary when present,
+// each cut to its bound.
+func writeContactRow(sb *strings.Builder, c *Contact) {
+	fmt.Fprintf(sb, "**%s**", clipSearchField(c.FormattedName, searchFieldMaxBytes))
+	if c.Org != "" {
+		fmt.Fprintf(sb, " (%s)", clipSearchField(c.Org, searchFieldMaxBytes))
 	}
-	if summary != "" {
-		fmt.Fprintf(sb, " — %s", summary)
+	if c.AISummary != "" {
+		fmt.Fprintf(sb, " — %s", clipSearchField(c.AISummary, searchSummaryMaxBytes))
 	}
 }
