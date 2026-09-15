@@ -56,6 +56,15 @@ type memIMAP struct {
 
 	// listFailures is how many of the next LIST commands answer NO.
 	listFailures int
+
+	// appendHook, when set, runs once after the next APPEND a session
+	// answers, before the client sees the reply (draft_harness_test.go).
+	appendHook func(folder string, uid imap.UID)
+
+	// fetchHook, when set, runs once after the next FETCH a session
+	// answers, before the client sees the command complete
+	// (draft_harness_test.go).
+	fetchHook func()
 }
 
 type memIMAPOptions struct {

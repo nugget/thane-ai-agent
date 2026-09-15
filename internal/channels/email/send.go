@@ -38,6 +38,12 @@ type SendRequest struct {
 	// to, which says whether list mail named the account personally; it
 	// is nil for email_send.
 	OriginalRecipients []Address
+
+	// OriginalEnvelope and OriginalFolder identify the message being
+	// replied to, so a draft's ledger entry can find it again; both are
+	// zero for email_send.
+	OriginalEnvelope *Envelope
+	OriginalFolder   string
 }
 
 // SendOutcome is what happened to a message that was not refused.
@@ -53,6 +59,19 @@ type SendOutcome struct {
 	SentFolderCopy string
 	DraftsFolder   string
 	DraftUID       uint32
+
+	// DraftID is the draft ledger's id for a drafted message, or empty
+	// when nothing was drafted or the ledger could not record it.
+	DraftID string
+
+	// DraftUntracked is true when a message was drafted on a service that
+	// keeps a draft ledger but the ledger could not record it.
+	DraftUntracked bool
+
+	// OpenDraftIDs lists Thane's open drafts answering the same message
+	// as a reply that was sent directly, which the operator could still
+	// send as a second answer.
+	OpenDraftIDs []string
 }
 
 // Send is the one path every outbound message takes: the account's
@@ -147,6 +166,14 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 			return SendOutcome{}, s.refuse(ctx, req.Tool, decision)
 		}
 		draftsFolder = folder
+		// The ledger stays locked from the conflict check through the
+		// entry the draft gets, so two replies to one message cannot both
+		// pass the check.
+		unlock := s.lockDraftLedger()
+		defer unlock()
+		if err := s.refuseDraftConflict(ctx, req, decision, draftsFolder); err != nil {
+			return SendOutcome{}, err
+		}
 	}
 
 	// The audit copy rides only mail Thane delivers. A draft carries
@@ -216,6 +243,8 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 		decision.DraftsFolder = draftsFolder
 		outcome.DraftsFolder = draftsFolder
 		outcome.DraftUID = appended.UID
+		outcome.DraftID = s.recordDraft(ctx, req, composed, appended)
+		outcome.DraftUntracked = s.state != nil && outcome.DraftID == ""
 	case DispositionSent:
 		wire := composed.Bytes
 		if signer := s.signerFor(cfg.Name); signer != nil {
@@ -253,6 +282,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendOutcome, error
 			}
 		}
 		s.recordOutboundInteractions(ctx, cfg.Name, composed.MessageID, trust.Assessments)
+		outcome.OpenDraftIDs = s.openDraftsAnswering(cfg.Name, req.InReplyTo)
 	}
 	outcome.Decision = decision
 
@@ -281,6 +311,7 @@ func (s *Service) logDecision(ctx context.Context, req SendRequest, decision Dec
 		"message_id", outcome.Composed.MessageID,
 		"in_reply_to", req.InReplyTo,
 		"drafts_folder", decision.DraftsFolder,
+		"draft_id", outcome.DraftID,
 		"signed", outcome.Signed,
 		"loop_id", tools.LoopIDFromContext(ctx),
 		"conversation_id", tools.ConversationIDFromContext(ctx),

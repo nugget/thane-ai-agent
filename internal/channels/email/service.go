@@ -23,8 +23,9 @@ const folderCacheMaxAge = 10 * time.Minute
 // resolver sends without trust gating, and polling requires both a
 // state store and a message bus.
 type ServiceDependencies struct {
-	// State persists the poller's per-account high-water marks.
-	// Required when polling is enabled.
+	// State persists the poller's per-account high-water marks and the
+	// draft ledger. Required when polling is enabled; without it drafts
+	// are not recorded and the draft tools refuse.
 	State *opstate.Store `json:"-"`
 
 	// MessageBus delivers new-mail wake envelopes to the handler loop.
@@ -80,6 +81,15 @@ type Service struct {
 	signers         SignerResolver
 	inspector       Inspector
 
+	// state holds the draft ledger (draft_ledger.go). It is nil when the
+	// service was built without a state store.
+	state *opstate.Store
+
+	// draftsMu serializes every draft-ledger read-modify-write together
+	// with the IMAP work that proves it, so two calls never race one
+	// entry. It is always taken before any Client's lock, never after.
+	draftsMu sync.Mutex
+
 	foldersMu sync.Mutex
 	folders   map[string]folderSnapshot
 }
@@ -132,6 +142,7 @@ func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
 		authenticator: deps.Authenticator,
 		signers:       deps.Signers,
 		inspector:     deps.Inspector,
+		state:         deps.State,
 	}
 	s.tools = newTools(s, deps.Contacts, deps.Logger)
 	s.contextProvider = newContextProvider(s)

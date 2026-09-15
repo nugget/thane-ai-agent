@@ -28,7 +28,7 @@ func (t *Tools) Tools() []*tools.Tool {
 	if t == nil {
 		return nil
 	}
-	return t.toolDefinitions()
+	return append(t.toolDefinitions(), t.draftToolDefinitions()...)
 }
 
 func accountParameter() map[string]any {
@@ -53,7 +53,9 @@ func draftParameter() map[string]any {
 		"description": "Hold the message in the account's drafts folder for the operator to send instead of delivering it (default: false). The account's delivery policy may hold it there anyway; the result's disposition says what happened and decision.route says which rule decided. " +
 			"draft: true does not relax the trust gate: a recipient refused for its zone is drafted only on an account whose Email Accounts entry shows draft_gate: relaxed. " +
 			"Every draft, requested or decided by the policy, goes to the folder with the drafts role (the account's drafts_folder, else the folder the server marks); when no folder has that role the message is refused with decision.route no_drafts_folder and nothing is sent in its place, and a draft you asked for is not to be resent without draft: true. " +
-			"A drafted message carries no audit Bcc, so its bcc_count is 0.",
+			"A drafted message carries no audit Bcc, so its bcc_count is 0. " +
+			"A drafted message's result carries draft_id, its key in Thane's draft ledger: while the draft is still Thane's, email_draft_revise edits its body and email_draft_withdraw withdraws it (both under the email_drafts capability tag). When the ledger could not record a draft, draft_id is absent and the note says so. " +
+			"A message that would be drafted is refused with decision.route draft_limit when the account already has 200 of Thane's drafts open, the most the ledger tracks.",
 	}
 }
 
@@ -75,9 +77,10 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_list",
 			Description: "List messages in one folder of one account, newest first. Returns JSON " +
-				"{account, folder, count, total_matched, truncated, messages:[{uid, from, to, cc, subject, date, message_id, flags, size}]}; " +
+				"{account, folder, count, total_matched, truncated, messages:[{uid, from, to, cc, subject, date, message_id, flags, size, thane_draft}]}; " +
 				addressShapeDescription +
 				"date is a delta such as -2h13m. An empty folder returns count 0 with an empty array. " +
+				"In the account's drafts folder, a row that is one of Thane's open drafts carries thane_draft {draft_id}, the key the email_drafts tools take; a row without it is not one of Thane's open drafts: treat it as the operator's, and no draft tool acts on it. " +
 				"UIDs are scoped to the account and folder they were listed from — pass both back to email_read, email_mark, and email_move. " +
 				"limit defaults to 20 and caps at 100; total_matched says how many messages matched before the cap. " +
 				"The result is capped at 16 KB: when that drops messages, count falls below what limit allowed and truncated is true. " +
@@ -102,7 +105,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 		{
 			Name: "email_read",
 			Description: "Read one message by UID. Returns a JSON header object " +
-				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, size, marked_seen, body_source, hidden_content:{present, chars}, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, auto_submitted, bulk, access_note} " +
+				"{account, folder, uid, message_id, in_reply_to, references, from, to, cc, reply_to, subject, date, flags, thane_draft, size, marked_seen, body_source, hidden_content:{present, chars}, body_truncated, raw_truncated, attachments:[{filename, content_type, size, inline}], attachments_omitted, addresses_omitted, authentication:{method, status, verified}, auto_submitted, bulk, access_note} " +
 				"followed by a line containing only --- and then the readable body: the text/plain part, or the HTML part rendered to text when body_source is \"html\". " +
 				"The rendering leaves out text the HTML's own markup hides with an inline idiom Go recognises (the hidden attribute, aria-hidden=\"true\", or an inline display:none, visibility:hidden, zero font-size, or zero opacity): that text is withheld from the body, hidden_content appears, and chars counts its characters, whitespace aside. " +
 				"Go reads no stylesheet and compares no colours, so text hidden any other way stays in the body and hidden_content stays absent; its absence does not show that the body is what a reader saw. " +
@@ -114,6 +117,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"Nothing authenticates these headers and any sender can set or omit them, so neither their presence nor their absence vouches for who wrote the message. " +
 				"They describe this message, not its sender: trust_zone and automated describe the address and do not change, and only this full read shows them, never a list or search result. They stop one thing: email_reply refuses to answer such a message unless the operator is present for this turn, except that an account whose Email Accounts entry shows draft_gate: relaxed drafts a reply to bulk mail that is not auto_submitted and whose own to or cc names this account's address (see email_reply). " +
 				"Whether reading marks the message seen follows mark_seen, whose default comes from the account: false on an account whose Email Accounts entry shows owner: operator (the operator's own mailbox, where unread is how they see what is new), true on every other account. On an operator mailbox, mark_seen: true is refused unless the operator is present for this turn. An account whose access is read never marks mail seen; marked_seen is then false and access_note says why. " +
+				"Read from the account's drafts folder, a message that is one of Thane's open drafts carries thane_draft {draft_id}, as in email_list. " +
 				"The UID must be given with the account and folder it was listed from; a UID the folder does not hold is an error naming both.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -227,7 +231,7 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"The account's policy then decides the disposition: sent (delivered by SMTP; cannot be recalled), drafted (held in the account's drafts folder for the operator to send; nothing has left the mailbox), or refused. " +
 				"The Email Accounts block lists, per account and for this turn, which zones it sends_directly_to, drafts_for, and refuses. " +
 				"The configured bcc_owner audit copy rides only mail that is sent, and bcc_count counts it; a drafted message carries none, so its bcc_count is 0. Returns JSON " +
-				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, signed, note, decision:{disposition, route, attended, gating, reason, drafts_folder, recipients:[{address, trust_zone, automated, gating, contact_status, contact, allowed, reason}]}}; " +
+				"{disposition: sent|drafted, account, message_id, to, cc, bcc_count, subject, sent_folder, sent_folder_copy, drafts_folder, draft_uid, draft_id, signed, note, decision:{disposition, route, attended, gating, reason, drafts_folder, recipients:[{address, trust_zone, automated, gating, contact_status, contact, allowed, reason}]}}; " +
 				"decision.gating and each recipient's gating are allowed, confirmation, draft_only, or blocked; sent_folder_copy is \"stored\" or \"failed\" for the copy written to sent_folder, and signed says whether an outbound signature was applied. " +
 				"A refusal is one sentence followed by the decision JSON naming every recipient at issue and how to recover, and nothing is sent or drafted. " +
 				"An account whose access is not send is refused with decision.route access: the message belongs to that mailbox, so never write it from any other account; report that the account cannot compose. " +
@@ -270,7 +274,10 @@ func (t *Tools) toolDefinitions() []*tools.Tool {
 				"body is markdown. Returns the same JSON shape as email_send with in_reply_to set, and with decision.original {auto_submitted, bulk} when the message replied to carries either mark (see email_read) and the account can write mail. " +
 				"A reply to such a message would be an automatic response, so in any turn the operator is not present for it is refused with decision.route automatic_response, whatever the sender's zone and even with draft: true, and nothing is sent or drafted: do not retry it or send it fresh with email_send; file the message and, if it needs an answer, bring it to the operator with request_core_attention. " +
 				"The one exception drafts rather than refuses: on an account whose Email Accounts entry shows draft_gate: relaxed, a reply to a message marked bulk and not auto_submitted whose own to or cc names this account's address is drafted, with decision.route personally_addressed_list_reply; list mail that reached this account only through a list address, every auto_submitted message (automatic replies, bounces, notifications), and a message whose only bulk mark is Precedence junk, which classic autoresponders set, stay refused, and the refusal says which. " +
-				"Go knows an automatic reply only by those headers, so one marked any other way, such as an out-of-office notice carrying only Precedence bulk, can still be drafted: read the body, and do not answer an automatic reply.",
+				"Go knows an automatic reply only by those headers, so one marked any other way, such as an out-of-office notice carrying only Precedence bulk, can still be drafted: read the body, and do not answer an automatic reply. " +
+				"A reply that would be drafted is refused with decision.route draft_open while one of Thane's drafts answering the same message is still open; the sentence names its draft_id, and email_draft_revise changes that draft instead of writing a second one. " +
+				"On an account whose Email Accounts entry shows owner: operator, it is refused with decision.route operator_reply_started when the drafts folder already holds a reply to the same message that is not one of Thane's open drafts, most likely the operator's own, because their draft comes first. Nothing is sent or drafted either way. " +
+				"A reply sent directly while one of Thane's open drafts answers the same message carries a note naming that draft_id: withdraw it with email_draft_withdraw unless the operator wants it kept, so they do not send it as a second answer.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
