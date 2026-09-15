@@ -24,13 +24,15 @@ var junkProtectedZones = []string{contacts.ZoneAdmin, contacts.ZoneHousehold, co
 const junkRefusalRecovery = "it stayed where it was: flag it with email_mark flag \"flagged\" if it needs the operator, and bring it to them with request_core_attention if it cannot wait; do not retry the move"
 
 // refusedMessage is one message the junk guard kept out of the junk
-// folder: who sent it, why it stays, and what to do instead.
+// folder: who sent it, why it stays, and what to do instead. An entry
+// past the result's size budget keeps only its UID (see
+// marshalMoveResponse).
 type refusedMessage struct {
 	UID       uint32 `json:"uid"`
-	From      string `json:"from"`
-	TrustZone string `json:"trust_zone"`
-	Reason    string `json:"reason"`
-	Recovery  string `json:"recovery"`
+	From      string `json:"from,omitempty"`
+	TrustZone string `json:"trust_zone,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Recovery  string `json:"recovery,omitempty"`
 }
 
 // guardJunk splits the UIDs of an unattended move into the junk folder

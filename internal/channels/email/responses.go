@@ -351,6 +351,16 @@ type moveResponse struct {
 	// folder, with why and what to do instead. They did not move.
 	Refused []refusedMessage `json:"refused"`
 
+	// MovedOmitted counts the entries at the end of moved that carry
+	// only uid and destination_uid, their detail dropped to hold the
+	// result to maxMoveOutput. They moved like the rest.
+	MovedOmitted int `json:"moved_omitted,omitempty"`
+
+	// RefusedOmitted counts the entries at the end of refused that
+	// carry only uid, their detail dropped to hold the result to
+	// maxMoveOutput. They stayed where they were like the rest.
+	RefusedOmitted int `json:"refused_omitted,omitempty"`
+
 	Note string `json:"note,omitempty"`
 }
 

@@ -1,10 +1,8 @@
 package email
 
 import (
-	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -16,8 +14,9 @@ import (
 // recognises the inline idioms senders use for it and nothing more:
 // the hidden attribute, aria-hidden="true", and an inline style of
 // display:none, visibility:hidden or collapse, a zero font-size, or a
-// zero opacity. It reads no stylesheet and compares no colours; that
-// would be layout.
+// zero opacity. Within one style attribute each of those properties is
+// judged by the declaration a browser applies (see [parseInlineStyle]).
+// It reads no stylesheet and compares no colours; that would be layout.
 
 // visibility is what the inline markup of an element and its ancestors
 // does to the content inside it.
@@ -75,135 +74,18 @@ func (v visibility) within(n *html.Node) visibility {
 	return v
 }
 
-// styled applies one inline style attribute. A hiding declaration holds
-// even when a later one in the same attribute contradicts it: a browser
-// lets the later one win only when its value is valid, and judging that
-// takes a CSS parser, so the renderer errs toward withholding text and
-// counting it. A value it does not understand changes nothing, the way
-// a browser ignores an invalid declaration.
+// styled applies one inline style attribute. Each property is judged by
+// its winning declaration, so a later display:block undoes an earlier
+// display:none unless the earlier one is !important. A property with no
+// declaration the renderer recognises changes nothing.
 func (v visibility) styled(style string) visibility {
-	var fontZero, fontReset, invisible, visible bool
-	for _, decl := range strings.Split(stripCSSComments(style), ";") {
-		prop, val, ok := strings.Cut(decl, ":")
-		if !ok {
-			continue
-		}
-		val = cssValue(val)
-		switch strings.ToLower(strings.TrimSpace(cssUnescape(prop))) {
-		case "display":
-			v.removed = v.removed || val == "none"
-		case "opacity":
-			v.removed = v.removed || opacityZero(val)
-		case "visibility":
-			switch val {
-			case "hidden", "collapse":
-				invisible = true
-			case "visible", "initial":
-				visible = true
-			}
-		case "font-size":
-			zero, reset := fontSizeZero(val)
-			fontZero = fontZero || zero
-			fontReset = fontReset || reset
-		}
+	s := parseInlineStyle(style)
+	if s.display.effect == effectHide || s.opacity.effect == effectHide {
+		v.removed = true
 	}
-	switch {
-	case fontZero:
-		v.fontZero = true
-	case fontReset:
-		v.fontZero = false
-	}
-	switch {
-	case invisible:
-		v.invisible = true
-	case visible:
-		v.invisible = false
-	}
+	v.invisible = s.visibility.apply(v.invisible)
+	v.fontZero = s.fontSize.apply(v.fontZero)
 	return v
-}
-
-// stripCSSComments removes /* */ comments, which a browser ignores
-// inside a declaration. An unterminated comment runs to the end.
-func stripCSSComments(s string) string {
-	var sb strings.Builder
-	for {
-		start := strings.Index(s, "/*")
-		if start < 0 {
-			sb.WriteString(s)
-			return sb.String()
-		}
-		sb.WriteString(s[:start])
-		end := strings.Index(s[start+2:], "*/")
-		if end < 0 {
-			return sb.String()
-		}
-		s = s[start+2+end+2:]
-	}
-}
-
-// cssValue normalises a declaration's value: escapes decoded, trimmed,
-// lower-cased, and without a trailing !important, which changes
-// precedence rather than meaning.
-func cssValue(val string) string {
-	val = strings.ToLower(strings.TrimSpace(cssUnescape(val)))
-	if i := strings.LastIndexByte(val, '!'); i >= 0 && strings.TrimSpace(val[i+1:]) == "important" {
-		val = strings.TrimSpace(val[:i])
-	}
-	return val
-}
-
-// opacityZero reports whether an opacity value leaves nothing visible.
-// A browser clamps a negative opacity to zero.
-func opacityZero(val string) bool {
-	f, err := strconv.ParseFloat(strings.TrimSuffix(val, "%"), 64)
-	return err == nil && f <= 0
-}
-
-// cssUnescape decodes CSS backslash escapes, which a browser decodes
-// before it reads a keyword: a backslash and one to six hex digits,
-// with one optional whitespace after them, is that code point, and a
-// backslash before anything else is that character. Without it,
-// display:n\one would hide text from a reader and not from the model.
-func cssUnescape(s string) string {
-	if !strings.Contains(s, `\`) {
-		return s
-	}
-	var sb strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] != '\\' {
-			sb.WriteByte(s[i])
-			continue
-		}
-		j := i + 1
-		for j < len(s) && j-i <= 6 && isHexDigit(s[j]) {
-			j++
-		}
-		if j == i+1 {
-			// Not hex: the next character stands for itself. A trailing
-			// backslash stands for nothing a keyword could match.
-			if j < len(s) {
-				r, size := utf8.DecodeRuneInString(s[j:])
-				sb.WriteRune(r)
-				j += size
-			}
-			i = j - 1
-			continue
-		}
-		cp, _ := strconv.ParseUint(s[i+1:j], 16, 32)
-		if cp == 0 || cp > unicode.MaxRune || (cp >= 0xD800 && cp <= 0xDFFF) {
-			cp = unicode.ReplacementChar
-		}
-		sb.WriteRune(rune(cp))
-		if j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r' || s[j] == '\f') {
-			j++
-		}
-		i = j - 1
-	}
-	return sb.String()
-}
-
-func isHexDigit(b byte) bool {
-	return ('0' <= b && b <= '9') || ('a' <= b && b <= 'f') || ('A' <= b && b <= 'F')
 }
 
 // legacyFontSize reports whether a <font size> value is one a browser
@@ -237,31 +119,36 @@ var fontSizeUnits = map[string]bool{
 	"q": true, "vw": true, "vh": true, "vmin": true, "vmax": true,
 }
 
-// fontSizeZero reads a font-size value. zero means a size of zero in
-// any unit. reset means a nonzero size of the element's own, which
-// shows text an ancestor's zero size hid. A value that is neither, such
-// as inherit, a size relative to the parent's, a function, or an
-// unknown unit, leaves the inherited size alone.
-func fontSizeZero(val string) (zero, reset bool) {
-	if fontSizeKeywords[val] {
-		return false, true
+// fontSizeRelativeUnits are the units a font-size scales the parent's
+// size in, so the element keeps whatever size it inherits.
+var fontSizeRelativeUnits = map[string]bool{"em": true, "ex": true, "ch": true, "%": true}
+
+// fontSizeEffect reads a font-size value. A size of zero in any unit
+// hides text, and a nonzero size of the element's own shows text an
+// ancestor's zero size hid. inherit, smaller, larger, and a size relative
+// to the parent's keep the inherited size. A function, a negative size,
+// or an unknown unit is not recognised; math is not either, because not
+// every engine accepts it.
+func fontSizeEffect(val string) (styleEffect, bool) {
+	switch {
+	case fontSizeKeywords[val]:
+		return effectShow, true
+	case val == "smaller", val == "larger", cssWideKeyword(val):
+		return effectKeep, true
 	}
-	i := strings.IndexFunc(val, func(r rune) bool { return !strings.ContainsRune("+-.0123456789", r) })
-	if i < 0 {
-		i = len(val)
+	f, unit, ok := cssNumber(val)
+	if !ok {
+		return effectKeep, false
 	}
-	f, err := strconv.ParseFloat(val[:i], 64)
-	if err != nil {
-		return false, false
-	}
-	unit := val[i:]
 	switch {
 	case f == 0 && (unit == "%" || strings.TrimLeftFunc(unit, unicode.IsLetter) == ""):
-		return true, false
+		return effectHide, true
 	case f > 0 && fontSizeUnits[unit]:
-		return false, true
+		return effectShow, true
+	case f > 0 && fontSizeRelativeUnits[unit]:
+		return effectKeep, true
 	}
-	return false, false
+	return effectKeep, false
 }
 
 // nonSpaceRunes counts the characters of s that are not whitespace,

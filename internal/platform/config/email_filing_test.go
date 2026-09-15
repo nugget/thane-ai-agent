@@ -67,6 +67,8 @@ func TestEmailFilingValidate(t *testing.T) {
 		{"bare role prefix", "", []string{"role:"}, "", `"role:" names no special-use role`},
 		{"drafts role", "", []string{"role:drafts"}, "", `mailbox.move_into[0] "role:drafts" names the drafts folder, which is never a move destination`},
 		{"drafts folder by name", "Operator Drafts", []string{"Operator Drafts"}, "", `"Operator Drafts" names the drafts folder`},
+		{"drafts folder by name in another case", "Operator Drafts", []string{"role:junk", "operator drafts"}, "", `mailbox.move_into[1] "operator drafts" names the drafts folder`},
+		{"a name that only shares a prefix with drafts", "Operator Drafts", []string{"Operator Drafts Old"}, "", ""},
 		{"note at the limit", "", nil, strings.Repeat("a", maxEmailFilingNoteBytes), ""},
 		{"note over the limit", "", nil, strings.Repeat("a", maxEmailFilingNoteBytes+1), "mailbox.filing_note is 301 bytes, over the 300-byte limit"},
 	}

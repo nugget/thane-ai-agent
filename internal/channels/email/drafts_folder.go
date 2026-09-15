@@ -10,15 +10,6 @@ import (
 // \Drafts, then one fresh LIST. When none of those answers, a message
 // the policy would draft is refused, and nothing is sent in its place.
 
-// draftsFolder returns the folder holding the account's drafts role, or
-// "" when none does or the listing failed. The refuse-only guards that
-// call it (drafts as a move source or destination, drafts as a mark
-// target) have nothing to refuse without a folder; the send path uses
-// sendDraftsFolder, which tells a failed listing from an absence.
-func (s *Service) draftsFolder(ctx context.Context, acct ResolvedAccount) string {
-	return s.newFolderResolver(acct).folder(ctx, RoleDrafts)
-}
-
 // sendDraftsFolder resolves where a drafted message goes. An empty
 // folder with a nil error means no folder has the drafts role, which
 // refuses the draft; an error is a failed listing, a fault in delivery
