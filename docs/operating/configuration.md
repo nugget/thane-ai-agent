@@ -662,6 +662,24 @@ signal:
 Optional. Requires [signal-cli](https://github.com/AsamK/signal-cli)
 running as a daemon with JSON-RPC over Unix socket.
 
+Each Signal conversation runs as its own loop. On a turn that answers
+an inbound message, the model's final text is sent as the reply. A loop
+can also wake a conversation's loop through the loop bus with no new
+message, for example a `request_core_attention` escalation whose target
+is the operator's Signal conversation. That turn answers nothing the
+person sent, so the model decides whether anything reaches them: its
+final text is sent unless it calls `signal_hold_reply` with a reason,
+a tool offered on that turn only. A held turn sends nothing, logs
+`signal reply held` at Info with the reason and the length of the
+withheld text (never the text), and stores a `signal_reply_held` note
+in the conversation. The note records whether the turn delivered a
+message itself with `signal_send_message`. A hold is logged and noted
+even when the agent run fails after it. Only reply text the model
+wrote is ever sent on a wake turn. An empty ending, the interactive
+fallback ("I hit a problem before I could finish that"), and the
+runtime's timeout notice or recovery summary are not sent: such a turn
+logs a Warn and stores a `signal_reply_not_sent` note.
+
 ## Contacts & CardDAV
 
 ```yaml

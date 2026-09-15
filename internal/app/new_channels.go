@@ -857,6 +857,7 @@ func (a *App) initChannels(s *newState) error {
 				Routing:          a.cfg.Signal.Routing,
 				Resolver:         a.contactBindingResolver,
 				BindConversation: a.mem.BindConversationChannel,
+				RecordNote:       signalReplyNoteRecorder(a.mem.AddMessage),
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,
 					DestDir:   a.cfg.Signal.AttachmentDir,

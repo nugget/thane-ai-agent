@@ -106,6 +106,13 @@ type BridgeConfig struct {
 	Registry         *loop.Registry                                                    // loop registry for dashboard visibility
 	Mailbox          *loop.Mailbox                                                     // durable data-plane inbox for per-sender loops
 	EventBus         *events.Bus                                                       // event bus for in-flight events
+
+	// RecordNote stores a system-authored note in a Signal conversation's
+	// history. The bridge uses it to record that a loop-notification wake
+	// sent nothing (held, or no deliverable reply), so later turns read a
+	// decision rather than an unsent final text posing as a delivered one.
+	// Nil disables the notes; the send decision itself is unaffected.
+	RecordNote func(conversationID, note string) error
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
@@ -119,6 +126,7 @@ type Bridge struct {
 	routing          config.SignalRoutingConfig
 	resolver         ContactResolver
 	bindConversation func(conversationID string, binding *memory.ChannelBinding) error
+	recordNote       func(conversationID, note string) error
 	attachments      AttachmentConfig
 	attachmentStore  *attachments.Store
 	visionAnalyzer   VisionAnalyzer
@@ -162,6 +170,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		routing:          cfg.Routing,
 		resolver:         cfg.Resolver,
 		bindConversation: cfg.BindConversation,
+		recordNote:       cfg.RecordNote,
 		attachments:      cfg.Attachments,
 		attachmentStore:  cfg.AttachmentStore,
 		visionAnalyzer:   cfg.VisionAnalyzer,
@@ -874,14 +883,25 @@ func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string,
 	// it channel would render the contact branch of the timing
 	// narrative and advance the previous contact — a wake erasing the
 	// very silence it is asking the model to weigh.
+	//
+	// fallback_suppressed is enforced at the send gate, not here: the
+	// request keeps the interactive fallback (an empty FallbackContent
+	// cannot survive the loop's firstNonEmpty merge), and the response
+	// runner refuses to deliver that placeholder, or any other text the
+	// runtime wrote in the model's place, on a turn that offers the hold
+	// tool.
 	turn := b.agentTurn(convID, channelBinding, content, opts, map[string]any{
 		"event_type":          "loop_notification",
 		"sender":              sender,
 		"notification_count":  len(envs),
 		"core_attention_wake": true,
 		"fallback_suppressed": true,
+		"reply_hold_offered":  true,
 	}, memory.OriginWake)
-	turn.Request.FallbackContent = ""
+	// The hold tool is what lets this turn end without messaging the
+	// person on the thread; it is offered here and on no other turn
+	// shape, because every other shape answers something they sent.
+	turn.Request.RuntimeTools = append(turn.Request.RuntimeTools, holdReplyRuntimeTool())
 
 	log := b.logger.With(
 		"subsystem", logging.SubsystemSignal,
@@ -1142,6 +1162,15 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 	defer cancel()
 	runCtx = logging.WithLogger(runCtx, log)
 
+	// A turn that offers the hold tool is a loop-notification wake. The
+	// hold recorder rides the run context so the tool handler can mark
+	// the turn held; nil on every other turn.
+	var hold *replyHold
+	if offersReplyHold(req.RuntimeTools) {
+		hold = &replyHold{}
+		runCtx = withReplyHold(runCtx, hold)
+	}
+
 	indicator := b.activityIndicator(sender)
 	stopActivity := indicator.Begin(runCtx)
 	resp, err := r.runner.Run(runCtx, req, stream)
@@ -1165,9 +1194,18 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		} else {
 			log.Error("signal agent run failed", "error", err)
 		}
+		// A hold made before the failure is still the model's decision
+		// about the thread. Nothing is sent either way, but without the
+		// held line and note the turn reads as a plain failed run.
+		if reason, held := hold.heldReason(); held {
+			b.finishHeldReply(log, req, resp, reason, err)
+		}
 		return resp, err
 	}
-	if strings.TrimSpace(resp.Content) == "" && req.FallbackContent != "" {
+	wake := hold != nil
+	// A wake turn never gets the interactive fallback: "please try again"
+	// answers a request nobody on the thread made.
+	if !wake && strings.TrimSpace(resp.Content) == "" && req.FallbackContent != "" {
 		resp.Content = req.FallbackContent
 	}
 
@@ -1176,8 +1214,23 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		"model", resp.Model,
 	)
 
-	if agentAlreadySent(resp.ToolsUsed) {
+	// The hold is checked before anything reads the final text: a held
+	// turn sends nothing whatever the text says, including text the
+	// engine's empty-response nudge coaxed out after the hold.
+	if reason, held := hold.heldReason(); held {
+		b.finishHeldReply(log, req, resp, reason, nil)
+		return resp, nil
+	}
+	// On a wake turn only a delivered send stands in for the reply: a
+	// signal_send_message call that failed sent nothing, so the turn goes
+	// on to the wake's no-delivery handling and its note. Ordinary turns
+	// keep the rule that any call stands in for the reply.
+	if agentAlreadySent(resp.ToolsUsed) && (!wake || sendToolDelivered(resp)) {
 		log.Info("signal reply already sent by agent tool call")
+		return resp, nil
+	}
+	if wake && (strings.TrimSpace(resp.Content) == "" || runtimeWroteFinalText(resp, req.FallbackContent)) {
+		b.finishUndeliverableWakeReply(log, req, resp)
 		return resp, nil
 	}
 	if resp.Content == "" || sender == "" {
@@ -1198,6 +1251,86 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 
 	log.Info("signal reply sent")
 	return resp, nil
+}
+
+// finishHeldReply closes a turn the model held with signal_hold_reply:
+// one Info line keyed to the turn, then a conversation note. The log
+// carries the discarded text's length, never its content — the text is
+// already in the conversation store, and the log is not a second copy.
+//
+// runErr is the agent run's error when the run failed after the hold. A
+// failed run returns no tool tally, so whether signal_send_message
+// delivered anything is left unrecorded rather than guessed.
+func (b *Bridge) finishHeldReply(log *slog.Logger, req loop.Request, resp *loop.Response, reason string, runErr error) {
+	discarded := strings.TrimSpace(resp.Content)
+	note := signalReplyNote{
+		Kind:              replyNoteHeld,
+		Reason:            reason,
+		FinalTextWithheld: discarded != "",
+	}
+	attrs := []any{
+		"reason", reason,
+		"discarded_text_len", len(discarded),
+		"loop_id", req.RoutingFactors["loop_id"],
+		"loop_name", req.RoutingFactors["loop_name"],
+	}
+	if runErr != nil {
+		note.RunFailed = true
+		attrs = append(attrs, "error", runErr)
+	} else {
+		sent := sendToolDelivered(resp)
+		note.SignalMessageSent = &sent
+		attrs = append(attrs, "signal_message_sent", sent)
+	}
+	log.Info("signal reply held", attrs...)
+	b.recordReplyNote(log, req.ConversationID, note)
+}
+
+// finishUndeliverableWakeReply closes a wake turn that ended with neither
+// a hold nor text the model wrote: an empty final text, one of the
+// runtime's placeholders, or the text of a timeout-recovered turn.
+// Nothing is sent. It is a Warn because the model skipped the contract
+// the wake prompt states — a deliberate "nothing to send" is a hold — or
+// timed out before it could keep it.
+func (b *Bridge) finishUndeliverableWakeReply(log *slog.Logger, req loop.Request, resp *loop.Response) {
+	runtimeText := runtimeWroteFinalText(resp, req.FallbackContent)
+	log.Warn("signal wake reply not sent: turn ended without reply text or a hold",
+		"runtime_fallback", runtimeText,
+		"finish_reason", resp.FinishReason,
+		"response_len", len(resp.Content),
+		"loop_id", req.RoutingFactors["loop_id"],
+		"loop_name", req.RoutingFactors["loop_name"],
+	)
+	cause := "the wake turn ended with no final text and no " + HoldReplyToolName + " call"
+	switch {
+	case resp.FinishReason == finishReasonTimeoutRecovery:
+		cause = "the wake turn's model call timed out before it wrote a reply or made a " + HoldReplyToolName + " call; the runtime's timeout text stored above was not sent"
+	case runtimeText:
+		cause = "the wake turn ended with no reply text and no " + HoldReplyToolName + " call; the runtime's empty-response placeholder stored above was not sent"
+	}
+	// This gate runs only after the turn delivered nothing through
+	// signal_send_message (sendToolDelivered).
+	sent := false
+	b.recordReplyNote(log, req.ConversationID, signalReplyNote{
+		Kind:              replyNoteNotSent,
+		SignalMessageSent: &sent,
+		Cause:             cause,
+		FinalTextWithheld: runtimeText && strings.TrimSpace(resp.Content) != "",
+	})
+}
+
+func (b *Bridge) recordReplyNote(log *slog.Logger, conversationID string, note signalReplyNote) {
+	if b.recordNote == nil || conversationID == "" {
+		return
+	}
+	body, err := json.Marshal(note)
+	if err != nil {
+		log.Warn("failed to encode signal reply note", "kind", note.Kind, "error", err)
+		return
+	}
+	if err := b.recordNote(conversationID, string(body)); err != nil {
+		log.Warn("failed to record signal reply note in conversation history", "kind", note.Kind, "error", err)
+	}
 }
 
 func (b *Bridge) activityIndicator(recipient string) messages.ActivityIndicator {
@@ -1602,6 +1735,23 @@ func copyFile(src, dst string) error {
 func agentAlreadySent(toolsUsed map[string]int) bool {
 	for name, count := range toolsUsed {
 		if count > 0 && strings.HasSuffix(name, "signal_send_message") {
+			return true
+		}
+	}
+	return false
+}
+
+// sendToolDelivered reports whether signal_send_message delivered a
+// message this turn. It reads the runner's per-tool tally, so a call
+// that returned an error is not a delivery. A runner that returns no
+// tally leaves only the call count, and then any call counts, as
+// [agentAlreadySent] reads it.
+func sendToolDelivered(resp *loop.Response) bool {
+	if resp.ToolOutcomes == nil {
+		return agentAlreadySent(resp.ToolsUsed)
+	}
+	for name, outcome := range resp.ToolOutcomes {
+		if outcome.Successes > 0 && strings.HasSuffix(name, "signal_send_message") {
 			return true
 		}
 	}
