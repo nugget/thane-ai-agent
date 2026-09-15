@@ -563,12 +563,12 @@ func TestSignalResponseRunner_WakeTurnReplyOutcomes(t *testing.T) {
 func TestBridge_ReplyHoldOfferedOnlyOnLoopNotificationWake(t *testing.T) {
 	h := newHoldHarness(t)
 	notify := coreAttentionNotify(t)
-	mkItem := func(message string, ts int64) loop.MailboxItem {
+	mkItem := func(dm *DataMessage, ts int64) loop.MailboxItem {
 		t.Helper()
 		payload, err := json.Marshal(&Envelope{
 			Source:      holdTestSender,
 			Timestamp:   ts,
-			DataMessage: &DataMessage{Timestamp: ts, Message: message},
+			DataMessage: dm,
 		})
 		if err != nil {
 			t.Fatalf("marshal envelope: %v", err)
@@ -591,14 +591,14 @@ func TestBridge_ReplyHoldOfferedOnlyOnLoopNotificationWake(t *testing.T) {
 		{
 			name: "inbound message",
 			build: func() (*loop.AgentTurn, error) {
-				return h.bridge.buildSignalTurn(context.Background(), holdTestSender, loop.TurnInput{MailboxItems: []loop.MailboxItem{mkItem("hello", 1700000000000)}})
+				return h.bridge.buildSignalTurn(context.Background(), holdTestSender, loop.TurnInput{MailboxItems: []loop.MailboxItem{mkItem(&DataMessage{Timestamp: 1700000000000, Message: "hello"}, 1700000000000)}})
 			},
 		},
 		{
 			name: "inbound message with a notification riding along",
 			build: func() (*loop.AgentTurn, error) {
 				return h.bridge.buildSignalTurn(context.Background(), holdTestSender, loop.TurnInput{
-					MailboxItems:    []loop.MailboxItem{mkItem("hello", 1700000000000)},
+					MailboxItems:    []loop.MailboxItem{mkItem(&DataMessage{Timestamp: 1700000000000, Message: "hello"}, 1700000000000)},
 					NotifyEnvelopes: []messages.Envelope{notify},
 				})
 			},
@@ -606,14 +606,12 @@ func TestBridge_ReplyHoldOfferedOnlyOnLoopNotificationWake(t *testing.T) {
 		{
 			name: "reaction",
 			build: func() (*loop.AgentTurn, error) {
-				return h.bridge.prepareSignalTurn(context.Background(), &Envelope{
-					Source:    holdTestSender,
-					Timestamp: 1700000000001,
-					DataMessage: &DataMessage{Reaction: &Reaction{
+				return h.bridge.buildSignalTurn(context.Background(), holdTestSender, loop.TurnInput{
+					MailboxItems: []loop.MailboxItem{mkItem(&DataMessage{Reaction: &Reaction{
 						Emoji:               "👍",
 						TargetAuthor:        holdTestSender,
 						TargetSentTimestamp: 1700000000000,
-					}},
+					}}, 1700000000001)},
 				})
 			},
 		},
