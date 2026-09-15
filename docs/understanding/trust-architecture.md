@@ -167,12 +167,13 @@ config-driven and validated at startup.
 Every outbound email passes through one Go path, `Service.Send`, and ends
 in exactly one disposition: sent, held in the account's Drafts folder for
 the operator to send, or refused with a decision record. The path checks
-the account's access level, adds the operator's audit copy outside the
-gate, assesses every recipient against the contact directory and the
-account's domain lists, routes on the most restrictive recipient's trust
-zone under the account's delivery policy, applies an unattended floor so a
-turn the operator is not present for drafts rather than sends unless the operator
-chose direct delivery, offers the composed message to a refuse-only
+the account's access level, assesses every recipient against the contact
+directory and the account's domain lists, routes on the most restrictive
+recipient's trust zone under the account's delivery policy, applies an
+unattended floor so a turn the operator is not present for drafts rather
+than sends unless the operator chose direct delivery, adds the operator's
+audit copy outside the gate to mail it will send (a draft carries none),
+offers the composed message to a refuse-only
 inspector, signs, and only then delivers. The model's tool call cannot
 skip a stage, a refusal names each recipient at issue with its recovery,
 and one log line per decision records which rule settled it. Rate

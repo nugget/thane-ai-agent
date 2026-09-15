@@ -151,8 +151,9 @@ native API, or one they wrote in a conversation bound to their own contact.
 A poller wake, a scheduled loop, a loop launched from the operator's
 conversation, and a call through the Ollama-compatible shim that Home
 Assistant automations and voice satellites use are all unattended. A
-drafted message carries the `bcc_owner` audit copy in its `Bcc` header so
-the operator's client sends it too. `drafts_folder` names where drafts go
+drafted message carries no `bcc_owner` audit copy, on any account: the
+operator sends it from their own client, under the account's
+`default_from`, and nothing Thane adds rides along. `drafts_folder` names where drafts go
 and defaults to the folder the server marks as drafts, else `Drafts`.
 `denied_recipient_domains` refuses recipients at those domains and their
 subdomains regardless of trust zone, and `allowed_recipient_domains`,
@@ -169,9 +170,58 @@ that, and the operator's own turn replies as usual. Every send ends in one of
 three dispositions, `sent`, `drafted`, or `refused`, and the tool result
 or refusal carries the decision that produced it.
 
-`bcc_owner` receives a blind copy of every message the agent sends. It is
-an audit copy for the operator, not a recipient the agent chose, and it is
-exempt from the trust gate.
+`bcc_owner` receives a blind copy of every message the agent sends, that
+is, every `sent` disposition; a draft carries none. It is an audit copy
+for the operator, not a recipient the agent chose, and it is exempt from
+the trust gate.
+
+### Whose mailbox
+
+```yaml
+    - name: personal
+      description: "The operator's own inbox."
+      imap:
+        host: imap.example.com
+        port: 993
+        username: alice@example.com
+        password: ${PERSONAL_PASSWORD}
+      default_from: "Alice Example <alice@example.com>"
+      policy:
+        access: send
+        delivery: drafts
+      mailbox:
+        owner: operator
+        voice: "First person as Alice; brief; sign with her first name only."
+```
+
+Each account's `mailbox` block says whose mailbox it is and how mail
+written from it should sound. It changes nothing about what the model
+may do there or where its mail goes; that is `policy`. `owner` is
+`assistant` (the default), a mailbox Thane keeps for itself or for a
+purpose the operator gave it, or `operator`, the operator's own inbox,
+which Thane helps with but does not own. Any other value is refused at
+startup. On an operator mailbox `email_read` leaves mail unread unless
+the call asks otherwise, and a turn the operator is not present for
+cannot mark mail seen, whether by reading it or with `email_mark`; the
+operator's own turn can. The built-in `email-default-handler` leaves
+operator mail in INBOX, moves only obvious spam from an unmatched sender
+to the folder the server marks with the junk role (a server that marks
+none keeps the spam where it is), flags what needs the operator, and
+neither replies nor drafts. `voice` is a note of at most 500 bytes on
+how mail from the account should sound; a longer one is refused.
+
+The model sees these in the account's Email Accounts entry: `owner`
+(only when it is `operator`), `writes_as` (the full `default_from`,
+display name included), `voice`, and on an operator mailbox
+`reads_mark_seen: false`. An account left at the defaults renders as it
+did before the block existed. The example above is one shape for an
+operator's inbox: with `delivery: drafts` and no `smtp`, nothing the
+model writes there is sent. A message the trust gate allows waits in
+the operator's drafts folder, under their `default_from` and in their
+voice, for them to send; a recipient the gate refuses, such as a
+`known` or unmatched address, is still refused. The built-in handler
+only flags on this mailbox and neither replies nor drafts, so drafts
+there come from turns the operator asks for.
 
 `poll_interval` is how often, in seconds, every account's INBOX is checked
 for new mail; it defaults to 300 when email is configured and `0` disables

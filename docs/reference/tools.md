@@ -291,19 +291,21 @@ instead of being reimplemented in each loop prompt.
 | Tool | Description |
 |------|-------------|
 | `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. |
-| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body; marks seen unless `mark_seen: false`. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. |
+| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body. Whether it marks the message seen follows `mark_seen`, which defaults to false on an account with `mailbox.owner: operator` and true elsewhere; on an operator mailbox, `mark_seen: true` is refused in a turn the operator is not present for. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. |
 | `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), and Message-ID. |
-| `email_folders` | List an account's mailboxes with special-use roles and counts. |
-| `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. |
-| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in Drafts for the operator, or refused with a decision record. |
-| `email_reply` | Reply with threading headers through the same gate and decision. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not. |
-| `email_move` | Move messages within an account; reports the new UIDs when the server returns them. |
+| `email_folders` | List an account's mailboxes with their special-use role (`inbox`, `drafts`, `sent`, `trash`, `junk`, `archive`, `all`, `flagged`, `important`, or none), raw attributes, and counts. |
+| `email_mark` | Add or remove a flag; reports the UIDs affected and the UIDs not found. On an operator mailbox, adding `seen` is refused in a turn the operator is not present for. |
+| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in Drafts for the operator, or refused with a decision record. The `bcc_owner` audit copy rides only sent mail. An account whose access is not `send` is refused, and the refusal says the message must not be written from another account. |
+| `email_reply` | Reply with threading headers through the same gate and decision, including the access refusal. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not. |
+| `email_move` | Move messages within an account. `destination` is required and `folder` is always the source; reports the new UIDs when the server returns them, and records both UID lists in the Email Accounts block's recent operations. |
 
 Every email tool takes an `account`; in a loop bound with
 `email_account` an omitted account resolves to the binding and other
 accounts are refused. The `email` tag also injects an **Email Accounts**
 context block listing each account with its policy (`access`,
-`delivery`, recipient-domain rules, the drafts folder), whether it may
+`delivery`, recipient-domain rules, the drafts folder), whose mailbox it
+is when the operator marked it (`owner`, `writes_as`, `voice`,
+`reads_mark_seen`), whether it may
 hand mail to SMTP itself, whether this turn is `attended`, which trust
 zones it sends directly to, drafts for, and refuses this turn, and its
 cached folder names with roles. An account whose `access` is `read`

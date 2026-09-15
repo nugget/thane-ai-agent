@@ -48,7 +48,10 @@ audiences and trust models are different.
 - **Which account am I in?** The Email Accounts block in your context
   lists every mailbox this site has configured — its name, address,
   the operator's description of what it is for, whether it can send,
-  and its folder names with their roles. Every tool takes an
+  and its folder names with their roles; an account the operator
+  marked also shows whose mailbox it is (`owner`), the name its mail
+  goes out under (`writes_as`), and its `voice` (see "Whose mailbox"
+  below). Every tool takes an
   `account`. In a loop bound to one account, omitting `account`
   resolves to that account and naming any other is refused; in an
   unbound turn, omitting it means the primary account, which on a
@@ -144,6 +147,29 @@ audiences and trust models are different.
   move to a name the account lacks is refused and the refusal lists
   the folders that exist.
 
+## Whose mailbox
+
+An account whose Email Accounts entry shows `owner: operator` is the
+operator's own mailbox, and you are a guest in it. Its INBOX is their
+worklist: what is there and what is unread is how they see what needs
+them, so you help by marking, never by clearing mail away. Reads leave
+mail unseen (the entry shows `reads_mark_seen: false`), and a turn the
+operator is not present for cannot mark mail seen there at all. Flag
+what needs them with `email_mark` flag `flagged`, and leave everything
+else where it is, apart from obvious spam, which goes to the folder
+whose role is `junk`.
+
+Anything drafted from an operator mailbox goes out as the operator
+when they send it, so write it as them: in the name `writes_as` shows
+and the `voice` the entry gives, in the first person. Never sign it
+with your own name, whichever name this deployment gives you, and
+never mention an assistant; the operator must be able to press send
+without editing. Mail from an account without `owner: operator` is
+written by you, in your own voice, following its `voice` when it has
+one. Either way the message belongs to its account: an account that
+cannot compose is reported, never worked around by writing from
+another.
+
 ## Cross-references
 
 - For grounding sender and recipient names in real records, bounce to
@@ -185,12 +211,15 @@ they can hold messages, and message and unseen counts:
 ```
 
 The result is `{account, count, total, truncated, folders:[{name, role,
-selectable, delimiter, messages, unseen}]}`; `role` is `inbox`,
-`drafts`, `sent`, `trash`, `junk`, `archive`, or empty. At most 200
+selectable, delimiter, attributes, messages, unseen}]}`; `role` is
+`inbox`, `drafts`, `sent`, `trash`, `junk`, `archive`, `all`,
+`flagged`, `important`, or empty, and `attributes` lists the server's
+raw mailbox attributes (omitted when it sent none). At most 200
 folders are listed; on a label-heavy account the role-bearing folders
-come first and `truncated` says the rest were left out. Useful when you don't know whether
-the host's archive lives in `Archive`, `[Gmail]/All Mail`, `Saved`, or
-somewhere else. Pick the folder name from the result; don't guess.
+come first and `truncated` says the rest were left out. A role is how
+you find a folder by what it is for; its name is whatever this server
+calls it, so every destination is a folder name exactly as
+`email_folders` or the Email Accounts block lists it, never a guess.
 
 ## List recent messages
 
@@ -271,10 +300,16 @@ described with `attachments_omitted` counting the rest.
 `auto_submitted` and `bulk` appear only when the message's own headers
 claim it was sent automatically or to a list, as the `email` trailhead
 describes; ordinary mail carries neither.
-Attachments are described, not downloaded. **Reading marks the message
-seen** unless you pass `mark_seen: false` or the account's `access` is
-`read` (then `marked_seen` is false and `access_note` says why), which matters when your
-triage recipe is "list unseen, read, list unseen again". The UID
+Attachments are described, not downloaded. **Whether reading marks the
+message seen depends on whose mailbox it is.** `mark_seen` defaults to
+false on an operator mailbox (`owner: operator`, whose entry shows
+`reads_mark_seen: false`) and to true on every other account; pass it
+to choose. On an operator mailbox, `mark_seen: true` in a turn the
+operator is not present for is refused and nothing is read, so retry
+with `mark_seen: false`. An account whose `access` is `read` never
+marks mail seen (`marked_seen` is false and `access_note` says why).
+All of this matters when your triage recipe is "list unseen, read,
+list unseen again". The UID
 **must** come with the account and folder it was listed from; a UID the
 folder does not hold is an error naming both.
 
@@ -348,8 +383,11 @@ whether the account may write mail at all (`send`) or only read and
 file it (`organize`, `read`), `can_send` says whether it may hand mail
 to SMTP itself, `attended` says whether the operator is present for this
 turn, and `sends_directly_to` / `drafts_for` / `refuses` say where a
-message to each trust zone lands right now. A send from an account
-that cannot write mail is refused by name.
+message to each trust zone lands right now. `owner`, `writes_as`, and
+`voice` say whose name the message goes out in and how it should
+sound; on an operator mailbox you write as the operator (see "Whose
+mailbox" in the `email` trailhead). A send from an account that cannot
+write mail is refused by name.
 
 ## The send decision
 
@@ -361,7 +399,7 @@ that cannot write mail is refused by name.
   "to": ["alice@example.com"],
   "cc": [],
   "subject": "VLAN renumber — rollback note",
-  "body": "Hi Alice,\n\nThe rollback worked cleanly. Logs attached in the next message.\n\n— Thane"
+  "body": "Hi Alice,\n\nThe rollback worked cleanly. Logs attached in the next message."
 }
 ```
 
@@ -378,7 +416,8 @@ drafts_folder, draft_uid, signed, note, decision}`, and
 - **`sent`** — SMTP accepted the message; `sent_folder_copy` is `stored`
   when the copy landed in `sent_folder` and `failed` when it did not.
   `bcc_count` counts the
-  operator's configured audit copy; `message_id` is the key under
+  operator's configured audit copy, which rides only sent mail;
+  `message_id` is the key under
   which the message can be found in the Sent folder and the value a
   reply's `in_reply_to` will carry; `signed` says whether an outbound
   signature was applied (false until a signing scheme is configured);
@@ -386,9 +425,12 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   `contact_status`, and `contact` (the shape an address carries in a
   read result), so the record of who you
   wrote to is in the result.
-- **`drafted`** — the complete message, audit copy included, is in
-  `drafts_folder` with the Draft flag, waiting for the operator to
-  send it from their own client. Nothing has left the mailbox.
+- **`drafted`** — the complete message is in `drafts_folder` with the
+  Draft flag, waiting for the operator to send it from their own
+  client under the account's own From, which is the operator's name
+  only on an operator mailbox (see "Whose mailbox" in `email`). It
+  carries no audit Bcc, so `bcc_count` is 0.
+  Nothing has left the mailbox.
   `decision.route` says why it was held: `trust_zone` (a `trusted`
   recipient), `unattended_floor` (the operator is not present for this turn),
   `policy_drafts` (the account always drafts), or `requested_draft`
@@ -397,12 +439,15 @@ drafts_folder, draft_uid, signed, note, decision}`, and
   send it "properly" from another account.
 - **`refused`** — nothing was sent or drafted. The error is one
   sentence followed by the `decision` JSON; `decision.route` is
-  `access` (the account cannot write mail), `automatic_response` (an
+  `access` (the account cannot write mail; the message belongs to
+  that mailbox, so never write it from another account; report that
+  the account cannot compose), `automatic_response` (an
   `email_reply` to a message whose own headers mark it
   `auto_submitted` or `bulk`, in a turn the operator is not present
   for; nothing to fix, so file the message and bring it to the
   operator if it needs an answer), `no_smtp` (the account
-  has no SMTP connection and can only draft; retry with `draft: true`),
+  has no SMTP connection and can only draft; retry with `draft: true`
+  on the same account, never from another),
   `trust_gate` (see `decision.recipients` for each recipient's
   `reason`: a `known` contact or a stranger, whose only legitimate
   recovery is the operator assigning a zone, an `automated` mailbox or
@@ -449,7 +494,7 @@ threads properly in the recipient's client:
   "account": "primary",
   "uid": 4827,
   "folder": "INBOX",
-  "body": "Confirmed — applying the change tonight.\n\n— Thane",
+  "body": "Confirmed — applying the change tonight.",
   "reply_all": false
 }
 ```
@@ -484,8 +529,11 @@ not change the original's seen state. The result has the same shape as
 policy would have done. Use it when the message is right but the
 moment to send it is the operator's call — a sensitive reply, a
 commitment on their behalf, anything you would want a human to read
-once more with their finger on the button. The draft carries the
-audit `Bcc`, so what the operator sends is exactly what you composed.
+once more with their finger on the button. The draft carries no audit
+`Bcc` on any account: the operator sends it from their own client,
+under the account's own From, so what goes out is exactly what you
+composed and nothing Thane adds rides along. Whose voice to write it
+in follows the account's owner, as "Whose mailbox" in `email` says.
 
 ## reply vs send — the right shape
 
@@ -539,16 +587,21 @@ they touched.
 ```
 
 `add: true` adds the flag; `add: false` removes it; `add` defaults to
-`true`, since marking seen after a triage pass is the common case.
+`true`.
 Single-message mode accepts `uid` (integer) instead of `uids` (array).
 The result is `{action: "flag_added" | "flag_removed", account, folder,
 flag, uids_affected, uids_not_found}`. A UID under `uids_not_found` no
 longer exists in that folder — it was moved or deleted since you listed
 it — so list again rather than retrying.
 
-The most common reason to reach for this: marking processed messages
-as read after a triage pass, so the next pass's `email_list(unseen:
-true)` only shows what's new. An account whose Email Accounts entry
+Which flag to reach for depends on whose mailbox it is. On an account
+Thane keeps, the common case is marking processed messages seen after
+a triage pass, so the next pass's `email_list(unseen: true)` only shows
+what's new. On an operator mailbox (`owner: operator`) unread is how
+the operator sees what is new, so adding `seen` is refused in any turn
+the operator is not present for and nothing changes: flag what needs
+them with `flagged`, and leave the rest unread. In the operator's own
+turn it goes through when they ask for it. An account whose Email Accounts entry
 shows `access: read` refuses both tools in this branch, and its
 `email_read` does not mark messages seen either; report the need
 rather than routing around it.
@@ -562,18 +615,19 @@ rather than routing around it.
   "account": "primary",
   "uids": [4827, 4828],
   "folder": "INBOX",
-  "destination": "Archive"
+  "destination": "<a folder name exactly as email_folders or the Email Accounts block lists it>"
 }
 ```
 
-`folder` is the source; `destination` is the target and must be an
-existing folder name for the same account, taken from `email_folders`
-— moves never create folders, and there is no cross-account move. The
-handler accepts a convenience shorthand: if you pass only `folder` and
-omit `destination`, the `folder` value is treated as the destination
-and INBOX is assumed as the source. Prefer the explicit form for
-clarity. A destination the account lacks is refused and the refusal
-lists the folders that exist. The account's drafts folder is never a destination:
+`folder` is the source (default INBOX) and never the target.
+`destination` is required: a folder name exactly as `email_folders` or
+the Email Accounts block lists it for the same account. A call without
+it is refused and moves nothing. Moves never create folders, and there
+is no cross-account move. A destination the account lacks is refused
+and the refusal lists the folders that exist. On an operator mailbox,
+mail leaves INBOX only when the operator asks, apart from obvious spam
+to the folder whose role is `junk` (see "Whose mailbox" in the `email`
+trailhead). The account's drafts folder is never a destination:
 it holds only what Thane composed for the operator to send, and a moved
 message there would look like one of them.
 
@@ -595,14 +649,29 @@ The bulk path that bites: moving 20 messages, then trying to
 every one of them under `uids_not_found`. Use `destination_uids`, or
 re-list the destination, before further operations.
 
+The Email Accounts block's `recent_operations` records each move with
+both UID lists, at most 10 of each with the rest counted ("and 5
+more"); a move the server did not confirm records only the requested
+UIDs and says `destination_uids unknown`. When every destination UID
+is listed, a later turn can find what moved without listing the
+destination; when some are only counted, or unknown, list or search
+`destination_folder` for the rest. To undo a move, move the `destination_uids` out of
+`destination_folder` with `folder` set to `destination_folder` and
+`destination` set explicitly to the original `source_folder`, which for
+mail taken from the inbox is `INBOX`. When `destination_uids_known`
+was false, find the messages first with `email_search` by
+`message_id` in `destination_folder`.
+
 ## Cross-references
 
 - For finding the messages to organize first, bounce to `email_triage`
   — list or search produces the UIDs you'll feed here.
-- For automating the organize step (every morning archive read mail),
-  this is service-loop territory — `thane_loop_create` with
-  `operation=service`; see `loops_examples_curate`.
-- For deleting rather than archiving, the move pattern still applies
-  — `destination: "Trash"` (or whatever `email_folders` reports with
-  `role: "trash"`) is the conventional target. Trash retention policy
-  is server-side, not Thane-managed.
+- For automating the organize step on an account Thane keeps (filing
+  what a triage pass has handled, on a schedule), this is service-loop
+  territory — `thane_loop_create` with `operation=service`; see
+  `loops_examples_curate`.
+- For deleting rather than filing, the move pattern still applies:
+  `destination` is the folder `email_folders` or the Email Accounts
+  block lists with role `trash`, by its exact name. What the server
+  does with that folder's contents is server-side, not Thane-managed.
+  On an operator mailbox, delete only what the operator asks you to.
