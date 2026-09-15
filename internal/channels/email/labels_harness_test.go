@@ -31,11 +31,19 @@ func (s *specialUseSession) Select(mailbox string, options *imap.SelectOptions) 
 	return data, err
 }
 
-// Store answers a STORE unless the test's store hook refuses it first.
+// Store answers a STORE unless a test's hook refuses it first: the
+// one-shot hook onNextStore set, which it clears, then the standing hook
+// onStore set.
 func (s *specialUseSession) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *imap.StoreFlags, options *imap.StoreOptions) error {
 	s.mem.mu.Lock()
-	hook := s.mem.storeHook
+	next, hook := s.mem.nextStoreHook, s.mem.storeHook
+	s.mem.nextStoreHook = nil
 	s.mem.mu.Unlock()
+	if next != nil {
+		if err := next(); err != nil {
+			return err
+		}
+	}
 	if hook != nil {
 		if err := hook(flags); err != nil {
 			return err

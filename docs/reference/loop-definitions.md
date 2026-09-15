@@ -224,7 +224,7 @@ states every key it needs:
 - For a review loop, a task that drains its queue: one `queue_pull` per
   wake, then `queue_ack` for each subject once its outcome is written,
   or `queue_defer` when its mailbox could not be reached. Subjects are
-  `draft:<draft_id>` and `message:<account>:<message_id>`, and each
+  `draft:<account>:<draft_id>` and `message:<account>:<message_id>`, and each
   item's summary is compact JSON naming the account.
 
 A skeleton for a review-loop override:
@@ -254,7 +254,7 @@ profile:
 
 ## Task
 
-<The per-wake procedure: call queue_pull once; for each draft:<draft_id>
+<The per-wake procedure: call queue_pull once; for each draft:<account>:<draft_id>
 subject, read the draft with email_draft_get and revise, withdraw, or
 leave it; for each message:<account>:<message_id> subject, find the
 message with email_search and handle it; call queue_ack for each
@@ -271,5 +271,6 @@ and a loop no account routes to is never woken by mail.
 With `email.poll_interval: 0` no new mail is routed, and of the
 built-in email loops only `email-draft-review` is added, when an
 account names it. An account's `review_loop` still receives drafts and
-escalations, is still woken for them, and is still checked at startup;
-nothing re-wakes the loop after a poll.
+escalations, is still woken for them, and is still checked at startup,
+and work a wake left queued still wakes it again `review_delay` later,
+as it does with polling on.

@@ -276,7 +276,13 @@ func (t *Tools) HandleDraftWithdraw(ctx context.Context, args map[string]any) (s
 
 	out, err := acct.Client.withdrawDraft(ctx, e, trash)
 	if err != nil {
+		if out.Moved {
+			return "", withdrawConfirmError(e, trash, err)
+		}
 		return "", t.refreshOnFolderMiss(ctx, acct, err)
+	}
+	if out.NoUIDPlus {
+		return "", s.refuseDraft(ctx, tool, e, draftRefusedNoUIDPlus, noUIDPlusSentence(e, "withdrawn"))
 	}
 	if out.Verdict != ownershipProven {
 		closed := s.closedReasonFor(ctx, acct, e.Folder, e, out.Verdict, nil)
@@ -284,6 +290,9 @@ func (t *Tools) HandleDraftWithdraw(ctx context.Context, args map[string]any) (s
 			return "", err
 		}
 		return "", s.refuseClosedDraft(ctx, tool, "withdrawn", e)
+	}
+	if !out.Confirmed {
+		return s.unconfirmedWithdrawal(ctx, tool, e, trash, out)
 	}
 	e.WithdrawnTo = &draftWithdrawal{Folder: trash, UID: out.TrashUID, Reason: reason, By: draftAuthor(ctx), At: time.Now().UTC()}
 	if err := s.closeDraft(ctx, &e, DraftStageWithdrawn, closedWithdrawn); err != nil {
@@ -297,7 +306,7 @@ func (t *Tools) HandleDraftWithdraw(ctx context.Context, args map[string]any) (s
 		DraftsFolder:  e.Folder,
 		TrashFolder:   trash,
 		TrashUID:      out.TrashUID,
-		TrashUIDKnown: out.TrashUIDKnown,
+		TrashUIDKnown: out.Confirmed,
 		Note:          "The draft was moved from " + e.Folder + " to " + trash + " and will not be sent; its entry is withdrawn. Nothing was sent.",
 	})
 }

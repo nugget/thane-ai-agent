@@ -392,7 +392,7 @@ starts receiving drafts from the triage pass.
 `email_escalate` is then refused with the flag to set instead. When it
 is set, every draft written on the account in a turn the operator is
 not present for, by any loop but the review loop itself, is queued for
-the review loop as `draft:<draft_id>`, and `email_escalate` queues a
+the review loop as `draft:<account>:<draft_id>`, and `email_escalate` queues a
 message as `message:<account>:<message_id>`. Queueing the same subject
 again replaces the item already waiting. Nothing about review is
 written to the mailbox or the draft ledger, and there is no review or
@@ -411,12 +411,16 @@ it arrives, so a burst becomes one review. `review_max_wait` (default
 `2h`) bounds how long a steady stream can put that wake off, and may
 not be shorter than `review_delay`. Both are Go durations, and a
 negative one is refused. The loop is also woken at startup for work
-queued before a restart, and after a poll when work its last wake
-announced, such as a batch larger than one pull or an item it
-deferred, is still queued `review_delay` after that wake. Work queued
-since the last wake is left to its own `review_delay` and
-`review_max_wait`, so a poll never cuts a burst short. Accounts sharing a review loop share one wake, shaped
-by the shortest delay and wait among them.
+queued before a restart, and again when work its last wake announced,
+such as a batch larger than one pull or an item it deferred, is still
+queued `review_delay` after that wake, though never sooner than a
+minute after it. That recheck runs on its own timer, whether or not
+mail is polled. Work queued since the last wake is left to its own
+`review_delay` and `review_max_wait`, so a recheck never cuts a burst
+short. A wake that cannot read the queue within 30 seconds is logged
+and tried again a minute later, whatever the `review_delay`. Accounts
+sharing a review loop share one wake, shaped by the shortest delay and
+wait among them.
 
 After every poll the poller also reconciles the draft ledger of each
 account with an open Thane draft whose poll succeeded, bounded to 10
@@ -442,7 +446,8 @@ off, no new mail is routed and `wake_loop` is not checked. An
 account's `review_loop` still receives drafts and escalations and is
 still woken for them, so it is still checked at startup, and the
 built-in `email-draft-review` is still added when an account names
-it; nothing re-wakes it after a poll. See
+it. Its recheck does not depend on polling, so work a wake left queued
+still wakes it again. See
 [Event Sources](../reference/event-sources.md) for what a new-mail wake
 carries. A loop that should only ever see one mailbox binds it with
 `bindings: {email_account: <name>}`; see

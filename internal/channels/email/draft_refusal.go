@@ -110,7 +110,11 @@ func closedReasonClause(e draftEntry) string {
 // noUIDPlusSentence refuses a revision on a server that cannot report
 // one UID alone.
 func noUIDPlusSentence(e draftEntry, verb string) string {
-	return fmt.Sprintf("Draft %s was not %s: the IMAP server for account %q advertises neither UIDPLUS nor IMAP4rev2, and changing a draft safely needs UIDPLUS to learn the new copy's UID and to expunge one UID alone; nothing was changed. Retrying fails the same way, so tell the operator what you would change instead.", e.ID, verb, e.Account)
+	need, next := "changing a draft safely needs UIDPLUS to learn the new copy's UID and to expunge one UID alone", "tell the operator what you would change instead"
+	if verb == "withdrawn" {
+		need, next = "a withdrawal counts only when the server reports that its move carried this draft, which only a UIDPLUS server reports", "tell the operator this draft should not be sent"
+	}
+	return fmt.Sprintf("Draft %s was not %s: the IMAP server for account %q advertises neither UIDPLUS nor IMAP4rev2, and %s; nothing was changed. Retrying fails the same way, so %s.", e.ID, verb, e.Account, need, next)
 }
 
 // uidUnknownSentence refuses an action on a draft whose UID the server

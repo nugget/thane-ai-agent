@@ -89,14 +89,15 @@ and recounts each review loop's queued work for the Email Accounts block.
 An account with a `mailbox.review_loop` has a second, uncoupled pass.
 A draft written on it in a turn the operator is not present for, by any
 loop but the review loop itself, is queued in the review loop's
-loopqueue partition as `draft:<draft_id>`, and `email_escalate` queues a
+loopqueue partition as `draft:<account>:<draft_id>`, and `email_escalate` queues a
 message as `message:<account>:<message_id>`; queueing the same subject
 again coalesces. The review loop is woken with an `email_review` event
 (`drafts`, `messages`, and `pending` counts in its metadata) once queued
 work has waited `review_delay`, never later than `review_max_wait` after
 the first of a burst, again at boot for work queued before a restart,
-and again by the poller when work an earlier wake left has waited
-`review_delay`. An empty queue never wakes it. It carries `queue_pull`,
+and again, on a timer of its own rather than a poll, when work an
+earlier wake left is still queued `review_delay` after that wake. An
+empty queue never wakes it. It carries `queue_pull`,
 `queue_ack`, and `queue_defer` over its own partition.
 
 High-water marks are stored in the operational state KV store (opstate)

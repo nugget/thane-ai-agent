@@ -10,9 +10,10 @@ import (
 	"github.com/emersion/go-imap/v2"
 )
 
-// move moves one message the way the operator's client does, and returns
-// its UID in dest as the server's COPYUID names it.
-func (o *operatorClient) move(folder string, uid uint32, dest string) uint32 {
+// moveTo moves one message the way the operator's client does, and
+// returns its UID in dest as the server's COPYUID names it. Unlike move
+// (draft_harness_test.go), it fails the test on any error.
+func (o *operatorClient) moveTo(folder string, uid uint32, dest string) uint32 {
 	o.t.Helper()
 	if _, err := o.c.Select(folder, nil).Wait(); err != nil {
 		o.t.Fatalf("operator select %s: %v", folder, err)
@@ -263,7 +264,7 @@ func TestOperatorMoveLapsesTheClaim(t *testing.T) {
 	poll(t, svc)
 	op := mem.operator()
 
-	archived := op.move("INBOX", uid, "Archive")
+	archived := op.moveTo("INBOX", uid, "Archive")
 	if got := listRowsIn(t, svc, "Archive")[archived].FlagLabel; got != "" {
 		t.Errorf("Archive flag_label = %q after the operator's move, want none", got)
 	}
@@ -272,7 +273,7 @@ func TestOperatorMoveLapsesTheClaim(t *testing.T) {
 	}
 	checkFlags(t, flagsOf(t, svc, "Archive", archived), thaneBlue, nil)
 
-	back := op.move("Archive", archived, "INBOX")
+	back := op.moveTo("Archive", archived, "INBOX")
 	poll(t, svc)
 	checkWake(t, wakeFlagsFor(t, delivered(), back), thaneBlue, nil)
 	if got := listRows(t, svc)[back].FlagLabel; got != "" {

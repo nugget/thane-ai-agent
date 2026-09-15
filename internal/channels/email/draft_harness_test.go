@@ -63,6 +63,168 @@ func (m *memIMAP) onNextFetch(hook func()) {
 	m.fetchHook = hook
 }
 
+// onNextMove runs hook once in place of the next MOVE any session makes,
+// which then answers a bare OK with no COPYUID and no EXPUNGE: the
+// answer of a server that moved the message and did not say where. The
+// hook makes the move itself, through another session.
+func (m *memIMAP) onNextMove(hook func() error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.moveHook = hook
+}
+
+// divertMove answers a MOVE the in-memory server would get wrong, and
+// reports whether it did. A pending onNextMove hook runs in its place.
+// A MOVE to an existing folder whose set names no message answers a
+// bare OK, as a real server does: imapmemserver would write a COPYUID
+// with empty UID sets there, which is not valid syntax and which go-imap
+// cannot parse. A MOVE to a folder that does not exist is left to
+// imapmemserver, which refuses it.
+func (s *specialUseSession) divertMove(numSet imap.NumSet, dest string) (bool, error) {
+	s.mem.mu.Lock()
+	hook := s.mem.moveHook
+	s.mem.moveHook = nil
+	s.mem.mu.Unlock()
+	if hook != nil {
+		return true, hook()
+	}
+	uids, ok := numSet.(imap.UIDSet)
+	if !ok {
+		return false, nil
+	}
+	if _, err := s.Status(dest, &imap.StatusOptions{}); err != nil {
+		return false, nil
+	}
+	// imapmemserver's Search rewrites the set's ranges in place and reads
+	// its options without a nil check, so it gets a copy and options.
+	criteria := &imap.SearchCriteria{UID: []imap.UIDSet{append(imap.UIDSet(nil), uids...)}}
+	found, err := s.Search(imapserver.NumKindUID, criteria, &imap.SearchOptions{})
+	if err != nil {
+		return true, err
+	}
+	return len(found.AllUIDs()) == 0, nil
+}
+
+// onNextStore runs hook once, before the next STORE any session makes;
+// an error it returns fails that STORE, as a dropped connection or a
+// server NO would. The session's Store is in labels_harness_test.go.
+func (m *memIMAP) onNextStore(hook func() error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextStoreHook = hook
+}
+
+// Expunge runs the server's one-shot expunge hook, then expunges.
+func (s *specialUseSession) Expunge(w *imapserver.ExpungeWriter, uids *imap.UIDSet) error {
+	s.mem.mu.Lock()
+	hook := s.mem.expungeHook
+	s.mem.expungeHook = nil
+	s.mem.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return s.Session.Expunge(w, uids)
+}
+
+// onNextExpunge runs hook once, before the next EXPUNGE any session
+// makes.
+func (m *memIMAP) onNextExpunge(hook func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.expungeHook = hook
+}
+
+// copyTo copies one message to dest, as a client files a sent draft in
+// Sent. It reports errors rather than failing, so a server-side hook can
+// call it.
+func (o *operatorClient) copyTo(folder string, uid uint32, dest string) error {
+	if _, err := o.c.Select(folder, nil).Wait(); err != nil {
+		return fmt.Errorf("operator select %s: %w", folder, err)
+	}
+	set := imap.UIDSet{}
+	set.AddNum(imap.UID(uid))
+	if _, err := o.c.Copy(set, dest).Wait(); err != nil {
+		return fmt.Errorf("operator copy to %s: %w", dest, err)
+	}
+	return nil
+}
+
+// appendDraft stores raw in folder as a draft, as a client saves one. It
+// reports errors rather than failing, so a server-side hook can call it.
+func (o *operatorClient) appendDraft(folder, raw string) error {
+	cmd := o.c.Append(folder, int64(len(raw)), &imap.AppendOptions{Flags: []imap.Flag{imap.FlagDraft, imap.FlagSeen}})
+	if _, err := cmd.Write([]byte(raw)); err != nil {
+		return fmt.Errorf("operator append: %w", err)
+	}
+	if err := cmd.Close(); err != nil {
+		return fmt.Errorf("operator append: %w", err)
+	}
+	if _, err := cmd.Wait(); err != nil {
+		return fmt.Errorf("operator append: %w", err)
+	}
+	return nil
+}
+
+// actOnOld does to uid in Drafts what act names, from the operator's
+// client, and returns the UID of the operator's edit when act is
+// oldEdited.
+func (o *operatorClient) actOnOld(uid uint32, act oldAction) uint32 {
+	o.t.Helper()
+	var err error
+	switch act {
+	case oldDiscarded:
+		err = o.discard("Drafts", uid)
+	case oldSent:
+		err = o.send("Drafts", uid)
+	case oldFlagged:
+		err = o.flagDeleted("Drafts", uid)
+	case oldEdited:
+		return o.edit("Drafts", uid, operatorDraft("Re: Crash window", messageIDFor("Crash window")))
+	}
+	if err != nil {
+		o.t.Fatal(err)
+	}
+	return 0
+}
+
+// move moves one message the way a client files it, with UID MOVE. It
+// reports errors rather than failing, so a server-side hook can call it.
+func (o *operatorClient) move(folder string, uid uint32, dest string) error {
+	if _, err := o.c.Select(folder, nil).Wait(); err != nil {
+		return fmt.Errorf("operator select %s: %w", folder, err)
+	}
+	set := imap.UIDSet{}
+	set.AddNum(imap.UID(uid))
+	if _, err := o.c.Move(set, dest).Wait(); err != nil {
+		return fmt.Errorf("operator move: %w", err)
+	}
+	return nil
+}
+
+// send sends one draft the way a client does: a copy is filed in Sent
+// and the draft is expunged. It reports errors rather than failing, so a
+// server-side hook can call it.
+func (o *operatorClient) send(folder string, uid uint32) error {
+	if _, err := o.c.Select(folder, nil).Wait(); err != nil {
+		return fmt.Errorf("operator select %s: %w", folder, err)
+	}
+	set := imap.UIDSet{}
+	set.AddNum(imap.UID(uid))
+	if _, err := o.c.Copy(set, "Sent").Wait(); err != nil {
+		return fmt.Errorf("operator copy to Sent: %w", err)
+	}
+	return o.discard(folder, uid)
+}
+
+// onFetch runs hook after the nth FETCH from now, any session's.
+func (m *memIMAP) onFetch(n int, hook func()) {
+	if n <= 1 {
+		m.onNextFetch(hook)
+		return
+	}
+	m.onNextFetch(func() { m.onFetch(n-1, hook) })
+}
+
 // operatorClient is the operator's own mail client: a second session
 // that edits and discards drafts behind Thane's back, the way a person's
 // client does.

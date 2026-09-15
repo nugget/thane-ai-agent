@@ -2,7 +2,10 @@ package email
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,23 +19,28 @@ type oldAction int
 const (
 	oldUntouched oldAction = iota
 	oldDiscarded
+	oldSent
 	oldFlagged
 	oldEdited
 )
 
 // TestReconcileSettlesAnInterruptedRevision pins crash recovery. A
 // write-ahead record is settled on the next draft tool call, by the
-// phase it reached. Before Thane began removing the old version, any
-// absence or \Deleted flag there is the operator's doing, so Thane's new
-// version is removed again and the entry closes as held; untouched, the
-// revision completes. Once Thane had begun removing the old version,
-// its absence or flag is Thane's own, and only an edit under another
-// UID shows the operator took over.
+// phase it reached. Before retiring, any absence or \Deleted flag on the
+// old version is the operator's doing: Thane's new version is removed
+// again, nothing is adopted, nothing the operator flagged is expunged,
+// and the entry closes as held; untouched, the revision rolls back to
+// the old version, which stays open. Retiring is recorded only once
+// Thane saw its own \Deleted flag hold on the old version, so there the
+// old version's absence or flag is Thane's own and the revision
+// completes, unless an edit under another UID shows the operator took
+// over, or the flag was cleared since, which rolls back. A record with a
+// new UID and no phase reads as appended.
 func TestReconcileSettlesAnInterruptedRevision(t *testing.T) {
 	tests := []struct {
 		name        string
+		phase       string
 		appendNew   bool
-		removing    bool
 		old         oldAction
 		wantStage   DraftStage
 		wantReason  string
@@ -40,16 +48,22 @@ func TestReconcileSettlesAnInterruptedRevision(t *testing.T) {
 		wantOld     bool
 		wantNew     bool
 	}{
-		{"before removing: both versions", true, false, oldUntouched, DraftStageOpen, "", true, false, true},
-		{"before removing: only the old version", false, false, oldUntouched, DraftStageOpen, "", false, true, false},
-		{"before removing: neither version", false, false, oldDiscarded, DraftStageGone, closedVanished, false, false, false},
-		{"before removing: the operator discarded the old version", true, false, oldDiscarded, DraftStageGone, closedTouchedDuringRevision, false, false, false},
-		{"before removing: the operator flagged the old version", true, false, oldFlagged, DraftStageGone, closedTouchedDuringRevision, false, true, false},
-		{"before removing: the operator edited the old version", true, false, oldEdited, DraftStageGone, closedTouchedDuringRevision, false, false, false},
-		{"removing: the old version untouched", true, true, oldUntouched, DraftStageOpen, "", true, false, true},
-		{"removing: the old version flagged", true, true, oldFlagged, DraftStageOpen, "", true, false, true},
-		{"removing: the old version expunged", true, true, oldDiscarded, DraftStageOpen, "", true, false, true},
-		{"removing: the operator edited meanwhile", true, true, oldEdited, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"appending: both versions", pendingAppending, true, oldUntouched, DraftStageOpen, "", false, true, false},
+		{"appending: only the old version", pendingAppending, false, oldUntouched, DraftStageOpen, "", false, true, false},
+		{"appending: neither version", pendingAppending, false, oldDiscarded, DraftStageGone, closedVanished, false, false, false},
+		{"appending: the operator discarded the old version", pendingAppending, true, oldDiscarded, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"appending: the operator flagged the old version", pendingAppending, true, oldFlagged, DraftStageGone, closedTouchedDuringRevision, false, true, false},
+		{"appending: the operator edited the old version", pendingAppending, true, oldEdited, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"appended: both versions untouched", pendingAppended, true, oldUntouched, DraftStageOpen, "", false, true, false},
+		{"appended: the operator sent the old version", pendingAppended, true, oldSent, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"appended: the operator discarded the old version", pendingAppended, true, oldDiscarded, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"appended: the old version flagged, by the operator or Thane's unconfirmed store", pendingAppended, true, oldFlagged, DraftStageGone, closedTouchedDuringRevision, false, true, false},
+		{"appended: the operator edited the old version", pendingAppended, true, oldEdited, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"a record with a new UID and no phase reads as appended", "", true, oldDiscarded, DraftStageGone, closedTouchedDuringRevision, false, false, false},
+		{"retiring: Thane's flag on the old version cleared since", pendingRetiring, true, oldUntouched, DraftStageOpen, "", false, true, false},
+		{"retiring: the old version flagged", pendingRetiring, true, oldFlagged, DraftStageOpen, "", true, false, true},
+		{"retiring: the old version expunged", pendingRetiring, true, oldDiscarded, DraftStageOpen, "", true, false, true},
+		{"retiring: the operator edited meanwhile", pendingRetiring, true, oldEdited, DraftStageGone, closedTouchedDuringRevision, false, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,31 +79,18 @@ func TestReconcileSettlesAnInterruptedRevision(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			e.Pending = &draftPending{MessageID: newID, SHA256: contentSum(composed.Bytes), Body: "Second version.", Revision: draftRevision{By: "email-draft-review", At: time.Now().UTC(), Note: "warmer"}}
+			e.Pending = &draftPending{Phase: tt.phase, MessageID: newID, SHA256: contentSum(composed.Bytes), Body: "Second version.", Revision: draftRevision{By: "email-draft-review", At: time.Now().UTC(), Note: "warmer"}}
 			var newUID uint32
 			if tt.appendNew {
 				newUID = f.mem.append("Drafts", string(composed.Bytes), imap.FlagDraft, imap.FlagSeen)
 			}
-			if tt.removing {
+			if tt.phase != pendingAppending {
 				e.Pending.NewUID, e.Pending.NewUIDValidity = newUID, e.UIDValidity
 			}
 			if err := f.svc.saveDraft(&e); err != nil {
 				t.Fatal(err)
 			}
-			op := f.mem.operator()
-			var editUID uint32
-			switch tt.old {
-			case oldDiscarded:
-				if err := op.discard("Drafts", e.UID); err != nil {
-					t.Fatal(err)
-				}
-			case oldFlagged:
-				if err := op.flagDeleted("Drafts", e.UID); err != nil {
-					t.Fatal(err)
-				}
-			case oldEdited:
-				editUID = op.edit("Drafts", e.UID, operatorDraft("Re: Crash window", messageIDFor("Crash window")))
-			}
+			editUID := f.mem.operator().actOnOld(e.UID, tt.old)
 
 			f.listDrafts(t, map[string]any{"include_closed": true})
 			got := f.entry(t, resp.DraftID)
@@ -101,11 +102,16 @@ func TestReconcileSettlesAnInterruptedRevision(t *testing.T) {
 				if got.UID != newUID || got.MessageID != newID || got.SHA256 != e.Pending.SHA256 || got.Body != "Second version." || got.PreviousBody != "First version." || got.Revisions != 1 || got.lastRevision().By != "email-draft-review" {
 					t.Errorf("entry = %+v, want the new version adopted at uid %d", got, newUID)
 				}
-			} else if got.UID != e.UID || got.Revisions != 0 {
+			} else if got.UID != e.UID || got.MessageID != e.MessageID || got.Body != "First version." || got.Revisions != 0 {
 				t.Errorf("entry = %+v, want it left at the old version", got)
 			}
 			if _, there := drafts[e.UID]; there != tt.wantOld {
 				t.Errorf("old version at uid %d present = %v, want %v: %v", e.UID, there, tt.wantOld, drafts)
+			}
+			if tt.wantOld && tt.old == oldFlagged {
+				if msg := f.readDraft(t, e.UID); !slices.Contains(msg.Flags, string(imap.FlagDeleted)) {
+					t.Errorf("old version flags = %v, want the operator's \\Deleted left as it was", msg.Flags)
+				}
 			}
 			if tt.appendNew {
 				if _, there := drafts[newUID]; there != tt.wantNew {
@@ -114,6 +120,113 @@ func TestReconcileSettlesAnInterruptedRevision(t *testing.T) {
 			}
 			if _, there := drafts[editUID]; editUID != 0 && !there {
 				t.Errorf("the operator's edit at uid %d was removed: %v", editUID, drafts)
+			}
+		})
+	}
+}
+
+// TestReviseRecordsEachPhaseBeforeItsStep pins the write-ahead record a
+// live revision leaves at each step: appending when the new version's
+// APPEND reaches the server, appended with the new UID when the old
+// version is checked and still when its \Deleted flag is read back, and
+// retiring by the time the old version is expunged, so a crash anywhere
+// reads the phase that authorizes no more than was done.
+func TestReviseRecordsEachPhaseBeforeItsStep(t *testing.T) {
+	f := newDraftFixture(t, nil)
+	resp, _ := f.replyDraft(t, context.Background(), "Phases", "First version.")
+
+	var mu sync.Mutex
+	var seen []string
+	record := func(step string) {
+		e, ok, err := f.svc.draftByID(resp.DraftID)
+		line := step + ": no record"
+		if err == nil && ok && e.Pending != nil {
+			line = fmt.Sprintf("%s: %s new_uid=%v", step, e.Pending.Phase, e.Pending.NewUID != 0)
+		}
+		mu.Lock()
+		seen = append(seen, line)
+		mu.Unlock()
+	}
+	f.mem.onNextAppend(func(string, imap.UID) {
+		record("append")
+		f.mem.onNextFetch(func() {
+			record("check")
+			f.mem.onNextFetch(func() { record("flag read-back") })
+		})
+		f.mem.onNextExpunge(func() { record("expunge") })
+	})
+
+	if _, err := f.revise(loopCtx("email-draft-review"), resp.DraftID, "Second version.", ""); err != nil {
+		t.Fatalf("revise: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"append: appending new_uid=false", "check: appended new_uid=true", "flag read-back: appended new_uid=true", "expunge: retiring new_uid=true"}
+	if !slices.Equal(seen, want) {
+		t.Errorf("records seen = %q, want %q", seen, want)
+	}
+	if e := f.entry(t, resp.DraftID); e.Pending != nil || e.Revisions != 1 {
+		t.Errorf("entry = revisions %d pending %+v, want the revision recorded and the record cleared", e.Revisions, e.Pending)
+	}
+}
+
+// TestReviseWhoseStoreFailsLeavesTheAppendedPhase pins why the retiring
+// record waits for the flag's read-back. Thane's STORE \Deleted on the
+// old version fails, as a dropped connection, a cancelled turn, or a
+// server NO would fail it, so the revision errors with its record at
+// appended, and whatever the operator then does to the old version is
+// theirs: left alone, the revision rolls back; sent, discarded, or
+// marked \Deleted, the entry closes held, Thane's new version is removed
+// and never adopted, and nothing the operator marked is expunged.
+func TestReviseWhoseStoreFailsLeavesTheAppendedPhase(t *testing.T) {
+	tests := []struct {
+		name       string
+		old        oldAction
+		wantStage  DraftStage
+		wantReason string
+		wantOld    bool
+	}{
+		{"the operator leaves the old version", oldUntouched, DraftStageOpen, "", true},
+		{"the operator sends the old version", oldSent, DraftStageGone, closedTouchedDuringRevision, false},
+		{"the operator discards the old version", oldDiscarded, DraftStageGone, closedTouchedDuringRevision, false},
+		{"the operator marks the old version \\Deleted", oldFlagged, DraftStageGone, closedTouchedDuringRevision, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newDraftFixture(t, nil)
+			resp, _ := f.replyDraft(t, context.Background(), "Crash window", "First version.")
+			e := f.entry(t, resp.DraftID)
+
+			f.mem.onNextStore(func() error { return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "STORE unavailable"} })
+			if _, err := f.revise(loopCtx("email-draft-review"), resp.DraftID, "Second version.", ""); err == nil {
+				t.Fatal("revise succeeded, want the failed STORE to fail it")
+			}
+			pending := f.entry(t, resp.DraftID).Pending
+			if pending == nil || pending.phase() != pendingAppended || pending.NewUID == 0 {
+				t.Fatalf("record after the failed STORE = %+v, want phase appended with the new UID", pending)
+			}
+			newUID := pending.NewUID
+			f.mem.operator().actOnOld(e.UID, tt.old)
+
+			f.listDrafts(t, map[string]any{"include_closed": true})
+			got := f.entry(t, resp.DraftID)
+			drafts, _ := f.drafts(t)
+			if got.Stage != tt.wantStage || got.ClosedReason != tt.wantReason || got.Pending != nil {
+				t.Fatalf("entry = stage %s reason %q pending %+v, want %s %q and no pending record", got.Stage, got.ClosedReason, got.Pending, tt.wantStage, tt.wantReason)
+			}
+			if got.UID != e.UID || got.MessageID != e.MessageID || got.Body != "First version." || got.Revisions != 0 {
+				t.Errorf("entry = %+v, want it left at the old version, never the new one adopted", got)
+			}
+			if _, there := drafts[newUID]; there {
+				t.Errorf("Thane's new version at uid %d was left in Drafts: %v", newUID, drafts)
+			}
+			if _, there := drafts[e.UID]; there != tt.wantOld {
+				t.Errorf("old version at uid %d present = %v, want %v: %v", e.UID, there, tt.wantOld, drafts)
+			}
+			if tt.old == oldFlagged {
+				if msg := f.readDraft(t, e.UID); !slices.Contains(msg.Flags, string(imap.FlagDeleted)) {
+					t.Errorf("old version flags = %v, want the operator's \\Deleted left as it was", msg.Flags)
+				}
 			}
 		})
 	}

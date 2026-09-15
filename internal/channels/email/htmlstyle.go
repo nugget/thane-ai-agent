@@ -13,7 +13,9 @@ import "strconv"
 // engine rejects is treated as rejected everywhere, so a hiding
 // declaration before it still stands, and the renderer withholds text a
 // reader in some client might see rather than show text a reader in
-// another cannot.
+// another cannot. For the same reason, a zero font-size in a newer
+// length unit such as 0lh or 0cqw is recognised even though only some
+// engines accept it. A zero can only hide, so it errs the same way.
 
 // styleEffect is what a property's winning declaration does to the
 // visibility an element inherits.
