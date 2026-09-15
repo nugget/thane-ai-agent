@@ -79,7 +79,7 @@ type Request struct {
 	RuntimeTools    []*tools.Tool                       `json:"-"` // Request-scoped tools visible only to this run
 	PullInput       func(context.Context) []llm.Message `json:"-"` // Polled at each iteration boundary and at closure to merge newly-arrived input into the live turn (#1221); nil disables
 	MaxIterations   int                                 `json:"-"` // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens int                                 `json:"-"` // Optional output-token budget across all iterations (0 = unlimited)
+	MaxOutputTokens int                                 `json:"-"` // Reported output-token budget across all model attempts, including recovery (0 = unlimited)
 	ToolTimeout     time.Duration                       `json:"-"` // Optional per-tool timeout (0 = no extra timeout)
 	UsageRole       string                              `json:"-"` // Optional usage role override (e.g., "delegate")
 	UsageTaskName   string                              `json:"-"` // Optional usage task name override
@@ -2379,8 +2379,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		MaxOutputTokens: req.MaxOutputTokens,
 
-		CheckBudget: func(totalOut int) bool {
-			return req.MaxOutputTokens > 0 && totalOut >= req.MaxOutputTokens
+		CheckBudget: func(_ int) bool {
+			return accounting.outputBudgetExhausted()
 		},
 
 		// Mid-turn input merge (#1221): the loop builds req.PullInput over
@@ -2729,7 +2729,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 	// Detect when the error handler triggered timeout recovery.
-	if timeoutRecovered {
+	if timeoutRecovered && iterResult.ExhaustReason != iterate.ExhaustTokenBudget {
 		finishReason = "timeout_recovery"
 	}
 
@@ -2812,6 +2812,9 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
 			return nil, "", cancelErr
 		}
+		if errors.Is(err, llm.ErrOutputBudgetExhausted) {
+			return nil, "", err
+		}
 		// A billing-blocked provider is a standing state the provider
 		// already announced on its transition edge; each iteration's
 		// rediscovery is Debug, not another ERROR. Failover deliberately
@@ -2848,7 +2851,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					iterLog.Info("LLM retry succeeded", "retry", retry, "model", model)
 					return resp, model, nil
 				}
-				if !isTimeout(retryErr) {
+				if errors.Is(retryErr, llm.ErrOutputBudgetExhausted) || !isTimeout(retryErr) {
 					return nil, "", retryErr
 				}
 			}
@@ -2871,6 +2874,9 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				resp, recoveryErr := client.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
 				if recoveryErr != nil {
+					if errors.Is(recoveryErr, llm.ErrOutputBudgetExhausted) {
+						return nil, "", recoveryErr
+					}
 					iterLog.Error("recovery model also failed",
 						"error", recoveryErr,
 						"recovery_model", l.recoveryModel,
