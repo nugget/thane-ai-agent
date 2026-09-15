@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -30,18 +31,27 @@ type accountingClient struct {
 }
 
 func (c *accountingClient) Chat(ctx context.Context, model string, messages []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
-	return c.accountCall(model, func() (*llm.ChatResponse, error) {
+	return c.accountCall(ctx, model, func(ctx context.Context) (*llm.ChatResponse, error) {
 		return c.Client.Chat(ctx, model, messages, tools)
 	})
 }
 
 func (c *accountingClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, stream llm.StreamCallback) (*llm.ChatResponse, error) {
-	return c.accountCall(model, func() (*llm.ChatResponse, error) {
+	return c.accountCall(ctx, model, func(ctx context.Context) (*llm.ChatResponse, error) {
 		return c.Client.ChatStream(ctx, model, messages, tools, stream)
 	})
 }
 
-func (c *accountingClient) accountCall(model string, call func() (*llm.ChatResponse, error)) (*llm.ChatResponse, error) {
+func (c *accountingClient) accountCall(ctx context.Context, model string, call func(context.Context) (*llm.ChatResponse, error)) (*llm.ChatResponse, error) {
+	if err := canceledContextError(c.accounting.observerContext, ctx); err != nil {
+		return nil, err
+	}
+	if remaining, limited := c.accounting.remainingOutputTokens(); limited {
+		if remaining == 0 {
+			return nil, llm.ErrOutputBudgetExhausted
+		}
+		ctx = llm.WithMaxOutputTokens(ctx, llm.ClampMaxOutputTokens(ctx, remaining))
+	}
 	sessionID := c.accounting.fallbackSession
 	if c.accounting.loop.archiver != nil {
 		if active := c.accounting.loop.archiver.ActiveSessionID(c.accounting.conversationID); active != "" {
@@ -49,7 +59,7 @@ func (c *accountingClient) accountCall(model string, call func() (*llm.ChatRespo
 		}
 	}
 	started := time.Now()
-	response, err := call()
+	response, err := call(ctx)
 	// A failed transport with no usage, or a synthetic fallback, is not
 	// evidence of a billable model call. Do not invent a zero-token record.
 	if response != nil && reportedUsage(response) {
@@ -69,7 +79,34 @@ func (c *accountingClient) accountCall(model string, call func() (*llm.ChatRespo
 		// generation deadline, but belongs to the same usage observer.
 		usage.Observe(a.observerContext, record)
 	}
+	if err != nil && canceledContextError(c.accounting.observerContext, ctx) == nil && c.accounting.outputBudgetExhausted() {
+		return response, errors.Join(llm.ErrOutputBudgetExhausted, err)
+	}
 	return response, err
+}
+
+// remainingOutputTokens derives the allowance from the same records used for
+// billing, including failed attempts. Recovery clients share this accounting
+// object, so detached contexts and direct provider calls cannot reset it.
+// Missing provider usage is unknown and is never invented as a budget debit.
+func (a *modelCallAccounting) remainingOutputTokens() (int, bool) {
+	remaining := a.request.MaxOutputTokens
+	if remaining <= 0 {
+		return 0, false
+	}
+	for _, call := range a.calls {
+		spent := max(0, call.OutputTokens)
+		if spent >= remaining {
+			return 0, true
+		}
+		remaining -= spent
+	}
+	return remaining, true
+}
+
+func (a *modelCallAccounting) outputBudgetExhausted() bool {
+	remaining, limited := a.remainingOutputTokens()
+	return limited && remaining == 0
 }
 
 func reportedUsage(response *llm.ChatResponse) bool {

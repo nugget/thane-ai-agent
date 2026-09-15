@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -144,6 +145,9 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 		if retryErr == nil {
 			return resp, retryModel, nil, true
 		}
+		if errors.Is(retryErr, llm.ErrOutputBudgetExhausted) {
+			return nil, "", retryErr, true
+		}
 		if !toolsAreALever && isLMStudioLoadedContextError(retryErr) {
 			escalated, escalateErr := escalateToMax()
 			if escalateErr != nil {
@@ -165,6 +169,9 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 		resp, retryErr := retryCall(nil)
 		if retryErr == nil {
 			return resp, retryModel, nil, true
+		}
+		if errors.Is(retryErr, llm.ErrOutputBudgetExhausted) {
+			return nil, "", retryErr, true
 		}
 		if isLMStudioLoadedContextError(retryErr) {
 			escalated, escalateErr := escalateToMax()
