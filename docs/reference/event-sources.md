@@ -54,7 +54,10 @@ event-driven; a `wake_loop` naming anything that is not an event-driven
 definition stops startup. Each event's
 metadata names the `account`, `folder`, and `uid` of the message, its
 `message_id`, `flags` (the message's IMAP flags as the server spells
-them, comma-separated, and absent when it has none), the sender (`from`,
+them, comma-separated, and absent when it has none; they never include
+a mark Thane set for a [label](../operating/configuration.md#labels),
+even when the message is listed again after a failed dispatch), the
+sender (`from`,
 `from_address`, `from_name`), and the
 contact directory's answer about the sender: `contact_status`
 (`matched`, `unmatched`, `ambiguous`, or `lookup_failed`), the effective

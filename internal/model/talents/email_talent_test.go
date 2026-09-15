@@ -379,7 +379,7 @@ func TestEmailTalentTeachesTwoPasses(t *testing.T) {
 	}{
 		{"shape bullet names escalate", "email", "**You want a more capable pass to look at a message** — call `email_escalate`"},
 		{"entry shows routing", "email", "An entry shows `wake_loop` when the account's new mail wakes a loop other than its owner's default, and `review_loop` with `pending_review`"},
-		{"wake metadata flags", "email", "so `\\Flagged` there means it is already flagged"},
+		{"wake metadata flags", "email", "so `\\Flagged` there is someone else's flag: the message is already flagged"},
 		{"review wake is unattended", "email", "A poller wake, a review wake, a scheduled loop"},
 		{"passes section", "email", "## Two passes over new mail"},
 		{"routing is configuration", "email", "is the operator's configuration, and no tool changes it"},
@@ -435,6 +435,97 @@ func TestEmailTalentTeachesTwoPasses(t *testing.T) {
 		{"a queue tool the review loop lacks", "queue_enqueue"},
 		{"curators are not named", "curator"},
 		{"the old coupling paragraph", "the coupling is a queue"},
+	}
+	for _, tt := range absent {
+		t.Run(tt.name, func(t *testing.T) {
+			for name, body := range text {
+				if strings.Contains(body, tt.gone) {
+					t.Errorf("talent %s still contains %q", name, tt.gone)
+				}
+			}
+		})
+	}
+}
+
+// TestEmailTalentTeachesLabels pins the slice 6 teaching and the arc's
+// synthesis: the five-question decision frame in the email trailhead,
+// what labels are, that a label with apply is Go's, how a row tells a
+// label's flag from an attention flag, that flagging clears only Thane's
+// colour, the keywords verdict, answered refused on a drafts account,
+// email_mark label and its refusals, and email_search's label and
+// unflagged filters and undeclared-argument refusal. It also pins that
+// no mail client and no site keyword is taught: labels are a portable
+// vocabulary, and a keyword learned by example is one the model searches
+// for on a site that declares another.
+func TestEmailTalentTeachesLabels(t *testing.T) {
+	text := emailTalentText(t)
+	present := []struct {
+		name   string
+		talent string
+		want   string
+	}{
+		{"frame section", "email", "## Five questions before you act"},
+		{"frame asks whose mailbox", "email", "**Whose mailbox is it?**"},
+		{"frame asks where mail may go", "email", "**Where may its mail go?**"},
+		{"frame asks draft, flag, or escalate", "email", "**Draft, flag, or escalate?**"},
+		{"frame asks whose draft", "email", "**Is this draft mine?**"},
+		{"frame asks what a mark says", "email", "**What does this mark say?**"},
+		{"frame says where care goes", "email", "What Go cannot check is the judgment"},
+		{"entry shows labels", "email", "It shows `labels` and `keywords` when the account's mailbox carries labels"},
+		{"labels section", "email", "## Labels"},
+		{"entry label shape", "email", "`labels` `[{label, meaning, shows_as, apply}]`"},
+		{"no labels means none written or taken", "email", "An entry without `labels` means no label is written on that account, and `email_mark` and `email_search` refuse one there"},
+		{"undeclared keyword is no label", "email", "A keyword in a message's `flags` that the entry's labels do not declare is the operator's or their client's, not a label"},
+		{"apply labels are Go's", "email", "**A label with `apply` is Go's, never yours.**"},
+		{"contact_matched from the directory", "email", "Under `contact_matched`, when new mail reaches INBOX from a sender whose `contact_status` is `matched`"},
+		{"the label claims only a match", "email", "it says nothing about who wrote the message or whether it matters"},
+		{"wake flags carry no Thane mark", "email", "without any mark Thane set for a label"},
+		{"flag_label is the label's mark", "email", "the label's mark, not a request for the operator's attention"},
+		{"any other flag is attention", "email", "Any other flag, whatever its colour, is someone's attention flag"},
+		{"flagging clears Thane's colour", "email", "Go clears the colour Thane wrote, so the flag reads plain, as the operator's attention flag"},
+		{"never another's colour", "email", "A colour anyone else set is never cleared."},
+		{"unflagging takes Thane's colour", "email", "with the colour keywords Thane wrote for it"},
+		{"keywords verdict", "email", "`keywords: \"permanent\"` means it does"},
+		{"no keyword without permanence", "email", "so Go writes no keyword there, a label's colour keywords included"},
+		{"absent verdict proves nothing", "email", "its absence says nothing about the server"},
+		{"a draft is not an answer", "email", "which is why `email_mark` refuses `answered` on an account whose `delivery` is `drafts`"},
+		{"a missing answered proves nothing", "email", "a missing `\\Answered` does not show that a draft you wrote went unsent"},
+		{"contact_save refusal is outside the operator's message", "email", "outside the operator's own message Go refuses the additions that would lend a higher zone"},
+		{"row labels", "email_triage", "labels, flag_label, size, thane_draft}]}"},
+		{"read labels", "email_triage", "date, flags, labels, flag_label, thane_draft, size"},
+		{"flag_label comes from Go's record", "email_triage", "Go reads that from its own record of what it set, never from the colour"},
+		{"colour keywords named", "email_triage", "the colour keywords `$MailFlagBit0` to `$MailFlagBit2` among them"},
+		{"raw flags stay", "email_triage", "The raw `flags` stay beside both."},
+		{"search label and unflagged", "email_triage", "`flagged` or `unflagged` (with or without `\\Flagged`, whoever set it), `label`"},
+		{"undeclared search argument refused", "email_triage", "so is an argument `email_search` does not take"},
+		{"flagged search finds label flags", "email_triage", "`flagged: true` finds a label's flag as well as an attention flag"},
+		{"apply a label section", "email_organize", "## Apply a label"},
+		{"a label the account lacks is refused", "email_organize", "A label the account's entry does not list is refused"},
+		{"colour refused over any other flag", "email_organize", "A label with a colour is refused on a message that already carries any flag but that label's own"},
+		{"removal takes only Thane's marks", "email_organize", "removes only the keyword and flag Thane recorded setting"},
+		{"keywords refusal quotes the server", "email_organize", "the refusal quotes the server, and the entry's `keywords` shows INBOX's answer"},
+		{"answered refused on drafts", "email_organize", "On an account whose `delivery` is `drafts`, `email_mark` refuses `answered`, adding or removing"},
+		{"flag result lists cleared colours", "email_organize", "uids_affected, uids_not_found, thane_color_cleared, note}"},
+		{"refused label not retried", "email_organize", "A refused message refuses the same way again, so do not retry it"},
+	}
+	for _, tt := range present {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(text[tt.talent], tt.want) {
+				t.Errorf("talent %s must contain %q", tt.talent, tt.want)
+			}
+		})
+	}
+
+	absent := []struct {
+		name string
+		gone string
+	}{
+		{"a mail client by name", "Apple"},
+		{"a site's keyword", "thane-contact"},
+		{"a flag read from its colour", "flag_color"},
+		{"a claim about what a mail client marks", "marks the message answered"},
+		{"the self-referencing escalate cross-reference", "see \"Escalate or flag\" above"},
+		{"the trailhead's zone-by-zone delivery recital", "Under the default `by_trust_zone` delivery"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {
