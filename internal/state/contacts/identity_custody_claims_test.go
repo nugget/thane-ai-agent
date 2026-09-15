@@ -552,6 +552,50 @@ func TestLegacyOwnerName_OperatorKeepsItsNickname(t *testing.T) {
 	}
 }
 
+// TestLegacyOwnerName_PaddedFormattedNameStillAnswers pins that the
+// legacy selector asks whether the operator's contact still answers to
+// the owner name with the resolver's own key. An operator whose
+// formatted name is the owner name, stored with edge space or in
+// another ASCII case, may replace the nickname "Alice", since
+// resolution still reaches it through the formatted name; one that
+// answers only through the nickname may not. The refusal is called
+// directly because contact_save loads a record by its formatted name
+// untrimmed, so it cannot select a padded one by name.
+func TestLegacyOwnerName_PaddedFormattedNameStillAnswers(t *testing.T) {
+	tests := []struct {
+		formatted string
+		refused   bool
+	}{
+		{"Alice", false},
+		{"Alice ", false},
+		{" alice\t", false},
+		{"Alice Operator", true},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%q", tt.formatted), func(t *testing.T) {
+			tools := newTestTools(t)
+			operator := seedNicknameAt(t, tools.store, tt.formatted, "Alice", ZoneKnown)
+			tools.SetOwnerContactName("Alice")
+			if got, err := tools.store.ResolveContact("Alice"); err != nil || got.ID != operator.ID {
+				t.Fatalf("ResolveContact(Alice) = %+v, %v, want the operator", got, err)
+			}
+			contact, err := tools.store.GetWithProperties(operator.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := SaveContactArgs{Name: strings.TrimSpace(tt.formatted), Nickname: "Ally"}
+			err = tools.ownerNameClaimRefusal(t.Context(), args, contact, false)
+			if tt.refused {
+				requireContains(t, err, `refused nickname "Ally"`, "only through that nickname")
+				return
+			}
+			if err != nil {
+				t.Errorf("replacing the nickname of an operator whose formatted name %q still answers to Alice was refused: %v", tt.formatted, err)
+			}
+		})
+	}
+}
+
 // TestSaveContact_SignalOnTelOnlyContact pins #1566's no-code decision
 // on a Signal IMPP added to a contact that holds only a TEL: the target
 // rule already covers a contact above known, and a known contact carries

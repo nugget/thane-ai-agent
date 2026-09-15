@@ -54,7 +54,7 @@ func (t *Tools) legacyOwnerName() string {
 // claimsOwnerName reports whether any of names is the legacy owner name,
 // ignoring edge space and Unicode case. That matches more than the
 // resolver does, which is safe only where a match refuses a claim;
-// whether a record answers to the name uses [sqliteLowerEqual].
+// whether a record answers to the name uses the resolver's [nameKey].
 func claimsOwnerName(owner string, names ...string) bool {
 	if owner == "" {
 		return false
@@ -88,9 +88,12 @@ func (t *Tools) ownerNameClaimRefusal(ctx context.Context, args SaveContactArgs,
 		return fmt.Errorf("contact_save refused to create %q: %q %s If this is the operator, contact_owner returns their contact; save to it by its exact name. If it is someone else, save them under a fuller name without that nickname, or ask the operator to add the contact through CardDAV or the contacts API", args.Name, owner, why)
 	}
 	// Whether the record still answers to the owner name after the save
-	// is decided the way the resolver decides it, so neither edge space
-	// nor a Unicode case variant passes for the name.
-	stillAnswers := sqliteLowerEqual(args.Nickname, owner) || sqliteLowerEqual(contact.FormattedName, owner)
+	// is decided with the resolver's own key: both sides trimmed of edge
+	// space and folded as LOWER folds them. So a formatted name stored
+	// with edge space still answers, as the resolver finds it, and a
+	// Unicode case variant does not pass for the name.
+	ownerKey := nameKey(owner)
+	stillAnswers := nameKey(args.Nickname) == ownerKey || nameKey(contact.FormattedName) == ownerKey
 	if claimsOwnerName(owner, contact.Nickname) && strings.TrimSpace(args.Nickname) != "" && !stillAnswers {
 		return t.ownerNicknameReplacementRefusal(ctx, args, contact, owner)
 	}

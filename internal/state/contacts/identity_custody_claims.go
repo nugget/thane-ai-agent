@@ -113,8 +113,8 @@ func sameFactProperty(a, b string) bool {
 }
 
 // sqliteLower folds ASCII letters only, as SQLite's built-in LOWER
-// does. It trims nothing, because LOWER does not: a stored name with
-// edge space no longer matches a lookup for the bare name.
+// does. It trims nothing, because LOWER does not; [nameKey] trims edge
+// space first, as the resolver trims both sides before it compares.
 func sqliteLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {
@@ -125,9 +125,10 @@ func sqliteLower(s string) string {
 	return string(b)
 }
 
-// sqliteLowerEqual reports whether two names are the same to the
-// resolver's LOWER comparison, so an ASCII case-only edit is not a
-// change and any other edit, edge space included, is.
+// sqliteLowerEqual reports whether two names are the same to SQLite
+// LOWER without trimming, so an ASCII case-only edit is not a change
+// and any other edit, edge space included, is. Whether a record answers
+// to a name is the resolver's question, and [nameKey] answers it.
 func sqliteLowerEqual(a, b string) bool {
 	return sqliteLower(a) == sqliteLower(b)
 }
