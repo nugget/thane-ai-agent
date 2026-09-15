@@ -93,9 +93,10 @@ type accountView struct {
 	// account limits where email_move may file its mail.
 	filingView
 
-	// reviewView adds wake_loop when the account's new mail is routed
-	// away from its owner's default, and review_loop with the cached
-	// pending_review when the account has a review pass.
+	// reviewView adds wake_loop, the loop each new message on the
+	// account wakes, on every entry while mail is polled, and
+	// review_loop with the cached pending_review when the account has a
+	// review pass.
 	reviewView
 
 	// labelsView adds labels and keywords when email.labels declares any

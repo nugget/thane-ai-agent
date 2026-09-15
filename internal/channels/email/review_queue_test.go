@@ -227,24 +227,40 @@ func emailAccountEntry(t *testing.T, svc *Service) map[string]any {
 }
 
 // TestEmailAccountsEntryRendersRouting pins the routing keys in the
-// block: wake_loop only when it differs from the owner's default,
-// review_loop when set, and pending_review from the cache alone.
+// block: wake_loop names the loop the account's new mail wakes on every
+// entry while mail is polled, the owner's default included, and none
+// when polling is off; review_loop renders when set, polled or not; and
+// pending_review comes from the cache alone.
 func TestEmailAccountsEntryRendersRouting(t *testing.T) {
 	tests := []struct {
 		name       string
+		pollingOff bool
 		mailbox    MailboxConfig
 		wantWake   any
 		wantReview any
 	}{
-		{"operator at its default", MailboxConfig{Owner: "operator"}, nil, nil},
-		{"assistant at its default", MailboxConfig{}, nil, nil},
-		{"operator kept on the default handler", MailboxConfig{Owner: "operator", WakeLoop: DefaultHandlerLoopName}, DefaultHandlerLoopName, nil},
-		{"assistant with a review pass", MailboxConfig{ReviewLoop: testReviewLoop}, nil, testReviewLoop},
+		{"operator at its default", false, MailboxConfig{Owner: "operator"}, OwnerTriageLoopName, nil},
+		{"assistant at its default", false, MailboxConfig{}, DefaultHandlerLoopName, nil},
+		{"operator kept on the default handler", false, MailboxConfig{Owner: "operator", WakeLoop: DefaultHandlerLoopName}, DefaultHandlerLoopName, nil},
+		{"assistant routed to its own loop", false, MailboxConfig{WakeLoop: " mail-sorter "}, "mail-sorter", nil},
+		{"assistant with a review pass", false, MailboxConfig{ReviewLoop: testReviewLoop}, DefaultHandlerLoopName, testReviewLoop},
+		{"polling off, operator at its default", true, MailboxConfig{Owner: "operator"}, nil, nil},
+		{"polling off, an explicit wake_loop", true, MailboxConfig{WakeLoop: "mail-sorter"}, nil, nil},
+		{"polling off, a review pass still shows", true, MailboxConfig{Owner: "operator", ReviewLoop: testReviewLoop}, nil, testReviewLoop},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f, _ := reviewFixture(t, "", func(a *AccountConfig) { a.Mailbox = tt.mailbox })
-			entry := emailAccountEntry(t, f.svc)
+			svc, _, _ := policyService(t, ServiceDependencies{Contacts: identityStub(), Queue: testReviewQueue(t)}, func(cfg *Config) {
+				cfg.Accounts[0].Mailbox = tt.mailbox
+				if tt.pollingOff {
+					zero := 0
+					cfg.PollInterval = &zero
+				}
+			})
+			if svc.PollingEnabled() == tt.pollingOff {
+				t.Fatalf("PollingEnabled() = %v, want %v", svc.PollingEnabled(), !tt.pollingOff)
+			}
+			entry := emailAccountEntry(t, svc)
 			if entry["wake_loop"] != tt.wantWake || entry["review_loop"] != tt.wantReview {
 				t.Errorf("wake_loop = %v, review_loop = %v; want %v, %v", entry["wake_loop"], entry["review_loop"], tt.wantWake, tt.wantReview)
 			}
