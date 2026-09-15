@@ -74,12 +74,12 @@ func TestEmailTalentTeachesWhoseMailbox(t *testing.T) {
 		{"draft on purpose carries no bcc", "email_respond", "The draft carries no audit `Bcc` on any account"},
 		{"bcc rides only sent mail", "email_respond", "which rides only sent mail"},
 		{"seen refused unattended on operator mailbox", "email_organize", "adding `seen` is refused in any turn the operator is not present for"},
-		{"destination required", "email_organize", "`destination` is required"},
+		{"exactly one target", "email_organize", "The target is exactly one of `destination` or `destination_role`."},
 		{"folder is the source", "email_organize", "`folder` is the source (default INBOX) and never the target."},
 		{"move recorded with uids", "email_organize", "records each move with both UID lists"},
 		{"move record is capped", "email_organize", "at most 10 of each with the rest counted"},
 		{"a draft goes out under the account's from", "email_respond", "under the account's own From, which is the operator's name only on an operator mailbox"},
-		{"undo names the source explicitly", "email_organize", "`destination` set explicitly to the original `source_folder`"},
+		{"undo names the source explicitly", "email_organize", "the target set explicitly to the original `source_folder`"},
 	}
 	for _, tt := range present {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,6 +100,90 @@ func TestEmailTalentTeachesWhoseMailbox(t *testing.T) {
 		{"another account as a recovery", "use an account that can send"},
 		{"every draft goes out as the operator", "as themselves"},
 		{"every draft goes out in the operator's name", "in their own name"},
+	}
+	for _, tt := range absent {
+		t.Run(tt.name, func(t *testing.T) {
+			for name, body := range text {
+				if strings.Contains(body, tt.gone) {
+					t.Errorf("talent %s still contains %q", name, tt.gone)
+				}
+			}
+		})
+	}
+}
+
+// TestEmailTalentTeachesFilingPolicy pins the slice 2 teaching: what
+// counts as obvious spam, filing it by role, the junk guard's refused
+// list and its recovery, the undo recipe, move_into and the INBOX
+// return, the drafts folder as a source, and hidden_content. It also
+// pins that the lines it replaced are gone.
+func TestEmailTalentTeachesFilingPolicy(t *testing.T) {
+	text := emailTalentText(t)
+	present := []struct {
+		name   string
+		talent string
+		want   string
+	}{
+		{"entry shows filing fields", "email", "shows its `junk_folder`, the `move_into` folders `email_move` accepts there, and any `filing_note`"},
+		{"whose mailbox files spam by role", "email", "which `email_move` files with `destination_role: \"junk\"`"},
+		{"whose mailbox names move_into", "email", "the entry's `move_into` lists the only folders mail may move into"},
+		{"folders bullet offers the role", "email", "`email_move` takes `destination_role` (such as `junk` or `trash`) and Go finds the folder"},
+		{"read result lists hidden_content", "email_triage", "body_source, hidden_content, body_truncated"},
+		{"hidden text is withheld and counted", "email_triage", "that text is withheld from the body and `hidden_content` `{present: true, chars}` says so"},
+		{"hidden_content alone is not abuse", "email_triage", "so `hidden_content` alone is not a sign of abuse"},
+		{"mark refuses the drafts folder", "email_organize", "The account's drafts folder is never the `folder` of an `email_mark` call."},
+		{"move refuses drafts both ways", "email_organize", "The account's drafts folder is neither a destination nor a source."},
+		{"neither or both refused", "email_organize", "A call with neither or both is refused and moves nothing"},
+		{"move_into limits destinations", "email_organize", "those folders are the only destinations `email_move` accepts there"},
+		{"operator default is junk alone", "email_organize", "unless the operator configured more it holds the junk folder alone"},
+		{"move_into holds when attended", "email_organize", "so it holds in the operator's own turn too"},
+		{"inbox return always allowed", "email_organize", "Moving mail back to INBOX out of a `move_into` folder is always allowed"},
+		{"result carries moved", "email_organize", "`moved` lists each message that moved as `{uid, destination_uid, message_id, from, trust_zone}`"},
+		{"result action refused", "email_organize", "`action` is `moved`, or `refused` when the junk guard refused every message and nothing moved"},
+		{"spam section", "email_organize", "## Obvious spam, and nothing else"},
+		{"spam needs an unmatched sender", "email_organize", "its sender's `contact_status` is `unmatched`"},
+		{"spam needs a hard sign", "email_organize", "it gives itself away with a hard sign"},
+		{"bulk alone is not spam", "email_organize", "Bulk or automated alone is never spam."},
+		{"hidden_content is evidence", "email_organize", "`hidden_content` on a read result is evidence that the sender hid text"},
+		{"spam moves by role", "email_organize", "\"destination_role\": \"junk\""},
+		{"guard lists refused", "email_organize", "under `refused` as `{uid, from, trust_zone, reason, recovery}`"},
+		{"guard recovery flags", "email_organize", "flag it with `email_mark` flag `flagged` if it needs the operator"},
+		{"guard recovery escalates", "email_organize", "bring it to them with `request_core_attention` if it cannot wait"},
+		{"guard refusal not retried", "email_organize", "Do not retry the move, by role or by name"},
+		{"no guard when attended", "email_organize", "In the operator's own turn there is no guard"},
+		{"undo recipe", "email_organize", "`email_move {account, folder: <junk_folder from the account's entry>, uids: <destination_uids from the move result>, destination_role: \"inbox\"}`"},
+		{"undo without destination uids", "email_organize", "taking each `message_id` from the result's `moved` list"},
+		{"trash by role", "email_organize", "`destination_role: \"trash\"` resolves the account's trash folder"},
+		{"rendering names the idioms Go recognises", "email_triage", "The rendering leaves out text the HTML's own markup hides with an inline idiom Go recognises"},
+		{"hidden text is what a reader would not see", "email_triage", "`hidden_content` is evidence that the sender put text in the message that a person reading it would not see."},
+		{"absent hidden_content proves nothing", "email_triage", "its absence does not show that the body is what a reader saw"},
+		{"guard covers addresses it cannot fully check", "email_organize", "when one of them is, or may be, at such a zone"},
+		{"refused trust_zone is the judged zone", "email_organize", "Its `trust_zone` is the zone the guard judged"},
+		{"a refusal waits for the operator", "email_organize", "a refused message waits for the operator, not for another attempt"},
+		{"undo into an unlisted folder is refused", "email_organize", "A move back into a folder the account's `move_into` does not list is refused like any other"},
+		{"operator entry shows move_into when limited", "email_organize", "An operator mailbox shows it whenever the list is limited"},
+		{"operator entry always shows junk_folder", "email", "an operator mailbox shows its `junk_folder` even when it allows every folder"},
+	}
+	for _, tt := range present {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(text[tt.talent], tt.want) {
+				t.Errorf("talent %s must contain %q", tt.talent, tt.want)
+			}
+		})
+	}
+
+	absent := []struct {
+		name string
+		gone string
+	}{
+		{"destination alone is required", "`destination` is required"},
+		{"spam filed by reading the role off the listing", "the folder whose role is `junk`"},
+		{"trash filed by reading the role off the listing", "block lists with role `trash`, by its exact name"},
+		{"undo only by destination", "`destination` set explicitly to the original `source_folder`"},
+		{"rendered body claimed faithful", "A rendered HTML body is what a person reading the message would see"},
+		{"hidden text gap told backwards", "showed a reader something other than what reached you"},
+		{"guard claimed to answer a repeat the same way", "the guard answers the same way every time"},
+		{"operator entry claimed to always show move_into", "An operator mailbox always shows it"},
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {
