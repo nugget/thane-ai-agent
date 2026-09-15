@@ -28,10 +28,12 @@ loop bus and nobody sent a new message) follows the same rule: your
 final text is sent to them word for word, even a note to yourself.
 When nothing should reach them from that turn, call
 `signal_hold_reply` with your reason, and the bridge sends nothing,
-whatever the final text says. It is offered only on those wake turns,
-because every other Signal turn answers something they sent. Holding
-the Signal message does not answer the loop that woke you; that reply
-still goes through `loop_wake`.
+whatever the final text says. Leaving the final text empty is not a
+hold: the runtime asks you to respond, and what you write then is
+sent. The hold is offered only on those wake turns, because every
+other Signal turn answers something they sent. Holding the Signal
+message does not answer the loop that woke you; that reply still goes
+through `loop_wake`.
 
 | Situation | Right move |
 |---|---|
@@ -47,7 +49,8 @@ The cleanest test: *if I do nothing extra, will the bridge send the
 right thing?* If yes, just answer and let the bridge handle it. If
 no — the message goes to a different recipient, or you need to send
 multiple things, or you want to send *before* the final reply text
-— `signal_send_message` is the right path.
+— `signal_send_message` is the right path. If a loop woke you and the
+right thing to send is nothing, `signal_hold_reply` is.
 
 ## Constants
 

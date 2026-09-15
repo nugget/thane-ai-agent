@@ -230,7 +230,11 @@ see what you decided, so a determination you reach and never send is
 one it never receives; the same concern comes back unchanged on its
 next pass. Escalating to a person is one available outcome, not the
 expected one, and "nothing needs to happen" is a real determination
-that still gets sent back with the reasoning behind it.
+that still gets sent back with the reasoning behind it. When the wake
+reaches you on a Signal thread, whether the person there hears
+anything is a separate decision: your final text is sent to them
+unless you hold it with `signal_hold_reply`, and neither the message
+nor the hold answers the requester.
 
 Natural-language timing inside a task does not schedule a service loop.
 Pick a sleep envelope (sleep_min, sleep_max) tight enough to catch what
