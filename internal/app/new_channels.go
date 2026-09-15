@@ -235,12 +235,17 @@ func (a *App) initChannels(s *newState) error {
 			MessageBus:   a.messageBus,
 			Contacts:     a.contactBindingResolver,
 			Interactions: &emailInteractionRecorder{store: contactStore},
+			Queue:        a.loopQueue,
 			Logger:       a.logger,
 		})
 		if err != nil {
 			return fmt.Errorf("create email service: %w", err)
 		}
 		a.emailService = svc
+		// Review loops wake on queued review work; arm before any
+		// traffic, and sweep once the loops are running (new_servers).
+		a.emailReviewWake = newEmailReviewWaker(a.loopQueue, a.messageBus, svc.AccountsInConfigOrder(), a.logger)
+		a.emailReviewWake.arm()
 		a.onClose("email", svc.Close)
 		a.loop.Tools().RegisterProvider(svc.ToolProvider())
 

@@ -66,7 +66,7 @@ func proveOwnership(e draftEntry, state draftFolderState) ownershipVerdict {
 // reconcileDrafts proves every open entry of an account against its
 // drafts folder, closes the ones that fail, settles write-ahead records
 // and unknown UIDs, and returns every entry of the account as it stands
-// afterwards. Caller must hold s.draftsMu.
+// afterwards. Caller must hold the account's draft lock.
 func (s *Service) reconcileDrafts(ctx context.Context, acct ResolvedAccount) ([]draftEntry, error) {
 	entries, err := s.draftEntries(acct.Name)
 	if err != nil {

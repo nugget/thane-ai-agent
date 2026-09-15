@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Mailbox owners: whose mailbox an account is.
 const (
@@ -51,6 +54,36 @@ type EmailMailboxConfig struct {
 	// bytes, on how this mailbox is filed, shown to the model in the
 	// account's Email Accounts entry.
 	FilingNote string `yaml:"filing_note"`
+
+	// WakeLoop names the loop that receives this account's new-mail
+	// wakes. Default: "email-owner-triage" when owner is operator, a
+	// built-in pass that prefers local models, files only obvious spam,
+	// flags what needs the operator, drafts plain answers where the
+	// account can draft, and hands the rest to review_loop; and
+	// "email-default-handler" otherwise. The loop must be an
+	// event_driven definition, or startup refuses the config.
+	WakeLoop string `yaml:"wake_loop"`
+
+	// ReviewLoop names a loop that looks at this account's mail after
+	// wake_loop: every draft a turn the operator is not present for
+	// writes here, and every message email_escalate hands over, is queued
+	// for it, and it is woken only while that queue holds work. Empty
+	// (the default) means no review pass, and email_escalate then
+	// refuses and says to flag the message instead. The built-in
+	// "email-draft-review" may use cloud models and asks for a higher
+	// quality floor than the wake loop. The loop must be an event_driven
+	// definition other than wake_loop, or startup refuses the config.
+	ReviewLoop string `yaml:"review_loop"`
+
+	// ReviewDelay is how long review work waits for more to arrive
+	// before review_loop is woken, so a burst of mail becomes one
+	// review. Default: 15m.
+	ReviewDelay time.Duration `yaml:"review_delay"`
+
+	// ReviewMaxWait bounds how long a steady stream of new review work
+	// can postpone that wake. Default: 2h. It may not be shorter than
+	// review_delay.
+	ReviewMaxWait time.Duration `yaml:"review_max_wait"`
 }
 
 // MailboxOwner returns the effective owner, applying the default.
@@ -83,5 +116,8 @@ func (a EmailAccountConfig) validateMailbox(i int) error {
 	if n := len(a.Mailbox.Voice); n > maxEmailMailboxVoiceBytes {
 		return fmt.Errorf("email.accounts[%d] (%s): mailbox.voice is %d bytes, over the %d-byte limit; keep it to a short note on how mail from this account should sound", i, a.Name, n, maxEmailMailboxVoiceBytes)
 	}
-	return a.validateFiling(i)
+	if err := a.validateFiling(i); err != nil {
+		return err
+	}
+	return a.validateRouting(i)
 }

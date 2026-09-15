@@ -1,6 +1,11 @@
 package email
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+)
 
 // mailboxView is the part of an account's Email Accounts entry that
 // says whose mailbox it is and how mail written from it should sound.
@@ -73,6 +78,39 @@ func (s *Service) newFilingView(cfg AccountConfig) filingView {
 	view.JunkFolder = known(RoleJunk)
 	if !cfg.MovesAnywhere() {
 		view.MoveInto = resolveFilingPolicy(cfg, known).entryNames()
+	}
+	return view
+}
+
+// reviewView is the part of an account's entry that says which loops
+// see its mail. wake_loop renders only when the operator routed the
+// account's new mail away from its owner's default, so an account at
+// its default renders as it did before routing existed. review_loop
+// renders when the account has a review pass, and with it
+// pending_review, the account's queued review work, and
+// pending_review_as_of, once the poller or an enqueue has counted it:
+// the render reads the count, it never counts.
+type reviewView struct {
+	WakeLoop          string `json:"wake_loop,omitempty"`
+	ReviewLoop        string `json:"review_loop,omitempty"`
+	PendingReview     *int   `json:"pending_review,omitempty"`
+	PendingReviewAsOf string `json:"pending_review_as_of,omitempty"`
+}
+
+// newReviewView projects an account's routing and its cached review
+// count for its entry.
+func (s *Service) newReviewView(cfg AccountConfig, now time.Time) reviewView {
+	view := reviewView{ReviewLoop: cfg.ReviewLoopName()}
+	if wake := cfg.WakeLoopName(); wake != cfg.DefaultWakeLoopName() {
+		view.WakeLoop = wake
+	}
+	if view.ReviewLoop == "" {
+		return view
+	}
+	if c, ok := s.cachedPendingReview(cfg.Name); ok {
+		pending := c.Pending
+		view.PendingReview = &pending
+		view.PendingReviewAsOf = promptfmt.FormatDeltaOnly(c.At, now)
 	}
 	return view
 }

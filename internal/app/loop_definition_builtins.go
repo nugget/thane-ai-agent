@@ -97,7 +97,7 @@ func builtInContainerDefinitionSpecs(cfg *config.Config, declared map[string]str
 		specs = append(specs, containerSpec(homeAssistantContainerName,
 			"Home Assistant integration: state watching, MQTT transport, and telemetry."))
 	}
-	if unifiPollerEnabled(cfg) || emailServicesEnabled(cfg) || forgePollerEnabled(cfg) || mediaServicesEnabled(cfg) {
+	if unifiPollerEnabled(cfg) || emailServicesEnabled(cfg) || emailReviewConfigured(cfg) || forgePollerEnabled(cfg) || mediaServicesEnabled(cfg) {
 		specs = append(specs, containerSpec(pollersContainerName,
 			"Outward integration services: presence, email, code-forge, and media-feed pollers and their triage handlers."))
 	}
@@ -183,6 +183,11 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			},
 		})
 	}
+
+	// The passes some account routes to: the operator-mailbox first pass,
+	// which only a poll wakes, and the review pass, which queued work
+	// wakes whether or not mail is polled (email_pass_builtins.go).
+	specs = append(specs, emailPassDefinitionSpecs(cfg)...)
 
 	if emailServicesEnabled(cfg) {
 		// Default landing zone for new-mail wakes when an operator

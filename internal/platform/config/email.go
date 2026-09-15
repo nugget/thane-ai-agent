@@ -390,6 +390,7 @@ func (c *EmailConfig) ApplyDefaults() {
 		acct.Policy.AllowedRecipientDomains = normalizeDomains(acct.Policy.AllowedRecipientDomains)
 		acct.Mailbox.Owner = acct.MailboxOwner()
 		acct.Mailbox.MoveInto = acct.MoveIntoTokens()
+		acct.applyRoutingDefaults()
 	}
 }
 

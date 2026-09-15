@@ -54,8 +54,9 @@ const (
 	// BindingEmailAccount names the email account (from email.accounts in
 	// config) this loop's email tools resolve to. Its value is an account
 	// name, and the account must exist at hydration. The built-in
-	// email-default-handler is deliberately unbound: it triages every
-	// configured mailbox and reads the account from each wake event.
+	// email-default-handler, email-owner-triage, and email-draft-review
+	// are deliberately unbound: each serves every mailbox that routes to
+	// it and reads the account from each wake event or queued item.
 	BindingEmailAccount = "email_account"
 )
 
