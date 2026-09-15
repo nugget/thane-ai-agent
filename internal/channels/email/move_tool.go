@@ -8,9 +8,10 @@ import (
 
 // move runs one validated email_move. Before anything moves it resolves
 // the drafts folder once and the destination, applies the drafts
-// protections and the account's filing policy, reads each message's
-// sender, and lets the junk guard hold back what it must; then it moves
-// the rest and reports every moved message with its sender.
+// protections, applies the account's filing policy in a turn the
+// operator is not present for, reads each message's sender, and lets
+// the junk guard hold back what it must; then it moves the rest and
+// reports every moved message with its sender.
 func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest) (moveResponse, error) {
 	s := t.service
 	r := s.newFolderResolver(acct)
@@ -36,7 +37,14 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 	if r.err != nil {
 		return moveResponse{}, r.err
 	}
-	if err := s.refuseFiling(ctx, acct, policy, opts.Folder, dest); err != nil {
+	// move_into binds only turns the operator is not present for. In
+	// theirs the move goes ahead, and once it has moved something the
+	// log records what went outside the rule; the drafts protections
+	// above hold in both.
+	outsideMoveInto := false
+	if attended(ctx) {
+		outsideMoveInto = !policy.allows(opts.Folder, dest)
+	} else if err := s.refuseFiling(ctx, acct, policy, opts.Folder, dest); err != nil {
 		return moveResponse{}, err
 	}
 
@@ -99,6 +107,9 @@ func (t *Tools) move(ctx context.Context, acct ResolvedAccount, req moveRequest)
 		resp.UIDsNotFound = nonNilUIDs(missingUIDs(opts.UIDs, result.UIDs))
 	} else {
 		resp.Note = "the server did not confirm which UIDs moved or their new UIDs; list " + result.Destination + " to check"
+	}
+	if outsideMoveInto {
+		s.logMoveOutsideMoveInto(ctx, acct, result, resp.Moved)
 	}
 	s.recordOp("email_move", acct.Name, result.SourceFolder, moveOperationRef(result))
 	return resp, nil
