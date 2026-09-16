@@ -219,20 +219,53 @@ func TestAmbiguousSessionPrefixErrorSaysWhenTheListIsPartial(t *testing.T) {
 // own context reaches the prefix lookup. The resolution runs before any
 // transcript is read, so without this the model's cancelled call would
 // still pay for a scan of every archived session.
+// TestArchiveSessionTranscriptToolHonoursContext pins every archive read
+// this tool makes to the caller's context, not just the cheap indexed
+// prefix lookup. Honouring cancellation on the lookup and ignoring it on
+// the transcript is the wrong way round: the transcript scan is the one
+// read whose cost grows with the session.
 func TestArchiveSessionTranscriptToolHonoursContext(t *testing.T) {
 	r := newSessionLookupFixture(t)
 	tool := r.Get("archive_session_transcript")
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
 
-	if _, err := tool.Handler(cancelled, map[string]any{"session_id": lookupSharedPrefix}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("handler error = %v, want context.Canceled", err)
+	tests := []struct {
+		name string
+		arg  string
+	}{
+		{name: "a shared prefix, which resolves before reading anything", arg: lookupSharedPrefix},
+		{name: "a full id with a transcript, the heaviest read", arg: lookupOldSessionID},
+		{name: "a full id whose session has no messages", arg: lookupSharedSessionID(3)},
 	}
-	// Negative control: the same argument under a live context reaches
-	// the ambiguity refusal, so the case above fails on cancellation.
-	if _, err := tool.Handler(t.Context(), map[string]any{"session_id": lookupSharedPrefix}); err == nil || errors.Is(err, context.Canceled) {
-		t.Fatalf("live handler error = %v, want the ambiguous-prefix refusal", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cancelled, cancel := context.WithCancel(t.Context())
+			cancel()
+			if _, err := tool.Handler(cancelled, map[string]any{"session_id": tt.arg}); !errors.Is(err, context.Canceled) {
+				t.Fatalf("handler error = %v, want context.Canceled", err)
+			}
+			// Negative control: the same argument under a live context
+			// gets an answer, so the case above fails on cancellation
+			// rather than on the argument.
+			if _, err := tool.Handler(t.Context(), map[string]any{"session_id": tt.arg}); errors.Is(err, context.Canceled) {
+				t.Fatalf("live handler error = %v, want an answer or an ordinary refusal", err)
+			}
+		})
 	}
+
+	// The empty-transcript branch decides between "no such session" and
+	// "a session with nothing in it", and it is reached only after the
+	// transcript read has already returned. Drive it directly so its own
+	// reads are pinned to ctx too.
+	t.Run("the empty-transcript lookup", func(t *testing.T) {
+		cancelled, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := missingArchiveSessionError(cancelled, r.archiveStore, lookupSharedSessionID(3)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("missingArchiveSessionError error = %v, want context.Canceled", err)
+		}
+		if err := missingArchiveSessionError(t.Context(), r.archiveStore, lookupSharedSessionID(3)); err != nil {
+			t.Fatalf("live missingArchiveSessionError error = %v, want nil for a session that exists", err)
+		}
+	})
 }
 
 // absoluteTimestampPattern matches an RFC3339 instant, the shape a

@@ -342,12 +342,12 @@ func (r *Registry) registerArchiveSessionTranscript(store *memory.ArchiveStore) 
 				return "", err
 			}
 
-			messages, err := store.GetSessionTranscript(sessionID)
+			messages, err := store.GetSessionTranscriptContext(ctx, sessionID)
 			if err != nil {
 				return "", fmt.Errorf("get transcript: %w", err)
 			}
 			if len(messages) == 0 {
-				if err := missingArchiveSessionError(store, sessionID); err != nil {
+				if err := missingArchiveSessionError(ctx, store, sessionID); err != nil {
 					return "", err
 				}
 			}

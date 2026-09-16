@@ -160,9 +160,10 @@ func sessionPrefixRefusal(lookup memory.SessionPrefixLookup, candidates []sessio
 
 // missingArchiveSessionError distinguishes a full session id that names
 // no archived session from a session that exists but has no messages.
-// It returns nil when the session exists.
-func missingArchiveSessionError(store *memory.ArchiveStore, id string) error {
-	sess, err := store.GetSession(id)
+// It returns nil when the session exists. The lookup runs under ctx, so
+// every archive read this tool makes is on the same cancellation.
+func missingArchiveSessionError(ctx context.Context, store *memory.ArchiveStore, id string) error {
+	sess, err := store.GetSessionContext(ctx, id)
 	if err != nil {
 		return fmt.Errorf("look up session %s: %w", id, err)
 	}

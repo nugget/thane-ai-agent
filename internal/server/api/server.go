@@ -1775,13 +1775,13 @@ func (s *Server) handleArchiveSessionGet(w http.ResponseWriter, r *http.Request)
 
 	id := r.PathValue("id")
 
-	sess, err := s.archiveStore.GetSession(id)
+	sess, err := s.archiveStore.GetSessionContext(r.Context(), id)
 	if err != nil || sess == nil {
 		s.errorResponse(w, http.StatusNotFound, "session not found")
 		return
 	}
 
-	transcript, err := s.archiveStore.GetSessionTranscript(id)
+	transcript, err := s.archiveStore.GetSessionTranscriptContext(r.Context(), id)
 	if err != nil {
 		s.errorResponse(w, http.StatusInternalServerError, "get transcript: "+err.Error())
 		return
@@ -1825,12 +1825,12 @@ func (s *Server) handleArchiveSessionExport(w http.ResponseWriter, r *http.Reque
 		fmt.Fprint(w, md)
 
 	case "json":
-		sess, err := s.archiveStore.GetSession(id)
+		sess, err := s.archiveStore.GetSessionContext(r.Context(), id)
 		if err != nil || sess == nil {
 			s.errorResponse(w, http.StatusNotFound, "session not found")
 			return
 		}
-		transcript, err := s.archiveStore.GetSessionTranscript(id)
+		transcript, err := s.archiveStore.GetSessionTranscriptContext(r.Context(), id)
 		if err != nil {
 			s.errorResponse(w, http.StatusInternalServerError, "get transcript: "+err.Error())
 			return
