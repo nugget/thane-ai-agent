@@ -22,6 +22,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 func testAPILogger() *slog.Logger {
@@ -413,10 +414,77 @@ func TestSessionStatsPricingCoverage(t *testing.T) {
 		})
 	}
 	snap := stats.Snapshot()
+	if snap.PricedRecords != 1 || snap.UnpricedRecords != 1 || snap.UnknownPricingRecords != 1 || snap.EstimatedCostUSD != 0 {
+		t.Errorf("unexpected top-level zero-cost coverage: %+v", snap)
+	}
 	for _, sum := range []usage.Summary{snap.ByModel["deployment"], snap.ByUpstreamModel["model"], snap.ByProvider["provider"], snap.ByResource["resource"]} {
 		if sum.TotalRecords != 3 || sum.PricedRecords != 1 || sum.UnpricedRecords != 1 || sum.UnknownPricingRecords != 1 || sum.TotalCostUSD != 0 {
 			t.Errorf("unexpected zero-cost coverage: %+v", sum)
 		}
+	}
+}
+
+func TestSessionStatsEndpointPricingCoverageWithoutBreakdownKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		records                   []usage.Record
+		priced, unpriced, unknown int
+		cost                      float64
+	}{
+		{name: "empty totals expose zero coverage"},
+		{
+			name: "all calls count independently of breakdowns",
+			records: []usage.Record{
+				{PricingStatus: "priced", CostUSD: 1.25},
+				{PricingStatus: "priced"}, // Explicit zero price still has coverage.
+				{PricingStatus: "unpriced", Outcome: "error"},
+				{CostUSD: 0.75, Outcome: "canceled"},
+				{PricingStatus: "future-status", CostUSD: 0.25},
+			},
+			priced: 2, unpriced: 1, unknown: 2, cost: 2.25,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, err := agent.NewLoop(agent.LoopOptions{
+				Logger: testAPILogger(), Memory: memory.NewStore(8), LLM: refusingLLM{}, Model: "test-model",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := NewServer("", 0, loop, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+			for _, rec := range tc.records {
+				server.stats.RecordCall(rec)
+			}
+			rr := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/v1/sessions/stats", nil))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+			}
+			var response map[string]json.RawMessage
+			if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			for field, want := range map[string]int{
+				"priced_records": tc.priced, "unpriced_records": tc.unpriced, "unknown_pricing_records": tc.unknown,
+			} {
+				var got int
+				if err := json.Unmarshal(response[field], &got); err != nil || got != want {
+					t.Errorf("%s = %s, want %d; error = %v", field, response[field], want, err)
+				}
+			}
+			var cost float64
+			if err := json.Unmarshal(response["estimated_cost_usd"], &cost); err != nil || cost != tc.cost {
+				t.Errorf("estimated cost = %v, want %v; error = %v", cost, tc.cost, err)
+			}
+			for _, key := range []string{"by_model", "by_upstream_model", "by_provider", "by_resource"} {
+				if _, exists := response[key]; exists {
+					t.Errorf("unexpected breakdown without identity keys: %s", key)
+				}
+			}
+			if server.stats.Snapshot().TotalRequests != 0 {
+				t.Error("model calls were counted as successful requests")
+			}
+		})
 	}
 }
 

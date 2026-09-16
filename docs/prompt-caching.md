@@ -241,6 +241,13 @@ unknown pricing coverage and keep their stored costs. Summary responses and
 with missing pricing is not evidence of free usage. Totals retain event-time
 costs and are not recalculated when prices change.
 
+Live API session statistics also expose `priced_records`, `unpriced_records`,
+and `unknown_pricing_records` alongside the top-level `estimated_cost_usd`,
+as well as in each breakdown. These counts cover reported API model calls
+since server startup, including failed requests; auxiliary calls remain in
+the durable ledger. Use these counts to distinguish configured zero-cost
+usage from an incomplete cost total.
+
 This is reported-usage accounting, not a complete invoice or an attempt log:
 calls without provider token counters and embedding calls are outside this
 ledger. Older rows cannot recover missing loop identity or full session IDs.
