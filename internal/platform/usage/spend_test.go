@@ -95,6 +95,69 @@ func TestSpendSnapshotEmptyAndExplicitlyFreeRemainDistinct(t *testing.T) {
 	}
 }
 
+func TestSpendSnapshotProviderAndRoleIncludeUnattributedAndZeroRateUsage(t *testing.T) {
+	t.Parallel()
+	s := testStore(t)
+	asOf := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	for _, rec := range []Record{
+		{ID: "interactive", Provider: "anthropic", Role: "interactive", InputTokens: 100, CostUSD: 15, PricingStatus: "priced"},
+		{ID: "paid-loop", LoopID: "hor", Provider: "anthropic", Role: "autonomous", InputTokens: 10, CostUSD: 1, PricingStatus: "priced"},
+		{ID: "local-loop", LoopID: "local", Provider: "ollama", Role: "autonomous", InputTokens: 25_600_000, PricingStatus: "priced"},
+		{ID: "legacy-unknown", CostUSD: 2},
+	} {
+		rec.Timestamp = asOf.Add(-time.Hour)
+		if err := s.Record(t.Context(), rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := s.SpendSnapshot(t.Context(), asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name   string
+		report Report
+		keys   []string
+		costs  []float64
+		tokens []int64
+	}{
+		{"provider", snapshot.ByProvider, []string{"anthropic", "", "ollama"}, []float64{16, 2, 0}, []int64{110, 0, 25_600_000}},
+		{"role", snapshot.ByRole, []string{"interactive", "", "autonomous"}, []float64{15, 2, 1}, []int64{100, 0, 25_600_010}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.report.Summary != snapshot.Last24Hours.Summary || tt.report.Unattributed != snapshot.Last24Hours.Unattributed {
+				t.Errorf("dimension report changed totals/coverage: %+v", tt.report)
+			}
+			if tt.report.Summary.TotalCostUSD != 18 || tt.report.Unattributed.TotalCostUSD != 17 || tt.report.MatchedGroups != 3 || len(tt.report.Groups) != 3 || tt.report.Truncated {
+				t.Fatalf("whole-agent grouped report = %+v", tt.report)
+			}
+			for i, key := range tt.keys {
+				group := tt.report.Groups[i]
+				if group.Key != key || group.Summary.TotalCostUSD != tt.costs[i] || group.Summary.TotalInputTokens != tt.tokens[i] {
+					t.Errorf("group %d = %+v", i, group)
+				}
+				if group.Summary.PricedRecords+group.Summary.UnpricedRecords+group.Summary.UnknownPricingRecords != group.Summary.TotalRecords {
+					t.Errorf("group coverage incomplete: %+v", group)
+				}
+			}
+		})
+	}
+	// A fourth key in each dimension is omitted by the shared three-row cap,
+	// while every report still includes its usage in the complete totals.
+	if err := s.Record(t.Context(), Record{ID: "fourth", Timestamp: asOf.Add(-time.Minute), Provider: "other", Role: "auxiliary", CostUSD: 3, PricingStatus: "unpriced"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = s.SpendSnapshot(t.Context(), asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range []Report{snapshot.ByProvider, snapshot.ByRole} {
+		if report.Summary != snapshot.Last24Hours.Summary || report.Unattributed != snapshot.Last24Hours.Unattributed || report.Summary.TotalCostUSD != 21 || report.MatchedGroups != 4 || len(report.Groups) != 3 || !report.Truncated {
+			t.Errorf("capped dimension report = %+v", report)
+		}
+	}
+}
+
 func TestSpendSnapshotFailureReturnsNoPartialWindows(t *testing.T) {
 	t.Parallel()
 	t.Run("invalid anchor before database access", func(t *testing.T) {
@@ -154,4 +217,30 @@ func TestSpendSnapshotFailureReturnsNoPartialWindows(t *testing.T) {
 			t.Fatalf("partial snapshot = %+v, %v", snapshot, err)
 		}
 	})
+	for _, dimension := range []string{"provider", "role"} {
+		t.Run(dimension+" failure discards completed windows", func(t *testing.T) {
+			s := testStore(t)
+			asOf := time.Now().UTC().Truncate(time.Second)
+			for _, id := range []string{"a", "b"} {
+				rec := Record{ID: id, Timestamp: asOf.Add(-time.Hour), LoopID: "same", Provider: "same", Role: "same"}
+				if dimension == "provider" {
+					rec.Provider = id
+				} else {
+					rec.Role = id
+				}
+				if err := s.Record(t.Context(), rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Whole-window, unattributed, and loop totals are integers, but the
+			// selected dimension has fractional counters that cannot decode.
+			if _, err := s.db.Exec(`UPDATE usage_records SET input_tokens = CASE id WHEN 'a' THEN 1.5 ELSE 0.5 END`); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := s.SpendSnapshot(t.Context(), asOf)
+			if snapshot != nil || err == nil || !strings.Contains(err.Error(), "read last 24 hours by "+dimension) {
+				t.Fatalf("partial snapshot = %+v, %v", snapshot, err)
+			}
+		})
+	}
 }

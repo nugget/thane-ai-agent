@@ -484,8 +484,10 @@ type Config struct {
 	Timezone string `yaml:"timezone"`
 
 	// Pricing maps model names to their per-million-token costs (USD).
-	// When empty, built-in defaults for known Anthropic models are applied.
-	// Local/Ollama models not listed here default to $0.
+	// When omitted, built-in defaults for known Anthropic models are applied.
+	// A missing entry records $0 with unpriced coverage. Configure explicit
+	// zero rates for known zero API charges; these count as priced without
+	// measuring hardware, energy, or capacity costs.
 	Pricing map[string]PricingEntry `yaml:"pricing"`
 
 	// Logging configures Thane's filesystem datasets, stdout policy, and

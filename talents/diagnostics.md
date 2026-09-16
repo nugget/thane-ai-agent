@@ -70,24 +70,38 @@ the last 24 hours with the previous 24 at its snapshot time. Background
 refresh runs every five minutes; rendering spend on either surface uses the cache.
 Check `status` and `sampled_ago`: pending or unavailable means no snapshot,
 while stale retains the last successful one. Both windows include full
-`summary` and `unattributed` totals with pricing coverage. `comparison`
-is available only when both windows have records and all are priced;
-a known zero prior cost permits a dollar change but no percentage.
-`top_loops` names up to three directly attributed loops by recorded cost,
-with omitted rows disclosed by `matched`, `returned`, and `truncated`.
+`summary` and `unattributed` totals with pricing coverage. Start with
+`by_provider` and `by_role`, each showing up to three recent-window groups,
+to locate recorded spend across the whole selection. `top_loops` is
+secondary: it names up to three directly attributed loops and their share
+of recorded dollars. A top loop need not account for much of the total;
+the share is not an invoice share. Each breakdown discloses omitted rows
+with `matched`, `returned`, and `truncated`.
+
+`comparison.recorded_cost_change_usd` is the difference between stored
+totals when both windows contain records, even with incomplete pricing.
+Coverage changes can drive it; it is not a bound on the real cost change.
+`comparison.cost_change_usd` and `comparison.cost_change_percent` require all records to be
+priced; a known zero prior cost permits the dollar change but no percentage.
 
 `cost_summary` supplies fresh detail when those observations warrant it.
-Use a panel `loop_id` with a time window to investigate one lifetime.
-For wider discovery, start with
-`{"period":"all","group_by":"loop"}` to compare loop lifetimes, then
-use a returned group `key` as `loop_id` to inspect one. From inside a loop,
+Start with `{"period":"today","group_by":"provider"}` or
+`{"period":"today","group_by":"role"}` for the overall distribution.
+Use `{"period":"today","group_by":"loop_name"}` to compare exact
+captured names across IDs and restarts. Reused names combine; a rename
+splits records between names. Use a panel `loop_id` or
+`{"period":"all","group_by":"loop"}` to compare individual lifetimes,
+then use a returned group `key` as `loop_id` to inspect one. From inside a loop,
 `{"loop_id":"self","since":"-3600s"}` measures its recorded work over
 the last hour. Exact recorded IDs remain queryable after a loop stops;
 `{"loop_name":"archivist","since":"-172800s","until":"-86400s"}`
 selects that captured name over the previous day's window. A name can cover
-multiple lifetime IDs, which the default loop grouping keeps separate.
-The `groups[].loop_name` field is the latest captured label in the selected
-window; query the ID to include records captured under other names.
+multiple lifetime IDs, which the default loop grouping keeps separate;
+add `group_by: "loop_name"` to combine them. For `group_by: "loop"`,
+`groups[].loop_name` is the latest captured label in the selected window;
+query the ID to include records captured under other names.
+Name groups omit unnamed records but can include named records without IDs;
+those records also remain in `unattributed`, so do not add the two totals.
 An explicit `group_by` such as `model` or `role` instead breaks down the
 selected spend. Loop filters cover direct recorded calls, not descendants.
 
@@ -95,10 +109,17 @@ Read `summary` and its pricing coverage before interpreting the bounded
 `groups`: `matched_groups` counts all groups, `returned_groups` counts those
 shown, and `summary` covers the full selection even when `truncated` is
 true. Global loop discovery reports usage without loop attribution in `unattributed`;
-do not assign it to a named loop. Missing prices mean incomplete cost coverage;
-unknown pricing means uncertain coverage, with stored estimates retained.
+do not infer a loop owner or assume it was non-loop work. Read pricing
+counts even when a row shows $0: configured zero API rates count as priced,
+missing rates contribute $0 with incomplete coverage, and unknown historical
+pricing leaves coverage uncertain while retaining stored estimates.
 No recorded usage does not establish no cost: calls without reported tokens
 are absent, and older records may lack loop identity.
+
+Token volume measures demand independently of dollars. Zero API rates do
+not establish zero hardware, energy, or capacity cost. The existing health
+latency rollup estimates request-log spans; it does not measure GPU or model
+execution time. Use these signals alongside spend when judging resource use.
 
 `logs_query` supplies failure evidence scoped by loop, subsystem, or request.
 The `system_health` snapshot already surfaces the newest warnings and errors

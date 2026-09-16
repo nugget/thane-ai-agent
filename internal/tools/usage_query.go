@@ -50,9 +50,9 @@ func parseCostSummaryOptions(ctx context.Context, args map[string]any, now time.
 		opts.GroupBy = "loop"
 	}
 	switch opts.GroupBy {
-	case "", "loop", "deployment", "model", "upstream_model", "provider", "resource", "role", "task":
+	case "", "loop", "loop_name", "deployment", "model", "upstream_model", "provider", "resource", "role", "task":
 	default:
-		problems = append(problems, "group_by must be loop, deployment, model, upstream_model, provider, resource, role, or task")
+		problems = append(problems, "group_by must be loop, loop_name, deployment, model, upstream_model, provider, resource, role, or task")
 	}
 	if _, present := args["limit"]; present {
 		limit, ok := toolargs.IntOK(args, "limit")

@@ -162,7 +162,7 @@ func renderPanel(payload map[string]any) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("### Internal Operations Panel\n\n")
-	b.WriteString("Operational health of your own runtime, assembled this iteration. Spend is a cached ledger snapshot: check its status and sampled_ago before comparing the two recorded-usage windows. This is perception, not conclusion: judge what you see against your recorded baselines, and drill in with system_health, loop_status, loop_activity, queue_status, doc_activity, logs_query, or cost_summary before escalating.\n\n")
+	b.WriteString("Operational health of your own runtime, assembled this iteration. Spend is a cached ledger snapshot: check its status and sampled_ago, then read provider and role headlines before the direct-loop breakdown. A partial recorded-dollar delta can reflect changing pricing coverage. This is perception, not conclusion: judge what you see against your recorded baselines, and drill in with system_health, loop_status, loop_activity, queue_status, doc_activity, logs_query, or cost_summary before escalating.\n\n")
 	b.WriteString("```json\n")
 	b.Write(blob)
 	b.WriteString("\n```")

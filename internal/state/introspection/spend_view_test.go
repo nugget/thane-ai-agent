@@ -46,6 +46,13 @@ func TestSpendComparisonCoverage(t *testing.T) {
 			if (got.CostChangeUSD != nil) != tc.available || (got.CostChangePercent != nil) != tc.percentage {
 				t.Fatalf("comparison availability = %+v", got)
 			}
+			wantRecorded := tc.current.TotalRecords > 0 && tc.previous.TotalRecords > 0
+			if (got.RecordedCostChangeUSD != nil) != wantRecorded {
+				t.Fatalf("recorded change availability = %+v", got)
+			}
+			if wantRecorded && *got.RecordedCostChangeUSD != tc.current.TotalCostUSD-tc.previous.TotalCostUSD {
+				t.Errorf("recorded change lost partial estimates: %+v", got)
+			}
 			if got.CostChangeUSD != nil && *got.CostChangeUSD != tc.delta {
 				t.Errorf("dollar change = %v, want %v", *got.CostChangeUSD, tc.delta)
 			}

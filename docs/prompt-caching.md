@@ -243,7 +243,9 @@ unknown pricing coverage and keep their stored costs. Summary responses and
 with missing pricing is not evidence of free usage. Totals retain event-time
 costs and are not recalculated when prices change. Missing prices make cost
 coverage incomplete; unknown historical coverage makes it uncertain without
-establishing that any cost is missing.
+establishing that any cost is missing. Configured zero API rates count as
+priced, but do not measure hardware, energy, or capacity costs. Inspect token
+volume independently of dollars when assessing resource demand.
 
 Live API session statistics also expose `priced_records`, `unpriced_records`,
 and `unknown_pricing_records` alongside the top-level `estimated_cost_usd`,
@@ -258,21 +260,32 @@ ledger. Older rows cannot recover missing loop identity or full session IDs.
 
 `system_health` and the metacognitive panel expose the same cached `spend`
 snapshot: trailing 24-hour usage, the preceding 24 hours, pricing coverage,
-unattributed usage, and up to three loops by direct recorded cost. Collection
-starts at boot and refreshes every five minutes with a five-second timeout;
+and unattributed usage. Start with the recent window's `by_provider` and
+`by_role` headlines, each containing up to three groups. `top_loops` is
+secondary direct-attribution detail; its shares use the full recent
+recorded-dollar total, not a complete invoice. Missing loop identity does
+not establish non-loop work. Collection starts at boot and refreshes every
+five minutes with a five-second timeout;
 rendering this spend block does no ledger work. Check its state and `sampled_ago`:
 pending or unavailable has no measurement, while stale retains the last good
-windows. The comparison requires records and complete known pricing in both
-windows; a zero prior cost leaves percentage change undefined. These are
+windows. `comparison.recorded_cost_change_usd` subtracts stored totals when
+both windows contain records. Incomplete coverage can change that delta; it
+is not a bound on the real cost change. The separate `comparison.cost_change_usd` and
+percentage require complete known pricing in both windows; a zero prior
+cost leaves percentage change undefined. The health latency rollup is a
+request-log-span estimate, not GPU or model execution time. These are
 observations for baseline judgment, with fresh detail available through
 `cost_summary`. See [recorded spend in system health](reference/tools.md#recorded-spend-in-system-health)
 for states, bounds, and truncation.
 
 `cost_summary` returns typed JSON for a selected time window. Use
 `{"loop_id":"self","since":"-3600s"}` inside a loop to inspect its
-last hour, or `{"period":"all","group_by":"loop"}` for global loop
-discovery. An exact recorded `loop_id` remains queryable after the instance
-stops; `loop_name` selects the captured name across matching lifetimes rather
+last hour. Use `group_by: "provider"` or `group_by: "role"` for the overall
+distribution, `group_by: "loop_name"` to combine exact captured names
+across restarts, or `group_by: "loop"` to discover separate lifetimes.
+Name grouping combines reused names and splits renamed records; it does
+not establish persistent identity. An exact recorded `loop_id` remains
+queryable after the instance stops; `loop_name` selects the captured name across matching lifetimes rather
 than resolving only the current live instance. Query the ID to include usage
 captured under other names. Loop selectors default to separate loop-ID groups
 whose `key` is the ID and whose `loop_name` is the latest captured label in

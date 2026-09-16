@@ -103,7 +103,7 @@ func TestReportAllGroupingModesShareTotalsAndFilters(t *testing.T) {
 	t.Parallel()
 	s, opts := reportFixture(t)
 	opts.Limit = 100
-	for _, groupBy := range []string{"", "deployment", "model", "upstream_model", "provider", "resource", "role", "task", "loop"} {
+	for _, groupBy := range []string{"", "deployment", "model", "upstream_model", "provider", "resource", "role", "task", "loop", "loop_name"} {
 		t.Run(groupBy, func(t *testing.T) {
 			opts := opts
 			opts.GroupBy = groupBy
@@ -135,6 +135,10 @@ func TestReportAllGroupingModesShareTotalsAndFilters(t *testing.T) {
 				if sum.TotalRecords != 4 || sum.TotalCostUSD != 7 || report.MatchedGroups != 3 {
 					t.Fatalf("known-loop group totals = %+v; groups=%d", sum, report.MatchedGroups)
 				}
+			} else if groupBy == "loop_name" {
+				if sum.TotalRecords != 5 || sum.TotalCostUSD != 8 || report.MatchedGroups != 3 {
+					t.Fatalf("named-loop group totals = %+v; groups=%d", sum, report.MatchedGroups)
+				}
 			} else if sum.TotalRecords != want.TotalRecords || sum.TotalCostUSD != want.TotalCostUSD || sum.PricedRecords != want.PricedRecords || sum.UnpricedRecords != want.UnpricedRecords || sum.UnknownPricingRecords != want.UnknownPricingRecords {
 				t.Fatalf("group totals = %+v, want complete coverage of %+v", sum, want)
 			}
@@ -151,6 +155,60 @@ func TestReportAllGroupingModesShareTotalsAndFilters(t *testing.T) {
 			filtered, err := s.Report(t.Context(), opts)
 			if err != nil || filtered.Summary.TotalRecords != 2 || filtered.Summary.TotalCostUSD != 3 || filtered.Unattributed.TotalRecords != 0 {
 				t.Fatalf("filtered report = %+v, %v", filtered, err)
+			}
+		})
+	}
+}
+
+func TestReportLoopNameCombinesCapturedNamesAcrossInstances(t *testing.T) {
+	t.Parallel()
+	s, defaults := reportFixture(t)
+	if err := s.Record(t.Context(), Record{ID: "unnamed-instance", Timestamp: defaults.Start.Add(10 * time.Second), LoopID: "unnamed", CostUSD: 4}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name         string
+		loopID       string
+		loopName     string
+		limit        int
+		wantRecords  int
+		wantCost     float64
+		unattributed int
+		matched      int
+		keys         []string
+		costs        []float64
+		counts       []int
+	}{
+		{name: "restarted or reused name combines even without ID", limit: 10, wantRecords: 7, wantCost: 19, unattributed: 2, matched: 3,
+			keys: []string{"review", "renamed", "other"}, costs: []float64{5, 2, 1}, counts: []int{3, 1, 1}},
+		{name: "limited named rows preserve all totals including unnamed", limit: 1, wantRecords: 7, wantCost: 19, unattributed: 2, matched: 3,
+			keys: []string{"review"}, costs: []float64{5}, counts: []int{3}},
+		{name: "exact name selects all captured matches", loopName: "review", limit: 10, wantRecords: 3, wantCost: 5, unattributed: 1, matched: 1,
+			keys: []string{"review"}, costs: []float64{5}, counts: []int{3}},
+		{name: "renamed instance retains separate captured names", loopID: "a", limit: 10, wantRecords: 2, wantCost: 3, matched: 2,
+			keys: []string{"renamed", "review"}, costs: []float64{2, 1}, counts: []int{1, 1}},
+		{name: "unnamed instance remains in totals only", loopID: "unnamed", limit: 10, wantRecords: 1, wantCost: 4},
+		{name: "name is an exact label", loopName: "Review", limit: 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := defaults
+			opts.GroupBy, opts.Limit = "loop_name", tt.limit
+			opts.LoopID, opts.LoopName = tt.loopID, tt.loopName
+			report, err := s.Report(t.Context(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Summary.TotalRecords != tt.wantRecords || report.Summary.TotalCostUSD != tt.wantCost || report.Unattributed.TotalRecords != tt.unattributed {
+				t.Errorf("complete totals = %+v, unattributed = %+v", report.Summary, report.Unattributed)
+			}
+			if report.MatchedGroups != tt.matched || len(report.Groups) != len(tt.keys) || report.Truncated != (tt.matched > len(tt.keys)) {
+				t.Fatalf("group count/cap = %+v", report)
+			}
+			for i, key := range tt.keys {
+				group := report.Groups[i]
+				if group.Key != key || group.LoopName != "" || group.Summary.TotalCostUSD != tt.costs[i] || group.Summary.TotalRecords != tt.counts[i] {
+					t.Errorf("group %d = %+v; want key=%q cost=%v records=%d", i, group, key, tt.costs[i], tt.counts[i])
+				}
 			}
 		})
 	}
