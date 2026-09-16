@@ -109,11 +109,24 @@ in the background every five minutes. Read `status`, `sampled_ago`,
 and the window bounds before comparing the last 24 hours with the
 previous 24. Pending or unavailable data is not a zero measurement;
 stale data retains the last successful snapshot. Each window includes
-pricing coverage and unattributed usage. The recent window also names
-up to three loops ranked by direct recorded cost. Use the supplied
-comparison when available and judge the evidence against your baselines. These are
-recorded estimates: missing prices limit coverage, unknown pricing
-leaves it uncertain, and no records does not establish no cost.
+pricing coverage and unattributed usage. Read `by_provider` and `by_role`
+first for the recent window's spend distribution. Each shows up to three
+groups. Use `top_loops` as secondary detail: its direct loop costs cover
+only captured loop IDs, and their shares describe recorded dollars, not
+the whole bill. Usage without a loop ID can include historical loop work;
+do not infer a loop owner or assume it is all interactive work.
+
+`comparison.recorded_cost_change_usd` subtracts the stored totals when
+both windows have records. With incomplete pricing, changes in coverage
+can drive that delta; it is not a bound on the real cost change. The
+separate `comparison.cost_change_usd` and percentage require every record to be
+priced. Distinguish configured zero API rates from missing rates and
+unknown historical pricing. Missing prices contribute $0 without proving
+free usage; unknown pricing retains the stored estimate. No records does
+not establish no cost. Token volume
+still measures demand when API rates are zero. Read latency as a separate
+signal: the health rollup estimates request-log spans, not GPU or model
+execution time. Judge these observations against your baselines.
 
 The drill-downs, when the panel or your concerns warrant them:
 
@@ -134,10 +147,12 @@ The drill-downs, when the panel or your concerns warrant them:
   flagged: a maintained document rewriting itself too often (an ego.md
   accumulating nonsense) surfaces here before anyone reads it.
 - logs_query — failure evidence when a concern needs the receipts.
-- cost_summary — fresh spend detail when the cached comparison or a
-  top loop warrants investigation. Pass a returned `loop_id` and a
-  time window to inspect its direct recorded usage; descendant loops
-  have their own totals.
+- cost_summary — fresh spend detail by provider or role, then loop
+  work when attribution and coverage support it. Use `group_by=loop_name`
+  to combine exact captured names across restarts; reused names combine
+  and renamed records split. Pass a returned `loop_id` and a time window
+  to inspect one lifetime's direct usage; descendant loops have their
+  own totals.
 
 The panel's version object shows the running version and commit, the
 previous version and when the boundary landed, the size of the jump,

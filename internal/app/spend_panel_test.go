@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -56,8 +57,9 @@ func TestSpendPanelAppWiringUsesConfiguredLedger(t *testing.T) {
 	a, _ := newSpendPanelTestApp(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	for _, record := range []usage.Record{
-		{Timestamp: now.Add(-time.Hour), LoopID: "full-loop-instance-id", LoopName: "metacognitive", Purpose: "compaction", PricingStatus: "priced", CostUSD: 4, InputTokens: 100},
-		{Timestamp: now.Add(-2 * time.Hour), PricingStatus: "priced", CostUSD: 2, InputTokens: 50},
+		{Timestamp: now.Add(-time.Hour), LoopID: "full-loop-instance-id", LoopName: "metacognitive", Purpose: "compaction", Provider: "anthropic", Role: "autonomous", PricingStatus: "priced", CostUSD: 4, InputTokens: 100},
+		{Timestamp: now.Add(-2 * time.Hour), Provider: "anthropic", Role: "interactive", PricingStatus: "priced", CostUSD: 2, InputTokens: 50},
+		{Timestamp: now.Add(-3 * time.Hour), Provider: "ollama", Role: "auxiliary", PricingStatus: "priced", InputTokens: 3200000},
 		{Timestamp: now.Add(-25 * time.Hour), LoopID: "prior-loop-instance-id", LoopName: "prior", PricingStatus: "priced", CostUSD: 3},
 		{Timestamp: now.Add(-49 * time.Hour), PricingStatus: "priced", CostUSD: 99},
 	} {
@@ -100,7 +102,7 @@ func TestSpendPanelAppWiringUsesConfiguredLedger(t *testing.T) {
 	if got.Last24Hours == nil || got.Previous24Hours == nil || got.Comparison == nil || got.TopLoops == nil {
 		t.Fatalf("available view omitted the configured report: %+v", got)
 	}
-	if got.Last24Hours.Summary.TotalRecords != 2 || got.Last24Hours.Summary.TotalCostUSD != 6 || got.Last24Hours.Summary.TotalInputTokens != 150 || got.Last24Hours.Summary.PricedRecords != 2 || got.Last24Hours.Unattributed.TotalCostUSD != 2 {
+	if got.Last24Hours.Summary.TotalRecords != 3 || got.Last24Hours.Summary.TotalCostUSD != 6 || got.Last24Hours.Summary.TotalInputTokens != 3200150 || got.Last24Hours.Summary.PricedRecords != 3 || got.Last24Hours.Unattributed.TotalCostUSD != 2 {
 		t.Errorf("recent window lost configured ledger records: %+v", got.Last24Hours)
 	}
 	if got.Previous24Hours.Summary.TotalRecords != 1 || got.Previous24Hours.Summary.TotalCostUSD != 3 {
@@ -109,8 +111,19 @@ func TestSpendPanelAppWiringUsesConfiguredLedger(t *testing.T) {
 	if got.Comparison.Status != "available" || got.Comparison.CostChangeUSD == nil || *got.Comparison.CostChangeUSD != 3 || got.Comparison.CostChangePercent == nil || *got.Comparison.CostChangePercent != 100 {
 		t.Errorf("comparison=%+v", got.Comparison)
 	}
-	if got.TopLoops.Matched != 1 || got.TopLoops.Returned != 1 || len(got.TopLoops.Loops) != 1 || got.TopLoops.Loops[0].LoopID != "full-loop-instance-id" || got.TopLoops.Loops[0].Summary.TotalCostUSD != 4 {
+	if got.ByProvider == nil || got.ByProvider.Returned != 2 || got.ByProvider.Groups[0].Key != "anthropic" || got.ByProvider.Groups[0].Summary.TotalCostUSD != 6 || got.ByProvider.Groups[1].Summary.TotalInputTokens != 3200000 {
+		t.Fatalf("provider headline lost real ledger usage: %+v", got.ByProvider)
+	}
+	if got.ByRole == nil || got.ByRole.Matched != 3 || got.ByRole.Returned < 2 || got.ByRole.Groups[1].Key != "interactive" || got.ByRole.Groups[1].Summary.TotalCostUSD != 2 {
+		t.Fatalf("role headline lost unattributed usage: %+v", got.ByRole)
+	}
+	if got.TopLoops.Matched != 1 || got.TopLoops.RecordedCostSharePercent == nil || math.Abs(*got.TopLoops.RecordedCostSharePercent-4.0/6*100) > 1e-9 || got.TopLoops.Returned != len(got.TopLoops.Loops) || got.TopLoops.Truncated != (got.TopLoops.Returned < 1) {
 		t.Errorf("loop attribution=%+v", got.TopLoops)
+	}
+	for _, loop := range got.TopLoops.Loops {
+		if loop.LoopID != "full-loop-instance-id" || loop.Summary.TotalCostUSD != 4 {
+			t.Errorf("loop detail=%+v", loop)
+		}
 	}
 }
 

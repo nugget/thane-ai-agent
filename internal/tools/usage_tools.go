@@ -18,7 +18,7 @@ func (r *Registry) registerCostSummary() {
 	}
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query recorded token usage and estimated API costs as JSON. Use group_by=loop to discover past loop IDs, loop_id=self for your own calls, or an exact historical loop_id. Loop filters cover direct calls only, excluding descendants. loop_name matches captured names across loop instances; groups keep IDs separate. Totals cover all matching records even when groups are truncated. Pricing counters distinguish priced, missing-price, and unknown historical coverage; no records does not prove zero cost.",
+		Description: "Query recorded token usage and estimated API costs as JSON. Start with group_by=provider or role for whole-agent spend, including records without loop IDs. Use group_by=loop_name to combine captured names across restarts, group_by=loop for instance IDs, or loop_id=self for your direct calls. Loop selectors exclude descendants. Totals cover all matching records even when groups are truncated. Pricing distinguishes configured rates (including zero), missing prices, and unknown historical coverage. A $0 estimate does not establish zero resource use.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -40,11 +40,11 @@ func (r *Registry) registerCostSummary() {
 				},
 				"loop_name": map[string]any{
 					"type": "string", "maxLength": 256,
-					"description": "Exact name captured on usage records; may match multiple historical loop IDs. A renamed loop's other-name records are excluded; query its ID for all its calls. Cannot combine with loop_id.",
+					"description": "Exact captured name, including matching records without an instance ID. May match multiple historical IDs. Other-name records are excluded; query an ID for its calls across renames. Cannot combine with loop_id. Add group_by=loop_name to combine matching instances into one row.",
 				},
 				"group_by": map[string]any{
-					"type": "string", "enum": []string{"loop", "deployment", "model", "upstream_model", "provider", "resource", "role", "task"},
-					"description": "Optional breakdown, ordered by cost descending then key. Defaults to loop with a loop selector, otherwise totals only. model aliases deployment. Loop keys are IDs; unattributed records appear separately, never as a loop.",
+					"type": "string", "enum": []string{"loop", "loop_name", "deployment", "model", "upstream_model", "provider", "resource", "role", "task"},
+					"description": "Optional breakdown, ordered by cost descending then key. Defaults to loop with a loop selector, otherwise totals only. provider/role cover all selected records. loop groups by instance ID; loop_name combines exact captured names, so reused names merge and renames split. Blank IDs/names are omitted only from their respective groups, never totals. model aliases deployment.",
 				},
 				"limit": map[string]any{
 					"type": "integer", "minimum": 1, "maximum": 100, "default": 20,
@@ -107,7 +107,9 @@ func (r *Registry) handleCostSummary(ctx context.Context, args map[string]any) (
 		Notes: []string{
 			"Costs are estimates stored at call time, not repriced. Pricing coverage describes recorded usage, not invoice completeness.",
 			"Usage records are provider-reported calls, including reported usage on failures; older records may aggregate iterations. Calls without reported usage and embeddings are absent.",
-			"Unattributed totals count matching records without a loop ID; they cannot be assigned retrospectively to a loop.",
+			"For whole-agent spend, omit loop selectors and use provider or role groups; these retain records without loop IDs. Loop groups cover only their captured attribution.",
+			"Unattributed totals count matching records without a loop ID; a captured name can still place them in a loop_name group, but cannot recover an instance ID.",
+			"Priced records use configured API rates, including explicit zero rates. A $0 estimate does not establish zero resource use; inspect token demand separately.",
 		},
 	}
 	if !opts.Start.IsZero() {
@@ -121,6 +123,9 @@ func (r *Registry) handleCostSummary(ctx context.Context, args map[string]any) (
 	}
 	if opts.LoopID != "" || opts.LoopName != "" {
 		result.Notes = append(result.Notes, "Loop selectors include only directly attributed records, not descendant calls. Name filters cover only records captured under that name.")
+	}
+	if opts.GroupBy == "loop_name" {
+		result.Notes = append(result.Notes, "Name groups combine exact captured names across restarts, including named records without IDs. Reused names merge and renamed records split. Blank names are omitted from groups but remain in matching totals; use group_by=loop to inspect instance IDs.")
 	}
 	if report.Summary.TotalRecords == 0 {
 		result.Notes = append(result.Notes, "No recorded usage matched; this does not establish zero cost. Check the loop ID or name and time window.")

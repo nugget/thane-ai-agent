@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -105,7 +106,7 @@ func TestCostSummaryToolPricingWarningsAreDistinct(t *testing.T) {
 		name, status     string
 		missing, unknown bool
 	}{
-		{"configured free", "priced", false, false},
+		{"configured zero API rate", "priced", false, false},
 		{"missing", "unpriced", true, false},
 		{"legacy", "", false, true},
 	} {
@@ -115,6 +116,9 @@ func TestCostSummaryToolPricingWarningsAreDistinct(t *testing.T) {
 			notes := strings.ToLower(strings.Join(got.Notes, " "))
 			if strings.Contains(notes, "missing prices") != tc.missing || strings.Contains(notes, "pricing coverage is unknown") != tc.unknown {
 				t.Errorf("wrong pricing guidance: %v", got.Notes)
+			}
+			if !strings.Contains(notes, "explicit zero rates") || !strings.Contains(notes, "$0 estimate does not establish zero resource use") {
+				t.Errorf("missing configured-zero and resource-use distinction: %v", got.Notes)
 			}
 		})
 	}
@@ -164,7 +168,7 @@ func TestCostSummaryToolGroupModes(t *testing.T) {
 		Resource: "host", Role: "autonomous", TaskName: "poll", LoopID: "loop-id", LoopName: "name", CostUSD: 1})
 	for group, key := range map[string]string{
 		"deployment": "deployment-id", "model": "deployment-id", "upstream_model": "wire-model",
-		"provider": "provider-family", "resource": "host", "role": "autonomous", "task": "poll", "loop": "loop-id",
+		"provider": "provider-family", "resource": "host", "role": "autonomous", "task": "poll", "loop": "loop-id", "loop_name": "name",
 	} {
 		t.Run(group, func(t *testing.T) {
 			got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": group})
@@ -176,6 +180,72 @@ func TestCostSummaryToolGroupModes(t *testing.T) {
 	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": " Provider "})
 	if got.GroupBy != "provider" || len(got.Groups) != 1 || got.Groups[0].Key != "provider-family" {
 		t.Errorf("normalized grouping=%+v", got)
+	}
+}
+
+func TestCostSummaryToolAdvertisesNameGrouping(t *testing.T) {
+	_, tool := costSummaryFixture(t)
+	properties := tool.Parameters["properties"].(map[string]any)
+	grouping := properties["group_by"].(map[string]any)
+	if !slices.Contains(grouping["enum"].([]string), "loop_name") {
+		t.Fatal("cost_summary does not advertise loop_name grouping")
+	}
+}
+
+func TestCostSummaryToolNameGroupsAcrossRestarts(t *testing.T) {
+	_, tool := costSummaryFixture(t,
+		usage.Record{LoopID: "retired", LoopName: "archivist", CostUSD: 3},
+		usage.Record{LoopID: "replacement", LoopName: "archivist", CostUSD: 4},
+		usage.Record{LoopName: "archivist", CostUSD: 2},
+		usage.Record{LoopID: "replacement", LoopName: "curator", CostUSD: 1},
+		usage.Record{LoopID: "unrelated", LoopName: "other", CostUSD: 8},
+		usage.Record{LoopID: "unnamed", CostUSD: 10},
+		usage.Record{CostUSD: 50},
+	)
+	for _, tc := range []struct {
+		name         string
+		selectors    map[string]any
+		records      int
+		cost         float64
+		unattributed float64
+		matched      int
+		keys         []string
+		groupCosts   []float64
+		truncated    bool
+	}{
+		{"bounded global", map[string]any{"limit": 1}, 7, 78, 52, 3, []string{"archivist"}, []float64{9}, true},
+		{"exact captured name", map[string]any{"loop_name": "archivist"}, 3, 9, 2, 1, []string{"archivist"}, []float64{9}, false},
+		{"one instance", map[string]any{"loop_id": "retired"}, 1, 3, 0, 1, []string{"archivist"}, []float64{3}, false},
+		{"renamed instance", map[string]any{"loop_id": "replacement"}, 2, 5, 0, 2, []string{"archivist", "curator"}, []float64{4, 1}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"period": "all", "group_by": "loop_name"}
+			for key, value := range tc.selectors {
+				args[key] = value
+			}
+			got, _ := invokeCostSummary(t, t.Context(), tool, args)
+			if got.GroupBy != "loop_name" || got.Summary.TotalRecords != tc.records || got.Summary.TotalCostUSD != tc.cost || got.Unattributed.TotalCostUSD != tc.unattributed || got.MatchedGroups != tc.matched || got.ReturnedGroups != len(tc.keys) || got.Truncated != tc.truncated {
+				t.Fatalf("name grouping changed selection, totals or row counts: %+v", got)
+			}
+			for i, key := range tc.keys {
+				if got.Groups[i].Key != key || got.Groups[i].Summary.TotalCostUSD != tc.groupCosts[i] {
+					t.Errorf("group %d=%+v; want name %q cost %v", i, got.Groups[i], key, tc.groupCosts[i])
+				}
+			}
+			notes := strings.Join(got.Notes, " ")
+			for _, phrase := range []string{"Reused names merge", "renamed records split", "Blank names are omitted", "including named records without IDs"} {
+				if !strings.Contains(notes, phrase) {
+					t.Errorf("name-grouping notes omitted %q: %v", phrase, got.Notes)
+				}
+			}
+		})
+	}
+
+	// The explicit name grouping does not change the established default:
+	// a name selector discovers separate IDs, while totals keep all matches.
+	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "loop_name": "archivist"})
+	if got.GroupBy != "loop" || got.Summary.TotalCostUSD != 9 || got.Unattributed.TotalCostUSD != 2 || got.MatchedGroups != 2 || got.ReturnedGroups != 2 || got.Groups[0].Key != "replacement" || got.Groups[1].Key != "retired" {
+		t.Fatalf("default instance grouping changed: %+v", got)
 	}
 }
 

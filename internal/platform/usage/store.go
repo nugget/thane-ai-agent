@@ -445,9 +445,10 @@ func ComputeDetailedCostForIdentityWithTTL(identity ModelIdentity, inputTokens, 
 
 // PricingFor returns the pricing entry for identity: the
 // deployment-qualified model first, then the upstream model. ok is
-// false when neither is in the table. The cost functions read that as
-// $0, which is right for a local model and wrong for a paid one, so
-// callers recording paid usage should check it.
+// false when neither is in the table. Cost functions return zero when pricing
+// is missing; that is an incomplete estimate, not evidence of free usage.
+// An explicit zero-rate entry establishes known $0 configured API cost,
+// including for local models, without implying zero resource consumption.
 func PricingFor(identity ModelIdentity, pricing map[string]config.PricingEntry) (config.PricingEntry, bool) {
 	if entry, ok := pricing[identity.Model]; ok {
 		return entry, true
@@ -469,8 +470,9 @@ func ComputeCostForIdentity(identity ModelIdentity, inputTokens, outputTokens in
 }
 
 // ComputeCost calculates the USD cost for a model's token usage based
-// on the pricing table. Models not in the table are treated as free
-// (local/Ollama models).
+// on the pricing table. Models not in the table return zero with unknown cost;
+// callers must use [PricingFor] to distinguish missing rates from an explicit
+// zero-rate entry.
 func ComputeCost(model string, inputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
 	return ComputeCostForIdentity(ResolveModelIdentity(model, nil), inputTokens, outputTokens, pricing)
 }

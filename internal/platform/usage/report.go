@@ -12,12 +12,14 @@ import (
 // for all retained history; End must be nonzero and later than Start. LoopID
 // and LoopName are mutually exclusive exact filters. LoopID selects only that
 // loop's own records, never descendants. LoopName selects the label captured
-// on each record, so names reused by different loop IDs remain separate, and
-// records captured under another name are outside that selection.
+// on each record; records captured under another name are outside that selection.
 //
 // GroupBy accepts deployment (or model), upstream_model, provider, resource,
-// role, task, or loop. Empty returns totals only. Limit bounds returned groups,
-// not the totals: zero defaults to 20, and explicit values must be 1 through 100.
+// role, task, loop, or loop_name. Loop groups by instance ID; loop_name combines
+// exact captured names across instance IDs, including records with no ID. Names
+// reused by unrelated loops combine, while a renamed loop splits across names.
+// Empty returns totals only. Limit bounds returned groups, not the totals: zero
+// defaults to 20, and explicit values must be 1 through 100.
 type ReportOptions struct {
 	Start    time.Time `json:"start"`
 	End      time.Time `json:"end"`
@@ -31,9 +33,12 @@ type ReportOptions struct {
 // of groups from the same read snapshot. Unattributed is the subset with no
 // captured loop ID; it may include historical or non-loop work and is never
 // assigned to a known loop. For loop grouping it is excluded from Groups and
-// MatchedGroups; other groupings include blank keys. MatchedGroups counts all
-// matching groups before Limit, and Truncated reports omitted groups. Both are
-// zero when grouping is disabled. Costs retain the values recorded at call time.
+// MatchedGroups. Loop-name grouping instead excludes records with blank captured
+// names from Groups and MatchedGroups, retaining them in Summary; named records
+// without a loop ID remain both grouped and Unattributed. Other groupings include
+// blank keys. MatchedGroups counts all matching groups before Limit, and Truncated
+// reports omitted groups. Both are zero when grouping is disabled. Costs retain
+// the values recorded at call time.
 type Report struct {
 	Summary       Summary       `json:"summary"`
 	Unattributed  Summary       `json:"unattributed"`
@@ -126,7 +131,7 @@ func validateReportOptions(opts *ReportOptions) (string, error) {
 		return "", fmt.Errorf("limit must be between 1 and 100")
 	}
 	switch opts.GroupBy {
-	case "", "upstream_model", "provider", "resource", "role":
+	case "", "upstream_model", "provider", "resource", "role", "loop_name":
 		return opts.GroupBy, nil
 	case "deployment", "model":
 		return "model", nil
@@ -135,7 +140,7 @@ func validateReportOptions(opts *ReportOptions) (string, error) {
 	case "loop":
 		return "loop_id", nil
 	default:
-		return "", fmt.Errorf("unsupported group_by %q; use deployment, model, upstream_model, provider, resource, role, task, or loop", opts.GroupBy)
+		return "", fmt.Errorf("unsupported group_by %q; use deployment, model, upstream_model, provider, resource, role, task, loop, or loop_name", opts.GroupBy)
 	}
 }
 
@@ -174,13 +179,16 @@ func readReportGroups(ctx context.Context, tx *sql.Tx, opts ReportOptions, colum
 	key := "COALESCE(u." + column + ", '')"
 	loopName := "''"
 	var selectArgs []any
-	if column == "loop_id" {
+	switch column {
+	case "loop_id":
 		where += " AND u.loop_id <> ''"
 		latestWhere, latestArgs := reportWhere("latest", opts)
 		loopName = `(SELECT latest.loop_name FROM usage_records latest
 			WHERE latest.loop_id = u.loop_id AND ` + latestWhere + `
 			ORDER BY latest.timestamp DESC, latest.id DESC LIMIT 1)`
 		selectArgs = latestArgs
+	case "loop_name":
+		where += " AND u.loop_name <> ''"
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT `+key+`
 		FROM usage_records u WHERE `+where+` GROUP BY `+key+`)`, args...).Scan(&report.MatchedGroups); err != nil {

@@ -762,9 +762,9 @@ and pinning a loop definition is `loop_definition_update` under `loops`.
 | Tool | Description |
 |------|-------------|
 | `get_version` | Agent version, build info, and commit SHA. |
-| `cost_summary` | Typed JSON for reported token usage and stored cost estimates over a time window, globally or by exact loop ID/captured name. Bounded breakdowns include loop, model, provider, resource, role, and task, with pricing coverage and unattributed usage kept explicit. Includes agent and auxiliary calls; counts records rather than logical requests. |
+| `cost_summary` | Typed JSON for reported token usage and stored cost estimates over a time window, globally or by exact loop ID/captured name. Bounded breakdowns include loop ID, captured loop name across lifetimes, model, provider, resource, role, and task, with pricing coverage and unattributed usage kept explicit. Includes agent and auxiliary calls; counts records rather than logical requests. |
 | `logs_query` | Query the structured log index with attribute filters. |
-| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, queue depths, 24h telemetry, the deploy story, WARN/ERROR rates, and cached recorded spend with pricing coverage and top direct loops. |
+| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, queue depths, 24h telemetry, the deploy story, WARN/ERROR rates, and cached recorded spend with provider/role headlines, pricing coverage, and secondary direct loop detail. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |
 | `doc_activity` | Revision-churn report over the managed document roots: revisions, net line delta, size, and authorship per document, with runaway-growth flagging. |
 | `loop_activity` | Journal-backed loop history: every wake with its attributed cause and sender, iteration outcomes, errors, and state changes — survives restarts and covers stopped loops. |
@@ -784,17 +784,40 @@ freshness and collection state. Failed refreshes retain the last good data.
 ending at the snapshot time. Each has a full `summary`, including pricing
 counts, and an `unattributed` subset without loop identity. Windows are absent
 before the first successful collection; that is distinct from measured zero
-records. `comparison` provides dollar and percentage changes only when both
-windows contain records and all are priced. A known zero prior cost still
-permits a dollar change; the percentage is null with reason `zero_prior_cost`.
+records. Missing loop attribution does not establish non-loop work: it can
+include historical records whose loop identity was never captured.
 
-`top_loops` shows up to three loop IDs ranked by direct recorded cost in
-`last_24h`. Names are the latest captured labels, with shortening marked by
-`loop_name_truncated`. The block is capped at 4 KiB; `matched`, `returned`,
-and `truncated` disclose omitted loop rows while window totals remain complete.
-Use a returned `loop_id` with `cost_summary` for fresh detail. These estimates
-and their coverage inform baseline judgment; they do not set health lamps or
-wake loops. They cover reported usage, not invoices or descendant rollups.
+Read `by_provider` and `by_role` first for the recent window's spend
+distribution. These fields sit directly under `spend`; each returns at most
+three `groups` with a `key` and full `summary`, ordered by recorded cost.
+Provider and role groups cover records regardless of loop attribution.
+
+`top_loops` is secondary detail: up to three loop IDs ranked by direct
+recorded cost in `last_24h`, with `scope: "direct_calls_with_loop_id"`.
+Its `recorded_cost_share_percent` measures all usage with a loop ID against
+the full recent recorded-dollar total; each loop row's field measures that
+row against the same denominator. Shares are null when the total is zero.
+These are shares of recorded estimates, not shares of a complete invoice.
+Names are the latest captured labels, with shortening marked by
+`loop_name_truncated`. Use a returned `loop_id` with `cost_summary` for fresh
+detail about that lifetime.
+
+`comparison.recorded_cost_change_usd` subtracts the stored window totals
+when both contain records, including when pricing coverage is incomplete.
+A change in coverage can drive this delta; it is not a bound on the real
+cost change. The separate `comparison.cost_change_usd` and `comparison.cost_change_percent` fields
+remain null unless both windows contain records and all are priced. A
+known zero prior cost permits `comparison.cost_change_usd`; the percentage is null
+with reason `zero_prior_cost`.
+
+The spend block is capped at 4 KiB. Each breakdown's `matched`, `returned`,
+and `truncated` fields disclose omitted rows while window totals remain
+complete. Loop rows are omitted before provider/role headline rows when
+the size budget requires it. These observations inform baseline judgment;
+they do not set health lamps or wake loops. They cover reported usage,
+not invoices or descendant rollups. Read token volume independently of
+dollars: known zero API charges still consume resources. The health
+latency rollup estimates request-log spans, not GPU or model execution time.
 
 ### Cost and usage queries
 
@@ -816,14 +839,16 @@ its usage across names.
 | Question | Arguments |
 |----------|-----------|
 | What has this loop used in the last hour? | `{"loop_id":"self","since":"-3600s"}` |
+| Where are today's recorded costs, including usage without loop IDs? | `{"period":"today","group_by":"role"}` or `{"period":"today","group_by":"provider"}` |
 | What did one recorded lifetime use during the preceding day's window? | `{"loop_id":"<recorded loop ID>","since":"-172800s","until":"-86400s"}` |
 | How does an exact loop name's recent usage split across models? | `{"loop_name":"archivist","period":"week","group_by":"model"}` |
+| What did each captured loop name use across restarts? | `{"period":"today","group_by":"loop_name"}` |
 | Which recorded loop lifetimes account for global usage? | `{"period":"all","group_by":"loop","limit":20}` |
 
 Loop selectors default to `group_by: "loop"`. Other supported breakdowns are
-`deployment` (or its alias `model`), `upstream_model`, `provider`, `resource`,
-`role`, and `task`. `limit` defaults to 20 and has a maximum of 100. The JSON
-response is capped at 16 KiB: `matched_groups`, `returned_groups`, and
+`loop_name`, `deployment` (or its alias `model`), `upstream_model`, `provider`,
+`resource`, `role`, and `task`. `limit` defaults to 20 and has a maximum of
+100. The JSON response is capped at 16 KiB: `matched_groups`, `returned_groups`, and
 `truncated` disclose any omitted rows. `summary` always covers the full
 selection, independently of the group limit. `unattributed` is the subset
 without a recorded loop ID; global loop discovery excludes those records
@@ -831,11 +856,21 @@ from its `groups`. For loop groups, `key` is the ID to use as `loop_id` in
 follow-up queries, and `loop_name` is the latest captured label in the
 selected window, without consulting the live registry.
 
+`group_by: "loop_name"` instead combines exact captured names across loop
+IDs and restarts, with the captured name as `key`. Reusing a name combines
+its records, while renaming splits records between names; this grouping
+does not assert durable loop identity. Use `group_by: "loop"` for separate
+lifetimes and a loop-ID selector to include a lifetime's records across names.
+Name groups omit records without captured names, retaining them in `summary`.
+Named records without IDs remain both grouped and in `unattributed`; adding
+the name groups to `unattributed` would double-count those records.
+
 Loop totals include only directly attributed recorded calls, not descendants.
 Configured zero rates count as priced; missing prices contribute zero and
 make spend incomplete. Unknown pricing preserves stored estimates and means
-coverage is uncertain. Calls without reported tokens are absent; older
-records may aggregate iterations or lack loop attribution. A zero-row result
+coverage is uncertain. Zero API rates do not measure hardware, energy, or
+capacity costs; token volume remains a separate demand signal. Calls without
+reported tokens are absent; older records may aggregate iterations or lack loop attribution. A zero-row result
 means no recorded usage matched, not that the loop did no work or incurred
 no cost.
 
