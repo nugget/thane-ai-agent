@@ -268,6 +268,8 @@ func (s *Server) LastRequest() time.Time {
 // SessionStats tracks API usage since server startup. Usage totals include
 // provider-reported calls from failed requests; TotalRequests counts successful
 // API requests, while each breakdown's TotalRecords counts reported model calls.
+// Pricing coverage counts every recorded call, including calls without the
+// identity metadata needed to appear in a breakdown.
 type SessionStats struct {
 	TotalInputTokens              int64     `json:"total_input_tokens"`
 	TotalOutputTokens             int64     `json:"total_output_tokens"`
@@ -275,6 +277,9 @@ type SessionStats struct {
 	TotalCacheReadInputTokens     int64     `json:"total_cache_read_input_tokens"`
 	TotalRequests                 int64     `json:"total_requests"`
 	EstimatedCostUSD              float64   `json:"estimated_cost_usd"`
+	PricedRecords                 int       `json:"priced_records"`
+	UnpricedRecords               int       `json:"unpriced_records"`
+	UnknownPricingRecords         int       `json:"unknown_pricing_records"`
 	ReportedBalance               float64   `json:"reported_balance_usd,omitempty"`
 	BalanceSetAt                  string    `json:"balance_set_at,omitempty"`
 	LastRequestAt                 time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
@@ -285,7 +290,7 @@ type SessionStats struct {
 	mu                            sync.Mutex
 }
 
-// RecordCall accumulates one priced, provider-reported model call, including
+// RecordCall accumulates one provider-reported model call, including
 // usage from calls in failed requests. It preserves the record's cost and
 // deployment attribution without changing the successful-request count.
 func (s *SessionStats) RecordCall(rec usage.Record) {
@@ -296,10 +301,18 @@ func (s *SessionStats) RecordCall(rec usage.Record) {
 	s.TotalCacheCreationInputTokens += int64(rec.CacheCreationInputTokens)
 	s.TotalCacheReadInputTokens += int64(rec.CacheReadInputTokens)
 	s.EstimatedCostUSD += rec.CostUSD
-	recordSessionUsageSummary(s.ByModel, rec.Model, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
-	recordSessionUsageSummary(s.ByUpstreamModel, rec.UpstreamModel, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
-	recordSessionUsageSummary(s.ByProvider, rec.Provider, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
-	recordSessionUsageSummary(s.ByResource, rec.Resource, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
+	switch rec.PricingStatus {
+	case "priced":
+		s.PricedRecords++
+	case "unpriced":
+		s.UnpricedRecords++
+	default:
+		s.UnknownPricingRecords++
+	}
+	recordSessionUsageSummary(s.ByModel, rec.Model, rec)
+	recordSessionUsageSummary(s.ByUpstreamModel, rec.UpstreamModel, rec)
+	recordSessionUsageSummary(s.ByProvider, rec.Provider, rec)
+	recordSessionUsageSummary(s.ByResource, rec.Resource, rec)
 }
 
 // Request completion is separate from billable calls: retries and failed turns
@@ -337,6 +350,8 @@ func (s *SessionStats) SetBalance(balance float64) {
 // SessionStatsSnapshot is a copy-safe snapshot of server-lifetime API usage.
 // TotalRequests counts successful requests. The usage totals and breakdowns
 // include every reported model call, including calls from failed requests.
+// Pricing coverage describes all calls contributing to EstimatedCostUSD,
+// independently of whether they have keys for the optional breakdowns.
 type SessionStatsSnapshot struct {
 	TotalInputTokens              int64 `json:"total_input_tokens"`
 	TotalOutputTokens             int64 `json:"total_output_tokens"`
@@ -347,19 +362,22 @@ type SessionStatsSnapshot struct {
 	// to the dashboard so operators can see at a glance whether
 	// prompt caching is actually saving tokens (cold start = near
 	// zero, warm session = high).
-	CacheHitRate     float64                  `json:"cache_hit_rate"`
-	TotalRequests    int64                    `json:"total_requests"`
-	EstimatedCostUSD float64                  `json:"estimated_cost_usd"`
-	ReportedBalance  float64                  `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt     string                   `json:"balance_set_at,omitempty"`
-	ByModel          map[string]usage.Summary `json:"by_model,omitempty"`
-	ByUpstreamModel  map[string]usage.Summary `json:"by_upstream_model,omitempty"`
-	ByProvider       map[string]usage.Summary `json:"by_provider,omitempty"`
-	ByResource       map[string]usage.Summary `json:"by_resource,omitempty"`
-	ContextTokens    int                      `json:"context_tokens"`
-	ContextWindow    int                      `json:"context_window"`
-	MessageCount     int                      `json:"message_count"`
-	Build            map[string]string        `json:"build,omitempty"`
+	CacheHitRate          float64                  `json:"cache_hit_rate"`
+	TotalRequests         int64                    `json:"total_requests"`
+	EstimatedCostUSD      float64                  `json:"estimated_cost_usd"`
+	PricedRecords         int                      `json:"priced_records"`
+	UnpricedRecords       int                      `json:"unpriced_records"`
+	UnknownPricingRecords int                      `json:"unknown_pricing_records"`
+	ReportedBalance       float64                  `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt          string                   `json:"balance_set_at,omitempty"`
+	ByModel               map[string]usage.Summary `json:"by_model,omitempty"`
+	ByUpstreamModel       map[string]usage.Summary `json:"by_upstream_model,omitempty"`
+	ByProvider            map[string]usage.Summary `json:"by_provider,omitempty"`
+	ByResource            map[string]usage.Summary `json:"by_resource,omitempty"`
+	ContextTokens         int                      `json:"context_tokens"`
+	ContextWindow         int                      `json:"context_window"`
+	MessageCount          int                      `json:"message_count"`
+	Build                 map[string]string        `json:"build,omitempty"`
 }
 
 func (s *SessionStats) Snapshot() SessionStatsSnapshot {
@@ -373,6 +391,9 @@ func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 		CacheHitRate:                  llm.CacheHitRate(int(s.TotalCacheReadInputTokens), int(s.TotalCacheCreationInputTokens)),
 		TotalRequests:                 s.TotalRequests,
 		EstimatedCostUSD:              s.EstimatedCostUSD,
+		PricedRecords:                 s.PricedRecords,
+		UnpricedRecords:               s.UnpricedRecords,
+		UnknownPricingRecords:         s.UnknownPricingRecords,
 		ReportedBalance:               s.ReportedBalance,
 		BalanceSetAt:                  s.BalanceSetAt,
 		ByModel:                       cloneSessionUsageMap(s.ByModel),
@@ -391,18 +412,26 @@ type usageSummaryResponse struct {
 	Groups  []usage.GroupedSummary `json:"groups,omitempty"`
 }
 
-func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int, cost float64) {
+func recordSessionUsageSummary(dst map[string]usage.Summary, key string, rec usage.Record) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return
 	}
 	sum := dst[key]
 	sum.TotalRecords++
-	sum.TotalInputTokens += int64(inputTokens)
-	sum.TotalOutputTokens += int64(outputTokens)
-	sum.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
-	sum.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
-	sum.TotalCostUSD += cost
+	sum.TotalInputTokens += int64(rec.InputTokens)
+	sum.TotalOutputTokens += int64(rec.OutputTokens)
+	sum.TotalCacheCreationInputTokens += int64(rec.CacheCreationInputTokens)
+	sum.TotalCacheReadInputTokens += int64(rec.CacheReadInputTokens)
+	sum.TotalCostUSD += rec.CostUSD
+	switch rec.PricingStatus {
+	case "priced":
+		sum.PricedRecords++
+	case "unpriced":
+		sum.UnpricedRecords++
+	default:
+		sum.UnknownPricingRecords++
+	}
 	dst[key] = sum
 }
 

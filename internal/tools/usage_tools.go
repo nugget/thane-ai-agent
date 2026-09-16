@@ -18,7 +18,7 @@ func (r *Registry) registerCostSummary() {
 
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Counts are usage records: new agent records represent model calls; older records may aggregate iterations. Use to understand spending patterns and resource consumption.",
+		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Counts are usage records: new agent records represent model calls; older records may aggregate iterations. Unpriced records mean incomplete cost coverage; unknown records mean coverage is uncertain. Use to understand spending patterns and resource consumption.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -41,7 +41,7 @@ func (r *Registry) registerCostSummary() {
 
 			start, end := parsePeriod(period)
 
-			summary, err := r.usageStore.Summary(start, end)
+			summary, err := r.usageStore.SummaryContext(ctx, start, end)
 			if err != nil {
 				return "", fmt.Errorf("query usage summary: %w", err)
 			}
@@ -58,6 +58,14 @@ func (r *Registry) registerCostSummary() {
 				sb.WriteString(fmt.Sprintf("  Cache read tokens: %s\n", formatTokenCount(summary.TotalCacheReadInputTokens)))
 			}
 			sb.WriteString(fmt.Sprintf("  Estimated cost: $%.4f\n", summary.TotalCostUSD))
+			sb.WriteString(fmt.Sprintf("  Pricing coverage: %d priced, %d unpriced, %d unknown\n",
+				summary.PricedRecords, summary.UnpricedRecords, summary.UnknownPricingRecords))
+			if summary.UnpricedRecords > 0 {
+				sb.WriteString("  Missing prices contribute $0. This is not a complete spend total.\n")
+			}
+			if summary.UnknownPricingRecords > 0 {
+				sb.WriteString("  Pricing coverage is unknown for some records; stored cost estimates are retained.\n")
+			}
 
 			if groupBy != "" {
 				grouped, groupLabel, err := queryGrouped(r.usageStore, groupBy, start, end)
@@ -76,6 +84,8 @@ func (r *Registry) registerCostSummary() {
 							formatTokenCount(gs.Summary.TotalInputTokens),
 							formatTokenCount(gs.Summary.TotalOutputTokens),
 						))
+						sb.WriteString(fmt.Sprintf("    pricing: %d priced, %d unpriced, %d unknown\n",
+							gs.Summary.PricedRecords, gs.Summary.UnpricedRecords, gs.Summary.UnknownPricingRecords))
 						if gs.Summary.TotalCacheCreationInputTokens > 0 || gs.Summary.TotalCacheReadInputTokens > 0 {
 							sb.WriteString(fmt.Sprintf("    cache: %s write / %s read\n",
 								formatTokenCount(gs.Summary.TotalCacheCreationInputTokens),

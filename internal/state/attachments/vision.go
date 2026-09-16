@@ -118,7 +118,7 @@ func (a *Analyzer) Analyze(ctx context.Context, rec *Record) (string, error) {
 	b64 := base64.StdEncoding.EncodeToString(data)
 
 	// Call the vision model with a timeout.
-	analyzeCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	analyzeCtx, cancel := context.WithTimeout(withAnalysisAttribution(ctx, rec), a.timeout)
 	defer cancel()
 
 	msgs := []llm.Message{{
@@ -181,7 +181,7 @@ func (a *Analyzer) Reanalyze(ctx context.Context, rec *Record, model string) (st
 	}
 	b64 := base64.StdEncoding.EncodeToString(data)
 
-	analyzeCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	analyzeCtx, cancel := context.WithTimeout(withAnalysisAttribution(ctx, rec), a.timeout)
 	defer cancel()
 
 	msgs := []llm.Message{{
@@ -214,4 +214,16 @@ func (a *Analyzer) Reanalyze(ctx context.Context, rec *Record, model string) (st
 	)
 
 	return description, nil
+}
+
+// On-demand reanalysis belongs to its caller; pre-turn ingestion may only know
+// the attachment's conversation. Do not substitute the source conversation for
+// an already-attributed caller analyzing an older attachment.
+func withAnalysisAttribution(ctx context.Context, rec *Record) context.Context {
+	attribution := llm.AttributionFromContext(ctx)
+	if attribution.ConversationID == "" {
+		attribution.ConversationID = rec.ConversationID
+		ctx = llm.WithAttribution(ctx, attribution)
+	}
+	return ctx
 }

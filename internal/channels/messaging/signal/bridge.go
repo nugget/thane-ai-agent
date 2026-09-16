@@ -1565,7 +1565,18 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 	// Vision analysis: analyze images on ingest and enrich the
 	// description with the LLM-generated summary.
 	if b.visionAnalyzer != nil && strings.HasPrefix(a.ContentType, "image/") {
-		visionDesc, err := b.visionAnalyzer.Analyze(ctx, rec)
+		// TurnBuilder runs before the loop adopts the Signal conversation.
+		// Charge ingestion to the attachment's conversation while retaining
+		// the responsible loop; an earlier conversation's session cannot
+		// follow it across that boundary.
+		visionCtx := ctx
+		attribution := llm.AttributionFromContext(ctx)
+		if rec.ConversationID != "" && attribution.ConversationID != rec.ConversationID {
+			attribution.ConversationID = rec.ConversationID
+			attribution.SessionID = ""
+			visionCtx = llm.WithAttribution(ctx, attribution)
+		}
+		visionDesc, err := b.visionAnalyzer.Analyze(visionCtx, rec)
 		if err != nil {
 			b.logger.Warn("vision analysis failed",
 				"id", a.ID,

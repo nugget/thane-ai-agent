@@ -224,6 +224,40 @@ Calls without reported usage and static fallback text create no usage
 record. A failed request retains the usage already reported.
 Usage absent before an interruption cannot be reconstructed.
 
+The ledger also captures reported chat-completion usage for compaction, fact
+extraction, session summaries, media summaries, and vision analysis. These
+records have an `auxiliary` role and a separate `purpose`; they do not inflate
+the live API request statistics. New records preserve full session and
+conversation identifiers and, when the work originates in a loop, its ID,
+name, and parent ID. Each record includes the individual call's outcome and
+elapsed milliseconds, including partial responses from failed calls. Loop
+identity is recorded at execution time; it is never reconstructed from a
+conversation's name. Incoming Signal vision is attributed to the attachment's
+conversation before the agent turn starts. Tool-requested analysis instead
+retains the caller's conversation when one is supplied.
+
+`pricing_status` distinguishes configured prices (`priced`, including an
+explicit zero rate) from missing prices (`unpriced`). Historical records have
+unknown pricing coverage and keep their stored costs. Summary responses and
+`cost_summary` expose priced, unpriced, and unknown record counts. A zero cost
+with missing pricing is not evidence of free usage. Totals retain event-time
+costs and are not recalculated when prices change. Missing prices make cost
+coverage incomplete; unknown historical coverage makes it uncertain without
+establishing that any cost is missing.
+
+Live API session statistics also expose `priced_records`, `unpriced_records`,
+and `unknown_pricing_records` alongside the top-level `estimated_cost_usd`,
+as well as in each breakdown. These counts cover reported API model calls
+since server startup, including failed requests; auxiliary calls remain in
+the durable ledger. Use these counts to distinguish configured zero-cost
+usage, missing prices, and uncertain pricing coverage.
+
+This is reported-usage accounting, not a complete invoice or an attempt log:
+calls without provider token counters and embedding calls are outside this
+ledger. Older rows cannot recover missing loop identity or full session IDs.
+Persisting new attribution prepares loop-level reporting; the existing
+`cost_summary` grouping options remain unchanged.
+
 Usage summaries and `cost_summary` count records,
 while live API `total_requests` counts successful logical requests.
 Historical records written before per-call accounting can contain

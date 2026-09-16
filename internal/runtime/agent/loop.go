@@ -1640,6 +1640,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// network-level failure — the case with no response body to carry a
 	// server id — be matched against the server's own record.
 	ctx = logging.WithRequestID(ctx, requestID)
+	attribution := llm.AttributionFromContext(ctx)
+	attribution.RequestID = requestID
+	attribution.SessionID = ""
+	attribution.ConversationID = convID
+	if req.RoutingFactors["loop_id"] != "" {
+		attribution.LoopID = req.RoutingFactors["loop_id"]
+		attribution.LoopName = req.RoutingFactors["loop_name"]
+		attribution.ParentLoopID = req.RoutingFactors["parent_loop_id"]
+	}
+	ctx = l.withUsageSession(llm.WithAttribution(ctx, attribution), convID)
 	runStarted := time.Now()
 	var accounting *modelCallAccounting
 	defer func() {
@@ -1775,7 +1785,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	accounting = &modelCallAccounting{
-		loop: l, conversationID: convID, fallbackSession: sessionID,
+		loop: l, conversationID: convID, fallbackSession: llm.AttributionFromContext(ctx).SessionID,
 		request: req, requestID: requestID, observerContext: ctx,
 	}
 	runClient := &accountingClient{Client: l.llm, accounting: accounting}
@@ -2432,6 +2442,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if l.archiver != nil {
 				iterationSessions[i] = l.archiver.EnsureSession(convID)
 			}
+			iterCtx = l.withUsageSession(iterCtx, convID)
 
 			// Rebuild system prompt each iteration so that:
 			// - Capability context reflects tags activated mid-run
@@ -2529,6 +2540,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCallIDStr := toolCallID.String()
 
 			toolCtx := tools.WithConversationID(iterCtx, convID)
+			toolCtx = l.withUsageSession(toolCtx, convID)
 			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
 			toolCtx = tools.WithHints(toolCtx, req.RoutingFactors)
 			toolCtx = loop.WithBindings(toolCtx, req.Bindings)
@@ -2651,6 +2663,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		// Post-response: memory storage, fact extraction, compaction.
 		OnTextResponse: func(iterCtx context.Context, content string, msgs []llm.Message) {
+			iterCtx = l.withUsageSession(iterCtx, convID)
 			if err := l.memory.AddMessage(convID, "assistant", content, memory.OriginInternal); err != nil {
 				logging.Logger(iterCtx).Warn("failed to store response", "error", err)
 			}
@@ -2661,7 +2674,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					if !l.extractor.ShouldExtract(userMessage, content, len(history)+len(req.Messages)+1, req.SkipContext) {
 						return
 					}
-					extractCtx, cancel := context.WithTimeout(context.Background(), l.extractor.Timeout())
+					extractCtx, cancel := context.WithTimeout(context.WithoutCancel(iterCtx), l.extractor.Timeout())
 					defer cancel()
 					if err := l.extractor.Extract(extractCtx, userMessage, content, extractMsgs); err != nil {
 						log.Warn("fact extraction failed", "error", err)
@@ -3482,7 +3495,7 @@ func (l *Loop) TriggerCompaction(ctx context.Context, conversationID string) err
 	if l.compactor == nil {
 		return fmt.Errorf("compaction not configured")
 	}
-	return l.compactor.Compact(ctx, conversationID)
+	return l.compactor.Compact(l.withUsageSession(ctx, conversationID), conversationID)
 }
 
 // ToolsJSON returns the tools definition as JSON (for debugging).
@@ -3612,12 +3625,6 @@ func firstNonEmpty(values ...string) string {
 func (l *Loop) makeUsageRecord(req *Request, rec usage.Record) usage.Record {
 	role := "interactive"
 	taskName := ""
-	if req.UsageRole != "" {
-		role = req.UsageRole
-	}
-	if req.UsageTaskName != "" {
-		taskName = req.UsageTaskName
-	}
 	if req.SkipContext {
 		role = "auxiliary"
 	}
@@ -3627,20 +3634,24 @@ func (l *Loop) makeUsageRecord(req *Request, rec usage.Record) usage.Record {
 			taskName = req.RoutingFactors["task"]
 		}
 	}
-
-	identity := usage.ResolveModelIdentity(rec.Model, l.currentModelCatalog())
-	rec.CostUSD = usage.ComputeDetailedCostForIdentityWithTTL(identity, rec.InputTokens,
-		rec.CacheCreationInputTokens, rec.CacheCreation5mInputTokens, rec.CacheCreation1hInputTokens,
-		rec.CacheReadInputTokens, rec.OutputTokens, l.pricing)
-	if identity.Provider == "anthropic" {
-		if _, priced := usage.PricingFor(identity, l.pricing); !priced {
-			l.warnUnpricedModel(identity)
-		}
+	if req.UsageRole != "" {
+		role = req.UsageRole
 	}
-	rec.Model = identity.Model
-	rec.UpstreamModel = identity.UpstreamModel
-	rec.Resource = identity.Resource
-	rec.Provider = identity.Provider
+	if req.UsageTaskName != "" {
+		taskName = req.UsageTaskName
+	}
+	if req.RoutingFactors["loop_id"] != "" {
+		rec.LoopID = req.RoutingFactors["loop_id"]
+		rec.LoopName = req.RoutingFactors["loop_name"]
+		rec.ParentLoopID = req.RoutingFactors["parent_loop_id"]
+	}
+	rec = usage.PriceRecord(rec, l.currentModelCatalog(), l.pricing)
+	if rec.Provider == "anthropic" && rec.PricingStatus == "unpriced" {
+		l.warnUnpricedModel(usage.ModelIdentity{
+			Model: rec.Model, UpstreamModel: rec.UpstreamModel, Resource: rec.Resource, Provider: rec.Provider,
+		})
+	}
+	rec.Purpose = "agent"
 	rec.Role = role
 	rec.TaskName = taskName
 	return rec

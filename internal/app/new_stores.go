@@ -446,6 +446,7 @@ func (a *App) initStores(s *newState) error {
 		MaxActiveMessages: 80,
 	}
 
+	compactionClient := a.auxiliaryUsageClient("compaction")
 	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
 		model, _ := rtr.Route(ctx, router.Request{
 			Query:    "conversation compaction",
@@ -457,7 +458,7 @@ func (a *App) initStores(s *newState) error {
 			},
 		})
 		msgs := []llm.Message{{Role: "user", Content: prompt}}
-		resp, err := a.llmClient.Chat(ctx, model, msgs, nil)
+		resp, err := compactionClient.Chat(ctx, model, msgs, nil)
 		if err != nil {
 			return "", err
 		}
@@ -485,7 +486,7 @@ func (a *App) initStores(s *newState) error {
 		ModelPreference: cfg.Archive.MetadataModel,
 		IdleTimeout:     time.Duration(idleTimeoutMinutes) * time.Minute,
 	}
-	summaryWorker := memory.NewSummarizerWorker(archiveStore, a.llmClient, rtr, logger, summarizerCfg)
+	summaryWorker := memory.NewSummarizerWorker(archiveStore, a.auxiliaryUsageClient("session_summary"), rtr, logger, summarizerCfg)
 	a.summaryWorker = summaryWorker
 
 	// --- Scheduler ---

@@ -32,14 +32,14 @@ func apiUsageRecords() []usage.Record {
 		{
 			Timestamp: time.Now(), Model: "primary/claude-source", UpstreamModel: "claude-source",
 			Resource: "primary", Provider: "anthropic", InputTokens: 100, OutputTokens: 10,
-			CostUSD: 0.0003,
+			CostUSD: 0.0003, PricingStatus: "priced",
 		},
 		{
 			Timestamp: time.Now(), Model: "recovery/claude-fallback", UpstreamModel: "claude-fallback",
 			Resource: "recovery", Provider: "anthropic", InputTokens: 300, OutputTokens: 30,
 			CacheCreationInputTokens: 50, CacheCreation5mInputTokens: 20,
 			CacheCreation1hInputTokens: 30, CacheReadInputTokens: 40,
-			CostUSD: 0.004312,
+			CostUSD: 0.004312, PricingStatus: "priced",
 		},
 	}
 }
@@ -109,6 +109,7 @@ func TestChatUsageUsesPricedCallsAcrossHandlers(t *testing.T) {
 				t.Fatal(err)
 			}
 			if snap.TotalInputTokens != sum.TotalInputTokens || snap.TotalOutputTokens != sum.TotalOutputTokens ||
+				snap.PricedRecords != sum.PricedRecords || snap.UnpricedRecords != sum.UnpricedRecords || snap.UnknownPricingRecords != sum.UnknownPricingRecords ||
 				snap.TotalCacheCreationInputTokens != sum.TotalCacheCreationInputTokens ||
 				snap.TotalCacheReadInputTokens != sum.TotalCacheReadInputTokens ||
 				math.Abs(snap.EstimatedCostUSD-sum.TotalCostUSD) > 1e-12 {
@@ -162,7 +163,7 @@ func TestRunChatLoopRetainsUsageOnFailureWithoutLedger(t *testing.T) {
 				t.Fatalf("failed request returned success: response=%+v error=%v", resp, err)
 			}
 			snap := server.stats.Snapshot()
-			if snap.TotalRequests != 0 || !server.LastRequest().IsZero() || snap.TotalInputTokens != 100 || snap.TotalOutputTokens != 10 || snap.ByModel["primary/claude-source"].TotalRecords != 1 {
+			if snap.TotalRequests != 0 || !server.LastRequest().IsZero() || snap.TotalInputTokens != 100 || snap.TotalOutputTokens != 10 || snap.ByModel["primary/claude-source"].TotalRecords != 1 || snap.PricedRecords != 1 || snap.UnpricedRecords != 0 || snap.UnknownPricingRecords != 0 {
 				t.Fatalf("failed-call accounting = %+v, last request = %v", snap, server.LastRequest())
 			}
 		})
@@ -181,7 +182,7 @@ func TestSessionStatsRecordCallConcurrent(t *testing.T) {
 	}
 	workers.Wait()
 	snap := server.stats.Snapshot()
-	if snap.TotalRequests != 0 || snap.TotalInputTokens != calls*100 || snap.ByModel["primary/claude-source"].TotalRecords != calls {
+	if snap.TotalRequests != 0 || snap.TotalInputTokens != calls*100 || snap.ByModel["primary/claude-source"].TotalRecords != calls || snap.PricedRecords != calls || snap.UnpricedRecords != 0 || snap.UnknownPricingRecords != 0 {
 		t.Fatalf("concurrent call totals = %+v", snap)
 	}
 }

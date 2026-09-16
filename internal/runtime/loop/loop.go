@@ -1359,6 +1359,11 @@ func (l *Loop) run(ctx context.Context) {
 	// from within the child loop's run is mis-parented onto the
 	// parent loop in the topology.
 	ctx = withLoopID(ctx, l.id)
+	// A spawned loop owns its model work; it must not inherit the request
+	// or session that happened to launch it.
+	ctx = llm.WithAttribution(ctx, llm.Attribution{
+		LoopID: l.id, LoopName: l.config.Name, ParentLoopID: l.ParentID(),
+	})
 
 	// Initial state depends on whether the loop waits for events or
 	// sleeps on a timer. WaitFunc loops enter StateWaiting immediately
@@ -1613,6 +1618,10 @@ func (l *Loop) run(ctx context.Context) {
 			"attempt", attemptCount+1,
 		)
 		iterCtx := logging.WithLogger(ctx, iterLog)
+		attribution := llm.AttributionFromContext(iterCtx)
+		attribution.ConversationID = convID
+		attribution.ParentLoopID = l.ParentID()
+		iterCtx = llm.WithAttribution(iterCtx, attribution)
 		if mailboxErr != nil {
 			iterLog.Warn("loop mailbox drain failed; continuing with notification input",
 				"error", mailboxErr,
@@ -2329,9 +2338,7 @@ func (l *Loop) buildTaskTurn(ctx context.Context, input TurnInput) (*AgentTurn, 
 // state become the final runner request.
 func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor bool) (Request, error) {
 	hints := map[string]string{
-		"source":    "loop",
-		"loop_id":   l.id,
-		"loop_name": l.config.Name,
+		"source": "loop",
 	}
 	if isSupervisor {
 		hints["supervisor"] = "true"
@@ -2388,6 +2395,11 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	for k, v := range l.requestOverride.RoutingFactors {
 		hints[k] = v
 	}
+	// These are runtime identities, not routing preferences. A parent or
+	// launch override must not stamp its own identity onto this loop's work.
+	hints["loop_id"] = l.id
+	hints["loop_name"] = l.config.Name
+	hints["parent_loop_id"] = l.ParentID()
 
 	inheritedTags := l.inheritedTags()
 	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags, inheritedTags)
@@ -2438,6 +2450,12 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	req.MaxOutputTokens = firstPositiveInt(l.requestOverride.MaxOutputTokens, req.MaxOutputTokens)
 	req.ToolTimeout = firstPositiveDuration(l.requestOverride.ToolTimeout, req.ToolTimeout)
 	req.UsageRole = firstNonEmpty(l.requestOverride.UsageRole, req.UsageRole)
+	if req.UsageRole == "" && req.MessageOrigin != memory.OriginChannel {
+		switch l.config.Operation {
+		case OperationService, OperationEventDriven, OperationBackgroundTask:
+			req.UsageRole = "autonomous"
+		}
+	}
 	req.UsageTaskName = firstNonEmpty(l.requestOverride.UsageTaskName, req.UsageTaskName)
 	req.SystemPrompt = firstNonEmpty(l.requestOverride.SystemPrompt, req.SystemPrompt)
 	req.PromptMode = firstPromptMode(l.requestOverride.PromptMode, req.PromptMode, l.requestBase.PromptMode)
@@ -2449,6 +2467,9 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 // It captures runner response state needed by subsequent iterations and
 // returns the typed iteration result used by snapshots and telemetry.
 func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallback, iterStart time.Time, isSupervisor bool, supervisorTrigger SupervisorTrigger) (*IterationResult, *Response, error) {
+	attribution := llm.AttributionFromContext(ctx)
+	attribution.ConversationID = req.ConversationID
+	ctx = llm.WithAttribution(ctx, attribution)
 	resp, err := l.deps.Runner.Run(ctx, req, stream)
 	if err == nil && resp == nil {
 		err = fmt.Errorf("runner returned nil response")

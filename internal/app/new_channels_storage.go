@@ -31,7 +31,7 @@ func (a *App) initAttachmentRuntime() error {
 
 	if a.attachmentStore != nil && a.cfg.Attachments.Vision.Enabled {
 		a.visionAnalyzer = attachments.NewAnalyzer(a.attachmentStore, attachments.AnalyzerConfig{
-			Client:  a.llmClient,
+			Client:  a.auxiliaryUsageClient("vision"),
 			Model:   a.cfg.Attachments.Vision.Model,
 			Prompt:  a.cfg.Attachments.Vision.Prompt,
 			Timeout: a.cfg.Attachments.Vision.ParsedTimeout(),

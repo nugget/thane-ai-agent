@@ -3652,6 +3652,9 @@ components:
         - total_cache_creation_input_tokens
         - total_cache_read_input_tokens
         - total_cost_usd
+        - priced_records
+        - unpriced_records
+        - unknown_pricing_records
       properties:
         total_records:
           type: integer
@@ -3685,8 +3688,23 @@ components:
         total_cost_usd:
           type: number
           readOnly: true
-          description: Sum of the canonical per-call costs in USD, priced for each deployment and cache TTL using configured rates.
+          description: Sum of recorded per-call costs in USD using configured deployment and cache TTL rates. Missing prices contribute zero; consult pricing coverage before treating this as complete spend.
           example: 0.8421
+        priced_records:
+          type: integer
+          readOnly: true
+          description: Records with configured prices, including explicitly configured zero rates.
+          example: 42
+        unpriced_records:
+          type: integer
+          readOnly: true
+          description: Records with reported tokens but no configured price. Their zero cost does not mean free usage.
+          example: 0
+        unknown_pricing_records:
+          type: integer
+          readOnly: true
+          description: Records whose pricing coverage was not captured, including historical records. Their recorded costs are preserved.
+          example: 0
       example:
         total_records: 42
         total_input_tokens: 148213
@@ -3694,6 +3712,9 @@ components:
         total_cache_creation_input_tokens: 96000
         total_cache_read_input_tokens: 312500
         total_cost_usd: 0.8421
+        priced_records: 42
+        unpriced_records: 0
+        unknown_pricing_records: 0
 
     SessionStats:
       type: object
@@ -3710,6 +3731,9 @@ components:
         - cache_hit_rate
         - total_requests
         - estimated_cost_usd
+        - priced_records
+        - unpriced_records
+        - unknown_pricing_records
         - context_tokens
         - context_window
         - message_count
@@ -3755,8 +3779,23 @@ components:
         estimated_cost_usd:
           type: number
           readOnly: true
-          description: Sum of canonical per-call costs in USD since startup, including reported usage from failed requests.
+          description: Sum of canonical API model-call costs in USD since startup, including reported usage from failed requests. Consult the top-level pricing coverage counts before treating this as complete spend; missing prices contribute zero.
           example: 1.2843
+        priced_records:
+          type: integer
+          readOnly: true
+          description: API model-call records since startup with configured prices, including explicitly configured zero rates.
+          example: 137
+        unpriced_records:
+          type: integer
+          readOnly: true
+          description: API model-call records since startup with reported tokens but no configured price. Their zero cost does not mean free usage.
+          example: 0
+        unknown_pricing_records:
+          type: integer
+          readOnly: true
+          description: API model-call records since startup whose pricing coverage was absent or unrecognized. Their recorded costs are preserved.
+          example: 0
         reported_balance_usd:
           type: number
           readOnly: true
@@ -3814,6 +3853,9 @@ components:
         cache_hit_rate: 0.765
         total_requests: 137
         estimated_cost_usd: 1.2843
+        priced_records: 137
+        unpriced_records: 0
+        unknown_pricing_records: 0
         reported_balance_usd: 48.72
         balance_set_at: "2026-06-24T08:00:00Z"
         by_model:
@@ -3824,6 +3866,9 @@ components:
             total_cache_creation_input_tokens: 80000
             total_cache_read_input_tokens: 290000
             total_cost_usd: 1.1021
+            priced_records: 120
+            unpriced_records: 0
+            unknown_pricing_records: 0
           gpt-oss:120b:
             total_records: 17
             total_input_tokens: 18213
@@ -3831,6 +3876,9 @@ components:
             total_cache_creation_input_tokens: 16000
             total_cache_read_input_tokens: 22500
             total_cost_usd: 0.1822
+            priced_records: 17
+            unpriced_records: 0
+            unknown_pricing_records: 0
         by_provider:
           anthropic:
             total_records: 120
@@ -3839,6 +3887,9 @@ components:
             total_cache_creation_input_tokens: 80000
             total_cache_read_input_tokens: 290000
             total_cost_usd: 1.1021
+            priced_records: 120
+            unpriced_records: 0
+            unknown_pricing_records: 0
         context_tokens: 148213
         context_window: 200000
         message_count: 312

@@ -314,6 +314,7 @@ func (a *App) initChannels(s *newState) error {
 	// each interaction using a local model. Opt-in via config.
 	if a.cfg.Extraction.Enabled {
 		extractionModel := a.cfg.Extraction.Model
+		extractionClient := a.auxiliaryUsageClient("fact_extraction")
 		a.logger.Info("fact extraction enabled", "model", extractionModel)
 
 		// FactSetter adapter with confidence reinforcement: if a fact already
@@ -337,7 +338,7 @@ func (a *App) initChannels(s *newState) error {
 			msgs := []llm.Message{{Role: "user", Content: prompt}}
 
 			start := time.Now()
-			resp, err := a.llmClient.Chat(ctx, extractionModel, msgs, nil)
+			resp, err := extractionClient.Chat(ctx, extractionModel, msgs, nil)
 			if err != nil {
 				a.logger.Warn("fact extraction LLM call failed",
 					"model", extractionModel,
@@ -654,6 +655,7 @@ func (a *App) initChannels(s *newState) error {
 
 		// Wire up LLM summarization for map-reduce transcript processing.
 		// Uses a local model via router for chunk summarization.
+		mediaClient := a.auxiliaryUsageClient("media_summary")
 		mc.SetSummarizer(func(ctx context.Context, prompt string) (string, error) {
 			hints := map[string]string{
 				router.FactorMission:      "background",
@@ -670,7 +672,7 @@ func (a *App) initChannels(s *newState) error {
 				RoutingFactors: hints,
 			})
 			msgs := []llm.Message{{Role: "user", Content: prompt}}
-			resp, err := a.llmClient.Chat(ctx, model, msgs, nil)
+			resp, err := mediaClient.Chat(ctx, model, msgs, nil)
 			if err != nil {
 				return "", err
 			}
