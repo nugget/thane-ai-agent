@@ -218,6 +218,47 @@ func TestCostSummaryTool_WithData(t *testing.T) {
 	}
 }
 
+func TestCostSummaryTool_DistinguishesMissingFromUnknownPricing(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		records    []usage.Record
+		incomplete bool
+		unknown    bool
+		cost       string
+	}{
+		{name: "empty", cost: "$0.0000"},
+		{name: "configured zero", records: []usage.Record{{PricingStatus: "priced"}}, cost: "$0.0000"},
+		{name: "missing price", records: []usage.Record{{PricingStatus: "unpriced"}}, incomplete: true, cost: "$0.0000"},
+		{name: "historical price", records: []usage.Record{{CostUSD: 1.25}}, unknown: true, cost: "$1.2500"},
+		{name: "unrecognized coverage", records: []usage.Record{{PricingStatus: "future-status", CostUSD: 1.25}}, unknown: true, cost: "$1.2500"},
+		{name: "mixed coverage", records: []usage.Record{{PricingStatus: "unpriced"}, {CostUSD: 1.25}}, incomplete: true, unknown: true, cost: "$1.2500"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := testUsageStore(t)
+			for _, rec := range tc.records {
+				if err := store.Record(t.Context(), rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reg := NewRegistry(nil, nil, nil)
+			reg.SetUsageStore(store)
+			result, err := reg.Get("cost_summary").Handler(t.Context(), map[string]any{"period": "all"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(result, "not a complete spend total") != tc.incomplete || strings.Contains(result, "Missing prices") != tc.incomplete {
+				t.Errorf("incomplete-cost warning should be %v: %s", tc.incomplete, result)
+			}
+			if strings.Contains(result, "Pricing coverage is unknown") != tc.unknown {
+				t.Errorf("unknown-coverage warning should be %v: %s", tc.unknown, result)
+			}
+			if !strings.Contains(result, "Estimated cost: "+tc.cost) {
+				t.Errorf("expected retained cost %s: %s", tc.cost, result)
+			}
+		})
+	}
+}
+
 func TestCostSummaryTool_GroupBy(t *testing.T) {
 	store := testUsageStore(t)
 	ctx := context.Background()

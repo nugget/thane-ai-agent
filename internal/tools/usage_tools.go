@@ -18,7 +18,7 @@ func (r *Registry) registerCostSummary() {
 
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Counts are usage records: new agent records represent model calls; older records may aggregate iterations. Reports pricing coverage: unpriced or unknown records mean the cost total is incomplete or uncertain. Use to understand spending patterns and resource consumption.",
+		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Counts are usage records: new agent records represent model calls; older records may aggregate iterations. Unpriced records mean incomplete cost coverage; unknown records mean coverage is uncertain. Use to understand spending patterns and resource consumption.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -60,8 +60,11 @@ func (r *Registry) registerCostSummary() {
 			sb.WriteString(fmt.Sprintf("  Estimated cost: $%.4f\n", summary.TotalCostUSD))
 			sb.WriteString(fmt.Sprintf("  Pricing coverage: %d priced, %d unpriced, %d unknown\n",
 				summary.PricedRecords, summary.UnpricedRecords, summary.UnknownPricingRecords))
-			if summary.UnpricedRecords > 0 || summary.UnknownPricingRecords > 0 {
-				sb.WriteString("  Missing prices contribute $0; unknown coverage retains historical estimates. This is not a complete spend total.\n")
+			if summary.UnpricedRecords > 0 {
+				sb.WriteString("  Missing prices contribute $0. This is not a complete spend total.\n")
+			}
+			if summary.UnknownPricingRecords > 0 {
+				sb.WriteString("  Pricing coverage is unknown for some records; stored cost estimates are retained.\n")
 			}
 
 			if groupBy != "" {

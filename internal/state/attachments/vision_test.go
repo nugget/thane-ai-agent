@@ -15,13 +15,15 @@ import (
 
 // mockLLMClient implements llm.Client for testing.
 type mockLLMClient struct {
-	response string
-	err      error
-	calls    int
+	response    string
+	err         error
+	calls       int
+	attribution llm.Attribution
 }
 
-func (m *mockLLMClient) Chat(_ context.Context, _ string, _ []llm.Message, _ []map[string]any) (*llm.ChatResponse, error) {
+func (m *mockLLMClient) Chat(ctx context.Context, _ string, _ []llm.Message, _ []map[string]any) (*llm.ChatResponse, error) {
 	m.calls++
+	m.attribution = llm.AttributionFromContext(ctx)
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -95,6 +97,29 @@ func TestAnalyze_HappyPath(t *testing.T) {
 	}
 	if found.AnalyzedAt.IsZero() {
 		t.Error("analyzed_at should be set")
+	}
+}
+
+func TestDescribePreservesCallerAttribution(t *testing.T) {
+	for _, reanalyze := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reanalyze=%t", reanalyze), func(t *testing.T) {
+			client := &mockLLMClient{response: "A wooded trail."}
+			analyzer, store := newTestAnalyzer(t, client)
+			record := ingestTestRecord(t, store, "trail.jpg", "image/jpeg", "signal", "+15551234567",
+				"attachment-source-conversation", []byte("image bytes"))
+			caller := llm.Attribution{
+				ConversationID: "tool-caller-conversation", SessionID: "caller-session-id", RequestID: "caller-request-id",
+				LoopID: "caller-loop-id", LoopName: "review", ParentLoopID: "caller-parent-id",
+			}
+			ctx := llm.WithAttribution(context.Background(), caller)
+			result, err := NewTools(store, analyzer).Describe(ctx, map[string]any{"id": record.ID, "reanalyze": reanalyze})
+			if err != nil || result != client.response || client.calls != 1 {
+				t.Fatalf("describe = %q, %v; model calls = %d", result, err, client.calls)
+			}
+			if client.attribution != caller {
+				t.Errorf("tool analysis lost caller attribution: %+v, want %+v", client.attribution, caller)
+			}
+		})
 	}
 }
 
