@@ -13,9 +13,9 @@ import (
 // all the managed-document guards, which read a document's owner and then
 // delete, move, or replace it — cannot be invalidated by another tool's
 // write landing in between. Every mutation path takes it: the write and
-// remove helpers take it for the caller, and doc_delete, doc_move, and
-// doc_copy take it around the whole read-decide-mutate sequence and call
-// the already-locked helpers.
+// remove helpers take it for the caller, and doc_delete, doc_move,
+// doc_copy, doc_move_section, and doc_copy_section take it around the
+// whole read-decide-mutate sequence and call the already-locked helpers.
 //
 // Duplicates collapse, so a transfer whose source and destination share a
 // root takes one lock rather than deadlocking on itself, and roots lock in

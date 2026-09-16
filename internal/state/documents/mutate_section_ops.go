@@ -57,6 +57,15 @@ func (s *Store) transferSection(ctx context.Context, action string, args Section
 	if err != nil {
 		return nil, err
 	}
+	// Both owners — the source's, whose section is about to be cut out,
+	// and the destination's, which is rewritten wholesale — are read and
+	// acted on inside one critical section over both roots. A section
+	// transfer renders the destination from the bytes it read and then
+	// replaces the file, so a document arriving there between the two
+	// would otherwise be overwritten by a check that had been true a
+	// moment earlier.
+	release := s.lockRootMutations(srcRoot, dstRoot)
+	defer release()
 
 	srcAbsPath, err := s.resolveDocumentPath(srcRoot, srcRelPath)
 	if err != nil {
@@ -140,7 +149,7 @@ func (s *Store) transferSection(ctx context.Context, action string, args Section
 		meta := mergeDocumentFrontmatter(nil, "", "", nil, nil, now)
 		renderedDestination = renderDocument(meta, updatedDestinationBody)
 	}
-	if err := s.writeDocumentFile(ctx, dstRoot, dstRelPath, renderedDestination); err != nil {
+	if err := s.writeDocumentFileLocked(ctx, dstRoot, dstRelPath, renderedDestination); err != nil {
 		return nil, err
 	}
 
@@ -150,7 +159,7 @@ func (s *Store) transferSection(ctx context.Context, action string, args Section
 			return nil, err
 		}
 		renderedSource := renderDocumentFromParts(touchDocumentFrontmatter(srcFrontmatterRaw, sourceRecord, now), updatedSourceBody)
-		if err := s.writeDocumentFile(ctx, srcRoot, srcRelPath, renderedSource); err != nil {
+		if err := s.writeDocumentFileLocked(ctx, srcRoot, srcRelPath, renderedSource); err != nil {
 			return nil, err
 		}
 	}

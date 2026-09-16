@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -310,5 +311,115 @@ func TestStoreTransferGuardSeesADestinationThatArrivesAfterItsRead(t *testing.T)
 				assertLifecycleTitle(t, store, source, "Notes")
 			})
 		}
+	}
+}
+
+// TestStoreSectionTransferGuardSeesADestinationThatArrivesAfterItsRead
+// drives the same destination race through doc_move_section and
+// doc_copy_section, which reach the destination by a different route: they
+// render it from the bytes they read — a whole new document when it was
+// absent — and then replace the file. An owner arriving in that window must
+// be refused rather than silently rewritten into a section transfer's
+// output, and an ordinary document arriving there must still receive the
+// section.
+func TestStoreSectionTransferGuardSeesADestinationThatArrivesAfterItsRead(t *testing.T) {
+	const (
+		source      = "kb:notes.md"
+		destination = "contacts:alice.md"
+		section     = "Garden"
+		owner       = "contact_dossier_write"
+	)
+	tests := []struct {
+		name string
+		// stamp is the managed_by of the document that arrives at the
+		// destination; empty makes it an ordinary document.
+		stamp     string
+		wantOwner string
+	}{
+		{name: "a dossier created after the destination read", stamp: owner, wantOwner: owner},
+		{name: "an ordinary document created after the destination read", stamp: ""},
+	}
+
+	for _, tt := range tests {
+		for _, action := range []string{"doc_move_section", "doc_copy_section"} {
+			t.Run(tt.name+"/"+action, func(t *testing.T) {
+				ctx := context.Background()
+				store, writer := newLifecycleRaceStore(t)
+				if _, err := store.Write(ctx, WriteArgs{
+					Ref:   source,
+					Title: "Notes",
+					Body:  stringPtr("## " + section + "\n\nBob keeps bees.\n"),
+				}); err != nil {
+					t.Fatalf("Write %s: %v", source, err)
+				}
+
+				release, arrivalDone := startPausedStampingWrite(t, store, writer, destination, "Alice dossier", tt.stamp)
+				transferred := make(chan error, 1)
+				go func() {
+					args := SectionTransferArgs{Ref: source, Section: section, DestinationRef: destination}
+					var err error
+					switch action {
+					case "doc_move_section":
+						_, err = store.MoveSection(ctx, args)
+					case "doc_copy_section":
+						_, err = store.CopySection(ctx, args)
+					}
+					transferred <- err
+				}()
+
+				select {
+				case err := <-transferred:
+					t.Fatalf("%s finished while a write held the contacts root (error = %v); its destination check is not coupled to its write", action, err)
+				case <-time.After(contendedMutationGrace):
+				}
+				close(release)
+				if err := <-arrivalDone; err != nil {
+					t.Fatalf("arriving write: %v", err)
+				}
+				err := <-transferred
+
+				if tt.wantOwner == "" {
+					if err != nil {
+						t.Fatalf("%s error = %v, want it to add the section to the ordinary document", action, err)
+					}
+					// The transfer must carry the version that landed, not
+					// the empty destination its read saw.
+					assertLifecycleTitle(t, store, destination, "Alice dossier")
+					assertLifecycleSection(t, store, destination, section, true)
+					assertLifecycleSection(t, store, source, section, action == "doc_copy_section")
+					return
+				}
+
+				var refusal *StructuredDocumentMutationError
+				if !errors.As(err, &refusal) || refusal.WriteTool != tt.wantOwner {
+					t.Fatalf("%s error = %v, want an ownership refusal naming %s", action, err, tt.wantOwner)
+				}
+				record, readErr := store.Read(ctx, destination)
+				if readErr != nil {
+					t.Fatalf("refused %s destroyed the dossier: %v", action, readErr)
+				}
+				if record.ManagedBy != tt.wantOwner {
+					t.Errorf("dossier managed_by = %q, want %q", record.ManagedBy, tt.wantOwner)
+				}
+				assertLifecycleTitle(t, store, destination, "Alice dossier")
+				// A refused transfer leaves the source whole: the section
+				// is not cut out on the way to a destination it never
+				// reached.
+				assertLifecycleSection(t, store, source, section, true)
+			})
+		}
+	}
+}
+
+// assertLifecycleSection reports whether ref's body carries a section
+// heading, so a transfer can be checked from both ends.
+func assertLifecycleSection(t *testing.T, store *Store, ref, heading string, want bool) {
+	t.Helper()
+	record, err := store.Read(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Read %s: %v", ref, err)
+	}
+	if got := strings.Contains(record.Body, "## "+heading); got != want {
+		t.Errorf("%s carries section %q = %t, want %t", ref, heading, got, want)
 	}
 }
