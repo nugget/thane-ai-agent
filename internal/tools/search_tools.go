@@ -99,7 +99,7 @@ func (r *Registry) registerKnowledgeSearch() {
 			"Check coverage before concluding absence: unavailable sources, on-request roots, errors, and truncation are explicit. " +
 			"Hits distinguish original transcript artifacts (primary, not necessarily verified claims), synthesized memory, and documents of unspecified evidentiary status. " +
 			"An excerpt is matching text; authored_summary is the document author's compact projection. Related hits sharing a ref are not independent corroboration. " +
-			"Follow the read tool and arguments to inspect evidence. For archive time windows or surrounding conversation use archive_search/archive_range; " +
+			"Follow the read tool and arguments to inspect evidence. An archives hit whose ref is archive:session:<full-session-uuid> already names its session in the form a durable citation uses; copy it whole, never shortened. For archive time windows or surrounding conversation use archive_search/archive_range; " +
 			"for document tag/frontmatter filters use doc_search. This is a bounded synchronous lookup; it does not launch a background task.",
 		SkipContentResolve: true,
 		Parameters: map[string]any{

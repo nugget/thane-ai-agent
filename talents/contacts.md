@@ -145,7 +145,20 @@ ordinary documents instead.
   if prose changed those sources of truth. A write that fails validation
   stores nothing and lists every violation at once, each over-budget
   projection with its overage and whether rewording closes it or whole items
-  must go; fix them all in the next call. Replacing an existing dossier with
+  must go; fix them all in the next call. Archive evidence cites the whole
+  session id, `archive:session:<full-session-uuid>`; a whole id in the older
+  hyphen spelling is rewritten for you and listed under
+  `canonicalized_citations`, with `canonicalized_citations_unlisted`
+  counting any the result had no room to list — those landed too. A leading part is refused, never completed
+  silently: the refusal names its full citation when one session matches,
+  lists the candidates when several share it, and says so when none does.
+  Choose among candidates by searching `archive_search` for the claim's own
+  words, since every hit carries its full `session_id`: cite the hit whose
+  id begins with the prefix, listed in the refusal or not. One refusal
+  looks up at most ten prefixes; leave the rest as written, and once the
+  looked-up ones are fixed the next call looks them up. Evidence you cannot
+  pin to one session goes under Open Questions, never into prose that
+  describes a prefix. Replacing an existing dossier with
   no read of it on record, or after it changed since that read, is also an
   error that stores nothing: read it again with `contact_dossier_read`, fold
   in the intervening change the error carries, and write again. The digest is
@@ -838,7 +851,15 @@ that should go:
   duplicate's dossier claims and citations into the surviving
   contact's dossier with `contact_dossier_write`: an existing dossier
   updates as usual, and a first one for the survivor is refused only
-  while a duplicate holding a dossier is still active.
+  while a duplicate holding a dossier is still active. Carry each
+  citation over whole. An older dossier may name a session only by a
+  prefix; the write refuses it and resolves it, so copy the full
+  citation it names, or move the claim to Open Questions, rather than
+  rewording the citation into prose. The duplicate's own dossier stays
+  in the contacts root after the forget, and no tool you have retires
+  it: `doc_delete` and `doc_move` refuse it, and `contact_dossier_write`
+  no longer reaches a forgotten contact. Report it to the operator with
+  the duplicate's UUID so they can remove it.
 - **Any other duplicate is the operator's.** Report the set with each
   contact's name, zone, and UUID. The operator merges the duplicate
   into the contact that should keep the name, renames one, or moves an

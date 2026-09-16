@@ -175,21 +175,27 @@ func TestValidateDossierWrite(t *testing.T) {
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777", "archive:session:019c52f0", 1)
 			},
-			wantErr: "full canonical UUID",
+			wantErr: "archive:session:019c52f0 in field full carries only the first 8 of a session id's 32 hex digits",
 		},
 		{
 			name: "legacy archive session separator",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "archive:session:", "archive:session-", 1)
 			},
-			wantErr: "archive:session:<full-session-uuid>",
+			wantErr: "uses the retired hyphen separator; write it as archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777",
 		},
 		{
 			name: "noncanonical archive session uuid",
 			mutate: func(candidate *documents.DocumentWriteCandidate) {
 				candidate.Body = strings.Replace(candidate.Body, "019c52f0-9ce8-7708-867f-35da2e6b4777", "019C52F0-9CE8-7708-867F-35DA2E6B4777", 1)
 			},
-			wantErr: "full canonical UUID",
+			wantErr: "spells the session id in a non-canonical form; write it as archive:session:019c52f0-9ce8-7708-867f-35da2e6b4777",
+		},
+		{
+			name: "canonical citation followed by a dash",
+			mutate: func(candidate *documents.DocumentWriteCandidate) {
+				candidate.Body = strings.Replace(candidate.Body, "35da2e6b4777.", "35da2e6b4777-- confirmed.", 1)
+			},
 		},
 	}
 
@@ -367,13 +373,13 @@ func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"correct every listed field",
-		"status_line=archive:session:019c1111",
-		"teaser=archive:session:019c2222",
-		"digest=archive:session:019c3333",
-		"full=archive:session:019c52f0",
-		"full=archive:session:01a056ae",
+		"archive:session:019c1111 in field status_line",
+		"archive:session:019c2222 in field teaser",
+		"archive:session:019c3333 in field digest",
+		"archive:session:019c52f0 in field full",
+		"archive:session:01a056ae in field full",
 		"archive:session:<full-session-uuid>",
-		"short prefixes can be ambiguous",
+		"sessions imported together share leading digits",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("WriteDossier() error = %v, want it to mention %q", err, want)
@@ -406,7 +412,7 @@ func TestValidateDossierWriteReportsFacetAndEvidenceViolationsTogether(t *testin
 		"facet contract",
 		"status_line is 121 characters",
 		"evidence contract",
-		"full=archive:session:019c52f0",
+		"archive:session:019c52f0 in field full",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("ValidateDossierWrite() error = %v, want it to mention %q", err, want)
@@ -511,8 +517,8 @@ func TestWriteDossierReportsAllProjectionViolationsBeforeWriting(t *testing.T) {
 		"correct every listed field",
 		"status_line is 121 characters",
 		"digest is 2049 characters",
-		"archive:session:019c52f0",
-		"full canonical UUID",
+		"archive:session:019c52f0 in field full",
+		"carries only the first 8 of a session id's 32 hex digits",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("WriteDossier() error = %v, want it to mention %q", err, want)

@@ -10,6 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // contactForkRemedyByKind names the fix for each kind of fork finding,
@@ -200,15 +201,17 @@ func logContactForkFindings(ctx context.Context, store *contacts.Store, logger *
 }
 
 // configureContactDossierDocuments hands the contact tools the document
-// tools a dossier is read and written through, and the store-level
-// presence check the second-dossier refusal uses. Without document
-// tools, dossier reads and writes stay unconfigured.
-func configureContactDossierDocuments(contactTools *contacts.Tools, docTools *documents.Tools, docStore *documents.Store) {
+// tools a dossier is read and written through, the store-level presence
+// check the second-dossier refusal uses, and the archive lookup a
+// refused session-id citation resolves through. Without document tools,
+// dossier reads and writes stay unconfigured.
+func configureContactDossierDocuments(contactTools *contacts.Tools, docTools *documents.Tools, docStore *documents.Store, archive *memory.ArchiveStore) {
 	if contactTools == nil || docTools == nil {
 		return
 	}
 	contactTools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted)
 	contactTools.ConfigureDossierPresence(documentPresence(docStore))
+	contactTools.ConfigureDossierArchiveSessions(archiveSessionResolver(archive))
 }
 
 // documentPresence reports whether a document exists at a ref, for the

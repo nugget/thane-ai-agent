@@ -613,6 +613,15 @@ readable and writable at their current refs so the guardrail does not strand
 history; normal authoring does not fork one into a second flat document merely
 to repair topology.
 
+The archivist cites archive evidence here in the same form as a contact
+dossier, `archive:session:<full-session-uuid>`, but this root has no citation
+validator: `doc_write` stores whatever citation text it is given. Documents
+written before the colon form was taught still carry the older
+`archive:session-` spelling, some with only an 8-character prefix. The
+archivist is taught to resolve such a prefix with `archive_session_transcript`
+before carrying the claim forward, and to move evidence it cannot pin to one
+session into the dossier's open questions.
+
 ### Contact dossiers
 
 `contacts` is the optional longitudinal document side of the structured
@@ -661,11 +670,33 @@ remainder or unavailable canonical writer defers the durable queue item behind
 ready work rather than losing it or letting it block the queue.
 
 Archive evidence in a contact dossier uses
-`archive:session:<full-session-uuid>`. Archive tools accept short prefixes as
-an interactive convenience, but durable dossier citations do not: imported
-sessions can share a prefix, making a shortened citation impossible to resolve
-unambiguously. `contact_dossier_write` and the contacts-root validator reject
-those ambiguous citations before Git changes.
+`archive:session:<full-session-uuid>`. `archive_session_transcript` looks up
+any leading part of an id across the whole archive as an interactive
+convenience, but durable dossier citations do not accept one: an imported
+session's id records when the import ran, so sessions imported together share
+leading digits, and a shortened citation cannot say which of them it meant.
+
+`contact_dossier_write` repairs what it can without guessing and refuses the
+rest before Git changes. A full id written in the older hyphen form
+(`archive:session-<uuid>`) is rewritten to the colon form, and the result lists
+each rewrite under `canonicalized_citations`. That list is bounded to keep the
+whole result inside 16 KB; a legacy dossier carrying more rewrites than fit
+gets the ones that did plus `canonicalized_citations_unlisted`, the count of
+those applied but not listed. A leading part is never completed silently; the
+refusal looks it up across the whole archive and names the full citation when
+exactly one session begins with it, lists up to five candidates when several
+do, and says so when none does. Each candidate carries its full `session_id`,
+how long ago it started as an exact-second `age` against `time_basis`
+`session_started` rather than a stored timestamp, and its title clipped to 240
+bytes. The whole refusal is held to 16 KB, and the recovery sentence is kept
+whatever a bound drops. Every refusal teaches content recovery (search
+`archive_search` for the claim's own words; each hit carries its full
+`session_id`) and sends evidence that cannot be pinned to one session to the
+dossier's open questions rather than into prose about a prefix. The write
+checks citation shape only, never whether a cited session still exists: a
+`-purge` re-import gives imported sessions new ids, and an existence check
+would then make every dossier citing them unwritable. The contacts-root
+validator stays strict and accepts only the canonical colon form.
 
 Fresh `thane init` workspaces declare and establish the root with the agent's
 signing key, required signature verification, and this context policy:
@@ -714,13 +745,25 @@ Contact lifecycle does not rename or silently erase this history:
   one. A duplicate above `known`, the
   operator's own, or bound to a Home Assistant person is forgotten only by
   the operator.
-  The duplicate dossier is retained unless the operator explicitly archives it
-  with `doc_move` to another suitable managed root or removes it with
-  `doc_delete`.
-- `doc_move` and `doc_delete` are recovery and lifecycle operations, not normal
-  dossier-authoring doors. A deletion removes the live document but remains a
-  signed deletion in the source root's Git history; forgetting or merging a
-  structured contact never performs that step automatically.
+  The duplicate dossier is retained unless the operator explicitly archives or
+  removes it in the contacts root's repository.
+- `doc_move` and `doc_delete` refuse a dossier stamped
+  `managed_by: contact_dossier_write` and name that tool. They refuse any
+  document stamped with an owner narrower than `doc_write` in a root whose
+  write validator enforces a domain contract, because a generic delete would
+  retire the document without its owner and a move would carry it out of the
+  validated root. `doc_move` and `doc_copy` also refuse to overwrite such a
+  document, and refuse to write a document stamped with such an owner into
+  that root from elsewhere: the validator checks content only, so a copy saved
+  before the owner's last write would pass it and roll the dossier back, and
+  the owner's operator-only gate and read-before-write check would never run.
+  Retiring, relocating, or restoring a managed dossier is an operator
+  action in the root's Git repository, where it remains a signed change;
+  forgetting or merging a structured contact never performs that step
+  automatically. A legacy dossier stamped `managed_by: doc_write`, or not
+  stamped at all, can still be moved or deleted with the document tools, as
+  can a managed document in an ordinary root, such as a deleted loop's
+  outputs.
 
 An existing installation can seed historical stewardship explicitly through
 `POST /v1/archive/contact-dossier-backfill`. Each call handles at most 200

@@ -84,7 +84,7 @@ func TestConfigureContactDossierDocuments_WiresTheRefusal(t *testing.T) {
 
 	tools := contacts.NewTools(contactStore, nil)
 	tools.ConfigureDossierRoot(true, true)
-	configureContactDossierDocuments(tools, documents.NewTools(docStore), docStore)
+	configureContactDossierDocuments(tools, documents.NewTools(docStore), docStore, nil)
 	_, err := tools.WriteDossier(ctx, contacts.DossierWriteArgs{ContactID: known.ID.String()})
 	if err == nil || !strings.Contains(err.Error(), "refused to start a second dossier") || !strings.Contains(err.Error(), household.ID.String()) {
 		t.Fatalf("WriteDossier() = %v, want the second-dossier refusal naming %s", err, household.ID)
@@ -92,7 +92,7 @@ func TestConfigureContactDossierDocuments_WiresTheRefusal(t *testing.T) {
 
 	unwired := contacts.NewTools(contactStore, nil)
 	unwired.ConfigureDossierRoot(true, true)
-	configureContactDossierDocuments(unwired, nil, docStore)
+	configureContactDossierDocuments(unwired, nil, docStore, nil)
 	_, err = unwired.WriteDossier(ctx, contacts.DossierWriteArgs{ContactID: known.ID.String()})
 	if err == nil || !strings.Contains(err.Error(), "document tools are not configured") {
 		t.Errorf("without document tools WriteDossier() = %v, want the unconfigured error", err)

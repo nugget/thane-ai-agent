@@ -449,7 +449,7 @@ func (a *App) initChannels(s *newState) error {
 			}
 		}
 	}
-	configureContactDossierDocuments(contactTools, a.documentTools, a.documentStore)
+	configureContactDossierDocuments(contactTools, a.documentTools, a.documentStore, a.archiveStore)
 	a.loop.Tools().SetContactTools(contactTools)
 
 	var talentVerifier func(context.Context, string, string) error

@@ -236,7 +236,7 @@ func identityRefusal(targetName, targetZone string, created bool, violations []I
 	for _, v := range violations {
 		items = append(items, fmt.Sprintf("%q=%q (%s): %s", echoForRefusal(v.Key), echoForRefusal(v.Value), v.Property, violationReason(v, targetName, targetZone)))
 	}
-	b.WriteString(boundedRefusalList(items))
+	b.WriteString(boundedRefusalList(items, refusalListMaxBytes))
 	b.WriteString("\n\n")
 	switch {
 	case c.target && (c.addresses || c.routing):

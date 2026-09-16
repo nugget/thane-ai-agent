@@ -227,10 +227,17 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 	// person, both UUIDs, advice by authority, updates free.
 	for _, want := range []string{"first write of a contact's dossier is refused", "shares a name", "looks like the same person",
 		"merely share a name each keep their own dossier", "names both UUIDs", "forget the duplicate by contact_id",
-		"If they are different people, write nothing and report both to the operator", "never refused"} {
+		"If they are different people, write nothing and report both to the operator", "never refused",
+		"cites the whole session id as archive:session:<full-session-uuid>"} {
 		if !strings.Contains(tool.Description, want) {
 			t.Errorf("contact_dossier_write description lacks %q: %s", want, tool.Description)
 		}
+	}
+	// The top-level description once said "full canonical session UUID",
+	// which a model read as a rule about the id alone and never about
+	// the separator.
+	if strings.Contains(tool.Description, "full canonical session UUID") {
+		t.Errorf("contact_dossier_write description still teaches the retired wording: %s", tool.Description)
 	}
 	properties := tool.Parameters["properties"].(map[string]any)
 	for field, budget := range map[string]string{
@@ -244,7 +251,17 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 		}
 	}
 	fullDescription := properties["full"].(map[string]any)["description"].(string)
-	for _, want := range []string{"archive:session:<full-session-uuid>", "full canonical session UUID", "short prefixes can be ambiguous"} {
+	for _, want := range []string{
+		"archive:session:<full-session-uuid>",
+		"sessions imported together share leading digits",
+		"canonicalized_citations",
+		"names the full citation to copy",
+		"lists the candidates if several do, and says so if none does",
+		fmt.Sprintf("One refusal looks up at most %d leading parts; leave the rest as written, and once the looked-up ones are fixed the next call looks them up", contacts.MaxDossierCitationLookups),
+		"search archive_search for the claim's own words",
+		"the one to cite begins with the prefix whether or not the refusal listed it",
+		"### Open Questions",
+	} {
 		if !strings.Contains(fullDescription, want) {
 			t.Errorf("full description = %q, want %q", fullDescription, want)
 		}

@@ -402,16 +402,6 @@ func (s *ArchiveStore) msgSelectCols() string {
 		COALESCE(origin, '') as origin`
 }
 
-// countSessionMessages populates MessageCount on individual session lookups.
-func (s *ArchiveStore) countSessionMessages(sessionID string) int {
-	var count int
-	_ = s.db.QueryRow(
-		`SELECT COUNT(*) FROM messages WHERE session_id = ?`,
-		sessionID,
-	).Scan(&count)
-	return count
-}
-
 // populateMessageCounts fills the MessageCount field on a slice of sessions
 // using a single grouped query to avoid the N+1 query pattern.
 func (s *ArchiveStore) populateMessageCounts(sessions []*Session) error {
@@ -1653,7 +1643,7 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 
 	sess, err := s.scanSession(row)
 	if sess != nil {
-		sess.MessageCount = s.countSessionMessages(sess.ID)
+		sess.MessageCount = s.countSessionMessages(context.Background(), sess.ID)
 	}
 	return sess, err
 }
@@ -1724,22 +1714,6 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 		results = append(results, info)
 	}
 	return results, rows.Err()
-}
-
-// GetSession retrieves a session by ID.
-func (s *ArchiveStore) GetSession(sessionID string) (*Session, error) {
-	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason,
-		       0 AS message_count,
-		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
-		FROM sessions WHERE id = ?
-	`, sessionID)
-
-	sess, err := s.scanSession(row)
-	if sess != nil {
-		sess.MessageCount = s.countSessionMessages(sess.ID)
-	}
-	return sess, err
 }
 
 // ListSessions returns sessions, newest first.
@@ -1987,24 +1961,6 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 		return nil, fmt.Errorf("populate message counts: %w", err)
 	}
 	return sessions, nil
-}
-
-// GetSessionTranscript returns all archived messages for a session in chronological order.
-func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]Message, error) {
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM messages
-		WHERE session_id = ?
-		ORDER BY timestamp ASC
-	`, s.msgSelectCols())
-
-	rows, err := s.db.Query(query, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("get transcript: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanMessages(rows)
 }
 
 // MaxArchiveRangeMessages is the hard row limit for archive time-range queries.

@@ -148,6 +148,16 @@ Once a hit looks worth reading, pull the full session with
 `archive_session_transcript` (in the `archive_session` branch).
 Search-then-transcript is the canonical pairing.
 
+Every `messages[]` and `sessions[]` hit names its session by the
+full `session_id`; pass that id on as is, and cite a session by it
+whole. That also makes content search the way back from a bare
+prefix. When an older note or dossier names a session only by its
+first digits and `archive_session_transcript` answers with several
+candidates for them, search for the words of the claim itself and
+keep the hit whose `session_id` begins with that prefix. Sessions
+imported together share their leading digits, so the prefix alone
+cannot choose; the claim's own words can.
+
 ## Cross-references
 
 - For "what was said in this *time window*" (regardless of topic),
@@ -268,21 +278,37 @@ search query, or when you remember a session by its title or tag
 ## Read one in full
 
 Once you've identified the session worth examining, pull the
-complete transcript with `archive_session_transcript`. Pass either
-the full session ID, or an 8-character prefix — the handler resolves
-short prefixes (up to 8 chars) by lookup; values longer than 8
-chars are treated as full IDs and won't prefix-match:
+complete transcript with `archive_session_transcript`, passing the
+full session id from the result that led you there — `id` in
+`archive_sessions`, `session_id` on `archive_search` and
+`archive_range` hits:
 
 ```json
 {
-  "session_id": "019e6238"
+  "session_id": "<full session id>"
 }
 ```
 
+A leading part of an id also works, at any length and with or
+without hyphens, and it is looked up across the whole archive. Treat
+it as a lookup convenience, never as the session's name: sessions
+imported together share their leading digits, because an imported
+session's id records when it was imported rather than when the
+conversation happened. When a part matches several sessions, the tool
+returns the candidates — full id, how long ago each started (`age`,
+measured from `time_basis` `session_started`), title — instead of a
+transcript. Pick one by its full id; when titles and ages don't decide
+it, search `archive_search` for words from the conversation itself,
+since every hit carries the full `session_id`.
+
+So anything durable that names a session — a dossier citation, a
+note, a handoff — carries the full id. A prefix means something only
+after a lookup, and the lookup may answer with several sessions.
+
 Returns the full message-by-message transcript in chronological
-order. The transcript cap is larger than the search/browse cap
-(32KB vs 16KB) because reading one session in full is the explicit
-intent.
+order, every message carrying the full `session_id`. The transcript
+cap is larger than the search/browse cap (32KB vs 16KB) because
+reading one session in full is the explicit intent.
 
 ## The canonical pairing
 

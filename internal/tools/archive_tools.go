@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -109,7 +108,10 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			"Use this when something jogs a memory or you need context from a prior " +
 			"conversation — the distilled surfaces are higher signal per byte and worth " +
 			"reading first when they have hits. Pair with archive_session_transcript when " +
-			"a hit looks worth reading in full.",
+			"a hit looks worth reading in full. Every messages[] and sessions[] hit carries its " +
+			"session's full session_id: pass it on as is, and use it whole wherever you cite the " +
+			"session. Searching for a claim's own words is also how to recover the full id behind " +
+			"an id prefix in older notes, since sessions imported together share leading digits.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -269,8 +271,9 @@ func (r *Registry) registerArchiveSessions(store *memory.ArchiveStore) {
 			"newest first. Each entry shows when it happened (delta seconds), how long it " +
 			"ran, message count, title, tags, and summary. Use this when you want to flip " +
 			"through history without a specific search query, or to find a session by " +
-			"tag or title. Returns JSON. Once you spot one worth a closer look, " +
-			"archive_session_transcript pulls the full transcript.",
+			"tag or title. Returns JSON; each entry's id is the full session id. Once you " +
+			"spot one worth a closer look, pass that id to archive_session_transcript for " +
+			"the full transcript.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -310,37 +313,43 @@ func (r *Registry) registerArchiveSessions(store *memory.ArchiveStore) {
 func (r *Registry) registerArchiveSessionTranscript(store *memory.ArchiveStore) {
 	r.Register(&Tool{
 		Name: "archive_session_transcript",
-		Description: "Read one past session in full. Pass either the full session ID or its " +
-			"first 8 characters (longer prefixes are also fine). Returns the complete " +
+		Description: "Read one past session in full. session_id is the session's full id — " +
+			"session_id on archive_search and archive_range hits, id in archive_sessions — or " +
+			"any leading part of it (hyphens optional), looked up across every archived session. " +
+			"A part that several sessions share returns those candidates with how long ago " +
+			"each started and its title, instead of a transcript. A leading part is only a lookup convenience: " +
+			"sessions imported together share leading digits, so anything durable that names a " +
+			"session (a citation, a note) uses the full id. Returns the complete " +
 			"message-by-message transcript as JSON, ordered chronologically with delta " +
-			"timestamps. Best after archive_search or archive_sessions has narrowed you to " +
-			"a specific session worth examining.",
+			"timestamps; every message carries the full session_id. Best after archive_search " +
+			"or archive_sessions has narrowed you to a specific session worth examining.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"session_id": map[string]any{
-					"type":        "string",
-					"description": "Full session ID or its first 8+ characters.",
+					"type": "string",
+					"description": "The session's full id (32 hex digits in 8-4-4-4-12 form), or any " +
+						"leading part of it to look up. A part shared by several sessions returns the " +
+						"candidates instead of a transcript.",
 				},
 			},
 			"required": []string{"session_id"},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
-			sessionID, _ := args["session_id"].(string)
-			if sessionID == "" {
-				return "", fmt.Errorf("session_id is required")
-			}
-			if len(sessionID) <= 8 {
-				fullID, err := resolveShortSessionID(store, sessionID)
-				if err != nil {
-					return "", err
-				}
-				sessionID = fullID
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			raw, _ := args["session_id"].(string)
+			sessionID, err := resolveTranscriptSessionID(ctx, store, raw)
+			if err != nil {
+				return "", err
 			}
 
-			messages, err := store.GetSessionTranscript(sessionID)
+			messages, err := store.GetSessionTranscriptContext(ctx, sessionID)
 			if err != nil {
 				return "", fmt.Errorf("get transcript: %w", err)
+			}
+			if len(messages) == 0 {
+				if err := missingArchiveSessionError(ctx, store, sessionID); err != nil {
+					return "", err
+				}
 			}
 
 			// Drop oldest messages first to fit the byte cap — the tail
@@ -367,7 +376,8 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 			"Filter to one conversation_id or omit " +
 			"it for everything. Crosses session boundaries — sessions are an internal " +
 			"abstraction here; this tool just gives you the messages. Returns JSON with " +
-			"delta-second timestamps and originating session IDs.",
+			"delta-second timestamps; every message carries the full session_id of the " +
+			"session it came from.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -447,26 +457,4 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 			return string(data), nil
 		},
 	})
-}
-
-// resolveShortSessionID finds a full session ID from a prefix.
-func resolveShortSessionID(store *memory.ArchiveStore, prefix string) (string, error) {
-	sessions, err := store.ListSessions("", 100)
-	if err != nil {
-		return "", fmt.Errorf("list sessions: %w", err)
-	}
-	var matches []string
-	for _, s := range sessions {
-		if strings.HasPrefix(s.ID, prefix) {
-			matches = append(matches, s.ID)
-		}
-	}
-	switch len(matches) {
-	case 0:
-		return "", fmt.Errorf("no session found with prefix %q", prefix)
-	case 1:
-		return matches[0], nil
-	default:
-		return "", fmt.Errorf("ambiguous prefix %q matches %d sessions", prefix, len(matches))
-	}
 }
