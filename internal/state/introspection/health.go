@@ -240,6 +240,9 @@ type HealthSnapshot struct {
 	// Telemetry zero-fills when the collector is unwired: zero requests
 	// and a quiet day are indistinguishable here.
 	Telemetry TelemetryRollup `json:"telemetry"`
+	// Spend is the independently refreshed ledger snapshot. Its status and
+	// age distinguish absent or stale measurements from recorded zero cost.
+	Spend SpendView `json:"spend"`
 }
 
 // Degraded lists the annunciator rows that are not ok — the panel's
@@ -269,6 +272,7 @@ func snapshotPayload(snap HealthSnapshot) map[string]any {
 		"host":         snap.Host,
 		"loops":        snap.Loops,
 		"telemetry":    snap.Telemetry,
+		"spend":        snap.Spend,
 	}
 	if len(snap.Queues) > 0 {
 		payload["queues"] = snap.Queues
@@ -385,6 +389,9 @@ type HealthSources struct {
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
 	Telemetry *telemetry.Collector
+	// Spend supplies cached recorded usage without querying during context
+	// assembly. Its lifecycle worker must be started separately with Run.
+	Spend *SpendCollector `json:"-"`
 	// BuildVersion and BuildCommit identify the running binary.
 	BuildVersion string
 	BuildCommit  string
@@ -423,7 +430,7 @@ func NewInspector(src HealthSources) *Inspector {
 // probe broke" is itself a health finding.
 func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	now := i.now()
-	snap := HealthSnapshot{}
+	snap := HealthSnapshot{Spend: i.spendView(now)}
 
 	// External connections, one lamp per watched service, name-sorted.
 	if i.src.ConnStatus != nil {

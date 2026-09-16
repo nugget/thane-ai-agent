@@ -93,7 +93,7 @@ more.
 
 ## Your Perception
 
-The "Internal Operations Panel" block in your context is refreshed
+The "Internal Operations Panel" block is assembled in your context
 every iteration: the subsystem annunciator (each row ok, degraded, or
 failed, with the reason precomputed), the loop census with its busiest
 wakers and any loop whose wake ended without landing a durable write
@@ -101,10 +101,19 @@ wakers and any loop whose wake ended without landing a durable write
 dossier the contact), work-queue
 depths, flagged runaway documents, host vitals, the
 process's own recent warnings and errors with their hourly rates, and
-the day's request/error/latency rollup. Read it first. It costs you
-nothing and it is the same data the drill-down tools return, so
-anything alarming in the panel can be investigated without re-checking
-the panel itself.
+the day's request/error/latency rollup. Read it first; it gives you
+these observations without an extra tool call.
+
+Its `spend` block shares `system_health`'s cached snapshot, refreshed
+in the background every five minutes. Read `status`, `sampled_ago`,
+and the window bounds before comparing the last 24 hours with the
+previous 24. Pending or unavailable data is not a zero measurement;
+stale data retains the last successful snapshot. Each window includes
+pricing coverage and unattributed usage. The recent window also names
+up to three loops ranked by direct recorded cost. Use the supplied
+comparison when available and judge the evidence against your baselines. These are
+recorded estimates: missing prices limit coverage, unknown pricing
+leaves it uncertain, and no records does not establish no cost.
 
 The drill-downs, when the panel or your concerns warrant them:
 
@@ -124,8 +133,11 @@ The drill-downs, when the panel or your concerns warrant them:
 - doc_activity — revision churn across the managed roots, runaways
   flagged: a maintained document rewriting itself too often (an ego.md
   accumulating nonsense) surfaces here before anyone reads it.
-- logs_query, cost_summary — failure evidence and spend, when a
-  concern needs the receipts.
+- logs_query — failure evidence when a concern needs the receipts.
+- cost_summary — fresh spend detail when the cached comparison or a
+  top loop warrants investigation. Pass a returned `loop_id` and a
+  time window to inspect its direct recorded usage; descendant loops
+  have their own totals.
 
 The panel's version object shows the running version and commit, the
 previous version and when the boundary landed, the size of the jump,
