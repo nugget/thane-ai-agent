@@ -90,6 +90,8 @@ type Store struct {
 	rootValidators  map[string]RootWriteValidator
 	verificationMu  sync.Mutex
 	verification    map[string]SignatureVerification
+	mutationMu      sync.Mutex
+	rootMutations   map[string]*sync.Mutex
 	logger          *slog.Logger
 	refreshMu       sync.Mutex
 	lastRefresh     time.Time

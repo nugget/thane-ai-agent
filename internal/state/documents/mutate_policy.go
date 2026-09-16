@@ -12,7 +12,16 @@ import (
 )
 
 func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string) error {
-	_, err := s.writeDocumentFileAtRevision(ctx, root, relPath, raw, "doc_write", "")
+	release := s.lockRootMutations(root)
+	defer release()
+	return s.writeDocumentFileLocked(ctx, root, relPath, raw)
+}
+
+// writeDocumentFileLocked is writeDocumentFile for a caller that already
+// holds root's mutation lock, such as a doc_move deciding on the
+// destination's current owner before replacing it.
+func (s *Store) writeDocumentFileLocked(ctx context.Context, root, relPath, raw string) error {
+	_, err := s.writeDocumentFileAtRevisionLocked(ctx, root, relPath, raw, "doc_write", "")
 	return err
 }
 
@@ -21,6 +30,15 @@ func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string
 // existing callers; a non-empty revision requires a writer that can compare
 // and commit atomically.
 func (s *Store) writeDocumentFileAtRevision(ctx context.Context, root, relPath, raw, action, expectedRevision string) (string, error) {
+	release := s.lockRootMutations(root)
+	defer release()
+	return s.writeDocumentFileAtRevisionLocked(ctx, root, relPath, raw, action, expectedRevision)
+}
+
+// writeDocumentFileAtRevisionLocked performs the write with root's
+// mutation lock already held, so the caller's view of the root cannot
+// change between the decision to write and the write itself.
+func (s *Store) writeDocumentFileAtRevisionLocked(ctx context.Context, root, relPath, raw, action, expectedRevision string) (string, error) {
 	absPath, err := s.resolveDocumentWritePath(root, relPath)
 	if err != nil {
 		return "", err
@@ -113,7 +131,12 @@ func (s *Store) refreshDocumentWrite(ctx context.Context, root, relPath string) 
 	return nil
 }
 
-func (s *Store) removeDocumentFile(ctx context.Context, root, relPath string) error {
+// removeDocumentFileLocked removes one document with root's mutation lock
+// already held. Every removal has a caller that first decided the document
+// may go — doc_delete and doc_move read its owner — and that decision and
+// this removal belong to the same critical section, so the removal takes
+// the version the caller actually read.
+func (s *Store) removeDocumentFileLocked(ctx context.Context, root, relPath string) error {
 	absPath, err := s.resolveDocumentPath(root, relPath)
 	if err != nil {
 		return err

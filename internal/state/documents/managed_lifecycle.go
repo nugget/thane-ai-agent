@@ -95,6 +95,10 @@ func narrowerOwner(record *DocumentRecord) string {
 // unmanaged one, a doc_write one (doc_write has no delete of its own), and
 // a managed one in an ordinary root, such as the outputs a deleted loop
 // leaves behind, whose owning tool no longer exists.
+//
+// The caller reads record and performs the retirement under root's
+// mutation lock ([Store.lockRootMutations]); an owner stamped onto the
+// document after this check would otherwise be retired by it anyway.
 func (s *Store) refuseManagedLifecycle(action, ref, root string, record *DocumentRecord) error {
 	owner := narrowerOwner(record)
 	if owner == "" || s.rootValidator(root) == nil {
@@ -117,6 +121,11 @@ type transferDestination struct {
 // content alone, so a stale copy of an owned document would pass it and
 // roll the document back. An ordinary destination root is left alone,
 // as [Store.refuseManagedLifecycle] leaves an ordinary source.
+//
+// The caller reads the destination here and writes it under the same
+// mutation lock over both roots ([Store.lockRootMutations]), so a dossier
+// that arrives at the destination after this read is seen by this check
+// rather than overwritten by the write that follows it.
 func (s *Store) refuseManagedTransfer(action, sourceRef string, source *DocumentRecord, dst transferDestination) error {
 	if s.rootValidator(dst.root) == nil {
 		return nil

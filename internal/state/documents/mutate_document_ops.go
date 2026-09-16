@@ -94,6 +94,13 @@ func (s *Store) Delete(ctx context.Context, args DeleteArgs) (*DeleteResult, err
 	if err != nil {
 		return nil, err
 	}
+	// The owner this reads is the owner the removal must act on, so both
+	// run under the root's mutation lock: a contact_dossier_write that
+	// stamps this document cannot land between them and have its dossier
+	// deleted by a check that was true a moment earlier.
+	release := s.lockRootMutations(root)
+	defer release()
+
 	absPath, err := s.resolveDocumentPath(root, relPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -113,7 +120,7 @@ func (s *Store) Delete(ctx context.Context, args DeleteArgs) (*DeleteResult, err
 		return nil, err
 	}
 
-	if err := s.removeDocumentFile(ctx, root, relPath); err != nil {
+	if err := s.removeDocumentFileLocked(ctx, root, relPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
 		}
@@ -134,6 +141,11 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 	if srcRoot == dstRoot && srcRelPath == dstRelPath {
 		return nil, fmt.Errorf("destination_ref must differ from ref")
 	}
+	// Both owners — the source's and the destination's — are read and
+	// acted on inside one critical section over both roots, so neither
+	// document can acquire an owner between the guard and the mutation.
+	release := s.lockRootMutations(srcRoot, dstRoot)
+	defer release()
 
 	srcAbsPath, err := s.resolveDocumentPath(srcRoot, srcRelPath)
 	if err != nil {
@@ -188,12 +200,12 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 		return nil, fmt.Errorf("destination document already exists at %s; retry with overwrite=true or choose a different destination_ref", args.DestinationRef)
 	}
 
-	if err := s.writeDocumentFile(ctx, dstRoot, dstRelPath, string(raw)); err != nil {
+	if err := s.writeDocumentFileLocked(ctx, dstRoot, dstRelPath, string(raw)); err != nil {
 		return nil, err
 	}
-	if err := s.removeDocumentFile(ctx, srcRoot, srcRelPath); err != nil {
+	if err := s.removeDocumentFileLocked(ctx, srcRoot, srcRelPath); err != nil {
 		if destinationExists {
-			if restoreErr := s.writeDocumentFile(ctx, dstRoot, dstRelPath, string(originalDestinationRaw)); restoreErr != nil {
+			if restoreErr := s.writeDocumentFileLocked(ctx, dstRoot, dstRelPath, string(originalDestinationRaw)); restoreErr != nil {
 				if os.IsNotExist(err) {
 					return nil, fmt.Errorf("document not found: %s (rollback restore failed: %v)", args.Ref, restoreErr)
 				}
@@ -228,6 +240,11 @@ func (s *Store) Copy(ctx context.Context, args CopyArgs) (*CopyResult, error) {
 	if srcRoot == dstRoot && srcRelPath == dstRelPath {
 		return nil, fmt.Errorf("destination_ref must differ from ref")
 	}
+	// The destination's owner is read and acted on inside one critical
+	// section over both roots, so a dossier written there after the guard
+	// read cannot be overwritten by this copy.
+	release := s.lockRootMutations(srcRoot, dstRoot)
+	defer release()
 
 	srcAbsPath, err := s.resolveDocumentPath(srcRoot, srcRelPath)
 	if err != nil {
@@ -271,7 +288,7 @@ func (s *Store) Copy(ctx context.Context, args CopyArgs) (*CopyResult, error) {
 		return nil, fmt.Errorf("destination document already exists at %s; retry with overwrite=true or choose a different destination_ref", args.DestinationRef)
 	}
 
-	if err := s.writeDocumentFile(ctx, dstRoot, dstRelPath, string(raw)); err != nil {
+	if err := s.writeDocumentFileLocked(ctx, dstRoot, dstRelPath, string(raw)); err != nil {
 		return nil, err
 	}
 	destinationRecord, _, _, err := s.readDocumentFile(dstAbsPath, dstRoot, dstRelPath)
