@@ -77,6 +77,22 @@ func (s *Store) Report(ctx context.Context, opts ReportOptions) (*Report, error)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	report, err := readReport(ctx, tx, opts, column)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("finish usage report: %w", err)
+	}
+	return report, nil
+}
+
+// Keeping reads separate from transaction ownership lets multi-window views
+// reuse the same filters and totals without observing different ledger states.
+func readReport(ctx context.Context, tx *sql.Tx, opts ReportOptions, column string) (*Report, error) {
 	report := &Report{Groups: []ReportGroup{}}
 	where, args := reportWhere("u", opts)
 	if err := tx.QueryRowContext(ctx, `SELECT `+reportTotalsSQL+` FROM usage_records u WHERE `+where, args...).Scan(reportSummaryArgs(&report.Summary)...); err != nil {
@@ -92,9 +108,6 @@ func (s *Store) Report(ctx context.Context, opts ReportOptions) (*Report, error)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("finish usage report: %w", err)
 	}
 	return report, nil
 }

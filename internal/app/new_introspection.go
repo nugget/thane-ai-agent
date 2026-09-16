@@ -107,6 +107,23 @@ func (a *App) initInspector() {
 		BuildVersion: buildinfo.Version,
 		BuildCommit:  buildinfo.GitCommit,
 	}
+	if a.usageStore != nil {
+		spend := introspection.NewSpendCollector(a.usageStore, a.logger)
+		src.Spend = spend
+		a.deferWorker("recorded-spend", func(ctx context.Context) error {
+			workerCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				spend.Run(workerCtx)
+			}()
+			a.onClose("recorded-spend", func() {
+				cancel()
+				<-done
+			})
+			return nil
+		})
+	}
 	if a.loopEventJournal != nil {
 		journal := a.loopEventJournal
 		src.BootHistory = func(ctx context.Context) ([]introspection.BootRecord, error) {

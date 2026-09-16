@@ -764,10 +764,37 @@ and pinning a loop definition is `loop_definition_update` under `loops`.
 | `get_version` | Agent version, build info, and commit SHA. |
 | `cost_summary` | Typed JSON for reported token usage and stored cost estimates over a time window, globally or by exact loop ID/captured name. Bounded breakdowns include loop, model, provider, resource, role, and task, with pricing coverage and unattributed usage kept explicit. Includes agent and auxiliary calls; counts records rather than logical requests. |
 | `logs_query` | Query the structured log index with attribute filters. |
-| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, per-partition queue depths, a 24h telemetry rollup, the deploy story (running vs previous version, recent boots), and the process's own WARN/ERROR rates. |
+| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, queue depths, 24h telemetry, the deploy story, WARN/ERROR rates, and cached recorded spend with pricing coverage and top direct loops. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |
 | `doc_activity` | Revision-churn report over the managed document roots: revisions, net line delta, size, and authorship per document, with runaway-growth flagging. |
 | `loop_activity` | Journal-backed loop history: every wake with its attributed cause and sender, iteration outcomes, errors, and state changes — survives restarts and covers stopped loops. |
+
+### Recorded spend in system health
+
+`system_health` and the metacognitive panel share the same `spend` block.
+A background collector starts at boot and refreshes every five minutes with
+a five-second timeout. Spend reads return the cached snapshot without waiting for
+collection or querying the ledger. `status` is `pending` before collection,
+`available` for a fresh snapshot, `stale` after a refresh failure or five
+minutes, and `unavailable` when no successful snapshot can be served.
+`sampled_ago`, `refreshing`, `last_attempt_ago`, and `refresh_error` expose
+freshness and collection state. Failed refreshes retain the last good data.
+
+`last_24h` and `previous_24h` cover adjacent half-open `[since, until)` windows
+ending at the snapshot time. Each has a full `summary`, including pricing
+counts, and an `unattributed` subset without loop identity. Windows are absent
+before the first successful collection; that is distinct from measured zero
+records. `comparison` provides dollar and percentage changes only when both
+windows contain records and all are priced. A known zero prior cost still
+permits a dollar change; the percentage is null with reason `zero_prior_cost`.
+
+`top_loops` shows up to three loop IDs ranked by direct recorded cost in
+`last_24h`. Names are the latest captured labels, with shortening marked by
+`loop_name_truncated`. The block is capped at 4 KiB; `matched`, `returned`,
+and `truncated` disclose omitted loop rows while window totals remain complete.
+Use a returned `loop_id` with `cost_summary` for fresh detail. These estimates
+and their coverage inform baseline judgment; they do not set health lamps or
+wake loops. They cover reported usage, not invoices or descendant rollups.
 
 ### Cost and usage queries
 

@@ -12,10 +12,10 @@ knowing whether your question is about *now* or about *history*.
 Start wide when anything feels off: `system_health` is one zero-argument
 call that returns a status row per subsystem — ok, degraded, or failed,
 each with the reason already written out — plus host vitals, queue
-depths, the loop census, and the day's request/error/latency rollup.
-Trust its summary line to tell you whether anything deserves a second
-call at all. A degraded row names the subsystem; the row's name is what
-the drill-down tools filter by.
+depths, the loop census, the day's request/error/latency rollup, and
+cached recorded spend. Its summary line reports subsystem health; a
+degraded row names the subsystem the drill-down tools filter by. Read
+the separate spend evidence against your baselines when assessing cost.
 
 The loop fleet has two views, and confusing them wastes calls.
 `loop_status` is NOW: the process table, one canonical row per running
@@ -65,7 +65,20 @@ switch to `doc_history` and `doc_diff` — those ride the `documents`
 tag, so activate it for per-document history (a loop that owns the
 document already carries the read family without any tag).
 
-`cost_summary` answers what recorded model work cost over time. Start with
+The `spend` block in `system_health` and the metacognitive panel compares
+the last 24 hours with the previous 24 at its snapshot time. Background
+refresh runs every five minutes; rendering spend on either surface uses the cache.
+Check `status` and `sampled_ago`: pending or unavailable means no snapshot,
+while stale retains the last successful one. Both windows include full
+`summary` and `unattributed` totals with pricing coverage. `comparison`
+is available only when both windows have records and all are priced;
+a known zero prior cost permits a dollar change but no percentage.
+`top_loops` names up to three directly attributed loops by recorded cost,
+with omitted rows disclosed by `matched`, `returned`, and `truncated`.
+
+`cost_summary` supplies fresh detail when those observations warrant it.
+Use a panel `loop_id` with a time window to investigate one lifetime.
+For wider discovery, start with
 `{"period":"all","group_by":"loop"}` to compare loop lifetimes, then
 use a returned group `key` as `loop_id` to inspect one. From inside a loop,
 `{"loop_id":"self","since":"-3600s"}` measures its recorded work over

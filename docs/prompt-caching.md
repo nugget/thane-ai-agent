@@ -256,6 +256,18 @@ This is reported-usage accounting, not a complete invoice or an attempt log:
 calls without provider token counters and embedding calls are outside this
 ledger. Older rows cannot recover missing loop identity or full session IDs.
 
+`system_health` and the metacognitive panel expose the same cached `spend`
+snapshot: trailing 24-hour usage, the preceding 24 hours, pricing coverage,
+unattributed usage, and up to three loops by direct recorded cost. Collection
+starts at boot and refreshes every five minutes with a five-second timeout;
+rendering this spend block does no ledger work. Check its state and `sampled_ago`:
+pending or unavailable has no measurement, while stale retains the last good
+windows. The comparison requires records and complete known pricing in both
+windows; a zero prior cost leaves percentage change undefined. These are
+observations for baseline judgment, with fresh detail available through
+`cost_summary`. See [recorded spend in system health](reference/tools.md#recorded-spend-in-system-health)
+for states, bounds, and truncation.
+
 `cost_summary` returns typed JSON for a selected time window. Use
 `{"loop_id":"self","since":"-3600s"}` inside a loop to inspect its
 last hour, or `{"period":"all","group_by":"loop"}` for global loop

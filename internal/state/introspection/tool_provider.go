@@ -58,7 +58,8 @@ func (t *Tools) Tools() []*tools.Tool {
 		{
 			Name: "system_health",
 			Description: "The annunciator panel for thane's own internals: one status row per subsystem (ok / degraded / failed, with a precomputed detail sentence) covering external connections, the memory guard, event-bus loss, log-index loss, document-root sync, work-queue backlog, and the loop fleet — plus host basics (disk, goroutines, uptime), per-partition queue depths, a 24h telemetry rollup (requests, errors, latency p50/p95, database sizes), the deploy story (running vs previous version, when the boundary landed, size of the jump, recent boots), and the process's own WARN/ERROR rates with the newest samples. " +
-				"Zero arguments; call it first when anything feels off. Each degraded row names the subsystem the drill-down tools filter by: loop problems → loop_status / loop_activity, queue backlog → queue_status, log or error detail → logs_query, document churn → doc_activity.",
+				"Includes cached recorded spend for the last 24h versus the previous 24h, with snapshot state/age, pricing coverage, unattributed usage, and up to three direct loops by cost. Read its coverage and supplied comparison against your baselines; missing data is not zero cost. " +
+				"Zero arguments; call it first when anything feels off. Each degraded row names the subsystem the drill-down tools filter by: loop problems → loop_status / loop_activity, queue backlog → queue_status, log or error detail → logs_query, document churn → doc_activity. Use cost_summary with a returned loop_id and time window for fresh spend detail.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 			Handler:    t.handleSystemHealth,
 		},
