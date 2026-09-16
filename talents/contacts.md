@@ -148,7 +148,8 @@ ordinary documents instead.
   must go; fix them all in the next call. Archive evidence cites the whole
   session id, `archive:session:<full-session-uuid>`; a whole id in the older
   hyphen spelling is rewritten for you and listed under
-  `canonicalized_citations`. A leading part is refused, never completed
+  `canonicalized_citations`, with `canonicalized_citations_unlisted`
+  counting any the result had no room to list — those landed too. A leading part is refused, never completed
   silently: the refusal names its full citation when one session matches,
   lists the candidates when several share it, and says so when none does.
   Choose among candidates by searching `archive_search` for the claim's own

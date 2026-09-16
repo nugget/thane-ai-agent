@@ -637,3 +637,102 @@ func TestDescribeSessionLookupClipsTitles(t *testing.T) {
 		})
 	}
 }
+
+// TestWriteDossierBoundsOneOversizedCitation pins the other shape the
+// refusal cap has to survive: not many citations but one long one. The
+// citation pattern's id is an unbounded run of alphanumerics joined by
+// hyphens and the full projection may be tens of kilobytes, so a pasted
+// token straight after archive:session: is a dossier's lever on the size
+// of a refusal that has only one item to list — and the itemized list
+// always emits its first item, whatever the budget says, so the clip has
+// to happen on the citation itself.
+func TestWriteDossierBoundsOneOversizedCitation(t *testing.T) {
+	const run = 32 << 10
+	citation := archiveSessionCitationPrefix + strings.Repeat("z", run)
+
+	tools, contactID := newCitationTestTools(t)
+	writer := &recordingDossierWriter{}
+	tools.ConfigureDossierDocuments(nil, writer.Write)
+
+	_, err := tools.WriteDossier(t.Context(), DossierWriteArgs{
+		ContactID:  contactID,
+		StatusLine: "Current.",
+		Teaser:     "Useful hook.",
+		Digest:     "Enough context to act.",
+		Full:       "Claims. — evidence: " + citation,
+	})
+	if err == nil {
+		t.Fatal("WriteDossier() accepted a malformed citation")
+	}
+	got := err.Error()
+	if len(got) > dossierCitationRefusalMaxBytes {
+		t.Errorf("refusal is %d bytes, want at most %d", len(got), dossierCitationRefusalMaxBytes)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("refusal is not valid UTF-8")
+	}
+	if !strings.HasSuffix(got, dossierCitationRecovery) {
+		t.Errorf("refusal does not end with the recovery:\n%s", got)
+	}
+	// The clip says how much it cut, so the citation stays recognizable
+	// and its real size is on the record.
+	if want := fmt.Sprintf("... (%d bytes)", len(citation)); !strings.Contains(got, want) {
+		t.Errorf("refusal does not report the clipped citation's size %q:\n%s", want, got)
+	}
+	if writer.calls != 0 {
+		t.Errorf("refused write stored %d dossiers, want 0", writer.calls)
+	}
+}
+
+// TestWithCanonicalizedCitationsBoundsTheReport pins the rewrite report
+// to one tool result. Distinct citations are bounded only by the body a
+// dossier may carry, so a legacy dossier inherited with hundreds of
+// hyphen-form ids would otherwise report every one of them on the
+// success path, where nothing else is competing to cut it back.
+func TestWithCanonicalizedCitationsBoundsTheReport(t *testing.T) {
+	const rewrites = 2000
+	changes := make([]canonicalizedCitation, 0, rewrites)
+	for i := range rewrites {
+		id := fmt.Sprintf("0190ab%02x-%04x-7000-8000-00000000%04x", i%256, i, i)
+		changes = append(changes, canonicalizedCitation{
+			From:   "archive:session-" + id,
+			To:     archiveSessionCitationPrefix + id,
+			Fields: []string{"full"},
+		})
+	}
+
+	const result = `{"action":"contact_dossier_write","applied":true}`
+	got, err := withCanonicalizedCitations(result, changes)
+	if err != nil {
+		t.Fatalf("withCanonicalizedCitations(): %v", err)
+	}
+	if len(got) > dossierWriteResultMaxBytes {
+		t.Errorf("result is %d bytes, want at most %d", len(got), dossierWriteResultMaxBytes)
+	}
+	if !json.Valid([]byte(got)) {
+		t.Fatalf("result is not valid JSON:\n%s", got)
+	}
+
+	var decoded struct {
+		CanonicalizedCitations []canonicalizedCitation `json:"canonicalized_citations"`
+		Unlisted               int                     `json:"canonicalized_citations_unlisted"`
+	}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(decoded.CanonicalizedCitations) == 0 {
+		t.Fatal("result lists no rewrites at all; one is always worth showing")
+	}
+	// Every rewrite is applied whether or not it is listed, so the count
+	// has to account for the whole set.
+	if listed, want := len(decoded.CanonicalizedCitations), rewrites-decoded.Unlisted; listed != want {
+		t.Errorf("result lists %d rewrites and says %d are unlisted, which accounts for %d of %d",
+			listed, decoded.Unlisted, listed+decoded.Unlisted, rewrites)
+	}
+	if decoded.Unlisted == 0 {
+		t.Errorf("result lists all %d rewrites in %d bytes; the bound did not engage", rewrites, len(got))
+	}
+	if !reflect.DeepEqual(decoded.CanonicalizedCitations[0], changes[0]) {
+		t.Errorf("first listed rewrite = %+v, want %+v", decoded.CanonicalizedCitations[0], changes[0])
+	}
+}

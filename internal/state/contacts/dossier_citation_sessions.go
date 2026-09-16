@@ -164,15 +164,36 @@ func formatCandidateAge(t, now time.Time) string {
 	return promptfmt.FormatDeltaOnly(t, now)
 }
 
+// dossierWriteResultMaxBytes is the ceiling on contact_dossier_write's
+// whole successful result: the 16 KB AGENTS.md gives a tool result that
+// is not a transcript, the same ceiling its refusal answers to. The
+// rewrite report is the one part of that result a dossier sizes, so it
+// spends what the write result itself leaves.
+const dossierWriteResultMaxBytes = 16 << 10
+
+// dossierRewriteReportFrame is what the report costs beside its entries:
+// the field name it is spliced under, the unlisted count when there is
+// one, and the object's closing brace. Reserving it is what keeps the
+// count inside the ceiling instead of pushed past it by a long list.
+const dossierRewriteReportFrame = 128
+
 // withCanonicalizedCitations adds the citations Go respelled to a
 // successful write result, so the caller learns the stored spelling
 // without reading the dossier back. The field is spliced into the result
 // object to keep its existing key order.
+//
+// The list is bounded and the rewrites it leaves out are counted. A
+// dossier's citations are bounded only by the body it may carry — a
+// legacy dossier inherited with hundreds of hyphen-form ids is one
+// ordinary call — and every rewrite is already applied and stored, so
+// dropping tail entries costs the caller only the transcript of them.
+// What it must not lose is that the rewrites happened and how many.
 func withCanonicalizedCitations(result string, changes []canonicalizedCitation) (string, error) {
 	if len(changes) == 0 {
 		return result, nil
 	}
-	listed, err := json.Marshal(changes)
+	reported, unlisted := boundedCitationRewrites(changes, dossierWriteResultMaxBytes-len(result)-dossierRewriteReportFrame)
+	listed, err := json.Marshal(reported)
 	if err != nil {
 		return "", fmt.Errorf("the contact dossier was written, but encoding the citations Go canonicalized failed: %w", err)
 	}
@@ -183,14 +204,48 @@ func withCanonicalizedCitations(result string, changes []canonicalizedCitation) 
 		if head == "{" {
 			separator = ""
 		}
-		return head + separator + `"canonicalized_citations":` + string(listed) + "}", nil
+		spliced := head + separator + `"canonicalized_citations":` + string(listed)
+		if unlisted > 0 {
+			spliced += fmt.Sprintf(`,"canonicalized_citations_unlisted":%d`, unlisted)
+		}
+		return spliced + "}", nil
 	}
 	wrapped, err := json.Marshal(struct {
 		WriteResult            string                  `json:"write_result"`
 		CanonicalizedCitations []canonicalizedCitation `json:"canonicalized_citations"`
-	}{WriteResult: result, CanonicalizedCitations: changes})
+		Unlisted               int                     `json:"canonicalized_citations_unlisted,omitempty"`
+	}{WriteResult: result, CanonicalizedCitations: reported, Unlisted: unlisted})
 	if err != nil {
 		return "", fmt.Errorf("the contact dossier was written, but encoding its result failed: %w", err)
 	}
 	return string(wrapped), nil
+}
+
+// boundedCitationRewrites returns the longest prefix of changes whose
+// JSON array fits maxBytes, and how many rewrites that prefix leaves
+// out. It sizes each entry once rather than re-encoding the growing
+// prefix, so a dossier carrying a thousand rewrites costs one pass.
+//
+// The first rewrite is always listed, as the refusal list does it: a
+// caller that sees an unlisted count and no example learns less than one
+// that sees the shape of what Go changed.
+func boundedCitationRewrites(changes []canonicalizedCitation, maxBytes int) ([]canonicalizedCitation, int) {
+	total := len("[]")
+	for i, change := range changes {
+		encoded, err := json.Marshal(change)
+		if err != nil {
+			// The caller encodes the same entries and reports the
+			// failure; sizing cannot be the place it surfaces.
+			return changes, 0
+		}
+		size := len(encoded)
+		if i > 0 {
+			size += len(",")
+		}
+		if i > 0 && total+size > maxBytes {
+			return changes[:i], len(changes) - i
+		}
+		total += size
+	}
+	return changes, 0
 }

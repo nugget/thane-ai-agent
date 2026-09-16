@@ -679,7 +679,10 @@ leading digits, and a shortened citation cannot say which of them it meant.
 `contact_dossier_write` repairs what it can without guessing and refuses the
 rest before Git changes. A full id written in the older hyphen form
 (`archive:session-<uuid>`) is rewritten to the colon form, and the result lists
-each rewrite under `canonicalized_citations`. A leading part is never
+each rewrite under `canonicalized_citations`. That list is bounded to keep the
+whole result inside 16 KB; a legacy dossier carrying more rewrites than fit
+gets the ones that did plus `canonicalized_citations_unlisted`, the count of
+those applied but not listed. A leading part is never
 completed silently; the refusal looks it up across the whole archive and names
 the full citation when exactly one session begins with it, lists up to five
 candidates with their start times and titles when several do, and says so when

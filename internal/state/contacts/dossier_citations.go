@@ -256,7 +256,13 @@ func validateDossierEvidenceCitations(ctx context.Context, payload documentfacet
 // and, for a leading part, what the archive knows about it.
 func describeCitationProblem(ctx context.Context, problem *citationProblem, resolver *citationResolver) string {
 	c := problem.citation
-	subject := c.text + " " + fieldPhrase(problem.fields)
+	// The citation is echoed through the same bound as every other
+	// caller-supplied value this package quotes back. A respelled or
+	// partial id is well under it, but a malformed one is only as short
+	// as whatever the pattern matched: the id it accepts is an unbounded
+	// run of alphanumerics joined by hyphens, so a pasted token or a
+	// mangled slug in the projection would otherwise size the refusal.
+	subject := echoForRefusal(c.text) + " " + fieldPhrase(problem.fields)
 	switch c.kind {
 	case citationRespelled:
 		if c.separator == "-" {
