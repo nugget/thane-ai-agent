@@ -255,8 +255,25 @@ usage, missing prices, and uncertain pricing coverage.
 This is reported-usage accounting, not a complete invoice or an attempt log:
 calls without provider token counters and embedding calls are outside this
 ledger. Older rows cannot recover missing loop identity or full session IDs.
-Persisting new attribution prepares loop-level reporting; the existing
-`cost_summary` grouping options remain unchanged.
+
+`cost_summary` returns typed JSON for a selected time window. Use
+`{"loop_id":"self","since":"-3600s"}` inside a loop to inspect its
+last hour, or `{"period":"all","group_by":"loop"}` for global loop
+discovery. An exact recorded `loop_id` remains queryable after the instance
+stops; `loop_name` selects the captured name across matching lifetimes rather
+than resolving only the current live instance. Query the ID to include usage
+captured under other names. Loop selectors default to separate loop-ID groups
+whose `key` is the ID and whose `loop_name` is the latest captured label in
+the selected window; an explicit `group_by`, such as `model`, breaks down
+the selected usage instead. These are direct recorded totals, not descendant
+rollups or reconstructed historical attribution.
+
+The summary covers every matching record even when the bounded group list
+is truncated. Global loop discovery reports unattributed usage separately
+instead of guessing a loop owner. Inspect pricing coverage with the stored
+cost estimates: no matching records is not evidence of no cost. See
+[cost and usage queries](reference/tools.md#cost-and-usage-queries) for
+selectors, custom windows, and response limits.
 
 Usage summaries and `cost_summary` count records,
 while live API `total_requests` counts successful logical requests.

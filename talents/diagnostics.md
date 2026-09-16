@@ -65,12 +65,32 @@ switch to `doc_history` and `doc_diff` — those ride the `documents`
 tag, so activate it for per-document history (a loop that owns the
 document already carries the read family without any tag).
 
-`logs_query` and `cost_summary` carry the receipts: failure evidence
-scoped by loop, subsystem, or request, and spend grouped by model,
-provider, or task. The `system_health` snapshot already surfaces the
-newest warnings and errors with their hourly rates, so reach for
-`logs_query` when a sample there needs its full story — not as the
-first sweep.
+`cost_summary` answers what recorded model work cost over time. Start with
+`{"period":"all","group_by":"loop"}` to compare loop lifetimes, then
+use a returned group `key` as `loop_id` to inspect one. From inside a loop,
+`{"loop_id":"self","since":"-3600s"}` measures its recorded work over
+the last hour. Exact recorded IDs remain queryable after a loop stops;
+`{"loop_name":"archivist","since":"-172800s","until":"-86400s"}`
+selects that captured name over the previous day's window. A name can cover
+multiple lifetime IDs, which the default loop grouping keeps separate.
+The `groups[].loop_name` field is the latest captured label in the selected
+window; query the ID to include records captured under other names.
+An explicit `group_by` such as `model` or `role` instead breaks down the
+selected spend. Loop filters cover direct recorded calls, not descendants.
+
+Read `summary` and its pricing coverage before interpreting the bounded
+`groups`: `matched_groups` counts all groups, `returned_groups` counts those
+shown, and `summary` covers the full selection even when `truncated` is
+true. Global loop discovery reports usage without loop attribution in `unattributed`;
+do not assign it to a named loop. Missing prices mean incomplete cost coverage;
+unknown pricing means uncertain coverage, with stored estimates retained.
+No recorded usage does not establish no cost: calls without reported tokens
+are absent, and older records may lack loop identity.
+
+`logs_query` supplies failure evidence scoped by loop, subsystem, or request.
+The `system_health` snapshot already surfaces the newest warnings and errors
+with their hourly rates, so reach for `logs_query` when a sample there needs
+its full story — not as the first sweep.
 
 Version boundaries are diagnostic events in their own right, and
 `system_health` precomputes the deploy story: running vs previous

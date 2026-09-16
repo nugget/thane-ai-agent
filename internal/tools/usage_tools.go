@@ -2,169 +2,157 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 )
 
-// registerCostSummary registers the cost_summary tool for querying
-// token usage and API costs.
+const maxCostSummaryBytes = 16 * 1024
+
 func (r *Registry) registerCostSummary() {
 	if r.usageStore == nil {
 		return
 	}
-
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Counts are usage records: new agent records represent model calls; older records may aggregate iterations. Unpriced records mean incomplete cost coverage; unknown records mean coverage is uncertain. Use to understand spending patterns and resource consumption.",
+		Description: "Query recorded token usage and estimated API costs as JSON. Use group_by=loop to discover past loop IDs, loop_id=self for your own calls, or an exact historical loop_id. Loop filters cover direct calls only, excluding descendants. loop_name matches captured names across loop instances; groups keep IDs separate. Totals cover all matching records even when groups are truncated. Pricing counters distinguish priced, missing-price, and unknown historical coverage; no records does not prove zero cost.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"period": map[string]any{
-					"type":        "string",
-					"enum":        []string{"today", "yesterday", "week", "month", "all"},
-					"description": "Time period to summarize.",
+					"type": "string", "enum": []string{"today", "yesterday", "week", "month", "all"},
+					"description": "Named time window (default today). Days use server local time; week and month are trailing windows. Cannot combine with since or until.",
+				},
+				"since": map[string]any{
+					"type": "string", "maxLength": 128,
+					"description": "Inclusive custom start: signed offset such as -24h or -7d, or RFC3339 timestamp. Omit period when using this.",
+				},
+				"until": map[string]any{
+					"type": "string", "maxLength": 128,
+					"description": "Exclusive custom end: signed offset or RFC3339 timestamp (default now). Requires since.",
+				},
+				"loop_id": map[string]any{
+					"type": "string", "maxLength": 256,
+					"description": "Exact loop instance ID, including completed loops, or self for the calling loop. Cannot combine with loop_name. Omit both selectors for all recorded usage.",
+				},
+				"loop_name": map[string]any{
+					"type": "string", "maxLength": 256,
+					"description": "Exact name captured on usage records; may match multiple historical loop IDs. A renamed loop's other-name records are excluded; query its ID for all its calls. Cannot combine with loop_id.",
 				},
 				"group_by": map[string]any{
-					"type":        "string",
-					"enum":        []string{"deployment", "model", "upstream_model", "provider", "resource", "role", "task"},
-					"description": "Optional: group results by deployment ID (deployment or model), upstream model, provider, resource, role, or task name.",
+					"type": "string", "enum": []string{"loop", "deployment", "model", "upstream_model", "provider", "resource", "role", "task"},
+					"description": "Optional breakdown, ordered by cost descending then key. Defaults to loop with a loop selector, otherwise totals only. model aliases deployment. Loop keys are IDs; unattributed records appear separately, never as a loop.",
+				},
+				"limit": map[string]any{
+					"type": "integer", "minimum": 1, "maximum": 100, "default": 20,
+					"description": "Maximum groups (default 20, max 100); the 16 KiB output budget can return fewer. Summary always covers the full selection. Narrow the window or selectors when truncated.",
 				},
 			},
-			"required": []string{"period"},
 		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			period, _ := args["period"].(string)
-			groupBy, _ := args["group_by"].(string)
-
-			start, end := parsePeriod(period)
-
-			summary, err := r.usageStore.SummaryContext(ctx, start, end)
-			if err != nil {
-				return "", fmt.Errorf("query usage summary: %w", err)
-			}
-
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("Cost Summary (%s):\n", period))
-			sb.WriteString(fmt.Sprintf("  Usage records: %d\n", summary.TotalRecords))
-			sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", formatTokenCount(summary.TotalInputTokens)))
-			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(summary.TotalOutputTokens)))
-			if summary.TotalCacheCreationInputTokens > 0 {
-				sb.WriteString(fmt.Sprintf("  Cache write tokens: %s\n", formatTokenCount(summary.TotalCacheCreationInputTokens)))
-			}
-			if summary.TotalCacheReadInputTokens > 0 {
-				sb.WriteString(fmt.Sprintf("  Cache read tokens: %s\n", formatTokenCount(summary.TotalCacheReadInputTokens)))
-			}
-			sb.WriteString(fmt.Sprintf("  Estimated cost: $%.4f\n", summary.TotalCostUSD))
-			sb.WriteString(fmt.Sprintf("  Pricing coverage: %d priced, %d unpriced, %d unknown\n",
-				summary.PricedRecords, summary.UnpricedRecords, summary.UnknownPricingRecords))
-			if summary.UnpricedRecords > 0 {
-				sb.WriteString("  Missing prices contribute $0. This is not a complete spend total.\n")
-			}
-			if summary.UnknownPricingRecords > 0 {
-				sb.WriteString("  Pricing coverage is unknown for some records; stored cost estimates are retained.\n")
-			}
-
-			if groupBy != "" {
-				grouped, groupLabel, err := queryGrouped(r.usageStore, groupBy, start, end)
-				if err != nil {
-					return "", err
-				}
-				if len(grouped) > 0 {
-					sb.WriteString(fmt.Sprintf("\nBy %s:\n", groupLabel))
-					for _, gs := range grouped {
-						display := gs.Key
-						if display == "" {
-							display = "(none)"
-						}
-						sb.WriteString(fmt.Sprintf("  %s: $%.4f (%d usage records, %s in / %s out)\n",
-							display, gs.Summary.TotalCostUSD, gs.Summary.TotalRecords,
-							formatTokenCount(gs.Summary.TotalInputTokens),
-							formatTokenCount(gs.Summary.TotalOutputTokens),
-						))
-						sb.WriteString(fmt.Sprintf("    pricing: %d priced, %d unpriced, %d unknown\n",
-							gs.Summary.PricedRecords, gs.Summary.UnpricedRecords, gs.Summary.UnknownPricingRecords))
-						if gs.Summary.TotalCacheCreationInputTokens > 0 || gs.Summary.TotalCacheReadInputTokens > 0 {
-							sb.WriteString(fmt.Sprintf("    cache: %s write / %s read\n",
-								formatTokenCount(gs.Summary.TotalCacheCreationInputTokens),
-								formatTokenCount(gs.Summary.TotalCacheReadInputTokens),
-							))
-						}
-					}
-				}
-			}
-
-			return sb.String(), nil
-		},
+		Handler: r.handleCostSummary,
 	})
 }
 
-// queryGrouped dispatches the grouped summary query based on the
-// group_by parameter. Results are ordered by cost descending.
-func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]usage.GroupedSummary, string, error) {
-	groupBy = strings.ToLower(strings.TrimSpace(groupBy))
-	if groupBy == "" {
-		return nil, "", nil
-	}
-	switch groupBy {
-	case "deployment", "model":
-		result, err := store.SummaryByGroup(groupBy, start, end)
-		return result, "Deployment", err
-	case "upstream_model":
-		result, err := store.SummaryByGroup(groupBy, start, end)
-		return result, "Upstream Model", err
-	case "provider":
-		result, err := store.SummaryByGroup(groupBy, start, end)
-		return result, "Provider", err
-	case "resource":
-		result, err := store.SummaryByGroup(groupBy, start, end)
-		return result, "Resource", err
-	case "role":
-		result, err := store.SummaryByGroup(groupBy, start, end)
-		return result, "Role", err
-	case "task":
-		result, err := store.SummaryByGroup(groupBy, start, end)
-		return result, "Task", err
-	default:
-		return nil, "", fmt.Errorf("unsupported group_by %q; use one of: deployment, model, upstream_model, provider, resource, role, task", groupBy)
-	}
+type costSummaryScope struct {
+	Kind     string `json:"kind"`
+	LoopID   string `json:"loop_id,omitempty"`
+	LoopName string `json:"loop_name,omitempty"`
 }
 
-// parsePeriod converts a period name to a start/end time range.
-func parsePeriod(period string) (time.Time, time.Time) {
+type costSummaryWindow struct {
+	Period string `json:"period,omitempty"`
+	Since  string `json:"since,omitempty"`
+	Until  string `json:"until"`
+	Bounds string `json:"bounds"`
+}
+
+type costSummaryResult struct {
+	Scope          costSummaryScope    `json:"scope"`
+	Window         costSummaryWindow   `json:"window"`
+	GroupBy        string              `json:"group_by,omitempty"`
+	Summary        usage.Summary       `json:"summary"`
+	Unattributed   usage.Summary       `json:"unattributed"`
+	MatchedGroups  int                 `json:"matched_groups"`
+	ReturnedGroups int                 `json:"returned_groups"`
+	Groups         []usage.ReportGroup `json:"groups"`
+	Truncated      bool                `json:"truncated"`
+	Notes          []string            `json:"notes"`
+}
+
+func (r *Registry) handleCostSummary(ctx context.Context, args map[string]any) (string, error) {
 	now := time.Now()
-	end := now.Add(1 * time.Minute) // slight future buffer
-
-	switch period {
-	case "today":
-		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		return start, end
-	case "yesterday":
-		yesterday := now.AddDate(0, 0, -1)
-		start := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, yesterday.Location())
-		endOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		return start, endOfDay
-	case "week":
-		return now.AddDate(0, 0, -7), end
-	case "month":
-		return now.AddDate(0, -1, 0), end
-	case "all":
-		return time.Time{}, end
-	default:
-		return time.Time{}, end
+	opts, period, err := parseCostSummaryOptions(ctx, args, now)
+	if err != nil {
+		return "", err
 	}
+	// All-history queries can scan a large ledger; cancellation and a fixed
+	// deadline bound the work independently of the output row limit.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	report, err := r.usageStore.Report(ctx, opts)
+	if err != nil {
+		return "", fmt.Errorf("cost_summary: query recorded usage (try a narrower time window): %w", err)
+	}
+	result := costSummaryResult{
+		Scope: costSummaryScope{Kind: "all_recorded_usage"},
+		Window: costSummaryWindow{
+			Period: period, Until: promptfmt.FormatDeltaOnly(opts.End, now),
+			Bounds: "inclusive_since_exclusive_until",
+		},
+		GroupBy: opts.GroupBy, Summary: report.Summary, Unattributed: report.Unattributed,
+		MatchedGroups: report.MatchedGroups, Groups: report.Groups, Truncated: report.Truncated,
+		Notes: []string{
+			"Costs are estimates stored at call time, not repriced. Pricing coverage describes recorded usage, not invoice completeness.",
+			"Usage records are provider-reported calls, including reported usage on failures; older records may aggregate iterations. Calls without reported usage and embeddings are absent.",
+			"Unattributed totals count matching records without a loop ID; they cannot be assigned retrospectively to a loop.",
+		},
+	}
+	if !opts.Start.IsZero() {
+		result.Window.Since = promptfmt.FormatDeltaOnly(opts.Start, now)
+	}
+	if opts.LoopID != "" {
+		result.Scope = costSummaryScope{Kind: "loop_id", LoopID: opts.LoopID}
+	}
+	if opts.LoopName != "" {
+		result.Scope = costSummaryScope{Kind: "recorded_loop_name", LoopName: opts.LoopName}
+	}
+	if opts.LoopID != "" || opts.LoopName != "" {
+		result.Notes = append(result.Notes, "Loop selectors include only directly attributed records, not descendant calls. Name filters cover only records captured under that name.")
+	}
+	if report.Summary.TotalRecords == 0 {
+		result.Notes = append(result.Notes, "No recorded usage matched; this does not establish zero cost. Check the loop ID or name and time window.")
+	}
+	if report.Summary.UnpricedRecords > 0 {
+		result.Notes = append(result.Notes, "Missing prices contribute $0. This is not a complete spend total.")
+	}
+	if report.Summary.UnknownPricingRecords > 0 {
+		result.Notes = append(result.Notes, "Pricing coverage is unknown for some records; stored cost estimates are retained.")
+	}
+	return marshalCostSummary(result)
 }
 
-// formatTokenCount formats a token count as a compact string (e.g.,
-// "1.23M", "456.0K", "789").
-func formatTokenCount(n int64) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.2fM", float64(n)/1_000_000.0)
+func marshalCostSummary(result costSummaryResult) (string, error) {
+	if result.Groups == nil {
+		result.Groups = []usage.ReportGroup{}
 	}
-	if n >= 1_000 {
-		return fmt.Sprintf("%.1fK", float64(n)/1_000.0)
+	// Drop whole groups so IDs and accounting figures remain exact. Recheck
+	// the full JSON after each removal because escaping can expand labels.
+	for {
+		result.ReturnedGroups = len(result.Groups)
+		data, err := json.Marshal(result)
+		if err != nil {
+			return "", fmt.Errorf("cost_summary: encode recorded usage: %w", err)
+		}
+		if len(data) <= maxCostSummaryBytes {
+			return string(data), nil
+		}
+		if len(result.Groups) == 0 {
+			return "", fmt.Errorf("cost_summary: report metadata exceeds %d bytes; shorten loop selectors", maxCostSummaryBytes)
+		}
+		result.Groups = result.Groups[:len(result.Groups)-1]
+		result.Truncated = true
 	}
-	return fmt.Sprintf("%d", n)
 }

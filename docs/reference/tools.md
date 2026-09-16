@@ -762,12 +762,55 @@ and pinning a loop definition is `loop_definition_update` under `loops`.
 | Tool | Description |
 |------|-------------|
 | `get_version` | Agent version, build info, and commit SHA. |
-| `cost_summary` | Aggregated reported token usage and estimated cost, with priced, unpriced, and unknown pricing record counts. Missing prices contribute zero, not evidence of free usage. Includes agent and auxiliary model calls; older rows may aggregate iterations. Counts usage records rather than logical requests. |
+| `cost_summary` | Typed JSON for reported token usage and stored cost estimates over a time window, globally or by exact loop ID/captured name. Bounded breakdowns include loop, model, provider, resource, role, and task, with pricing coverage and unattributed usage kept explicit. Includes agent and auxiliary calls; counts records rather than logical requests. |
 | `logs_query` | Query the structured log index with attribute filters. |
 | `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, per-partition queue depths, a 24h telemetry rollup, the deploy story (running vs previous version, recent boots), and the process's own WARN/ERROR rates. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |
 | `doc_activity` | Revision-churn report over the managed document roots: revisions, net line delta, size, and authorship per document, with runaway-growth flagging. |
 | `loop_activity` | Journal-backed loop history: every wake with its attributed cause and sender, iteration outcomes, errors, and state changes — survives restarts and covers stopped loops. |
+
+### Cost and usage queries
+
+`cost_summary` defaults to `period: "today"`. Other periods are `yesterday`,
+`week`, `month`, and `all`. For a custom half-open window `[since, until)`,
+provide `since` as a signed second delta such as `-3600s` or an RFC3339
+timestamp; `until` accepts the same forms and defaults to now. Do not combine
+`period` with `since` or `until`. Invalid or reversed windows return an error.
+
+Omit loop selectors for global totals. Supply either `loop_id` or
+`loop_name`, never both. `loop_id: "self"` selects the calling loop and errors
+outside loop context. A full recorded ID can identify a stopped or prior
+process's loop; it does not need to exist in the live registry. `loop_name`
+matches the exact name captured with usage, so it can select several loop
+lifetimes. It does not resolve the name to today's live instance. Records
+captured under a different name are excluded; query the loop's ID to include
+its usage across names.
+
+| Question | Arguments |
+|----------|-----------|
+| What has this loop used in the last hour? | `{"loop_id":"self","since":"-3600s"}` |
+| What did one recorded lifetime use during the preceding day's window? | `{"loop_id":"<recorded loop ID>","since":"-172800s","until":"-86400s"}` |
+| How does an exact loop name's recent usage split across models? | `{"loop_name":"archivist","period":"week","group_by":"model"}` |
+| Which recorded loop lifetimes account for global usage? | `{"period":"all","group_by":"loop","limit":20}` |
+
+Loop selectors default to `group_by: "loop"`. Other supported breakdowns are
+`deployment` (or its alias `model`), `upstream_model`, `provider`, `resource`,
+`role`, and `task`. `limit` defaults to 20 and has a maximum of 100. The JSON
+response is capped at 16 KiB: `matched_groups`, `returned_groups`, and
+`truncated` disclose any omitted rows. `summary` always covers the full
+selection, independently of the group limit. `unattributed` is the subset
+without a recorded loop ID; global loop discovery excludes those records
+from its `groups`. For loop groups, `key` is the ID to use as `loop_id` in
+follow-up queries, and `loop_name` is the latest captured label in the
+selected window, without consulting the live registry.
+
+Loop totals include only directly attributed recorded calls, not descendants.
+Configured zero rates count as priced; missing prices contribute zero and
+make spend incomplete. Unknown pricing preserves stored estimates and means
+coverage is uncertain. Calls without reported tokens are absent; older
+records may aggregate iterations or lack loop attribution. A zero-row result
+means no recorded usage matched, not that the loop did no work or incurred
+no cost.
 
 ## MCP tools
 
