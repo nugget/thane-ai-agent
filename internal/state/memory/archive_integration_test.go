@@ -34,7 +34,11 @@ func TestCompaction_PreservesMessages(t *testing.T) {
 		}
 	}
 
-	if !compactor.NeedsCompaction("test-conv") {
+	needed, err := compactor.NeedsCompaction(context.Background(), "test-conv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needed {
 		t.Skip("not enough tokens to trigger compaction")
 	}
 

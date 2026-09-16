@@ -792,6 +792,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Conversation" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "500":
+          description: Conversation metadata or active history could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NativeAPIError" }
   /v1/sessions/stats:
     get:
       tags: [Conversations & Sessions]
@@ -818,6 +823,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionHistory" }
+        "500":
+          description: Active conversation history could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NativeAPIError" }
   /v1/sessions/compact:
     post:
       tags: [Conversations & Sessions]
@@ -830,6 +840,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionActionAck" }
+        "500":
+          description: Compaction failed, including a failed required memory read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NativeAPIError" }
   /v1/sessions/balance:
     post:
       tags: [Conversations & Sessions]
@@ -1632,6 +1647,29 @@ components:
           type: string
           description: Human-readable message describing what went wrong.
           example: resource not found
+
+    NativeAPIError:
+      type: object
+      description: Structured error returned by native conversation and session handlers.
+      required: [error]
+      properties:
+        error:
+          type: object
+          description: HTTP status and explanation of the failure.
+          required: [code, message, type]
+          properties:
+            code:
+              type: integer
+              description: HTTP status code.
+              example: 500
+            message:
+              type: string
+              description: Human-readable explanation of the failure.
+              example: session history unavailable
+            type:
+              type: string
+              description: Native API error category.
+              enum: [invalid_request_error]
 
     CompanionObservationBatch:
       type: object

@@ -16,6 +16,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -26,9 +27,9 @@ import (
 // MemoryStore is the interface for memory storage backends (in-memory
 // and SQLite). Both [Store] and [SQLiteStore] satisfy it.
 type MemoryStore interface {
-	GetMessages(conversationID string) []Message
+	GetMessages(ctx context.Context, conversationID string) ([]Message, error)
 	AddMessage(conversationID, role, content, origin string) error
-	GetConversation(id string) *Conversation
+	GetConversation(ctx context.Context, id string) (*Conversation, error)
 	Clear(conversationID string) error
 	Stats() map[string]any
 }
@@ -124,18 +125,24 @@ func NewStore(maxMessages int) *Store {
 }
 
 // GetConversation retrieves a conversation by ID.
-// Returns nil if not found.
-func (s *Store) GetConversation(id string) *Conversation {
+// Returns nil without an error if not found, or an error on cancellation.
+func (s *Store) GetConversation(ctx context.Context, id string) (*Conversation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	conv, ok := s.conversations[id]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	// Return a copy to avoid race conditions
-	return conv.copy()
+	return conv.copy(), nil
 }
 
 // GetOrCreateConversation retrieves or creates a conversation.
@@ -229,20 +236,26 @@ func (s *Store) addMessage(conversationID string, role, content, origin string, 
 }
 
 // GetMessages retrieves messages for a conversation.
-// Returns empty slice if conversation doesn't exist.
-func (s *Store) GetMessages(conversationID string) []Message {
+// Returns an empty slice if the conversation does not exist, or an error on cancellation.
+func (s *Store) GetMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	conv, ok := s.conversations[conversationID]
 	if !ok {
-		return []Message{}
+		return []Message{}, nil
 	}
 
 	// Return a copy
 	msgs := make([]Message, len(conv.Messages))
 	copy(msgs, conv.Messages)
-	return msgs
+	return msgs, nil
 }
 
 // Clear removes a conversation.
@@ -253,21 +266,27 @@ func (s *Store) Clear(conversationID string) error {
 	return nil
 }
 
-// GetTokenCount returns estimated token count for a conversation.
-func (s *Store) GetTokenCount(conversationID string) int {
+// GetTokenCount returns the estimated token count, or an error on cancellation.
+func (s *Store) GetTokenCount(ctx context.Context, conversationID string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 
 	conv, ok := s.conversations[conversationID]
 	if !ok {
-		return 0
+		return 0, nil
 	}
 
 	total := 0
 	for _, m := range conv.Messages {
 		total += len(m.Content) / 4 // Rough estimate: 4 chars per token
 	}
-	return total
+	return total, nil
 }
 
 // Stats returns memory statistics.
@@ -323,7 +342,11 @@ func (s *Store) PutConversationMetadata(conversationID string, metadata *Convers
 // portion of a conversation's typed metadata.
 func (s *Store) BindConversationChannel(conversationID string, binding *ChannelBinding) error {
 	var metadata *ConversationMetadata
-	if conv := s.GetConversation(conversationID); conv != nil && conv.Metadata != nil {
+	conv, err := s.GetConversation(context.Background(), conversationID)
+	if err != nil {
+		return fmt.Errorf("read conversation before binding channel: %w", err)
+	}
+	if conv != nil && conv.Metadata != nil {
 		metadata = conv.Metadata.Clone()
 	}
 	if metadata == nil {

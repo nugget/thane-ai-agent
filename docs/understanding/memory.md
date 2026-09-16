@@ -37,9 +37,18 @@ and it remembers across sessions, restarts, and model changes.
 Short-term context for the current interaction. Messages are stored with
 role, content, timestamp, and token count.
 
+A turn that uses stored context must successfully read its active conversation
+history before recording incoming messages or calling the model. Failed queries,
+unreadable rows, and canceled reads return errors so incomplete history cannot
+silently become the next prompt. A successful read of a new conversation may be empty.
+
 **Compaction:** When approaching context limits, older messages are
 summarized by the LLM into compressed form. Compaction preserves semantic
 content (decisions, facts, preferences) while reducing token count.
+Its token counts, message selection, and prior summaries must all be readable
+before summarization proceeds. Failed or canceled compaction leaves the source
+rows intact. Automatic compaction runs after the reply with a five-minute
+deadline; failures are logged for the operator.
 
 ### Session Working Memory
 
