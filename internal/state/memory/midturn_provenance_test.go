@@ -36,8 +36,8 @@ func TestMidTurnMessageRoundTrip(t *testing.T) {
 			t.Errorf("%s: mid-turn message not flagged mid_turn", path)
 		}
 	}
-	check("GetMessages", store.GetMessages("conv-1"))
-	check("GetAllMessages", store.GetAllMessages("conv-1"))
+	check("GetMessages", mustReadMessages(t, store.GetMessages, "conv-1"))
+	check("GetAllMessages", mustReadMessages(t, store.GetAllMessages, "conv-1"))
 }
 
 // TestMidTurnMessageNullLegacyRow pins the read paths against a row whose
@@ -66,8 +66,8 @@ func TestMidTurnMessageNullLegacyRow(t *testing.T) {
 		}
 		t.Fatalf("%s: NULL-mid_turn row dropped from the read (silent message loss)", path)
 	}
-	find("GetMessages", store.GetMessages("conv-1"))
-	find("GetAllMessages", store.GetAllMessages("conv-1"))
+	find("GetMessages", mustReadMessages(t, store.GetMessages, "conv-1"))
+	find("GetAllMessages", mustReadMessages(t, store.GetAllMessages, "conv-1"))
 }
 
 // TestMidTurnMessageInMemoryParity confirms the in-memory Store honors the same
@@ -81,7 +81,7 @@ func TestMidTurnMessageInMemoryParity(t *testing.T) {
 		t.Fatalf("AddMidTurnMessage: %v", err)
 	}
 	byContent := make(map[string]Message)
-	for _, m := range s.GetMessages("c") {
+	for _, m := range mustReadMessages(t, s.GetMessages, "c") {
 		byContent[m.Content] = m
 	}
 	if byContent["ordinary"].MidTurn {

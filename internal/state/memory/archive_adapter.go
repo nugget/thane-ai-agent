@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -248,7 +249,13 @@ func (a *ArchiveAdapter) conversationChannelBinding(conversationID string) *Chan
 	if conversationID == "" {
 		return nil
 	}
-	conv := a.msgStore.GetConversation(conversationID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conv, err := a.msgStore.GetConversation(ctx, conversationID)
+	if err != nil {
+		a.logger.Warn("could not read session channel binding", "conversation_id", conversationID, "error", err)
+		return nil
+	}
 	if conv == nil || conv.Metadata == nil {
 		return nil
 	}

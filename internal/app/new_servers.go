@@ -148,7 +148,12 @@ func (a *App) initServers(s *newState) error {
 	// Wire up the data providers that the checkpointer snapshots.
 	checkpointer.SetProviders(
 		func() ([]checkpoint.Conversation, error) {
-			convs := a.mem.GetAllConversations()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			convs, err := a.mem.GetAllConversations(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("read conversations for checkpoint: %w", err)
+			}
 			result := make([]checkpoint.Conversation, len(convs))
 			for i, c := range convs {
 				msgs := make([]checkpoint.SourceMessage, len(c.Messages))

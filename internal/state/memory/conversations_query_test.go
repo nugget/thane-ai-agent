@@ -265,7 +265,7 @@ func TestQueryConversationsTrueCount(t *testing.T) {
 		t.Fatalf("message_count = %+v, want 5 (uncapped active only)", page.Conversations)
 	}
 	// Sanity: the legacy capped path still reports the cap.
-	if n := len(s.GetMessages("big")); n != 3 {
+	if n := len(mustReadMessages(t, s.GetMessages, "big")); n != 3 {
 		t.Fatalf("GetMessages len = %d, want 3 (the cap this test contrasts)", n)
 	}
 }

@@ -46,7 +46,7 @@ func TestCloseSession(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before := mem.GetMessages("conv1")
+			before := mustMemoryMessages(t, mem, "conv1")
 			if err := loop.CloseSession("conv1", tc.reason, tc.carryForward); err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +66,7 @@ func TestCloseSession(t *testing.T) {
 					t.Fatalf("original row changed: %+v -> %+v", msg, transcript[i])
 				}
 			}
-			active := mem.GetMessages("conv1")
+			active := mustMemoryMessages(t, mem, "conv1")
 			if tc.carryForward == "" {
 				if len(active) != 0 {
 					t.Fatalf("unexpected active messages: %+v", active)
@@ -93,7 +93,7 @@ func TestCheckpointSession(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before := mem.GetMessages("conv1")
+			before := mustMemoryMessages(t, mem, "conv1")
 			err := loop.CheckpointSession("conv1", tc.label)
 			if tc.empty {
 				if err == nil {
@@ -104,7 +104,7 @@ func TestCheckpointSession(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after := mem.GetMessages("conv1"); !reflect.DeepEqual(before, after) {
+			if after := mustMemoryMessages(t, mem, "conv1"); !reflect.DeepEqual(before, after) {
 				t.Fatalf("checkpoint changed active messages: %+v -> %+v", before, after)
 			}
 			session, err := archive.GetSession(sid)
@@ -146,13 +146,13 @@ func TestSplitSession(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before := mem.GetMessages("conv1")
+			before := mustMemoryMessages(t, mem, "conv1")
 			err := loop.SplitSession("conv1", tc.atIndex, tc.atMessage)
 			if tc.errorText != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.errorText) {
 					t.Fatalf("error=%v want %q", err, tc.errorText)
 				}
-				if after := mem.GetMessages("conv1"); !reflect.DeepEqual(before, after) {
+				if after := mustMemoryMessages(t, mem, "conv1"); !reflect.DeepEqual(before, after) {
 					t.Fatal("failed split changed messages")
 				}
 				return
@@ -168,7 +168,7 @@ func TestSplitSession(t *testing.T) {
 			if err != nil || len(transcript) != tc.prefix {
 				t.Fatalf("prefix=%+v error=%v", transcript, err)
 			}
-			active := mem.GetMessages("conv1")
+			active := mustMemoryMessages(t, mem, "conv1")
 			if len(active) != tc.count-tc.prefix {
 				t.Fatalf("suffix=%+v", active)
 			}
@@ -241,11 +241,11 @@ func TestSessionOperationsWithoutArchiver(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "no archiver") {
 					t.Fatalf("error=%v want missing archiver", err)
 				}
-				if len(mem.GetMessages("conv1")) != 1 {
+				if len(mustMemoryMessages(t, mem, "conv1")) != 1 {
 					t.Fatal("unsupported durable operation changed ephemeral context")
 				}
-			} else if err != nil || len(mem.GetMessages("conv1")) != 0 {
-				t.Fatalf("ephemeral reset: error=%v messages=%v", err, mem.GetMessages("conv1"))
+			} else if err != nil || len(mustMemoryMessages(t, mem, "conv1")) != 0 {
+				t.Fatalf("ephemeral reset: error=%v messages=%v", err, mustMemoryMessages(t, mem, "conv1"))
 			}
 		})
 	}

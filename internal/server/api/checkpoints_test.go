@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,10 @@ func TestCheckpointRestoreUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := store.GetAllConversations()
+	before, err := store.GetAllConversations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -58,8 +62,8 @@ func TestCheckpointRestoreUnsupported(t *testing.T) {
 			}
 		})
 	}
-	if after := store.GetAllConversations(); !reflect.DeepEqual(after, before) {
-		t.Fatalf("restore changed live conversations: got %+v, want %+v", after, before)
+	if after, err := store.GetAllConversations(context.Background()); err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("restore changed live conversations: got %+v, error %v; want %+v", after, err, before)
 	}
 	stored, err := cp.Get(snapshot.ID)
 	if err != nil {

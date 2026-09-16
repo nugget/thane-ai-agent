@@ -241,13 +241,18 @@ func (s *Server) ConfigureChatLoopLauncher(launch func(context.Context, looppkg.
 // DashboardSnapshot returns a copy of the current session stats
 // enriched with context window, message count, and build information.
 // This is used by the web dashboard to display runtime overview data.
-func (s *Server) DashboardSnapshot() SessionStatsSnapshot {
+// A failed context-token read is logged and leaves that measurement zero.
+func (s *Server) DashboardSnapshot(ctx context.Context) SessionStatsSnapshot {
 	snap := s.stats.Snapshot()
 	memStats := s.loop.MemoryStats()
 	if msgs, ok := memStats["messages"].(int); ok {
 		snap.MessageCount = msgs
 	}
-	snap.ContextTokens = s.loop.GetTokenCount("default")
+	if tokens, err := s.loop.GetTokenCount(ctx, "default"); err != nil {
+		s.logger.Warn("context token measurement unavailable", "conversation_id", "default", "error", err)
+	} else {
+		snap.ContextTokens = tokens
+	}
 	snap.ContextWindow = s.loop.GetContextWindow()
 	snap.Build = buildinfo.RuntimeInfo()
 	return snap
@@ -1597,7 +1602,12 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	conv := s.memoryStore.GetConversation(id)
+	conv, err := s.memoryStore.GetConversation(r.Context(), id)
+	if err != nil {
+		s.logger.Error("conversation read failed", "conversation_id", id, "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "conversation unavailable")
+		return
+	}
 	if conv == nil {
 		s.errorResponse(w, http.StatusNotFound, "conversation not found")
 		return
@@ -1616,7 +1626,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, s.DashboardSnapshot(), s.logger)
+	writeJSON(w, s.DashboardSnapshot(r.Context()), s.logger)
 }
 
 func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
@@ -1704,7 +1714,12 @@ func (s *Server) handleSessionCompact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
-	messages := s.loop.GetHistory("default")
+	messages, err := s.loop.GetHistory(r.Context(), "default")
+	if err != nil {
+		s.logger.Error("session history read failed", "conversation_id", "default", "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "session history unavailable")
+		return
+	}
 
 	// Filter to user/assistant messages only (skip system/tool)
 	type historyMessage struct {

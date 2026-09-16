@@ -2,6 +2,7 @@ package memory
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -46,7 +47,7 @@ func TestGetMessages_OverflowReturnsNewestNotOldest(t *testing.T) {
 			msgID(i), "user", msgContent(i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	got := store.GetMessages("conv-1")
+	got := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(got) != 5 {
 		t.Fatalf("len = %d, want 5", len(got))
 	}
@@ -82,7 +83,7 @@ func TestGetMessages_OverflowPreservesCompactionSummary(t *testing.T) {
 			msgID(i), "user", msgContent(i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	got := store.GetMessages("conv-1")
+	got := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(got) != 6 { // 5 newest dialogue + 1 summary
 		t.Fatalf("len = %d, want 6 (5 newest + summary)", len(got))
 	}
@@ -128,7 +129,7 @@ func TestGetMessages_ExcludesCompactedRows(t *testing.T) {
 		insertActiveAt(t, store, "conv-1", msgID(i), "user", msgContent(i), base.Add(time.Duration(i+2)*time.Minute))
 	}
 
-	for _, m := range store.GetMessages("conv-1") {
+	for _, m := range mustReadMessages(t, store.GetMessages, "conv-1") {
 		if m.ID == "compacted-orig" {
 			t.Fatalf("compacted row leaked into working window: %+v", m)
 		}
@@ -147,7 +148,7 @@ func TestGetMessages_SummaryInsideWindowNotDuplicated(t *testing.T) {
 		CompactionSummaryPrefix+"\n\nrecent summary", base.Add(3*time.Minute))
 	insertActiveAt(t, store, "conv-1", "u3", "user", "u3", base.Add(4*time.Minute))
 
-	got := store.GetMessages("conv-1")
+	got := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(got) != 4 {
 		t.Fatalf("len = %d, want 4 (no duplicate summary)", len(got))
 	}
@@ -172,7 +173,7 @@ func TestGetMessages_UnderMaxUnchanged(t *testing.T) {
 	for i, role := range roles {
 		insertActiveAt(t, store, "conv-1", msgID(i), role, msgContent(i), base.Add(time.Duration(i)*time.Minute))
 	}
-	got := store.GetMessages("conv-1")
+	got := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(got) != len(roles) {
 		t.Fatalf("len = %d, want %d (all active rows)", len(got), len(roles))
 	}
@@ -189,8 +190,8 @@ func TestGetMessages_SameTimestampTiebreakDeterministic(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		insertActiveAt(t, store, "conv-1", msgID(i), "user", msgContent(i), ts)
 	}
-	first := store.GetMessages("conv-1")
-	second := store.GetMessages("conv-1")
+	first := mustReadMessages(t, store.GetMessages, "conv-1")
+	second := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(first) != 3 {
 		t.Fatalf("len = %d, want 3", len(first))
 	}
@@ -235,7 +236,7 @@ func TestGetMessages_ClipWarnEmittedThenThrottled(t *testing.T) {
 				insertActiveAt(t, store, "conv-1", msgID(i), "user", msgContent(i), base.Add(time.Duration(i)*time.Minute))
 			}
 			for range tc.calls {
-				_ = store.GetMessages("conv-1")
+				_ = mustReadMessages(t, store.GetMessages, "conv-1")
 			}
 			got := strings.Count(buf.String(), "read window clipped")
 			if got != tc.wantWarns {
@@ -254,7 +255,7 @@ func TestClear_EvictsClipWarnEntry(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		insertActiveAt(t, store, "conv-1", msgID(i), "user", msgContent(i), base.Add(time.Duration(i)*time.Minute))
 	}
-	_ = store.GetMessages("conv-1") // overflow -> records a clip-warn entry
+	_ = mustReadMessages(t, store.GetMessages, "conv-1") // overflow -> records a clip-warn entry
 
 	if _, ok := store.clipWarnAt["conv-1"]; !ok {
 		t.Fatalf("expected a clip-warn entry after an overflowing read")
@@ -286,8 +287,8 @@ func TestActiveMessageCount_ExcludesSystemAndCompacted(t *testing.T) {
 		t.Fatalf("insert compacted: %v", err)
 	}
 
-	if got := store.ActiveMessageCount("conv-1"); got != 4 {
-		t.Errorf("ActiveMessageCount = %d, want 4 (excludes system + compacted)", got)
+	if got, err := store.ActiveMessageCount(context.Background(), "conv-1"); err != nil || got != 4 {
+		t.Errorf("ActiveMessageCount = %d, error = %v; want 4 (excludes system + compacted)", got, err)
 	}
 }
 
@@ -297,13 +298,19 @@ type fakeCompactable struct {
 	count  int
 }
 
-func (f fakeCompactable) GetTokenCount(string) int                       { return f.tokens }
-func (f fakeCompactable) ActiveMessageCount(string) int                  { return f.count }
-func (f fakeCompactable) GetMessagesForCompaction(string, int) []Message { return nil }
-func (f fakeCompactable) GetActiveCompactionSummaries(string) ([]Message, error) {
+func (f fakeCompactable) GetTokenCount(context.Context, string) (int, error) { return f.tokens, nil }
+func (f fakeCompactable) ActiveMessageCount(context.Context, string) (int, error) {
+	return f.count, nil
+}
+func (f fakeCompactable) GetMessagesForCompaction(context.Context, string, int) ([]Message, error) {
 	return nil, nil
 }
-func (f fakeCompactable) ApplyCompaction(string, []string, string, time.Time) error { return nil }
+func (f fakeCompactable) GetActiveCompactionSummaries(context.Context, string) ([]Message, error) {
+	return nil, nil
+}
+func (f fakeCompactable) ApplyCompaction(context.Context, string, []string, string, time.Time) error {
+	return nil
+}
 
 func TestNeedsCompaction_TokenOrCountTrigger(t *testing.T) {
 	// threshold = 2000 * 0.5 = 1000; count trigger at 6.
@@ -323,8 +330,8 @@ func TestNeedsCompaction_TokenOrCountTrigger(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewCompactor(fakeCompactable{tokens: tc.tokens, count: tc.count}, cfg, nil, slog.Default())
-			if got := c.NeedsCompaction("conv-1"); got != tc.want {
-				t.Errorf("NeedsCompaction(tokens=%d,count=%d) = %v, want %v", tc.tokens, tc.count, got, tc.want)
+			if got, err := c.NeedsCompaction(context.Background(), "conv-1"); err != nil || got != tc.want {
+				t.Errorf("NeedsCompaction(tokens=%d,count=%d) = %v, error = %v; want %v", tc.tokens, tc.count, got, err, tc.want)
 			}
 		})
 	}
@@ -333,8 +340,8 @@ func TestNeedsCompaction_TokenOrCountTrigger(t *testing.T) {
 func TestNeedsCompaction_CountTriggerDisabledWhenZero(t *testing.T) {
 	cfg := CompactionConfig{MaxTokens: 2000, TriggerRatio: 0.5, MaxActiveMessages: 0}
 	c := NewCompactor(fakeCompactable{tokens: 100, count: 500}, cfg, nil, slog.Default())
-	if c.NeedsCompaction("conv-1") {
-		t.Errorf("NeedsCompaction = true, want false (MaxActiveMessages=0 disables the count gate)")
+	if got, err := c.NeedsCompaction(context.Background(), "conv-1"); err != nil || got {
+		t.Errorf("NeedsCompaction = %v, error = %v; want false (MaxActiveMessages=0 disables the count gate)", got, err)
 	}
 }
 
