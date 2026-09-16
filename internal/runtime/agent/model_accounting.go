@@ -8,7 +8,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
-	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // Model calls and iterations are different units: a retry can consume tokens
@@ -58,22 +57,23 @@ func (c *accountingClient) accountCall(ctx context.Context, model string, call f
 			sessionID = active
 		}
 	}
+	attribution := llm.AttributionFromContext(c.accounting.observerContext)
+	attribution.RequestID = c.accounting.requestID
+	attribution.ConversationID = c.accounting.conversationID
+	attribution.SessionID = sessionID
+	ctx = llm.WithAttribution(ctx, attribution)
 	started := time.Now()
 	response, err := call(ctx)
 	// A failed transport with no usage, or a synthetic fallback, is not
 	// evidence of a billable model call. Do not invent a zero-token record.
-	if response != nil && reportedUsage(response) {
+	if record, ok := usage.CallRecord(firstNonEmpty(c.modelOverride, model), response, started, err); ok {
 		a := c.accounting
-		record := a.loop.makeUsageRecord(a.request, usage.Record{
-			Timestamp: started, Model: firstNonEmpty(c.modelOverride, response.Model, model),
-			SessionID: memory.ShortID(sessionID), ConversationID: a.conversationID,
-			RequestID: a.requestID, UpstreamRequestID: response.UpstreamRequestID,
-			InputTokens: response.InputTokens, OutputTokens: response.OutputTokens,
-			CacheCreationInputTokens:   response.CacheCreationInputTokens,
-			CacheCreation5mInputTokens: response.CacheCreation5mInputTokens,
-			CacheCreation1hInputTokens: response.CacheCreation1hInputTokens,
-			CacheReadInputTokens:       response.CacheReadInputTokens,
-		})
+		// A direct recovery client's response names the wire model; the
+		// deployment override remains authoritative for pricing/provenance.
+		if c.modelOverride != "" {
+			record.Model = c.modelOverride
+		}
+		record = a.loop.makeUsageRecord(a.request, usage.ApplyAttribution(record, attribution))
 		a.calls = append(a.calls, record)
 		// Use the original run context: timeout recovery can use its own
 		// generation deadline, but belongs to the same usage observer.
@@ -107,12 +107,6 @@ func (a *modelCallAccounting) remainingOutputTokens() (int, bool) {
 func (a *modelCallAccounting) outputBudgetExhausted() bool {
 	remaining, limited := a.remainingOutputTokens()
 	return limited && remaining == 0
-}
-
-func reportedUsage(response *llm.ChatResponse) bool {
-	return response.InputTokens != 0 || response.OutputTokens != 0 ||
-		response.CacheCreationInputTokens != 0 || response.CacheReadInputTokens != 0 ||
-		response.CacheCreation5mInputTokens != 0 || response.CacheCreation1hInputTokens != 0
 }
 
 // accountRecoveryClient preserves the same observer when explicit context

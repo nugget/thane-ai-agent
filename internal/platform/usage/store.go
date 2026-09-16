@@ -1,6 +1,6 @@
 // Package usage provides persistent token usage and cost tracking for
 // LLM interactions. Records are append-only and indexed by timestamp,
-// session, and conversation for efficient aggregation queries.
+// session, conversation, and loop for efficient aggregation queries.
 package usage
 
 import (
@@ -23,50 +23,69 @@ import (
 // models. Failed requests retain any usage already reported by the provider;
 // a call without reported usage does not imply a zero-cost successful call.
 type Record struct {
-	ID             string
-	Timestamp      time.Time
-	RequestID      string
-	SessionID      string
-	ConversationID string
+	ID             string    `json:"id"`
+	Timestamp      time.Time `json:"timestamp"`
+	RequestID      string    `json:"request_id"`
+	SessionID      string    `json:"session_id"`
+	ConversationID string    `json:"conversation_id"`
+	LoopID         string    `json:"loop_id"`
+	LoopName       string    `json:"loop_name"`
+	ParentLoopID   string    `json:"parent_loop_id"`
+	// Purpose identifies the operation that initiated the call, such as
+	// agent execution or summarization. Empty means it was not captured.
+	Purpose string `json:"purpose"`
 	// UpstreamRequestID is the provider-side request identifier when
 	// available (e.g. Anthropic's `x-request-id` response header).
 	// Empty when the provider does not return one or the call failed
 	// before headers arrived. Captured for support escalation and to
 	// correlate our local r_* IDs with upstream invoice line items.
-	UpstreamRequestID        string
-	Model                    string // Selected deployment ID when known
-	UpstreamModel            string
-	Resource                 string
-	Provider                 string // Provider family, e.g. "anthropic", "ollama", "lmstudio"
-	InputTokens              int
-	OutputTokens             int
-	CacheCreationInputTokens int
+	UpstreamRequestID        string `json:"upstream_request_id"`
+	Model                    string `json:"model"` // Selected deployment ID when known
+	UpstreamModel            string `json:"upstream_model"`
+	Resource                 string `json:"resource"`
+	Provider                 string `json:"provider"` // Provider family, e.g. "anthropic", "ollama", "lmstudio"
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
 	// CacheCreation5mInputTokens and CacheCreation1hInputTokens break
 	// down the cache-write bucket by TTL when the provider exposes it
 	// (Anthropic). Their sum is ≤ CacheCreationInputTokens; any
 	// shortfall reflects writes the provider didn't attribute. When
 	// the breakdown is absent (both zero), cost computation treats the
 	// full CacheCreationInputTokens as 5m for the conservative default.
-	CacheCreation5mInputTokens int
-	CacheCreation1hInputTokens int
-	CacheReadInputTokens       int
-	CostUSD                    float64
-	Role                       string // "interactive", "delegate", "scheduled", "auxiliary"
-	TaskName                   string // "email_poll", "periodic_reflection", etc. (empty for interactive)
+	CacheCreation5mInputTokens int     `json:"cache_creation_5m_input_tokens"`
+	CacheCreation1hInputTokens int     `json:"cache_creation_1h_input_tokens"`
+	CacheReadInputTokens       int     `json:"cache_read_input_tokens"`
+	CostUSD                    float64 `json:"cost_usd"`
+	Role                       string  `json:"role"`      // "interactive", "delegate", "scheduled", "autonomous", "auxiliary"
+	TaskName                   string  `json:"task_name"` // "email_poll", "periodic_reflection", etc. (empty for interactive)
+	// PricingStatus is "priced" when configured rates were applied, including
+	// explicit zero rates, or "unpriced" when no rate was available. Empty
+	// means unknown for legacy records; CostUSD retains its recorded value.
+	PricingStatus string `json:"pricing_status"`
+	// Outcome is "success", "error", or "canceled". Empty means unknown for
+	// legacy records. Token counters only include provider-reported usage.
+	Outcome string `json:"outcome"`
+	// DurationMS is elapsed model-call time in milliseconds. Zero can also
+	// mean the duration was not captured by a legacy writer.
+	DurationMS int64 `json:"duration_ms"`
 }
 
 // ModelIdentity is the normalized usage-facing identity for a selected
 // model/deployment.
 type ModelIdentity struct {
-	Model         string
-	UpstreamModel string
-	Resource      string
-	Provider      string
+	Model         string `json:"model"`
+	UpstreamModel string `json:"upstream_model"`
+	Resource      string `json:"resource"`
+	Provider      string `json:"provider"`
 }
 
 // Summary holds aggregated token usage and cost totals. TotalRecords counts
 // usage records, not distinct logical requests. New agent records represent
 // individual model calls; older records can aggregate several iterations.
+// Pricing coverage counts distinguish configured zero-cost calls from missing
+// prices and unknown records (legacy or unrecognized pricing status).
+// TotalCostUSD sums the costs recorded at call time.
 type Summary struct {
 	TotalRecords                  int     `json:"total_records"`
 	TotalInputTokens              int64   `json:"total_input_tokens"`
@@ -74,6 +93,9 @@ type Summary struct {
 	TotalCacheCreationInputTokens int64   `json:"total_cache_creation_input_tokens"`
 	TotalCacheReadInputTokens     int64   `json:"total_cache_read_input_tokens"`
 	TotalCostUSD                  float64 `json:"total_cost_usd"`
+	PricedRecords                 int     `json:"priced_records"`
+	UnpricedRecords               int     `json:"unpriced_records"`
+	UnknownPricingRecords         int     `json:"unknown_pricing_records"`
 }
 
 // CacheHitRate returns the fraction of cache-eligible input tokens that
@@ -135,8 +157,9 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 		`INSERT INTO usage_records
 			(id, timestamp, request_id, upstream_request_id, session_id, conversation_id, model, upstream_model, resource, provider,
 			 input_tokens, output_tokens, cache_creation_input_tokens, cache_creation_5m_input_tokens,
-			 cache_creation_1h_input_tokens, cache_read_input_tokens, cost_usd, role, task_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 cache_creation_1h_input_tokens, cache_read_input_tokens, cost_usd, role, task_name,
+			 loop_id, loop_name, parent_loop_id, purpose, pricing_status, outcome, duration_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.RequestID,
@@ -156,6 +179,13 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 		rec.CostUSD,
 		rec.Role,
 		rec.TaskName,
+		rec.LoopID,
+		rec.LoopName,
+		rec.ParentLoopID,
+		rec.Purpose,
+		rec.PricingStatus,
+		rec.Outcome,
+		rec.DurationMS,
 	)
 	if err != nil {
 		return fmt.Errorf("insert usage record: %w", err)
@@ -175,7 +205,10 @@ func (s *Store) SummaryContext(ctx context.Context, start, end time.Time) (*Summ
 	row := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0),
-		        COALESCE(SUM(cost_usd), 0)
+		        COALESCE(SUM(cost_usd), 0),
+		        COUNT(CASE WHEN pricing_status = 'priced' THEN 1 END),
+		        COUNT(CASE WHEN pricing_status = 'unpriced' THEN 1 END),
+		        COUNT(CASE WHEN pricing_status NOT IN ('priced', 'unpriced') THEN 1 END)
 		 FROM usage_records
 		 WHERE timestamp >= ? AND timestamp < ?`,
 		start.UTC().Format(time.RFC3339),
@@ -183,7 +216,7 @@ func (s *Store) SummaryContext(ctx context.Context, start, end time.Time) (*Summ
 	)
 
 	var sum Summary
-	if err := row.Scan(&sum.TotalRecords, &sum.TotalInputTokens, &sum.TotalOutputTokens, &sum.TotalCacheCreationInputTokens, &sum.TotalCacheReadInputTokens, &sum.TotalCostUSD); err != nil {
+	if err := row.Scan(&sum.TotalRecords, &sum.TotalInputTokens, &sum.TotalOutputTokens, &sum.TotalCacheCreationInputTokens, &sum.TotalCacheReadInputTokens, &sum.TotalCostUSD, &sum.PricedRecords, &sum.UnpricedRecords, &sum.UnknownPricingRecords); err != nil {
 		return nil, fmt.Errorf("query usage summary: %w", err)
 	}
 	return &sum, nil
@@ -258,7 +291,10 @@ func (s *Store) summaryGroupedBy(ctx context.Context, column string, start, end 
 	// never user input, so embedding it directly is safe.
 	query := fmt.Sprintf(
 		`SELECT COALESCE(%s, ''), COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0), COALESCE(SUM(cost_usd), 0)
+		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0), COALESCE(SUM(cost_usd), 0),
+		        COUNT(CASE WHEN pricing_status = 'priced' THEN 1 END),
+		        COUNT(CASE WHEN pricing_status = 'unpriced' THEN 1 END),
+		        COUNT(CASE WHEN pricing_status NOT IN ('priced', 'unpriced') THEN 1 END)
 		 FROM usage_records
 		 WHERE timestamp >= ? AND timestamp < ?
 		 GROUP BY %s
@@ -278,12 +314,33 @@ func (s *Store) summaryGroupedBy(ctx context.Context, column string, start, end 
 	var result []GroupedSummary
 	for rows.Next() {
 		var gs GroupedSummary
-		if err := rows.Scan(&gs.Key, &gs.Summary.TotalRecords, &gs.Summary.TotalInputTokens, &gs.Summary.TotalOutputTokens, &gs.Summary.TotalCacheCreationInputTokens, &gs.Summary.TotalCacheReadInputTokens, &gs.Summary.TotalCostUSD); err != nil {
+		if err := rows.Scan(&gs.Key, &gs.Summary.TotalRecords, &gs.Summary.TotalInputTokens, &gs.Summary.TotalOutputTokens, &gs.Summary.TotalCacheCreationInputTokens, &gs.Summary.TotalCacheReadInputTokens, &gs.Summary.TotalCostUSD, &gs.Summary.PricedRecords, &gs.Summary.UnpricedRecords, &gs.Summary.UnknownPricingRecords); err != nil {
 			return nil, fmt.Errorf("scan usage by %s: %w", column, err)
 		}
 		result = append(result, gs)
 	}
 	return result, rows.Err()
+}
+
+// PriceRecord resolves rec's selected model identity and computes its cost using
+// the supplied event-time rates, including cache-write TTLs. A configured zero
+// rate is priced; absent rates yield zero cost and unpriced status. It returns a
+// copy and preserves attribution, outcome, duration, and provider-reported token
+// counters. Use it before persistence, never to reprice historical records.
+func PriceRecord(rec Record, catalog *fleet.Catalog, pricing map[string]config.PricingEntry) Record {
+	identity := ResolveModelIdentity(rec.Model, catalog)
+	rec.Model = identity.Model
+	rec.UpstreamModel = identity.UpstreamModel
+	rec.Resource = identity.Resource
+	rec.Provider = identity.Provider
+	rec.CostUSD = ComputeDetailedCostForIdentityWithTTL(identity, rec.InputTokens,
+		rec.CacheCreationInputTokens, rec.CacheCreation5mInputTokens,
+		rec.CacheCreation1hInputTokens, rec.CacheReadInputTokens, rec.OutputTokens, pricing)
+	rec.PricingStatus = "unpriced"
+	if _, ok := PricingFor(identity, pricing); ok {
+		rec.PricingStatus = "priced"
+	}
+	return rec
 }
 
 // ResolveModelIdentity resolves usage-facing metadata for a selected

@@ -285,7 +285,7 @@ type SessionStats struct {
 	mu                            sync.Mutex
 }
 
-// RecordCall accumulates one priced, provider-reported model call, including
+// RecordCall accumulates one provider-reported model call, including
 // usage from calls in failed requests. It preserves the record's cost and
 // deployment attribution without changing the successful-request count.
 func (s *SessionStats) RecordCall(rec usage.Record) {
@@ -296,10 +296,10 @@ func (s *SessionStats) RecordCall(rec usage.Record) {
 	s.TotalCacheCreationInputTokens += int64(rec.CacheCreationInputTokens)
 	s.TotalCacheReadInputTokens += int64(rec.CacheReadInputTokens)
 	s.EstimatedCostUSD += rec.CostUSD
-	recordSessionUsageSummary(s.ByModel, rec.Model, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
-	recordSessionUsageSummary(s.ByUpstreamModel, rec.UpstreamModel, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
-	recordSessionUsageSummary(s.ByProvider, rec.Provider, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
-	recordSessionUsageSummary(s.ByResource, rec.Resource, rec.InputTokens, rec.OutputTokens, rec.CacheCreationInputTokens, rec.CacheReadInputTokens, rec.CostUSD)
+	recordSessionUsageSummary(s.ByModel, rec.Model, rec)
+	recordSessionUsageSummary(s.ByUpstreamModel, rec.UpstreamModel, rec)
+	recordSessionUsageSummary(s.ByProvider, rec.Provider, rec)
+	recordSessionUsageSummary(s.ByResource, rec.Resource, rec)
 }
 
 // Request completion is separate from billable calls: retries and failed turns
@@ -391,18 +391,26 @@ type usageSummaryResponse struct {
 	Groups  []usage.GroupedSummary `json:"groups,omitempty"`
 }
 
-func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int, cost float64) {
+func recordSessionUsageSummary(dst map[string]usage.Summary, key string, rec usage.Record) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return
 	}
 	sum := dst[key]
 	sum.TotalRecords++
-	sum.TotalInputTokens += int64(inputTokens)
-	sum.TotalOutputTokens += int64(outputTokens)
-	sum.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
-	sum.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
-	sum.TotalCostUSD += cost
+	sum.TotalInputTokens += int64(rec.InputTokens)
+	sum.TotalOutputTokens += int64(rec.OutputTokens)
+	sum.TotalCacheCreationInputTokens += int64(rec.CacheCreationInputTokens)
+	sum.TotalCacheReadInputTokens += int64(rec.CacheReadInputTokens)
+	sum.TotalCostUSD += rec.CostUSD
+	switch rec.PricingStatus {
+	case "priced":
+		sum.PricedRecords++
+	case "unpriced":
+		sum.UnpricedRecords++
+	default:
+		sum.UnknownPricingRecords++
+	}
 	dst[key] = sum
 }
 

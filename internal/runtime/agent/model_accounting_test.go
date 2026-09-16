@@ -156,7 +156,7 @@ func TestRun_AccountsEachModelCallIncludingRetryUsage(t *testing.T) {
 		if model != wantModels[i] || upstream != wantUpstream[i] || input != (i+1)*100 || output != (i+1)*10 || math.Abs(cost-wantCost[i]) > 1e-12 {
 			t.Errorf("usage row %d = model:%s upstream:%s tokens:%d/%d cost:%g", i, model, upstream, input, output, cost)
 		}
-		if session != memory.ShortID(loop.archiver.ActiveSessionID("mixed-model-accounting")) || request != live.RequestID || role != "delegate" || task != "inspect-source" {
+		if session != loop.archiver.ActiveSessionID("mixed-model-accounting") || request != live.RequestID || role != "delegate" || task != "inspect-source" {
 			t.Errorf("usage provenance lost: session=%q request=%q role=%q task=%q", session, request, role, task)
 		}
 		if observed[i].CostUSD != cost || observed[i].Model != model || observed[i].RequestID != request || observed[i].UpstreamRequestID != upstream {

@@ -152,6 +152,34 @@ func TestCostSummaryTool_EmptyStore(t *testing.T) {
 	}
 }
 
+func TestCostSummaryTool_PricingCoverage(t *testing.T) {
+	store := testUsageStore(t)
+	ctx := context.Background()
+	for _, status := range []string{"priced", "unpriced", ""} {
+		if err := store.Record(ctx, usage.Record{
+			Model: "deployment", InputTokens: 100, PricingStatus: status,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := NewRegistry(nil, nil, nil)
+	reg.SetUsageStore(store)
+	result, err := reg.Get("cost_summary").Handler(ctx, map[string]any{"period": "all", "group_by": "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Estimated cost: $0.0000",
+		"Pricing coverage: 1 priced, 1 unpriced, 1 unknown",
+		"pricing: 1 priced, 1 unpriced, 1 unknown",
+		"Missing prices contribute $0",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("missing %q in %s", want, result)
+		}
+	}
+}
+
 func TestCostSummaryTool_WithData(t *testing.T) {
 	store := testUsageStore(t)
 	ctx := context.Background()

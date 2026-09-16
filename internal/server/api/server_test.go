@@ -401,6 +401,25 @@ func TestSessionStatsSnapshot_IncludesDeploymentBreakdowns(t *testing.T) {
 	}
 }
 
+func TestSessionStatsPricingCoverage(t *testing.T) {
+	stats := &SessionStats{
+		ByModel: make(map[string]usage.Summary), ByUpstreamModel: make(map[string]usage.Summary),
+		ByProvider: make(map[string]usage.Summary), ByResource: make(map[string]usage.Summary),
+	}
+	for _, status := range []string{"priced", "unpriced", ""} {
+		stats.RecordCall(usage.Record{
+			Model: "deployment", UpstreamModel: "model", Provider: "provider", Resource: "resource",
+			PricingStatus: status, InputTokens: 100,
+		})
+	}
+	snap := stats.Snapshot()
+	for _, sum := range []usage.Summary{snap.ByModel["deployment"], snap.ByUpstreamModel["model"], snap.ByProvider["provider"], snap.ByResource["resource"]} {
+		if sum.TotalRecords != 3 || sum.PricedRecords != 1 || sum.UnpricedRecords != 1 || sum.UnknownPricingRecords != 1 || sum.TotalCostUSD != 0 {
+			t.Errorf("unexpected zero-cost coverage: %+v", sum)
+		}
+	}
+}
+
 func TestHandleUsageSummary(t *testing.T) {
 	store := testAPIUsageStore(t)
 	ctx := context.Background()

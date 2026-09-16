@@ -54,5 +54,19 @@ var schema = database.Schema{
 		// correlation. Rows from before this migration have "" — fine,
 		// the column is informational and never participates in joins.
 		database.ColumnAdd{Table: "usage_records", Column: "upstream_request_id", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		// Attribution and coverage are captured for new model calls. Empty
+		// strings leave historical records explicitly unknown; no identity,
+		// outcome, or pricing status is inferred from their stored cost.
+		database.ColumnAdd{Table: "usage_records", Column: "loop_id", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.ColumnAdd{Table: "usage_records", Column: "loop_name", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.ColumnAdd{Table: "usage_records", Column: "parent_loop_id", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.ColumnAdd{Table: "usage_records", Column: "purpose", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.ColumnAdd{Table: "usage_records", Column: "pricing_status", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.ColumnAdd{Table: "usage_records", Column: "outcome", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.ColumnAdd{Table: "usage_records", Column: "duration_ms", Typedef: "INTEGER NOT NULL DEFAULT 0"},
+		database.IndexCreate{
+			Name: "idx_usage_loop_timestamp",
+			SQL:  `CREATE INDEX IF NOT EXISTS idx_usage_loop_timestamp ON usage_records(loop_id, timestamp)`,
+		},
 	},
 }

@@ -332,6 +332,10 @@ func (w *SummarizerWorker) scan(ctx context.Context) {
 // generation always runs here regardless, so the row is always marked
 // summarized and never re-scanned (#989, #1024).
 func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) bool {
+	attribution := llm.AttributionFromContext(ctx)
+	attribution.SessionID = sess.ID
+	attribution.ConversationID = sess.ConversationID
+	ctx = llm.WithAttribution(ctx, attribution)
 	ctx, cancel := context.WithTimeout(ctx, w.config.Timeout)
 	defer cancel()
 
