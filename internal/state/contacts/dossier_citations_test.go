@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
@@ -49,7 +50,10 @@ func newFakeArchiveSessions() *fakeArchiveSessions {
 	return f
 }
 
-func (f *fakeArchiveSessions) resolve(prefix string) (ArchiveSessionLookup, error) {
+func (f *fakeArchiveSessions) resolve(ctx context.Context, prefix string) (ArchiveSessionLookup, error) {
+	if err := ctx.Err(); err != nil {
+		return ArchiveSessionLookup{}, err
+	}
 	f.calls = append(f.calls, prefix)
 	var lookup ArchiveSessionLookup
 	for _, session := range f.sessions {
@@ -385,5 +389,35 @@ func TestWithCanonicalizedCitations(t *testing.T) {
 				t.Errorf("withCanonicalizedCitations() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestValidateDossierEvidenceCitationsHonoursContext pins that the
+// caller's context reaches the archive resolver. Without it a cancelled
+// contact_dossier_write would still scan the archive once per refused
+// leading part.
+func TestValidateDossierEvidenceCitationsHonoursContext(t *testing.T) {
+	archive := newFakeArchiveSessions()
+	payload := documentfacets.Payload{
+		StatusLine: "Current.",
+		Teaser:     "Useful hook.",
+		Digest:     "Enough context to act.",
+		Full:       "Garden plans. — evidence: archive:session:0190aaaa",
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := validateDossierEvidenceCitations(cancelled, payload, archive.resolve)
+	if err == nil {
+		t.Fatal("validateDossierEvidenceCitations accepted a leading part")
+	}
+	if !strings.Contains(err.Error(), "Looking 0190aaaa up in the archive failed: context canceled") {
+		t.Errorf("refusal does not report the cancelled lookup:\n%v", err)
+	}
+	// Negative control: under a live context the same citation resolves
+	// to its one session, so the case above fails on cancellation.
+	live := validateDossierEvidenceCitations(t.Context(), payload, archive.resolve)
+	if live == nil || !strings.Contains(live.Error(), "Exactly one archived session begins with it") {
+		t.Errorf("live refusal lost the resolved candidate:\n%v", live)
 	}
 }

@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -149,7 +151,7 @@ func TestResolveSessionPrefix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lookup, err := store.ResolveSessionPrefix(tt.prefix, tt.limit)
+			lookup, err := store.ResolveSessionPrefix(t.Context(), tt.prefix, tt.limit)
 			if err != nil {
 				t.Fatalf("ResolveSessionPrefix(%q, %d): %v", tt.prefix, tt.limit, err)
 			}
@@ -170,7 +172,7 @@ func TestResolveSessionPrefix(t *testing.T) {
 	}
 
 	t.Run("match carries start time, title and summary", func(t *testing.T) {
-		lookup, err := store.ResolveSessionPrefix("0190aaaa-0000-7000-8000-000000000001", 1)
+		lookup, err := store.ResolveSessionPrefix(t.Context(), "0190aaaa-0000-7000-8000-000000000001", 1)
 		if err != nil {
 			t.Fatalf("ResolveSessionPrefix: %v", err)
 		}
@@ -187,7 +189,7 @@ func TestResolveSessionPrefix(t *testing.T) {
 	})
 
 	t.Run("malformed prefix is refused", func(t *testing.T) {
-		_, err := store.ResolveSessionPrefix("0190aaaq", 5)
+		_, err := store.ResolveSessionPrefix(t.Context(), "0190aaaq", 5)
 		if !errors.Is(err, ErrMalformedSessionID) {
 			t.Fatalf("error = %v, want ErrMalformedSessionID", err)
 		}
@@ -231,4 +233,55 @@ func TestSessionPrefixQueriesUseIDIndex(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveSessionPrefixHonoursContext pins the lookup to the caller's
+// context. A tool call that is cancelled or past its deadline must stop
+// paying for the archive scan, and the count read that a shared prefix
+// triggers is as cancellable as the range read every lookup makes.
+func TestResolveSessionPrefixHonoursContext(t *testing.T) {
+	store := newTestArchiveStore(t)
+	base := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	const lower, upper = "0190aaaa", "0190aaab"
+	for i := range 3 {
+		id := fmt.Sprintf("%s-0000-7000-8000-%012d", lower, i)
+		if _, err := store.db.Exec(`INSERT INTO sessions (id, conversation_id, started_at, title) VALUES (?, 'conv', ?, ?)`,
+			id, base.Format(time.RFC3339Nano), "Bob import "+id); err != nil {
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	t.Run("range read", func(t *testing.T) {
+		if _, err := store.readSessionPrefixRange(cancelled, lower, upper, 6); !errors.Is(err, context.Canceled) {
+			t.Fatalf("readSessionPrefixRange error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("count read", func(t *testing.T) {
+		if _, err := store.countSessionPrefixRange(cancelled, lower, upper); !errors.Is(err, context.Canceled) {
+			t.Fatalf("countSessionPrefixRange error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("lookup", func(t *testing.T) {
+		// limit 1 against three matches is the shape that reads the
+		// range and then counts, so neither read can be the only one
+		// the cancellation reaches.
+		if _, err := store.ResolveSessionPrefix(cancelled, lower, 1); !errors.Is(err, context.Canceled) {
+			t.Fatalf("ResolveSessionPrefix error = %v, want context.Canceled", err)
+		}
+	})
+	// Negative control: the same lookup under a live context answers, so
+	// the cancelled cases above fail on cancellation rather than on the
+	// fixture or the query.
+	t.Run("live context still counts the matches", func(t *testing.T) {
+		lookup, err := store.ResolveSessionPrefix(t.Context(), lower, 1)
+		if err != nil {
+			t.Fatalf("ResolveSessionPrefix: %v", err)
+		}
+		if len(lookup.Matches) != 1 || lookup.Total != 3 {
+			t.Fatalf("lookup listed %d of %d matches, want 1 of 3", len(lookup.Matches), lookup.Total)
+		}
+	})
 }

@@ -335,9 +335,9 @@ func (r *Registry) registerArchiveSessionTranscript(store *memory.ArchiveStore) 
 			},
 			"required": []string{"session_id"},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			raw, _ := args["session_id"].(string)
-			sessionID, err := resolveTranscriptSessionID(store, raw)
+			sessionID, err := resolveTranscriptSessionID(ctx, store, raw)
 			if err != nil {
 				return "", err
 			}

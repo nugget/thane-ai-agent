@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -127,7 +128,10 @@ func IsFullSessionID(normalized string) bool {
 // [DefaultSessionPrefixCandidates] when limit is not positive), and
 // reports the full match count in Total. Zero matches is a successful
 // empty lookup, not an error.
-func (s *ArchiveStore) ResolveSessionPrefix(prefix string, limit int) (SessionPrefixLookup, error) {
+//
+// Both reads it makes run under ctx, so a caller whose tool call is
+// cancelled or past its deadline stops paying for the lookup.
+func (s *ArchiveStore) ResolveSessionPrefix(ctx context.Context, prefix string, limit int) (SessionPrefixLookup, error) {
 	normalized, err := NormalizeSessionIDPrefix(prefix)
 	if err != nil {
 		return SessionPrefixLookup{}, err
@@ -139,7 +143,7 @@ func (s *ArchiveStore) ResolveSessionPrefix(prefix string, limit int) (SessionPr
 
 	// One row past the limit says whether a count is needed at all, so
 	// the common unique-prefix lookup is a single indexed read.
-	matches, err := s.readSessionPrefixRange(normalized, upper, limit+1)
+	matches, err := s.readSessionPrefixRange(ctx, normalized, upper, limit+1)
 	if err != nil {
 		return SessionPrefixLookup{}, err
 	}
@@ -149,16 +153,25 @@ func (s *ArchiveStore) ResolveSessionPrefix(prefix string, limit int) (SessionPr
 	}
 
 	lookup.Matches = matches[:limit]
-	if err := s.db.QueryRow(sessionPrefixCountQuery, normalized, upper).Scan(&lookup.Total); err != nil {
-		return SessionPrefixLookup{}, fmt.Errorf("count sessions with id prefix %q: %w", normalized, err)
+	if lookup.Total, err = s.countSessionPrefixRange(ctx, normalized, upper); err != nil {
+		return SessionPrefixLookup{}, err
 	}
 	return lookup, nil
 }
 
-// readSessionPrefixRange runs [sessionPrefixRangeQuery] and parses the
-// rows it returns.
-func (s *ArchiveStore) readSessionPrefixRange(lower, upper string, limit int) ([]SessionPrefixMatch, error) {
-	rows, err := s.db.Query(sessionPrefixRangeQuery, lower, upper, limit)
+// countSessionPrefixRange runs [sessionPrefixCountQuery] under ctx.
+func (s *ArchiveStore) countSessionPrefixRange(ctx context.Context, lower, upper string) (int, error) {
+	var total int
+	if err := s.db.QueryRowContext(ctx, sessionPrefixCountQuery, lower, upper).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count sessions with id prefix %q: %w", lower, err)
+	}
+	return total, nil
+}
+
+// readSessionPrefixRange runs [sessionPrefixRangeQuery] under ctx and
+// parses the rows it returns.
+func (s *ArchiveStore) readSessionPrefixRange(ctx context.Context, lower, upper string, limit int) ([]SessionPrefixMatch, error) {
+	rows, err := s.db.QueryContext(ctx, sessionPrefixRangeQuery, lower, upper, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find sessions with id prefix %q: %w", lower, err)
 	}

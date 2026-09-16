@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -31,8 +32,9 @@ type ArchiveSessionLookup struct {
 // ArchiveSessionResolver finds the archived sessions whose ids begin with
 // prefix, a leading part of a session id in canonical 8-4-4-4-12 form
 // such as "019c52f0" or "019c52f0-9ce8". It searches the whole archive,
-// and zero matches is an empty lookup, not an error.
-type ArchiveSessionResolver func(prefix string) (ArchiveSessionLookup, error)
+// and zero matches is an empty lookup, not an error. The lookup runs
+// under ctx, so a cancelled contact_dossier_write stops it.
+type ArchiveSessionResolver func(ctx context.Context, prefix string) (ArchiveSessionLookup, error)
 
 // ConfigureDossierArchiveSessions installs the archive lookup
 // [Tools.WriteDossier] uses when it refuses a leading part of a session
@@ -59,7 +61,7 @@ func newCitationResolver(resolve ArchiveSessionResolver) *citationResolver {
 
 // describe returns what the archive says about prefix, as a sentence to
 // append to the citation's refusal, or "" without a resolver.
-func (r *citationResolver) describe(prefix string) string {
+func (r *citationResolver) describe(ctx context.Context, prefix string) string {
 	if r == nil || r.resolve == nil {
 		return ""
 	}
@@ -72,7 +74,7 @@ func (r *citationResolver) describe(prefix string) string {
 			"To look it up now instead, call archive_session_transcript with session_id %q",
 			MaxDossierCitationLookups, prefix)
 	}
-	lookup, err := r.resolve(prefix)
+	lookup, err := r.resolve(ctx, prefix)
 	described := describeSessionLookup(prefix, lookup, err)
 	r.seen[prefix] = described
 	return described

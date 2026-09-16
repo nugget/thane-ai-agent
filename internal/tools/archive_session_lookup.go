@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -32,8 +33,9 @@ type sessionCandidateView struct {
 // session_id argument into exactly one full session id. A full id is
 // returned as is; a leading part is resolved against every archived
 // session, and a part that matches none or several is refused with an
-// error that teaches the next call.
-func resolveTranscriptSessionID(store *memory.ArchiveStore, raw string) (string, error) {
+// error that teaches the next call. The archive lookup runs under ctx,
+// so a cancelled tool call stops it.
+func resolveTranscriptSessionID(ctx context.Context, store *memory.ArchiveStore, raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	for _, citation := range archiveSessionCitationPrefixes {
 		trimmed = strings.TrimPrefix(trimmed, citation)
@@ -50,7 +52,7 @@ func resolveTranscriptSessionID(store *memory.ArchiveStore, raw string) (string,
 		return id, nil
 	}
 
-	lookup, err := store.ResolveSessionPrefix(id, memory.DefaultSessionPrefixCandidates)
+	lookup, err := store.ResolveSessionPrefix(ctx, id, memory.DefaultSessionPrefixCandidates)
 	if err != nil {
 		return "", fmt.Errorf("resolve session_id %q: %w", id, err)
 	}

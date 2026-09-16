@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -191,8 +192,8 @@ type citationProblem struct {
 // gives imported sessions new ids and would otherwise make every dossier
 // citing them unwritable. resolve, when set, lets a refused leading part
 // name its full citation or its candidates; the root validator passes
-// nil and refuses without them.
-func validateDossierEvidenceCitations(payload documentfacets.Payload, resolve ArchiveSessionResolver) error {
+// nil and refuses without them, so ctx bounds nothing on that path.
+func validateDossierEvidenceCitations(ctx context.Context, payload documentfacets.Payload, resolve ArchiveSessionResolver) error {
 	var problems []*citationProblem
 	byText := make(map[string]*citationProblem)
 	var rejected []string
@@ -225,7 +226,7 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload, resolve Ar
 	resolver := newCitationResolver(resolve)
 	lines := make([]string, 0, len(problems))
 	for _, problem := range problems {
-		lines = append(lines, "- "+describeCitationProblem(problem, resolver))
+		lines = append(lines, "- "+describeCitationProblem(ctx, problem, resolver))
 	}
 	return toolargs.Rejected(fmt.Errorf("archive-session citations must each name one archived session by its full id:\n%s\n%s",
 		strings.Join(lines, "\n"), dossierCitationRecovery), rejected...)
@@ -233,7 +234,7 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload, resolve Ar
 
 // describeCitationProblem says what is wrong with one refused citation
 // and, for a leading part, what the archive knows about it.
-func describeCitationProblem(problem *citationProblem, resolver *citationResolver) string {
+func describeCitationProblem(ctx context.Context, problem *citationProblem, resolver *citationResolver) string {
 	c := problem.citation
 	subject := c.text + " " + fieldPhrase(problem.fields)
 	switch c.kind {
@@ -244,7 +245,7 @@ func describeCitationProblem(problem *citationProblem, resolver *citationResolve
 		return fmt.Sprintf("%s spells the session id in a non-canonical form; write it as %s", subject, c.canonical())
 	case citationLeadingPart:
 		return fmt.Sprintf("%s carries only the first %d of a session id's %d hex digits; a leading part is not a durable citation because sessions imported together share leading digits%s",
-			subject, c.digits, sessionIDHexDigits, resolver.describe(c.id))
+			subject, c.digits, sessionIDHexDigits, resolver.describe(ctx, c.id))
 	default:
 		return fmt.Sprintf("%s is not a session id: %s", subject, c.problem)
 	}

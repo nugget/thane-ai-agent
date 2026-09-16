@@ -152,7 +152,7 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err := validateDossierSubjectName(contact.FormattedName, payload); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
-	if err := validateDossierEvidenceCitations(payload, t.dossierSessions); err != nil {
+	if err := validateDossierEvidenceCitations(ctx, payload, t.dossierSessions); err != nil {
 		validationErrs = append(validationErrs, err)
 	}
 	if len(validationErrs) > 0 {
@@ -328,7 +328,10 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 	if err := validateDossierSubjectName(contactName, payload); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("identity contract: %w", err))
 	}
-	if err := validateDossierEvidenceCitations(payload, nil); err != nil {
+	// A root write validator carries no context of its own, and the nil
+	// resolver keeps this path free of archive lookups, so there is
+	// nothing here for a context to cancel.
+	if err := validateDossierEvidenceCitations(context.Background(), payload, nil); err != nil {
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
 	}
 	if len(validationErrs) > 0 {

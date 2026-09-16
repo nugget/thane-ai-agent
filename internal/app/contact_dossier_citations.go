@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -14,8 +16,8 @@ func archiveSessionResolver(store *memory.ArchiveStore) contacts.ArchiveSessionR
 	if store == nil {
 		return nil
 	}
-	return func(prefix string) (contacts.ArchiveSessionLookup, error) {
-		lookup, err := store.ResolveSessionPrefix(prefix, memory.DefaultSessionPrefixCandidates)
+	return func(ctx context.Context, prefix string) (contacts.ArchiveSessionLookup, error) {
+		lookup, err := store.ResolveSessionPrefix(ctx, prefix, memory.DefaultSessionPrefixCandidates)
 		if err != nil {
 			return contacts.ArchiveSessionLookup{}, err
 		}

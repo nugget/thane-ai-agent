@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -208,5 +209,25 @@ func TestAmbiguousSessionPrefixErrorSaysWhenTheListIsPartial(t *testing.T) {
 				t.Errorf("error mentions unlisted sessions when every match is listed:\n%v", err)
 			}
 		})
+	}
+}
+
+// TestArchiveSessionTranscriptToolHonoursContext pins that the tool's
+// own context reaches the prefix lookup. The resolution runs before any
+// transcript is read, so without this the model's cancelled call would
+// still pay for a scan of every archived session.
+func TestArchiveSessionTranscriptToolHonoursContext(t *testing.T) {
+	r := newSessionLookupFixture(t)
+	tool := r.Get("archive_session_transcript")
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := tool.Handler(cancelled, map[string]any{"session_id": lookupSharedPrefix}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("handler error = %v, want context.Canceled", err)
+	}
+	// Negative control: the same argument under a live context reaches
+	// the ambiguity refusal, so the case above fails on cancellation.
+	if _, err := tool.Handler(t.Context(), map[string]any{"session_id": lookupSharedPrefix}); err == nil || errors.Is(err, context.Canceled) {
+		t.Fatalf("live handler error = %v, want the ambiguous-prefix refusal", err)
 	}
 }
