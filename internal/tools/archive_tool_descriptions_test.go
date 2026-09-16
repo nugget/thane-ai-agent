@@ -23,7 +23,7 @@ func TestArchiveToolDescriptionsTeachFullSessionIDs(t *testing.T) {
 			tool: "archive_session_transcript",
 			want: []string{
 				"any leading part of it",
-				"returns those candidates with start times and titles instead of a transcript",
+				"returns those candidates with how long ago each started and its title, instead of a transcript",
 				"A leading part is only a lookup convenience",
 				"anything durable that names a session (a citation, a note) uses the full id",
 			},

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
@@ -223,7 +224,9 @@ func validateDossierEvidenceCitations(ctx context.Context, payload documentfacet
 		return nil
 	}
 
-	resolver := newCitationResolver(resolve)
+	// One now for the whole refusal: every candidate age it renders is
+	// measured from the same instant, however many lookups it makes.
+	resolver := newCitationResolver(resolve, time.Now())
 	lines := make([]string, 0, len(problems))
 	for _, problem := range problems {
 		lines = append(lines, "- "+describeCitationProblem(ctx, problem, resolver))

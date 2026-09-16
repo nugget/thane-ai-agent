@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -106,7 +107,8 @@ func TestArchiveSessionTranscriptTool_ResolvesSessionID(t *testing.T) {
 			arg:  lookupSharedPrefix,
 			wantErr: []string{
 				`session_id "01a1bbbb" matches 7 archived sessions`,
-				`"session_id":"` + lookupSharedSessionID(0) + `","started_at":"2025-06-01T12:00:00Z","title":"Bob import 0"`,
+				`"session_id":"` + lookupSharedSessionID(0) + `","age":"-`,
+				`","time_basis":"session_started","title":"Bob import 0"`,
 				lookupSharedSessionID(4),
 				"(2 more not listed)",
 				"Retry with the full session_id",
@@ -201,7 +203,7 @@ func TestAmbiguousSessionPrefixErrorSaysWhenTheListIsPartial(t *testing.T) {
 		{name: "more matches than listed", total: len(matches) + 7, wantNote: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ambiguousSessionPrefixError(memory.SessionPrefixLookup{Prefix: lookupSharedPrefix, Matches: matches, Total: tt.total})
+			err := ambiguousSessionPrefixError(memory.SessionPrefixLookup{Prefix: lookupSharedPrefix, Matches: matches, Total: tt.total}, batch.Add(2*time.Hour))
 			if got := strings.Contains(err.Error(), note); got != tt.wantNote {
 				t.Errorf("error carries the unlisted note = %v, want %v:\n%v", got, tt.wantNote, err)
 			}
@@ -229,5 +231,40 @@ func TestArchiveSessionTranscriptToolHonoursContext(t *testing.T) {
 	// the ambiguity refusal, so the case above fails on cancellation.
 	if _, err := tool.Handler(t.Context(), map[string]any{"session_id": lookupSharedPrefix}); err == nil || errors.Is(err, context.Canceled) {
 		t.Fatalf("live handler error = %v, want the ambiguous-prefix refusal", err)
+	}
+}
+
+// absoluteTimestampPattern matches an RFC3339 instant, the shape a
+// model-facing result must not carry for a past event.
+var absoluteTimestampPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`)
+
+// TestAmbiguousSessionPrefixErrorRendersAges pins each candidate to an
+// exact-second delta and the field it is measured from, all taken
+// against one captured now. An absolute started_at would leave the model
+// subtracting timestamps to tell apart sessions an import minted minutes
+// apart, which is the arithmetic AGENTS.md keeps out of model context.
+func TestAmbiguousSessionPrefixErrorRendersAges(t *testing.T) {
+	batch := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := batch.Add(50 * time.Hour)
+	lookup := memory.SessionPrefixLookup{
+		Prefix: lookupSharedPrefix,
+		Matches: []memory.SessionPrefixMatch{
+			{ID: lookupSharedSessionID(0), StartedAt: batch, Title: "Bob import 0"},
+			{ID: lookupSharedSessionID(1), StartedAt: now.Add(-90 * time.Second), Title: "Bob import 1"},
+		},
+		Total: 2,
+	}
+
+	got := ambiguousSessionPrefixError(lookup, now).Error()
+	for _, want := range []string{
+		`{"session_id":"` + lookupSharedSessionID(0) + `","age":"-2d2h","time_basis":"session_started","title":"Bob import 0"}`,
+		`{"session_id":"` + lookupSharedSessionID(1) + `","age":"-90s","time_basis":"session_started","title":"Bob import 1"}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("refusal lacks %s:\n%s", want, got)
+		}
+	}
+	if stamp := absoluteTimestampPattern.FindString(got); stamp != "" {
+		t.Errorf("refusal carries the absolute timestamp %q:\n%s", stamp, got)
 	}
 }

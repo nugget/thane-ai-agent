@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -20,13 +21,38 @@ const archiveSessionContentRecovery = "search archive_search for words from the 
 // colon form is canonical; the hyphen form is the older spelling.
 var archiveSessionCitationPrefixes = []string{"archive:session:", "archive:session-"}
 
+// sessionCandidateTimeBasis names the instant each candidate's age is
+// measured from, so a delta cannot be read against some other clock.
+const sessionCandidateTimeBasis = "session_started"
+
 // sessionCandidateView is one entry in the candidate list an ambiguous
 // session_id prefix returns. The key is session_id so the chosen entry
-// can be copied straight into the next call.
+// can be copied straight into the next call. Age is an exact-second
+// delta rather than the stored timestamp, because telling apart sessions
+// an import minted minutes apart should not cost the model a subtraction
+// (docs/model-facing-context.md); the absolute started_at stays in
+// storage and logs.
 type sessionCandidateView struct {
 	SessionID string `json:"session_id"`
-	StartedAt string `json:"started_at"`
+	Age       string `json:"age"`
+	TimeBasis string `json:"time_basis"`
 	Title     string `json:"title"`
+}
+
+// sessionCandidateViews renders the matches of one lookup against a
+// single captured now, so two candidates of the same age read as the
+// same age.
+func sessionCandidateViews(matches []memory.SessionPrefixMatch, now time.Time) []sessionCandidateView {
+	candidates := make([]sessionCandidateView, 0, len(matches))
+	for _, match := range matches {
+		candidates = append(candidates, sessionCandidateView{
+			SessionID: match.ID,
+			Age:       promptfmt.FormatDeltaOnly(match.StartedAt, now),
+			TimeBasis: sessionCandidateTimeBasis,
+			Title:     match.Title,
+		})
+	}
+	return candidates
 }
 
 // resolveTranscriptSessionID turns archive_session_transcript's
@@ -62,22 +88,17 @@ func resolveTranscriptSessionID(ctx context.Context, store *memory.ArchiveStore,
 	case 1:
 		return lookup.Matches[0].ID, nil
 	default:
-		return "", ambiguousSessionPrefixError(lookup)
+		// One now for the whole refusal, so the candidate ages are
+		// comparable to each other and not to when each was rendered.
+		return "", ambiguousSessionPrefixError(lookup, time.Now())
 	}
 }
 
 // ambiguousSessionPrefixError lists the sessions a shared prefix
 // matches, bounded by the lookup's limit, and says how to choose among
-// them.
-func ambiguousSessionPrefixError(lookup memory.SessionPrefixLookup) error {
-	candidates := make([]sessionCandidateView, 0, len(lookup.Matches))
-	for _, match := range lookup.Matches {
-		candidates = append(candidates, sessionCandidateView{
-			SessionID: match.ID,
-			StartedAt: match.StartedAt.UTC().Format(time.RFC3339),
-			Title:     match.Title,
-		})
-	}
+// them. Every candidate age is measured from now.
+func ambiguousSessionPrefixError(lookup memory.SessionPrefixLookup, now time.Time) error {
+	candidates := sessionCandidateViews(lookup.Matches, now)
 	listed, err := json.Marshal(candidates)
 	if err != nil {
 		return fmt.Errorf("session_id %q matches %d archived sessions; listing them failed: %w", lookup.Prefix, lookup.Total, err)
@@ -92,7 +113,7 @@ func ambiguousSessionPrefixError(lookup memory.SessionPrefixLookup) error {
 		"session_id %q matches %d archived sessions, so no transcript was read. Candidates in id order: %s%s. "+
 			"Retry with the full session_id of the one you mean. Ids minted close together share leading digits, "+
 			"and an import mints a whole batch that way, recording when the import ran rather than when each conversation happened; "+
-			"when the titles and start times do not decide it, %s.%s",
+			"when the titles and ages do not decide it, %s.%s",
 		lookup.Prefix, lookup.Total, listed, unlisted, archiveSessionContentRecovery, unlistedRecovery)
 }
 

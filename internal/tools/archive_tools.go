@@ -316,8 +316,8 @@ func (r *Registry) registerArchiveSessionTranscript(store *memory.ArchiveStore) 
 		Description: "Read one past session in full. session_id is the session's full id — " +
 			"session_id on archive_search and archive_range hits, id in archive_sessions — or " +
 			"any leading part of it (hyphens optional), looked up across every archived session. " +
-			"A part that several sessions share returns those candidates with start times and " +
-			"titles instead of a transcript. A leading part is only a lookup convenience: " +
+			"A part that several sessions share returns those candidates with how long ago " +
+			"each started and its title, instead of a transcript. A leading part is only a lookup convenience: " +
 			"sessions imported together share leading digits, so anything durable that names a " +
 			"session (a citation, a note) uses the full id. Returns the complete " +
 			"message-by-message transcript as JSON, ordered chronologically with delta " +

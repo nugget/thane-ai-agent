@@ -51,9 +51,14 @@ func TestConfigureContactDossierDocuments_ResolvesCitedSessionPrefixes(t *testin
 		Digest:     "Enough context to act.",
 		Full:       "Garden plans. — evidence: archive:session-0190aaaa",
 	})
-	want := `cite archive:session:` + citedID + ` (started_at 2025-01-10T09:00:00Z, title "Alice plans the garden")`
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("WriteDossier() = %v, want the refusal to name %q", err, want)
+	// The age is measured from the clock the write runs on, so the
+	// citation is asserted as the two halves either side of it; the
+	// delta itself is pinned against a fixed clock in the contacts
+	// package, which renders it.
+	head := `cite archive:session:` + citedID + ` (age -`
+	tail := `, time_basis session_started, title "Alice plans the garden")`
+	if err == nil || !strings.Contains(err.Error(), head) || !strings.Contains(err.Error(), tail) {
+		t.Fatalf("WriteDossier() = %v, want the refusal to name %q ... %q", err, head, tail)
 	}
 
 	if archiveSessionResolver(nil) != nil {

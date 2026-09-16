@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,11 @@ func (f *fakeArchiveSessions) resolve(ctx context.Context, prefix string) (Archi
 // with what the archive knows about it, and a canonical id is written
 // without asking the archive whether it still exists.
 func TestWriteDossierResolvesArchiveSessionCitations(t *testing.T) {
-	uniqueCitation := fmt.Sprintf("cite archive:session:%s (started_at 2025-01-10T09:00:00Z, title %q)", citeUniqueID, "Alice plans the garden")
+	// The age is measured from the clock the write runs on, so the
+	// citation is asserted as the two halves either side of it;
+	// TestDescribeSessionLookupRendersAges pins the delta itself.
+	uniqueCitationHead := fmt.Sprintf("Exactly one archived session begins with it: cite archive:session:%s (age -", citeUniqueID)
+	uniqueCitationTail := fmt.Sprintf(", time_basis session_started, title %q)", "Alice plans the garden")
 
 	tests := []struct {
 		name       string
@@ -106,7 +111,8 @@ func TestWriteDossierResolvesArchiveSessionCitations(t *testing.T) {
 			full: "Garden plans. — evidence: archive:session:0190aaaa",
 			want: []string{
 				"archive:session:0190aaaa in field full carries only the first 8 of a session id's 32 hex digits",
-				"Exactly one archived session begins with it: " + uniqueCitation,
+				uniqueCitationHead,
+				uniqueCitationTail,
 			},
 			wantRejected: []string{"full"},
 			wantLookups:  []string{"0190aaaa"},
@@ -117,7 +123,8 @@ func TestWriteDossierResolvesArchiveSessionCitations(t *testing.T) {
 			want: []string{
 				"archive:session-01a1bbbb in field full carries only the first 8",
 				"7 archived sessions begin with it (ids minted close together share leading digits, and an import mints a whole batch that way)",
-				`{"session_id":"01a1bbbb-0000-7000-8000-000000000000","started_at":"2025-06-01T12:00:00Z","title":"Bob import 0"}`,
+				`{"session_id":"01a1bbbb-0000-7000-8000-000000000000","age":"-`,
+				`","time_basis":"session_started","title":"Bob import 0"}`,
 				"(2 more not listed)",
 				"Search archive_search for the claim's own words and cite the hit whose session_id begins with 01a1bbbb, listed here or not",
 			},
@@ -148,7 +155,8 @@ func TestWriteDossierResolvesArchiveSessionCitations(t *testing.T) {
 				"No archived session has an id that begins with it",
 				"archive:session:0190aaaa-bbbb in field full carries only the first 12",
 				"archive:session:zz01 in field full is not a session id: 'z' is not a hex digit",
-				uniqueCitation,
+				uniqueCitationHead,
+				uniqueCitationTail,
 				"### Open Questions",
 			},
 			// The whole id in the older spelling is respelled before
@@ -419,5 +427,67 @@ func TestValidateDossierEvidenceCitationsHonoursContext(t *testing.T) {
 	live := validateDossierEvidenceCitations(t.Context(), payload, archive.resolve)
 	if live == nil || !strings.Contains(live.Error(), "Exactly one archived session begins with it") {
 		t.Errorf("live refusal lost the resolved candidate:\n%v", live)
+	}
+}
+
+// absoluteTimestampPattern matches an RFC3339 instant, the shape a
+// model-facing refusal must not carry for a past event.
+var absoluteTimestampPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`)
+
+// TestDescribeSessionLookupRendersAges pins what a refused leading part
+// says about when its candidates ran: an exact-second delta and the
+// field the delta is measured from, all against the one now the refusal
+// captured. An absolute started_at would leave the model subtracting
+// timestamps to tell apart sessions an import minted an hour apart.
+func TestDescribeSessionLookupRendersAges(t *testing.T) {
+	batch := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := batch.Add(50 * time.Hour)
+	shared := func(i int) string { return fmt.Sprintf("%s-0000-7000-8000-%012d", citeSharedPrefix, i) }
+
+	tests := []struct {
+		name   string
+		lookup ArchiveSessionLookup
+		want   []string
+	}{
+		{
+			name: "one match names the citation with its age",
+			lookup: ArchiveSessionLookup{Total: 1, Matches: []ArchiveSessionMatch{
+				{ID: citeUniqueID, StartedAt: batch, Title: "Alice plans the garden"},
+			}},
+			want: []string{fmt.Sprintf(`cite archive:session:%s (age -2d2h, time_basis session_started, title "Alice plans the garden")`, citeUniqueID)},
+		},
+		{
+			name: "candidates carry an age and the basis it is measured from",
+			lookup: ArchiveSessionLookup{Total: 2, Matches: []ArchiveSessionMatch{
+				{ID: shared(0), StartedAt: batch, Title: "Bob import 0"},
+				{ID: shared(1), StartedAt: now.Add(-90 * time.Second), Title: "Bob import 1"},
+			}},
+			want: []string{
+				`{"session_id":"` + shared(0) + `","age":"-2d2h","time_basis":"session_started","title":"Bob import 0"}`,
+				`{"session_id":"` + shared(1) + `","age":"-90s","time_basis":"session_started","title":"Bob import 1"}`,
+			},
+		},
+		{
+			// A resolver that cannot say when a session started must not
+			// have that read as a session two thousand years old.
+			name: "a missing start time reads as unknown, not an age since the zero instant",
+			lookup: ArchiveSessionLookup{Total: 1, Matches: []ArchiveSessionMatch{
+				{ID: citeUniqueID, Title: "Alice plans the garden"},
+			}},
+			want: []string{"(age unknown, time_basis session_started,"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := describeSessionLookup(citeSharedPrefix, tt.lookup, now, nil)
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("description lacks %s:\n%s", want, got)
+				}
+			}
+			if stamp := absoluteTimestampPattern.FindString(got); stamp != "" {
+				t.Errorf("description carries the absolute timestamp %q:\n%s", stamp, got)
+			}
+		})
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 // MaxDossierCitationLookups bounds how many distinct leading parts one
@@ -53,10 +55,13 @@ func (t *Tools) ConfigureDossierArchiveSessions(resolve ArchiveSessionResolver) 
 type citationResolver struct {
 	resolve ArchiveSessionResolver
 	seen    map[string]string
+	// now is captured once for the whole refusal, so two candidates the
+	// same age read as the same age however long the lookups take.
+	now time.Time
 }
 
-func newCitationResolver(resolve ArchiveSessionResolver) *citationResolver {
-	return &citationResolver{resolve: resolve, seen: make(map[string]string)}
+func newCitationResolver(resolve ArchiveSessionResolver, now time.Time) *citationResolver {
+	return &citationResolver{resolve: resolve, seen: make(map[string]string), now: now}
 }
 
 // describe returns what the archive says about prefix, as a sentence to
@@ -75,23 +80,34 @@ func (r *citationResolver) describe(ctx context.Context, prefix string) string {
 			MaxDossierCitationLookups, prefix)
 	}
 	lookup, err := r.resolve(ctx, prefix)
-	described := describeSessionLookup(prefix, lookup, err)
+	described := describeSessionLookup(prefix, lookup, r.now, err)
 	r.seen[prefix] = described
 	return described
 }
 
+// sessionCandidateTimeBasis names the instant each candidate's age is
+// measured from, so a delta cannot be read against some other clock.
+const sessionCandidateTimeBasis = "session_started"
+
 // sessionCandidateView is one candidate a shared leading part lists. The
 // key is session_id, the name archive tool results use for the same id.
+// Age is an exact-second delta rather than the stored timestamp: a model
+// choosing between sessions minted minutes apart should not have to do
+// the subtraction (docs/model-facing-context.md). The absolute
+// started_at stays where it belongs, in storage and logs.
 type sessionCandidateView struct {
 	SessionID string `json:"session_id"`
-	StartedAt string `json:"started_at"`
+	Age       string `json:"age"`
+	TimeBasis string `json:"time_basis"`
 	Title     string `json:"title"`
 }
 
 // describeSessionLookup renders one resolver answer: the full citation
 // when exactly one session matches, the bounded candidates when several
 // do, and a plain statement when none does.
-func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, err error) string {
+// Every age it renders is taken against the one now the caller captured
+// for the refusal.
+func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, now time.Time, err error) string {
 	if err != nil {
 		return fmt.Sprintf(". Looking %s up in the archive failed: %v", prefix, err)
 	}
@@ -101,15 +117,16 @@ func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, err error
 		return ". No archived session has an id that begins with it"
 	case 1:
 		match := lookup.Matches[0]
-		return fmt.Sprintf(". Exactly one archived session begins with it: cite %s%s (started_at %s, title %q)",
-			archiveSessionCitationPrefix, match.ID, formatCandidateTime(match.StartedAt), match.Title)
+		return fmt.Sprintf(". Exactly one archived session begins with it: cite %s%s (age %s, time_basis %s, title %q)",
+			archiveSessionCitationPrefix, match.ID, formatCandidateAge(match.StartedAt, now), sessionCandidateTimeBasis, match.Title)
 	}
 
 	candidates := make([]sessionCandidateView, 0, len(lookup.Matches))
 	for _, match := range lookup.Matches {
 		candidates = append(candidates, sessionCandidateView{
 			SessionID: match.ID,
-			StartedAt: formatCandidateTime(match.StartedAt),
+			Age:       formatCandidateAge(match.StartedAt, now),
+			TimeBasis: sessionCandidateTimeBasis,
 			Title:     match.Title,
 		})
 	}
@@ -127,11 +144,15 @@ func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, err error
 		total, listed, unlisted, prefix)
 }
 
-func formatCandidateTime(t time.Time) string {
+// formatCandidateAge renders how long before now a candidate session
+// started. A resolver that reports no start time says "unknown" rather
+// than an age measured from the zero instant, which would read as a
+// session started two thousand years ago.
+func formatCandidateAge(t, now time.Time) string {
 	if t.IsZero() {
 		return "unknown"
 	}
-	return t.UTC().Format(time.RFC3339)
+	return promptfmt.FormatDeltaOnly(t, now)
 }
 
 // withCanonicalizedCitations adds the citations Go respelled to a
