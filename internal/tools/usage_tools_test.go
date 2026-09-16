@@ -2,440 +2,348 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
-	_ "modernc.org/sqlite"
 )
 
 func testUsageStore(t *testing.T) *usage.Store {
 	t.Helper()
 	db, err := database.OpenMemory()
 	if err != nil {
-		t.Fatalf("database.Open: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-
-	s, err := usage.NewStore(db, nil)
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := usage.NewStore(db, nil)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatal(err)
 	}
-	return s
+	return store
 }
 
-func TestFormatTokenCount(t *testing.T) {
-	tests := []struct {
-		name string
-		n    int64
-		want string
-	}{
-		{"millions", 1_230_000, "1.23M"},
-		{"exact_million", 1_000_000, "1.00M"},
-		{"thousands", 456_000, "456.0K"},
-		{"exact_thousand", 1_000, "1.0K"},
-		{"small", 789, "789"},
-		{"zero", 0, "0"},
-		{"large", 12_345_678, "12.35M"},
-		{"boundary_below_million", 999_999, "1000.0K"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatTokenCount(tt.n)
-			if got != tt.want {
-				t.Errorf("formatTokenCount(%d) = %q, want %q", tt.n, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParsePeriod(t *testing.T) {
-	tests := []struct {
-		name       string
-		period     string
-		wantRecent bool // true if start should be recent (within last 48h)
-	}{
-		{"today", "today", true},
-		{"week", "week", true},
-		{"month", "month", true},
-		{"all", "all", false},
-		{"unknown_defaults_to_all", "bogus", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			start, end := parsePeriod(tt.period)
-
-			// End should always be in the future (now + buffer).
-			if end.Before(time.Now().Add(-1 * time.Second)) {
-				t.Errorf("end %v should be at or after now", end)
-			}
-
-			if tt.wantRecent {
-				// Start should be within the last ~32 days.
-				cutoff := time.Now().AddDate(0, -2, 0)
-				if start.Before(cutoff) {
-					t.Errorf("start %v too far in the past for period %q", start, tt.period)
-				}
-			} else {
-				// "all" and unknown should use zero time.
-				if !start.IsZero() {
-					t.Errorf("start should be zero for period %q, got %v", tt.period, start)
-				}
-			}
-		})
-	}
-}
-
-func TestParsePeriod_TodayBounds(t *testing.T) {
-	start, _ := parsePeriod("today")
-	now := time.Now()
-	expectedStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	if !start.Equal(expectedStart) {
-		t.Errorf("today start = %v, want %v", start, expectedStart)
-	}
-}
-
-func TestParsePeriod_YesterdayBounds(t *testing.T) {
-	start, end := parsePeriod("yesterday")
-	now := time.Now()
-	yesterday := now.AddDate(0, 0, -1)
-	expectedStart := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, yesterday.Location())
-	expectedEnd := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	if !start.Equal(expectedStart) {
-		t.Errorf("yesterday start = %v, want %v", start, expectedStart)
-	}
-	if !end.Equal(expectedEnd) {
-		t.Errorf("yesterday end = %v, want %v", end, expectedEnd)
-	}
-}
-
-func TestCostSummaryTool_Registration(t *testing.T) {
+func costSummaryFixture(t *testing.T, records ...usage.Record) (*usage.Store, *Tool) {
+	t.Helper()
 	store := testUsageStore(t)
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	if tool == nil {
-		t.Fatal("cost_summary tool not registered")
-	}
-	if tool.Name != "cost_summary" {
-		t.Errorf("tool name = %q, want %q", tool.Name, "cost_summary")
-	}
-}
-
-func TestCostSummaryTool_EmptyStore(t *testing.T) {
-	store := testUsageStore(t)
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	if tool == nil {
-		t.Fatal("cost_summary tool not registered")
-	}
-
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"period": "all",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	if !strings.Contains(result, "Usage records: 0") {
-		t.Errorf("expected zero requests in output, got:\n%s", result)
-	}
-	if !strings.Contains(result, "$0.0000") {
-		t.Errorf("expected zero cost in output, got:\n%s", result)
-	}
-}
-
-func TestCostSummaryTool_PricingCoverage(t *testing.T) {
-	store := testUsageStore(t)
-	ctx := context.Background()
-	for _, status := range []string{"priced", "unpriced", ""} {
-		if err := store.Record(ctx, usage.Record{
-			Model: "deployment", InputTokens: 100, PricingStatus: status,
-		}); err != nil {
+	for _, rec := range records {
+		if rec.Timestamp.IsZero() {
+			rec.Timestamp = time.Now().Add(-time.Minute)
+		}
+		if err := store.Record(t.Context(), rec); err != nil {
 			t.Fatal(err)
 		}
 	}
 	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
-	result, err := reg.Get("cost_summary").Handler(ctx, map[string]any{"period": "all", "group_by": "model"})
+	tool := reg.Get("cost_summary")
+	if tool == nil {
+		t.Fatal("cost_summary was not registered")
+	}
+	return store, tool
+}
+
+func invokeCostSummary(t *testing.T, ctx context.Context, tool *Tool, args map[string]any) (costSummaryResult, string) {
+	t.Helper()
+	raw, err := tool.Handler(ctx, args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"Estimated cost: $0.0000",
-		"Pricing coverage: 1 priced, 1 unpriced, 1 unknown",
-		"pricing: 1 priced, 1 unpriced, 1 unknown",
-		"Missing prices contribute $0",
-	} {
-		if !strings.Contains(result, want) {
-			t.Errorf("missing %q in %s", want, result)
+	var result costSummaryResult
+	if !utf8.ValidString(raw) || !json.Valid([]byte(raw)) {
+		t.Fatalf("tool did not return valid UTF-8 JSON (%d bytes)", len(raw))
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	return result, raw
+}
+
+func TestCostSummaryToolPricingCoverage(t *testing.T) {
+	_, tool := costSummaryFixture(t,
+		usage.Record{Model: "paid", PricingStatus: "priced", CostUSD: 1, InputTokens: 100, OutputTokens: 10, CacheCreationInputTokens: 30, CacheReadInputTokens: 40},
+		usage.Record{Model: "local", PricingStatus: "priced", InputTokens: 200},
+		usage.Record{Model: "missing-price", PricingStatus: "unpriced", InputTokens: 300},
+		usage.Record{Model: "historical", CostUSD: .5, InputTokens: 400},
+		usage.Record{Model: "future-status", PricingStatus: "unrecognized", CostUSD: .25, InputTokens: 500},
+	)
+	got, raw := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all"})
+	want := usage.Summary{TotalRecords: 5, TotalInputTokens: 1500, TotalOutputTokens: 10,
+		TotalCacheCreationInputTokens: 30, TotalCacheReadInputTokens: 40,
+		TotalCostUSD: 1.75, PricedRecords: 2, UnpricedRecords: 1, UnknownPricingRecords: 2}
+	if got.Summary != want || got.Scope.Kind != "all_recorded_usage" || got.GroupBy != "" || len(got.Groups) != 0 || got.Truncated {
+		t.Fatalf("summary=%+v scope=%+v grouping=%q groups=%d truncated=%v", got.Summary, got.Scope, got.GroupBy, len(got.Groups), got.Truncated)
+	}
+	notes := strings.ToLower(strings.Join(got.Notes, " "))
+	for _, phrase := range []string{"missing prices", "pricing coverage is unknown"} {
+		if !strings.Contains(notes, phrase) {
+			t.Errorf("notes omitted %q: %v", phrase, got.Notes)
 		}
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"scope", "window", "summary", "unattributed", "matched_groups", "returned_groups", "truncated"} {
+		if _, ok := envelope[key]; !ok {
+			t.Errorf("missing contract field %q", key)
+		}
+	}
+	if got.Window.Period != "all" || got.Window.Since != "" || got.Window.Until == "" || got.Window.Bounds == "" {
+		t.Errorf("all-time window=%+v", got.Window)
 	}
 }
 
-func TestCostSummaryTool_WithData(t *testing.T) {
-	store := testUsageStore(t)
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	recs := []usage.Record{
-		{Timestamp: now, RequestID: "r1", Model: "claude-opus", Provider: "anthropic", InputTokens: 1000, OutputTokens: 500, CostUSD: 1.5, Role: "interactive"},
-		{Timestamp: now, RequestID: "r2", Model: "claude-sonnet", Provider: "anthropic", InputTokens: 2000, OutputTokens: 1000, CostUSD: 0.5, Role: "delegate", TaskName: "summarize"},
-	}
-	for _, rec := range recs {
-		if err := store.Record(ctx, rec); err != nil {
-			t.Fatalf("Record: %v", err)
-		}
-	}
-
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	if tool == nil {
-		t.Fatal("cost_summary tool not registered")
-	}
-
-	result, err := tool.Handler(ctx, map[string]any{
-		"period": "all",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	if !strings.Contains(result, "Usage records: 2") {
-		t.Errorf("expected 2 usage records, got:\n%s", result)
-	}
-	if !strings.Contains(result, "$2.0000") {
-		t.Errorf("expected $2.0000 total cost, got:\n%s", result)
-	}
-}
-
-func TestCostSummaryTool_DistinguishesMissingFromUnknownPricing(t *testing.T) {
+func TestCostSummaryToolPricingWarningsAreDistinct(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		records    []usage.Record
-		incomplete bool
-		unknown    bool
-		cost       string
+		name, status     string
+		missing, unknown bool
 	}{
-		{name: "empty", cost: "$0.0000"},
-		{name: "configured zero", records: []usage.Record{{PricingStatus: "priced"}}, cost: "$0.0000"},
-		{name: "missing price", records: []usage.Record{{PricingStatus: "unpriced"}}, incomplete: true, cost: "$0.0000"},
-		{name: "historical price", records: []usage.Record{{CostUSD: 1.25}}, unknown: true, cost: "$1.2500"},
-		{name: "unrecognized coverage", records: []usage.Record{{PricingStatus: "future-status", CostUSD: 1.25}}, unknown: true, cost: "$1.2500"},
-		{name: "mixed coverage", records: []usage.Record{{PricingStatus: "unpriced"}, {CostUSD: 1.25}}, incomplete: true, unknown: true, cost: "$1.2500"},
+		{"configured free", "priced", false, false},
+		{"missing", "unpriced", true, false},
+		{"legacy", "", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := testUsageStore(t)
-			for _, rec := range tc.records {
-				if err := store.Record(t.Context(), rec); err != nil {
-					t.Fatal(err)
-				}
+			_, tool := costSummaryFixture(t, usage.Record{PricingStatus: tc.status, InputTokens: 10})
+			got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all"})
+			notes := strings.ToLower(strings.Join(got.Notes, " "))
+			if strings.Contains(notes, "missing prices") != tc.missing || strings.Contains(notes, "pricing coverage is unknown") != tc.unknown {
+				t.Errorf("wrong pricing guidance: %v", got.Notes)
 			}
-			reg := NewRegistry(nil, nil, nil)
-			reg.SetUsageStore(store)
-			result, err := reg.Get("cost_summary").Handler(t.Context(), map[string]any{"period": "all"})
+		})
+	}
+}
+
+func TestCostSummaryToolSelfScope(t *testing.T) {
+	_, tool := costSummaryFixture(t,
+		usage.Record{LoopID: "self-id", LoopName: "worker", Purpose: "agent", CostUSD: 1, PricingStatus: "priced"},
+		usage.Record{LoopID: "self-id", LoopName: "worker", Purpose: "compaction", CostUSD: .25, PricingStatus: "priced"},
+		usage.Record{LoopID: "child-id", ParentLoopID: "self-id", LoopName: "delegate", CostUSD: 9},
+		usage.Record{LoopID: "other-id", LoopName: "worker", CostUSD: 10},
+		usage.Record{CostUSD: 5, InputTokens: 500},
+	)
+	got, _ := invokeCostSummary(t, WithLoopID(t.Context(), "self-id"), tool, map[string]any{"period": "all", "loop_id": "self"})
+	if got.Scope.Kind != "loop_id" || got.Scope.LoopID != "self-id" || got.Summary.TotalRecords != 2 || got.Summary.TotalCostUSD != 1.25 {
+		t.Fatalf("self scope included unrelated work: scope=%+v summary=%+v", got.Scope, got.Summary)
+	}
+	if got.GroupBy != "loop" || got.MatchedGroups != 1 || got.ReturnedGroups != 1 || len(got.Groups) != 1 || got.Groups[0].Key != "self-id" || got.Groups[0].LoopName != "worker" {
+		t.Errorf("self grouping=%+v", got)
+	}
+	if got.Unattributed != (usage.Summary{}) {
+		t.Errorf("self selection included unattributed work: %+v", got.Unattributed)
+	}
+	global, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": "loop"})
+	if global.Unattributed.TotalRecords != 1 || global.Unattributed.TotalCostUSD != 5 || global.MatchedGroups != 3 {
+		t.Errorf("global coverage lost unattributed work or invented a loop: %+v", global)
+	}
+}
+
+func TestCostSummaryToolHistoricalNameKeepsDistinctIDs(t *testing.T) {
+	_, tool := costSummaryFixture(t,
+		usage.Record{LoopID: "retired", LoopName: "archivist", CostUSD: 3},
+		usage.Record{LoopID: "replacement", LoopName: "archivist", CostUSD: 4},
+		usage.Record{LoopID: "unrelated", LoopName: "other", CostUSD: 100},
+	)
+	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "loop_name": "archivist"})
+	if got.Scope.Kind != "recorded_loop_name" || got.Scope.LoopName != "archivist" || got.Summary.TotalCostUSD != 7 || got.GroupBy != "loop" || got.MatchedGroups != 2 || len(got.Groups) != 2 {
+		t.Fatalf("historical name selection=%+v", got)
+	}
+	if got.Groups[0].Key != "replacement" || got.Groups[1].Key != "retired" {
+		t.Errorf("distinct loop IDs or cost ordering lost: %+v", got.Groups)
+	}
+}
+
+func TestCostSummaryToolGroupModes(t *testing.T) {
+	_, tool := costSummaryFixture(t, usage.Record{Model: "deployment-id", UpstreamModel: "wire-model", Provider: "provider-family",
+		Resource: "host", Role: "autonomous", TaskName: "poll", LoopID: "loop-id", LoopName: "name", CostUSD: 1})
+	for group, key := range map[string]string{
+		"deployment": "deployment-id", "model": "deployment-id", "upstream_model": "wire-model",
+		"provider": "provider-family", "resource": "host", "role": "autonomous", "task": "poll", "loop": "loop-id",
+	} {
+		t.Run(group, func(t *testing.T) {
+			got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": group})
+			if len(got.Groups) != 1 || got.Groups[0].Key != key || got.Groups[0].Summary.TotalCostUSD != 1 || got.MatchedGroups != 1 || got.ReturnedGroups != 1 {
+				t.Fatalf("group %q=%+v", group, got)
+			}
+		})
+	}
+	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": " Provider "})
+	if got.GroupBy != "provider" || len(got.Groups) != 1 || got.Groups[0].Key != "provider-family" {
+		t.Errorf("normalized grouping=%+v", got)
+	}
+}
+
+func TestCostSummaryToolFiltersBeforeGroupLimit(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	since, until := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	_, tool := costSummaryFixture(t,
+		usage.Record{Timestamp: since, LoopID: "selected", Model: "inside-high", CostUSD: 2},
+		usage.Record{Timestamp: since.Add(time.Minute), LoopID: "selected", Model: "inside-low", CostUSD: 1},
+		usage.Record{Timestamp: until, LoopID: "selected", Model: "outside-window", CostUSD: 100},
+		usage.Record{Timestamp: since, LoopID: "unrelated", Model: "outside-loop", CostUSD: 200},
+	)
+	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{
+		"since": since.Format(time.RFC3339), "until": until.Format(time.RFC3339),
+		"loop_id": "selected", "group_by": "model", "limit": float64(1),
+	})
+	if got.Summary.TotalRecords != 2 || got.Summary.TotalCostUSD != 3 || got.MatchedGroups != 2 || got.ReturnedGroups != 1 || !got.Truncated || len(got.Groups) != 1 || got.Groups[0].Key != "inside-high" {
+		t.Fatalf("filter/limit ordering lost matching rows or complete total: %+v", got)
+	}
+	if got.Window.Period != "" || !strings.HasPrefix(got.Window.Since, "-") || !strings.HasPrefix(got.Window.Until, "-") {
+		t.Errorf("custom window must expose relative bounds: %+v", got.Window)
+	}
+}
+
+func TestCostSummaryToolEmptyScopeAndMissingSelfDiffer(t *testing.T) {
+	_, tool := costSummaryFixture(t)
+	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"loop_id": "not-recorded", "period": "all"})
+	if got.Summary.TotalRecords != 0 || got.MatchedGroups != 0 || got.ReturnedGroups != 0 || len(got.Groups) != 0 || got.Truncated {
+		t.Fatalf("empty selection=%+v", got)
+	}
+	notes := strings.ToLower(strings.Join(got.Notes, " "))
+	if !strings.Contains(notes, "no ") || !strings.Contains(notes, "record") {
+		t.Errorf("empty result omitted guidance: %v", got.Notes)
+	}
+	if _, err := tool.Handler(t.Context(), map[string]any{"loop_id": "self"}); err == nil || !strings.Contains(strings.ToLower(err.Error()), "loop") {
+		t.Fatalf("missing self context error=%v", err)
+	}
+}
+
+func TestCostSummaryToolBoundedJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		count, repeats int
+	}{
+		{"many Unicode labels", 30, 200}, {"oversized first group", 1, 5000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var records []usage.Record
+			for i := range tc.count {
+				records = append(records, usage.Record{LoopID: fmt.Sprintf("id-%03d", i), LoopName: strings.Repeat("界🌌", tc.repeats), CostUSD: 1})
+			}
+			_, tool := costSummaryFixture(t, records...)
+			got, raw := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": "loop", "limit": 100})
+			if len(raw) > 16*1024 || !got.Truncated || got.MatchedGroups != tc.count || got.ReturnedGroups != len(got.Groups) || len(got.Groups) >= tc.count {
+				t.Fatalf("bounded result bytes=%d matched=%d returned=%d groups=%d truncated=%v", len(raw), got.MatchedGroups, got.ReturnedGroups, len(got.Groups), got.Truncated)
+			}
+			if got.Summary.TotalRecords != tc.count || got.Summary.TotalCostUSD != float64(tc.count) {
+				t.Errorf("response cap altered total: %+v", got.Summary)
+			}
+		})
+	}
+}
+
+func TestCostSummaryToolRejectsInvalidArguments(t *testing.T) {
+	_, tool := costSummaryFixture(t)
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"unknown period", map[string]any{"period": "ever"}},
+		{"unknown group", map[string]any{"group_by": "bogus"}},
+		{"selector conflict", map[string]any{"loop_id": "id", "loop_name": "name"}},
+		{"period with since", map[string]any{"period": "all", "since": "-1h"}},
+		{"period with until", map[string]any{"period": "today", "until": "-1h"}},
+		{"until without since", map[string]any{"until": "-1h"}},
+		{"reversed window", map[string]any{"since": "-1h", "until": "-2h"}},
+		{"empty window", map[string]any{"since": "-1h", "until": "-1h"}},
+		{"malformed time", map[string]any{"since": "yesterday evening"}},
+		{"unsigned duration", map[string]any{"since": "1h"}},
+		{"limit zero", map[string]any{"limit": 0}},
+		{"limit negative", map[string]any{"limit": -1}},
+		{"limit too high", map[string]any{"limit": 101}},
+		{"limit fractional", map[string]any{"limit": 1.5}},
+		{"limit boolean", map[string]any{"limit": true}},
+		{"limit NaN", map[string]any{"limit": math.NaN()}},
+		{"limit infinite", map[string]any{"limit": math.Inf(1)}},
+		{"oversized name", map[string]any{"loop_name": strings.Repeat("界", 257)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tool.Handler(t.Context(), tc.args); err == nil {
+				t.Fatal("invalid arguments were accepted")
+			}
+		})
+	}
+	for _, key := range []string{"period", "since", "until", "group_by", "loop_id", "loop_name"} {
+		for _, value := range []any{"", "   ", true, 3, nil} {
+			t.Run(fmt.Sprintf("%s/%v", key, value), func(t *testing.T) {
+				if _, err := tool.Handler(t.Context(), map[string]any{key: value}); err == nil {
+					t.Fatal("empty or wrong-typed argument was accepted")
+				}
+			})
+		}
+	}
+}
+
+func TestCostSummaryToolCancellation(t *testing.T) {
+	_, tool := costSummaryFixture(t, usage.Record{InputTokens: 1})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := tool.Handler(ctx, map[string]any{"period": "all", "group_by": "model"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation became a successful empty report: %v", err)
+	}
+}
+
+func TestParseCostSummaryWindows(t *testing.T) {
+	zone := time.FixedZone("household", -6*60*60)
+	now := time.Date(2026, time.September, 16, 14, 15, 16, 0, zone)
+	today := time.Date(2026, time.September, 16, 0, 0, 0, 0, zone)
+	for _, tc := range []struct {
+		name       string
+		args       map[string]any
+		period     string
+		start, end time.Time
+	}{
+		{"default", nil, "today", today, now},
+		{"today", map[string]any{"period": "today"}, "today", today, now},
+		{"yesterday", map[string]any{"period": "yesterday"}, "yesterday", today.AddDate(0, 0, -1), today},
+		{"week", map[string]any{"period": "week"}, "week", now.AddDate(0, 0, -7), now},
+		{"month", map[string]any{"period": "month"}, "month", now.AddDate(0, -1, 0), now},
+		{"all", map[string]any{"period": "all"}, "all", time.Time{}, now},
+		{"signed custom", map[string]any{"since": "-2h", "until": "-1h"}, "", now.Add(-2 * time.Hour), now.Add(-time.Hour)},
+		{"custom until defaults now", map[string]any{"since": "-1d"}, "", now.Add(-24 * time.Hour), now},
+		{"RFC3339", map[string]any{"since": "2026-09-01T00:00:00Z", "until": "2026-09-02T00:00:00Z"}, "", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, period, err := parseCostSummaryOptions(t.Context(), tc.args, now)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(result, "not a complete spend total") != tc.incomplete || strings.Contains(result, "Missing prices") != tc.incomplete {
-				t.Errorf("incomplete-cost warning should be %v: %s", tc.incomplete, result)
-			}
-			if strings.Contains(result, "Pricing coverage is unknown") != tc.unknown {
-				t.Errorf("unknown-coverage warning should be %v: %s", tc.unknown, result)
-			}
-			if !strings.Contains(result, "Estimated cost: "+tc.cost) {
-				t.Errorf("expected retained cost %s: %s", tc.cost, result)
+			if !opts.Start.Equal(tc.start) || !opts.End.Equal(tc.end) || period != tc.period || opts.Limit != 20 {
+				t.Errorf("window=%v..%v period=%q limit=%d; want %v..%v period=%q limit=20", opts.Start, opts.End, period, opts.Limit, tc.start, tc.end, tc.period)
 			}
 		})
 	}
 }
 
-func TestCostSummaryTool_GroupBy(t *testing.T) {
-	store := testUsageStore(t)
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	recs := []usage.Record{
-		{Timestamp: now, RequestID: "r1", Model: "opus", Provider: "anthropic", InputTokens: 1000, OutputTokens: 500, CostUSD: 3.0, Role: "interactive"},
-		{Timestamp: now, RequestID: "r2", Model: "sonnet", Provider: "anthropic", InputTokens: 2000, OutputTokens: 1000, CostUSD: 1.0, Role: "delegate"},
+func TestCostSummaryToolLimitDefaultsAndCoercion(t *testing.T) {
+	var records []usage.Record
+	for i := range 25 {
+		records = append(records, usage.Record{Model: fmt.Sprintf("model-%02d", i), CostUSD: 1})
 	}
-	for _, rec := range recs {
-		if err := store.Record(ctx, rec); err != nil {
-			t.Fatalf("Record: %v", err)
+	_, tool := costSummaryFixture(t, records...)
+	got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": "model"})
+	if got.MatchedGroups != 25 || got.ReturnedGroups != 20 || !got.Truncated || got.Summary.TotalCostUSD != 25 {
+		t.Fatalf("default limit lost groups or totals: %+v", got)
+	}
+	for _, limit := range []any{int(2), int32(2), int64(2), float64(2), json.Number("2"), " 2 "} {
+		got, _ := invokeCostSummary(t, t.Context(), tool, map[string]any{"period": "all", "group_by": "model", "limit": limit})
+		if got.MatchedGroups != 25 || got.ReturnedGroups != 2 || len(got.Groups) != 2 || !got.Truncated || got.Summary.TotalCostUSD != 25 {
+			t.Errorf("limit %T(%v) changed matching totals or returned count: %+v", limit, limit, got)
 		}
 	}
-
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-
-	tests := []struct {
-		name     string
-		groupBy  string
-		wantText string
-	}{
-		{"by_deployment", "deployment", "By Deployment:"},
-		{"by_model", "model", "By Deployment:"},
-		{"by_upstream_model", "upstream_model", "By Upstream Model:"},
-		{"by_provider", "provider", "By Provider:"},
-		{"by_resource", "resource", "By Resource:"},
-		{"by_role", "role", "By Role:"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := tool.Handler(ctx, map[string]any{
-				"period":   "all",
-				"group_by": tt.groupBy,
-			})
-			if err != nil {
-				t.Fatalf("handler error: %v", err)
-			}
-			if !strings.Contains(result, tt.wantText) {
-				t.Errorf("expected %q in output, got:\n%s", tt.wantText, result)
-			}
-		})
-	}
 }
 
-func TestCostSummaryTool_GroupBy_NormalizesInput(t *testing.T) {
-	store := testUsageStore(t)
-	ctx := context.Background()
-
-	if err := store.Record(ctx, usage.Record{
-		Timestamp:    time.Now().UTC(),
-		RequestID:    "r1",
-		Model:        "sonnet",
-		Provider:     "anthropic",
-		InputTokens:  10,
-		OutputTokens: 5,
-		CostUSD:      0.1,
-		Role:         "interactive",
-	}); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	result, err := tool.Handler(ctx, map[string]any{
-		"period":   "all",
-		"group_by": " Provider ",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if !strings.Contains(result, "By Provider:") {
-		t.Fatalf("expected provider grouping in output, got:\n%s", result)
-	}
-}
-
-func TestCostSummaryTool_GroupBy_InvalidValue(t *testing.T) {
-	store := testUsageStore(t)
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"period":   "all",
-		"group_by": "bogus",
-	})
-	if err == nil {
-		t.Fatal("expected invalid group_by error")
-	}
-	if !strings.Contains(err.Error(), "unsupported group_by") {
-		t.Fatalf("error = %q, want unsupported group_by detail", err)
-	}
-}
-
-func TestCostSummaryTool_GroupBy_WhitespaceMeansUngrouped(t *testing.T) {
-	store := testUsageStore(t)
-	ctx := context.Background()
-
-	if err := store.Record(ctx, usage.Record{
-		Timestamp:    time.Now().UTC(),
-		RequestID:    "r_whitespace",
-		Model:        "sonnet",
-		Provider:     "anthropic",
-		InputTokens:  10,
-		OutputTokens: 5,
-		CostUSD:      0.1,
-		Role:         "interactive",
-	}); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	result, err := tool.Handler(ctx, map[string]any{
-		"period":   "all",
-		"group_by": "   ",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if strings.Contains(result, "By ") {
-		t.Fatalf("expected ungrouped summary, got:\n%s", result)
-	}
-}
-
-func TestCostSummaryTool_GroupByOrdering(t *testing.T) {
-	store := testUsageStore(t)
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	recs := []usage.Record{
-		{Timestamp: now, RequestID: "r1", Model: "cheap", Provider: "ollama", InputTokens: 100, OutputTokens: 50, CostUSD: 0.01, Role: "interactive"},
-		{Timestamp: now, RequestID: "r2", Model: "expensive", Provider: "anthropic", InputTokens: 100, OutputTokens: 50, CostUSD: 10.0, Role: "interactive"},
-	}
-	for _, rec := range recs {
-		if err := store.Record(ctx, rec); err != nil {
-			t.Fatalf("Record: %v", err)
-		}
-	}
-
-	reg := NewRegistry(nil, nil, nil)
-	reg.SetUsageStore(store)
-
-	tool := reg.Get("cost_summary")
-	result, err := tool.Handler(ctx, map[string]any{
-		"period":   "all",
-		"group_by": "model",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	// "expensive" should appear before "cheap" in output (cost DESC).
-	expIdx := strings.Index(result, "expensive")
-	cheapIdx := strings.Index(result, "cheap")
-	if expIdx == -1 || cheapIdx == -1 {
-		t.Fatalf("expected both models in output, got:\n%s", result)
-	}
-	if expIdx > cheapIdx {
-		t.Errorf("expensive should appear before cheap (cost DESC order), got:\n%s", result)
-	}
-}
-
-func TestSetUsageStore_NilStore(t *testing.T) {
+func TestSetUsageStoreNilStore(t *testing.T) {
 	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(nil)
-
-	tool := reg.Get("cost_summary")
-	if tool != nil {
-		t.Error("cost_summary should not be registered with nil store")
+	if reg.Get("cost_summary") != nil {
+		t.Error("cost_summary registered without a usage store")
 	}
 }
