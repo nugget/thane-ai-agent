@@ -33,6 +33,19 @@ const dossierCitationRecovery = "Cite archive evidence as archive:session:<full-
 	"To find a full id, search archive_search for the claim's own words: every hit carries its full session_id. " +
 	"Evidence you cannot pin to one session belongs under ### Open Questions in full, not in prose that describes a prefix or a legacy session."
 
+// dossierCitationRefusalMaxBytes is the ceiling on a whole citation
+// refusal: the 16 KB AGENTS.md gives a tool result that is not a
+// transcript. The refusal reaches the model as contact_dossier_write's
+// entire result, so nothing else is competing for the budget.
+const dossierCitationRefusalMaxBytes = 16 << 10
+
+// dossierCitationListMaxBytes is what the itemized part of a refusal may
+// spend, the ceiling less room for the sentence that introduces the
+// list, dossierCitationRecovery, and the frame a faceted write wraps a
+// refusal in. Reserving that room is what keeps the recovery inside the
+// cap instead of pushed past it by a long list.
+const dossierCitationListMaxBytes = dossierCitationRefusalMaxBytes - (1 << 10)
+
 // citationKind classifies one archive-session citation as written.
 type citationKind int
 
@@ -229,10 +242,14 @@ func validateDossierEvidenceCitations(ctx context.Context, payload documentfacet
 	resolver := newCitationResolver(resolve, time.Now())
 	lines := make([]string, 0, len(problems))
 	for _, problem := range problems {
-		lines = append(lines, "- "+describeCitationProblem(ctx, problem, resolver))
+		lines = append(lines, describeCitationProblem(ctx, problem, resolver))
 	}
-	return toolargs.Rejected(fmt.Errorf("archive-session citations must each name one archived session by its full id:\n%s\n%s",
-		strings.Join(lines, "\n"), dossierCitationRecovery), rejected...)
+	// The list is what grows with the dossier: ten leading parts, each
+	// listing five candidates with their titles. Bounding it here rather
+	// than the finished error keeps dossierCitationRecovery on the end,
+	// which is the one sentence the model needs whatever got dropped.
+	return toolargs.Rejected(fmt.Errorf("archive-session citations must each name one archived session by its full id:%s\n%s",
+		boundedRefusalList(lines, dossierCitationListMaxBytes), dossierCitationRecovery), rejected...)
 }
 
 // describeCitationProblem says what is wrong with one refused citation

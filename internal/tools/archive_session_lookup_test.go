@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -267,4 +268,132 @@ func TestAmbiguousSessionPrefixErrorRendersAges(t *testing.T) {
 	if stamp := absoluteTimestampPattern.FindString(got); stamp != "" {
 		t.Errorf("refusal carries the absolute timestamp %q:\n%s", stamp, got)
 	}
+}
+
+// TestClipCandidateTitle pins the title bound to rune boundaries. A
+// title is author-controlled, so the cut lands wherever the byte count
+// says; cutting there by byte index would hand the model a title ending
+// in half a character (AGENTS.md).
+func TestClipCandidateTitle(t *testing.T) {
+	const cut = sessionCandidateTitleMaxBytes - len(sessionCandidateCutMarker)
+
+	t.Run("a title within the bound is untouched", func(t *testing.T) {
+		title := "Bob imports the greenhouse ledger"
+		if got := clipCandidateTitle(title); got != title {
+			t.Fatalf("clipCandidateTitle(%q) = %q, want it unchanged", title, got)
+		}
+	})
+
+	for _, glyph := range []struct{ name, text string }{
+		{name: "three-byte rune", text: "世"},
+		{name: "four-byte rune", text: "😀"},
+	} {
+		// Walk the rune across the cut byte so every way it can
+		// straddle is covered, ending with the aligned case where the
+		// cut lands exactly on its leading byte.
+		for offset := range len(glyph.text) {
+			t.Run(fmt.Sprintf("%s straddling the cut at +%d", glyph.name, offset), func(t *testing.T) {
+				lead := cut - len(glyph.text) + 1 + offset
+				title := strings.Repeat("a", lead) + glyph.text + strings.Repeat("b", sessionCandidateTitleMaxBytes)
+
+				got := clipCandidateTitle(title)
+				if len(got) > sessionCandidateTitleMaxBytes {
+					t.Errorf("clipped title is %d bytes, want at most %d", len(got), sessionCandidateTitleMaxBytes)
+				}
+				if !strings.HasSuffix(got, sessionCandidateCutMarker) {
+					t.Errorf("clipped title %q does not mark the cut", got)
+				}
+				kept := strings.TrimSuffix(got, sessionCandidateCutMarker)
+				if !utf8.ValidString(kept) {
+					t.Errorf("clipped title %q is not valid UTF-8", kept)
+				}
+				if !strings.HasPrefix(title, kept) {
+					t.Errorf("clipped title %q is not a prefix of the original", kept)
+				}
+				// The rune either survives whole or is dropped whole:
+				// landing on its leading byte keeps everything before
+				// it, and any other offset steps back past it.
+				wantKept := lead
+				if offset == len(glyph.text)-1 {
+					wantKept = cut
+				}
+				if len(kept) != wantKept {
+					t.Errorf("kept %d bytes, want %d", len(kept), wantKept)
+				}
+			})
+		}
+	}
+}
+
+// TestAmbiguousSessionPrefixErrorStaysWithinTheTranscriptCap pins the
+// refusal to the ceiling of the tool it stands in for. One call can be
+// answered with several candidates carrying arbitrarily long titles, so
+// without a bound a dossier full of hostile titles could inject an
+// unbounded error into the model's context.
+func TestAmbiguousSessionPrefixErrorStaysWithinTheTranscriptCap(t *testing.T) {
+	batch := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	now := batch.Add(50 * time.Hour)
+	// A multi-byte title an order of magnitude past any tool result.
+	pathological := strings.Repeat("なにもない", 200_000)
+
+	tests := []struct {
+		name        string
+		matches     int
+		title       string
+		wantDropped bool
+	}{
+		{name: "pathological titles are clipped", matches: 5, title: pathological},
+		{name: "candidates past the cap are dropped from the tail", matches: 400, title: strings.Repeat("Bob import ", 30), wantDropped: true},
+		{name: "a small refusal is left alone", matches: 2, title: "Bob import"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookup := memory.SessionPrefixLookup{Prefix: lookupSharedPrefix, Total: tt.matches}
+			for i := range tt.matches {
+				lookup.Matches = append(lookup.Matches, memory.SessionPrefixMatch{
+					ID: lookupSharedSessionID(i), StartedAt: batch.Add(time.Duration(i) * time.Minute), Title: tt.title,
+				})
+			}
+
+			got := ambiguousSessionPrefixError(lookup, now).Error()
+			if len(got) > archiveTranscriptByteCap {
+				t.Errorf("refusal is %d bytes, want at most %d", len(got), archiveTranscriptByteCap)
+			}
+			if !utf8.ValidString(got) {
+				t.Error("refusal is not valid UTF-8")
+			}
+			// Whatever the cap dropped, the way out survives it.
+			if !strings.Contains(got, archiveSessionContentRecovery) {
+				t.Errorf("refusal lost its recovery:\n%s", got)
+			}
+
+			listedIDs := strings.Count(got, `"session_id":`)
+			if !tt.wantDropped {
+				if listedIDs != tt.matches {
+					t.Errorf("refusal lists %d of %d candidates, want all of them", listedIDs, tt.matches)
+				}
+				if strings.Contains(got, "not listed") {
+					t.Errorf("refusal claims candidates were dropped:\n%s", got)
+				}
+				return
+			}
+			if listedIDs == 0 || listedIDs >= tt.matches {
+				t.Errorf("refusal lists %d of %d candidates, want a non-empty shortened list", listedIDs, tt.matches)
+			}
+			if want := fmt.Sprintf("(%d more not listed)", tt.matches-listedIDs); !strings.Contains(got, want) {
+				t.Errorf("refusal does not say it dropped %q:\n%s", want, got[:min(len(got), 400)])
+			}
+		})
+	}
+
+	t.Run("a title within the bound is listed in full", func(t *testing.T) {
+		lookup := memory.SessionPrefixLookup{Prefix: lookupSharedPrefix, Total: 2, Matches: []memory.SessionPrefixMatch{
+			{ID: lookupSharedSessionID(0), StartedAt: batch, Title: "Bob import 0"},
+			{ID: lookupSharedSessionID(1), StartedAt: batch, Title: "Bob import 1"},
+		}}
+		got := ambiguousSessionPrefixError(lookup, now).Error()
+		if strings.Contains(got, sessionCandidateCutMarker) {
+			t.Errorf("refusal marks a cut in a title short enough to keep:\n%s", got)
+		}
+	})
 }

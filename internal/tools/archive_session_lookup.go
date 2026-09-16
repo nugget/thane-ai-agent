@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,27 @@ var archiveSessionCitationPrefixes = []string{"archive:session:", "archive:sessi
 // sessionCandidateTimeBasis names the instant each candidate's age is
 // measured from, so a delta cannot be read against some other clock.
 const sessionCandidateTimeBasis = "session_started"
+
+// sessionCandidateTitleMaxBytes caps each candidate's title, matching
+// what archive_search gives a session hit. A title is author-controlled
+// and arbitrarily long, and this list exists to tell candidates apart,
+// which their opening words already do.
+const sessionCandidateTitleMaxBytes = 240
+
+// sessionCandidateCutMarker ends a title cut to its bound. It is the
+// marker the contact and document lists already use, so a cut reads the
+// same wherever the model meets one.
+const sessionCandidateCutMarker = "…[cut]"
+
+// clipCandidateTitle bounds one title to sessionCandidateTitleMaxBytes
+// including the marker, cutting on a rune boundary so a multi-byte
+// character is never split (AGENTS.md).
+func clipCandidateTitle(title string) string {
+	if len(title) <= sessionCandidateTitleMaxBytes {
+		return title
+	}
+	return truncateUTF8(title, sessionCandidateTitleMaxBytes-len(sessionCandidateCutMarker)) + sessionCandidateCutMarker
+}
 
 // sessionCandidateView is one entry in the candidate list an ambiguous
 // session_id prefix returns. The key is session_id so the chosen entry
@@ -49,7 +71,7 @@ func sessionCandidateViews(matches []memory.SessionPrefixMatch, now time.Time) [
 			SessionID: match.ID,
 			Age:       promptfmt.FormatDeltaOnly(match.StartedAt, now),
 			TimeBasis: sessionCandidateTimeBasis,
-			Title:     match.Title,
+			Title:     clipCandidateTitle(match.Title),
 		})
 	}
 	return candidates
@@ -97,19 +119,38 @@ func resolveTranscriptSessionID(ctx context.Context, store *memory.ArchiveStore,
 // ambiguousSessionPrefixError lists the sessions a shared prefix
 // matches, bounded by the lookup's limit, and says how to choose among
 // them. Every candidate age is measured from now.
+//
+// This refusal stands in place of the transcript the call asked for, so
+// it answers to the same ceiling: clipped titles keep it small in the
+// ordinary case, and a byte fit drops candidates from the tail if
+// anything — JSON escaping of a hostile title, a lookup limit raised
+// past the default — still pushes it past archiveTranscriptByteCap. The
+// recovery that closes the refusal is never what gets dropped.
 func ambiguousSessionPrefixError(lookup memory.SessionPrefixLookup, now time.Time) error {
 	candidates := sessionCandidateViews(lookup.Matches, now)
-	listed, err := json.Marshal(candidates)
-	if err != nil {
+	if _, err := json.Marshal(candidates); err != nil {
 		return fmt.Errorf("session_id %q matches %d archived sessions; listing them failed: %w", lookup.Prefix, lookup.Total, err)
 	}
+	return errors.New(string(memory.FitPrefix(len(candidates), archiveTranscriptByteCap, func(k int) []byte {
+		return []byte(sessionPrefixRefusal(lookup, candidates[:k]))
+	})))
+}
+
+// sessionPrefixRefusal renders the refusal around the candidates it is
+// given. The unlisted count covers every match the list leaves out,
+// whether the lookup's limit or the byte cap dropped it, so a shortened
+// list still says how much of the archive it is not showing.
+func sessionPrefixRefusal(lookup memory.SessionPrefixLookup, candidates []sessionCandidateView) string {
+	// Marshalling a prefix of a slice the caller has already marshalled
+	// cannot fail, so there is no second error to report here.
+	listed, _ := json.Marshal(candidates)
 
 	unlisted, unlistedRecovery := "", ""
-	if n := lookup.Unlisted(); n > 0 {
+	if n := lookup.Total - len(candidates); n > 0 {
 		unlisted = fmt.Sprintf(" (%d more not listed)", n)
 		unlistedRecovery = fmt.Sprintf(" The session you mean may be one of the %d not listed: keep the archive_search hit whose session_id begins with %q, listed here or not.", n, lookup.Prefix)
 	}
-	return fmt.Errorf(
+	return fmt.Sprintf(
 		"session_id %q matches %d archived sessions, so no transcript was read. Candidates in id order: %s%s. "+
 			"Retry with the full session_id of the one you mean. Ids minted close together share leading digits, "+
 			"and an import mints a whole batch that way, recording when the import ran rather than when each conversation happened; "+

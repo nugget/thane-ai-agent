@@ -77,12 +77,18 @@ func echoForRefusal(s string) string {
 }
 
 // boundedRefusalList renders items as "\n- item" lines. Once the next
-// line would pass refusalListMaxBytes it stops, says how many items it
-// did not list, and how to see them; the first item is always listed.
-func boundedRefusalList(items []string) string {
+// line would pass maxBytes it stops, says how many items it did not
+// list, and how to see them; the first item is always listed, so a
+// single oversized item is reported rather than silently dropped.
+//
+// Callers pass the budget their own refusal has left after the prose
+// around the list, because what the model must keep — the recovery that
+// closes the refusal — comes after the items and must not be what a long
+// list pushes out.
+func boundedRefusalList(items []string, maxBytes int) string {
 	var b strings.Builder
 	for i, item := range items {
-		if i > 0 && b.Len()+len("\n- ")+len(item) > refusalListMaxBytes {
+		if i > 0 && b.Len()+len("\n- ")+len(item) > maxBytes {
 			fmt.Fprintf(&b, "\n- ...and %d more refused, not listed here; fix or drop the listed ones and retry to see the rest", len(items)-i)
 			break
 		}
@@ -192,7 +198,7 @@ func factRefusals(facts map[string]string) error {
 	if len(refusals) == 0 {
 		return nil
 	}
-	return fmt.Errorf("contact_save refused %d fact(s); nothing was saved:%s", len(refusals), boundedRefusalList(refusals))
+	return fmt.Errorf("contact_save refused %d fact(s); nothing was saved:%s", len(refusals), boundedRefusalList(refusals, refusalListMaxBytes))
 }
 
 // argumentRefusals checks contact_save's scalar and origin arguments
@@ -233,5 +239,5 @@ func argumentRefusals(args SaveContactArgs) error {
 	if len(refusals) == 0 {
 		return nil
 	}
-	return fmt.Errorf("contact_save refused %d argument value(s); nothing was saved:%s", len(refusals), boundedRefusalList(refusals))
+	return fmt.Errorf("contact_save refused %d argument value(s); nothing was saved:%s", len(refusals), boundedRefusalList(refusals, refusalListMaxBytes))
 }

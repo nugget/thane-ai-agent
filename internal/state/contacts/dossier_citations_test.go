@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
@@ -487,6 +488,151 @@ func TestDescribeSessionLookupRendersAges(t *testing.T) {
 			}
 			if stamp := absoluteTimestampPattern.FindString(got); stamp != "" {
 				t.Errorf("description carries the absolute timestamp %q:\n%s", stamp, got)
+			}
+		})
+	}
+}
+
+// longTitledArchiveSessions answers every leading part with the five
+// candidates the archive's own lookup would return, each titled well
+// past the bound: the worst case one dossier can provoke per citation.
+func longTitledArchiveSessions(_ context.Context, prefix string) (ArchiveSessionLookup, error) {
+	lookup := ArchiveSessionLookup{Total: 40}
+	batch := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	for i := range 5 {
+		lookup.Matches = append(lookup.Matches, ArchiveSessionMatch{
+			ID:        fmt.Sprintf("%s-0000-7000-8000-%012d", prefix, i),
+			StartedAt: batch.Add(time.Duration(i) * time.Hour),
+			// Multi-byte, so a byte-index cut would split a character.
+			Title: strings.Repeat("Carol réviewe le journal de la serre 🌱 ", 40),
+		})
+	}
+	return lookup, nil
+}
+
+// TestWriteDossierBoundsRefusalSize pins the whole citation refusal to
+// one tool result. Ten leading parts, each listing five candidates with
+// author-controlled titles, is a dossier's lever on the size of the
+// error it provokes; the bound has to hold while leaving the recovery
+// and an honest account of what was dropped.
+func TestWriteDossierBoundsRefusalSize(t *testing.T) {
+	citations := make([]string, 0, MaxDossierCitationLookups)
+	for i := range MaxDossierCitationLookups {
+		citations = append(citations, fmt.Sprintf("archive:session:0190ab%02x", i))
+	}
+
+	tests := []struct {
+		name        string
+		resolve     ArchiveSessionResolver
+		citations   []string
+		wantDropped bool
+	}{
+		{
+			name:        "ten leading parts with long-titled candidates",
+			resolve:     longTitledArchiveSessions,
+			citations:   citations,
+			wantDropped: true,
+		},
+		{
+			name:      "a small refusal is left alone",
+			resolve:   newFakeArchiveSessions().resolve,
+			citations: citations[:2],
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools, contactID := newCitationTestTools(t)
+			writer := &recordingDossierWriter{}
+			tools.ConfigureDossierDocuments(nil, writer.Write)
+			tools.ConfigureDossierArchiveSessions(tt.resolve)
+
+			_, err := tools.WriteDossier(t.Context(), DossierWriteArgs{
+				ContactID:  contactID,
+				StatusLine: "Current.",
+				Teaser:     "Useful hook.",
+				Digest:     "Enough context to act.",
+				Full:       "Claims. — evidence: " + strings.Join(tt.citations, ", "),
+			})
+			if err == nil {
+				t.Fatal("WriteDossier() accepted leading parts")
+			}
+			got := err.Error()
+			if len(got) > dossierCitationRefusalMaxBytes {
+				t.Errorf("refusal is %d bytes, want at most %d", len(got), dossierCitationRefusalMaxBytes)
+			}
+			if !utf8.ValidString(got) {
+				t.Error("refusal is not valid UTF-8")
+			}
+			// Whatever the bound dropped, the way out is still the last
+			// thing the model reads.
+			if !strings.HasSuffix(got, dossierCitationRecovery) {
+				t.Errorf("refusal does not end with the recovery:\n%s", got)
+			}
+
+			listed := strings.Count(got, " in field full carries only the first ")
+			if !tt.wantDropped {
+				if listed != len(tt.citations) {
+					t.Errorf("refusal lists %d of %d citations, want all of them", listed, len(tt.citations))
+				}
+				if strings.Contains(got, "not listed here") {
+					t.Errorf("refusal claims citations were dropped:\n%s", got)
+				}
+				return
+			}
+			if listed == 0 || listed >= len(tt.citations) {
+				t.Errorf("refusal lists %d of %d citations, want a non-empty shortened list", listed, len(tt.citations))
+			}
+			if want := fmt.Sprintf("...and %d more refused, not listed here", len(tt.citations)-listed); !strings.Contains(got, want) {
+				t.Errorf("refusal does not say it dropped %q:\n%s", want, got)
+			}
+			if !strings.Contains(got, searchCutMarker) {
+				t.Errorf("refusal carries an unclipped title:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestDescribeSessionLookupClipsTitles pins the per-candidate title
+// bound, including the rune boundary the cut lands on.
+func TestDescribeSessionLookupClipsTitles(t *testing.T) {
+	now := time.Date(2025, 6, 3, 14, 0, 0, 0, time.UTC)
+	// Four-byte runes, so a byte-index cut would split one: the cut
+	// falls at byte 234, which is inside the 59th glyph.
+	title := strings.Repeat("🌱", 200)
+
+	for _, tt := range []struct {
+		name   string
+		lookup ArchiveSessionLookup
+	}{
+		{
+			name: "the one match's title",
+			lookup: ArchiveSessionLookup{Total: 1, Matches: []ArchiveSessionMatch{
+				{ID: citeUniqueID, StartedAt: now.Add(-time.Hour), Title: title},
+			}},
+		},
+		{
+			name: "every candidate's title",
+			lookup: ArchiveSessionLookup{Total: 2, Matches: []ArchiveSessionMatch{
+				{ID: citeUniqueID, StartedAt: now.Add(-time.Hour), Title: title},
+				{ID: citeAbsentID, StartedAt: now.Add(-time.Hour), Title: title},
+			}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := describeSessionLookup(citeSharedPrefix, tt.lookup, now, nil)
+			if !utf8.ValidString(got) {
+				t.Fatal("description is not valid UTF-8")
+			}
+			if !strings.Contains(got, searchCutMarker) {
+				t.Errorf("description does not mark the cut:\n%s", got)
+			}
+			if strings.Contains(got, strings.Repeat("🌱", 100)) {
+				t.Errorf("description carries a title past the bound:\n%s", got)
+			}
+			// The kept glyphs are whole: a split four-byte rune would
+			// decode as U+FFFD.
+			if strings.ContainsRune(got, utf8.RuneError) {
+				t.Errorf("description split a multi-byte character:\n%s", got)
 			}
 		})
 	}

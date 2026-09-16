@@ -89,6 +89,14 @@ func (r *citationResolver) describe(ctx context.Context, prefix string) string {
 // measured from, so a delta cannot be read against some other clock.
 const sessionCandidateTimeBasis = "session_started"
 
+// sessionCandidateTitleMaxBytes caps each candidate's title, matching
+// what a session hit carries elsewhere. A title is author-controlled and
+// arbitrarily long, and one refusal can list five candidates for each of
+// [MaxDossierCitationLookups] leading parts, so an unclipped title is a
+// way for a dossier to grow the error it provokes without bound.
+// clipSearchField cuts on a rune boundary and marks the cut.
+const sessionCandidateTitleMaxBytes = 240
+
 // sessionCandidateView is one candidate a shared leading part lists. The
 // key is session_id, the name archive tool results use for the same id.
 // Age is an exact-second delta rather than the stored timestamp: a model
@@ -118,7 +126,8 @@ func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, now time.
 	case 1:
 		match := lookup.Matches[0]
 		return fmt.Sprintf(". Exactly one archived session begins with it: cite %s%s (age %s, time_basis %s, title %q)",
-			archiveSessionCitationPrefix, match.ID, formatCandidateAge(match.StartedAt, now), sessionCandidateTimeBasis, match.Title)
+			archiveSessionCitationPrefix, match.ID, formatCandidateAge(match.StartedAt, now), sessionCandidateTimeBasis,
+			clipSearchField(match.Title, sessionCandidateTitleMaxBytes))
 	}
 
 	candidates := make([]sessionCandidateView, 0, len(lookup.Matches))
@@ -127,7 +136,7 @@ func describeSessionLookup(prefix string, lookup ArchiveSessionLookup, now time.
 			SessionID: match.ID,
 			Age:       formatCandidateAge(match.StartedAt, now),
 			TimeBasis: sessionCandidateTimeBasis,
-			Title:     match.Title,
+			Title:     clipSearchField(match.Title, sessionCandidateTitleMaxBytes),
 		})
 	}
 	listed, err := json.Marshal(candidates)
