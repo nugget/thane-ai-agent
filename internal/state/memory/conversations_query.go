@@ -184,7 +184,9 @@ func (s *SQLiteStore) conversationFilters(q ConversationQuery) convFilters {
 // message content: the active count is a correlated COUNT over the
 // idx_messages_status index, so cost scales with the page size and filter
 // selectivity, not the all-time conversation corpus. [SQLiteStore.GetAllConversations]
-// provides the strict full-history read used for diagnostic snapshots.
+// provides diagnostic snapshots of each conversation's active working window,
+// which may be capped; read or decoding failures return an error instead of a
+// partial snapshot.
 func (s *SQLiteStore) QueryConversations(q ConversationQuery) (*ConversationPage, error) {
 	sort := "updated_at"
 	switch q.Sort {
@@ -303,7 +305,7 @@ func (s *SQLiteStore) QueryConversations(q ConversationQuery) (*ConversationPage
 		var id string
 		// strftime returns NULL for any value it cannot parse; scan into
 		// NullString so this summary listing can show one odd row with a
-		// zero timestamp. Full diagnostic snapshots instead reject invalid
+		// zero timestamp. Diagnostic snapshot reads instead reject invalid
 		// stored timestamps rather than produce incomplete state.
 		var createdNorm, updatedNorm, metadata sql.NullString
 		var msgCount int

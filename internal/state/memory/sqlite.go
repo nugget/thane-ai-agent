@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -308,7 +309,7 @@ func (s *SQLiteStore) GetConversation(ctx context.Context, id string) (*Conversa
 	var createdAt, updatedAt string
 	var metadata sql.NullString
 	if err := row.Scan(&conv.ID, &createdAt, &updatedAt, &metadata); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("query conversation: %w", err)
@@ -391,7 +392,8 @@ func (s *SQLiteStore) Stats() map[string]any {
 	}
 }
 
-// GetAllConversations returns all conversations for diagnostic snapshots.
+// GetAllConversations returns diagnostic snapshots of all conversations and
+// their active working-memory windows, as defined by [SQLiteStore.GetMessages].
 // Query, decoding, or cancellation errors return no partial snapshot.
 func (s *SQLiteStore) GetAllConversations(ctx context.Context) ([]*Conversation, error) {
 	rows, err := s.db.QueryContext(ctx, `
