@@ -17,6 +17,13 @@ import (
 // doc_copy, doc_move_section, and doc_copy_section take it around the
 // whole read-decide-mutate sequence and call the already-locked helpers.
 //
+// The lock is held across the root writer's commit and the index refresh
+// that follows it, so a contended root costs a waiting mutation the whole
+// of both. It is a plain [sync.Mutex] and takes no context, so a caller
+// whose tool call is cancelled while queued waits for its turn anyway.
+// Nothing under it blocks on refreshMu — see [Store.touchLastRefresh] —
+// so the wait is bounded by other mutations, not by a refresh pass.
+//
 // Duplicates collapse, so a transfer whose source and destination share a
 // root takes one lock rather than deadlocking on itself, and roots lock in
 // name order, so two transfers between the same pair of roots cannot each

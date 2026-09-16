@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -94,7 +95,7 @@ type Store struct {
 	rootMutations   map[string]*sync.Mutex
 	logger          *slog.Logger
 	refreshMu       sync.Mutex
-	lastRefresh     time.Time
+	lastRefresh     atomic.Int64
 	refreshInterval time.Duration
 	fullVerifyMu    sync.Mutex
 	lastFullVerify  map[string]time.Time
@@ -210,7 +211,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 	}
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-	if s.refreshInterval > 0 && !s.lastRefresh.IsZero() && time.Since(s.lastRefresh) < s.refreshInterval {
+	if last := s.lastRefreshAt(); s.refreshInterval > 0 && !last.IsZero() && time.Since(last) < s.refreshInterval {
 		return nil
 	}
 	for root, dir := range s.roots {
@@ -229,7 +230,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 			return err
 		}
 	}
-	s.lastRefresh = time.Now()
+	s.touchLastRefresh(time.Now())
 	return nil
 }
 

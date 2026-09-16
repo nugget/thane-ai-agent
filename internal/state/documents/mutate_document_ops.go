@@ -306,10 +306,28 @@ func (s *Store) deleteIndexedDocument(ctx context.Context, root, relPath string)
 	return nil
 }
 
+// touchLastRefresh records that the index is current as of now, so the
+// next [Store.Refresh] inside the refresh interval can skip its walk.
+//
+// It is an atomic store rather than a write under refreshMu because every
+// mutation calls it while holding a root's mutation lock, and Refresh
+// holds refreshMu across the walk of every root — periodically including
+// a full git re-verification pass. Blocking here would hold the root's
+// lock for the length of that pass and queue every other mutation on that
+// root behind it, uninterruptibly. [Store.Refresh] calls this while
+// holding refreshMu, so taking that lock here would also deadlock it.
 func (s *Store) touchLastRefresh(now time.Time) {
-	s.refreshMu.Lock()
-	s.lastRefresh = now
-	s.refreshMu.Unlock()
+	s.lastRefresh.Store(now.UnixNano())
+}
+
+// lastRefreshAt reads the instant [Store.touchLastRefresh] last recorded,
+// or the zero time when nothing has refreshed the index yet.
+func (s *Store) lastRefreshAt() time.Time {
+	nanos := s.lastRefresh.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
 }
 
 func (s *Store) pruneEmptyDocumentDirs(rootPath, dir string) {
