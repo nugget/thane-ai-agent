@@ -173,6 +173,12 @@ var nonToolTokens = map[string]struct{}{
 	// `session_` is a real tool prefix.
 	"session_id": {},
 
+	// Archive candidate field value. A session candidate's `age` is a
+	// delta, and `time_basis` names the instant it is measured from:
+	// `session_started`, the value, not a tool. The matcher flags it for
+	// the same reason as `session_id` — `session_` is a real tool prefix.
+	"session_started": {},
+
 	// Notification record field name (UUID identifying an outstanding
 	// actionable). Appears as a parameter on resolve_actionable and
 	// as an annotation in conversation history. The matcher flags it

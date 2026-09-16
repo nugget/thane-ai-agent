@@ -295,10 +295,11 @@ it as a lookup convenience, never as the session's name: sessions
 imported together share their leading digits, because an imported
 session's id records when it was imported rather than when the
 conversation happened. When a part matches several sessions, the tool
-returns the candidates — full id, start time, title — instead of a
-transcript. Pick one by its full id; when titles and start times
-don't decide it, search `archive_search` for words from the
-conversation itself, since every hit carries the full `session_id`.
+returns the candidates — full id, how long ago each started (`age`,
+measured from `time_basis` `session_started`), title — instead of a
+transcript. Pick one by its full id; when titles and ages don't decide
+it, search `archive_search` for words from the conversation itself,
+since every hit carries the full `session_id`.
 
 So anything durable that names a session — a dossier citation, a
 note, a handoff — carries the full id. A prefix means something only

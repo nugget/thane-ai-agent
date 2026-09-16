@@ -682,18 +682,21 @@ rest before Git changes. A full id written in the older hyphen form
 each rewrite under `canonicalized_citations`. That list is bounded to keep the
 whole result inside 16 KB; a legacy dossier carrying more rewrites than fit
 gets the ones that did plus `canonicalized_citations_unlisted`, the count of
-those applied but not listed. A leading part is never
-completed silently; the refusal looks it up across the whole archive and names
-the full citation when exactly one session begins with it, lists up to five
-candidates with their start times and titles when several do, and says so when
-none does. Every refusal teaches content recovery (search `archive_search` for
-the claim's own words; each hit carries its full `session_id`) and sends
-evidence that cannot be pinned to one session to the dossier's open questions
-rather than into prose about a prefix. The write checks citation shape only,
-never whether a cited session still exists: a `-purge` re-import gives imported
-sessions new ids, and an existence check would then make every dossier citing
-them unwritable. The contacts-root validator stays strict and accepts only the
-canonical colon form.
+those applied but not listed. A leading part is never completed silently; the
+refusal looks it up across the whole archive and names the full citation when
+exactly one session begins with it, lists up to five candidates when several
+do, and says so when none does. Each candidate carries its full `session_id`,
+how long ago it started as an exact-second `age` against `time_basis`
+`session_started` rather than a stored timestamp, and its title clipped to 240
+bytes. The whole refusal is held to 16 KB, and the recovery sentence is kept
+whatever a bound drops. Every refusal teaches content recovery (search
+`archive_search` for the claim's own words; each hit carries its full
+`session_id`) and sends evidence that cannot be pinned to one session to the
+dossier's open questions rather than into prose about a prefix. The write
+checks citation shape only, never whether a cited session still exists: a
+`-purge` re-import gives imported sessions new ids, and an existence check
+would then make every dossier citing them unwritable. The contacts-root
+validator stays strict and accepts only the canonical colon form.
 
 Fresh `thane init` workspaces declare and establish the root with the agent's
 signing key, required signature verification, and this context policy:
