@@ -397,3 +397,35 @@ func TestAmbiguousSessionPrefixErrorStaysWithinTheTranscriptCap(t *testing.T) {
 		}
 	})
 }
+
+// TestArchiveSessionTranscriptBoundsAMalformedArgument pins the branch
+// the ambiguity cap does not cover: a session_id that names no session at
+// all. Both refusals stand in place of the transcript the call asked for,
+// so both answer to the same ceiling — one bounded branch beside an
+// unbounded one is not a bounded tool.
+func TestArchiveSessionTranscriptBoundsAMalformedArgument(t *testing.T) {
+	r := newSessionLookupFixture(t)
+	tool := r.Get("archive_session_transcript")
+
+	for _, arg := range []string{
+		strings.Repeat("z", 200_000),
+		strings.Repeat("a", 200_000),
+		archiveSessionCitationPrefixes[0] + strings.Repeat("なにもない", 40_000),
+	} {
+		got, err := tool.Handler(t.Context(), map[string]any{"session_id": arg})
+		if err == nil {
+			t.Fatalf("archive_session_transcript accepted a %d-byte session_id, returning %d bytes", len(arg), len(got))
+		}
+		refusal := err.Error()
+		if len(refusal) > archiveTranscriptByteCap {
+			t.Errorf("refusal is %d bytes for a %d-byte argument, want at most %d", len(refusal), len(arg), archiveTranscriptByteCap)
+		}
+		if !utf8.ValidString(refusal) {
+			t.Error("refusal is not valid UTF-8")
+		}
+		// The refusal still teaches the shape to retry with.
+		if !strings.Contains(refusal, "8-4-4-4-12") {
+			t.Errorf("refusal does not say what a session id looks like:\n%s", refusal)
+		}
+	}
+}

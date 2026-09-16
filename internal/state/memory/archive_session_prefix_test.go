@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestNormalizeSessionIDPrefix(t *testing.T) {
@@ -284,4 +285,87 @@ func TestResolveSessionPrefixHonoursContext(t *testing.T) {
 			t.Fatalf("lookup listed %d of %d matches, want 1 of 3", len(lookup.Matches), lookup.Total)
 		}
 	})
+}
+
+// TestNormalizeSessionIDPrefixBoundsItsEcho pins that a malformed
+// argument cannot size the error it provokes. The refusal reaches the
+// model as a tool result, and a session_id can arrive as a resolved
+// content reference rather than as something a model typed, so the
+// argument is not bounded by the caller's own output.
+func TestNormalizeSessionIDPrefixBoundsItsEcho(t *testing.T) {
+	const oversized = 200_000
+	tests := []struct {
+		name string
+		raw  string
+		// wantErr is a fragment the clipped error must still carry, so
+		// the clip does not cost the diagnosis.
+		wantErr string
+	}{
+		{
+			name:    "non-hex run",
+			raw:     strings.Repeat("z", oversized),
+			wantErr: "character 'z' at byte 1 is not a hex digit or hyphen",
+		},
+		{
+			name:    "hex run longer than an id",
+			raw:     strings.Repeat("a", oversized),
+			wantErr: "it has 200000 hex digits and a full session id has 32",
+		},
+		{
+			name:    "hyphens only",
+			raw:     strings.Repeat("-", oversized),
+			wantErr: "it has no hex digits",
+		},
+		{
+			name: "non-printable runes, which %q escapes several bytes each",
+			raw:  strings.Repeat("\x00", oversized),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NormalizeSessionIDPrefix(tt.raw)
+			if !errors.Is(err, ErrMalformedSessionID) {
+				t.Fatalf("NormalizeSessionIDPrefix() error = %v, want ErrMalformedSessionID", err)
+			}
+			got := err.Error()
+			// Generous next to the argument, tight next to any tool-result
+			// cap: the echo is clipped, and %q escaping of what survives
+			// is the only other term.
+			if max := 8 * sessionIDEchoMaxBytes; len(got) > max {
+				t.Errorf("error is %d bytes for a %d-byte argument, want at most %d", len(got), len(tt.raw), max)
+			}
+			if !utf8.ValidString(got) {
+				t.Error("error is not valid UTF-8")
+			}
+			if want := fmt.Sprintf("... (%d bytes)", len(tt.raw)); !strings.Contains(got, want) {
+				t.Errorf("error does not report the clipped argument's size %q: %s", want, got)
+			}
+			if tt.wantErr != "" && !strings.Contains(got, tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", got, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestEchoSessionIDCutsOnARuneBoundary pins that the echo never splits a
+// multi-byte character (AGENTS.md), including when the bound falls inside
+// one.
+func TestEchoSessionIDCutsOnARuneBoundary(t *testing.T) {
+	// Four-byte runes: 96 is not a multiple of 4, so a byte-index cut
+	// would land inside the 25th glyph.
+	raw := strings.Repeat("😀", 40)
+	got := echoSessionID(raw)
+	if !utf8.ValidString(got) {
+		t.Fatalf("echoSessionID() is not valid UTF-8: %q", got)
+	}
+	clipped := strings.TrimSuffix(got, fmt.Sprintf("... (%d bytes)", len(raw)))
+	if clipped == got {
+		t.Fatalf("echoSessionID() did not mark the cut: %q", got)
+	}
+	if len(clipped) > sessionIDEchoMaxBytes {
+		t.Errorf("echoSessionID() kept %d bytes, want at most %d", len(clipped), sessionIDEchoMaxBytes)
+	}
+	if !strings.HasPrefix(raw, clipped) {
+		t.Errorf("echoSessionID() kept %q, which is not a prefix of the argument", clipped)
+	}
 }

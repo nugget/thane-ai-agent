@@ -33,6 +33,26 @@ const DefaultSessionPrefixCandidates = 5
 // from a store failure.
 var ErrMalformedSessionID = errors.New("malformed session id")
 
+// sessionIDEchoMaxBytes caps the argument a malformed-id error quotes
+// back. A full id wrapped in a citation prefix is under 60 bytes, so a
+// real mistake is still quoted whole; what this stops is an argument
+// sizing the error it provokes. That is not hypothetical for a tool
+// argument: session_id may arrive as a content reference the tool layer
+// resolves, so what reaches here is bounded by the referenced document,
+// not by what a model typed.
+const sessionIDEchoMaxBytes = 96
+
+// echoSessionID renders raw for a refusal: whole when it is short,
+// otherwise cut on a rune boundary (AGENTS.md) and marked with the
+// original byte count, so an argument that is nothing like a session id
+// stays recognizable without becoming the error.
+func echoSessionID(raw string) string {
+	if len(raw) <= sessionIDEchoMaxBytes {
+		return raw
+	}
+	return fmt.Sprintf("%s... (%d bytes)", clipToRuneBoundary(raw, sessionIDEchoMaxBytes), len(raw))
+}
+
 // sessionPrefixRangeQuery reads the sessions whose ids fall in the
 // half-open range [prefix, next(prefix)). The range is served by the
 // primary-key index on sessions.id, so it costs the same for the
@@ -81,7 +101,10 @@ func (l SessionPrefixLookup) Unlisted() int {
 // lowercased, then hyphens are re-inserted at the canonical 8-4-4-4-12
 // positions, so "0190AAAABBBB", "0190aaaa-bbbb" and "0190aaaa-bbbb-"
 // all normalize to "0190aaaa-bbbb". The error wraps
-// [ErrMalformedSessionID] and names the offending character or count.
+// [ErrMalformedSessionID] and names the offending character or count. It
+// quotes the argument back clipped to [sessionIDEchoMaxBytes], and the
+// byte offset and digit count it reports are of the whole argument, not
+// of the clipped echo.
 func NormalizeSessionIDPrefix(raw string) (string, error) {
 	digits := make([]byte, 0, sessionIDHexDigits)
 	for i, r := range raw {
@@ -93,14 +116,14 @@ func NormalizeSessionIDPrefix(raw string) (string, error) {
 		case 'A' <= r && r <= 'F':
 			digits = append(digits, byte(r-'A'+'a'))
 		default:
-			return "", fmt.Errorf("%w %q: character %q at byte %d is not a hex digit or hyphen", ErrMalformedSessionID, raw, r, i+1)
+			return "", fmt.Errorf("%w %q: character %q at byte %d is not a hex digit or hyphen", ErrMalformedSessionID, echoSessionID(raw), r, i+1)
 		}
 	}
 	switch {
 	case len(digits) == 0:
-		return "", fmt.Errorf("%w %q: it has no hex digits", ErrMalformedSessionID, raw)
+		return "", fmt.Errorf("%w %q: it has no hex digits", ErrMalformedSessionID, echoSessionID(raw))
 	case len(digits) > sessionIDHexDigits:
-		return "", fmt.Errorf("%w %q: it has %d hex digits and a full session id has %d", ErrMalformedSessionID, raw, len(digits), sessionIDHexDigits)
+		return "", fmt.Errorf("%w %q: it has %d hex digits and a full session id has %d", ErrMalformedSessionID, echoSessionID(raw), len(digits), sessionIDHexDigits)
 	}
 
 	var b strings.Builder
