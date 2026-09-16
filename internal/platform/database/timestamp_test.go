@@ -155,3 +155,47 @@ func TestFormatTimestamp_MatchesDriverBinding(t *testing.T) {
 		}
 	}
 }
+
+func TestTimestampKeySQL(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, text := range []string{
+		"2026-09-15T00:00:00Z",
+		"2026-09-14 19:00:00.123456789-05:00",
+		"2026-09-15T05:30:00.123456789+05:30",
+		"2026-09-14 19:00:00.123456789 -0500 CDT",
+		"1969-12-31 23:59:59.999999999",
+		"9999-12-31T23:59:59.999999999Z",
+	} {
+		t.Run(text, func(t *testing.T) {
+			ts, err := ParseTimestamp(text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if err := db.QueryRow(`SELECT thane_timestamp_key(?)`, text).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if want := TimestampKey(ts); got != want {
+				t.Fatalf("key = %q, want %q", got, want)
+			}
+		})
+	}
+	for _, sec := range []int64{-62135596800, -1, 0, 1790000000, 253402300799} {
+		a := time.Unix(sec, 999999998)
+		b := a.Add(time.Nanosecond)
+		c := b.Add(time.Nanosecond)
+		if TimestampKey(a) >= TimestampKey(b) || TimestampKey(b) >= TimestampKey(c) {
+			t.Fatalf("keys not ordered at %v", a)
+		}
+	}
+	for _, invalid := range []any{"garbage", "", nil, 123} {
+		var got string
+		if err := db.QueryRow(`SELECT thane_timestamp_key(?)`, invalid).Scan(&got); err == nil {
+			t.Fatalf("invalid %v succeeded", invalid)
+		}
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
+	"github.com/nugget/thane-ai-agent/internal/server/edge"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/state/companions"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -47,7 +48,6 @@ func (a *App) initServers(s *newState) error {
 		cfg.Listen.Port,
 		a.loop,
 		a.rtr,
-		cfg.Pricing,
 		a.modelRegistry,
 		a.usageStore,
 		a.persistModelRegistryPolicy,
@@ -56,7 +56,16 @@ func (a *App) initServers(s *newState) error {
 		a.deletePersistedModelRegistryResourcePolicy,
 		logger,
 	)
+	// Companion account tokens open the native API only while the
+	// companion surface itself is on; a disabled companion block with
+	// stale tokens left in it must not keep granting API access.
+	companionTokens := map[string]string{}
+	if cfg.Companion.Configured() {
+		companionTokens = cfg.Companion.TokenIndex()
+	}
+	server.SetAuth(cfg.Listen.Auth, companionTokens)
 	server.SetMemoryStore(a.mem)
+	server.SetConversationModelPins(a.loop)
 	server.SetArchiveStore(a.archiveStore)
 	server.UseContactStore(a.contactStore)
 	if a.archivistDefinitionEnabled() {
@@ -127,13 +136,10 @@ func (a *App) initServers(s *newState) error {
 	a.wireProviderBillingAttention()
 
 	// --- Checkpointer ---
-	// Periodically snapshots application state (conversations, facts,
-	// scheduled tasks) to enable crash recovery. Also creates a snapshot
-	// on clean shutdown and before model failover. Shares thane.db.
-	checkpointCfg := checkpoint.Config{
-		PeriodicMessages: 50, // Snapshot every 50 messages
-	}
-	checkpointer, err := checkpoint.NewCheckpointer(a.mem.DB(), checkpointCfg, logger)
+	// Captures diagnostic state on manual requests, clean shutdown, and
+	// model failover. Restart persistence comes from the underlying stores;
+	// these snapshots are incomplete and cannot restore application state.
+	checkpointer, err := checkpoint.NewCheckpointer(a.mem.DB(), logger)
 	if err != nil {
 		return fmt.Errorf("create checkpointer: %w", err)
 	}
@@ -142,7 +148,12 @@ func (a *App) initServers(s *newState) error {
 	// Wire up the data providers that the checkpointer snapshots.
 	checkpointer.SetProviders(
 		func() ([]checkpoint.Conversation, error) {
-			convs := a.mem.GetAllConversations()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			convs, err := a.mem.GetAllConversations(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("read conversations for checkpoint: %w", err)
+			}
 			result := make([]checkpoint.Conversation, len(convs))
 			for i, c := range convs {
 				msgs := make([]checkpoint.SourceMessage, len(c.Messages))
@@ -203,7 +214,7 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.SetCheckpointer(checkpointer)
 	a.loop.SetFailoverHandler(checkpointer)
-	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)
+	logger.Info("checkpoint snapshots enabled", "triggers", []string{"manual", "pre-failover", "shutdown"})
 
 	checkpointer.LogStartupStatus()
 
@@ -228,7 +239,11 @@ func (a *App) initServers(s *newState) error {
 	// Home Assistant's Ollama integration connects here, allowing Thane
 	// to serve as a drop-in replacement for a standalone Ollama instance.
 	if cfg.OllamaAPI.Enabled {
-		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, cfg.OllamaAPI.APIKey, a.loop, logger)
+		allowedSources, err := cfg.OllamaAPI.AllowedPrefixes()
+		if err != nil {
+			return fmt.Errorf("ollama api: %w", err)
+		}
+		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, cfg.OllamaAPI.APIKey, allowedSources, a.loop, logger)
 		a.ollamaServer.SetOWUTracker(owuTracker)
 	}
 
@@ -237,7 +252,11 @@ func (a *App) initServers(s *newState) error {
 	// (/v1/chat/completions, /v1/models) on its own port, keeping the
 	// Thane-native /v1 API on the primary port free of foreign shapes.
 	if cfg.OpenAIAPI.Enabled {
-		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, a.server, logger)
+		allowedSources, err := cfg.OpenAIAPI.AllowedPrefixes()
+		if err != nil {
+			return fmt.Errorf("openai api: %w", err)
+		}
+		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, cfg.OpenAIAPI.APIKey, allowedSources, a.server, logger)
 	}
 
 	// --- Companion app endpoint ---
@@ -391,11 +410,6 @@ func (a *App) initServers(s *newState) error {
 	// apps to be configured — and both degrade to absence when their
 	// source is missing.
 	// Canonical contact-UUID → bound companion accounts, shared by the
-	// channel enrichment join and the fused whereabouts tool. Config
-	// may spell a binding in any form uuid.Parse accepts; lookups
-	// compare against contact.ID.String().
-	accountsByContact := companionAccountsByContact(cfg.Companion)
-
 	if s.contactLookup != nil {
 		if s.personTracker != nil {
 			tracker := s.personTracker
@@ -407,17 +421,9 @@ func (a *App) initServers(s *newState) error {
 				return counterpartyPresenceView(snap, time.Now())
 			}
 		}
-		if len(accountsByContact) > 0 && a.companionDevices != nil {
+		if a.companionDevices != nil {
 			s.contactLookup.devicesFor = func(ctx context.Context, contactID string) []agent.CounterpartyDevice {
-				accounts := accountsByContact[contactID]
-				if len(accounts) == 0 {
-					return nil
-				}
-				owned := make(map[string]bool, len(accounts))
-				for _, acct := range accounts {
-					owned[acct] = true
-				}
-				devices, err := a.companionDevices.List(ctx)
+				devices, err := a.companionDevices.DevicesForContact(ctx, contactID)
 				if err != nil {
 					logger.Warn("counterparty device join failed", "error", err)
 					return nil
@@ -431,9 +437,6 @@ func (a *App) initServers(s *newState) error {
 				now := time.Now()
 				var views []agent.CounterpartyDevice
 				for _, d := range devices {
-					if !owned[d.Account] || d.State != companions.DeviceStateActive {
-						continue
-					}
 					availability := "offline"
 					if live[[2]string{d.Account, d.ClientID}] {
 						availability = "online"
@@ -465,11 +468,6 @@ func (a *App) initServers(s *newState) error {
 		if s.personTracker != nil {
 			deps.Presence = s.personTracker.Snapshot
 		}
-		if len(accountsByContact) > 0 {
-			deps.AccountsForContact = func(contactID string) []string {
-				return accountsByContact[contactID]
-			}
-		}
 		if a.companionRegistry != nil {
 			registry := a.companionRegistry
 			deps.LiveIdentities = func() map[[2]string]bool {
@@ -481,6 +479,7 @@ func (a *App) initServers(s *newState) error {
 			}
 		}
 		a.loop.Tools().EnableCounterpartyTools(deps)
+		a.loop.Tools().EnableCounterpartyPlacesTools(deps)
 	}
 
 	// --- CardDAV server ---
@@ -686,7 +685,7 @@ func (a *App) initServers(s *newState) error {
 	if a.mqttPub != nil && s.personTracker != nil && cfg.Unifi.Configured() {
 		var apSensors []mqtt.DynamicSensor
 		mqttInstanceID := a.mqttInstanceID
-		for _, entityID := range cfg.Person.Track {
+		for _, entityID := range s.personTracker.EntityIDs() {
 			shortName := entityID
 			if idx := strings.IndexByte(entityID, '.'); idx >= 0 {
 				shortName = entityID[idx+1:]
@@ -865,6 +864,12 @@ func (a *App) initServers(s *newState) error {
 				a.subWakeFeeder.Rebuild()
 				a.subWakeFeeder.Sweep(ctx)
 			}
+			// Every definition is registered now: refuse an account
+			// whose review_loop names none, polling or not, then wake
+			// review loops for work queued before a restart.
+			if err := a.startEmailReviewPasses(ctx); err != nil {
+				return err
+			}
 			// Now that the durable definition snapshot is registered,
 			// fail loud on any config-defined MQTT wake subscription
 			// that names a loop nobody actually registered. Runtime
@@ -891,6 +896,49 @@ func (a *App) initServers(s *newState) error {
 	}
 	if mqttConnectWorker != nil {
 		a.deferWorker("mqtt-connect", mqttConnectWorker)
+	}
+
+	// --- HTTPS front door ---
+	// Optional TLS listener that holds a certificate per configured
+	// hostname and routes each to one of the surfaces by name, so a
+	// hostname reaches exactly the routes, guards, and logging its
+	// plaintext twin has. Handler() freezes each surface's route table
+	// on first call, so this must run after every route-affecting
+	// setter above (companion handlers, identity evidence, the web
+	// dashboard); it is the last thing initServers does for that reason.
+	// A supervisor may have pre-bound the privileged ports and handed
+	// them down (systemd socket activation, or the macOS companion's port
+	// broker). Adopt them before the front door binds anything, and if the
+	// front door is off, release them rather than hold ports nobody serves.
+	inherited, err := edge.InheritListeners(logger)
+	if err != nil {
+		return fmt.Errorf("inherited listeners: %w", err)
+	}
+	if !cfg.TLS.Enabled && len(inherited) > 0 {
+		for name, l := range inherited {
+			logger.Warn("supervisor handed down a listener but tls is not enabled; releasing it", "name", name, "address", l.Addr().String())
+			_ = l.Close()
+		}
+	}
+	if cfg.TLS.Enabled {
+		surfaces := edge.Surfaces{"native": a.server.Handler()}
+		if a.ollamaServer != nil {
+			surfaces["ollama"] = a.ollamaServer.Handler()
+		}
+		if a.openaiServer != nil {
+			surfaces["openai"] = a.openaiServer.Handler()
+		}
+		edgeServer, err := edge.New(edge.Options{
+			Config:    cfg.TLS,
+			Surfaces:  surfaces,
+			CoreRoot:  cfg.CoreRoot(),
+			Logger:    logger,
+			Listeners: inherited,
+		})
+		if err != nil {
+			return fmt.Errorf("https front door: %w", err)
+		}
+		a.edgeServer = edgeServer
 	}
 
 	return nil
@@ -929,19 +977,28 @@ func counterpartyPresenceView(snap contacts.PersonSnapshot, now time.Time) *agen
 // companion source is configured. Provider entries may remain in disabled
 // config, but they must not keep persisted companion data reachable through
 // contact joins after the operator disables the integration.
-func companionAccountsByContact(cfg config.CompanionConfig) map[string][]string {
+// companionContactForAccount resolves an account to the canonical
+// contact UUID the operator declared for it, or "" when the account is
+// unclaimed or the binding is unparseable.
+//
+// Config may spell a binding in any form uuid.Parse accepts; the value
+// this returns is canonical, because it is written to the device row and
+// compared against contact.ID.String().
+func companionContactForAccount(cfg config.CompanionConfig) func(string) string {
 	if !cfg.Configured() {
 		return nil
 	}
-	accountsByContact := make(map[string][]string)
+	contactByAccount := make(map[string]string, len(cfg.Providers))
 	for account, provider := range cfg.Providers {
 		if provider.Contact == "" {
 			continue
 		}
 		if id, err := uuid.Parse(provider.Contact); err == nil {
-			canonicalID := id.String()
-			accountsByContact[canonicalID] = append(accountsByContact[canonicalID], account)
+			contactByAccount[account] = id.String()
 		}
 	}
-	return accountsByContact
+	if len(contactByAccount) == 0 {
+		return nil
+	}
+	return func(account string) string { return contactByAccount[account] }
 }

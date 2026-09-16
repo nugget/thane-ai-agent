@@ -264,6 +264,21 @@ func (b *Backend) addressBook() carddav.AddressBook {
 // AddressObject.
 func (b *Backend) contactToObject(c *contacts.Contact) (*carddav.AddressObject, error) {
 	card := contacts.ContactToCard(c)
+	// ContactToCard withholds rows whose names are vCard syntax or a
+	// codec-owned header, whether an older writer stored one or the
+	// operator's own PUT carried one. Say so, because the operator's next
+	// PUT of this card removes it.
+	var withheld []string
+	for _, p := range c.Properties {
+		if !contacts.EmittablePropertyName(p.Property) {
+			withheld = append(withheld, p.Property)
+		}
+	}
+	if len(withheld) > 0 {
+		b.logger.Warn("contact properties withheld from CardDAV",
+			"contact_id", c.ID.String(),
+			"properties", withheld)
+	}
 	// Emit the counterparty binding so the operator sees and can edit
 	// it in their contacts client; round-trips preserve it. A read
 	// failure fails the whole conversion: emitting a card WITHOUT the

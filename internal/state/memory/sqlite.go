@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -181,7 +183,8 @@ func (s *SQLiteStore) addMessage(conversationID, role, content, origin string, m
 
 // GetMessages retrieves the working-memory window for a conversation:
 // the newest maxMessages active rows plus every active compaction
-// summary, returned in chronological (ASC) order.
+// summary, returned in chronological (ASC) order. Query, row-decoding,
+// iteration, and cancellation errors return no partial history.
 //
 // The window is deliberately anchored to the NEWEST rows. A naive
 // `ORDER BY timestamp ASC LIMIT maxMessages` returns the OLDEST rows,
@@ -197,8 +200,8 @@ func (s *SQLiteStore) addMessage(conversationID, role, content, origin string, m
 // outside a naive newest-N window; the UNION arm force-includes them so
 // the model never loses its compacted past. UNION (set semantics) also
 // dedupes a summary that happens to land inside the newest-N window.
-func (s *SQLiteStore) GetMessages(conversationID string) []Message {
-	rows, err := s.db.Query(`
+func (s *SQLiteStore) GetMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		WITH recent AS (
 			SELECT id, role, content, timestamp, COALESCE(mid_turn, 0) AS mid_turn, COALESCE(origin, '') AS origin
 			FROM messages
@@ -215,19 +218,16 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 		ORDER BY timestamp ASC, id ASC
 	`, conversationID, s.maxMessages, conversationID, CompactionSummaryPrefix)
 	if err != nil {
-		return []Message{}
+		return nil, fmt.Errorf("query active messages: %w", err)
 	}
 	defer rows.Close()
 
-	var messages []Message
-	for rows.Next() {
-		var m Message
-		var midTurn int
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &midTurn, &m.Origin); err != nil {
-			continue
-		}
-		m.MidTurn = midTurn != 0
-		messages = append(messages, m)
+	messages, err := scanWorkingMessages(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close active messages: %w", err)
 	}
 
 	// Observability: a read may have clipped older active rows. Clipping is
@@ -239,16 +239,20 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	// history retrieval. A silent clip is exactly what hid the amnesia bug.
 	if len(messages) >= s.maxMessages {
 		var activeTotal int
-		_ = s.db.QueryRow(`
+		if err := s.db.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM messages
 			WHERE conversation_id = ? AND status = 'active'
-		`, conversationID).Scan(&activeTotal)
-		if activeTotal > len(messages) {
+		`, conversationID).Scan(&activeTotal); err != nil {
+			s.logger.Debug("could not count clipped active messages", "conversation_id", conversationID, "error", err)
+		} else if activeTotal > len(messages) {
 			s.maybeWarnClip(conversationID, activeTotal, len(messages))
 		}
 	}
 
-	return messages
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // maybeWarnClip emits a rate-limited warning when GetMessages returned
@@ -280,45 +284,58 @@ func (s *SQLiteStore) maybeWarnClip(conversationID string, activeTotal, returned
 // a conversation — the reducible set compaction can actually shrink
 // (GetMessagesForCompaction filters role != 'system' too). Feeds the
 // count-aware compaction trigger so a summary-only overflow can't spin
-// an unsatisfiable compaction loop.
-func (s *SQLiteStore) ActiveMessageCount(conversationID string) int {
+// an unsatisfiable compaction loop. A failed or canceled read returns an
+// error rather than a zero count.
+func (s *SQLiteStore) ActiveMessageCount(ctx context.Context, conversationID string) (int, error) {
 	var count int
-	_ = s.db.QueryRow(`
+	if err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM messages
 		WHERE conversation_id = ? AND status = 'active' AND role != 'system'
-	`, conversationID).Scan(&count)
-	return count
+	`, conversationID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count active messages: %w", err)
+	}
+	return count, nil
 }
 
-// GetConversation retrieves a conversation by ID.
-func (s *SQLiteStore) GetConversation(id string) *Conversation {
-	row := s.db.QueryRow(`
+// GetConversation retrieves a conversation with active history. Absence returns
+// nil without an error; failed or canceled reads return no partial conversation.
+func (s *SQLiteStore) GetConversation(ctx context.Context, id string) (*Conversation, error) {
+	row := s.db.QueryRowContext(ctx, `
 		SELECT id, created_at, updated_at, metadata FROM conversations WHERE id = ?
 	`, id)
 
 	var conv Conversation
+	var createdAt, updatedAt string
 	var metadata sql.NullString
-	if err := row.Scan(&conv.ID, &conv.CreatedAt, &conv.UpdatedAt, &metadata); err != nil {
-		return nil
+	if err := row.Scan(&conv.ID, &createdAt, &updatedAt, &metadata); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query conversation: %w", err)
+	}
+	var err error
+	if conv.CreatedAt, err = database.ParseTimestamp(createdAt); err != nil {
+		return nil, fmt.Errorf("parse conversation created_at: %w", err)
+	}
+	if conv.UpdatedAt, err = database.ParseTimestamp(updatedAt); err != nil {
+		return nil, fmt.Errorf("parse conversation updated_at: %w", err)
 	}
 	if metadata.Valid {
-		meta, err := parseConversationMetadata(metadata.String)
-		if err != nil {
-			s.logger.Warn("conversation metadata invalid",
-				"conversation_id", id,
-				"error", err,
-			)
-		} else {
-			conv.Metadata = meta
+		if conv.Metadata, err = parseConversationMetadata(metadata.String); err != nil {
+			return nil, fmt.Errorf("parse conversation metadata: %w", err)
 		}
 	}
-
-	conv.Messages = s.GetMessages(id)
-	return &conv
+	conv.Messages, err = s.GetMessages(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("read conversation history: %w", err)
+	}
+	return &conv, nil
 }
 
-// Clear removes a conversation and its messages.
+// Clear empties the active conversation window while preserving its durable
+// transcript and conversation metadata. Session-aware callers should use
+// [SessionLifecycle] so the boundary and row ownership commit together.
 func (s *SQLiteStore) Clear(conversationID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -326,12 +343,15 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Exec(`DELETE FROM messages WHERE conversation_id = ?`, conversationID)
+	now := time.Now().UTC()
+	_, err = tx.Exec(`UPDATE messages SET status = 'archived', archived_at = ?, archive_reason = 'clear'
+		WHERE conversation_id = ? AND status IN ('active', 'compacted')`, now, conversationID)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec(`DELETE FROM conversations WHERE id = ?`, conversationID)
+	_, err = tx.Exec(`UPDATE tool_calls SET status = 'archived', archived_at = ?
+		WHERE conversation_id = ? AND status = 'active'`, now, conversationID)
 	if err != nil {
 		return err
 	}
@@ -344,11 +364,15 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 	// fresh unique ID per invocation and Clear on finish, so without this
 	// the map would grow one stale entry per overflowing delegate for the
 	// life of the process.
+	s.forgetClipWarning(conversationID)
+
+	return nil
+}
+
+func (s *SQLiteStore) forgetClipWarning(conversationID string) {
 	s.clipWarnMu.Lock()
 	delete(s.clipWarnAt, conversationID)
 	s.clipWarnMu.Unlock()
-
-	return nil
 }
 
 // Stats returns memory statistics.
@@ -368,54 +392,55 @@ func (s *SQLiteStore) Stats() map[string]any {
 	}
 }
 
-// GetAllConversations returns all conversations for checkpointing.
-func (s *SQLiteStore) GetAllConversations() []*Conversation {
-	rows, err := s.db.Query(`
+// GetAllConversations returns diagnostic snapshots of all conversations and
+// their active working-memory windows, as defined by [SQLiteStore.GetMessages].
+// Query, decoding, or cancellation errors return no partial snapshot.
+func (s *SQLiteStore) GetAllConversations(ctx context.Context) ([]*Conversation, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, created_at, updated_at, metadata FROM conversations ORDER BY updated_at DESC
 	`)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("query snapshot conversations: %w", err)
 	}
 	defer rows.Close()
 
 	var convs []*Conversation
 	for rows.Next() {
-		var id, createdAt, updatedAt string
+		var conv Conversation
+		var createdAt, updatedAt string
 		var metadata sql.NullString
-		if err := rows.Scan(&id, &createdAt, &updatedAt, &metadata); err != nil {
-			continue
-		}
-
-		conv := &Conversation{
-			ID:       id,
-			Messages: s.GetMessages(id),
+		if err := rows.Scan(&conv.ID, &createdAt, &updatedAt, &metadata); err != nil {
+			return nil, fmt.Errorf("scan snapshot conversation: %w", err)
 		}
 		if metadata.Valid {
-			if meta, err := parseConversationMetadata(metadata.String); err != nil {
-				s.logger.Warn("conversation metadata invalid during snapshot",
-					"conversation_id", id,
-					"error", err,
-				)
-			} else {
-				conv.Metadata = meta
+			conv.Metadata, err = parseConversationMetadata(metadata.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse snapshot conversation metadata: %w", err)
 			}
 		}
-		if t, err := database.ParseTimestamp(createdAt); err != nil {
-			s.logger.Warn("conversation created_at invalid during snapshot",
-				"conversation_id", id, "created_at", createdAt, "error", err)
-		} else {
-			conv.CreatedAt = t
+		if conv.CreatedAt, err = database.ParseTimestamp(createdAt); err != nil {
+			return nil, fmt.Errorf("parse snapshot conversation created_at: %w", err)
 		}
-		if t, err := database.ParseTimestamp(updatedAt); err != nil {
-			s.logger.Warn("conversation updated_at invalid during snapshot",
-				"conversation_id", id, "updated_at", updatedAt, "error", err)
-		} else {
-			conv.UpdatedAt = t
+		if conv.UpdatedAt, err = database.ParseTimestamp(updatedAt); err != nil {
+			return nil, fmt.Errorf("parse snapshot conversation updated_at: %w", err)
 		}
-
-		convs = append(convs, conv)
+		convs = append(convs, &conv)
 	}
-	return convs
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read snapshot conversations: %w", err)
+	}
+	// Do not hold the metadata query's connection while loading history;
+	// callers may use a single-connection database.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close snapshot conversations: %w", err)
+	}
+	for _, conv := range convs {
+		conv.Messages, err = s.GetMessages(ctx, conv.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read snapshot conversation %s: %w", conv.ID, err)
+		}
+	}
+	return convs, nil
 }
 
 // PutConversationMetadata replaces the typed metadata for a
@@ -444,7 +469,11 @@ func (s *SQLiteStore) PutConversationMetadata(conversationID string, metadata *C
 // portion of a conversation's typed metadata.
 func (s *SQLiteStore) BindConversationChannel(conversationID string, binding *ChannelBinding) error {
 	var metadata *ConversationMetadata
-	if conv := s.GetConversation(conversationID); conv != nil && conv.Metadata != nil {
+	conv, err := s.GetConversation(context.Background(), conversationID)
+	if err != nil {
+		return fmt.Errorf("read conversation before binding channel: %w", err)
+	}
+	if conv != nil && conv.Metadata != nil {
 		metadata = conv.Metadata.Clone()
 	}
 	if metadata == nil {
@@ -456,15 +485,31 @@ func (s *SQLiteStore) BindConversationChannel(conversationID string, binding *Ch
 
 // GetAllMessages retrieves ALL messages for a conversation, including compacted ones.
 // Includes tool call data for full-fidelity archiving — never lose primary sources.
-func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
-	rows, err := s.db.Query(`
+// Failed or canceled reads return an error without partial history.
+func (s *SQLiteStore) GetAllMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	return s.readLifecycleMessages(ctx, conversationID, false)
+}
+
+// CurrentSessionMessages returns the current non-archived rows, including
+// compacted source rows, in stable chronological order. Archived history is
+// excluded so a retroactive split cannot reach into a previous session.
+func (s *SQLiteStore) CurrentSessionMessages(conversationID string) ([]Message, error) {
+	return s.readLifecycleMessages(context.Background(), conversationID, true)
+}
+
+func (s *SQLiteStore) readLifecycleMessages(ctx context.Context, conversationID string, currentOnly bool) ([]Message, error) {
+	condition := ""
+	if currentOnly {
+		condition = " AND status IN ('active', 'compacted')"
+	}
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, role, content, timestamp, tool_calls, tool_call_id, COALESCE(mid_turn, 0), COALESCE(origin, '')
 		FROM messages
-		WHERE conversation_id = ?
-		ORDER BY timestamp ASC
+		WHERE conversation_id = ?`+condition+`
+		ORDER BY timestamp ASC, id ASC
 	`, conversationID)
 	if err != nil {
-		return []Message{}
+		return nil, fmt.Errorf("query conversation messages: %w", err)
 	}
 	defer rows.Close()
 
@@ -473,8 +518,12 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 		var m Message
 		var toolCalls, toolCallID sql.NullString
 		var midTurn int
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID, &midTurn, &m.Origin); err != nil {
-			continue
+		var timestamp string
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &timestamp, &toolCalls, &toolCallID, &midTurn, &m.Origin); err != nil {
+			return nil, fmt.Errorf("scan conversation message: %w", err)
+		}
+		if m.Timestamp, err = database.ParseTimestamp(timestamp); err != nil {
+			return nil, fmt.Errorf("parse conversation message timestamp: %w", err)
 		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
@@ -486,95 +535,101 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 		messages = append(messages, m)
 	}
 
-	return messages
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read conversation messages: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
-// GetTokenCount returns the total token count for a conversation.
-func (s *SQLiteStore) GetTokenCount(conversationID string) int {
+// GetTokenCount returns the active conversation's token count. An unreadable
+// count returns an error rather than an apparently empty conversation.
+func (s *SQLiteStore) GetTokenCount(ctx context.Context, conversationID string) (int, error) {
 	var count int
-	_ = s.db.QueryRow(`
+	if err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(token_count), 0)
 		FROM messages
 		WHERE conversation_id = ? AND status = 'active'
-	`, conversationID).Scan(&count)
-	return count
-}
-
-// NeedsCompaction checks if a conversation needs compaction.
-func (s *SQLiteStore) NeedsCompaction(conversationID string, maxTokens int) bool {
-	return s.GetTokenCount(conversationID) > int(float64(maxTokens)*0.7)
-}
-
-// GetMessagesForCompaction retrieves messages that should be compacted.
-// Keeps the most recent 'keep' messages.
-func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) []Message {
-	// Get total count
-	var total int
-	_ = s.db.QueryRow(`
-		SELECT COUNT(*) FROM messages
-		WHERE conversation_id = ? AND status = 'active' AND role != 'system'
-	`, conversationID).Scan(&total)
-
-	if total <= keep {
-		return nil // Nothing to compact
+	`, conversationID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count active conversation tokens: %w", err)
 	}
+	return count, nil
+}
 
-	// Get older messages (everything except the last 'keep')
-	offset := 0
-	limit := total - keep
-
-	rows, err := s.db.Query(`
-		SELECT id, role, content, timestamp
+// GetMessagesForCompaction returns older active non-system messages, keeping
+// the most recent keep messages. Errors return no partial selection.
+func (s *SQLiteStore) GetMessagesForCompaction(ctx context.Context, conversationID string, keep int) ([]Message, error) {
+	total, err := s.ActiveMessageCount(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if total <= keep {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, role, content, timestamp, COALESCE(mid_turn, 0), COALESCE(origin, '')
 		FROM messages
 		WHERE conversation_id = ? AND status = 'active' AND role != 'system'
-		ORDER BY timestamp ASC
-		LIMIT ? OFFSET ?
-	`, conversationID, limit, offset)
+		ORDER BY timestamp ASC, id ASC LIMIT ?
+	`, conversationID, total-keep)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("query compaction messages: %w", err)
 	}
 	defer rows.Close()
-
-	var messages []Message
-	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
-			continue
-		}
-		messages = append(messages, m)
-	}
-
-	return messages
+	return scanWorkingMessages(ctx, rows)
 }
 
-// GetActiveCompactionSummaries returns the active compaction-summary
-// system messages for a conversation, oldest first. The prefix match
-// distinguishes summaries from other system rows (session handoffs,
-// notices) without a schema change. A query error is surfaced so the
-// caller can abort rather than mistake a transient failure for "no
-// prior summaries" and stack a fresh one.
-func (s *SQLiteStore) GetActiveCompactionSummaries(conversationID string) ([]Message, error) {
-	rows, err := s.db.Query(`
-		SELECT id, role, content, timestamp
+// GetActiveCompactionSummaries returns active compaction-summary system
+// messages, oldest first. Query, decoding, and cancellation errors return no
+// partial result, so a failed read cannot masquerade as no prior summaries.
+func (s *SQLiteStore) GetActiveCompactionSummaries(ctx context.Context, conversationID string) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, role, content, timestamp, COALESCE(mid_turn, 0), COALESCE(origin, '')
 		FROM messages
 		WHERE conversation_id = ? AND status = 'active' AND role = 'system'
 		  AND content LIKE ? || '%'
-		ORDER BY timestamp ASC
+		ORDER BY timestamp ASC, id ASC
 	`, conversationID, CompactionSummaryPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("query compaction summaries: %w", err)
 	}
 	defer rows.Close()
+	return scanWorkingMessages(ctx, rows)
+}
 
+// Required prompt and compaction reads share one strict scanner so a damaged
+// row or interrupted iteration cannot silently remove part of the history.
+func scanWorkingMessages(ctx context.Context, rows *sql.Rows) ([]Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var messages []Message
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
-			return nil, fmt.Errorf("scan compaction summary: %w", err)
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		var m Message
+		var timestamp string
+		var midTurn int
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &timestamp, &midTurn, &m.Origin); err != nil {
+			return nil, fmt.Errorf("scan active message: %w", err)
+		}
+		var err error
+		if m.Timestamp, err = database.ParseTimestamp(timestamp); err != nil {
+			return nil, fmt.Errorf("parse active message timestamp: %w", err)
+		}
+		m.MidTurn = midTurn != 0
 		messages = append(messages, m)
 	}
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read active messages: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // ApplyCompaction atomically marks the given messages compacted and
@@ -582,14 +637,15 @@ func (s *SQLiteStore) GetActiveCompactionSummaries(conversationID string) ([]Mes
 // Splitting these into two writes risks losing active history if the
 // insert fails after the mark (and, with summary folding, could drop
 // the conversation's only summary) — so they commit or roll back
-// together.
-func (s *SQLiteStore) ApplyCompaction(conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error {
+// together. Caller cancellation aborts the transaction rather than applying a
+// summary produced after its request ended.
+func (s *SQLiteStore) ApplyCompaction(ctx context.Context, conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error {
 	msgID, err := uuid.NewV7()
 	if err != nil {
 		return fmt.Errorf("generate summary ID: %w", err)
 	}
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin compaction tx: %w", err)
 	}
@@ -601,16 +657,24 @@ func (s *SQLiteStore) ApplyCompaction(conversationID string, compactedIDs []stri
 		for _, id := range compactedIDs {
 			args = append(args, id)
 		}
-		if _, err := tx.Exec(fmt.Sprintf(`
+		result, err := tx.ExecContext(ctx, fmt.Sprintf(`
 			UPDATE messages
 			SET status = 'compacted'
-			WHERE conversation_id = ? AND id IN (%s)
-		`, database.Placeholders(len(compactedIDs))), args...); err != nil {
+			WHERE conversation_id = ? AND status = 'active' AND id IN (%s)
+		`, database.Placeholders(len(compactedIDs))), args...)
+		if err != nil {
 			return fmt.Errorf("mark compacted: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count compacted messages: %w", err)
+		}
+		if affected != int64(len(compactedIDs)) {
+			return fmt.Errorf("conversation changed during compaction; preserved the current session without applying a stale summary")
 		}
 	}
 
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status, origin)
 		VALUES (?, ?, 'system', ?, ?, ?, 'active', ?)
 	`, msgID.String(), conversationID, summary, summaryTS, llm.EstimateTokens(summary), OriginInternal); err != nil {
@@ -655,12 +719,41 @@ type ToolCall struct {
 // RecordToolCall records a tool call execution.
 // messageID can be empty - it will be stored as NULL.
 func (s *SQLiteStore) RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error {
+	return s.RecordSessionToolCall(conversationID, "", messageID, toolCallID, toolName, arguments)
+}
+
+// RecordSessionToolCall records a tool call against the session that produced
+// its model iteration. A later call in the same response can arrive after an
+// earlier call closed that session; it is then inserted as archived so it
+// cannot leak into the successor's active window. A non-empty sessionID must
+// belong to conversationID. Empty sessionID retains deferred session claiming.
+func (s *SQLiteStore) RecordSessionToolCall(conversationID, sessionID, messageID, toolCallID, toolName, arguments string) error {
 	now := time.Now()
 
 	var msgID any
 	if messageID != "" {
 		msgID = messageID
 	} // else nil (NULL)
+	if sessionID != "" {
+		result, err := s.db.Exec(`INSERT INTO tool_calls
+			(id, message_id, conversation_id, session_id, tool_name, arguments, started_at, status, archived_at)
+			SELECT ?, ?, ?, id, ?, ?, ?,
+				CASE WHEN ended_at IS NULL THEN 'active' ELSE 'archived' END,
+				CASE WHEN ended_at IS NULL THEN NULL ELSE ? END
+			FROM sessions WHERE id = ? AND conversation_id = ?`,
+			toolCallID, msgID, conversationID, toolName, arguments, now, now, sessionID, conversationID)
+		if err != nil {
+			return fmt.Errorf("record session tool call: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count recorded session tool call: %w", err)
+		}
+		if affected != 1 {
+			return fmt.Errorf("tool call session %s does not belong to conversation %s", sessionID, conversationID)
+		}
+		return nil
+	}
 
 	_, err := s.db.Exec(`
 		INSERT INTO tool_calls (id, message_id, conversation_id, tool_name, arguments, started_at)
@@ -831,41 +924,6 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 	}
 
 	return calls
-}
-
-// ArchiveToolCalls updates tool calls in the unified table to archived status.
-// This replaces the cross-DB copy that the legacy archive flow used.
-func (s *SQLiteStore) ArchiveToolCalls(conversationID, sessionID string) (int64, error) {
-	now := time.Now().UTC()
-	result, err := s.db.Exec(`
-		UPDATE tool_calls
-		SET session_id = COALESCE(session_id, ?),
-		    status = 'archived',
-		    archived_at = ?
-		WHERE conversation_id = ? AND status = 'active'
-	`, sessionID, now.Format(time.RFC3339Nano), conversationID)
-	if err != nil {
-		return 0, fmt.Errorf("archive tool calls: %w", err)
-	}
-	return result.RowsAffected()
-}
-
-// ArchiveMessages updates messages in the unified table to archived status.
-// This replaces the cross-DB copy that the legacy archive flow used.
-func (s *SQLiteStore) ArchiveMessages(conversationID, sessionID, reason string) (int64, error) {
-	now := time.Now().UTC()
-	result, err := s.db.Exec(`
-		UPDATE messages
-		SET session_id = COALESCE(session_id, ?),
-		    status = 'archived',
-		    archived_at = ?,
-		    archive_reason = ?
-		WHERE conversation_id = ? AND status IN ('active', 'compacted')
-	`, sessionID, now.Format(time.RFC3339Nano), reason, conversationID)
-	if err != nil {
-		return 0, fmt.Errorf("archive messages: %w", err)
-	}
-	return result.RowsAffected()
 }
 
 // ToolCallStats returns statistics about tool usage.

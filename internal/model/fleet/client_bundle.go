@@ -69,6 +69,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		case "lmstudio":
 			lc := modelproviders.NewLMStudioClientWithTTL(res.URL, serverAPIKey(cfg, res.ID), res.ID, logger.With("resource", res.ID), res.IdleTTLSeconds)
 			applyStreamIdleTimeout(lc.OpenAICompatClient, cfg, res.ID)
+			applyChatTemplateKwargs(lc.OpenAICompatClient, cfg, res.ID)
 			lmstudioClients[res.ID] = lc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          lc.Ping,
@@ -83,6 +84,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			// compatibility risk.
 			oc := modelproviders.NewOpenAICompatClient(res.URL, serverAPIKey(cfg, res.ID), "openai_compat", res.ID, logger.With("resource", res.ID), 0)
 			applyStreamIdleTimeout(oc, cfg, res.ID)
+			applyChatTemplateKwargs(oc, cfg, res.ID)
 			openAICompatClients[res.ID] = oc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          oc.Ping,
@@ -217,4 +219,19 @@ func applyStreamIdleTimeout(c *modelproviders.OpenAICompatClient, cfg *config.Co
 		return
 	}
 	c.SetStreamIdleTimeout(res.StreamIdleTimeout)
+}
+
+// applyChatTemplateKwargs forwards the resource's configured
+// chat_template_kwargs onto its client. Resources that configured none
+// are left alone, which keeps the field off the wire for every server
+// that has no opinion about it.
+func applyChatTemplateKwargs(c *modelproviders.OpenAICompatClient, cfg *config.Config, resourceID string) {
+	if c == nil || cfg == nil {
+		return
+	}
+	res, ok := cfg.Models.Resources[resourceID]
+	if !ok || len(res.ChatTemplateKwargs) == 0 {
+		return
+	}
+	c.SetChatTemplateKwargs(res.ChatTemplateKwargs)
 }

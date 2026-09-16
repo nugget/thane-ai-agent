@@ -89,6 +89,7 @@ func (r *Registry) composeArchiveSearch() {
 		return
 	}
 	r.registerArchiveSearch(memory.NewMemorySearch(r.archiveStore, r.workingMemoryStore, nil))
+	r.registerKnowledgeSearch()
 }
 
 func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
@@ -118,7 +119,7 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 				},
 				"conversation_id": map[string]any{
 					"type":        "string",
-					"description": "Optional: scope the raw-message search to one conversation. Distilled surfaces are unscoped. Omit to search across everything.",
+					"description": "Optional: scope messages, session summaries, and working memory to one conversation. Omit to search across conversations.",
 				},
 				"min_time": map[string]any{
 					"type": "string",
@@ -144,7 +145,7 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			},
 			"required": []string{"query"},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			query, _ := args["query"].(string)
 			if query == "" {
 				return "", fmt.Errorf("query is required")
@@ -182,7 +183,7 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 				opts.To = t
 			}
 
-			bundle, err := searcher.Search(opts)
+			bundle, err := searcher.SearchContext(ctx, opts)
 			if err != nil {
 				return "", fmt.Errorf("archive search: %w", err)
 			}
@@ -203,11 +204,12 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			//      pass at the end.
 			render := func(msgs, sess, wm int) []byte {
 				clipped := &memory.SearchBundle{
-					Messages:      bundle.Messages[:msgs],
-					Sessions:      bundle.Sessions[:sess],
-					WorkingMemory: bundle.WorkingMemory[:wm],
-					Truncated:     bundle.Truncated,
-					TotalMessages: bundle.TotalMessages,
+					Messages:            bundle.Messages[:msgs],
+					Sessions:            bundle.Sessions[:sess],
+					WorkingMemory:       bundle.WorkingMemory[:wm],
+					Truncated:           bundle.Truncated,
+					TotalMessages:       bundle.TotalMessages,
+					UnavailableSurfaces: bundle.UnavailableSurfaces,
 				}
 				truncated := bundle.Truncated ||
 					msgs < len(bundle.Messages) ||
@@ -361,7 +363,8 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 			"min_time / max_time accept either RFC3339 absolute timestamps or signed " +
 			"deltas (\"-1800s\" = 30 minutes ago). min_messages acts as a floor: set it " +
 			"to 50 and you'll get at least 50 of the most recent messages even on a quiet " +
-			"conversation, regardless of min_time. Filter to one conversation_id or omit " +
+			"conversation, regardless of min_time, subject to max_messages and the output size cap. " +
+			"Filter to one conversation_id or omit " +
 			"it for everything. Crosses session boundaries — sessions are an internal " +
 			"abstraction here; this tool just gives you the messages. Returns JSON with " +
 			"delta-second timestamps and originating session IDs.",
@@ -389,7 +392,8 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				},
 				"max_messages": map[string]any{
 					"type":        "number",
-					"description": "Cap on results. Default: 200.",
+					"description": "Cap on results. Default: 200; maximum: 1000. The floor cannot exceed this cap.",
+					"maximum":     memory.MaxArchiveRangeMessages,
 				},
 				"exclude_session_id": map[string]any{
 					"type": "string",
@@ -398,7 +402,7 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				},
 			},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			now := time.Now()
 			opts := memory.RangeOptions{}
 
@@ -413,23 +417,23 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 				if err != nil {
 					return "", fmt.Errorf("min_time: %w", err)
 				}
-				opts.From = t
+				opts.From = &t
 			}
 			if v, ok := args["max_time"].(string); ok && v != "" {
 				t, err := promptfmt.ParseTimeOrDelta(v, now)
 				if err != nil {
 					return "", fmt.Errorf("max_time: %w", err)
 				}
-				opts.To = t
+				opts.To = &t
 			}
 			if n, ok := args["min_messages"].(float64); ok && n > 0 {
-				opts.MinMessages = int(n)
+				opts.MinMessages = int(min(n, float64(memory.MaxArchiveRangeMessages)))
 			}
 			if n, ok := args["max_messages"].(float64); ok && n > 0 {
-				opts.MaxMessages = int(n)
+				opts.MaxMessages = int(min(n, float64(memory.MaxArchiveRangeMessages)))
 			}
 
-			messages, truncated, err := store.GetMessagesInRange(opts)
+			messages, truncated, err := store.GetMessagesInRange(ctx, opts)
 			if err != nil {
 				return "", fmt.Errorf("archive range: %w", err)
 			}

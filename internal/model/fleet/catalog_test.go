@@ -486,7 +486,7 @@ func TestMergeDiscoveredDeployment_PreservesExistingRuntimeMetadataOnZeroValues(
 
 func TestMergeDiscoveredDeployment_PreservesExistingImageSupportWhenDiscoveryIsFalse(t *testing.T) {
 	dep := &Deployment{
-		SupportsImages: true,
+		ObservedSupportsImages: true,
 	}
 
 	mergeDiscoveredDeployment(dep, DiscoveredModel{
@@ -726,5 +726,109 @@ func TestCatalogRouterConfig_ExcludesInactiveDeploymentsAndRetargetsDefault(t *t
 	})
 	if got == "spark/gpt-oss:20b" {
 		t.Fatal("router selected inactive deployment")
+	}
+}
+
+// TestSupportsImagesOverride pins the fourth capability override. Tools,
+// streaming, and the context window could all be declared in config;
+// vision could not, and it is the one with no authoritative source on a
+// plain OpenAI-compatible endpoint — the /v1/models schema carries an id
+// and nothing about modality. A multimodal model whose name does not
+// advertise itself was therefore invisible to Thane no matter what the
+// server could actually do, and no runtime tool could correct it.
+func TestSupportsImagesOverride(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		modelName string
+		override  *bool
+		want      bool
+	}{
+		{
+			// The case that motivated this: served by vLLM, genuinely
+			// multimodal, and named nothing the heuristic recognizes.
+			name:      "an override rescues a model the name heuristic misses",
+			modelName: "Qwen/Qwen3.5-122B-A10B-FP8",
+			override:  boolPtr(true),
+			want:      true,
+		},
+		{
+			name:      "without an override that same model stays invisible",
+			modelName: "Qwen/Qwen3.5-122B-A10B-FP8",
+			want:      false,
+		},
+		{
+			// The override has to be able to say no, not only yes: a
+			// name containing "vl" is a guess, and an operator who knows
+			// better outranks it.
+			name:      "an override of false beats a vision-looking name",
+			modelName: "qwen2.5-vl:7b",
+			override:  boolPtr(false),
+			want:      false,
+		},
+		{
+			name:      "the heuristic still stands where nothing overrides it",
+			modelName: "qwen2.5-vl:7b",
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{}
+			cfg.Models.Resources = map[string]config.ModelServerConfig{
+				"spark": {URL: "http://spark:8000", Provider: "openai_compat"},
+			}
+			cfg.Models.Available = []config.ModelConfig{
+				{Name: tt.modelName, Resource: "spark", SupportsImages: tt.override},
+			}
+
+			cat, err := BuildCatalog(cfg)
+			if err != nil {
+				t.Fatalf("BuildCatalog: %v", err)
+			}
+			var dep *Deployment
+			for i := range cat.Deployments {
+				if cat.Deployments[i].ModelName == tt.modelName {
+					dep = &cat.Deployments[i]
+					break
+				}
+			}
+			if dep == nil {
+				t.Fatalf("no deployment built for %q", tt.modelName)
+			}
+			if dep.SupportsImages != tt.want {
+				t.Errorf("SupportsImages = %v, want %v (observed=%v, override=%v)",
+					dep.SupportsImages, tt.want, dep.ObservedSupportsImages, tt.override)
+			}
+		})
+	}
+}
+
+// TestSupportsImagesOverrideSurvivesDiscovery pins the half of the
+// contract the merge path owns. Discovery ORs its own observation in, so
+// an operator who wrote supports_images: false has to keep it off however
+// loudly a runner disagrees — otherwise the override holds only until the
+// next inventory sweep.
+func TestSupportsImagesOverrideSurvivesDiscovery(t *testing.T) {
+	t.Parallel()
+
+	dep := &Deployment{
+		SupportsImagesOverride: boolPtr(false),
+	}
+
+	mergeDiscoveredDeployment(dep, DiscoveredModel{
+		Name:           "qwen-vl:latest",
+		SupportsImages: true,
+	}, modelproviders.Capabilities{SupportsImages: true})
+
+	if dep.SupportsImages {
+		t.Error("SupportsImages = true, want the operator's explicit false to survive discovery")
+	}
+	if !dep.ObservedSupportsImages {
+		t.Error("ObservedSupportsImages = false, want discovery still recorded under the override")
 	}
 }

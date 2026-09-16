@@ -100,6 +100,27 @@ func applyContactIdentityConfig(cfg *config.Config, store *contacts.Store, logge
 	return resolved, nil
 }
 
+// configureContactToolsOperator tells the contact tools who the operator
+// is. Under the legacy owner-name selector it resolves the name now,
+// through the channel resolver's own cache and before any model turn can
+// create a contact, and pins that record for identity custody, so
+// custody protects exactly the contact the resolver marks IsOwner for
+// the life of the process. When the name named no record it pins that
+// too, with the reason, so custody fails closed on a name several
+// contacts answer to and contact_owner reports it as that.
+func configureContactToolsOperator(contactTools *contacts.Tools, resolver *contactChannelBindingResolver, identity contactIdentityConfig) {
+	if identity.operatorContactID != uuid.Nil {
+		contactTools.ConfigureOperatorContactID(identity.operatorContactID)
+	}
+	if identity.legacyOwnerContactName == "" {
+		return
+	}
+	contactTools.SetOwnerContactName(identity.legacyOwnerContactName)
+	if identity.operatorContactID == uuid.Nil {
+		contactTools.ConfigureLegacyOperatorContactID(resolver.resolvedOperator())
+	}
+}
+
 // initChannels wires tools and external channels into the agent loop.
 // Sections include fact store, contact directory, notifications, email,
 // forge, working memory, fact extraction, provenance,
@@ -139,8 +160,11 @@ func (a *App) initChannels(s *newState) error {
 		return err
 	}
 	a.contactBindingsConfigOwned = contactIdentity.configOwnsHAPersonBindings
-	operatorContactID := contactIdentity.operatorContactID
-	legacyOwnerContactName := contactIdentity.legacyOwnerContactName
+	a.contactBindingResolver = &contactChannelBindingResolver{
+		store:                  contactStore,
+		operatorContactID:      contactIdentity.operatorContactID,
+		legacyOwnerContactName: contactIdentity.legacyOwnerContactName,
+	}
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()
@@ -165,17 +189,15 @@ func (a *App) initChannels(s *newState) error {
 	if a.cfg.Identity.ContactName != "" {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
 	}
-	if operatorContactID != uuid.Nil {
-		contactTools.ConfigureOperatorContactID(operatorContactID)
-	}
-	if legacyOwnerContactName != "" {
-		contactTools.SetOwnerContactName(legacyOwnerContactName)
-	}
+	configureContactToolsOperator(contactTools, a.contactBindingResolver, contactIdentity)
+	operatorID, operatorErr := a.contactBindingResolver.resolvedOperator()
+	logLegacyOperatorResolution(a.logger, contactStore, contactIdentity, operatorID, operatorErr)
 	ownerActivity := (&ownerChannelActivityAdapter{
 		loops: &channelLoopAdapter{registry: a.loopRegistry},
 	}).ActiveOwnerChannels
 	contactTools.SetOwnerActivitySource(ownerActivity)
 	a.logger.Info("contact store initialized", "path", a.cfg.DataDir+"/contacts.db")
+	logContactDirectoryAudits(s.ctx, a.cfg, contactStore, a.logger)
 
 	// --- Notifications ---
 	// Push notifications via HA companion app. Requires both the HA client
@@ -207,47 +229,47 @@ func (a *App) initChannels(s *newState) error {
 	}
 
 	// --- Email ---
-	// Native IMAP/SMTP email. Replaces the MCP email server approach
-	// with direct IMAP connections for reading and SMTP for sending,
-	// supporting multiple accounts with trust zone gating.
+	// Native IMAP/SMTP email. The email service owns account routing,
+	// the model-facing tools and context block, and the poller that
+	// turns new mail into handler wakes.
 	if a.cfg.Email.Configured() {
-		emailMgr := email.NewManager(a.cfg.Email, a.logger)
-		a.emailMgr = emailMgr
-		a.onClose("email", emailMgr.Close)
-
-		emailTools := email.NewTools(emailMgr, &emailContactResolver{store: contactStore})
-		a.loop.Tools().SetEmailTools(emailTools)
+		svc, err := email.NewService(a.cfg.Email, email.ServiceDependencies{
+			State:        a.opStore,
+			MessageBus:   a.messageBus,
+			Contacts:     a.contactBindingResolver,
+			Interactions: &emailInteractionRecorder{store: contactStore},
+			Queue:        a.loopQueue,
+			Logger:       a.logger,
+		})
+		if err != nil {
+			return fmt.Errorf("create email service: %w", err)
+		}
+		a.emailService = svc
+		// Review loops wake on queued review work; arm before any
+		// traffic, and sweep once the loops are running (new_servers).
+		// The waker stops before the service closes (LIFO), taking its
+		// recheck timers and wake workers with it.
+		a.emailReviewWake = newEmailReviewWaker(a.loopQueue, a.messageBus, svc.AccountsInConfigOrder(), a.logger)
+		a.emailReviewWake.arm()
+		a.onClose("email", svc.Close)
+		a.onClose("email-review-wake", a.emailReviewWake.stop)
+		a.loop.Tools().RegisterProvider(svc.ToolProvider())
 
 		// Register each account with connwatch for health monitoring.
-		for _, name := range emailMgr.AccountNames() {
-			acctName := name // capture for closure
-			acct, _ := emailMgr.Account(acctName)
+		for _, probe := range svc.HealthProbes() {
 			a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-				Name:    "email-" + acctName,
-				Probe:   func(pCtx context.Context) error { return acct.Ping(pCtx) },
+				Name:    "email-" + probe.Account,
+				Probe:   probe.Probe,
 				Backoff: connwatch.DefaultBackoffConfig(),
 				Logger:  a.logger,
 			})
 		}
 
-		// --- Email polling ---
-		// Periodic IMAP check for new mail. The poller advances the
-		// per-account high-water mark and dispatches an event-source
-		// envelope (one per account-poll cycle, one event per message)
-		// to the configured wake_loop target (default:
-		// email-default-handler). The contact resolver translates the
-		// sender's email into a trust zone so each event ships with an
-		// owner/trusted/household/known/stranger tag, letting the
-		// handler loop adapt depth without forking the route.
-		if a.cfg.Email.PollIntervalSec > 0 {
-			poller := email.NewPoller(emailMgr, a.opStore, a.logger,
-				email.WithMessageBus(a.messageBus),
-				email.WithContactResolver(&emailContactResolver{store: contactStore}),
-			)
-			a.emailPoller = poller
-		}
-
-		a.logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", a.cfg.Email.PollIntervalSec)
+		a.logger.Info("email enabled",
+			"accounts", svc.AccountNames(),
+			"poll_interval", a.cfg.Email.PollingInterval(),
+			"polling", svc.PollingEnabled(),
+		)
 	} else {
 		a.logger.Info("email disabled (not configured)")
 	}
@@ -427,9 +449,7 @@ func (a *App) initChannels(s *newState) error {
 			}
 		}
 	}
-	if a.documentTools != nil {
-		contactTools.ConfigureDossierDocuments(a.documentTools.Read, a.documentTools.WriteFaceted)
-	}
+	configureContactDossierDocuments(contactTools, a.documentTools, a.documentStore)
 	a.loop.Tools().SetContactTools(contactTools)
 
 	var talentVerifier func(context.Context, string, string) error
@@ -534,9 +554,9 @@ func (a *App) initChannels(s *newState) error {
 		LiveRegistry:     a.loopRegistry,
 	})
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
-		Registry:       a.loopRegistry,
-		LaunchLoop:     a.launchLoop,
-		MailboxPending: a.loopQueue.PendingCounts,
+		Registry:     a.loopRegistry,
+		LaunchLoop:   a.launchLoop,
+		QueuePending: a.loopQueue.PendingCounts,
 	})
 	a.initMessageBus()
 	a.loop.Tools().ConfigureMessageTools(tools.MessageToolDeps{
@@ -709,6 +729,7 @@ func (a *App) initChannels(s *newState) error {
 	a.loop.Tools().SetArchiveStore(a.archiveStore)
 	a.loop.Tools().SetConversationResetter(a.loop)
 	a.loop.Tools().SetSessionManager(a.loop)
+	a.loop.Tools().SetConversationModelPinner(a.loop)
 
 	// --- Embeddings ---
 	// Optional semantic search over fact and contact stores. When enabled,
@@ -831,18 +852,15 @@ func (a *App) initChannels(s *newState) error {
 			a.onCloseErr("signal", signalClient.Close)
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:        signalClient,
-				Runner:        &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
-				Logger:        a.logger,
-				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
-				HandleTimeout: a.cfg.Signal.HandleTimeout,
-				Routing:       a.cfg.Signal.Routing,
-				Resolver: &contactChannelBindingResolver{
-					store:                  contactStore,
-					operatorContactID:      operatorContactID,
-					legacyOwnerContactName: legacyOwnerContactName,
-				},
+				Client:           signalClient,
+				Runner:           &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
+				Logger:           a.logger,
+				RateLimit:        a.cfg.Signal.RateLimitPerMinute,
+				HandleTimeout:    a.cfg.Signal.HandleTimeout,
+				Routing:          a.cfg.Signal.Routing,
+				Resolver:         a.contactBindingResolver,
 				BindConversation: a.mem.BindConversationChannel,
+				RecordNote:       signalReplyNoteRecorder(a.mem.AddMessage),
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,
 					DestDir:   a.cfg.Signal.AttachmentDir,

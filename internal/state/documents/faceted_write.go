@@ -52,6 +52,10 @@ type FacetedWriteArgs struct {
 	Validate         func(documentfacets.Payload) error `json:"-"`
 	ExpectedRevision string                             `json:"-"`
 	ReceiptScope     string                             `json:"-"`
+	// RejectionIsError surfaces a refused publish as a
+	// *MutationRejectedError rather than an inline applied:false payload;
+	// see [WriteArgs.RejectionIsError] for who sets it and why.
+	RejectionIsError bool `json:"-"`
 	// PreviousWriteTools permits a trusted adapter to rename its own write
 	// surface while atomically migrating the document contract.
 	PreviousWriteTools []string `json:"-"`
@@ -157,7 +161,7 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		}
 	}
 	if len(validationErrors) > 0 {
-		return "", fmt.Errorf("faceted document projections are invalid; correct every listed field and retry once: %w", errors.Join(validationErrors...))
+		return "", documentfacets.InvalidProjectionsError("faceted document projections", validationErrors...)
 	}
 
 	body := args.Contract.Render(args.Payload)
@@ -174,6 +178,7 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		Body:               &body,
 		ExpectedRevision:   args.ExpectedRevision,
 		ReceiptScope:       args.ReceiptScope,
+		RejectionIsError:   args.RejectionIsError,
 		StructuredTool:     args.WriteTool,
 		PreviousWriteTools: append([]string(nil), args.PreviousWriteTools...),
 	}
@@ -182,7 +187,8 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 	if result != nil {
 		result.Action = args.WriteTool
 	}
-	return t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
+	payload, err := t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
+	return deliverMutation(payload, err, args.RejectionIsError)
 }
 
 func containsWriteTool(tools []string, target string) bool {
@@ -230,7 +236,12 @@ func validateFacetedDocumentBody(body string, frontmatter map[string][]string) e
 	payload := manifest.Contract.Parse(body)
 	var validationErrors []error
 	if err := manifest.Contract.Validate(payload); err != nil {
-		validationErrors = append(validationErrors, err)
+		// The contract marks each violation with its projection key, but
+		// here every projection arrived inside one whole body, so those
+		// keys are not arguments of the call that sent it. Keep the text
+		// and drop the marks: a structured writer that does take the keys
+		// as arguments has already validated them with the marks intact.
+		validationErrors = append(validationErrors, errors.New(err.Error()))
 	}
 	if got, want := strings.TrimSpace(body), manifest.Contract.Render(payload); got != want {
 		validationErrors = append(validationErrors, fmt.Errorf("body does not match the canonical faceted document codec; write logical projections through %s", manifest.ManagedBy))

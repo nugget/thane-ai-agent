@@ -139,7 +139,7 @@ Everything is calm.
 		t.Fatalf("write metacognitive.md: %v", err)
 	}
 
-	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{
+	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, nil, []looppkg.OutputSpec{
 		{
 			Name:    "metacognitive_state",
 			Type:    looppkg.OutputTypeMaintainedDocument,
@@ -190,7 +190,7 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 		t.Fatalf("write metacognitive.md: %v", err)
 	}
 
-	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{facetedSpec}, now)
+	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, nil, []looppkg.OutputSpec{facetedSpec}, now)
 	if err != nil {
 		t.Fatalf("renderLoopOutputContextWithNow: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestRenderLoopOutputContextUsesAuthoredProjections(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(coreDir, "metacognitive.md"), []byte(preFacet), 0o644); err != nil {
 		t.Fatalf("rewrite metacognitive.md: %v", err)
 	}
-	ctx, err = renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{facetedSpec}, now)
+	ctx, err = renderLoopOutputContextWithNow(context.Background(), store, nil, []looppkg.OutputSpec{facetedSpec}, now)
 	if err != nil {
 		t.Fatalf("renderLoopOutputContextWithNow (pre-facet): %v", err)
 	}

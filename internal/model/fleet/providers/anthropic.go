@@ -334,6 +334,9 @@ func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []llm
 }
 
 // ChatStream sends a chat request, optionally streaming tokens via callback.
+// Streaming success requires the provider's message_stop completion event.
+// On error, a non-nil response carries only usage already reported by the
+// provider; it is not a completed assistant response.
 func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	// A billing-blocked account fails fast without an HTTP round-trip
 	// (one probe per interval keeps recovery detection alive): the
@@ -350,13 +353,21 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	anthropicTools := convertToolsToAnthropic(tools)
 	systemPayload := anthropicSystemPayload(messages, systemPrompt)
 
+	// The request-level breakpoint occupies one of the four slots, so
+	// decide it before the guards and let them leave room for it.
+	requestCache := anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, anthropicUsesExplicitPromptCaching(systemPayload))
+	reservedSlots := 0
+	if requestCache != nil {
+		reservedSlots = 1
+	}
+
 	// Enforce Anthropic cache-breakpoint guards (≤4 total, per-model
 	// minimum cached-prefix length) on the assembled blocks+tools.
 	// Runs below the model minimum and excess breakpoints are silently
 	// ignored by the API, so we drop them here and warn instead.
 	var cacheDrops []CacheBreakpointDrop
 	if blocks, ok := systemPayload.([]anthropicContent); ok {
-		cacheDrops = applyCacheBreakpointGuards(blocks, anthropicTools, model, c.callLogger(ctx))
+		cacheDrops = applyCacheBreakpointGuards(blocks, anthropicTools, model, reservedSlots, c.callLogger(ctx))
 	}
 	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
@@ -570,7 +581,9 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader, upstreamRequestID string, log *slog.Logger, started time.Time) (*llm.ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		partial := convertFromAnthropic(&resp)
+		partial.UpstreamRequestID = upstreamRequestID
+		return usageOnlyResponse(partial), fmt.Errorf("decode response: %w", err)
 	}
 	result := convertFromAnthropic(&resp)
 	result.UpstreamRequestID = upstreamRequestID
@@ -606,6 +619,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		stopReason     string
 		usage          anthropicUsage
 		model          string
+		messageStopped bool
 	)
 
 	for scanner.Scan() {
@@ -697,11 +711,10 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			if event.Usage != nil {
 				usage.OutputTokens = event.Usage.OutputTokens
 			}
-		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read stream: %w", err)
+		case "message_stop":
+			messageStopped = true
+		}
 	}
 
 	resp := &llm.ChatResponse{
@@ -711,7 +724,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done:                     true,
+		Done:                     messageStopped,
 		UpstreamRequestID:        upstreamRequestID,
 		InputTokens:              usage.InputTokens,
 		OutputTokens:             usage.OutputTokens,
@@ -723,6 +736,13 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		resp.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
 	}
 	resp.StopReason = stopReason
+
+	if err := scanner.Err(); err != nil {
+		return usageOnlyResponse(resp), fmt.Errorf("read stream: %w", err)
+	}
+	if !messageStopped {
+		return usageOnlyResponse(resp), fmt.Errorf("read stream: truncated response without message_stop")
+	}
 
 	attrs := []any{
 		"model", resp.Model,
@@ -751,8 +771,19 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 	return resp, nil
 }
 
+// anthropicPromptCacheControl decides Anthropic's automatic,
+// request-level cache breakpoint. It rides the last message block and
+// moves forward as the conversation grows, so each iteration of a tool
+// loop reads the history the previous iteration wrote. Explicit system
+// markers do not replace it: they pin the stable prefix, and without
+// the automatic breakpoint every iteration re-sends the growing
+// transcript as uncached input.
+//
+// It keeps the default 5m TTL. Anthropic requires longer-TTL entries
+// to precede shorter ones, and the automatic breakpoint lands after
+// the 5m system run.
 func anthropicPromptCacheControl(systemPrompt string, messages []anthropicMessage, tools []anthropicTool, explicit bool) *anthropicCacheControl {
-	if explicit || !shouldUseAnthropicPromptCaching(systemPrompt, messages, tools) {
+	if !explicit && !shouldUseAnthropicPromptCaching(systemPrompt, messages, tools) {
 		return nil
 	}
 	return &anthropicCacheControl{Type: "ephemeral"}
@@ -902,15 +933,18 @@ type CacheBreakpointDrop struct {
 //     model-specific minimum, strip cache_control. The block itself
 //     remains; only the breakpoint is removed.
 //  2. Count surviving system breakpoints plus the one blanket tool
-//     cache (if any). If the total still exceeds 4, drop the tool
-//     cache first — it is an undifferentiated "cache the last tool"
+//     cache (if any) against the cap: 4 minus reservedSlots, the
+//     slots the caller has already committed to the request-level
+//     breakpoint. If the total exceeds it, drop the tool cache
+//     first — it is an undifferentiated "cache the last tool"
 //     policy, whereas system breakpoints reflect deliberate
 //     per-section TTL choices.
 //  3. If still over the cap, drop trailing system breakpoints (the
 //     earliest runs typically cover the largest stable prefix, so
 //     dropping from the tail minimizes the loss).
-func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool, model string, logger *slog.Logger) []CacheBreakpointDrop {
+func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool, model string, reservedSlots int, logger *slog.Logger) []CacheBreakpointDrop {
 	minTokens := minCacheablePrefixTokens(model)
+	limit := maxAnthropicCacheBreakpoints - reservedSlots
 	var drops []CacheBreakpointDrop
 
 	// Step 1: strip under-minimum breakpoints from system blocks.
@@ -952,7 +986,7 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 	}
 
 	total := systemBreakpoints + toolBreakpoint
-	if total <= maxAnthropicCacheBreakpoints {
+	if total <= limit {
 		return drops
 	}
 
@@ -965,7 +999,8 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 		logger.Warn("dropping tool cache breakpoint to fit Anthropic 4-breakpoint cap",
 			"system_breakpoints", systemBreakpoints,
 			"total_requested", total,
-			"max", maxAnthropicCacheBreakpoints,
+			"reserved_slots", reservedSlots,
+			"max", limit,
 		)
 		drops = append(drops, CacheBreakpointDrop{
 			Reason:     "over_cap_tool_breakpoint",
@@ -975,13 +1010,13 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 		})
 		tools[len(tools)-1].CacheControl = nil
 		total--
-		if total <= maxAnthropicCacheBreakpoints {
+		if total <= limit {
 			return drops
 		}
 	}
 
 	// Step 4: drop trailing system breakpoints until we fit.
-	excess := total - maxAnthropicCacheBreakpoints
+	excess := total - limit
 	for i := len(blocks) - 1; i >= 0 && excess > 0; i-- {
 		if blocks[i].CacheControl == nil {
 			continue

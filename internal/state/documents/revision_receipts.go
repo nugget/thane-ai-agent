@@ -48,6 +48,37 @@ type modelMutationConflict struct {
 	CurrentTruncated bool   `json:"current_excerpt_truncated,omitempty"`
 }
 
+// MutationRejectedError is the error form of a refused mutation. The
+// document is unchanged, and Result carries the same model-facing
+// applied:false payload the doc_* tools return inline: the rejection
+// message plus, for a stale receipt, the bounded intervening diff or
+// current excerpt. The doc_* tools deliver that payload as a successful
+// result because a conversational model reads it either way. A loop's
+// generated output tool asks for this error instead
+// ([WriteArgs.RejectionIsError]): there a result that reads as success
+// while nothing was committed is indistinguishable from a healthy
+// publish — to the loop's failure handling, to the event log's ok flag,
+// and to a model that does not independently check doc_history — and a
+// model that senses the write did not land retries the identical call.
+type MutationRejectedError struct {
+	Action  string
+	Ref     string
+	Message string
+	// Result is the marshaled rejection payload, byte-identical to what
+	// the inline contract returns as a successful result.
+	Result string
+}
+
+// Error returns the rejection message followed by the payload, so a model
+// reading the tool error gets both the next move and the reconciliation
+// data in one place.
+func (e *MutationRejectedError) Error() string {
+	if strings.TrimSpace(e.Result) == "" {
+		return e.Message
+	}
+	return e.Message + "\n" + e.Result
+}
+
 func (s *Store) automaticExpectedRevision(root string, existed bool, record *DocumentRecord, expected string) string {
 	if expected = strings.TrimSpace(expected); expected != "" {
 		return expected
@@ -72,6 +103,38 @@ func (t *Tools) rememberDocumentReceipt(scope string, doc *DocumentRecord) {
 		return
 	}
 	t.rememberRevisionReceipt(scope, doc.Ref, doc.Revision)
+}
+
+// RememberRead records doc's current revision as scope's hidden read
+// receipt, for a caller that showed the model the document by a path other
+// than the read tools. The loop output context is that caller: it renders a
+// loop's own documents into each wake's prompt, which is the read the loop
+// actually performs before rewriting them — asking for a second one through
+// doc_read costs every wake a refusal, a re-read, and a retry, for nothing
+// the model has not already seen. A receipt asserts that this scope has seen
+// this whole revision, so record one only when the whole document was shown;
+// a truncated rendering must leave the read-first requirement standing.
+// Non-revision roots keep no receipts, so the call is a no-op for them.
+func (t *Tools) RememberRead(scope string, doc *DocumentRecord) {
+	t.rememberDocumentReceipt(scope, doc)
+}
+
+// rememberAbsentReceipt records that the caller itself removed ref from
+// a revision-backed root, so its next write there is a conditional create
+// rather than a replacement of a revision that no longer exists. Without
+// this the pre-deletion receipt stayed pinned: a loop that created a
+// document, deleted it, and created it again at the same ref was refused
+// with "deleted after this loop last read it" — for a deletion it had
+// performed. Roots without a writer keep no receipts and record nothing.
+func (t *Tools) rememberAbsentReceipt(scope, ref string) {
+	if t == nil || t.store == nil {
+		return
+	}
+	root, _, err := parseRef(ref)
+	if err != nil || t.store.rootWriter(root) == nil {
+		return
+	}
+	t.rememberRevisionReceipt(scope, ref, revisionAbsent)
 }
 
 func (t *Tools) rememberRevisionReceipt(scope, ref, revision string) {
@@ -161,6 +224,13 @@ func (t *Tools) prepareJournalReceipt(args *JournalUpdateArgs) {
 	}
 }
 
+// marshalMutationResult turns a store mutation outcome into its
+// model-facing shape. A success records the new revision as the caller's
+// receipt. A refusal — no read on record for a whole-document
+// replacement, or a receipt the document has moved past — comes back as a
+// *MutationRejectedError carrying the inline payload; deliverMutation
+// then decides, per caller, whether that surfaces as the error or as the
+// payload. Every other error passes through untouched.
 func (t *Tools) marshalMutationResult(ctx context.Context, action, ref, scope, expected string, result *MutationResult, err error) (string, error) {
 	if err == nil {
 		if result != nil {
@@ -171,11 +241,11 @@ func (t *Tools) marshalMutationResult(ctx context.Context, action, ref, scope, e
 
 	var readRequired *PriorReadRequiredError
 	if errors.As(err, &readRequired) {
-		return marshalToolResult(&modelMutationConflict{
+		return rejectMutation(&modelMutationConflict{
 			Action:  action,
 			Applied: false,
 			Ref:     ref,
-			Message: fmt.Sprintf("No change was made. Read %s first so Thane can protect the whole-document replacement against intervening edits, then retry without any revision parameter.", ref),
+			Message: priorReadRequiredMessage(ref),
 		})
 	}
 
@@ -188,7 +258,7 @@ func (t *Tools) marshalMutationResult(ctx context.Context, action, ref, scope, e
 	}
 	conflict := t.store.describeMutationConflict(ctx, action, ref, expected, revisionConflict)
 	t.rememberRevisionReceipt(scope, ref, conflict.receiptRevision)
-	return marshalToolResult(&modelMutationConflict{
+	return rejectMutation(&modelMutationConflict{
 		Action:           conflict.action,
 		Applied:          false,
 		Ref:              conflict.ref,
@@ -200,6 +270,37 @@ func (t *Tools) marshalMutationResult(ctx context.Context, action, ref, scope, e
 		CurrentExcerpt:   conflict.currentExcerpt,
 		CurrentTruncated: conflict.currentTruncated,
 	})
+}
+
+// priorReadRequiredMessage names the precondition that failed and the one
+// call that satisfies it. Its predecessor advised retrying "without any
+// revision parameter" — a parameter no model-facing tool has carried
+// since revision preconditions went hidden — so a caller that had done
+// exactly what the message asked (read, then retry body-only) was told to
+// do it again, verbatim, forever.
+func priorReadRequiredMessage(ref string) string {
+	return fmt.Sprintf("No change was made: Thane has no record of this loop reading %s, and a whole-document replacement is only applied against a version its caller has read — that is what protects intervening edits. Read %s with doc_read, then retry the same call.", ref, ref)
+}
+
+// rejectMutation marshals a refusal into the typed error that carries it.
+func rejectMutation(conflict *modelMutationConflict) (string, error) {
+	payload, err := marshalToolResult(conflict)
+	if err != nil {
+		return "", err
+	}
+	return "", &MutationRejectedError{Action: conflict.Action, Ref: conflict.Ref, Message: conflict.Message, Result: payload}
+}
+
+// deliverMutation shapes a mutation outcome for its caller. A refusal
+// stays a *MutationRejectedError for callers that asked for one and
+// becomes the inline applied:false payload, with no error, for everyone
+// else. Any other outcome passes through unchanged.
+func deliverMutation(payload string, err error, rejectionIsError bool) (string, error) {
+	var rejected *MutationRejectedError
+	if err != nil && !rejectionIsError && errors.As(err, &rejected) {
+		return rejected.Result, nil
+	}
+	return payload, err
 }
 
 func (s *Store) describeMutationConflict(ctx context.Context, action, ref, expected string, conflict *RootRevisionConflictError) mutationConflict {

@@ -2,7 +2,9 @@ package identity
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -285,12 +287,30 @@ func writePrivateFile(path string, data []byte) error {
 type coreConfig struct {
 	Version     int                       `yaml:"version"`
 	GeneratedAt string                    `yaml:"generated_at"`
+	Listen      listenPolicy              `yaml:"listen"`
 	Identity    identityPolicy            `yaml:"identity"`
 	Person      personPolicy              `yaml:"person"`
 	Trust       trustPolicy               `yaml:"trust"`
 	Delegation  delegationPolicy          `yaml:"delegation"`
 	Channels    channelPolicy             `yaml:"channels"`
 	Roots       map[string]coreRootPolicy `yaml:"roots,omitempty"`
+}
+
+// listenPolicy is the native API's authentication block as thane init
+// writes it: one freshly minted operator token, so a new workspace's API
+// and console are closed from the first boot rather than open until
+// someone remembers.
+type listenPolicy struct {
+	Auth listenAuthPolicy `yaml:"auth"`
+}
+
+type listenAuthPolicy struct {
+	Tokens []apiTokenPolicy `yaml:"tokens"`
+}
+
+type apiTokenPolicy struct {
+	Label string `yaml:"label"`
+	Token string `yaml:"token"`
 }
 
 type identityPolicy struct {
@@ -413,7 +433,12 @@ func managedDossierRootDeclaration(signing *SigningKeyPair) coreRootPolicy {
 }
 
 func renderCoreConfig(instanceName string, generatedAt time.Time, signing *SigningKeyPair, ca *CertificateAuthority, operator *OperatorSigner, operatorContactID string) ([]byte, error) {
+	apiToken, err := GenerateAPIToken()
+	if err != nil {
+		return nil, err
+	}
 	cfg := coreConfig{
+		Listen: listenPolicy{Auth: listenAuthPolicy{Tokens: []apiTokenPolicy{{Label: "operator", Token: apiToken}}}},
 		Roots: map[string]coreRootPolicy{
 			"core":     coreSeedDeclaration(signing, operator),
 			"contacts": contactsRootDeclaration(signing),
@@ -472,4 +497,15 @@ func ParseCACertificate(data []byte) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("parse certificate: %w", err)
 	}
 	return cert, nil
+}
+
+// GenerateAPIToken mints an operator credential for the native API: 32
+// random bytes, base64url without padding, so it is safe in headers,
+// YAML, and shell without quoting.
+func GenerateAPIToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate api token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }

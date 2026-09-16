@@ -52,8 +52,46 @@ func (s *Store) PendingStats(ctx context.Context) ([]ConsumerPending, error) {
 	return stats, rows.Err()
 }
 
+// PendingBeyond returns what is still queued for one consumer after the
+// first skip items in drain order: how many, and when the oldest of them
+// was enqueued. A partition with nothing behind that point reports zero
+// and a zero time.
+//
+// The offset is the whole point. Peeked items stay pending until acked,
+// so a plain aggregate over the partition counts the batch the caller is
+// already holding — and because drain order is oldest-first within a
+// priority, MIN(enqueued_at) over that set always describes an item in
+// hand rather than one still waiting. A loop deciding how long to sleep
+// would be reading the age of work it had just picked up.
+//
+// The ordering here must stay identical to the one [Store.Peek] uses, or
+// the offset skips the wrong rows.
+//
+// Separate from [Store.PendingStats] because the hot caller is a single
+// loop asking about itself on every pull, and scanning every partition to
+// answer that would make the common case pay for the census.
+func (s *Store) PendingBeyond(ctx context.Context, consumer string, skip int) (pending int, oldest time.Time, err error) {
+	if skip < 0 {
+		skip = 0
+	}
+	var oldestRaw any
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), MIN(enqueued_at) FROM (
+			SELECT enqueued_at
+			FROM loop_queue
+			WHERE consumer_loop = ? AND status = ?
+			ORDER BY priority DESC, enqueued_at ASC, dedup_key ASC
+			LIMIT -1 OFFSET ?
+		)
+	`, strings.TrimSpace(consumer), StatusPending, skip)
+	if err := row.Scan(&pending, &oldestRaw); err != nil {
+		return 0, time.Time{}, fmt.Errorf("loopqueue: pending beyond %d for %q: %w", skip, consumer, err)
+	}
+	return pending, parseQueueTimestamp(oldestRaw), nil
+}
+
 // PendingCounts returns pending depth keyed by consumer partition —
-// the join shape loop views use to attach mailbox depth to a loop row.
+// the join shape loop views use to attach queue depth to a loop row.
 // Partitions with no pending work are absent from the map.
 func (s *Store) PendingCounts(ctx context.Context) (map[string]int, error) {
 	stats, err := s.PendingStats(ctx)

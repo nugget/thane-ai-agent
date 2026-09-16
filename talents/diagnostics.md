@@ -28,6 +28,23 @@ no-op counts and wakes per hour. "Is the archivist stuck right now" is
 `loop_activity`. The aggregate leads its result: read wakes-per-hour and
 the by-source decomposition before scrolling events.
 
+A loop can be degraded with no error on record. When a wake ends
+normally but every call it made to a durable write — its declared
+output's tool, or `contact_dossier_write` for one contact — was
+rejected, every counter reads the wake as a success. So the health
+rollup in `loop_status` and the `system_health` loop census name that
+loop with the tool, the contact for a dossier, and the rejection count,
+and its `loop_status` row carries `unpublished_writes` with the target,
+the last rejection text, and the conversation id to pull logs by. Each
+contact's dossier is judged on its own: a wake that lands Alice's
+dossier and never lands Bob's leaves Bob's flagged. A dossier entry
+with no target is calls that wrote no dossier of their own, such as a
+`contact_id` that is no active contact, and any landed dossier clears
+it. Any other entry clears when a later wake lands the same write. It is held in
+memory, so a restart clears it too; `loop_activity`'s
+`iteration_complete` events keep the `write_rejections` and
+`unpublished_writes` counts across restarts.
+
 `queue_status` audits the durable work queues globally and read-only:
 pending depth with oldest-item age per consumer, completion throughput
 and wait latency over a window. Old pending work means a consumer is

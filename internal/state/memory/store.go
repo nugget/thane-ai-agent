@@ -6,15 +6,17 @@
 // messages that are actively used for LLM context windows. Messages can be
 // compacted (summarized) when the context grows too large.
 //
-// Session archive (ArchiveStore) provides immutable, long-term storage of
-// all conversation transcripts. Messages are archived before any destructive
-// operation (compaction, reset, shutdown), ensuring primary source data is
-// never lost. The archive supports full-text search with gap-aware context
+// Session archive (ArchiveStore) reads the same durable message rows as active
+// memory. Compaction, reset, and shutdown change lifecycle state rather than
+// deleting or copying transcripts. [SessionLifecycle] commits boundaries and
+// row ownership together; checkpoints bookmark existing message IDs without
+// changing the active context. The archive supports full-text search with gap-aware context
 // expansion — search results include surrounding conversation bounded by
 // natural silence gaps rather than rigid message counts.
 package memory
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -25,9 +27,9 @@ import (
 // MemoryStore is the interface for memory storage backends (in-memory
 // and SQLite). Both [Store] and [SQLiteStore] satisfy it.
 type MemoryStore interface {
-	GetMessages(conversationID string) []Message
+	GetMessages(ctx context.Context, conversationID string) ([]Message, error)
 	AddMessage(conversationID, role, content, origin string) error
-	GetConversation(id string) *Conversation
+	GetConversation(ctx context.Context, id string) (*Conversation, error)
 	Clear(conversationID string) error
 	Stats() map[string]any
 }
@@ -63,12 +65,13 @@ const (
 
 // Message represents a conversation message. This is the unified type for
 // both active working-memory messages and archived session transcripts.
-// Archive-specific fields (ConversationID, SessionID, TokenCount, ArchivedAt,
-// ArchiveReason) are zero-valued for active messages.
+// Reader projections may omit ownership and archival fields. A SessionID
+// alone does not imply archival: active rows can already belong to a session
+// after a checkpoint, split, or carry-forward handoff.
 type Message struct {
 	ID             string    `json:"id"`                        // Stable UUIDv7 assigned at creation time
-	ConversationID string    `json:"conversation_id,omitempty"` // Set for archived messages
-	SessionID      string    `json:"session_id,omitempty"`      // Set for archived messages
+	ConversationID string    `json:"conversation_id,omitempty"` // Owning conversation, when included by the reader
+	SessionID      string    `json:"session_id,omitempty"`      // Owning session, independent of lifecycle status
 	Role           string    `json:"role"`                      // system, user, assistant, tool
 	Content        string    `json:"content"`
 	Timestamp      time.Time `json:"timestamp"`
@@ -122,18 +125,24 @@ func NewStore(maxMessages int) *Store {
 }
 
 // GetConversation retrieves a conversation by ID.
-// Returns nil if not found.
-func (s *Store) GetConversation(id string) *Conversation {
+// Returns nil without an error if not found, or an error on cancellation.
+func (s *Store) GetConversation(ctx context.Context, id string) (*Conversation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	conv, ok := s.conversations[id]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	// Return a copy to avoid race conditions
-	return conv.copy()
+	return conv.copy(), nil
 }
 
 // GetOrCreateConversation retrieves or creates a conversation.
@@ -227,20 +236,26 @@ func (s *Store) addMessage(conversationID string, role, content, origin string, 
 }
 
 // GetMessages retrieves messages for a conversation.
-// Returns empty slice if conversation doesn't exist.
-func (s *Store) GetMessages(conversationID string) []Message {
+// Returns an empty slice if the conversation does not exist, or an error on cancellation.
+func (s *Store) GetMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	conv, ok := s.conversations[conversationID]
 	if !ok {
-		return []Message{}
+		return []Message{}, nil
 	}
 
 	// Return a copy
 	msgs := make([]Message, len(conv.Messages))
 	copy(msgs, conv.Messages)
-	return msgs
+	return msgs, nil
 }
 
 // Clear removes a conversation.
@@ -251,21 +266,27 @@ func (s *Store) Clear(conversationID string) error {
 	return nil
 }
 
-// GetTokenCount returns estimated token count for a conversation.
-func (s *Store) GetTokenCount(conversationID string) int {
+// GetTokenCount returns the estimated token count, or an error on cancellation.
+func (s *Store) GetTokenCount(ctx context.Context, conversationID string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 
 	conv, ok := s.conversations[conversationID]
 	if !ok {
-		return 0
+		return 0, nil
 	}
 
 	total := 0
 	for _, m := range conv.Messages {
 		total += len(m.Content) / 4 // Rough estimate: 4 chars per token
 	}
-	return total
+	return total, nil
 }
 
 // Stats returns memory statistics.
@@ -282,29 +303,6 @@ func (s *Store) Stats() map[string]any {
 		"conversations": len(s.conversations),
 		"messages":      totalMessages,
 		"max_per_conv":  s.maxMessages,
-	}
-}
-
-// GetAllConversations returns all conversations for checkpointing.
-func (s *Store) GetAllConversations() []*Conversation {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	convs := make([]*Conversation, 0, len(s.conversations))
-	for _, conv := range s.conversations {
-		convs = append(convs, conv.copy())
-	}
-	return convs
-}
-
-// RestoreConversations replaces all conversations from a checkpoint.
-func (s *Store) RestoreConversations(convs []*Conversation) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.conversations = make(map[string]*Conversation, len(convs))
-	for _, conv := range convs {
-		s.conversations[conv.ID] = conv.copy()
 	}
 }
 
@@ -344,7 +342,11 @@ func (s *Store) PutConversationMetadata(conversationID string, metadata *Convers
 // portion of a conversation's typed metadata.
 func (s *Store) BindConversationChannel(conversationID string, binding *ChannelBinding) error {
 	var metadata *ConversationMetadata
-	if conv := s.GetConversation(conversationID); conv != nil && conv.Metadata != nil {
+	conv, err := s.GetConversation(context.Background(), conversationID)
+	if err != nil {
+		return fmt.Errorf("read conversation before binding channel: %w", err)
+	}
+	if conv != nil && conv.Metadata != nil {
 		metadata = conv.Metadata.Clone()
 	}
 	if metadata == nil {

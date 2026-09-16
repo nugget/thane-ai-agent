@@ -22,7 +22,7 @@ mail and it's *not* for in-loop supervisor attention:
 | You want to... | Surface |
 |---|---|
 | Push an alert, ask a decision via buttons, or escalate to a human | `notifications` — this leaf |
-| Compose and send an email (correspondence — threaded, addressed, archived) | `email` (`email_send` for new threads, `email_reply` for replies) |
+| Compose and send an email (correspondence — threaded, addressed, archived) | `email` (`email_send` for new threads, `email_reply` for replies; the account's policy may hold the message in its drafts folder for the operator) |
 | Get the agent's own supervisor to take a turn (loop-side core attention) | `request_core_attention` (core tool; no activation needed) — that's *the agent* attending, not *the user* |
 | Send a Signal message that's conversational, not alert-shaped | `signal` (`signal_send_message`) |
 
@@ -82,8 +82,27 @@ settle *how*:
 - **Recipients resolve through the contact directory.** The
   *outbound* tools (`send_notification`, `ha_notify`,
   `request_human_decision`, `request_human_escalation`) take a
-  `recipient` (contact name) and the system looks up the channel
-  from contact facts. `resolve_actionable` is the exception — it
+  `recipient` and find the contact whose formatted name or
+  nickname it is (when several hold it, the operator's own contact
+  first, then one above `known`; two or more at the same standing are
+  a tie that reaches none of them, with an error that lists them as
+  below). Only when none does, they take the one contact whose
+  given name or first word it is; a first name two contacts share
+  reaches neither. The error lists up to five of the contacts that
+  share it, each with its full formatted name, zone, and `contact_id`,
+  and counts the rest, which `contact_lookup` with that first name as
+  `query` lists ahead of any other match while no more than 50 share
+  it; send again with the full formatted name of the one you mean,
+  unless a tie leaves it no other name, and then ask the operator
+  which contact should keep the name. Notes, orgs, and AI summaries never
+  resolve a recipient, so pass the person's exact contact name or
+  nickname, not a description: a description reaches no one. The
+  channel comes from the contact's facts: a
+  `notification_preference`, else a channel the person is active on
+  now, else Home Assistant push when they have an `ha_companion_app`
+  (`ha_notify` always uses Home Assistant push). Delivery reads each
+  fact in any case and uses only its first value.
+  `resolve_actionable` is the exception — it
   closes an existing tracked notification by `request_id` /
   `action_id` and has no recipient. Get the contact lookup right
   on the outbound side and the delivery routing is automatic; pass
@@ -173,7 +192,10 @@ Reach for it when:
 - You explicitly want the HA push channel (e.g., a critical
   HA-originated alert where Signal would be the wrong feel)
 - The recipient's contact facts don't yet route through
-  `send_notification` (rare; usually a config gap worth fixing)
+  `send_notification` (rare). On an admin, household, trusted, or
+  operator contact a missing routing fact is not yours to add: tell
+  the operator which fact is missing on whom, and they add it through
+  CardDAV, the contacts API, or by asking you in their own message.
 
 When the channel doesn't matter, prefer `send_notification` — it
 keeps the routing decision in the system, not in your prose.
@@ -194,7 +216,7 @@ tracking and timeout policy loads.
   `notifications_ask`.
 - For "where's the user reading this?", that's a contact-fact
   question — `contacts` (`contact_lookup`) shows the configured
-  channels.
+  channels. Delivery uses the first value of each routing fact.
 
 ---
 name: notifications_ask

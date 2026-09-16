@@ -17,10 +17,11 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8099", "listen address")
 	static := flag.String("static", "internal/server/web/static", "console static asset directory")
+	authToken := flag.String("auth-token", "", "when set, gate the harness like production and accept this operator token")
 	flag.Parse()
 
 	log.Printf("ui harness: http://%s  (static: %s)", *addr, *static)
-	if err := api.RunUIHarness(*addr, *static); err != nil {
+	if err := api.RunUIHarness(*addr, *static, *authToken); err != nil {
 		log.Fatalf("ui harness: %v", err)
 	}
 }

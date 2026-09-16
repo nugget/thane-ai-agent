@@ -91,6 +91,31 @@ func TestSaveContact_Update(t *testing.T) {
 	}
 }
 
+// TestSaveContact_RefusesKeyCustodyFacts pins the custody boundary the
+// email authentication seam depends on: the key that verifies a
+// contact's messages cannot be installed through contact_save, in any
+// spelling, and the refusal leaves nothing behind.
+func TestSaveContact_RefusesKeyCustodyFacts(t *testing.T) {
+	tools := newTestTools(t)
+	for _, key := range []string{"KEY", "key", "Key", "X-THANE-KEY-PGP", "x-thane-key-smime"} {
+		_, err := tools.SaveContact(`{"name":"Key Holder","kind":"individual","facts":{"email":"holder@example.com","` + key + `":"-----BEGIN PGP PUBLIC KEY BLOCK-----"}}`)
+		if err == nil {
+			t.Fatalf("fact %q must be refused", key)
+		}
+		if !strings.Contains(err.Error(), "operator-custodied") || !strings.Contains(err.Error(), key) {
+			t.Errorf("refusal for %q must name the key and the custody rule: %v", key, err)
+		}
+	}
+	if _, err := tools.store.FindByName("Key Holder"); err == nil {
+		t.Error("a refused save must not create the contact")
+	}
+
+	// The same key at top level is rescued into facts and refused there too.
+	if _, err := tools.SaveContact(`{"name":"Key Holder","kind":"individual","KEY":"x"}`); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+		t.Errorf("top-level KEY must be refused after rescue: %v", err)
+	}
+}
+
 func TestSaveContact_WithFacts(t *testing.T) {
 	tools := newTestTools(t)
 
@@ -156,7 +181,7 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 		"kind":"individual",
 		"facts":{"email":"person@example.com","timezone":"America/Chicago"},
 		"origin_tags":["signal","SIGNAL","projects"]
-	}`, provenance)
+	}`, provenance, false)
 	if err != nil {
 		t.Fatalf("SaveContactFromModel() error = %v", err)
 	}
@@ -197,7 +222,7 @@ func TestSaveContactFromModelRecordsPropertyProvenanceAndSignalsOnce(t *testing.
 		"kind":"individual",
 		"facts":{"email":"PERSON@example.com","timezone":"america/chicago"},
 		"origin_tags":["PROJECTS","SIGNAL"]
-	}`, newer)
+	}`, newer, false)
 	if err != nil {
 		t.Fatalf("repeated SaveContactFromModel() error = %v", err)
 	}
@@ -231,7 +256,7 @@ func TestSaveContactFromModelDoesNotSignalRejectedOrRolledBackWrites(t *testing.
 		"name":"Custody Rejection",
 		"kind":"individual",
 		"trust_zone":"admin"
-	}`, provenance); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
+	}`, provenance, false); err == nil || !strings.Contains(err.Error(), "operator-custodied") {
 		t.Fatalf("trust-zone rejection error = %v", err)
 	}
 	if _, err := tools.store.db.Exec(`
@@ -247,7 +272,7 @@ func TestSaveContactFromModelDoesNotSignalRejectedOrRolledBackWrites(t *testing.
 		"name":"Rollback Rejection",
 		"kind":"individual",
 		"facts":{"email":"nobody@example.com"}
-	}`, provenance); err == nil || !strings.Contains(err.Error(), "forced property rollback") {
+	}`, provenance, false); err == nil || !strings.Contains(err.Error(), "forced property rollback") {
 		t.Fatalf("property rollback error = %v", err)
 	}
 	if calls != 0 {
@@ -555,7 +580,7 @@ func TestSaveContactFromModelQueuesRefreshBeforeEmbedding(t *testing.T) {
 		order = append(order, "embedding")
 	}})
 
-	if _, err := tools.SaveContactFromModel(t.Context(), `{"name":"Ordered Contact","kind":"individual"}`, &PropertyProvenance{Source: "contact_save"}); err != nil {
+	if _, err := tools.SaveContactFromModel(t.Context(), `{"name":"Ordered Contact","kind":"individual"}`, &PropertyProvenance{Source: "contact_save"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"refresh", "embedding"}; !reflect.DeepEqual(order, want) {
@@ -619,6 +644,95 @@ func TestLookupContact_ByQuery(t *testing.T) {
 	if !strings.Contains(result, "Eve Search") {
 		t.Errorf("result = %q, want to contain 'Eve Search'", result)
 	}
+}
+
+// TestLookupContact_QuerySaysWhenItStops pins that a query matching more
+// contacts than SearchLimit lists SearchLimit of them, says it stopped
+// there and how to reach one it left out, and that a query matching
+// SearchLimit contacts or fewer lists them all and says nothing of the
+// kind, since then no contact was left out. It runs on both search
+// paths.
+func TestLookupContact_QuerySaysWhenItStops(t *testing.T) {
+	tests := []struct {
+		seeded   int
+		wantMark bool
+	}{
+		{SearchLimit - 1, false},
+		{SearchLimit, false},
+		{SearchLimit + 1, true},
+	}
+	for _, fts := range []bool{true, false} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("seeded=%d/fts=%v", tt.seeded, fts), func(t *testing.T) {
+				tools := newTestTools(t)
+				tools.store.ftsEnabled = fts
+				for i := range tt.seeded {
+					if _, err := tools.store.UpsertWithProperties(&Contact{
+						FormattedName: fmt.Sprintf("Neighbour %03d", i), Kind: "individual", TrustZone: ZoneKnown, Note: "lives next to Dave",
+					}, nil); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got, err := tools.LookupContact(`{"query":"Dave"}`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if listed := min(tt.seeded, SearchLimit); !strings.Contains(got, fmt.Sprintf("Found %d contact(s)", listed)) {
+					t.Errorf("query lookup does not list %d contacts:\n%s", listed, got)
+				}
+				for _, mark := range []string{fmt.Sprintf("Stopped at %d matches; more contacts match", SearchLimit), "are listed first", "full formatted name as name"} {
+					if strings.Contains(got, mark) != tt.wantMark {
+						t.Errorf("query lookup of %d matches contains %q = %v, want %v:\n%s", tt.seeded, mark, !tt.wantMark, tt.wantMark, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestLookupContact_NameReadsNamesQueryReadsText pins the split between
+// contact_lookup's two doors: a name no record holds is not found even
+// when notes and summaries mention it, query lists the records whose
+// text does, and a first name two records share is an error naming
+// both contact_id values.
+func TestLookupContact_NameReadsNamesQueryReadsText(t *testing.T) {
+	tools := newTestTools(t)
+	for _, args := range []string{
+		`{"name":"Carol Rivera","kind":"individual","note":"Dave's partner"}`,
+		`{"name":"Eve Rivera","kind":"individual","ai_summary":"Dave's daughter"}`,
+	} {
+		if _, err := tools.SaveContact(args); err != nil {
+			t.Fatalf("save %s: %v", args, err)
+		}
+	}
+	byName, err := tools.LookupContact(`{"name":"Dave"}`)
+	if err != nil || !strings.Contains(byName, `No contact found named "Dave"`) {
+		t.Errorf("name lookup = %q, %v, want not found", byName, err)
+	}
+	byQuery, err := tools.LookupContact(`{"query":"Dave"}`)
+	if err != nil || !strings.Contains(byQuery, "Found 2 contact(s)") ||
+		!strings.Contains(byQuery, "Carol Rivera") || !strings.Contains(byQuery, "Eve Rivera") {
+		t.Errorf("query lookup = %q, %v, want both records listed", byQuery, err)
+	}
+
+	for _, args := range []string{
+		`{"name":"Dave Smith","kind":"individual","given_name":"Dave"}`,
+		`{"name":"Dave Jones","kind":"individual","given_name":"Dave"}`,
+	} {
+		if _, err := tools.SaveContact(args); err != nil {
+			t.Fatalf("save %s: %v", args, err)
+		}
+	}
+	smith, err := tools.store.FindByName("Dave Smith")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jones, err := tools.store.FindByName("Dave Jones")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tools.LookupContact(`{"name":"Dave"}`)
+	requireContains(t, err, `ambiguous contact "Dave"`, smith.ID.String(), jones.ID.String(), "matched on given_name", "Retry with the contact_id")
 }
 
 func TestLookupContact_ByKind(t *testing.T) {
@@ -1103,12 +1217,13 @@ func TestExportVCF_SelfWithTrustZoneFilter(t *testing.T) {
 
 func TestOwnerContact_ConfiguredName(t *testing.T) {
 	tools := newTestTools(t)
-	tools.SetOwnerContactName("Aimee")
 
 	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operator seeds their record before the legacy name selects it.
+	tools.SetOwnerContactName("Aimee")
 	setZone(t, tools, "Aimee", "household")
 
 	result, err := tools.OwnerContact(`{}`)
@@ -1168,7 +1283,6 @@ func TestOwnerContact_FallsBackToSoleAdmin(t *testing.T) {
 
 func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
 	tools := newTestTools(t)
-	tools.SetOwnerContactName("Aimee")
 	tools.SetOwnerActivitySource(func() []OwnerChannelActivity {
 		return []OwnerChannelActivity{
 			{
@@ -1195,6 +1309,8 @@ func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operator seeds their record before the legacy name selects it.
+	tools.SetOwnerContactName("Aimee")
 	setZone(t, tools, "Aimee", "household")
 
 	result, err := tools.OwnerContact(`{}`)
@@ -1234,7 +1350,6 @@ func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {
 
 func TestOwnerContact_LimitsOwnerActivitySummary(t *testing.T) {
 	tools := newTestTools(t)
-	tools.SetOwnerContactName("Aimee")
 	tools.SetOwnerActivitySource(func() []OwnerChannelActivity {
 		out := make([]OwnerChannelActivity, 0, ownerActivitySummaryLimit+3)
 		for i := 0; i < ownerActivitySummaryLimit+3; i++ {
@@ -1251,6 +1366,8 @@ func TestOwnerContact_LimitsOwnerActivitySummary(t *testing.T) {
 	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","facts":{"email":"aimee@example.com"}}`); err != nil {
 		t.Fatal(err)
 	}
+	// The operator seeds their record before the legacy name selects it.
+	tools.SetOwnerContactName("Aimee")
 
 	result, err := tools.OwnerContact(`{}`)
 	setZone(t, tools, "Aimee", "household")
@@ -1719,6 +1836,52 @@ func TestImportVCF_HAPersonNotImportable(t *testing.T) {
 	for k := range props {
 		if strings.Contains(strings.ToLower(k), "ha-person") || strings.Contains(strings.ToLower(k), "ha_person") {
 			t.Errorf("header rescued as property %q", k)
+		}
+	}
+}
+
+// TestImportVCF_KeyPropertiesNotImportable pins the custody rule on the
+// import path: a vCard carrying KEY or X-THANE-KEY-* installs neither,
+// whether it merges into an existing contact or creates a new one, and
+// the result says keys were dropped.
+func TestImportVCF_KeyPropertiesNotImportable(t *testing.T) {
+	tools := newTestTools(t)
+	if _, err := tools.SaveContact(`{"name":"Alice","kind":"individual","facts":{"email":"alice@example.com"}}`); err != nil {
+		t.Fatal(err)
+	}
+	vcf := "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nEMAIL:alice@example.com\r\nKEY:https://attacker.example/alice.asc\r\nX-THANE-KEY-PGP:attacker\r\nEND:VCARD\r\n" +
+		"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Bob New\r\nEMAIL:bob@example.com\r\nKEY:https://attacker.example/bob.asc\r\nEND:VCARD\r\n"
+	args, err := json.Marshal(map[string]any{"text": vcf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tools.ImportVCF(string(args))
+	if err != nil {
+		t.Fatalf("ImportVCF: %v", err)
+	}
+	if !strings.Contains(out, "3 key propert") || !strings.Contains(out, "operator custody") {
+		t.Errorf("result must say the keys were dropped: %q", out)
+	}
+	for _, name := range []string{"Alice", "Bob New"} {
+		c, err := tools.store.FindByName(name)
+		if err != nil {
+			t.Fatalf("FindByName %s: %v", name, err)
+		}
+		props, err := tools.store.GetProperties(c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hasEmail := false
+		for _, p := range props {
+			if isReservedKeyProperty(p.Property) {
+				t.Errorf("%s: key property %s=%q was imported", name, p.Property, p.Value)
+			}
+			if p.Property == "EMAIL" {
+				hasEmail = true
+			}
+		}
+		if !hasEmail {
+			t.Errorf("%s: the rest of the vCard must still import", name)
 		}
 	}
 }

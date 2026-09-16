@@ -206,12 +206,16 @@ Each projection has a rune budget — 120 for `status_line`, 500 for
 rather than trimmed, because a clipped projection reads as a fragment
 with no sign that anything is missing. The budget is a ceiling, not
 a target — compose comfortably under it; you cannot count runes
-precisely enough to graze a ceiling safely.
+precisely enough to graze a ceiling safely. A rejection names each
+failing field's overage and the fix sized to it: reword a small gap,
+remove whole items from a large one.
 
 Think about what each length is *for* rather than truncating the one
 above it. The status line is a glance: what is true right now. The
 teaser is what a reader needs to decide whether to open the document.
-The digest is enough to act on without opening it.
+The digest is enough to act on without opening it — current state
+only, rewritten whole each publish, so a resolved item leaves it rather
+than staying on marked resolved.
 
 ## Where the reasoning goes
 

@@ -79,12 +79,12 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantTool: "replace_output_ranch_notes",
 		},
 		{
-			name: "working notes rejects published audience",
+			name: "working notes rejects an agent-wide audience",
 			output: OutputSpec{
 				Name:     "ranch notes",
 				Type:     OutputTypeWorkingNotes,
 				Ref:      "core:ranch-notes.md",
-				Audience: OutputAudiencePublished,
+				Audience: OutputAudienceAgent,
 			},
 			wantErr: true,
 		},
@@ -159,12 +159,26 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "facets on internal maintained document rejected",
+			// The point of the subscribers tier: a faceted document that
+			// is never advertised. Refusing this was the old contract's
+			// assumption that a facet implies an ambient reader.
+			name: "facets on a subscribers maintained document accepted",
+			output: OutputSpec{
+				Name:     "whereabouts",
+				Type:     OutputTypeMaintainedDocument,
+				Ref:      "whereabouts:nugget.md",
+				Audience: OutputAudienceSubscribers,
+				Facets:   []FacetSpec{{Name: OutputFacetStatusLine}},
+			},
+			wantTool: "publish_output_whereabouts",
+		},
+		{
+			name: "facets on a private maintained document rejected",
 			output: OutputSpec{
 				Name:     "hypotheses",
 				Type:     OutputTypeMaintainedDocument,
 				Ref:      "core:hypotheses.md",
-				Audience: OutputAudienceInternal,
+				Audience: OutputAudiencePrivate,
 				Facets:   []FacetSpec{{Name: OutputFacetStatusLine}},
 			},
 			wantErr: true,
@@ -197,14 +211,32 @@ func TestOutputSpecEffectiveAudience(t *testing.T) {
 		want   OutputAudience
 	}{
 		{
-			name:   "maintained document defaults published",
+			name:   "maintained document defaults agent-wide",
 			output: OutputSpec{Type: OutputTypeMaintainedDocument},
-			want:   OutputAudiencePublished,
+			want:   OutputAudienceAgent,
 		},
 		{
-			name:   "working notes default internal",
+			name:   "working notes default private",
 			output: OutputSpec{Type: OutputTypeWorkingNotes},
-			want:   OutputAudienceInternal,
+			want:   OutputAudiencePrivate,
+		},
+		{
+			// Frontmatter written before the rename is on disk, so the
+			// retired spellings must still resolve rather than failing
+			// validation as unknown values.
+			name:   "legacy internal resolves to private",
+			output: OutputSpec{Type: OutputTypeMaintainedDocument, Audience: "internal"},
+			want:   OutputAudiencePrivate,
+		},
+		{
+			name:   "legacy published resolves to agent",
+			output: OutputSpec{Type: OutputTypeMaintainedDocument, Audience: "published"},
+			want:   OutputAudienceAgent,
+		},
+		{
+			name:   "subscribers is its own reach",
+			output: OutputSpec{Type: OutputTypeMaintainedDocument, Audience: OutputAudienceSubscribers},
+			want:   OutputAudienceSubscribers,
 		},
 	}
 
@@ -321,7 +353,7 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	if len(got.Outputs[0].Facets) != 2 || got.Outputs[0].Facets[0].Name != OutputFacetStatusLine {
 		t.Fatalf("round-tripped facets = %v, want [status_line teaser]", got.Outputs[0].Facets)
 	}
-	if got.Outputs[1].EffectiveAudience() != OutputAudienceInternal {
+	if got.Outputs[1].EffectiveAudience() != OutputAudiencePrivate {
 		t.Fatalf("working notes audience = %q, want internal", got.Outputs[1].EffectiveAudience())
 	}
 	if err := got.ValidatePersistable(); err != nil {

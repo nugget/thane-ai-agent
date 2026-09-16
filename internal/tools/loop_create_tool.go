@@ -35,7 +35,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
 			"output (service/event_driven only) declares a managed markdown document the loop maintains, rewriting it each cycle to reflect current state; declaring facets publishes condensed projections alongside the body instead. It comes with a private working-notes document for the loop's own thinking, and both documents are scaffolded with ownership frontmatter before launch — a faceted output's scaffold carries the exact section skeleton its publish tool fills, so the loop's first iteration sees the shape it is expected to produce. Better than the placeholder skeleton: output.initial authors the first publish at create time from the survey you just did (same arguments as the publish tool; see the parameter). A document that already exists is preserved rather than re-scaffolded or seeded; if replace=true also changes its facet contract, output.migration explicitly supplies only newly required projections while Go preserves the full body and retained projections (document_state / working_notes_state in the result report which happened). Document-owning loops carry the read-side doc tools regardless of tags (doc_read — which returns this loop's own outputs whole, even when large — plus doc_outline/doc_section for paging other large documents, and doc_history/doc_diff/doc_at for revision history). Omit output for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
-			"bindings restricts which named shared resources the loop may reach (forge_account and repo_root); a caller already inside a binding carries it into the new loop and cannot override it or place the loop under an incompatible container. " +
+			"bindings restricts which named shared resources the loop may reach (" + strings.Join(looppkg.BindingKeys(), ", ") + "); a caller already inside a binding carries it into the new loop and cannot override it or place the loop under an incompatible container. " +
 			"prompt_mode picks the system-prompt shape: set \"task\" for a mechanical maintainer/watcher/poller (fetch a source, check a state, update a document) — the compact worker prompt drops the reflective identity stack, the largest single prompt cost in a background loop; leave it unset for a loop that reflects on the agent or composes messages in its voice. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared, facets when it declared any, and working_notes_document — every document-owning loop is given a private notes surface beside its document, so its reasoning has somewhere to go that is not what it publishes. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
@@ -463,15 +463,20 @@ func parseOutputInitial(raw any, output looppkg.OutputSpec) (payload looppkg.Fac
 	}
 
 	if output.HasFacets() {
+		// Both facet checks mark their violations with projection keys
+		// (toolargs.RejectedArgumentsError), which here sit nested under
+		// output.initial rather than being arguments of loop_create. Only
+		// the text is kept, so no mark names an argument this call never
+		// sent.
 		payload, err = output.FacetPayloadFromArgs(initial)
 		if err != nil {
-			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %w", err)
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %s", err.Error())
 		}
 		// The whole declared ladder or nothing: a partial seed would
 		// publish projections describing different moments, exactly what
 		// the publish tool exists to prevent.
 		if err := output.ValidateFacetPayload(payload); err != nil {
-			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %w", err)
+			return looppkg.FacetPayload{}, "", false, fmt.Errorf("output.initial: %s", err.Error())
 		}
 		return payload, notes, true, nil
 	}
@@ -647,7 +652,12 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 				}
 				payload, err = migrateOutputPayload(record, newContract, plan.migrationValues)
 				if err != nil {
-					return "", fmt.Errorf("output.migration: %w", err)
+					// As with output.initial, the contract marks projection
+					// keys (toolargs.RejectedArgumentsError) that sit
+					// nested under output.migration, or that were
+					// preserved from the document and never sent. Only the
+					// text is kept.
+					return "", fmt.Errorf("output.migration: %s", err.Error())
 				}
 				body = payload.Full
 				documentState = "migrated_contract"
@@ -1059,9 +1069,22 @@ func thaneLoopCreateSchema() map[string]any {
 						"description": "Optional human title for the document. Defaults to the loop name.",
 					},
 					"facets": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
-						"description": "Publish selected projections alongside the full body, so each consumer takes the shape it needs. status_line and teaser are both outward-facing signals: status_line is the tight ambient form and teaser is the roomier search or cross-reference form. digest carries enough context to act. status_line is required whenever facets are declared — the one-line projection every surface can take — and teaser and digest are optional. Declaring any swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per declared projection plus full.",
+						"type": "array",
+						"items": map[string]any{
+							"anyOf": []map[string]any{
+								{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+								{
+									"type": "object",
+									"properties": map[string]any{
+										"name":   map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+										"format": map[string]any{"type": "string", "enum": []string{"markdown", "plain", "json"}},
+									},
+									"required":             []string{"name"},
+									"additionalProperties": false,
+								},
+							},
+						},
+						"description": "Publish selected projections alongside the full body, so each consumer takes the shape it needs. status_line and teaser are both outward-facing signals: status_line is the tight ambient form and teaser is the roomier search or cross-reference form. digest carries enough context to act. status_line is required whenever facets are declared — the one-line projection every surface can take — and teaser and digest are optional. Declaring any swaps the loop's generated tool from replace_output_* to publish_output_*, which takes one argument per declared projection plus full. Write a bare name for the default markdown encoding, or {\"name\": \"digest\", \"format\": \"json\"} for a projection a program reads rather than a person — a json projection is rejected at publish if it is not valid JSON, so a consumer that asked for json never receives prose.",
 					},
 					"initial": map[string]any{
 						"type":        "object",
@@ -1160,7 +1183,7 @@ func thaneLoopCreateSchema() map[string]any {
 			"bindings": map[string]any{
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
-				"description":          "Optional resource instances this loop is restricted to. Recognized keys: forge_account names the forge account every forge tool resolves to; repo_root names the repository root every file and repository-history tool resolves to. Omitted selectors default to their binding and other instances are refused. Bindings inherit from containers with outermost-ancestor-wins semantics. A caller already inside a binding cannot omit or override it, and cannot create the loop under a container that resolves that binding differently.",
+				"description":          "Optional resource instances this loop is restricted to. Recognized keys: " + looppkg.BindingKeysProse() + ". Omitted selectors default to their binding and other instances are refused. Bindings inherit from containers with outermost-ancestor-wins semantics. A caller already inside a binding cannot omit or override it, and cannot create the loop under a container that resolves that binding differently.",
 			},
 			"instructions": map[string]any{
 				"type":        "string",

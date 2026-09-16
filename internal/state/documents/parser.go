@@ -21,6 +21,8 @@ var (
 type parsedDocument struct {
 	Title   string
 	Summary string
+	// Body is the logical full projection, never the private facet codec.
+	Body string
 	// Audience is the document's single audience frontmatter value
 	// ("" when undeclared), promoted out of the frontmatter map so the
 	// index can store it as a first-class column and exclude
@@ -134,6 +136,7 @@ func parseMarkdownDocumentParts(name string, meta map[string][]string, body stri
 	return parsedDocument{
 		Title:       title,
 		Summary:     summary,
+		Body:        logicalFull,
 		Audience:    firstValue(meta, audienceFrontmatterKey),
 		Facets:      facets,
 		FacetBytes:  facetBytes,

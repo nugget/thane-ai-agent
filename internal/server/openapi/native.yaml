@@ -16,15 +16,22 @@ info:
     different host/port. Keeping the two apart lets their security models
     diverge — see below.
 
-    ## Security model (declared now, enforced in stages)
+    ## Security model
 
-    Each operation below carries an `x-thane-scope` extension naming the
-    permission it will require once authorization is enforced. Today the API is
-    open behind the network boundary; the contract is declared first so the
-    explorer, the UIs, and the eventual middleware all agree on the shape.
+    Authentication is enforced: whenever `listen.auth.tokens` holds at least
+    one operator token, every operation requires a credential except those
+    marked `security: []` (health, version, identity evidence, the console's
+    sign-in endpoints, and the companion endpoints that authenticate
+    in-band). With no operator token configured the API is open, and
+    `thane init` mints one for new workspaces. Authorization is not yet
+    scoped: each operation carries an `x-thane-scope` extension naming the
+    scope a credential will need once scoped authorization lands, and every
+    credential is unscoped today.
 
-    - **AuthN:** bearer token (`Authorization: Bearer <token>`). The scheme is
-      written OIDC-ready; tokens are minted directly for now.
+    - **AuthN:** bearer token (`Authorization: Bearer <token>`): an operator
+      token, or a companion account token, which authenticates as that
+      account. The console exchanges a token once at `POST /v1/auth/login`
+      for a session cookie and sends that instead.
     - **AuthZ scopes** are `resource:action`:
       `loops:read`, `definitions:read`, `definitions:write`, `requests:read`,
       `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
@@ -125,6 +132,7 @@ paths:
         `birth.asserted_at` is a claim covered by the signed birth commit. It
         is not an independently witnessed timestamp.
       x-thane-scope: identity:read
+      security: []
       responses:
         "200":
           description: Identity evidence snapshot.
@@ -199,12 +207,102 @@ paths:
                         ready: { type: boolean }
                         last_check: { type: string }
                         last_error: { type: string }
+  /v1/auth/login:
+    post:
+      tags: [System]
+      operationId: authLogin
+      summary: Exchange a token for a console session cookie
+      description: >-
+        The console's sign-in. Posts an operator token once and
+        receives an HttpOnly, SameSite=Strict `thane_session` cookie (marked
+        Secure when the request arrived over TLS, directly or via a proxy
+        reporting `X-Forwarded-Proto: https`). The token is never stored by
+        the console. Sessions live in memory, expire after
+        `listen.auth.session_ttl` without use, and end on restart. Returns 404
+        when no operator token is configured, since there is nothing to sign
+        in to, and 403 for a companion account token: a device credential
+        cannot become an operator's browser session.
+      security: []
+      requestBody:
+        description: The credential to exchange.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: >-
+                    An operator token. A companion account token is refused
+                    with 403.
+                  example: 0GxlTt1n5uP5R9M9Ck4vYkq1vHsZ6l2ZB7Q4Yw4GJ7A
+      responses:
+        "200":
+          description: Signed in; the session cookie is set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+              example:
+                auth_required: true
+                authenticated: true
+                principal: { kind: api_token, name: operator }
+        "400":
+          description: Missing token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: The token was not accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >-
+            A companion account token was presented. It authenticates a device,
+            not an operator, and cannot be exchanged for a console session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/auth/logout:
+    post:
+      tags: [System]
+      operationId: authLogout
+      summary: Revoke the console session
+      description: Revokes the session named by the cookie, if any, and clears the cookie.
+      security: []
+      responses:
+        "204":
+          description: Session revoked and cookie cleared.
+  /v1/auth/session:
+    get:
+      tags: [System]
+      operationId: authSession
+      summary: Whether a credential is required, and whether the caller has one
+      description: >-
+        Public, so the console can decide to show the sign-in without first
+        collecting a 401. With a valid bearer token or session cookie it
+        names the principal.
+      security: []
+      responses:
+        "200":
+          description: Gate posture and the caller's principal, if any.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSession" }
+              example:
+                auth_required: true
+                authenticated: false
   /v1/version:
     get:
       tags: [System]
       operationId: getVersion
       summary: Build and runtime metadata
-      x-thane-scope: system:read
+      description: >-
+        Unauthenticated: supervisors and deploy verification read it before
+        any credential is at hand.
+      security: []
       responses:
         "200":
           description: Version info.
@@ -496,6 +594,10 @@ paths:
         ranked by q-value (q=0 refuses a type), then specificity (exact
         beats `text/*` beats `*/*`), then listed order, so a client whose
         header names application/json ahead of text/plain gets JSON.
+        This is a reader surface: temporal templates in the authored
+        prose ({{delta:2026-09-18}}) arrive expanded against the current
+        time in the household timezone, identically in every
+        representation. The stored document keeps the raw template.
       x-thane-scope: definitions:read
       parameters:
         - name: name
@@ -690,6 +792,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Conversation" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "500":
+          description: Conversation metadata or active history could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NativeAPIError" }
   /v1/sessions/stats:
     get:
       tags: [Conversations & Sessions]
@@ -716,6 +823,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionHistory" }
+        "500":
+          description: Active conversation history could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NativeAPIError" }
   /v1/sessions/compact:
     post:
       tags: [Conversations & Sessions]
@@ -728,6 +840,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionActionAck" }
+        "500":
+          description: Compaction failed, including a failed required memory read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NativeAPIError" }
   /v1/sessions/balance:
     post:
       tags: [Conversations & Sessions]
@@ -818,15 +935,38 @@ paths:
       tags: [Archive]
       operationId: listArchivedMessages
       summary: List archived messages
+      description: |
+        Returns the oldest matching messages in chronological order, using message
+        ID to break ties at the same instant. Bounds are inclusive, with nanosecond
+        precision, and may use different time-zone offsets. In the unified store,
+        all message statuses are included. The response echoes the supplied bounds.
       x-thane-scope: archive:read
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - name: from
+          in: query
+          required: true
+          description: Inclusive lower bound as an RFC3339 timestamp, optionally with fractional seconds.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: true
+          description: Inclusive upper bound as an RFC3339 timestamp; must not precede from.
+          schema: { type: string, format: date-time }
+        - name: conversation_id
+          in: query
+          description: Restrict results to this conversation; omit for all conversations.
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: Maximum messages to return. Non-positive values use 500; values above 1000 are clamped.
+          schema: { type: integer, default: 500 }
       responses:
         "200":
           description: Archived messages within the requested time range, with the count and echoed bounds.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ArchivedMessageList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /v1/archive/search:
     get:
       tags: [Archive]
@@ -949,16 +1089,29 @@ paths:
     post:
       tags: [Checkpoints]
       operationId: restoreCheckpoint
-      summary: Restore from a checkpoint
+      summary: Report unsupported checkpoint restoration
+      description: >-
+        Restoration is not implemented. Diagnostic snapshots cannot be applied
+        to live state. When checkpointing is configured, any valid checkpoint
+        UUID returns 501 without looking up the snapshot or changing state.
       x-thane-scope: checkpoints:write
       parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
-        "200":
-          description: Acknowledgement that the checkpoint was restored.
+        "400":
+          description: The checkpoint ID is not a valid UUID.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/CheckpointRestoreAck" }
-        "404": { $ref: "#/components/responses/NotFound" }
+              schema: { $ref: "#/components/schemas/Error" }
+        "501":
+          description: Checkpoint restoration is not supported; no state was changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Checkpointing is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   # --------------------------------------------------------- Model Routing
   /v1/models:
@@ -1381,11 +1534,26 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: opaque
       description: |
-        Bearer token. Written OIDC-ready; minted directly for now. The
-        per-operation `x-thane-scope` extension names the scope the token must
-        carry once authorization is enforced.
+        Operator token from `listen.auth.tokens`, or a companion account token
+        (`companion.providers.<account>.tokens`), which authenticates as that
+        account.
+
+        A companion token is not an operator credential. It authenticates a
+        device offering data and reaches only the companion surface —
+        `/v1/realtime/ws` and its aliases, `POST /v1/companion/observations`.
+        Every other gated operation answers `403` with an error of type
+        `forbidden`, and `POST /v1/auth/login` refuses it rather than minting a
+        session. Operations marked `security: []` are public and unaffected.
+
+        Enforced on every operation except those marked `security: []`
+        whenever at least one operator token is configured; with none configured
+        the API is open. The console holds no token: it exchanges one at
+        `POST /v1/auth/login` for an HttpOnly, SameSite=Strict session cookie
+        that the browser sends instead. The per-operation `x-thane-scope`
+        extension names the scope a token will need once scoped authorization
+        lands; today every credential is unscoped.
     companionBearerAuth:
       type: http
       scheme: bearer
@@ -1444,6 +1612,32 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    AuthSession:
+      type: object
+      description: The native API gate's posture and the caller's identity.
+      required: [auth_required, authenticated]
+      properties:
+        auth_required:
+          type: boolean
+          description: Whether the API requires a credential (an operator token is configured).
+          example: true
+        authenticated:
+          type: boolean
+          description: Whether this request carried a valid credential.
+          example: true
+        principal:
+          type: object
+          description: Who the credential names; absent when unauthenticated.
+          properties:
+            kind:
+              type: string
+              description: How the identity was established.
+              enum: [api_token, companion, session, device_cert]
+              example: session
+            name:
+              type: string
+              description: The token label, companion account, or certificate subject; never a secret.
+              example: operator
     Error:
       type: object
       description: Standard error envelope returned for any 4xx/5xx response.
@@ -1453,6 +1647,29 @@ components:
           type: string
           description: Human-readable message describing what went wrong.
           example: resource not found
+
+    NativeAPIError:
+      type: object
+      description: Structured error returned by native conversation and session handlers.
+      required: [error]
+      properties:
+        error:
+          type: object
+          description: HTTP status and explanation of the failure.
+          required: [code, message, type]
+          properties:
+            code:
+              type: integer
+              description: HTTP status code.
+              example: 500
+            message:
+              type: string
+              description: Human-readable explanation of the failure.
+              example: session history unavailable
+            type:
+              type: string
+              description: Native API error category.
+              enum: [invalid_request_error]
 
     CompanionObservationBatch:
       type: object
@@ -2104,6 +2321,24 @@ components:
           description: Number of consecutive failed iterations.
           readOnly: true
           example: 0
+        unpublished_writes:
+          type: array
+          readOnly: true
+          description: Per durable write tool (a declared output's generated tool, or contact_dossier_write) and target, the latest wake that ended without landing that write — every call for that target rejected, none succeeded — while the turn itself completed normally, so consecutive_errors never counts it. The target is the canonical contact_id for contact_dossier_write and empty for a declared output's tool, which writes one document. A later completed wake in which the tool succeeds for the same target clears the entry; landing another contact's dossier does not. A dossier call whose contact_id spells no contact, or names one the tool refuses as the wrong record (not an active contact, or a second dossier for one person), writes no dossier of its own, so it has no target; it is recorded only when the wake landed no dossier, and any later landed dossier clears it. A wake that ends in an error is not observed. At most 16 entries; the oldest are dropped. Sorted by tool, then target; omitted when empty.
+          items:
+            type: object
+            properties:
+              tool: { type: string }
+              target: { type: string, description: "The canonical contact_id for contact_dossier_write. Omitted for a declared output's tool, and for dossier calls that wrote no dossier of their own." }
+              failures: { type: integer, description: "Rejected calls for this tool and target in that wake, repeat-guard refusals included." }
+              last_error: { type: string }
+              at: { type: string, format: date-time }
+              conversation_id: { type: string }
+            required: [tool, failures, at]
+        unpublished_wakes:
+          type: integer
+          readOnly: true
+          description: Wakes since the loop started that ended with at least one durable write unpublished. Omitted when zero.
         recent_conv_ids:
           type: array
           items: { type: string }
@@ -2238,6 +2473,19 @@ components:
         last_error:
           type: [string, "null"]
           description: Most recent error text; null when clean.
+        unpublished_writes:
+          type: array
+          description: Durable writes a completed wake never landed, one per tool and target, which consecutive_errors cannot show because the turn ended normally. Omitted when none.
+          items:
+            type: object
+            properties:
+              tool: { type: string }
+              target: { type: string, description: "The canonical contact_id for contact_dossier_write. Omitted for a declared output's tool, and for dossier calls that wrote no dossier of their own." }
+              failures: { type: integer, description: "Rejected calls for this tool and target in that wake, repeat-guard refusals included." }
+              last_error: { type: string }
+              at_delta: { type: string, description: "Signed delta to when the wake ended, e.g. \"-2h\"." }
+              conversation_id: { type: string }
+            required: [tool, failures, at_delta]
     LoopStatusWithView:
       description: A running loop's status snapshot enriched with its canonical LoopView projection under `view`.
       allOf:
@@ -3071,6 +3319,84 @@ components:
           link_source: exact
           is_owner: false
 
+    ConversationModelPin:
+      type: object
+      description: >-
+        A model override requested from inside one conversation. While it
+        stands, every turn of that conversation bypasses the router and runs
+        on the named deployment; a turn the deployment cannot serve routes
+        normally and is recorded in last_fallback. Pins live in process
+        memory only and clear when Thane restarts.
+      required: [conversation_id, model, pinned_at]
+      properties:
+        conversation_id:
+          type: string
+          readOnly: true
+          description: The conversation the pin applies to.
+          example: signal-alice
+        model:
+          type: string
+          readOnly: true
+          description: Resolved deployment ID the conversation is held to.
+          example: claude-opus-4-8
+        provider:
+          type: string
+          readOnly: true
+          description: Provider serving the pinned deployment.
+          example: anthropic
+        resource:
+          type: string
+          readOnly: true
+          description: Model resource the pinned deployment runs on.
+          example: cloud
+        supports_tools:
+          type: boolean
+          readOnly: true
+          description: Whether the pinned deployment can call tools.
+        supports_images:
+          type: boolean
+          readOnly: true
+          description: Whether the pinned deployment accepts image input. A turn carrying images falls back to the router when false.
+        supports_streaming:
+          type: boolean
+          readOnly: true
+          description: Whether the pinned deployment can stream responses.
+        context_window:
+          type: integer
+          readOnly: true
+          description: Configured context window of the pinned deployment, in tokens.
+          example: 200000
+        reason:
+          type: string
+          readOnly: true
+          description: Free-text justification recorded when the pin was set.
+          example: "user asked to compare opus on this thread"
+        pinned_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the pin was set.
+          example: "2026-09-03T15:04:05Z"
+        last_fallback:
+          type: object
+          readOnly: true
+          description: The most recent turn the pin could not serve; omitted until that happens.
+          required: [at, model, reason]
+          properties:
+            at:
+              type: string
+              format: date-time
+              description: RFC3339 timestamp of the turn that routed around the pin.
+              example: "2026-09-03T15:10:00Z"
+            model:
+              type: string
+              description: Deployment the router chose for that turn instead.
+              example: qwen3:8b
+            reason:
+              type: string
+              description: The preflight verdict that ruled the pinned deployment out for that turn.
+              example: it does not support image inputs
+
     ConversationSummary:
       type: object
       description: >-
@@ -3269,6 +3595,12 @@ components:
         metadata:
           $ref: "#/components/schemas/ConversationMetadata"
           description: Typed conversation metadata; omitted when none is set.
+        model_pin:
+          $ref: "#/components/schemas/ConversationModelPin"
+          description: >-
+            The live model pin holding this conversation to one deployment;
+            omitted when the conversation routes normally. Runtime state, not
+            part of the stored record: it clears when Thane restarts.
         created_at:
           type: string
           format: date-time
@@ -3311,7 +3643,8 @@ components:
       type: object
       description: >-
         Aggregated token-usage and cost totals for one breakdown bucket
-        (a model, upstream model, provider, or resource).
+        (a model, upstream model, provider, or resource). Includes reported
+        usage from failed model calls and failed requests.
       required:
         - total_records
         - total_input_tokens
@@ -3323,7 +3656,7 @@ components:
         total_records:
           type: integer
           readOnly: true
-          description: Number of usage records aggregated into this bucket.
+          description: Number of reported model calls in this bucket; one API request can produce multiple calls.
           example: 42
         total_input_tokens:
           type: integer
@@ -3352,7 +3685,7 @@ components:
         total_cost_usd:
           type: number
           readOnly: true
-          description: Total estimated cost in USD for this bucket, from the config pricing table.
+          description: Sum of the canonical per-call costs in USD, priced for each deployment and cache TTL using configured rates.
           example: 0.8421
       example:
         total_records: 42
@@ -3365,9 +3698,10 @@ components:
     SessionStats:
       type: object
       description: >-
-        Token-usage, cost, and context-window snapshot for the active
-        session, plus per-model/provider/resource breakdowns and build
-        metadata. Returned by GET /v1/sessions/stats.
+        API token usage and cost since server startup, plus current context
+        information, per-model/provider/resource breakdowns and build metadata.
+        Usage includes reported model calls from failed requests, even without
+        a configured usage ledger. Returned by GET /v1/sessions/stats.
       required:
         - total_input_tokens
         - total_output_tokens
@@ -3416,12 +3750,12 @@ components:
           type: integer
           format: int64
           readOnly: true
-          description: Total number of model requests recorded this session.
+          description: Number of successfully completed API requests since startup; separate from each breakdown's per-call total_records.
           example: 137
         estimated_cost_usd:
           type: number
           readOnly: true
-          description: Total estimated cost in USD this session, from the config pricing table.
+          description: Sum of canonical per-call costs in USD since startup, including reported usage from failed requests.
           example: 1.2843
         reported_balance_usd:
           type: number
@@ -3437,7 +3771,7 @@ components:
         by_model:
           type: object
           readOnly: true
-          description: Per-model usage totals, keyed by model alias.
+          description: Per-model usage totals, keyed by selected deployment ID when known.
           additionalProperties: { $ref: "#/components/schemas/UsageSummary" }
         by_upstream_model:
           type: object
@@ -4447,7 +4781,7 @@ components:
             - type: "null"
           readOnly: true
           description: >-
-            The captured, restorable state. Populated on create and fetch;
+            The captured diagnostic state. Populated on create and fetch;
             null in list responses, which return metadata only.
         byte_size:
           type: integer
@@ -4495,14 +4829,16 @@ components:
 
     CheckpointState:
       type: object
-      description: The actual restorable data captured in a checkpoint.
+      description: >-
+        Selected diagnostic data captured in a checkpoint. This is not a
+        complete backup and cannot restore live state.
       required: [conversations, facts]
       properties:
         conversations:
           type: array
           items: { $ref: "#/components/schemas/CheckpointConversation" }
           readOnly: true
-          description: Captured chat sessions with their full message history.
+          description: Captured chat sessions with their current working windows; excludes archived history and full message provenance.
         facts:
           type: array
           items: { $ref: "#/components/schemas/CheckpointFact" }
@@ -4512,7 +4848,7 @@ components:
           type: array
           items: { $ref: "#/components/schemas/CheckpointTask" }
           readOnly: true
-          description: Pending scheduled tasks at checkpoint time; omitted when none.
+          description: Selected pending-task metadata, without full schedules or payloads; omitted when none.
         config:
           $ref: "#/components/schemas/CheckpointConfigSnapshot"
           description: Agent configuration at checkpoint time; omitted when not captured.
@@ -4826,32 +5162,3 @@ components:
             byte_size: 31077
             message_count: 198
             fact_count: 41
-
-    CheckpointRestoreAck:
-      type: object
-      description: >-
-        Acknowledgement that a checkpoint was restored. Backs POST
-        /v1/checkpoints/{id}/restore.
-      required: [status, id, message]
-      properties:
-        status:
-          type: string
-          readOnly: true
-          description: Outcome of the restore operation.
-          enum: [restored]
-          example: restored
-        id:
-          type: string
-          format: uuid
-          readOnly: true
-          description: Identifier of the checkpoint that was restored.
-          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
-        message:
-          type: string
-          readOnly: true
-          description: Human-readable confirmation message.
-          example: checkpoint restored successfully
-      example:
-        status: restored
-        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
-        message: checkpoint restored successfully

@@ -19,7 +19,22 @@ import (
 const (
 	queuePullDefaultLimit = 5
 	queuePullMaxLimit     = 25
-	archivistPullLimit    = 3
+	// The archivist's steady-state batch. Deliberately smaller than the
+	// general default: each item is a subject whose dossier synthesis
+	// wants care rather than throughput.
+	archivistPullDefaultLimit = 3
+	// Its ceiling, which the default no longer equals. The two were the
+	// same number, so the batch size could not be raised by any prompt
+	// and a backlog could only ever drain three subjects per wake. A
+	// ceiling above the default lets a loop that can see its own depth
+	// take a bigger bite when it is behind, and change nothing when it
+	// is not.
+	//
+	// Twelve rather than the general 25: each subject pulls a session
+	// transcript into context, and a batch large enough to push one call
+	// past a local model's window would route that turn to a cloud
+	// provider — fixing the backlog by quietly paying more for it.
+	archivistPullMaxLimit = 12
 )
 
 // buildLoopQueueTools returns the loop-private work-queue tools for one
@@ -36,29 +51,73 @@ const (
 // Trigger rate (producers calling Enqueue) is fully decoupled from work
 // rate (this loop's sleep cadence).
 func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.RuntimeTool {
+	return buildQueueTools(store, loopName, queuePaceSleep)
+}
+
+// queuePace is how a queue consumer gets its next turn, which decides
+// what its queue tools tell it to do once a batch is done: a self-paced
+// loop sleeps and pulls again, and an event-driven loop woken by its
+// queue has no sleep to set, so it stops and is woken while work waits.
+type queuePace int
+
+const (
+	queuePaceSleep queuePace = iota
+	queuePaceWake
+)
+
+// queuePaceText is the pace-dependent wording of the queue tools.
+type queuePaceText struct {
+	batchEnd      string
+	limitHint     string
+	retainedNewer string
+	secondPull    string
+}
+
+func (p queuePace) text() queuePaceText {
+	if p == queuePaceWake {
+		return queuePaceText{
+			batchEnd:      "Finish this batch and stop; work still queued wakes you again.",
+			limitHint:     "Pull a batch you can finish in this wake.",
+			retainedNewer: "Newer evidence arrived while this item was being processed. The newer item remains queued and wakes you again; leave it for that wake.",
+			secondPull:    "queue_pull already returned this wake's batch; finish those items and stop — remaining work stays queued and wakes you again",
+		}
+	}
+	return queuePaceText{
+		batchEnd:      "Finish this batch, persist your state, and sleep; remaining work belongs to the next iteration.",
+		limitHint:     "Pull a batch you can actually process before sleeping.",
+		retainedNewer: "Newer evidence arrived while this item was being processed. The newer item remains queued; call queue_pull before handling it.",
+		secondPull:    "queue_pull already returned this turn's batch; finish those items, persist durable state, and call set_next_sleep — remaining work stays queued for the next iteration",
+	}
+}
+
+// buildQueueTools returns the queue tools for one consumer loop, worded
+// for how it is paced.
+func buildQueueTools(store *loopqueue.Store, loopName string, pace queuePace) []looppkg.RuntimeTool {
 	receipts := newQueueReceipts()
 	defaultPullLimit, maxPullLimit := queuePullLimits(loopName)
+	text := pace.text()
 	return []looppkg.RuntimeTool{
 		{
 			Name: "queue_pull",
 			Description: "Pull a batch of pending work items from your queue, highest priority first then oldest. " +
 				"Each item gives a subject (the key you pass to queue_ack), its source, a short summary, priority, and age — not the full payload. " +
 				"Exactly one batch may be pulled per loop iteration. Items stay queued until you queue_ack them, so an interrupted iteration just re-serves them next time. " +
-				"Finish this batch, persist your state, and sleep; remaining work belongs to the next iteration.",
+				text.batchEnd + " " +
+				"The result reports `remaining`, the number of items still queued behind this batch, and `oldest_wait`, how long the oldest of those has waited — neither counts what this batch handed you. A null `remaining` means the depth could not be measured, which is not the same as an empty queue. Together they say whether you are keeping up; your loop definition says what to do about it.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"limit": map[string]any{
 						"type":        "integer",
-						"description": fmt.Sprintf("Maximum items to pull this turn (default %d, capped at %d). Pull a batch you can actually process before sleeping.", defaultPullLimit, maxPullLimit),
+						"description": fmt.Sprintf("Maximum items to pull this turn (default %d, capped at %d). %s", defaultPullLimit, maxPullLimit, text.limitHint),
 					},
 				},
 			},
 			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				requestID := logging.RequestIDFromContext(ctx)
-				if err := receipts.beginPull(requestID); err != nil {
-					return "", err
+				if !receipts.beginPull(requestID) {
+					return "", fmt.Errorf("%s", text.secondPull)
 				}
 				limit, err := intFromMap(args, "limit")
 				if err != nil {
@@ -89,7 +148,24 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 						Age:      promptfmt.FormatDeltaOnly(it.EnqueuedAt, now),
 					})
 				}
-				return toQueueJSON(queuePullResult{Count: len(views), Items: views})
+				result := queuePullResult{Count: len(views), Items: views}
+				// Measured over the rows after this batch in drain order,
+				// so neither the count nor the age describes work already
+				// in hand. A failed probe leaves remaining null rather
+				// than zero: the pull still succeeds, because trading a
+				// whole iteration for a number would be the worse
+				// bargain, but the loop is told the depth is unknown
+				// instead of being told the queue is empty.
+				if pending, oldest, err := store.PendingBeyond(ctx, loopName, len(views)); err == nil {
+					result.Remaining = &pending
+					if pending > 0 && !oldest.IsZero() {
+						result.OldestWait = promptfmt.FormatDeltaOnly(oldest, now)
+					}
+				} else {
+					logging.Logger(ctx).Warn("queue_pull: could not measure remaining depth",
+						"loop", loopName, "error", err)
+				}
+				return toQueueJSON(result)
 			},
 		},
 		{
@@ -127,7 +203,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				case loopqueue.AckMissing:
 					return fmt.Sprintf(`{"status":"already_acknowledged","subject":%q}`, subject), nil
 				case loopqueue.AckSuperseded:
-					return fmt.Sprintf(`{"status":"retained_newer","subject":%q,"instruction":"Newer evidence arrived while this item was being processed. The newer item remains queued; call queue_pull before handling it."}`, subject), nil
+					return fmt.Sprintf(`{"status":"retained_newer","subject":%q,"instruction":%q}`, subject, text.retainedNewer), nil
 				default:
 					return "", fmt.Errorf("unexpected queue acknowledgement outcome %q", outcome)
 				}
@@ -221,7 +297,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 
 func queuePullLimits(loopName string) (defaultLimit, maxLimit int) {
 	if strings.TrimSpace(loopName) == archivist.DefinitionName {
-		return archivistPullLimit, archivistPullLimit
+		return archivistPullDefaultLimit, archivistPullMaxLimit
 	}
 	return queuePullDefaultLimit, queuePullMaxLimit
 }
@@ -232,20 +308,22 @@ type queueReceipts struct {
 	lastPullRequestID string
 }
 
-func (r *queueReceipts) beginPull(requestID string) error {
+// beginPull reports whether this request may pull, false when it has
+// already pulled its one batch.
+func (r *queueReceipts) beginPull(requestID string) bool {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		// Internal callers without a model request scope retain the historical
 		// behavior. Every model-driven loop iteration carries a request ID.
-		return nil
+		return true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.lastPullRequestID == requestID {
-		return fmt.Errorf("queue_pull already returned this turn's batch; finish those items, persist durable state, and call set_next_sleep — remaining work stays queued for the next iteration")
+		return false
 	}
 	r.lastPullRequestID = requestID
-	return nil
+	return true
 }
 
 func (r *queueReceipts) releasePull(requestID string) {
@@ -303,8 +381,26 @@ type queueItemView struct {
 }
 
 type queuePullResult struct {
-	Count int             `json:"count"`
-	Items []queueItemView `json:"items"`
+	Count int `json:"count"`
+	// Remaining is how much work is still queued beyond this batch, and
+	// is null when the depth could not be measured.
+	//
+	// It exists because a pull that hands back three items looked
+	// identical whether the queue held three or three hundred, so a loop
+	// choosing how long to sleep was doing it blind and a backlog could
+	// grow indefinitely behind a cadence that looked reasonable.
+	//
+	// Nullable for that same reason one layer down: a failed probe
+	// reporting 0 would be indistinguishable from a drained queue, which
+	// is the exact confusion this field was added to end. Null means not
+	// measured; 0 means measured and empty.
+	Remaining *int `json:"remaining"`
+	// OldestWait is how long the oldest still-queued item has waited,
+	// omitted when nothing remains. Depth alone does not distinguish a
+	// burst that just arrived from a backlog that has been losing ground
+	// for days, and those call for different sleeps.
+	OldestWait string          `json:"oldest_wait,omitempty"`
+	Items      []queueItemView `json:"items"`
 }
 
 // projectQueuePayload extracts the model-facing source + summary from a

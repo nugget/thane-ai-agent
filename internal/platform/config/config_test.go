@@ -404,7 +404,7 @@ func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 		t.Fatal("expected delegation_required to be true")
 	}
 
-	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "contact_save", "contact_lookup", "contact_owner", "session_working_memory", "session_close", "archive_search"}
+	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "contact_save", "contact_lookup", "contact_owner", "session_working_memory", "session_close", "archive_search", "doc_search", "search"}
 	if len(cfg.Agent.OrchestratorTools) != len(want) {
 		t.Fatalf("orchestrator_tools length = %d, want %d; got %v", len(cfg.Agent.OrchestratorTools), len(want), cfg.Agent.OrchestratorTools)
 	}
@@ -448,19 +448,68 @@ func TestAgentConfig_NoDefaultsWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestValidate_PersonDevicesUntrackedEntity(t *testing.T) {
+// TestValidate_PersonDevicesOutsideTrackIsAllowed pins the inversion.
+// Presence membership comes from contact ha_person_entity bindings, which
+// config validation cannot read, so a device mapping for an entity absent
+// from person.track is legitimate — and rejecting it would leave UniFi
+// room presence hostage to the list that no longer decides membership.
+func TestValidate_PersonDevicesOutsideTrackIsAllowed(t *testing.T) {
 	cfg := Default()
 	cfg.Person.Track = []string{"person.alice"}
 	cfg.Person.Devices = map[string][]DeviceMapping{
-		"person.bob": {{MAC: "aa:bb:cc:dd:ee:ff"}}, // bob is not tracked
+		"person.bob": {{MAC: "aa:bb:cc:dd:ee:ff"}},
 	}
 
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for untracked entity in person.devices")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a device mapping outside person.track to be accepted", err)
 	}
-	if !strings.Contains(err.Error(), "person.bob") {
-		t.Errorf("error should mention person.bob, got: %v", err)
+}
+
+// TestValidate_PersonDevicesShape covers what config CAN still answer:
+// the key is a well-formed person entity, and the list is not empty. An
+// empty list passes a len(Devices) > 0 gate while contributing no MAC,
+// which starts a UniFi poll loop that can never attribute a client.
+func TestValidate_PersonDevicesShape(t *testing.T) {
+	tests := []struct {
+		name      string
+		devices   map[string][]DeviceMapping
+		wantError string
+	}{
+		{
+			name:      "empty device list",
+			devices:   map[string][]DeviceMapping{"person.alice": {}},
+			wantError: "lists no devices",
+		},
+		{
+			name:      "malformed key",
+			devices:   map[string][]DeviceMapping{"person.Alice": {{MAC: "aa:bb:cc:dd:ee:ff"}}},
+			wantError: "must match person.<object_id>",
+		},
+		{
+			name:      "empty mac",
+			devices:   map[string][]DeviceMapping{"person.alice": {{MAC: ""}}},
+			wantError: "must not be empty",
+		},
+		{
+			name:    "well formed",
+			devices: map[string][]DeviceMapping{"person.alice": {{MAC: "aa:bb:cc:dd:ee:ff"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Person.Devices = tt.devices
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.wantError)
+			}
+		})
 	}
 }
 
@@ -512,12 +561,14 @@ func TestContentMaxLength_Default(t *testing.T) {
 }
 
 // TestApplyDefaults_PricingHasCurrentModels locks in cost-tracking
-// pricing for the current model fleet. Opus 4.8 is $5/$25 — far below
-// the retired Opus 4's $15/$75 — so a missing entry would silently
-// mis-price usage rather than error.
+// pricing for the current model fleet. A model missing from the table
+// records every call at $0 rather than erroring, so a fleet move that
+// outruns this table is invisible in cost reports.
 func TestApplyDefaults_PricingHasCurrentModels(t *testing.T) {
 	cfg := Default()
 	want := map[string]PricingEntry{
+		"claude-opus-5":     {InputPerMillion: 5.0, OutputPerMillion: 25.0},
+		"claude-sonnet-5":   {InputPerMillion: 2.0, OutputPerMillion: 10.0},
 		"claude-opus-4-8":   {InputPerMillion: 5.0, OutputPerMillion: 25.0},
 		"claude-sonnet-4-6": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
 		"claude-haiku-4-5":  {InputPerMillion: 1.0, OutputPerMillion: 5.0},
@@ -1036,9 +1087,11 @@ func TestValidate_PersonContactBindings(t *testing.T) {
 			wantError: "must match person.<object_id>",
 		},
 		{
-			name:      "untracked person entity",
-			bindings:  map[string]string{aliceID: "person.carol"},
-			wantError: "untracked entity",
+			// The contact store decides membership, so a binding for an
+			// entity person.track omits is legitimate; presenceRoster
+			// reconciles the two at startup where bindings are readable.
+			name:     "person entity outside person.track",
+			bindings: map[string]string{aliceID: "person.carol"},
 		},
 		{
 			name:      "duplicate person claim",
@@ -2037,5 +2090,28 @@ func TestCompanionContactBindingValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "alice") || !strings.Contains(err.Error(), "not-a-uuid") {
 		t.Errorf("rejection should name the account and value: %v", err)
+	}
+}
+
+// TestValidate_EmailBlockValidatedEvenWhenIncomplete pins that a
+// written but incomplete email block is reported rather than silently
+// disabled: an account missing its host, or a malformed bcc_owner with
+// no complete account, fails validation.
+func TestValidate_EmailBlockValidatedEvenWhenIncomplete(t *testing.T) {
+	cfg := Default()
+	cfg.Email.Accounts = []EmailAccountConfig{{Name: "personal", IMAP: EmailIMAPConfig{Username: "alice@example.com"}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "imap.host") {
+		t.Errorf("an account missing imap.host must fail validation, got %v", err)
+	}
+
+	cfg = Default()
+	cfg.Email.BccOwner = "not an address"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "bcc_owner") {
+		t.Errorf("a malformed bcc_owner must fail validation without any account, got %v", err)
+	}
+
+	cfg = Default()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("an absent email block must still validate: %v", err)
 	}
 }

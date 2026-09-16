@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/app"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/coreintegrity"
+	"github.com/nugget/thane-ai-agent/internal/server/edge"
 )
 
 // runValidate parses and validates the config that would be loaded by
@@ -43,21 +46,23 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 	// signatures may establish them, so it only runs once the config parses.
 	var admission []app.RootAdmission
 	var coreLoops []app.CoreLoopDefinition
+	var tlsErr error
 	if loadErr == nil {
 		admission = app.CheckRootAdmission(context.Background(), cfg)
 		coreLoops = app.CheckCoreLoopDefinitions(cfg)
+		tlsErr = tlsPreflight(cfg)
 	}
 	if outputFmt == "json" {
 		// Always emit JSON to stdout, even on failure — scripts may
 		// want the structured error. The error is still returned so
 		// the exit code reflects validity.
-		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity, admission, coreLoops); err != nil {
+		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity, admission, coreLoops, tlsErr); err != nil {
 			return err
 		}
 		if loadErr != nil {
 			return terminal(loadErr)
 		}
-		return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops))
+		return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops), tlsErr)
 	}
 	if loadErr != nil {
 		// Config could not load, but the integrity report is often the
@@ -70,6 +75,10 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 	}
 	fmt.Fprintf(w, "✓ Config valid: %s\n\n", cfgPath)
 	writeValidateText(w, cfg)
+	if cfg.TLS.Enabled {
+		fmt.Fprintln(w)
+		writeTLSText(w, cfg, tlsErr)
+	}
 	if integrity != nil {
 		fmt.Fprintln(w)
 		writeIntegrityText(w, *integrity)
@@ -82,7 +91,34 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		fmt.Fprintln(w)
 		writeCoreLoopText(w, coreLoops)
 	}
-	return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops))
+	return firstError(integrityError(integrity), admissionError(admission), coreLoopError(coreLoops), tlsErr)
+}
+
+// tlsPreflight runs the HTTPS front door's boot-time checks without
+// touching the network: the DNS provider resolves and its settings
+// decode, certificate storage is writable, and every client CA parses.
+// Nothing is printed by this function; the caller reports it.
+func tlsPreflight(cfg *config.Config) error {
+	if cfg == nil || !cfg.TLS.Enabled {
+		return nil
+	}
+	if err := edge.Preflight(cfg.TLS, cfg.CoreRoot()); err != nil {
+		return terminal(fmt.Errorf("https front door: %w (thane serve will refuse to start)", err))
+	}
+	return nil
+}
+
+// writeTLSText prints the front door's hostnames and the preflight
+// verdict. A token is never printed, only whether it decoded.
+func writeTLSText(w io.Writer, cfg *config.Config, err error) {
+	if err != nil {
+		fmt.Fprintf(w, "✗ HTTPS front door: %v\n", err)
+		return
+	}
+	fmt.Fprintf(w, "✓ HTTPS front door: %d hostname(s) via %s DNS-01, storage %s\n",
+		len(cfg.TLS.Hostnames), cfg.TLS.CertMagic.DNS.Provider, cfg.TLS.CertMagic.Storage)
+	fmt.Fprintf(w, "  binds %s (public port %d); listeners a supervisor hands down (LISTEN_FDS) override the bind at serve time\n",
+		net.JoinHostPort(cfg.TLS.HTTPS.Address, strconv.Itoa(cfg.TLS.HTTPS.Port)), cfg.TLS.HTTPS.EffectivePublicPort())
 }
 
 // coreLoopError converts a definition document that will not parse into
@@ -319,6 +355,16 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 	fmt.Fprintf(w, "  Home Assistant:       %v\n", cfg.HomeAssistant.Configured())
 	fmt.Fprintf(w, "  Signal bridge:        %v\n", cfg.Signal.Enabled)
 	fmt.Fprintf(w, "  Embeddings:           %v\n", cfg.Embeddings.Enabled)
+	sending, drafting := 0, 0
+	for _, acct := range cfg.Email.Accounts {
+		switch {
+		case acct.CanDeliver():
+			sending++
+		case acct.CanDraft():
+			drafting++
+		}
+	}
+	fmt.Fprintf(w, "  Email accounts:       %d (sending: %d, drafting only: %d, polling: %v)\n", len(cfg.Email.Accounts), sending, drafting, cfg.Email.PollingInterval() > 0)
 	// The core service loops are deliberately absent here: their config
 	// enabled flags stopped stating whether they run once definition
 	// documents became authoritative (#1361), and the Core loop
@@ -327,7 +373,28 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 
 // writeValidateJSON emits the structured validation report. cfg may be
 // nil when load failed; loadErr is non-nil when validation failed.
-func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report, admission []app.RootAdmission, coreLoops []app.CoreLoopDefinition) error {
+func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report, admission []app.RootAdmission, coreLoops []app.CoreLoopDefinition, tlsErr error) error {
+	type tlsJSON struct {
+		Enabled   bool   `json:"enabled"`
+		Hostnames int    `json:"hostnames,omitempty"`
+		Provider  string `json:"dns_provider,omitempty"`
+		Storage   string `json:"storage,omitempty"`
+		OK        bool   `json:"ok"`
+		Error     string `json:"error,omitempty"`
+	}
+	var tlsReport *tlsJSON
+	if loadErr == nil && cfg != nil && cfg.TLS.Enabled {
+		tlsReport = &tlsJSON{
+			Enabled:   true,
+			Hostnames: len(cfg.TLS.Hostnames),
+			Provider:  cfg.TLS.CertMagic.DNS.Provider,
+			Storage:   cfg.TLS.CertMagic.Storage,
+			OK:        tlsErr == nil,
+		}
+		if tlsErr != nil {
+			tlsReport.Error = tlsErr.Error()
+		}
+	}
 	type rootAdmissionJSON struct {
 		Root     string `json:"root"`
 		RepoPath string `json:"repo_path,omitempty"`
@@ -361,16 +428,24 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 		Integrity *coreintegrity.Report    `json:"integrity,omitempty"`
 		Roots     []rootAdmissionJSON      `json:"root_admission,omitempty"`
 		CoreLoops []app.CoreLoopDefinition `json:"core_loop_definitions,omitempty"`
+		TLS       *tlsJSON                 `json:"tls,omitempty"`
 	}{
 		Path:      cfgPath,
-		Valid:     loadErr == nil,
+		Valid:     loadErr == nil && tlsErr == nil,
 		Integrity: integrity,
 		Roots:     roots,
 		CoreLoops: coreLoops,
+		TLS:       tlsReport,
 	}
 	if loadErr != nil {
 		result.Error = loadErr.Error()
-	} else if cfg != nil {
+	} else if tlsErr != nil {
+		// A failed front-door preflight is a config serve refuses, so it
+		// reads as invalid here the way a parse failure does, not as a
+		// valid file with a footnote.
+		result.Error = tlsErr.Error()
+	}
+	if loadErr == nil && cfg != nil {
 		result.Summary = map[string]any{
 			"default_model":            cfg.Models.Default,
 			"model_resources":          len(cfg.Models.Resources),
@@ -382,6 +457,8 @@ func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr 
 			"homeassistant_configured": cfg.HomeAssistant.Configured(),
 			"signal_enabled":           cfg.Signal.Enabled,
 			"embeddings_enabled":       cfg.Embeddings.Enabled,
+			"email_accounts":           len(cfg.Email.Accounts),
+			"email_polling":            cfg.Email.PollingInterval() > 0,
 		}
 	}
 	enc := json.NewEncoder(w)

@@ -71,6 +71,14 @@ Fixed core prompt files (`axioms.md`, `persona.md`, `mission.md`,
 read/verify/frontmatter-strip/truncate mechanics. Their cache policy
 follows the section they render into, not a separate file-specific path.
 
+Between tool-loop iterations, a generated prompt refresh replaces both
+the plain text and its structured sections. Providers that serialize
+sections therefore see the same updated capabilities, guidance, and live
+state as providers that consume plain text. The initial context-usage
+estimate is omitted after a refresh because it describes the earlier
+prompt. Caller-supplied system prompts remain intact across iterations
+and are represented as a section without an explicit cache TTL.
+
 ## Adding a New Section
 
 When adding a new system-prompt section, classify it before choosing any
@@ -141,16 +149,44 @@ Thane enforces this in `applyCacheBreakpointGuards`: under-minimum runs
 have their `cache_control` stripped at request time with a WARN log.
 Unknown model families default to the strictest minimum.
 
+### Conversation History
+
+Requests worth caching also carry Anthropic's automatic, request-level
+`cache_control`. It lands on the last message block and moves forward
+as the conversation grows, so each call in a tool loop reads the
+transcript the previous call wrote and pays full input price only for
+what is new since then. It composes with the explicit system and tool
+markers: the explicit markers pin the stable prefix, the automatic one
+follows the tail. Without it, a long tool loop re-sends its whole
+growing transcript as uncached input on every iteration.
+
+`anthropicPromptCacheControl` decides which requests are worth it. The
+automatic breakpoint is sent when the system prompt carries explicit
+markers, or when `shouldUseAnthropicPromptCaching` sees any of: tool
+definitions, three or more messages, an assistant turn, or a system
+prompt of at least 4096 characters. A short one-shot request with none
+of those goes out without it, because there is nothing a later call
+would read back.
+
+It keeps the default 5m TTL. Anthropic requires longer-TTL entries to
+precede shorter ones, and the tail sits after the `5m` system run.
+
 ### The 4-Breakpoint Cap
 
 Anthropic rejects requests carrying more than four `cache_control`
-markers total across system blocks, tools, and messages. Today's policy
-normally emits two system breakpoints plus one tool breakpoint.
+markers total across system blocks, tools, and messages, and the
+automatic breakpoint counts as one. Today's policy normally emits two
+system breakpoints, one tool breakpoint, and the automatic one when the
+request qualifies for it.
 
-The guard in `applyCacheBreakpointGuards` drops excess breakpoints
-before the request is sent. It drops the blanket tool breakpoint first,
-then trims trailing system breakpoints. Every drop logs a WARN so
-operators can see why the cache did not apply.
+The guard in `applyCacheBreakpointGuards` reserves the automatic slot
+when one is being sent, then drops excess explicit breakpoints before
+the request is sent. It drops the blanket tool breakpoint first, then
+trims trailing system breakpoints. Each over-cap drop logs a WARN,
+since exceeding the cap means the assembly plan changed. Under-minimum
+drops log at DEBUG instead: a short section is a structural fact of
+the prompt that recurs on every request. Every drop, at either level,
+is also listed on the debug `outbound cache markers` line.
 
 ### Anthropic Anti-Patterns
 
@@ -158,7 +194,8 @@ operators can see why the cache did not apply.
   `LIVE STATE`, or `CONTINUITY CONTEXT`.
 - Fragmenting stable sections into many TTL runs. Each TTL transition
   can create a breakpoint.
-- Assuming four breakpoints is plenty. Tools already take one slot.
+- Assuming four breakpoints is plenty. Tools and the conversation tail
+  already take two.
 - Ignoring minimum prefix lengths. A too-short breakpoint is a no-op.
 
 ## Future Providers
@@ -178,6 +215,20 @@ that provider actually has matching semantics.
 
 ## Validating Caching
 
+Usage is priced per model call, including provider-reported usage from
+retries, partial failures, and forced-response recovery. The durable
+ledger and live API statistics use the same per-call cost, with separate
+5-minute and 1-hour cache-write rates. Request token totals sum those
+calls; changing models during a request does not reprice earlier work.
+Calls without reported usage and static fallback text create no usage
+record. A failed request retains the usage already reported.
+Usage absent before an interruption cannot be reconstructed.
+
+Usage summaries and `cost_summary` count records,
+while live API `total_requests` counts successful logical requests.
+Historical records written before per-call accounting can contain
+several iterations in one row; their counts cannot recover call totals.
+
 Provider-specific metrics differ, but useful validation usually asks:
 
 - Are stable prompt bytes reused after the first turn?
@@ -192,6 +243,11 @@ For Anthropic today, inspect:
 - `cache_hit_rate` on Anthropic debug log lines
 - `cache_hit_rate` in the session stats JSON served by `/stats`
 - raw `cache_creation_input_tokens` and `cache_read_input_tokens`
+- `request_cache_control_ttl` on the debug `outbound cache markers`
+  line: `default` means the conversation tail carries the automatic
+  breakpoint. Empty is expected on a short one-shot request; on a
+  tool-bearing or multi-turn request it means history is being re-sent
+  uncached
 
 ## References
 

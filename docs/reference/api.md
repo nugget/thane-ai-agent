@@ -1,8 +1,13 @@
 # API & Endpoints
 
-Thane can serve up to four network listeners from a single binary. The native
+Thane can serve up to six network listeners from a single binary. The native
 API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 (11434), and CardDAV (8843) listeners are each optional, enabled via config.
+An optional HTTPS front door (443, plus a redirect-only listener on 80) terminates TLS
+in-process and routes each configured hostname to the native, Ollama, or
+OpenAI surface, reaching exactly the routes and guards that surface has on
+its plaintext port; see
+[HTTPS Front Door](../operating/configuration.md#https-front-door).
 
 Every HTTP listener refuses state-changing requests (`POST`, `PUT`, `DELETE`,
 `PATCH`) that a browser marks as cross-origin, via the `Sec-Fetch-Site` and
@@ -21,6 +26,44 @@ Port 8080 serves the Thane-native API and the embedded Cognition Engine
 dashboard's static assets (no build step). The dashboard consumes its JSON and
 SSE entirely from the native `/v1` API (graph, process table, and forensics
 views). The OpenAI-compatible shim runs on its own port (see below).
+
+### Authentication
+
+The native API is gated whenever `listen.auth.tokens` holds at least one
+token. Clients send `Authorization: Bearer <token>`; an operator token
+authenticates as its label, a companion account token
+(`companion.providers.<account>.tokens`) as that account, and a client
+certificate the HTTPS front door verified as its subject. A missing or wrong
+credential gets `401` with `WWW-Authenticate: Bearer realm="thane"`.
+
+A companion account token is not an operator credential. It authenticates a
+device offering data, and it reaches the companion surface — `/v1/realtime/ws`
+and its aliases, `POST /v1/companion/observations` — and nothing else gated:
+every other gated route answers `403` with an error of type `forbidden`.
+The allowlist is deny-by-default, so a route added later is closed to
+companions until it is named on purpose, and a test derives the companion
+surface from the route table to keep the two in step. Public routes are
+unaffected, being public to everyone. This matters because that credential
+lives in a phone's Keychain and travels further than an operator token.
+
+The routes that serve without a credential are exactly: `GET /health`,
+`GET /v1/version`, `GET /v1/identity`, the console shell and `/static/*`,
+`/docs*`, the three `/v1/auth/*` endpoints, and the companion endpoints
+(`/v1/realtime/ws` and its aliases, `POST /v1/companion/observations`),
+which authenticate in-band. A CI test walks the route table and fails if a
+route is neither gated nor listed as public on purpose.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/auth/session` | Whether a credential is required and whether the caller has one; names the principal. |
+| `POST` | `/v1/auth/login` | Exchange an **operator** token for an HttpOnly, SameSite=Strict `thane_session` cookie (the console's sign-in). A companion token is refused with `403`: a device credential cannot become an operator's browser session. |
+| `POST` | `/v1/auth/logout` | Revoke the session and clear the cookie. |
+
+The console never stores a token: it exchanges one at sign-in for the
+session cookie, which the browser sends on every fetch and on the SSE
+stream. The cookie is marked Secure when the request arrived over TLS,
+directly or through a proxy reporting `X-Forwarded-Proto: https`. See
+[Listen Addresses](../operating/configuration.md#listen-addresses).
 
 ### Chat
 
@@ -72,7 +115,7 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/loops` | Running loop status snapshots. Optional `?state=` filter (`pending`, `sleeping`, `waiting`, `processing`, `error`, `stopped`). |
 | `GET` | `/v1/loops/{id}` | One running loop's status. |
 | `GET` | `/v1/loops/{id}/logs` | Structured logs for a running loop's recent conversation IDs (bare array, newest first; `?limit=` default 50, max 200). |
-| `GET` | `/v1/loops/{name}/outputs/{output}` | One declared loop output at a negotiated fidelity: `text/plain` = `status_line` when that signal shape is declared, `application/json` = typed facets + full body, `text/markdown` (default) = document body. A plain-only request is not acceptable for an output without `status_line`. |
+| `GET` | `/v1/loops/{name}/outputs/{output}` | One declared loop output at a negotiated fidelity: `text/plain` = `status_line` when that signal shape is declared, `application/json` = typed facets + full body, `text/markdown` (default) = document body. A plain-only request is not acceptable for an output without `status_line`. Temporal templates in the prose arrive expanded (household timezone); the stored document keeps the raw template. |
 | `GET` | `/v1/loops/events` | SSE stream: initial loop snapshot, then loop and delegate events. |
 | `GET` | `/v1/schedules` | Scheduler tasks (`at`/`every`/`cron`) each with its next fire time. Optional `?enabled=true`. |
 | `GET` | `/v1/schedules/{id}` | One scheduled task. |
@@ -103,6 +146,15 @@ filesystem paths, signer principals, or the contents of `.allowed_signers`.
 | `GET` | `/v1/archive/stats` | Archive statistics. |
 | `POST` | `/v1/archive/contact-dossier-backfill` | Advance one bounded page of the durable, one-time contact-dossier backfill (`?limit`, default 50, max 200). |
 
+`GET /v1/archive/messages` requires inclusive `from` and `to` RFC3339
+bounds (fractional seconds and time-zone offsets are supported). It returns
+the oldest matching messages, ordered by instant and then message ID, with
+`messages`, `count`, and the original `from`/`to` values. Use `conversation_id`
+to scope the query. `limit` defaults to 500 and is capped at 1000; non-positive
+values use the default. Reversed bounds return 400. In the unified store,
+active, compacted, and archived messages are all eligible. Large global ranges
+scan historical timestamp formats; cancelling the request cancels the query.
+
 The backfill endpoint is an operator operation (`archive:write` in the native
 API contract), not a model tool or an autonomous-loop behavior. It freezes a
 cutoff on its first call, pages active contact subjects and then historical
@@ -129,11 +181,16 @@ cadence.
 | `GET` | `/v1/checkpoints` | List checkpoints. |
 | `GET` | `/v1/checkpoints/{id}` | Get checkpoint metadata/detail. |
 | `DELETE` | `/v1/checkpoints/{id}` | Delete a checkpoint. |
-| `POST` | `/v1/checkpoints/{id}/restore` | Restore from a checkpoint. |
+| `POST` | `/v1/checkpoints/{id}/restore` | Unsupported; returns 501 for a valid checkpoint UUID when checkpointing is configured. |
 | `GET` | `/v1/realtime/ws` | First-party realtime WebSocket (canonical). |
 | `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias (deprecated; see below). |
 | `POST` | `/v1/companion/observations` | Submit a bounded latest-value observation batch from an authenticated companion. |
+
+Checkpoint snapshots capture selected diagnostic state, not a complete backup.
+They can be created and inspected, but cannot restore live state. Restore
+requests return 400 for a malformed UUID or 503 when checkpointing is not
+configured. A valid UUID returns 501 whether or not the snapshot exists.
 
 During the realtime handshake, the pre-authentication `auth_required.version`
 field identifies the companion protocol version. After successful

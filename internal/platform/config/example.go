@@ -3,7 +3,6 @@ package config
 import (
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
@@ -40,12 +39,18 @@ func ExampleConfig() *Config {
 	delegatesEnabled := true
 	envelopesEnabled := true
 	docRootIndexing := true
+	emailPollInterval := 300
+	imapTLS := true
+	smtpStartTLS := true
 
 	return &Config{
 		// ── Required / always-shown sections ──────────────────────────────
 
 		Listen: ListenConfig{
 			Port: 8080,
+			Auth: ListenAuthConfig{
+				Tokens: []APIToken{{Label: "operator", Token: "your-api-token"}},
+			},
 		},
 
 		OllamaAPI: OllamaAPIConfig{
@@ -56,6 +61,29 @@ func ExampleConfig() *Config {
 		OpenAIAPI: OpenAIAPIConfig{
 			Enabled: true,
 			Port:    8081,
+		},
+
+		TLS: TLSConfig{
+			Enabled:    false,
+			HTTPS:      TLSListenConfig{Port: 443},
+			HTTP:       TLSRedirectConfig{Port: 80},
+			HSTSMaxAge: 4320 * time.Hour,
+			Hostnames: map[string]string{
+				"thane.example.net":  "native",
+				"ollama.example.net": "ollama",
+			},
+			CertMagic: CertMagicConfig{
+				CA:     "https://acme-staging-v02.api.letsencrypt.org/directory",
+				Email:  "acme@example.net",
+				Agreed: true,
+				DNS: CertMagicDNSConfig{
+					Provider:           "linode",
+					PropagationDelay:   10 * time.Minute,
+					PropagationTimeout: 15 * time.Minute,
+					Resolvers:          []string{"ns1.linode.com", "ns2.linode.com"},
+					Settings:           map[string]any{"api_token": "your-linode-api-token"},
+				},
+			},
 		},
 
 		HomeAssistant: HomeAssistantConfig{
@@ -122,8 +150,9 @@ func ExampleConfig() *Config {
 				// root stays out unless it says otherwise, so a corpus
 				// can only inject because policy allows it.
 				Context: RootContextPolicy{
-					Inject: RootInjectTagged,
-					Search: RootSearchDefault,
+					Inject:     RootInjectTagged,
+					Search:     RootSearchDefault,
+					SearchBody: true,
 				},
 				Authoring: "managed",
 				Git: DocumentRootGitConfig{
@@ -358,24 +387,69 @@ func ExampleConfig() *Config {
 			},
 		},
 
-		Email: email.Config{
-			Accounts: []email.AccountConfig{
+		Email: EmailConfig{
+			BccOwner:     "Operator <operator@example.com>",
+			PollInterval: &emailPollInterval,
+			Accounts: []EmailAccountConfig{
 				{
-					Name: "primary",
-					IMAP: email.IMAPConfig{
+					Name:        "primary",
+					Description: "Thane's own mailbox. Correspondence with the household and trusted contacts.",
+					IMAP: EmailIMAPConfig{
 						Host:     "imap.example.com",
 						Port:     993,
 						Username: "thane@example.com",
 						Password: "your-email-password",
-						TLS:      true,
+						TLS:      &imapTLS,
 					},
-					SMTP: email.SMTPConfig{
+					SMTP: EmailSMTPConfig{
 						Host:     "smtp.example.com",
 						Port:     587,
 						Username: "thane@example.com",
 						Password: "your-email-password",
+						StartTLS: &smtpStartTLS,
 					},
-					DefaultFrom: "Thane <thane@example.com>",
+					DefaultFrom:  "Thane <thane@example.com>",
+					SentFolder:   "Sent",
+					DraftsFolder: "Drafts",
+					Policy: EmailPolicyConfig{
+						Access:                 EmailAccessSend,
+						Delivery:               EmailDeliveryByTrustZone,
+						DraftGate:              EmailDraftGateStrict,
+						DeniedRecipientDomains: []string{"example.org"},
+					},
+					Mailbox: EmailMailboxConfig{
+						Owner:         EmailMailboxOwnerAssistant,
+						WakeLoop:      EmailWakeLoopDefaultHandler,
+						ReviewDelay:   defaultEmailReviewDelay,
+						ReviewMaxWait: defaultEmailReviewMaxWait,
+						Labels:        []string{"contact"},
+					},
+				},
+				{
+					Name:        "packages",
+					Description: "Parcel and delivery notifications. Read and file only; never sends.",
+					IMAP: EmailIMAPConfig{
+						Host:     "imap.example.com",
+						Port:     993,
+						Username: "packages@example.com",
+						Password: "your-email-password",
+						TLS:      &imapTLS,
+					},
+					Policy: EmailPolicyConfig{Access: EmailAccessOrganize, Delivery: EmailDeliveryByTrustZone, DraftGate: EmailDraftGateStrict},
+					Mailbox: EmailMailboxConfig{
+						Owner:         EmailMailboxOwnerAssistant,
+						WakeLoop:      EmailWakeLoopDefaultHandler,
+						ReviewDelay:   defaultEmailReviewDelay,
+						ReviewMaxWait: defaultEmailReviewMaxWait,
+					},
+				},
+			},
+			Labels: map[string]EmailLabelConfig{
+				"contact": {
+					Meaning: "The sender matches a contact record",
+					Keyword: "thane-contact",
+					Color:   "blue",
+					Apply:   EmailLabelApplyContactMatched,
 				},
 			},
 		},
@@ -506,13 +580,13 @@ func ExampleConfig() *Config {
 		},
 
 		Pricing: map[string]PricingEntry{
-			"claude-opus-4-8": {
+			"claude-opus-5": {
 				InputPerMillion:  5.0,
 				OutputPerMillion: 25.0,
 			},
-			"claude-sonnet-4-6": {
-				InputPerMillion:  3.0,
-				OutputPerMillion: 15.0,
+			"claude-sonnet-5": {
+				InputPerMillion:  2.0,
+				OutputPerMillion: 10.0,
 			},
 			"claude-haiku-4-5": {
 				InputPerMillion:  1.0,

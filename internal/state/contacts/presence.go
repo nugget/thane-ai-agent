@@ -2,7 +2,6 @@ package contacts
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -18,46 +17,91 @@ import (
 // person in context output. Richer than the default entity JSON
 // because the tracker has provider-attributed room data.
 type PersonPresenceContext struct {
-	Entity       string `json:"entity"`
-	Name         string `json:"name"`
-	State        string `json:"state"`
-	Since        string `json:"since"`
+	// Contact identity first: the model reasons about people, and
+	// ContactID is what lets it chain into contact_whereabouts without
+	// gambling on name resolution.
+	Contact    string `json:"contact,omitempty"`
+	ContactID  string `json:"contact_id,omitempty"`
+	TrustZone  string `json:"trust_zone,omitempty"`
+	IsOperator bool   `json:"is_operator,omitempty"`
+
+	Entity string `json:"entity"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	// StateSince is when this person entity last changed state. While
+	// away that is when they left home — it is not how long they have
+	// been wherever they are now. It was named "since", which invited
+	// exactly that misreading in an always-on block with no tool call to
+	// blame and no hedge available.
+	StateSince   string `json:"state_since,omitempty"`
 	Room         string `json:"room,omitempty"`
 	RoomProvider string `json:"room_provider,omitempty"`
 	RoomSource   string `json:"room_source,omitempty"`
 	RoomConflict bool   `json:"room_conflict,omitempty"`
 }
 
+// ContactIdentity is the contact a tracked person entity resolves to.
+// The tracker holds no contact store; app wiring supplies a resolver so
+// the projection can be contact-rooted without the dependency.
+type ContactIdentity struct {
+	ID         string
+	Name       string
+	TrustZone  string
+	IsOperator bool
+}
+
+// PersonPresenceInput is the state of one tracked person.
+//
+// A struct rather than a parameter list: the previous signature took
+// eight positional primitives, and contact identity would have made it
+// twelve.
+type PersonPresenceInput struct {
+	EntityID     string
+	Name         string
+	State        string
+	StateSince   time.Time
+	Room         string
+	RoomProvider string
+	RoomSource   string
+	RoomConflict bool
+	Contact      *ContactIdentity
+	Now          time.Time
+}
+
 // FormatPersonPresence formats a tracked person as compact JSON with
 // delta-annotated timestamps.
-func FormatPersonPresence(
-	entityID, name, state string,
-	since time.Time,
-	room, roomProvider, roomSource string,
-	roomConflict bool,
-	now time.Time,
-) string {
-	displayState := state
-	if strings.EqualFold(state, "not_home") {
+func FormatPersonPresence(in PersonPresenceInput) string {
+	displayState := in.State
+	if strings.EqualFold(in.State, "not_home") {
 		displayState = "away"
 	}
-	if !strings.EqualFold(state, "home") || roomConflict {
+	room, roomProvider, roomSource := in.Room, in.RoomProvider, in.RoomSource
+	roomConflict := in.RoomConflict
+	if !strings.EqualFold(in.State, "home") || roomConflict {
 		room = ""
 		roomProvider = ""
 		roomSource = ""
 	}
-	if !strings.EqualFold(state, "home") {
+	if !strings.EqualFold(in.State, "home") {
 		roomConflict = false
 	}
 	pc := PersonPresenceContext{
-		Entity:       entityID,
-		Name:         name,
+		Entity:       in.EntityID,
+		Name:         in.Name,
 		State:        displayState,
-		Since:        promptfmt.FormatDeltaOnly(since, now),
 		Room:         room,
 		RoomProvider: roomProvider,
 		RoomSource:   roomSource,
 		RoomConflict: roomConflict,
+	}
+	if !in.StateSince.IsZero() {
+		pc.StateSince = promptfmt.FormatDeltaOnly(in.StateSince, in.Now)
+	}
+	if c := in.Contact; c != nil {
+		pc.Contact = c.Name
+		pc.ContactID = c.ID
+		pc.TrustZone = c.TrustZone
+		pc.IsOperator = c.IsOperator
 	}
 	return promptfmt.MarshalCompact(pc)
 }
@@ -101,6 +145,11 @@ type PresenceTracker struct {
 	order     []string           // insertion order for deterministic output
 	observers []RoomObserver     // called on room changes
 
+	// contactResolver maps a person entity to the contact it belongs to.
+	// Supplied by app wiring; nil in tests and in deployments with no
+	// contact store, where the block degrades to entity-only.
+	contactResolver func(entityID string) (ContactIdentity, bool)
+
 	linkedByPerson  map[string][]string
 	ownersByTracker map[string][]string
 	trackerPlatform map[string]string
@@ -115,11 +164,25 @@ type PresenceTracker struct {
 	logger *slog.Logger
 }
 
+// PresenceOption configures a tracker at construction.
+//
+// An option rather than a setter: the resolver is wiring, fixed for the
+// tracker's life, and the architecture baseline counts mutator growth
+// deliberately. Variadic so the existing call sites are untouched.
+type PresenceOption func(*PresenceTracker)
+
+// WithContactResolver supplies the entity-to-contact projection that
+// makes the presence block contact-rooted. Omitted, the block renders
+// entity-only rather than inventing an identity.
+func WithContactResolver(fn func(entityID string) (ContactIdentity, bool)) PresenceOption {
+	return func(t *PresenceTracker) { t.contactResolver = fn }
+}
+
 // NewPresenceTracker creates a person tracker for the given entity IDs. All
 // entities start in "Unknown" state until Initialize is called. The
 // timezone is an IANA location string (e.g., "America/Chicago"); an
 // empty or invalid timezone falls back to the system local timezone.
-func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger) *PresenceTracker {
+func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger, opts ...PresenceOption) *PresenceTracker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -145,7 +208,7 @@ func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger
 		order = append(order, id)
 	}
 
-	return &PresenceTracker{
+	t := &PresenceTracker{
 		people:          people,
 		order:           order,
 		linkedByPerson:  make(map[string][]string),
@@ -155,6 +218,10 @@ func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger
 		loc:             loc,
 		logger:          logger,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 // TagContextBucket places current person presence in live state.
@@ -167,38 +234,68 @@ func (t *PresenceTracker) TagContextBucket() agentctx.ContextBucket {
 // tracked. Implements [agent.TagContextProvider]; registered via
 // RegisterAlwaysContextProvider.
 //
-// People with known state are formatted as compact JSON with delta-
-// annotated timestamps following #458 conventions. People with unknown
-// or unset state are rendered as plain markdown text.
+// Every row is compact JSON with delta-annotated timestamps following
+// #458 conventions, including people whose state is unknown or unset —
+// those carry state "unknown" and no state_since.
+//
+// Live state is snapshotted under the read lock and the lock is released
+// before contact resolution, which reaches the contacts database and
+// would otherwise hold presence writers behind SQLite's busy wait.
 func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if len(t.order) == 0 {
+	rows := t.presenceRows(time.Now())
+	if len(rows) == 0 {
 		return "", nil
 	}
-
-	now := time.Now()
 
 	var sb strings.Builder
 	sb.WriteString("### People & Presence\n\n")
 
-	for _, id := range t.order {
-		p := t.people[id]
-		displayName := TitleCase(p.FriendlyName)
-
-		if p.State == "Unknown" || p.Since.IsZero() {
-			fmt.Fprintf(&sb, "- **%s**: unknown\n", displayName)
-		} else {
-			sb.WriteString(FormatPersonPresence(
-				p.EntityID, displayName, p.State, p.Since,
-				p.Room, p.RoomProvider, p.RoomSource, p.roomConflict, now,
-			))
-			sb.WriteByte('\n')
+	for i := range rows {
+		if t.contactResolver != nil {
+			if c, ok := t.contactResolver(rows[i].EntityID); ok {
+				rows[i].Contact = &c
+			}
 		}
+		sb.WriteString(FormatPersonPresence(rows[i]))
+		sb.WriteByte('\n')
 	}
 
 	return sb.String(), nil
+}
+
+// presenceRows copies the tracked people into render inputs. It takes the
+// read lock and performs no I/O, so applyPersonState reclaims the write
+// lock without waiting on contact resolution.
+func (t *PresenceTracker) presenceRows(now time.Time) []PersonPresenceInput {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	rows := make([]PersonPresenceInput, 0, len(t.order))
+	for _, id := range t.order {
+		p := t.people[id]
+		in := PersonPresenceInput{
+			EntityID:     p.EntityID,
+			Name:         TitleCase(p.FriendlyName),
+			State:        p.State,
+			StateSince:   p.Since,
+			Room:         p.Room,
+			RoomProvider: p.RoomProvider,
+			RoomSource:   p.RoomSource,
+			RoomConflict: p.roomConflict,
+			Now:          now,
+		}
+		// Unknown renders as JSON too. It used to be a markdown bullet
+		// carrying only a display name, so on the one turn the model most
+		// needs a handle it had nothing to chain into.
+		if p.State == "Unknown" || p.Since.IsZero() {
+			in.State = "unknown"
+			in.StateSince = time.Time{}
+			in.Room, in.RoomProvider, in.RoomSource = "", "", ""
+			in.RoomConflict = false
+		}
+		rows = append(rows, in)
+	}
+	return rows
 }
 
 // SetDeviceMACs configures the MAC addresses associated with a tracked

@@ -1,5 +1,7 @@
 package tools
 
+import looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+
 // loopSpecSchema returns the JSON-Schema description of the agent-facing
 // loop-definition spec object, shared by loop_definition_set,
 // loop_definition_lint, and spawn_loop. Until this existed those tools
@@ -75,7 +77,7 @@ func loopSpecSchema(description string) map[string]any {
 			"bindings": map[string]any{
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
-				"description":          "Resource instances this loop is scoped to. Tags decide whether a surface is available; bindings decide which instance of it you get. Recognized keys: \"forge_account\" — the forge account every forge tool resolves to; \"repo_root\" — the named repository root file and repository-history tools resolve to. Omitted selectors default to their binding and other instances are refused. Keys are a closed set and an unknown one refuses the definition. A container's binding cannot be overridden by its children.",
+				"description":          "Resource instances this loop is scoped to. Tags decide whether a surface is available; bindings decide which instance of it you get. Recognized keys: " + looppkg.BindingKeysProse() + ". Omitted selectors default to their binding and other instances are refused. Keys are a closed set and an unknown one refuses the definition. A container's binding cannot be overridden by its children.",
 			},
 			"sleep_min": map[string]any{
 				"type":        "string",
@@ -204,8 +206,8 @@ func loopOutputSpecSchema() map[string]any {
 			},
 			"audience": map[string]any{
 				"type":        "string",
-				"enum":        []string{"published", "internal"},
-				"description": "Who may see this output's content. published (default) allows projection into search results, context injection, and ambient surfaces; internal keeps it to this loop's own context and explicit reads by ref. working_notes outputs are internal automatically. Internal is context hygiene, not secrecy: operators and the archive still see the document.",
+				"enum":        []string{"agent", "subscribers", "private"},
+				"description": "How far this output's content reaches inside Thane. agent (default) allows projection into search results, context injection, and ambient surfaces; subscribers is for an output only the loops subscribing to it should read — never advertised, and excluded from search by default (doc_search returns it on include_restricted, or when filtering the audience key explicitly). Its delivery half is not built yet: no loop can declare a subscription to an output, so today it behaves like private plus that search opt-in, and choosing it will not deliver the output to anything; private keeps it to this loop's own context and explicit reads by ref. working_notes outputs are private automatically. Every value stays inside Thane and none of them permit anything to leave for an external surface — that is a separate declaration. This is context hygiene, not secrecy: operators and the archive still see the document.",
 			},
 			"ref":     map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
 			"mode":    map[string]any{"type": "string", "enum": []string{"replace"}, "description": "Write mode. Both output types are rewritten each cycle, so this defaults correctly when omitted and there is no reason to set it. A faceted maintained_document publishes projections instead."},

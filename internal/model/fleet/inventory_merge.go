@@ -137,7 +137,10 @@ func mergeDiscoveredDeployment(dep *Deployment, model DiscoveredModel, caps mode
 	if model.LoadedInstanceID != "" {
 		dep.LoadedInstanceID = model.LoadedInstanceID
 	}
-	dep.SupportsImages = dep.SupportsImages || model.SupportsImages
+	// Observation, not the resolved value: an operator who wrote
+	// supports_images: false keeps it off however loudly discovery
+	// disagrees.
+	dep.ObservedSupportsImages = dep.ObservedSupportsImages || model.SupportsImages
 	if model.TrainedForToolUse {
 		dep.TrainedForToolUse = true
 	}
@@ -158,7 +161,7 @@ func newDiscoveredDeployment(base *Catalog, ri ResourceInventory, model Discover
 		ObservedSupportsTools:     observedBoolCapability(model.SupportsTools, caps.SupportsTools),
 		TrainedForToolUse:         model.TrainedForToolUse,
 		ObservedSupportsStreaming: observedBoolCapability(model.SupportsStreaming, caps.SupportsStreaming),
-		SupportsImages:            model.SupportsImages,
+		ObservedSupportsImages:    model.SupportsImages,
 		ObservedContextWindow:     firstPositiveInt(model.ContextWindow, base.ContextWindowForModel(model.Name, 0)),
 		MaxContextWindow:          model.MaxContextWindow,
 		LoadedContextWindow:       model.LoadedContextWindow,

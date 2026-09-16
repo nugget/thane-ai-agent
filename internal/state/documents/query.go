@@ -213,14 +213,14 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		doc   DocumentSummary
 		score int
 	}
-	includeInternal := q.IncludeInternal || audienceExplicitlyFiltered(q)
+	includeRestricted := q.IncludeRestricted || audienceExplicitlyFiltered(q)
 	var matches []scored
 	for rows.Next() {
 		var doc DocumentSummary
 		if err := scanDocument(rows, &doc); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
-		if !includeInternal && isInternalAudienceDocument(doc.Frontmatter) {
+		if !includeRestricted && isRestrictedAudienceDocument(doc.Frontmatter) {
 			continue
 		}
 		if !hasAllTags(doc.Tags, q.Tags) {

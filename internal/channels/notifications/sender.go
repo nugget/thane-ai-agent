@@ -23,8 +23,13 @@ type HAClient interface {
 }
 
 // ContactResolver resolves a contact name to its record and properties.
-// ResolveContact uses cascading resolution (exact name → nickname →
-// search) for flexible name matching.
+// ResolveContact matches a formatted name or nickname, preferring the
+// operator's own record and then records above known, then the one
+// contact whose given name or first word the name is. It never matches
+// notes. A name two contacts at the same standing hold exactly, and a
+// first name several contacts share, are errors that list up to five
+// of them rather than a guess, so a notification is never routed to a
+// contact the name only mentions or to one of two it cannot tell apart.
 type ContactResolver interface {
 	ResolveContact(name string) (*contacts.Contact, error)
 	GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error)
@@ -94,8 +99,10 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		return fmt.Errorf("lookup properties for %q: %w", n.Recipient, err)
 	}
 
-	apps, ok := props["ha_companion_app"]
-	if !ok || len(apps) == 0 {
+	// The first value in any case, lowercase spelling first, exactly as
+	// the router reads it.
+	apps := contacts.FactValues(props, contacts.PropertyHACompanionApp)
+	if len(apps) == 0 {
 		return fmt.Errorf("contact %q has no ha_companion_app property configured", n.Recipient)
 	}
 	entity := apps[0]

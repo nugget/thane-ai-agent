@@ -5,53 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
-
-// mockLLMClient returns pre-configured responses in sequence.
-type mockLLMClient struct {
-	mu        sync.Mutex
-	responses []*llm.ChatResponse
-	callIndex int
-	calls     []mockCall
-}
-
-type mockCall struct {
-	Model    string
-	Messages []llm.Message
-	Tools    []map[string]any
-}
-
-func (m *mockLLMClient) Chat(ctx context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
-	return m.ChatStream(ctx, model, messages, toolDefs, nil)
-}
-
-func (m *mockLLMClient) ChatStream(_ context.Context, model string, messages []llm.Message, toolDefs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.calls = append(m.calls, mockCall{Model: model, Messages: messages, Tools: toolDefs})
-
-	if m.callIndex >= len(m.responses) {
-		return nil, fmt.Errorf("mock: no more responses (call %d)", m.callIndex)
-	}
-
-	resp := m.responses[m.callIndex]
-	m.callIndex++
-	return resp, nil
-}
-
-func (m *mockLLMClient) Ping(_ context.Context) error { return nil }
 
 func newTestRegistry() *tools.Registry {
 	r := tools.NewEmptyRegistry()
@@ -155,7 +118,7 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "Be concise", nil)
@@ -246,7 +209,7 @@ func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 				},
 			}
 
-			exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
+			exec := NewExecutor(slog.Default(), nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
 			exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 			result, err := exec.execute(context.Background(), "Check the hallway light", "general", "", tc.tags, executionOptions{
@@ -292,7 +255,7 @@ func TestExecute_LoopBackedInheritsCallerTags(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	ctx := tools.WithInheritableCapabilityTags(context.Background(), []string{"web", "message_channel"})
@@ -328,7 +291,7 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, executionOptions{
@@ -369,7 +332,7 @@ func TestExecute_LoopBackedTagScopedExcludesDelegateFamily(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	_, err := exec.execute(context.Background(), "task", "ha", "", []string{"web"}, executionOptions{
@@ -409,7 +372,7 @@ func TestExecute_LoopBackedTagScopedExcludesDirectHumanEgress(t *testing.T) {
 		"signal":          {"signal_send_message", "signal_send_reaction"},
 		"web":             {"web_search"},
 	})
-	exec := NewExecutor(slog.Default(), nil, nil, reg, "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, reg, "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	_, err := exec.execute(context.Background(), "task", "ha", "", []string{"notifications", "web"}, executionOptions{
@@ -435,7 +398,7 @@ func TestExecute_LoopBackedTagScopedExcludesDirectHumanEgress(t *testing.T) {
 func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 	t.Parallel()
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 
 	t.Run("tag-scoped branch", func(t *testing.T) {
 		reg := exec.delegateToolRegistry([]string{"web"}, false)
@@ -492,7 +455,7 @@ func TestDelegateToolRegistry_ExcludesDirectHumanEgress(t *testing.T) {
 		"web":             {"web_search"},
 	})
 
-	exec := NewExecutor(slog.Default(), nil, nil, reg, "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, reg, "spark/gpt-oss:20b")
 
 	for _, tt := range []struct {
 		name string
@@ -538,7 +501,7 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithCoreTagsDoNotBypassFiltering(t *
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 	exec.SetCoreTags([]string{"web"})
 
@@ -744,7 +707,7 @@ func TestExecute_LoopBackedExplicitEmptyScopeNoDuplicateExcludes(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, executionOptions{
@@ -769,7 +732,7 @@ func TestExecute_LoopBackedExplicitEmptyScopeNoDuplicateExcludes(t *testing.T) {
 }
 
 func TestExecute_EmptyTask(t *testing.T) {
-	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	exec.ConfigureLoopExecution(&mockLoopRunner{}, looppkg.NewRegistry())
 	_, err := exec.Execute(context.Background(), "", "general", "", nil)
 
@@ -784,7 +747,7 @@ func TestExecute_EmptyTask(t *testing.T) {
 // callers at the missing wiring step so future refactors do not silently
 // reintroduce a fallback path or a less actionable error.
 func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
-	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	// No ConfigureLoopExecution call.
 
 	_, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
@@ -801,7 +764,7 @@ func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
 // the contract is that loops wiring is mandatory and the failure mode
 // must be actionable.
 func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
-	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 
 	_, err := exec.StartBackground(context.Background(), "Check the office light", "general", "", nil)
 	if err == nil {
@@ -813,7 +776,7 @@ func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
 }
 
 func TestNowToolHandler_EmptyTask(t *testing.T) {
-	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	handler := NowToolHandler(exec)
 
 	result, err := handler(context.Background(), map[string]any{})
@@ -827,18 +790,25 @@ func TestNowToolHandler_EmptyTask(t *testing.T) {
 }
 
 func TestNowToolHandler_DefaultProfile(t *testing.T) {
-	mock := &mockLLMClient{
-		responses: []*llm.ChatResponse{
-			{
-				Model:        "test-model",
-				Message:      llm.Message{Role: "assistant", Content: "Done."},
-				InputTokens:  50,
-				OutputTokens: 10,
-			},
+	var captured looppkg.Request
+	var calls int
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+			calls++
+		},
+		resp: &looppkg.Response{
+			Content:      "Done.",
+			Model:        "test-model",
+			FinishReason: "stop",
+			InputTokens:  50,
+			OutputTokens: 10,
+			Iterations:   1,
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 	handler := NowToolHandler(exec)
 
 	result, err := handler(context.Background(), map[string]any{
@@ -848,8 +818,11 @@ func TestNowToolHandler_DefaultProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NowToolHandler() error = %v", err)
 	}
-	if !strings.Contains(result, "profile=general") {
-		t.Errorf("result = %q, want to contain 'profile=general'", result)
+	if calls != 1 || captured.UsageTaskName != "general" {
+		t.Fatalf("runner calls = %d, profile = %q; want one general-profile run", calls, captured.UsageTaskName)
+	}
+	if !strings.HasPrefix(result, "[Delegate SUCCEEDED: profile=general,") || !strings.Contains(result, "Done.") {
+		t.Errorf("result = %q, want successful general-profile response", result)
 	}
 }
 
@@ -928,7 +901,7 @@ func TestExecute_LoopBackedDelegateRequiresStreamingCapableModel(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(slog.Default(), nil, rtr, newTestRegistry(), "local-model")
+	exec := NewExecutor(slog.Default(), rtr, newTestRegistry(), "local-model")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	result, err := exec.Execute(context.Background(), "Inspect the current working directory", "general", "", nil)
@@ -973,7 +946,7 @@ func TestNowToolHandler_RoutesToSyncPath(t *testing.T) {
 			Model:   "test-model",
 		},
 	}
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
@@ -1003,7 +976,7 @@ func TestNowToolHandler_ContextModeFull(t *testing.T) {
 			Model:   "test-model",
 		},
 	}
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
 	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
@@ -1027,7 +1000,7 @@ func TestNowToolHandler_ContextModeFull(t *testing.T) {
 func TestNowToolHandler_InvalidContextMode(t *testing.T) {
 	t.Parallel()
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	exec.ConfigureLoopExecution(&mockLoopRunner{}, looppkg.NewRegistry())
 
 	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
@@ -1062,7 +1035,7 @@ func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
 	})
 	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
 	exec.ConfigureLoopExecution(runner, registry)
 	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
 
@@ -1105,7 +1078,7 @@ func TestAssignToolHandler_LaunchesBackgroundDelegate(t *testing.T) {
 	})
 	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, registry)
 	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
 
@@ -1154,7 +1127,7 @@ func TestStartBackground_UsesSignalChannelCompletionTarget(t *testing.T) {
 	})
 	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
 
-	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(&mockLoopRunner{
 		resp: &looppkg.Response{
 			Content: "Signal delegate answer",
@@ -1349,7 +1322,7 @@ func TestPrepareExecution_RunPolicyClamps(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 			exec.runPolicies = map[string]*RunPolicy{tc.policy.Name: &tc.policy}
 
 			prep, err := exec.prepareExecution(context.Background(), "any task", tc.policy.Name, "", nil, executionOptions{})
@@ -1402,7 +1375,7 @@ func TestPrepareExecution_GuidanceBranch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 			prep, err := exec.prepareExecution(context.Background(), tc.task, "", tc.guidance, nil, executionOptions{})
 			if err != nil {
 				t.Fatalf("prepareExecution: %v", err)
@@ -1691,7 +1664,7 @@ func TestDelegateToolRegistry_BranchCoverage(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 			if len(tc.coreTags) > 0 {
 				exec.SetCoreTags(tc.coreTags)
 			}

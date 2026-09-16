@@ -78,10 +78,10 @@ type AdvertisableDocument struct {
 // assembly is a whole slow turn. The price is that a caller on a store
 // without a running refresher sees the index as of its last refresh.
 //
-// Documents whose audience column reads internal are excluded in the
-// SQL itself — the #1250 privacy gate: curator working notes must never
-// be offered to ambient context, and must not even be fetched and
-// decoded on a per-turn path.
+// Documents declaring a reach narrower than agent-wide are excluded in
+// the SQL itself — the #1250 privacy gate: curator working notes and
+// subscriber-only outputs must never be offered to ambient context, and
+// must not even be fetched and decoded on a per-turn path.
 func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocument, error) {
 	if s == nil {
 		return nil, fmt.Errorf("document index not configured")
@@ -89,9 +89,9 @@ func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocume
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT root, rel_path, abs_path, title, summary, facets_json, COALESCE(facet_bytes_json, '{}'), tags_json, frontmatter_json, modified_at, size_bytes
 		 FROM indexed_documents
-		 WHERE LOWER(TRIM(COALESCE(audience, ''))) <> ?
+		 WHERE LOWER(TRIM(COALESCE(audience, ''))) NOT IN (?, ?, ?)
 		 ORDER BY root, rel_path`,
-		audienceInternalValue,
+		restrictedAudienceArgs()...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("enumerate advertisable documents: %w", err)
@@ -123,7 +123,7 @@ func (s *Store) AdvertisableDocuments(ctx context.Context) ([]AdvertisableDocume
 		// holds the single promoted value, while frontmatter may carry
 		// several. A document any of whose audience values reads
 		// internal stays out, even if the promoted one does not.
-		if isInternalAudienceDocument(frontmatter) {
+		if isRestrictedAudienceDocument(frontmatter) {
 			continue
 		}
 		doc.ModifiedAt, err = database.ParseTimestamp(modified)

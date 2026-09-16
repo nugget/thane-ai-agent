@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -538,9 +539,13 @@ func TestWriteDossierRequiresCanonicalActiveContact(t *testing.T) {
 		name      string
 		contactID string
 		want      string
+		// targetRefused: the refusal is of the contact named, so no retry
+		// of this contact_id is the write the caller meant. A
+		// non-canonical spelling still names its contact.
+		targetRefused bool
 	}{
 		{name: "noncanonical", contactID: "019C76E4-2FF1-7918-8D6F-6C2488F5098D", want: "canonical non-zero UUID"},
-		{name: "missing", contactID: "019c76e4-2ff1-7918-8d6f-6c2488f5098d", want: "not an active structured contact"},
+		{name: "missing", contactID: "019c76e4-2ff1-7918-8d6f-6c2488f5098d", want: "not an active structured contact", targetRefused: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := validPayload
@@ -548,6 +553,9 @@ func TestWriteDossierRequiresCanonicalActiveContact(t *testing.T) {
 			_, err := tools.WriteDossier(context.Background(), args)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("WriteDossier() error = %v, want %q", err, tt.want)
+			}
+			if got := errors.Is(err, ErrDossierTargetRefused); got != tt.targetRefused {
+				t.Errorf("errors.Is(err, ErrDossierTargetRefused) = %v, want %v", got, tt.targetRefused)
 			}
 		})
 	}

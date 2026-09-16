@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -266,7 +265,6 @@ type labelExpander interface {
 // Executor runs delegate sub-agent tasks.
 type Executor struct {
 	logger          *slog.Logger
-	llm             llm.Client
 	router          *router.Router
 	parentReg       *tools.Registry
 	runPolicies     map[string]*RunPolicy
@@ -281,7 +279,6 @@ type Executor struct {
 	loopRegistry    *looppkg.Registry
 	completionSink  looppkg.CompletionSink
 	sessionArchiver agent.SessionArchiver
-	conversations   *memory.SQLiteStore
 }
 
 // NewExecutor creates a delegate executor. The returned executor is not
@@ -289,10 +286,9 @@ type Executor struct {
 // non-nil runner and registry; without those, [Executor.Execute] and
 // [Executor.StartBackground] will fail. The remaining Configure* and
 // Set* methods supply optional cross-cutting wiring.
-func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, parentReg *tools.Registry, defaultModel string) *Executor {
+func NewExecutor(logger *slog.Logger, rtr *router.Router, parentReg *tools.Registry, defaultModel string) *Executor {
 	return &Executor{
 		logger:       logger,
-		llm:          llmClient,
 		router:       rtr,
 		parentReg:    parentReg,
 		runPolicies:  builtinRunPolicies(),
@@ -415,11 +411,10 @@ func (e *Executor) ConfigureLoopCompletionSink(sink looppkg.CompletionSink) {
 
 // ConfigureSessionLifecycle configures archival and cleanup for loop-backed
 // delegate conversations. The archiver preserves parent session linkage and
-// archived transcripts; the conversation store is cleared after completion so
-// ephemeral delegate turns do not accumulate in working memory.
-func (e *Executor) ConfigureSessionLifecycle(archiver agent.SessionArchiver, store *memory.SQLiteStore) {
+// atomically archives completed turns out of working memory while retaining
+// their transcripts and tool-call records.
+func (e *Executor) ConfigureSessionLifecycle(archiver agent.SessionArchiver) {
 	e.sessionArchiver = archiver
-	e.conversations = store
 }
 
 // RunPolicyNames returns the names of all registered run policies.
@@ -749,22 +744,9 @@ func (e *Executor) finishLoopExecution(prep *preparedExecution) {
 	if prep == nil {
 		return
 	}
-	if e.sessionArchiver != nil && e.conversations != nil {
-		msgs := e.conversations.GetMessages(prep.conversationID)
-		if err := e.sessionArchiver.ArchiveConversation(prep.conversationID, msgs, "delegate"); err != nil {
-			prep.log.Warn("failed to archive delegate conversation", "error", err)
-		}
-		sessionID := e.sessionArchiver.ActiveSessionID(prep.conversationID)
-		if sessionID == "" {
-			sessionID = prep.archiveSessionID
-		}
-		if sessionID != "" {
-			if err := e.sessionArchiver.EndSession(sessionID, "delegate"); err != nil {
-				prep.log.Warn("failed to end delegate session", "error", err)
-			}
-		}
-		if err := e.conversations.Clear(prep.conversationID); err != nil {
-			prep.log.Warn("failed to clear delegate conversation", "error", err)
+	if e.sessionArchiver != nil {
+		if err := e.sessionArchiver.CloseConversation(prep.conversationID, "delegate"); err != nil {
+			prep.log.Warn("failed to close delegate conversation", "error", err)
 		}
 		return
 	}

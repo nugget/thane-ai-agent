@@ -25,7 +25,7 @@ func TestDelegateCarriesCallerBindings(t *testing.T) {
 
 	newPrep := func(t *testing.T, ctx context.Context) *preparedExecution {
 		t.Helper()
-		exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+		exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 		prep, err := exec.prepareExecution(ctx, "audit the queue", "", "", nil, executionOptions{})
 		if err != nil {
 			t.Fatalf("prepareExecution: %v", err)
@@ -63,7 +63,7 @@ func TestDelegateCarriesCallerBindings(t *testing.T) {
 	} {
 		t.Run("launch carries the binding for "+string(op), func(t *testing.T) {
 			t.Parallel()
-			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 			prep := newPrep(t, boundCtx)
 
 			launch := exec.buildLoopLaunch(prep, "audit the queue", "", op,
@@ -77,7 +77,7 @@ func TestDelegateCarriesCallerBindings(t *testing.T) {
 
 	t.Run("the launched spec does not alias the caller's map", func(t *testing.T) {
 		t.Parallel()
-		exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+		exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 		prep := newPrep(t, boundCtx)
 
 		launch := exec.buildLoopLaunch(prep, "audit", "", looppkg.OperationRequestReply,
@@ -91,7 +91,7 @@ func TestDelegateCarriesCallerBindings(t *testing.T) {
 
 	t.Run("the launched spec validates", func(t *testing.T) {
 		t.Parallel()
-		exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+		exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
 		prep := newPrep(t, boundCtx)
 
 		launch := exec.buildLoopLaunch(prep, "audit", "", looppkg.OperationRequestReply,

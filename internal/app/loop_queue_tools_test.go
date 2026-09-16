@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -61,7 +62,12 @@ func TestArchivistQueuePullEnforcesWakeBatchLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, subject := range []string{"session:one", "session:two", "session:three", "session:four", "session:five"} {
+	// Enough to exercise the ceiling, which is now above the default.
+	subjects := make([]string, 0, archivistPullMaxLimit+3)
+	for i := range archivistPullMaxLimit + 3 {
+		subjects = append(subjects, fmt.Sprintf("session:%02d", i))
+	}
+	for _, subject := range subjects {
 		if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{}`)); err != nil {
 			t.Fatal(err)
 		}
@@ -80,11 +86,19 @@ func TestArchivistQueuePullEnforcesWakeBatchLimit(t *testing.T) {
 
 	for _, tc := range []struct {
 		name      string
+		want      int
 		requestID string
 		args      map[string]any
 	}{
-		{name: "omitted limit", requestID: "r_default", args: map[string]any{}},
-		{name: "oversized limit", requestID: "r_oversized", args: map[string]any{"limit": 25}},
+		{name: "omitted limit takes the default", requestID: "r_default", args: map[string]any{}, want: archivistPullDefaultLimit},
+		{
+			// Previously this clamped to the default too, because the
+			// default and the ceiling were the same number. They are not
+			// any more: a loop that can see it is behind may ask for a
+			// bigger batch, up to the ceiling.
+			name:      "oversized limit clamps to the ceiling, not the default",
+			requestID: "r_oversized", args: map[string]any{"limit": 25}, want: archivistPullMaxLimit,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := pull(logging.WithRequestID(t.Context(), tc.requestID), tc.args)
@@ -95,8 +109,8 @@ func TestArchivistQueuePullEnforcesWakeBatchLimit(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &result); err != nil {
 				t.Fatalf("decode queue_pull: %v", err)
 			}
-			if result.Count != archivistPullLimit || len(result.Items) != archivistPullLimit {
-				t.Fatalf("queue_pull result = %#v, want %d items", result, archivistPullLimit)
+			if result.Count != tc.want || len(result.Items) != tc.want {
+				t.Fatalf("queue_pull result count = %d (%d items), want %d", result.Count, len(result.Items), tc.want)
 			}
 		})
 	}
@@ -284,5 +298,196 @@ func TestQueueAckToolDiscardsCompletedReceiptBeforeKeyRecreation(t *testing.T) {
 	items, err := store.Peek(t.Context(), "archivist", 1)
 	if err != nil || len(items) != 1 || string(items[0].Payload) != `{"v":2}` {
 		t.Fatalf("recreated item was not retained: items=%#v err=%v", items, err)
+	}
+}
+
+// TestQueuePullReportsRemainingDepth pins the signal a self-paced loop
+// needs and did not have. A pull that hands back three items looked
+// identical whether the queue held three or three hundred, so a loop
+// choosing its own sleep was choosing it blind — and the archivist's
+// backlog grew to 266 behind a four-hour nap that looked entirely
+// reasonable from where it was standing.
+func TestQueuePullReportsRemainingDepth(t *testing.T) {
+	pullOnce := func(t *testing.T, enqueued, limit int) queuePullResult {
+		t.Helper()
+
+		db, err := database.OpenMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		store, err := loopqueue.NewStore(db, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range enqueued {
+			subject := fmt.Sprintf("session:%03d", i)
+			if err := store.Enqueue(t.Context(), "archivist", subject, 0, []byte(`{}`)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		var pull func(context.Context, map[string]any) (string, error)
+		for _, tool := range buildLoopQueueTools(store, "archivist") {
+			if tool.Name == "queue_pull" {
+				pull = tool.Handler
+			}
+		}
+		raw, err := pull(logging.WithRequestID(t.Context(), "r1"), map[string]any{"limit": limit})
+		if err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		var got queuePullResult
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		return got
+	}
+
+	tests := []struct {
+		name          string
+		enqueued      int
+		limit         int
+		wantCount     int
+		wantRemaining int
+	}{
+		{
+			// The case that motivated this: a full batch, and a great
+			// deal more behind it.
+			name: "a deep queue says how deep", enqueued: 266, limit: 3,
+			wantCount: 3, wantRemaining: 263,
+		},
+		{
+			// Peeked items stay pending until acked, so remaining has to
+			// exclude the batch in hand or it would double-count it.
+			name: "remaining excludes the batch in hand", enqueued: 5, limit: 5,
+			wantCount: 5, wantRemaining: 0,
+		},
+		{name: "an exhausted queue reports nothing behind it", enqueued: 2, limit: 3, wantCount: 2, wantRemaining: 0},
+		{name: "an empty queue", enqueued: 0, limit: 3, wantCount: 0, wantRemaining: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pullOnce(t, tt.enqueued, tt.limit)
+			if got.Count != tt.wantCount {
+				t.Errorf("count = %d, want %d", got.Count, tt.wantCount)
+			}
+			if got.Remaining == nil {
+				t.Fatalf("remaining = null, want it measured as %d", tt.wantRemaining)
+			}
+			if *got.Remaining != tt.wantRemaining {
+				t.Errorf("remaining = %d, want %d", *got.Remaining, tt.wantRemaining)
+			}
+			// Depth alone cannot tell a burst that just arrived from a
+			// backlog losing ground for days, and those want different
+			// sleeps — so the wait is reported whenever anything remains.
+			if tt.wantRemaining > 0 && got.OldestWait == "" {
+				t.Error("remaining work reported with no oldest_wait")
+			}
+			if tt.wantRemaining == 0 && got.OldestWait != "" {
+				t.Errorf("oldest_wait = %q with nothing remaining", got.OldestWait)
+			}
+		})
+	}
+}
+
+// TestArchivistPullCeilingExceedsItsDefault pins that a backlog can
+// actually be worked through. The default and the maximum were the same
+// number, so no prompt could ask for a bigger batch and a queue could
+// only ever drain three subjects per wake however far behind it fell.
+// The default is unchanged: steady state should still be three careful
+// subjects, not twelve rushed ones.
+func TestArchivistPullCeilingExceedsItsDefault(t *testing.T) {
+	def, max := queuePullLimits("archivist")
+	if def != archivistPullDefaultLimit {
+		t.Errorf("default = %d, want %d", def, archivistPullDefaultLimit)
+	}
+	if max <= def {
+		t.Errorf("max = %d and default = %d; a backlog cannot be worked down when they are equal", max, def)
+	}
+	// Each subject pulls a session transcript into context. A ceiling
+	// large enough to push one call past a local model's window would
+	// route that turn to a cloud provider, which fixes the backlog by
+	// quietly paying more for it.
+	if max > queuePullMaxLimit {
+		t.Errorf("max = %d exceeds the general ceiling %d", max, queuePullMaxLimit)
+	}
+}
+
+// TestQueuePullOldestWaitDescribesWhatIsLeft pins that the reported age
+// belongs to the backlog, not to the batch in hand.
+//
+// Drain order is oldest-first within a priority, so an aggregate over the
+// whole partition necessarily returns an item this pull just handed over.
+// A loop reading that would size its sleep against the age of work it had
+// already picked up — precisely backwards.
+func TestQueuePullOldestWaitDescribesWhatIsLeft(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Four items, of which the three that a batch would take are made
+	// genuinely older. Enqueueing in a loop is not enough: the rows land
+	// inside the same second and their timestamps tie, which hides the
+	// very difference this test exists to detect.
+	for i := range 4 {
+		if err := store.Enqueue(t.Context(), "archivist", fmt.Sprintf("session:%d", i), 0, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE loop_queue SET enqueued_at = datetime(enqueued_at, '-1 hour')
+		 WHERE dedup_key IN ('session:0','session:1','session:2')`); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	pending, oldest, err := store.PendingBeyond(t.Context(), "archivist", 3)
+	if err != nil {
+		t.Fatalf("PendingBeyond: %v", err)
+	}
+	if pending != 1 {
+		t.Fatalf("pending beyond 3 = %d, want 1", pending)
+	}
+
+	all, wholePartitionOldest, err := store.PendingBeyond(t.Context(), "archivist", 0)
+	if err != nil {
+		t.Fatalf("PendingBeyond(0): %v", err)
+	}
+	if all != 4 {
+		t.Fatalf("pending beyond 0 = %d, want 4", all)
+	}
+	if !oldest.After(wholePartitionOldest) {
+		t.Errorf("oldest beyond the batch (%s) is not newer than the partition's oldest (%s); the batch in hand is being described",
+			oldest, wholePartitionOldest)
+	}
+}
+
+// TestQueuePullUnmeasuredDepthIsNullNotZero pins the result shape for a
+// failed probe. Reporting 0 would be indistinguishable from a drained
+// queue — the same absent-signal-reads-as-healthy failure this whole
+// change exists to remove, one layer down.
+func TestQueuePullUnmeasuredDepthIsNullNotZero(t *testing.T) {
+	unmeasured, err := json.Marshal(queuePullResult{Count: 1, Items: []queueItemView{{Subject: "session:x"}}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(unmeasured), `"remaining":null`) {
+		t.Errorf("unmeasured depth serialized as %s, want an explicit null", unmeasured)
+	}
+
+	zero := 0
+	measured, err := json.Marshal(queuePullResult{Count: 1, Remaining: &zero, Items: []queueItemView{{Subject: "session:x"}}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(measured), `"remaining":0`) {
+		t.Errorf("a measured empty queue serialized as %s, want remaining 0", measured)
 	}
 }

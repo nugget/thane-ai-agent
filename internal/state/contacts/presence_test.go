@@ -51,8 +51,13 @@ func TestNewPresenceTracker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
-	if !strings.Contains(result, ": unknown") {
+	// Unknown renders as JSON now, not a markdown bullet: the model needs
+	// a chainable handle on the turn it knows least.
+	if !strings.Contains(result, `"state":"unknown"`) {
 		t.Errorf("expected unknown state in initial context, got:\n%s", result)
+	}
+	if !strings.Contains(result, `"entity":"person.alice"`) {
+		t.Errorf("expected unknown rows to stay chainable, got:\n%s", result)
 	}
 }
 
@@ -126,9 +131,9 @@ func TestTracker_Initialize_PartialFailure(t *testing.T) {
 	if !strings.Contains(result, `"name":"Alice"`) || !strings.Contains(result, `"state":"home"`) {
 		t.Errorf("expected Alice with state:home, got:\n%s", result)
 	}
-	// Bob should show unknown.
-	if !strings.Contains(result, "- **Bob**: unknown") {
-		t.Errorf("expected Bob: unknown, got:\n%s", result)
+	// Bob should show unknown, as JSON like everyone else.
+	if !strings.Contains(result, `{"entity":"person.bob","name":"Bob","state":"unknown"}`) {
+		t.Errorf("expected Bob unknown as JSON, got:\n%s", result)
 	}
 }
 
@@ -165,8 +170,8 @@ func TestTracker_HandleStateChange_IgnoresUntracked(t *testing.T) {
 	tracker.HandleStateChange("light.kitchen", "off", "on", "")
 
 	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
-	if !strings.Contains(result, "- **Alice**: unknown") {
-		t.Errorf("expected Alice: unknown unchanged, got:\n%s", result)
+	if !strings.Contains(result, `{"entity":"person.alice","name":"Alice","state":"unknown"}`) {
+		t.Errorf("expected Alice unknown unchanged, got:\n%s", result)
 	}
 }
 
@@ -270,8 +275,10 @@ func TestTracker_GetContext(t *testing.T) {
 	if !strings.Contains(result, `"entity":"person.alice"`) || !strings.Contains(result, `"state":"home"`) {
 		t.Errorf("expected JSON format with entity and state, got:\n%s", result)
 	}
-	if !strings.Contains(result, `"since":"-`) {
-		t.Errorf("expected delta since field, got:\n%s", result)
+	// state_since, not since: it is when the entity last changed state,
+	// which while away is when they left home.
+	if !strings.Contains(result, `"state_since":"-`) {
+		t.Errorf("expected delta state_since field, got:\n%s", result)
 	}
 
 	// Verify Alice comes before Bob (insertion order).
@@ -773,5 +780,78 @@ func TestPresenceSnapshot(t *testing.T) {
 	}
 	if _, ok := tracker.Snapshot("person.nobody"); ok {
 		t.Error("untracked entity reported as tracked")
+	}
+}
+
+// TestPresenceIsContactRooted pins the projection the model depends on.
+//
+// Without contact_id in this block the model cannot chain into
+// contact_whereabouts on a turn with no counterparty binding — it has
+// only a friendly name and has to gamble on resolution.
+func TestPresenceIsContactRooted(t *testing.T) {
+	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil, WithContactResolver(func(entityID string) (ContactIdentity, bool) {
+		if entityID != "person.alice" {
+			return ContactIdentity{}, false
+		}
+		return ContactIdentity{
+			ID:         "019c76e4-2ff1-7918-8d6f-6c2488f5098d",
+			Name:       "Alice",
+			TrustZone:  "owner",
+			IsOperator: true,
+		}, true
+	}))
+	tracker.HandleStateChange("person.alice", "not_home", "home", "")
+
+	out, err := tracker.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	for _, want := range []string{
+		`"contact":"Alice"`,
+		`"contact_id":"019c76e4-2ff1-7918-8d6f-6c2488f5098d"`,
+		`"trust_zone":"owner"`,
+		`"is_operator":true`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("presence block missing %s, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestPresenceDegradesWithoutContactStore keeps the block honest where no
+// contact claims the entity: entity-only, never an invented identity.
+func TestPresenceDegradesWithoutContactStore(t *testing.T) {
+	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
+	tracker.HandleStateChange("person.alice", "not_home", "home", "")
+
+	out, err := tracker.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if strings.Contains(out, "contact_id") || strings.Contains(out, "trust_zone") {
+		t.Errorf("unbound entity should carry no contact identity, got:\n%s", out)
+	}
+	if !strings.Contains(out, `"entity":"person.alice"`) {
+		t.Errorf("entity row should still render, got:\n%s", out)
+	}
+}
+
+// TestStateSinceIsNotDwellTime documents the semantics the rename exists
+// for: while away this is when they left home, not how long they have
+// been anywhere.
+func TestStateSinceIsNotDwellTime(t *testing.T) {
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	out := FormatPersonPresence(PersonPresenceInput{
+		EntityID:   "person.alice",
+		Name:       "Alice",
+		State:      "not_home",
+		StateSince: now.Add(-3*time.Hour - 44*time.Minute),
+		Now:        now,
+	})
+	if !strings.Contains(out, `"state_since":"-3h44m"`) {
+		t.Errorf("expected state_since delta, got: %s", out)
+	}
+	if strings.Contains(out, `"since"`) {
+		t.Errorf("bare `since` invites reading this as dwell time, got: %s", out)
 	}
 }

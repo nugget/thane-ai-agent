@@ -185,7 +185,8 @@ func (c *OllamaClient) Chat(ctx context.Context, model string, messages []llm.Me
 }
 
 // ChatStream sends a streaming chat request to Ollama.
-// If callback is non-nil, tokens are streamed to it.
+// If callback is non-nil, tokens are streamed to it. On error, a non-nil
+// response preserves already-reported usage without assistant output.
 func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
@@ -234,6 +235,8 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
 	}
 
+	upstreamRequestID := resp.Header.Get("x-request-id")
+
 	// Extract valid tool names for validation
 	validToolNames := extractToolNames(tools)
 
@@ -241,9 +244,12 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		// Non-streaming: single JSON response
 		var wire ollamaWireResponse
 		if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
-			return nil, fmt.Errorf("decode response: %w", err)
+			partial := wire.toChatResponse()
+			partial.UpstreamRequestID = upstreamRequestID
+			return usageOnlyResponse(partial), fmt.Errorf("decode response: %w", err)
 		}
 		chatResp := wire.toChatResponse()
+		chatResp.UpstreamRequestID = upstreamRequestID
 
 		c.logger.Debug("response received",
 			"model", chatResp.Model,
@@ -274,6 +280,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	// Streaming: read newline-delimited JSON
 	var finalResp *llm.ChatResponse
+	var lastUsage *llm.ChatResponse
 	var toolCalls []llm.ToolCall
 	var contentBuilder strings.Builder
 	toolCallBufferFlushed := false // tracks whether we've started streaming to client
@@ -285,7 +292,19 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			if err == io.EOF {
 				break
 			}
-			return nil, fmt.Errorf("decode stream chunk: %w", err)
+			if lastUsage != nil {
+				lastUsage.InputTokens = max(lastUsage.InputTokens, wire.PromptEvalCount)
+				lastUsage.OutputTokens = max(lastUsage.OutputTokens, wire.EvalCount)
+			} else {
+				lastUsage = usageOnlyResponse(wire.toChatResponse())
+			}
+			if lastUsage != nil {
+				lastUsage.UpstreamRequestID = upstreamRequestID
+			}
+			return lastUsage, fmt.Errorf("decode stream chunk: %w", err)
+		}
+		if wire.PromptEvalCount != 0 || wire.EvalCount != 0 {
+			lastUsage = usageOnlyResponse(wire.toChatResponse())
 		}
 
 		// Accumulate content.
@@ -327,10 +346,19 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	if finalResp == nil {
 		c.logger.Debug("stream ended without done marker, synthesizing response")
-		finalResp = &llm.ChatResponse{Model: model, Done: true}
+		finalResp = lastUsage
+		if finalResp == nil {
+			finalResp = &llm.ChatResponse{Model: model}
+		}
+		if finalResp.Model == "" {
+			finalResp.Model = model
+		}
+		finalResp.Done = true
 		finalResp.Message.Content = contentBuilder.String()
 		finalResp.Message.ToolCalls = toolCalls
 	}
+
+	finalResp.UpstreamRequestID = upstreamRequestID
 
 	c.logger.Debug("stream complete",
 		"model", finalResp.Model,
@@ -452,17 +480,4 @@ func (c *OllamaClient) ListModelInfos(ctx context.Context) ([]OllamaModelInfo, e
 	}
 
 	return result.Models, nil
-}
-
-// ListModels returns available model names.
-func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
-	models, err := c.ListModelInfos(ctx)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(models))
-	for i, m := range models {
-		names[i] = m.Name
-	}
-	return names, nil
 }

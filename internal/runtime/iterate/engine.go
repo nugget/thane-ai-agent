@@ -36,6 +36,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterations         []IterationRecord
 		toolsUsed          = make(map[string]int)
 		toolCallCounts     = make(map[string]int)
+		ledger             = newToolLedger()
 		totalInput         int
 		totalOutput        int
 		totalCacheCreate   int
@@ -90,59 +91,44 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// per second is minutes of work discarded on arrival.
 		callCtx := iterCtx
 		if cfg.MaxOutputTokens > 0 {
-			callCtx = llm.WithMaxOutputTokens(iterCtx, cfg.MaxOutputTokens-totalOutput)
+			callCtx = llm.WithMaxOutputTokens(iterCtx, llm.ClampMaxOutputTokens(iterCtx, cfg.MaxOutputTokens-totalOutput))
 		}
 		llmResp, err := cfg.LLM.ChatStream(callCtx, model, messages, toolDefs, cfg.Stream)
-		if err != nil {
-			if cfg.OnLLMError != nil {
-				var newModel string
-				// callCtx, not iterCtx: this handler retries, fails
-				// over, and downshifts to a recovery model, and each of
-				// those is a real generation against the same budget.
-				// Handing it the unbudgeted context left every recovery
-				// path free to run away — the exact behavior this change
-				// exists to stop, reached by the route taken when
-				// something has already gone wrong.
-				llmResp, newModel, err = cfg.OnLLMError(callCtx, err, model, messages, toolDefs, cfg.Stream)
-				if err != nil {
-					return &Result{
-						Model:                      model,
-						UpstreamRequestID:          latestUpstreamRequestID(iterations),
-						InputTokens:                totalInput,
-						PeakInputTokens:            peakInputTokens(iterations),
-						OutputTokens:               totalOutput,
-						CacheCreationInputTokens:   totalCacheCreate,
-						CacheCreation5mInputTokens: totalCacheCreate5m,
-						CacheCreation1hInputTokens: totalCacheCreate1h,
-						CacheReadInputTokens:       totalCacheRead,
-						ToolsUsed:                  toolsUsed,
-						Exhausted:                  true,
-						Iterations:                 iterations,
-						Messages:                   messages,
-						IterationCount:             len(iterations),
-					}, err
-				}
-				if newModel != "" {
-					model = newModel
-				}
-			} else {
-				return &Result{
-					Model:                      model,
-					UpstreamRequestID:          latestUpstreamRequestID(iterations),
-					InputTokens:                totalInput,
-					PeakInputTokens:            peakInputTokens(iterations),
-					OutputTokens:               totalOutput,
-					CacheCreationInputTokens:   totalCacheCreate,
-					CacheCreation5mInputTokens: totalCacheCreate5m,
-					CacheCreation1hInputTokens: totalCacheCreate1h,
-					CacheReadInputTokens:       totalCacheRead,
-					ToolsUsed:                  toolsUsed,
-					Exhausted:                  true,
-					Iterations:                 iterations,
-					Messages:                   messages,
-					IterationCount:             len(iterations),
-				}, err
+		if err != nil && !errors.Is(err, llm.ErrOutputBudgetExhausted) && cfg.OnLLMError != nil {
+			var newModel string
+			llmResp, newModel, err = cfg.OnLLMError(callCtx, err, model, messages, toolDefs, cfg.Stream)
+			if err == nil && newModel != "" {
+				model = newModel
 			}
+		}
+		if err != nil {
+			partial := &Result{
+				Model:                      model,
+				UpstreamRequestID:          latestUpstreamRequestID(iterations),
+				InputTokens:                totalInput,
+				PeakInputTokens:            peakInputTokens(iterations),
+				OutputTokens:               totalOutput,
+				CacheCreationInputTokens:   totalCacheCreate,
+				CacheCreation5mInputTokens: totalCacheCreate5m,
+				CacheCreation1hInputTokens: totalCacheCreate1h,
+				CacheReadInputTokens:       totalCacheRead,
+				ToolsUsed:                  toolsUsed,
+				ToolOutcomes:               ledger.snapshot(),
+				Exhausted:                  true,
+				Iterations:                 iterations,
+				Messages:                   messages,
+				IterationCount:             len(iterations),
+			}
+			if errors.Is(err, llm.ErrOutputBudgetExhausted) {
+				iterLog.Warn("output budget exhausted during model call", "error", err)
+				partial.ExhaustReason = ExhaustTokenBudget
+				partial.Content = cfg.FallbackContent
+				if partial.Content == "" {
+					partial.Content = prompts.EmptyResponseFallback
+				}
+				return partial, nil
+			}
+			return partial, err
 		}
 
 		// Accumulate token usage.
@@ -159,7 +145,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		}
 
 		// --- Budget check ---
-		if cfg.CheckBudget != nil && cfg.CheckBudget(totalOutput) {
+		if cfg.outputBudgetExhausted(totalOutput) {
 			iterLog.Warn("budget exhausted", "total_output", totalOutput)
 			budgetRec := IterationRecord{
 				Index:                      i,
@@ -190,6 +176,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				CacheCreation1hInputTokens: totalCacheCreate1h,
 				CacheReadInputTokens:       totalCacheRead,
 				ToolsUsed:                  toolsUsed,
+				ToolOutcomes:               ledger.snapshot(),
 				Exhausted:                  true,
 				ExhaustReason:              ExhaustTokenBudget,
 				Iterations:                 iterations,
@@ -275,6 +262,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
+				// Named before the repeat guard, so a refused call is
+				// charged to the document it would have written.
+				target := cfg.targetOf(toolName, tc.Function.Arguments)
 
 				// Marshal arguments to JSON.
 				argsJSON := ""
@@ -296,9 +286,10 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					)
 					messages = append(messages, llm.Message{
 						Role:       "tool",
-						Content:    fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
+						Content:    cfg.repeatedCallMessage(toolName, toolCallCounts[callKey]),
 						ToolCallID: tc.ID,
 					})
+					ledger.blocked(toolName, target)
 					toolLoopDetected = true
 					continue // skip execution; move to next tool in batch
 				}
@@ -368,6 +359,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						batchHasNonMetaTool = true
 					}
 				}
+				result = ledger.observe(toolName, target, tc.Function.Arguments, toolErr, result)
 
 				// --- Callback: tool call done ---
 				// Pass toolCtx so the callback can access values injected
@@ -502,6 +494,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			CacheCreation1hInputTokens: totalCacheCreate1h,
 			CacheReadInputTokens:       totalCacheRead,
 			ToolsUsed:                  toolsUsed,
+			ToolOutcomes:               ledger.snapshot(),
 			Exhausted:                  false,
 			Iterations:                 iterations,
 			Messages:                   messages,
@@ -526,6 +519,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		CacheCreation1hInputTokens: totalCacheCreate1h,
 		CacheReadInputTokens:       totalCacheRead,
 		ToolsUsed:                  toolsUsed,
+		ToolOutcomes:               ledger.snapshot(),
 		Exhausted:                  true,
 		ExhaustReason:              breakReason,
 		Iterations:                 iterations,
@@ -563,11 +557,16 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 				partial.Messages = messages
 				return partial, nil
 			}
-			recoveryCtx = llm.WithMaxOutputTokens(ctx, remaining)
+			recoveryCtx = llm.WithMaxOutputTokens(ctx, llm.ClampMaxOutputTokens(ctx, remaining))
 		}
 		resp, err := cfg.LLM.ChatStream(recoveryCtx, model, messages, nil, cfg.Stream)
 		if err != nil {
-			log.Error("force-text LLM call failed", "model", model, "reason", partial.ExhaustReason, "error", err)
+			if errors.Is(err, llm.ErrOutputBudgetExhausted) {
+				partial.ExhaustReason = ExhaustTokenBudget
+				log.Warn("output budget exhausted during force-text recovery", "model", model, "error", err)
+			} else {
+				log.Error("force-text LLM call failed", "model", model, "reason", partial.ExhaustReason, "error", err)
+			}
 			if partial.Content == "" {
 				partial.Content = cfg.FallbackContent
 				if partial.Content == "" {
@@ -580,7 +579,12 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 
 		partial.InputTokens += resp.InputTokens
 		partial.OutputTokens += resp.OutputTokens
+		if cfg.outputBudgetExhausted(partial.OutputTokens) {
+			partial.ExhaustReason = ExhaustTokenBudget
+		}
 		partial.CacheCreationInputTokens += resp.CacheCreationInputTokens
+		partial.CacheCreation5mInputTokens += resp.CacheCreation5mInputTokens
+		partial.CacheCreation1hInputTokens += resp.CacheCreation1hInputTokens
 		partial.CacheReadInputTokens += resp.CacheReadInputTokens
 		messages = append(messages, resp.Message)
 

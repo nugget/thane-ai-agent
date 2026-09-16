@@ -265,7 +265,7 @@ func TestRunChatLoopRoutesThroughLoopRuntime(t *testing.T) {
 		},
 	}
 
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.ConfigureChatLoopLauncher(func(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {
 		capturedLaunch = launch
 		return looppkg.NewRegistry().Launch(ctx, launch, looppkg.Deps{
@@ -332,7 +332,7 @@ func TestHandleStreamingCompletionUsesChatLoopStream(t *testing.T) {
 		},
 	}
 
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.ConfigureChatLoopLauncher(func(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {
 		return looppkg.NewRegistry().Launch(ctx, launch, looppkg.Deps{
 			Runner: runner,
@@ -367,22 +367,25 @@ func TestSessionStatsSnapshot_IncludesDeploymentBreakdowns(t *testing.T) {
 		ByResource:      make(map[string]usage.Summary),
 	}
 
-	stats.Record(usage.ModelIdentity{
+	stats.RecordCall(usage.Record{
 		Model:         "mirror/gpt-oss:20b",
 		UpstreamModel: "gpt-oss:20b",
 		Resource:      "mirror",
 		Provider:      "ollama",
-	}, 100, 25, 0, 0)
-	stats.Record(usage.ModelIdentity{
+		InputTokens:   100, OutputTokens: 25,
+	})
+	stats.RecordCall(usage.Record{
 		Model:         "mirror/gpt-oss:20b",
 		UpstreamModel: "gpt-oss:20b",
 		Resource:      "mirror",
 		Provider:      "ollama",
-	}, 50, 10, 0, 0)
+		InputTokens:   50, OutputTokens: 10,
+	})
+	stats.recordRequest()
 
 	snap := stats.Snapshot()
-	if snap.TotalRequests != 2 {
-		t.Fatalf("TotalRequests = %d, want 2", snap.TotalRequests)
+	if snap.TotalRequests != 1 {
+		t.Fatalf("TotalRequests = %d, want 1 successful request for 2 calls", snap.TotalRequests)
 	}
 	if snap.ByModel["mirror/gpt-oss:20b"].TotalRecords != 2 {
 		t.Fatalf("by_model records = %d, want 2", snap.ByModel["mirror/gpt-oss:20b"].TotalRecords)
@@ -433,7 +436,7 @@ func TestHandleUsageSummary(t *testing.T) {
 		}
 	}
 
-	server := NewServer("", 0, nil, nil, nil, nil, store, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, store, nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/telemetry/usage?hours=48&group_by=resource", nil)
 	rec := httptest.NewRecorder()
@@ -469,7 +472,7 @@ func TestHandleUsageSummary(t *testing.T) {
 }
 
 func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
-	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/telemetry/usage?group_by=bogus", nil)
 	rec := httptest.NewRecorder()
@@ -481,7 +484,7 @@ func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
 }
 
 func TestHandleUsageSummary_InvalidHours(t *testing.T) {
-	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/telemetry/usage?hours=zero", nil)
 	rec := httptest.NewRecorder()
@@ -494,7 +497,7 @@ func TestHandleUsageSummary_InvalidHours(t *testing.T) {
 
 func TestHandleModelFleet(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -514,7 +517,7 @@ func TestHandleModelFleet(t *testing.T) {
 
 func TestHandleModelRegistry(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models/registry", nil)
 	rec := httptest.NewRecorder()
@@ -545,7 +548,7 @@ func TestHandleModelRegistry(t *testing.T) {
 func TestHandleRouterTelemetryIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	capturedAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
 	resetAt := capturedAt.Add(time.Minute)
@@ -609,7 +612,7 @@ func TestHandleRouterTelemetryIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
@@ -657,7 +660,7 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 func TestHandleModelRegistryPolicySet_UpdatesRouterConfig(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"inactive","reason":"drain this node"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
@@ -698,7 +701,7 @@ func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *
 	}
 
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"mirror/qwen3-vl:latest","routable":true,"reason":"promote vision model"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
@@ -736,7 +739,7 @@ func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *
 
 func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"bogus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
@@ -750,7 +753,7 @@ func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 
 func TestHandleModelRegistryPolicySet_RequiresStateOrRoutable(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
@@ -764,7 +767,7 @@ func TestHandleModelRegistryPolicySet_RequiresStateOrRoutable(t *testing.T) {
 
 func TestHandleModelRegistryPolicySet_UnknownDeployment(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"missing/model","state":"flagged"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
@@ -778,7 +781,7 @@ func TestHandleModelRegistryPolicySet_UnknownDeployment(t *testing.T) {
 
 func TestHandleModelRegistryPolicyDelete_UnknownDeployment(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/models/registry/policy?deployment=missing/model", nil)
 	rec := httptest.NewRecorder()
@@ -797,7 +800,6 @@ func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T
 	server := NewServer(
 		"",
 		0,
-		nil,
 		nil,
 		nil,
 		registry,
@@ -855,7 +857,6 @@ func TestHandleModelRegistryPolicySet_PersistenceFailure(t *testing.T) {
 		0,
 		nil,
 		nil,
-		nil,
 		registry,
 		nil,
 		func(string, fleet.DeploymentPolicy) error { return errors.New("boom") },
@@ -887,7 +888,7 @@ func TestHandleModelRegistryPolicySet_PersistenceFailure(t *testing.T) {
 func TestHandleModelRegistryResourcePolicySetAndDelete(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"resource":"spark","state":"inactive","reason":"office hours"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/resource-policy", body)
@@ -944,7 +945,6 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 		0,
 		nil,
 		nil,
-		nil,
 		registry,
 		nil,
 		nil,
@@ -975,7 +975,7 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 
 func TestHandleContactsCreateListGetUpdateDelete(t *testing.T) {
 	store := testAPIContactStore(t)
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseContactStore(store)
 
 	createBody := bytes.NewBufferString(`{
@@ -1084,7 +1084,7 @@ func TestHandleContactsCreateListGetUpdateDelete(t *testing.T) {
 
 func TestHandleContactsListFilters(t *testing.T) {
 	store := testAPIContactStore(t)
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseContactStore(store)
 
 	alice, err := store.UpsertWithProperties(&contacts.Contact{
@@ -1142,7 +1142,7 @@ func TestHandleContactsListFilters(t *testing.T) {
 
 func TestHandleContactsValidationErrors(t *testing.T) {
 	store := testAPIContactStore(t)
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseContactStore(store)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/v1/contacts", bytes.NewBufferString(`{"kind":"individual"}`))
@@ -1192,7 +1192,7 @@ func TestHandleContactsValidationErrors(t *testing.T) {
 }
 
 func TestHandleContactsUnavailable(t *testing.T) {
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/contacts", nil)
 	rec := httptest.NewRecorder()
@@ -1205,7 +1205,7 @@ func TestHandleContactsUnavailable(t *testing.T) {
 
 func TestHandleLoopDefinitions(t *testing.T) {
 	registry := testAPILoopDefinitionRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
 		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.Status{
@@ -1250,7 +1250,7 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 	var savedAt time.Time
 	var deleted string
 	var reconciled []string
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
 		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), nil)
@@ -1319,7 +1319,7 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 
 func TestHandleLoopDefinitionSet_ConfigDefinitionConflict(t *testing.T) {
 	registry := testAPILoopDefinitionRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 
 	body := bytes.NewBufferString(`{"spec":{"name":"metacog_like","task":"Override config.","operation":"service"}}`)
@@ -1350,7 +1350,7 @@ func TestHandleLoopDefinitionSet_CommitErrorStatusMapping(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := testAPILoopDefinitionRegistry(t)
-			server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+			server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 			server.UseLoopDefinitionRegistry(registry)
 			server.ConfigureLoopDefinitionPersistence(
 				func(_ context.Context, _ looppkg.Spec, _ time.Time) error { return tc.commitErr },
@@ -1373,7 +1373,7 @@ func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
 	registry := testAPILoopDefinitionRegistry(t)
 	var persisted looppkg.DefinitionPolicy
 	var deleted string
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
 		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.Status{
@@ -1441,7 +1441,7 @@ func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
 
 func TestHandleLoopDefinitionLaunch(t *testing.T) {
 	registry := testAPILoopDefinitionRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
 		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), nil)

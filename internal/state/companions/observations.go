@@ -296,6 +296,44 @@ func scanLatestObservation(row *sql.Rows) (companion.LatestObservation, error) {
 	return observation, nil
 }
 
+// LatestObservationsForContact returns the latest observation of one
+// kind for every ACTIVE device belonging to one contact.
+//
+// Contact-scoped rather than account-scoped on purpose: an account can
+// hold both a retired phone and a live one, and collapsing a contact to
+// account names loses the device state filter, so the retired handset's
+// last known location comes back alongside the current one. Scoping at
+// the device row keeps ownership and liveness in the same predicate.
+func (s *Store) LatestObservationsForContact(ctx context.Context, kind, contactID string) ([]companion.LatestObservation, error) {
+	kind = strings.TrimSpace(kind)
+	contactID = strings.TrimSpace(contactID)
+	if kind == "" || contactID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT d.account, o.device_id, d.client_id, o.kind, o.event_id,
+		       o.schema_version, o.status, o.observed_at, o.received_at, o.payload
+		FROM companion_latest_observations o
+		JOIN companion_devices d ON d.device_id = o.device_id
+		WHERE o.kind = ? AND d.contact_id = ? AND d.state = ?
+		ORDER BY d.account, d.client_id
+	`, kind, contactID, DeviceStateActive)
+	if err != nil {
+		return nil, fmt.Errorf("list %s observations for contact: %w", kind, err)
+	}
+	defer rows.Close()
+
+	var observations []companion.LatestObservation
+	for rows.Next() {
+		observation, err := scanLatestObservation(rows)
+		if err != nil {
+			return nil, err
+		}
+		observations = append(observations, observation)
+	}
+	return observations, rows.Err()
+}
+
 // LatestObservationsByKind returns the latest observation of one kind
 // for every device belonging to the given accounts, ordered by
 // account/client for a stable shape. Scoped at the query so a caller

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // DossierRootName is the canonical managed document root for longitudinal
@@ -134,6 +135,9 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	if err != nil {
 		return "", err
 	}
+	if err := t.secondDossierRefusal(ctx, contact); err != nil {
+		return "", err
+	}
 
 	payload := documentfacets.Payload{
 		StatusLine: args.StatusLine,
@@ -155,7 +159,7 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		validationErrs = append(validationErrs, err)
 	}
 	if len(validationErrs) > 0 {
-		return "", fmt.Errorf("contact dossier projections are invalid; correct every listed field and retry once: %w", errors.Join(validationErrs...))
+		return "", documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)
 	}
 	return t.dossierWrite(ctx, documents.FacetedWriteArgs{
 		Ref:          DossierRef(id),
@@ -165,6 +169,11 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Payload:      payload,
 		WriteTool:    DossierWriteToolName,
 		ReceiptScope: args.ReceiptScope,
+		// A refused replacement (no read on record, or a read the dossier
+		// has moved past) must read as a failed call, not an applied:false
+		// success: the loop runtime counts a successful call as a landed
+		// dossier, so an inline refusal would hide the loss.
+		RejectionIsError: true,
 	})
 }
 
@@ -176,7 +185,7 @@ func (t *Tools) resolveDossierContact(rawID string) (*Contact, uuid.UUID, error)
 	}
 	contact, err := t.store.Get(id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, uuid.Nil, fmt.Errorf("contact_id %s is not an active structured contact; call contact_lookup to resolve the intended contact instead of retrying this UUID", id)
+		return nil, uuid.Nil, targetRefusal{fmt.Errorf("contact_id %s is not an active structured contact; call contact_lookup to resolve the intended contact instead of retrying this UUID", id)}
 	}
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("load structured contact %s: %w", id, err)
@@ -322,7 +331,7 @@ func validateDossierWrite(candidate documents.DocumentWriteCandidate, resolveCon
 		validationErrs = append(validationErrs, fmt.Errorf("evidence contract: %w", err))
 	}
 	if len(validationErrs) > 0 {
-		return fmt.Errorf("dossier %s projections are invalid; correct every listed field and retry once: %w", candidate.Path, errors.Join(validationErrs...))
+		return documentfacets.InvalidProjectionsError(fmt.Sprintf("dossier %s projections", candidate.Path), validationErrs...)
 	}
 	if got, want := strings.TrimSpace(candidate.Body), dossierOutputContract.Render(payload); got != want {
 		return fmt.Errorf("dossier %s must use the canonical facet section order with no text outside those sections", candidate.Path)
@@ -355,7 +364,7 @@ func validateDossierSubjectIdentity(id uuid.UUID, payload documentfacets.Payload
 	if len(redundant) == 0 {
 		return nil
 	}
-	return fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id)
+	return toolargs.Rejected(fmt.Errorf("projection(s) [%s] repeat the subject contact UUID %s; omit that UUID and its derived contacts ref or contact tag because Go already binds the document path and frontmatter to this structured contact", strings.Join(redundant, ", "), id), redundant...)
 }
 
 // validateDossierSubjectName keeps the compact lookup projections focused on
@@ -385,7 +394,7 @@ func validateDossierSubjectName(name string, payload documentfacets.Payload) err
 	if len(redundant) == 0 {
 		return nil
 	}
-	return fmt.Errorf("projection(s) [%s] repeat the subject contact name %q; omit the name because the structured contact and dossier title already identify the subject; digest and full may use it when standalone prose needs it", strings.Join(redundant, ", "), name)
+	return toolargs.Rejected(fmt.Errorf("projection(s) [%s] repeat the subject contact name %q; omit the name because the structured contact and dossier title already identify the subject; digest and full may use it when standalone prose needs it", strings.Join(redundant, ", "), name), redundant...)
 }
 
 func containsFoldedPhrase(text, phrase string) bool {
@@ -431,7 +440,9 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 
 	seen := make(map[string]struct{})
 	invalid := make([]string, 0)
+	var rejected []string
 	for _, field := range fields {
+		fieldRejected := false
 		for _, match := range archiveSessionCitationPattern.FindAllStringSubmatch(field.value, -1) {
 			citation := match[0]
 			rawID := match[2]
@@ -439,6 +450,7 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 			if match[1] == ":" && err == nil && id != uuid.Nil && id.String() == rawID {
 				continue
 			}
+			fieldRejected = true
 			key := field.name + "\x00" + citation
 			if _, duplicate := seen[key]; duplicate {
 				continue
@@ -446,12 +458,15 @@ func validateDossierEvidenceCitations(payload documentfacets.Payload) error {
 			seen[key] = struct{}{}
 			invalid = append(invalid, field.name+"="+citation)
 		}
+		if fieldRejected {
+			rejected = append(rejected, field.name)
+		}
 	}
 	if len(invalid) == 0 {
 		return nil
 	}
 	sort.Strings(invalid)
-	return fmt.Errorf("archive-session citation(s) [%s] do not use a full canonical UUID; replace each with archive:session:<full-session-uuid> from archive_search or archive_sessions because short prefixes can be ambiguous", strings.Join(invalid, ", "))
+	return toolargs.Rejected(fmt.Errorf("archive-session citation(s) [%s] do not use a full canonical UUID; replace each with archive:session:<full-session-uuid> from archive_search or archive_sessions because short prefixes can be ambiguous", strings.Join(invalid, ", ")), rejected...)
 }
 
 func dossierIDFromPath(relPath string) (uuid.UUID, error) {

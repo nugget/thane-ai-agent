@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
@@ -159,7 +162,14 @@ func (a *App) initAwareness(s *newState) error {
 		// The registry client stays the concrete a.ha: registry reads
 		// are a different interface with their own cache.
 		haStateReads = homeassistant.NewStateReadCache(a.ha)
-		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, haStateReads, logger)
+
+		// Presence enrichment is bound lazily: the person tracker is
+		// built further down this function, after both providers are
+		// registered, so the closure reads it at render time rather
+		// than capturing a nil.
+		presenceOption := awareness.WithPersonPresence(a.watchedPersonPresence(s, logger))
+
+		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, haStateReads, logger, presenceOption)
 		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
@@ -170,7 +180,7 @@ func (a *App) initAwareness(s *newState) error {
 		// scope_tag indirection. Loop-scoped, not always-on: a loop's
 		// declared watch set is its eyes, and a task-mode worker keeps
 		// its eyes while shedding the ambient identity (#1363).
-		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, haStateReads, logger)
+		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, haStateReads, logger, presenceOption)
 		loopSubProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterLoopScopedContextProvider(loopSubProvider)
 
@@ -229,6 +239,17 @@ func (a *App) initAwareness(s *newState) error {
 	// class-aware projection so the window reads closed→open for a
 	// garage_door, not off→on — injected here because contextfmt imports
 	// the homeassistant package and the provider cannot import it back.
+	// One derivation of the household zone for every provider that
+	// renders day words or expands temporal templates. Two derivations
+	// would be two chances to disagree about which day it is, and the
+	// disagreement would only ever show up late in a local evening.
+	homeZone := time.Local
+	if cfg.Timezone != "" {
+		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			homeZone = loc
+		}
+	}
+
 	// The system's one-line self-assessment: metacog's published
 	// status_line facet, the annunciator of judgments beside the state
 	// window's annunciator of facts (#1351). Always-on (ambient
@@ -237,7 +258,7 @@ func (a *App) initAwareness(s *newState) error {
 	// The provider advertises this signal before reading it. The final
 	// discriminator selects it and prepends the materialized projection to
 	// Live State, so a busy eager state window cannot starve the verdict.
-	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, logger))
+	a.loop.RegisterAlwaysContextProvider(awareness.NewSystemSelfAssessmentProvider(a.readSystemSelfAssessmentDocument, homeZone, logger))
 
 	// The corpus advertiser: any document root whose context policy opts
 	// in (advertise: always|tagged) offers its faceted documents to the
@@ -261,12 +282,6 @@ func (a *App) initAwareness(s *newState) error {
 			advertisePolicies[name] = documents.DocumentRootAdvertisePolicy{
 				Mode:        rootCfg.Context.EffectiveAdvertise(),
 				RequiresTag: rootCfg.Context.RequiresTag,
-			}
-		}
-		homeZone := time.Local
-		if cfg.Timezone != "" {
-			if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
-				homeZone = loc
 			}
 		}
 		registry := a.loopDefinitionRegistry
@@ -320,8 +335,21 @@ func (a *App) initAwareness(s *newState) error {
 	// initialization (personTracker was nil). Catch up immediately
 	// after construction when HA is available. Initialize is idempotent,
 	// so a redundant call from OnReady is harmless.
-	if len(cfg.Person.Track) > 0 {
-		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
+	presenceRoster, rosterErr := a.presenceRoster(cfg)
+	if rosterErr != nil {
+		return rosterErr
+	}
+	if len(presenceRoster) > 0 {
+		// Contact-rooted presence: the model reasons about people, and
+		// without a contact id here it cannot chain into
+		// contact_whereabouts on a turn with no counterparty binding.
+		// Resolved per render, so a contact renamed or re-zoned after
+		// startup is picked up without a restart.
+		var presenceOpts []contacts.PresenceOption
+		if resolver := a.presenceContactResolver(logger); resolver != nil {
+			presenceOpts = append(presenceOpts, contacts.WithContactResolver(resolver))
+		}
+		s.personTracker = contacts.NewPresenceTracker(presenceRoster, cfg.Timezone, logger, presenceOpts...)
 		s.personTracker.OnIngestEntitiesChange(seedPresenceIngestFloor)
 		s.personTracker.OnLinkedTrackersChange(func(entityIDs []string) {
 			if a.ha == nil || len(entityIDs) == 0 {
@@ -347,7 +375,7 @@ func (a *App) initAwareness(s *newState) error {
 			s.personTracker.SetDeviceMACs(entityID, macs)
 		}
 
-		logger.Info("person tracking enabled", "entities", cfg.Person.Track)
+		logger.Info("person tracking enabled", "entities", presenceRoster)
 
 		if a.ha != nil {
 			initCtx, initCancel := context.WithTimeout(s.ctx, 10*time.Second)
@@ -364,9 +392,11 @@ func (a *App) initAwareness(s *newState) error {
 
 	// --- UniFi room presence ---
 	// Optional: polls UniFi controller for wireless client associations
-	// and pushes room-level presence into the person tracker. Requires
-	// both person.track and unifi config to be set.
-	if cfg.Unifi.Configured() && s.personTracker != nil {
+	// and pushes room-level presence into the person tracker. Needs a
+	// roster to place and MAC mappings to place them by; the predicate
+	// must stay identical to unifiPollerEnabled, or the loop definition
+	// and the poller it describes drift apart.
+	if cfg.Unifi.Configured() && s.personTracker != nil && personDeviceMappings(cfg) > 0 {
 		unifiClient := unifi.NewClient(cfg.Unifi.URL, cfg.Unifi.APIKey, logger)
 
 		// Build MAC -> entity_id mapping from config.
@@ -403,7 +433,9 @@ func (a *App) initAwareness(s *newState) error {
 			"ap_rooms", len(cfg.Person.APRooms),
 		)
 	} else if cfg.Unifi.Configured() && s.personTracker == nil {
-		logger.Warn("unifi configured but person tracking disabled (no person.track entries)")
+		logger.Warn("unifi configured but no contact carries an ha_person_entity binding, so there is nobody to place in a room")
+	} else if cfg.Unifi.Configured() && personDeviceMappings(cfg) == 0 {
+		logger.Warn("unifi configured but person.devices maps no MAC addresses, so room presence cannot attribute a client to anyone")
 	}
 
 	// Forge account context is now injected via tag context provider
@@ -556,4 +588,130 @@ func (a *App) initAwareness(s *newState) error {
 	}
 
 	return nil
+}
+
+// presenceRoster derives the tracked person entities from the contact
+// store, where a contact's ha_person_entity binding is its declaration
+// of interest, and reconciles that roster against person.track.
+//
+// person.track is an assertion here, not a source: every entity it names
+// must be claimed by a contact. Twelve consumers hang off the tracker —
+// the prompt block, the ingest floor, Snapshot for channel enrichment
+// and contact_whereabouts, UniFi room updates, the MQTT AP sensor — and
+// an entity that quietly leaves the roster takes all of them with it at
+// once. An unclaimed entry refuses the boot and names itself rather than
+// shrinking the roster where nobody would notice.
+func (a *App) presenceRoster(cfg *config.Config) ([]string, error) {
+	if a.contactStore == nil {
+		// Only reachable in tests; initChannels fails the boot when the
+		// contact store cannot be opened. Without the identity root
+		// there is no roster to derive.
+		return nil, nil
+	}
+
+	roster, err := a.contactStore.HAPersonBoundEntities()
+	if err != nil {
+		return nil, fmt.Errorf("derive presence roster from contact bindings: %w", err)
+	}
+
+	bound := make(map[string]bool, len(roster))
+	for _, entity := range roster {
+		bound[entity] = true
+	}
+	var unclaimed []string
+	for _, entity := range cfg.Person.Track {
+		if trimmed := strings.TrimSpace(entity); trimmed != "" && !bound[trimmed] {
+			unclaimed = append(unclaimed, trimmed)
+		}
+	}
+	if len(unclaimed) > 0 {
+		return nil, fmt.Errorf(
+			"person.track names %d Home Assistant person %s that no contact claims (%s): presence membership now comes from contact ha_person_entity bindings, so bind each under person.contact_bindings or drop it from person.track",
+			len(unclaimed), pluralEntity(len(unclaimed)), strings.Join(unclaimed, ", "))
+	}
+	return roster, nil
+}
+
+func pluralEntity(n int) string {
+	if n == 1 {
+		return "entity"
+	}
+	return "entities"
+}
+
+// presenceContactResolver resolves a Home Assistant person entity to the
+// contact that claims it. Returns nil when there is no contact store, in
+// which case presence renders entity-only.
+//
+// One resolver serves every surface that names a person — the ambient
+// presence block and subscription rendering both — so the two cannot
+// disagree about who somebody is, or about whether they are the operator.
+func (a *App) presenceContactResolver(logger *slog.Logger) func(string) (contacts.ContactIdentity, bool) {
+	if a.contactStore == nil {
+		return nil
+	}
+	store := a.contactStore
+	bindings := a.contactBindingResolver
+	return func(entityID string) (contacts.ContactIdentity, bool) {
+		contact, err := store.FindByHAPersonEntity(entityID)
+		if err != nil {
+			// An unclaimed entity is (nil, nil) and degrades silently by
+			// design. A store failure degrades identically but is not
+			// routine: it strips contact_id and operator status out of an
+			// always-on block, so say so.
+			logger.Warn("presence contact resolution failed, rendering entity-only",
+				"entity_id", entityID, "error", err)
+			return contacts.ContactIdentity{}, false
+		}
+		if contact == nil {
+			return contacts.ContactIdentity{}, false
+		}
+		return contacts.ContactIdentity{
+			ID:         contact.ID.String(),
+			Name:       contact.FormattedName,
+			TrustZone:  contact.TrustZone,
+			IsOperator: bindings.isOperator(contact),
+		}, true
+	}
+}
+
+// watchedPersonPresence joins a subscribed person entity to the presence
+// tracker's view of them, so a service loop that declares person.* in its
+// subscriptions sees who the person is and which room they are in rather
+// than a bare "not_home".
+//
+// The tracker is constructed after the providers that render its people,
+// so this closes over the init state and reads the tracker per render.
+//
+// Degradation is per-source, not all-or-nothing. No tracker or an
+// untracked entity yields nothing, and the row renders as raw Home
+// Assistant state. A tracked person whom no contact claims — or whom
+// contact resolution could not resolve — still contributes room data;
+// only the identity fields are omitted, rather than inventing one.
+func (a *App) watchedPersonPresence(s *newState, logger *slog.Logger) awareness.PersonPresenceSource {
+	resolveContact := a.presenceContactResolver(logger)
+	return func(entityID string) (awareness.PersonPresenceFields, bool) {
+		if s.personTracker == nil {
+			return awareness.PersonPresenceFields{}, false
+		}
+		snap, tracked := s.personTracker.Snapshot(entityID)
+		if !tracked {
+			return awareness.PersonPresenceFields{}, false
+		}
+		fields := awareness.PersonPresenceFields{
+			Room:         snap.Room,
+			RoomProvider: snap.RoomProvider,
+			RoomSource:   snap.RoomSource,
+			RoomConflict: snap.RoomConflict,
+		}
+		if resolveContact != nil {
+			if identity, ok := resolveContact(entityID); ok {
+				fields.Contact = identity.Name
+				fields.ContactID = identity.ID
+				fields.TrustZone = identity.TrustZone
+				fields.IsOperator = identity.IsOperator
+			}
+		}
+		return fields, true
+	}
 }

@@ -45,15 +45,15 @@ const CompactionSummaryPrefix = "[Conversation Summary]"
 
 // CompactableStore is the interface for stores that support compaction.
 type CompactableStore interface {
-	GetTokenCount(conversationID string) int
+	GetTokenCount(ctx context.Context, conversationID string) (int, error)
 	// ActiveMessageCount is the active non-summary message count — the
 	// reducible set — backing the count-aware compaction trigger.
-	ActiveMessageCount(conversationID string) int
-	GetMessagesForCompaction(conversationID string, keep int) []Message
-	GetActiveCompactionSummaries(conversationID string) ([]Message, error)
+	ActiveMessageCount(ctx context.Context, conversationID string) (int, error)
+	GetMessagesForCompaction(ctx context.Context, conversationID string, keep int) ([]Message, error)
+	GetActiveCompactionSummaries(ctx context.Context, conversationID string) ([]Message, error)
 	// ApplyCompaction atomically marks compactedIDs compacted and
 	// inserts the replacement summary at summaryTS.
-	ApplyCompaction(conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error
+	ApplyCompaction(ctx context.Context, conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error
 }
 
 // WorkingMemoryReader is the subset of WorkingMemoryStore needed by the
@@ -113,17 +113,24 @@ func (c *Compactor) CompactionThreshold() int {
 // either the token budget (the long-standing gate) or, when configured,
 // the active non-summary message count reaching MaxActiveMessages. The
 // count gate catches short-message overflow the token gate misses — the
-// exact precondition of the working-memory freeze — so the predicate is
-// a strict superset of the prior token-only behavior.
-func (c *Compactor) NeedsCompaction(conversationID string) bool {
-	if c.store.GetTokenCount(conversationID) > c.CompactionThreshold() {
-		return true
+// exact precondition of the working-memory freeze. Required count-read failures
+// return an error rather than an apparently unnecessary compaction.
+func (c *Compactor) NeedsCompaction(ctx context.Context, conversationID string) (bool, error) {
+	tokens, err := c.store.GetTokenCount(ctx, conversationID)
+	if err != nil {
+		return false, fmt.Errorf("read compaction token count: %w", err)
 	}
-	if c.config.MaxActiveMessages > 0 &&
-		c.store.ActiveMessageCount(conversationID) >= c.config.MaxActiveMessages {
-		return true
+	if tokens > c.CompactionThreshold() {
+		return true, nil
 	}
-	return false
+	if c.config.MaxActiveMessages > 0 {
+		count, err := c.store.ActiveMessageCount(ctx, conversationID)
+		if err != nil {
+			return false, fmt.Errorf("read compaction message count: %w", err)
+		}
+		return count >= c.config.MaxActiveMessages, nil
+	}
+	return false, nil
 }
 
 // tryAcquire marks the conversation as compacting, returning false when
@@ -152,6 +159,9 @@ func (c *Compactor) release(conversationID string) {
 // Concurrent calls for the same conversation coalesce — the extras
 // return nil without doing work.
 func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !c.tryAcquire(conversationID) {
 		c.logger.Debug("compaction already in flight; skipping",
 			"conversation_id", conversationID)
@@ -161,12 +171,18 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 
 	// Re-check under the flight guard: the trigger that queued this
 	// call may predate a compaction that just finished.
-	if !c.NeedsCompaction(conversationID) {
+	needed, err := c.NeedsCompaction(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	if !needed {
 		return nil
 	}
 
-	// Get messages to compact (older ones)
-	messages := c.store.GetMessagesForCompaction(conversationID, c.config.KeepRecent)
+	messages, err := c.store.GetMessagesForCompaction(ctx, conversationID, c.config.KeepRecent)
+	if err != nil {
+		return fmt.Errorf("read compaction messages: %w", err)
+	}
 
 	// Snap the compaction boundary to a turn edge: a trailing user
 	// message here means its reply sits in the keep window (or hasn't
@@ -187,7 +203,6 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		"eligible_messages", len(messages),
 		"min_required", c.config.MinMessagesToCompact,
 		"keep_recent", c.config.KeepRecent,
-		"token_count", c.store.GetTokenCount(conversationID),
 		"max_tokens", c.config.MaxTokens,
 	)
 
@@ -209,7 +224,7 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	// so their content carries forward through the new summary. A read
 	// error here must abort: treating it as "no priors" would insert a
 	// fresh summary and re-stack, the exact failure the fold prevents.
-	priors, err := c.store.GetActiveCompactionSummaries(conversationID)
+	priors, err := c.store.GetActiveCompactionSummaries(ctx, conversationID)
 	if err != nil {
 		return fmt.Errorf("read prior summaries: %w", err)
 	}
@@ -234,12 +249,20 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Generate summary
 	summary, err := c.summarizer.Summarize(ctx, folded, workingMem)
 	if err != nil {
 		return fmt.Errorf("summarize: %w", err)
 	}
 
+	// A provider may return successful output after cancellation. Never
+	// let that late result mutate the active conversation.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Format as a system message
 	formattedSummary := formatCompactionSummary(folded, summary)
 
@@ -254,7 +277,7 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	for i, m := range folded {
 		ids[i] = m.ID
 	}
-	if err := c.store.ApplyCompaction(conversationID, ids, formattedSummary, folded[0].Timestamp); err != nil {
+	if err := c.store.ApplyCompaction(ctx, conversationID, ids, formattedSummary, folded[0].Timestamp); err != nil {
 		return fmt.Errorf("apply compaction: %w", err)
 	}
 
@@ -281,11 +304,18 @@ func formatCompactionSummary(messages []Message, summary string) string {
 	return sb.String()
 }
 
-// CompactionStats returns stats about compaction for a conversation.
-func (c *Compactor) CompactionStats(conversationID string) map[string]any {
-	tokenCount := c.store.GetTokenCount(conversationID)
+// CompactionStats returns active counts and compaction thresholds. A failed
+// required read returns an error rather than zero-filled statistics.
+func (c *Compactor) CompactionStats(ctx context.Context, conversationID string) (map[string]any, error) {
+	tokenCount, err := c.store.GetTokenCount(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("read compaction token count: %w", err)
+	}
+	activeCount, err := c.store.ActiveMessageCount(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("read compaction message count: %w", err)
+	}
 	threshold := int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
-	activeCount := c.store.ActiveMessageCount(conversationID)
 
 	// needs_compaction must reflect BOTH gates (token budget OR active
 	// count), matching NeedsCompaction — otherwise the stat lies whenever
@@ -301,7 +331,7 @@ func (c *Compactor) CompactionStats(conversationID string) map[string]any {
 		"max_active_messages":  c.config.MaxActiveMessages,
 		"needs_compaction":     needsToken || needsCount,
 		"ratio":                float64(tokenCount) / float64(c.config.MaxTokens),
-	}
+	}, nil
 }
 
 // LLMSummarizer uses an LLM to generate summaries.

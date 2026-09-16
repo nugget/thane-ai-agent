@@ -919,3 +919,64 @@ func TestResetCapabilities_DropsOnlyVoluntaryTags(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionOrigin_UnidentifiedOwuBindingDoesNotPinOwner is the
+// consequence half of #1503. The Ollama-compatible surface has no
+// credential that could tell Home Assistant from Open WebUI from any
+// other host on the segment, so the binding it produces names the
+// channel and nothing else. A binding like that must not reach the
+// protected owner tag: the tools that tag carries are the operator's,
+// and the caller has not been shown to be the operator.
+func TestSessionOrigin_UnidentifiedOwuBindingDoesNotPinOwner(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"owner_tool", "chat_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Tools:       []string{"owner_tool"},
+			Protected:   true,
+		},
+		"chat": {
+			Description: "Ordinary conversation tools.",
+			Tools:       []string{"chat_tool"},
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"owu": {"chat"},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages:       []Message{{Role: "user", Content: "turn on the garage lights"}},
+		RoutingFactors: map[string]string{"source": "owu", "channel": "ollama"},
+		ChannelBinding: &memory.ChannelBinding{Channel: "owu"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	if !hasName(names, "chat_tool") {
+		t.Fatalf("chat_tool should be available from the channel's own tags: %v", names)
+	}
+	if hasName(names, "owner_tool") {
+		t.Fatalf("owner_tool was offered to an unidentified owu caller: %v", names)
+	}
+
+	originCtx := parseSessionOriginContext(t, mock.calls[0].Messages[0].Content)
+	if containsString(originCtx.Tags, "owner") {
+		t.Fatalf("origin tags = %#v, want no owner tag for an unidentified caller", originCtx.Tags)
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "channel_binding"); ok {
+		t.Fatalf("a binding with no identity applied a channel_binding rule: %#v", rule)
+	}
+}

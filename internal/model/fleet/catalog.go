@@ -58,6 +58,7 @@ type Deployment struct {
 	SupportsStreaming         bool
 	ObservedSupportsStreaming bool
 	SupportsImages            bool
+	ObservedSupportsImages    bool
 	ContextWindow             int
 	ObservedContextWindow     int
 	MaxContextWindow          int
@@ -89,6 +90,7 @@ type Deployment struct {
 
 	SupportsToolsOverride     *bool
 	SupportsStreamingOverride *bool
+	SupportsImagesOverride    *bool
 	ContextWindowOverride     int
 }
 
@@ -202,6 +204,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		RunnerState           string
 		SupportsToolsOverride *bool
 		SupportsStreaming     *bool
+		SupportsImages        *bool
 		TrainedForToolUse     bool
 		ContextWindowOverride int
 		MaxContextWindow      int
@@ -285,6 +288,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 				return override
 			}(),
 			SupportsStreaming:     m.SupportsStreaming,
+			SupportsImages:        m.SupportsImages,
 			TrainedForToolUse:     m.SupportsTools,
 			ContextWindowOverride: m.ContextWindow,
 			Speed:                 m.Speed,
@@ -333,17 +337,11 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			Quantization:              p.Quantization,
 			SupportsToolsOverride:     p.SupportsToolsOverride,
 			SupportsStreamingOverride: p.SupportsStreaming,
+			SupportsImagesOverride:    p.SupportsImages,
 			ContextWindowOverride:     p.ContextWindowOverride,
 		}
 		if res, ok := resourceByID[p.ResourceID]; ok {
 			applyObservedCapabilities(&dep, res.Capabilities)
-			dep.SupportsImages = modelproviders.SupportsImagesForModel(
-				dep.Provider,
-				dep.ModelName,
-				dep.Family,
-				dep.Families,
-				res.Capabilities,
-			)
 		}
 		deployments = append(deployments, dep)
 	}
@@ -406,8 +404,20 @@ func applyObservedCapabilities(dep *Deployment, caps modelproviders.Capabilities
 	if !dep.ObservedSupportsStreaming {
 		dep.ObservedSupportsStreaming = caps.SupportsStreaming
 	}
+	if !dep.ObservedSupportsImages {
+		// The name heuristic is a guess of last resort, so it only gets
+		// to speak where nothing authoritative already has.
+		dep.ObservedSupportsImages = modelproviders.SupportsImagesForModel(
+			dep.Provider,
+			dep.ModelName,
+			dep.Family,
+			dep.Families,
+			caps,
+		)
+	}
 	dep.SupportsTools = boolOverrideValue(dep.SupportsToolsOverride, dep.ObservedSupportsTools)
 	dep.SupportsStreaming = boolOverrideValue(dep.SupportsStreamingOverride, dep.ObservedSupportsStreaming)
+	dep.SupportsImages = boolOverrideValue(dep.SupportsImagesOverride, dep.ObservedSupportsImages)
 	dep.ContextWindow = effectiveContextWindow(dep)
 }
 

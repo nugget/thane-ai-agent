@@ -19,9 +19,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // harnessLoopReg is a static LoopStatusReader seeded with synthetic loops.
@@ -157,7 +159,7 @@ func harnessHealth() map[string]DependencyStatus {
 // RunUIHarness serves the web console at addr, backed by synthetic /v1 data.
 // staticDir is the directory of console assets to serve live (so JS/CSS/HTML
 // edits show on reload without rebuilding the harness).
-func RunUIHarness(addr, staticDir string) error {
+func RunUIHarness(addr, staticDir, authToken string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	loops := harnessLoops()
@@ -192,14 +194,32 @@ func RunUIHarness(addr, staticDir string) error {
 	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
 	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
 
-	// Console static assets, served live from staticDir.
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+	// Console static assets, served live from staticDir. The console
+	// posture is applied here, and the API posture to the whole handler
+	// below, exactly as production composes them — so a change to the
+	// console that its content policy would refuse fails here, while
+	// the asset is still being iterated on, rather than in prod.
+	console := func(h http.Handler) http.Handler {
+		return listen.SecurityHeaders(listen.PostureConsole, h)
+	}
+	mux.Handle("GET /static/", console(http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir)))))
+	mux.Handle("GET /{$}", console(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
-	})
+	})))
 
 	logger.Warn("ui harness listening", "addr", addr, "static", staticDir)
-	return http.ListenAndServe(addr, mux)
+	var handler http.Handler = mux
+	if authToken != "" {
+		// Exercise the console's sign-in flow against the same gate
+		// production runs, with one operator token.
+		gate := newAuthGate(config.ListenAuthConfig{Tokens: []config.APIToken{{Label: "harness", Token: authToken}}, SessionTTL: time.Hour}, nil, nil)
+		s.auth = gate
+		mux.HandleFunc("POST /v1/auth/login", s.handleAuthLogin)
+		mux.HandleFunc("POST /v1/auth/logout", s.handleAuthLogout)
+		mux.HandleFunc("GET /v1/auth/session", s.handleAuthSession)
+		handler = gate.wrap(mux)
+	}
+	return http.ListenAndServe(addr, listen.SecurityHeaders(listen.PostureAPI, handler))
 }
 
 // emitSyntheticActivity drives the "signal/aimee" loop through repeating turns

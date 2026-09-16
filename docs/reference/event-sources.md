@@ -45,17 +45,70 @@ See [MQTT](../operating/mqtt.md) for setup details.
 
 ## Email Polling
 
-Scheduled IMAP checks with high-water mark tracking. The scheduler fires a
-polling task at a configured interval. The poller checks for messages with
-UIDs greater than the stored high-water mark — only new messages trigger
-agent wakes.
+The `email-poller` service loop checks every configured account's INBOX at
+`email.poll_interval` and dispatches each new message as one event to the
+account's wake loop: its `mailbox.wake_loop`, which defaults to the
+built-in `email-owner-triage` on an account with `mailbox.owner: operator`
+and to the built-in `email-default-handler` everywhere else. Both are
+event-driven; a `wake_loop` naming anything that is not an event-driven
+definition stops startup. Each event's
+metadata names the `account`, `folder`, and `uid` of the message, its
+`message_id`, `flags` (the message's IMAP flags as the server spells
+them, comma-separated, and absent when it has none; they never include
+a mark Thane still claims for a [label](../operating/configuration.md#labels),
+even when the message is listed again after a failed dispatch or the
+account no longer carries the label, while a mark on a second copy of
+the message, or on one someone else moved, is not Thane's and shows), the
+sender (`from`,
+`from_address`, `from_name`), and the
+contact directory's answer about the sender: `contact_status`
+(`matched`, `unmatched`, `ambiguous`, or `lookup_failed`), the effective
+`trust_zone` (`unknown` for a stranger, the least privileged candidate's
+zone when several records share the address), `is_owner` (always
+present, `true` only when the matched record is the operator's), for a
+match `contact_id` and `contact_name`, and `automated`. `automated` is
+present, as `"true"`, only when the sender's mailbox name marks a
+no-reply, notification, or bounce address; its `trust_zone` is then
+capped at `known`, and a matched sender keeps its `contact_id`.
+`trust_zone`, `is_owner`, `contact_id`, and `contact_name` are the names
+the Signal bridge uses in its loop metadata; `contact_status` and
+`automated` are email-only. `is_owner` says the
+matched record is the operator's; it does not say the operator wrote
+the message, because a From header is a claim until a signature
+verifies it. The poller stamps no per-wake tags; identity rides in the
+event. After each delivered batch the poller records an inbound
+interaction on every matched contact, once per contact at the newest
+message's date, bounded by the time the batch was received so a forged
+future Date cannot pin the record.
 
-High-water marks are stored in the operational state KV store (opstate),
-not in prompt context. This means the poller cannot be manipulated into
-re-processing old messages.
+After every poll, and after the poll's wakes are delivered, the poller
+reconciles the draft ledger of each account with an open Thane draft, so
+a draft the operator sent, edited, or discarded closes within one poll,
+and recounts each review loop's queued work for the Email Accounts block.
 
-Each email account is polled independently. Multiple accounts with different
-folders can be configured.
+An account with a `mailbox.review_loop` has a second, uncoupled pass.
+A draft written on it in a turn the operator is not present for, by any
+loop but the review loop itself, is queued in the review loop's
+loopqueue partition as `draft:<account>:<draft_id>`, and `email_escalate` queues a
+message as `message:<account>:<message_id>`; queueing the same subject
+again coalesces. The review loop is woken with an `email_review` event
+(`drafts`, `messages`, and `pending` counts in its metadata) once queued
+work has waited `review_delay`, never later than `review_max_wait` after
+the first of a burst, again at boot for work queued before a restart,
+and again, on a timer of its own rather than a poll, when work an
+earlier wake left is still queued `review_delay` after that wake. An
+empty queue never wakes it. It carries `queue_pull`,
+`queue_ack`, and `queue_defer` over its own partition.
+
+High-water marks are stored in the operational state KV store (opstate)
+as `{uidvalidity, uid}` per account, not in prompt context. The poller
+cannot be manipulated into re-processing old messages, and a mailbox
+whose UIDVALIDITY changes reseeds silently instead of replaying.
+Messages the account itself sent (matching `default_from`) are skipped.
+
+Each account is polled independently; only INBOX is watched. The poller
+also refreshes the folder cache the Email Accounts context block renders,
+so a handler woken by the poller sees real folder names.
 
 ## Signal Messaging
 

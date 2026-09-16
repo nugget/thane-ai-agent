@@ -22,6 +22,25 @@ listen:
   address: ""
   # Port is the TCP port to listen on. Default: 8080.
   port: 8080
+  # Auth gates the native /v1 API and the console. See ListenAuthConfig.
+  auth:
+    # Tokens are the operator's API credentials. The gate keeps only
+    # SHA-256 digests and compares in constant time; the loaded config
+    # itself still holds the plaintext for the process lifetime, as it
+    # does every other credential, until the secret store lands. Label
+    # names the holder in logs and in the session endpoint, never the
+    # token itself.
+    tokens:
+      - # Label identifies the holder (a person, a script, a device); it is
+        # what logs and the session endpoint report.
+        label: operator
+        # Token is the secret the holder presents. Treat this file
+        # accordingly.
+        token: your-api-token
+    # SessionTTL is how long a console session cookie stays valid
+    # without use; each authenticated request extends it. Default: 168h
+    # (7 days). Sessions live in memory and end on restart.
+    session_ttl: 0s
 # OllamaAPI configures the optional Ollama-compatible API server,
 # used for Home Assistant integration.
 ollama_api:
@@ -37,6 +56,14 @@ ollama_api:
   # this only for token-capable clients (e.g. Open WebUI) or when HA
   # connects through a proxy that injects the header.
   api_key: ""
+  # AllowedSources, when non-empty, admits only callers whose address
+  # falls inside one of the listed CIDR prefixes; a bare address is a
+  # single host. A caller's address is the peer on the socket, never a
+  # forwarded header. This is the admission control for the one
+  # surface that cannot ask for a credential, so it is where an
+  # operator says which hosts may drive the agent loop through it.
+  # Empty leaves the surface open to anything that can reach the port.
+  allowed_sources: []
 # OpenAIAPI configures the optional OpenAI-compatible API server,
 # serving the frozen OpenAI shim on its own port (separate from the
 # Thane-native /v1 API on the primary listen port).
@@ -51,6 +78,137 @@ openai_api:
   # delegation — so leaving it empty (open) is appropriate only when
   # every host that can reach the port is trusted.
   api_key: ""
+  # AllowedSources, when non-empty, admits only callers whose address
+  # falls inside one of the listed CIDR prefixes; a bare address is a
+  # single host. A caller's address is the peer on the socket, never a
+  # forwarded header. Clients of this shim can send a bearer key, so
+  # here the list is a second lock rather than the only one, and it is
+  # checked first: a refused caller never reaches the key comparison.
+  # Empty leaves the surface open.
+  allowed_sources: []
+# TLS configures the optional HTTPS front door: in-process TLS
+# termination with certificates from certmagic, routing each
+# configured hostname to one of the surfaces above.
+tls:
+  # Enabled starts the HTTPS front door. Off by default; the plaintext
+  # listeners are unaffected either way.
+  enabled: false
+  # HTTPS is the TLS listener. Port defaults to 443. Binding it needs
+  # privilege on every platform Thane runs on: Linux wants
+  # CAP_NET_BIND_SERVICE or the unprivileged-port sysctl, and macOS
+  # refuses ports below 1024 to ordinary users outright. Where Thane
+  # runs unprivileged, bind a high port and redirect 443 to it with the
+  # OS packet filter, then set PublicPort so redirects name the port
+  # clients actually use.
+  https:
+    # Address is the bind address; empty means all interfaces.
+    address: ""
+    # Port is the TCP port Thane binds. Default: 443.
+    port: 443
+    # PublicPort is the port clients reach the listener on when a packet
+    # filter or port map sits in front of it (Thane bound to 8443, the
+    # OS redirecting 443 to it). It is what the plain-HTTP redirect names
+    # in its Location; zero means the same as Port.
+    public_port: 0
+  # HTTP is the plain listener that answers every request with a
+  # permanent redirect to HTTPS and nothing else. Port defaults to 80.
+  http:
+    # Disabled turns the redirect listener off entirely.
+    disabled: false
+    # Address is the bind address; empty means all interfaces.
+    address: ""
+    # Port is the TCP port. Default: 80.
+    port: 80
+  # HSTSMaxAge is the Strict-Transport-Security max-age sent on every
+  # HTTPS response. Zero uses the default of 4320h (180 days); to send
+  # no header at all, set HSTSDisabled.
+  hsts_max_age: 4320h
+  # HSTSDisabled omits the Strict-Transport-Security header entirely.
+  hsts_disabled: false
+  # Hostnames maps each hostname to the surface it reaches: "native"
+  # (the /v1 API and dashboard), "ollama", or "openai". Every hostname
+  # listed gets its own managed certificate; a request for a hostname
+  # not listed is refused with 421 Misdirected Request. Names are
+  # explicit, never issued on demand.
+  hostnames:
+    ollama.example.net: ollama
+    thane.example.net: native
+  # ClientAuth controls verification of client certificates presented
+  # during the handshake. See TLSClientAuthConfig.
+  client_auth:
+    # Disabled turns client-certificate verification off. Certificates a
+    # client presents are then ignored rather than verified.
+    disabled: false
+    # TrustedPeerCAs lists additional CA certificate files (PEM) whose
+    # issued client certificates are accepted alongside the channel CA.
+    # Relative paths resolve against the core root.
+    trusted_peer_cas: []
+  # CertMagic is the certificate-management pass-through. See
+  # CertMagicConfig.
+  certmagic:
+    # CA is the ACME directory URL. Empty selects Let's Encrypt
+    # production. Point it at the staging directory
+    # (https://acme-staging-v02.api.letsencrypt.org/directory) while
+    # bringing the front door up beside an existing proxy.
+    ca: https://acme-staging-v02.api.letsencrypt.org/directory
+    # Email is the ACME account contact. Strongly recommended: the CA
+    # uses it for expiry and revocation notices.
+    email: acme@example.net
+    # Agreed records acceptance of the CA's subscriber agreement. Must be
+    # true; the CA refuses account creation otherwise.
+    agreed: true
+    # KeyType selects the certificate key: ed25519, p256, p384, rsa2048,
+    # or rsa4096. Empty uses certmagic's default (p256).
+    key_type: ""
+    # RenewalWindowRatio is the fraction of a certificate's lifetime
+    # after which renewal is attempted. Zero uses certmagic's default
+    # (1/3, so a 90-day certificate renews at 60 days).
+    renewal_window_ratio: 0.0
+    # Storage is the directory for ACME account keys and issued
+    # certificates. Default: {workspace}/tls. Runtime state, never
+    # inside core; a path under the core root is refused.
+    storage: ""
+    # MustStaple requests certificates with the OCSP must-staple
+    # extension.
+    must_staple: false
+    # CertObtainTimeout bounds one issuance attempt end to end, including
+    # DNS propagation waits. Zero uses certmagic's default; set it above
+    # dns.propagation_delay plus dns.propagation_timeout or issuance is
+    # cut off while still waiting for DNS.
+    cert_obtain_timeout: 0s
+    # DNS configures the DNS-01 challenge solver, which is the only
+    # challenge the front door uses.
+    dns:
+      # Provider names the DNS provider from Thane's registry (currently
+      # "linode"). Required.
+      provider: linode
+      # PropagationDelay is how long to wait after creating the challenge
+      # record before starting propagation checks. Providers whose
+      # authoritative servers lag their API need this; Linode's guidance is
+      # ten minutes, which is the registry default for that provider when
+      # this is zero.
+      propagation_delay: 10m
+      # PropagationTimeout is the longest to keep checking for the record
+      # after the delay. Zero uses the provider's registry default; -1
+      # (certmagic's sentinel) disables propagation checks so issuance
+      # proceeds as soon as the delay elapses.
+      propagation_timeout: 15m
+      # Resolvers lists DNS servers to query during propagation checks,
+      # as host or host:port. Pointing these at the zone's authoritative
+      # nameservers avoids waiting on recursive-resolver caches.
+      resolvers:
+        - ns1.linode.com
+        - ns2.linode.com
+      # TTL is the challenge record's TTL. Zero uses the provider default.
+      ttl: 0s
+      # OverrideDomain delegates the challenge record to another domain
+      # (a CNAME'd _acme-challenge target).
+      override_domain: ""
+      # Settings is passed through to the provider verbatim, with the
+      # provider's own field names (for linode: api_token, and optionally
+      # api_url and api_version). Unknown keys are rejected.
+      settings:
+        api_token: your-linode-api-token
 #
 # (optional) CardDAV configures the optional CardDAV server for native
 # carddav:
@@ -126,6 +284,21 @@ models:
       # this via the native `ttl` request field on inference endpoints.
       # Zero lets the runner use its default behavior.
       idle_ttl_seconds: 0
+      # ChatTemplateKwargs is passed through to the server as
+      # chat_template_kwargs, which OpenAI-compatible runners hand to the
+      # model's Jinja chat template. Its main use is the reasoning
+      # toggle: a model with thinking on by default spends the output
+      # budget on a think block, and a turn with a modest ceiling returns
+      # empty content rather than an answer.
+      # 
+      # The accepted keys belong to the model's template, not to the
+      # server, and they differ by family — Qwen reads enable_thinking,
+      # DeepSeek reads thinking, gpt-oss reads reasoning_effort. This is
+      # nonetheless resource-scoped because it is wire dialect, like the
+      # max_tokens spelling; an operator who changes which family a
+      # resource serves must revisit it. Unknown keys are inert: the
+      # template simply never reads them.
+      chat_template_kwargs: {}
       # StreamIdleTimeout bounds how long this endpoint may send nothing
       # at all before a request is abandoned. It measures silence, not
       # duration: a slow generation is still allowed to be slow, and the
@@ -153,6 +326,21 @@ models:
       # this via the native `ttl` request field on inference endpoints.
       # Zero lets the runner use its default behavior.
       idle_ttl_seconds: 0
+      # ChatTemplateKwargs is passed through to the server as
+      # chat_template_kwargs, which OpenAI-compatible runners hand to the
+      # model's Jinja chat template. Its main use is the reasoning
+      # toggle: a model with thinking on by default spends the output
+      # budget on a think block, and a turn with a modest ceiling returns
+      # empty content rather than an answer.
+      # 
+      # The accepted keys belong to the model's template, not to the
+      # server, and they differ by family — Qwen reads enable_thinking,
+      # DeepSeek reads thinking, gpt-oss reads reasoning_effort. This is
+      # nonetheless resource-scoped because it is wire dialect, like the
+      # max_tokens spelling; an operator who changes which family a
+      # resource serves must revisit it. Unknown keys are inert: the
+      # template simply never reads them.
+      chat_template_kwargs: {}
       # StreamIdleTimeout bounds how long this endpoint may send nothing
       # at all before a request is abandoned. It measures silence, not
       # duration: a slow generation is still allowed to be slow, and the
@@ -178,6 +366,17 @@ models:
       resource: edge
       supports_tools: true
       supports_streaming: false
+      # SupportsImages is an optional per-deployment vision override. Nil
+      # inherits what the resource reported or what the model name
+      # implies. It exists because that inference is the only one with no
+      # authoritative source on a plain OpenAI-compatible endpoint: the
+      # /v1/models schema carries an id and nothing about modality, so
+      # vision is inferred from the model name alone. A multimodal model
+      # whose name matches none of the vision-name patterns that
+      # inference knows is invisible to Thane however capable the server
+      # is. LM Studio escapes this only because its native inventory
+      # returns a vision flag.
+      supports_images: false
       context_window: 32768
       speed: 9
       quality: 5
@@ -188,6 +387,17 @@ models:
       resource: default
       supports_tools: true
       supports_streaming: false
+      # SupportsImages is an optional per-deployment vision override. Nil
+      # inherits what the resource reported or what the model name
+      # implies. It exists because that inference is the only one with no
+      # authoritative source on a plain OpenAI-compatible endpoint: the
+      # /v1/models schema carries an id and nothing about modality, so
+      # vision is inferred from the model name alone. A multimodal model
+      # whose name matches none of the vision-name patterns that
+      # inference knows is invisible to Thane however capable the server
+      # is. LM Studio escapes this only because its native inventory
+      # returns a vision flag.
+      supports_images: false
       context_window: 131072
       speed: 3
       quality: 9
@@ -310,6 +520,10 @@ roots:
       # Search controls search visibility: "default", "on_request", or
       # "never".
       search: ""
+      # SearchBody opts this root's logical document bodies into explicit
+      # content search. Default false searches indexed metadata only.
+      # Search still governs visibility, and Indexing must be enabled.
+      search_body: false
       # RequiresTag optionally gates the whole root behind one capability
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
@@ -481,6 +695,10 @@ roots:
       # Search controls search visibility: "default", "on_request", or
       # "never".
       search: default
+      # SearchBody opts this root's logical document bodies into explicit
+      # content search. Default false searches indexed metadata only.
+      # Search still governs visibility, and Indexing must be enabled.
+      search_body: true
       # RequiresTag optionally gates the whole root behind one capability
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
@@ -617,6 +835,10 @@ roots:
       # Search controls search visibility: "default", "on_request", or
       # "never".
       search: ""
+      # SearchBody opts this root's logical document bodies into explicit
+      # content search. Default false searches indexed metadata only.
+      # Search still governs visibility, and Indexing must be enabled.
+      search_body: false
       # RequiresTag optionally gates the whole root behind one capability
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
@@ -983,11 +1205,18 @@ compaction:
 #     collected and published. Default: 60. Minimum: 10.
 #     interval: 60
 #
-# (optional) Person configures household member presence tracking. When Track
+# (optional) Person configures household member presence tracking.
 # person:
-#   Track is a list of Home Assistant person entity IDs to monitor
-#   (e.g., ["person.nugget", "person.dan"]). Each entry must begin
-#   with "person.". An empty list disables person tracking.
+#   Track is a startup assertion, not the roster. Presence membership
+#   comes from the contact store: a contact is tracked because it
+#   carries an ha_person_entity binding. Every entity listed here must
+#   be claimed by some contact, or startup fails and names the
+#   unclaimed ones — which catches a config that has drifted from the
+#   contact graph instead of quietly shrinking the roster.
+#
+#   Each entry must begin with "person.". An empty list asserts
+#   nothing and does not disable tracking; a contact store with no
+#   bindings does that.
 #   track:
 #     - person.alice
 #     - person.bob
@@ -1000,9 +1229,12 @@ compaction:
 #   bindings; this key is ignored in recovery mode.
 #   contact_bindings:
 #     0d1f8a6e-4c2b-4b7e-9f00-3a7d0e2c9b41: person.alice
-#   Devices maps tracked person entity IDs to their wireless device
-#   MAC addresses. Used by the UniFi poller to determine which person
-#   a wireless client belongs to for room-level presence.
+#   Devices maps person entity IDs to their wireless device MAC
+#   addresses. Used by the UniFi poller to determine which person a
+#   wireless client belongs to for room-level presence. Keys need not
+#   appear in Track — membership is the contact store's answer, not
+#   this file's — but each key must name at least one MAC, since the
+#   poller with no mappings can attribute nothing.
 #   devices:
 #     person.alice:
 #       - # MAC is the device's MAC address (e.g., "AA:BB:CC:DD:EE:FF").
@@ -1118,26 +1350,430 @@ compaction:
 #   MaxSubscriptions limits runtime-managed repository event subscriptions.
 #   max_subscriptions: 50
 #
-# (optional) Email configures native IMAP email access. When configured, Thane
+# (optional) Email configures native IMAP and SMTP mailboxes. When configured,
 # email:
-#   bcc_owner: ""
-#   poll_interval: 0
+#   BccOwner is an address that receives a blind copy of every message
+#   the agent sends, unless it is already a recipient. It is an audit
+#   copy for the operator, not a recipient the agent chose, and it
+#   does not need a contact record. Leave empty to disable.
+#   bcc_owner: Operator <operator@example.com>
+#   PollInterval is how often, in seconds, every account's INBOX is
+#   checked for new mail. Default: 300 when at least one account is
+#   configured. Set to 0 to disable polling; the built-in email-poller
+#   and email-default-handler loops are then not created, and mail is
+#   only ever read when a tool asks for it. Negative values are
+#   rejected.
+#   poll_interval: 300
+#   Accounts lists the mailboxes Thane connects to. The first account is
+#   the primary: tools use it when no account is named and no loop
+#   binding selects one.
 #   accounts:
-#     - name: primary
+#     - # Name is the short identifier tools and loop bindings use for this
+#       account (for example "personal" or "packages"). Required and unique.
+#       name: primary
+#       Description is an operator-authored note about what this mailbox is
+#       for, shown to the model beside the account name so it learns the
+#       account's purpose and limits before acting rather than by being
+#       refused. For example: "parcel and delivery notifications; never
+#       sends".
+#       description: Thane's own mailbox. Correspondence with the household and trusted contacts.
+#       IMAP configures the connection used to read and organize mail.
 #       imap:
+#         Host is the IMAP server hostname, for example "imap.example.com".
 #         host: imap.example.com
+#         Port is the IMAP server port. Default: 993.
 #         port: 993
+#         Username is the IMAP login, typically the mailbox address.
 #         username: thane@example.com
+#         Password is the IMAP login password. Environment variable
+#         expansion such as ${IMAP_PASSWORD} is available.
 #         password: your-email-password
+#         TLS controls whether the connection is TLS from the first byte.
+#         Default: true on every port except 143. When false, the connection
+#         starts in plaintext and is upgraded with STARTTLS before the login;
+#         a server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
 #         tls: true
+#       SMTP configures the connection used to send mail. Omit to make the
+#       account read-and-organize only.
 #       smtp:
+#         Host is the SMTP submission server hostname, for example
+#         "smtp.example.com". Setting it enables sending from the account.
 #         host: smtp.example.com
+#         Port is the SMTP server port. Default: 587.
 #         port: 587
+#         Username is the SMTP login, typically the mailbox address.
 #         username: thane@example.com
+#         Password is the SMTP login password. Environment variable
+#         expansion such as ${SMTP_PASSWORD} is available.
 #         password: your-email-password
-#         starttls: false
+#         StartTLS controls whether the connection starts in plaintext and is
+#         upgraded with STARTTLS (submission on 587) rather than being TLS
+#         from the first byte (465). Default: true on every port except 465.
+#         A server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
+#         starttls: true
+#       DefaultFrom is the From address for mail sent from this account,
+#       for example "Thane <thane@example.com>". Required when smtp is
+#       configured. It is also how the poller recognises the account's own
+#       outbound copies in INBOX and skips them.
 #       default_from: Thane <thane@example.com>
+#       SentFolder is the IMAP folder that receives a copy of every message
+#       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
+#       Leave empty to keep no server-side copy.
+#       sent_folder: Sent
+#       DraftsFolder is the exact name of the IMAP folder that receives
+#       messages held for the operator to send, for a server that marks no
+#       folder with the \Drafts special-use attribute. Leave empty to use
+#       the folder the server marks. When neither names one, a message the
+#       policy would draft is refused; nothing is sent in its place.
+#       drafts_folder: Drafts
+#       JunkFolder is the exact name of the folder that holds spam, for a
+#       server that marks none with the \Junk special-use attribute. Leave
+#       empty to use the folder the server marks.
+#       junk_folder: ""
+#       TrashFolder is the exact name of the folder that holds deleted
+#       mail, for a server that marks none with \Trash. Leave empty to use
+#       the folder the server marks.
+#       trash_folder: ""
+#       Policy is what the model may do with this account beyond reading
+#       it, and where the mail it writes goes.
+#       policy:
+#         Access is the most the model may do with this account: "read"
+#         (list, search, and read without marking messages seen),
+#         "organize" (also flag and move), or "send" (also compose, reply,
+#         and draft). Default: "send" when smtp is configured, "organize"
+#         otherwise. An account with smtp configured may still be held at
+#         "organize", which keeps its credentials for the operator's own
+#         use; "send" without smtp can only draft and requires the
+#         drafts delivery mode.
+#         access: send
+#         Delivery decides where outbound mail goes once every recipient
+#         has passed the trust gate. "by_trust_zone" (default) sends
+#         directly to admin and household recipients when the operator is
+#         present for the turn, holds mail for trusted recipients in the
+#         drafts folder for the operator to send, and refuses known and
+#         unknown recipients. The operator is present only for their own
+#         message, sent through Thane's native API or written in a
+#         conversation bound to their contact; every other turn (a poller
+#         wake, a scheduled loop, a loop launched from the operator's
+#         conversation, a call through the Ollama-compatible shim that Home
+#         Assistant automations use) holds everything in the drafts folder,
+#         so an autonomous loop never sends on its own. "drafts" holds every
+#         message there. "direct" sends everything the gate allows,
+#         including to trusted recipients and from unattended turns; choose
+#         it deliberately.
+#         delivery: by_trust_zone
+#         DraftGate is how the trust gate treats recipients when delivery
+#         is drafts, where the operator sends every message by hand.
+#         "relaxed" (the default with delivery drafts) drafts for anyone a
+#         person could answer: a recipient refused only for its trust zone
+#         (no contact record, a known contact, or an address several records
+#         share whose least privileged one is blocked) is drafted, because
+#         the operator's own send is the gate. Automated mailboxes, failed
+#         directory lookups, and the recipient-domain rules stay refused. A
+#         relaxed account also drafts an unattended reply to mailing-list or
+#         bulk mail whose own To or Cc names the account's address. "strict"
+#         (the default otherwise) applies the gate as every other delivery
+#         mode does. relaxed with any other delivery mode is refused.
+#         draft_gate: strict
+#         DeniedRecipientDomains lists domains this account never writes
+#         to, even when the recipient is a trusted contact. An entry covers
+#         the domain and its subdomains ("example.com" also covers
+#         mail.example.com). Checked before allowed_recipient_domains.
+#         denied_recipient_domains:
+#           - example.org
+#         AllowedRecipientDomains, when set, limits outbound recipients to
+#         these domains and their subdomains; every other recipient is
+#         refused. Empty means no limit.
+#         allowed_recipient_domains: []
+#       Mailbox says whose mailbox this is and how its mail should sound.
+#       mailbox:
+#         Owner is whose mailbox this is: "assistant" (default) for a
+#         mailbox Thane keeps, or "operator" for the operator's own inbox,
+#         which Thane helps with but does not own. On an operator mailbox,
+#         email_read leaves mail unread unless the call asks otherwise, and
+#         a turn the operator is not present for cannot mark mail seen,
+#         whether by reading it or with email_mark. Any other value is
+#         refused.
+#         owner: assistant
+#         Voice is an operator-authored note, at most 500 bytes, on how mail
+#         written from this account should sound, for example "first person
+#         as Alice; brief; sign with her first name only". It is shown to
+#         the model in the account's Email Accounts entry.
+#         voice: ""
+#         MoveInto lists where email_move may file this account's mail in a
+#         turn the operator is not present for, such as a new-mail wake or a
+#         scheduled loop. An entry is role:<role>, the folder holding that
+#         special-use role (inbox, sent, trash, junk, archive, all, flagged
+#         or important; junk_folder and trash_folder answer for their roles
+#         first), or an exact folder name; "*" alone allows every folder.
+#         Moving mail back to INBOX out of a listed folder is always allowed,
+#         so a move can be undone. The drafts folder can never be listed. It
+#         binds only those turns: in the operator's own message, sent through
+#         Thane's native API or in a conversation bound to their contact,
+#         email_move may file into any folder but the drafts folder. A call
+#         through the Ollama-compatible shim, such as Home Assistant voice,
+#         is not their own message.
+#         Default: [role:junk] when owner is operator, so a turn the operator
+#         is not present for moves only spam out of their INBOX, and ["*"]
+#         otherwise.
+#         move_into: []
+#         FilingNote is an optional operator-authored sentence, at most 300
+#         bytes, on how this mailbox is filed, shown to the model in the
+#         account's Email Accounts entry.
+#         filing_note: ""
+#         WakeLoop names the loop that receives this account's new-mail
+#         wakes. Default: "email-owner-triage" when owner is operator, a
+#         built-in pass that prefers local models, files only obvious spam,
+#         flags what needs the operator, drafts plain answers where the
+#         account can draft, and hands the rest to review_loop; and
+#         "email-default-handler" otherwise. The loop must be an
+#         event_driven definition, or startup refuses the config.
+#         wake_loop: email-default-handler
+#         ReviewLoop names a loop that looks at this account's mail after
+#         wake_loop: every draft a turn the operator is not present for
+#         writes here, and every message email_escalate hands over, is queued
+#         for it, and it is woken only while that queue holds work. Empty
+#         (the default) means no review pass, and email_escalate then
+#         refuses and says to flag the message instead. The built-in
+#         "email-draft-review" may use cloud models and asks for a higher
+#         quality floor than the wake loop. The loop must be an event_driven
+#         definition other than wake_loop, or startup refuses the config.
+#         review_loop: ""
+#         ReviewDelay is how long review work waits for more to arrive
+#         before review_loop is woken, so a burst of mail becomes one
+#         review. Default: 15m.
+#         review_delay: 15m
+#         ReviewMaxWait bounds how long a steady stream of new review work
+#         can postpone that wake. Default: 2h. It may not be shorter than
+#         review_delay.
+#         review_max_wait: 2h
+#         Labels names the email.labels this mailbox's mail carries, for
+#         example [contact]. Only these are written here, listed in the
+#         account's Email Accounts entry, and taken by email_mark and
+#         email_search on it. Empty (the default) means none, whatever
+#         email.labels declares. An account whose access is read is never
+#         written, so naming a label there is refused.
+#         labels:
+#           - contact
+#     - # Name is the short identifier tools and loop bindings use for this
+#       account (for example "personal" or "packages"). Required and unique.
+#       name: packages
+#       Description is an operator-authored note about what this mailbox is
+#       for, shown to the model beside the account name so it learns the
+#       account's purpose and limits before acting rather than by being
+#       refused. For example: "parcel and delivery notifications; never
+#       sends".
+#       description: Parcel and delivery notifications. Read and file only; never sends.
+#       IMAP configures the connection used to read and organize mail.
+#       imap:
+#         Host is the IMAP server hostname, for example "imap.example.com".
+#         host: imap.example.com
+#         Port is the IMAP server port. Default: 993.
+#         port: 993
+#         Username is the IMAP login, typically the mailbox address.
+#         username: packages@example.com
+#         Password is the IMAP login password. Environment variable
+#         expansion such as ${IMAP_PASSWORD} is available.
+#         password: your-email-password
+#         TLS controls whether the connection is TLS from the first byte.
+#         Default: true on every port except 143. When false, the connection
+#         starts in plaintext and is upgraded with STARTTLS before the login;
+#         a server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
+#         tls: true
+#       SMTP configures the connection used to send mail. Omit to make the
+#       account read-and-organize only.
+#       smtp:
+#         Host is the SMTP submission server hostname, for example
+#         "smtp.example.com". Setting it enables sending from the account.
+#         host: ""
+#         Port is the SMTP server port. Default: 587.
+#         port: 0
+#         Username is the SMTP login, typically the mailbox address.
+#         username: ""
+#         Password is the SMTP login password. Environment variable
+#         expansion such as ${SMTP_PASSWORD} is available.
+#         password: ""
+#         StartTLS controls whether the connection starts in plaintext and is
+#         upgraded with STARTTLS (submission on 587) rather than being TLS
+#         from the first byte (465). Default: true on every port except 465.
+#         A server that does not offer STARTTLS is refused rather than sent
+#         credentials in the clear.
+#         starttls: false
+#       DefaultFrom is the From address for mail sent from this account,
+#       for example "Thane <thane@example.com>". Required when smtp is
+#       configured. It is also how the poller recognises the account's own
+#       outbound copies in INBOX and skips them.
+#       default_from: ""
+#       SentFolder is the IMAP folder that receives a copy of every message
+#       sent from this account, for example "Sent" or "[Gmail]/Sent Mail".
+#       Leave empty to keep no server-side copy.
 #       sent_folder: ""
+#       DraftsFolder is the exact name of the IMAP folder that receives
+#       messages held for the operator to send, for a server that marks no
+#       folder with the \Drafts special-use attribute. Leave empty to use
+#       the folder the server marks. When neither names one, a message the
+#       policy would draft is refused; nothing is sent in its place.
+#       drafts_folder: ""
+#       JunkFolder is the exact name of the folder that holds spam, for a
+#       server that marks none with the \Junk special-use attribute. Leave
+#       empty to use the folder the server marks.
+#       junk_folder: ""
+#       TrashFolder is the exact name of the folder that holds deleted
+#       mail, for a server that marks none with \Trash. Leave empty to use
+#       the folder the server marks.
+#       trash_folder: ""
+#       Policy is what the model may do with this account beyond reading
+#       it, and where the mail it writes goes.
+#       policy:
+#         Access is the most the model may do with this account: "read"
+#         (list, search, and read without marking messages seen),
+#         "organize" (also flag and move), or "send" (also compose, reply,
+#         and draft). Default: "send" when smtp is configured, "organize"
+#         otherwise. An account with smtp configured may still be held at
+#         "organize", which keeps its credentials for the operator's own
+#         use; "send" without smtp can only draft and requires the
+#         drafts delivery mode.
+#         access: organize
+#         Delivery decides where outbound mail goes once every recipient
+#         has passed the trust gate. "by_trust_zone" (default) sends
+#         directly to admin and household recipients when the operator is
+#         present for the turn, holds mail for trusted recipients in the
+#         drafts folder for the operator to send, and refuses known and
+#         unknown recipients. The operator is present only for their own
+#         message, sent through Thane's native API or written in a
+#         conversation bound to their contact; every other turn (a poller
+#         wake, a scheduled loop, a loop launched from the operator's
+#         conversation, a call through the Ollama-compatible shim that Home
+#         Assistant automations use) holds everything in the drafts folder,
+#         so an autonomous loop never sends on its own. "drafts" holds every
+#         message there. "direct" sends everything the gate allows,
+#         including to trusted recipients and from unattended turns; choose
+#         it deliberately.
+#         delivery: by_trust_zone
+#         DraftGate is how the trust gate treats recipients when delivery
+#         is drafts, where the operator sends every message by hand.
+#         "relaxed" (the default with delivery drafts) drafts for anyone a
+#         person could answer: a recipient refused only for its trust zone
+#         (no contact record, a known contact, or an address several records
+#         share whose least privileged one is blocked) is drafted, because
+#         the operator's own send is the gate. Automated mailboxes, failed
+#         directory lookups, and the recipient-domain rules stay refused. A
+#         relaxed account also drafts an unattended reply to mailing-list or
+#         bulk mail whose own To or Cc names the account's address. "strict"
+#         (the default otherwise) applies the gate as every other delivery
+#         mode does. relaxed with any other delivery mode is refused.
+#         draft_gate: strict
+#         DeniedRecipientDomains lists domains this account never writes
+#         to, even when the recipient is a trusted contact. An entry covers
+#         the domain and its subdomains ("example.com" also covers
+#         mail.example.com). Checked before allowed_recipient_domains.
+#         denied_recipient_domains: []
+#         AllowedRecipientDomains, when set, limits outbound recipients to
+#         these domains and their subdomains; every other recipient is
+#         refused. Empty means no limit.
+#         allowed_recipient_domains: []
+#       Mailbox says whose mailbox this is and how its mail should sound.
+#       mailbox:
+#         Owner is whose mailbox this is: "assistant" (default) for a
+#         mailbox Thane keeps, or "operator" for the operator's own inbox,
+#         which Thane helps with but does not own. On an operator mailbox,
+#         email_read leaves mail unread unless the call asks otherwise, and
+#         a turn the operator is not present for cannot mark mail seen,
+#         whether by reading it or with email_mark. Any other value is
+#         refused.
+#         owner: assistant
+#         Voice is an operator-authored note, at most 500 bytes, on how mail
+#         written from this account should sound, for example "first person
+#         as Alice; brief; sign with her first name only". It is shown to
+#         the model in the account's Email Accounts entry.
+#         voice: ""
+#         MoveInto lists where email_move may file this account's mail in a
+#         turn the operator is not present for, such as a new-mail wake or a
+#         scheduled loop. An entry is role:<role>, the folder holding that
+#         special-use role (inbox, sent, trash, junk, archive, all, flagged
+#         or important; junk_folder and trash_folder answer for their roles
+#         first), or an exact folder name; "*" alone allows every folder.
+#         Moving mail back to INBOX out of a listed folder is always allowed,
+#         so a move can be undone. The drafts folder can never be listed. It
+#         binds only those turns: in the operator's own message, sent through
+#         Thane's native API or in a conversation bound to their contact,
+#         email_move may file into any folder but the drafts folder. A call
+#         through the Ollama-compatible shim, such as Home Assistant voice,
+#         is not their own message.
+#         Default: [role:junk] when owner is operator, so a turn the operator
+#         is not present for moves only spam out of their INBOX, and ["*"]
+#         otherwise.
+#         move_into: []
+#         FilingNote is an optional operator-authored sentence, at most 300
+#         bytes, on how this mailbox is filed, shown to the model in the
+#         account's Email Accounts entry.
+#         filing_note: ""
+#         WakeLoop names the loop that receives this account's new-mail
+#         wakes. Default: "email-owner-triage" when owner is operator, a
+#         built-in pass that prefers local models, files only obvious spam,
+#         flags what needs the operator, drafts plain answers where the
+#         account can draft, and hands the rest to review_loop; and
+#         "email-default-handler" otherwise. The loop must be an
+#         event_driven definition, or startup refuses the config.
+#         wake_loop: email-default-handler
+#         ReviewLoop names a loop that looks at this account's mail after
+#         wake_loop: every draft a turn the operator is not present for
+#         writes here, and every message email_escalate hands over, is queued
+#         for it, and it is woken only while that queue holds work. Empty
+#         (the default) means no review pass, and email_escalate then
+#         refuses and says to flag the message instead. The built-in
+#         "email-draft-review" may use cloud models and asks for a higher
+#         quality floor than the wake loop. The loop must be an event_driven
+#         definition other than wake_loop, or startup refuses the config.
+#         review_loop: ""
+#         ReviewDelay is how long review work waits for more to arrive
+#         before review_loop is woken, so a burst of mail becomes one
+#         review. Default: 15m.
+#         review_delay: 15m
+#         ReviewMaxWait bounds how long a steady stream of new review work
+#         can postpone that wake. Default: 2h. It may not be shorter than
+#         review_delay.
+#         review_max_wait: 2h
+#         Labels names the email.labels this mailbox's mail carries, for
+#         example [contact]. Only these are written here, listed in the
+#         account's Email Accounts entry, and taken by email_mark and
+#         email_search on it. Empty (the default) means none, whatever
+#         email.labels declares. An account whose access is read is never
+#         written, so naming a label there is refused.
+#         labels: []
+#   Labels is the vocabulary of marks the operator sees in their mail
+#   client, keyed by label name: at most 8, at most one per colour. An
+#   account carries only the labels its mailbox.labels names.
+#   labels:
+#     contact:
+#       Meaning is what the label says about a message, in one short
+#       sentence, at most 200 bytes. It is shown to the model beside the
+#       label's name. Required.
+#       meaning: The sender matches a contact record
+#       Keyword is the IMAP keyword the label writes, for example
+#       "thane-contact": printable ASCII without spaces or any of
+#       ( ) { % * " \ ], at most 64 bytes. System flags such as \Flagged,
+#       keywords beginning with $ (the ones clients already give meaning
+#       to, such as $Junk and the $MailFlagBit0-2 colour keywords), and
+#       Junk, NonJunk, and NotJunk are refused. A keyword is always
+#       searchable; whether a client shows it depends on the client.
+#       keyword: thane-contact
+#       Color is the flag colour the label writes: red, orange, yellow,
+#       green, blue, purple, or grey. It is written as \Flagged plus the
+#       $MailFlagBit0-2 keywords that encode the colour, which a client
+#       that colours flags displays; every other client shows a plain flag.
+#       A colour is written only on a message nobody has flagged, and at
+#       most one label may use each colour.
+#       color: blue
+#       Apply names the rule under which Go applies the label itself, so
+#       the model never does. "contact_matched" applies it at poll time to
+#       new INBOX mail whose sender matches exactly one contact record, on
+#       every account whose mailbox.labels names the label. Leave empty for
+#       a label the model applies with email_mark.
+#       apply: contact_matched
 #
 # (optional) Identity configures contact identities for the agent and human operator.
 # identity:
@@ -1497,12 +2133,12 @@ archivist:
 #   claude-haiku-4-5:
 #     input_per_million: 1.0
 #     output_per_million: 5.0
-#   claude-opus-4-8:
+#   claude-opus-5:
 #     input_per_million: 5.0
 #     output_per_million: 25.0
-#   claude-sonnet-4-6:
-#     input_per_million: 3.0
-#     output_per_million: 15.0
+#   claude-sonnet-5:
+#     input_per_million: 2.0
+#     output_per_million: 10.0
 #
 # Logging configures Thane's filesystem datasets, stdout policy, and
 # queryable request/log retention.

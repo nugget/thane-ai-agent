@@ -130,11 +130,14 @@ func (s *Store) beginVerifyPass(root string) bool {
 func (s *Store) indexedDocUnchanged(ctx context.Context, root, relPath string, info fs.FileInfo) bool {
 	var existingModified string
 	var existingSize int64
+	var bodyIndexed sql.NullBool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT modified_at, size_bytes FROM indexed_documents WHERE root = ? AND rel_path = ?`,
+		`SELECT modified_at, size_bytes, content_body_indexed FROM indexed_documents
+		 WHERE root = ? AND rel_path = ? AND rowid IN (SELECT rowid FROM indexed_document_content_fts WHERE rowid = indexed_documents.rowid)`,
 		root, relPath,
-	).Scan(&existingModified, &existingSize)
+	).Scan(&existingModified, &existingSize, &bodyIndexed)
 	return err == nil &&
+		bodyIndexed.Valid && bodyIndexed.Bool == s.indexBody(root) &&
 		existingModified == info.ModTime().UTC().Format(time.RFC3339Nano) &&
 		existingSize == info.Size()
 }
@@ -215,6 +218,11 @@ func (s *Store) Refresh(ctx context.Context) error {
 			}
 			continue
 		}
+		if !s.indexBody(root) {
+			if err := s.clearIndexedBody(ctx, root); err != nil {
+				return err
+			}
+		}
 		if err := s.refreshRoot(ctx, root, dir); err != nil {
 			return err
 		}
@@ -263,8 +271,7 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 			return ctx.Err()
 		}
 		if err != nil {
-			s.logger.Warn("document scan skipped entry", "root", root, "path", path, "error", err)
-			return nil
+			return fmt.Errorf("scan document entry %q: %w", path, err)
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
@@ -312,8 +319,7 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 			}
 		}
 		if err := s.upsertFile(ctx, root, rel); err != nil {
-			s.logger.Warn("document index skipped file", "root", root, "path", path, "error", err)
-			return nil
+			return fmt.Errorf("index document %s: %w", makeRef(root, rel), err)
 		}
 		return nil
 	})
@@ -327,6 +333,7 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 	}
 	defer rows.Close()
 
+	var stale []string
 	for rows.Next() {
 		var rel string
 		if err := rows.Scan(&rel); err != nil {
@@ -335,11 +342,20 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 		if seen[rel] {
 			continue
 		}
+		stale = append(stale, rel)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, rel := range stale {
 		if err := s.deleteIndexedDocumentRows(ctx, root, rel); err != nil {
 			return fmt.Errorf("delete stale document: %w", err)
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) deleteIndexedDocumentRows(ctx context.Context, root, relPath string) error {
@@ -374,17 +390,8 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 	modified := info.ModTime().UTC().Format(time.RFC3339Nano)
 	size := info.Size()
 
-	var existingModified string
-	var existingSize int64
-	err = s.db.QueryRowContext(ctx,
-		`SELECT modified_at, size_bytes FROM indexed_documents WHERE root = ? AND rel_path = ?`,
-		root, relPath,
-	).Scan(&existingModified, &existingSize)
-	switch {
-	case err == nil && existingModified == modified && existingSize == size:
+	if s.indexedDocUnchanged(ctx, root, relPath, info) {
 		return nil
-	case err != nil && err != sql.ErrNoRows:
-		return fmt.Errorf("lookup indexed document: %w", err)
 	}
 
 	raw, err := readDocumentBytes(absPath)
@@ -433,8 +440,8 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO indexed_documents
-			(root, rel_path, abs_path, title, summary, facets_json, facet_bytes_json, audience, tags_json, frontmatter_json, links_json, modified_at, size_bytes, word_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(root, rel_path, abs_path, title, summary, facets_json, facet_bytes_json, audience, tags_json, frontmatter_json, links_json, modified_at, size_bytes, word_count, content_body_indexed)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(root, rel_path) DO UPDATE SET
 		 	abs_path = excluded.abs_path,
 		 	title = excluded.title,
@@ -447,10 +454,14 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 		 	links_json = excluded.links_json,
 		 	modified_at = excluded.modified_at,
 		 	size_bytes = excluded.size_bytes,
-		 	word_count = excluded.word_count`,
-		root, relPath, absPath, doc.Title, doc.Summary, string(facetsJSON), string(facetBytesJSON), doc.Audience, string(tagsJSON), string(metaJSON), string(linksJSON), modified, size, doc.WordCount,
+			word_count = excluded.word_count,
+			content_body_indexed = excluded.content_body_indexed`,
+		root, relPath, absPath, doc.Title, doc.Summary, string(facetsJSON), string(facetBytesJSON), doc.Audience, string(tagsJSON), string(metaJSON), string(linksJSON), modified, size, doc.WordCount, s.indexBody(root),
 	); err != nil {
 		return fmt.Errorf("upsert indexed document: %w", err)
+	}
+	if err := s.upsertContentIndex(ctx, tx, root, relPath, doc); err != nil {
+		return err
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM indexed_document_sections WHERE root = ? AND rel_path = ?`, root, relPath); err != nil {

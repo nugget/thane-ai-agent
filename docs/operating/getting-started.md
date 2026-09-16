@@ -49,14 +49,21 @@ material, `core/config.yaml`, and the bundled talents under
 `core/talents/`. A reference `config.example.yaml` and
 `persona.example.md` are also written at the workspace root.
 
+The generated config also carries a freshly minted operator token under
+`listen.auth.tokens`, so the native API and the web console are closed from
+the first boot. Send it as `Authorization: Bearer <token>` from API clients,
+or paste it once into the console's sign-in, which keeps only a session
+cookie. See [Listen Addresses](configuration.md#listen-addresses).
+
 Initialization first generates a stable UUID into
 `identity.operator_contact_id` in the signed config, then seeds an
 `admin`-zone operator contact stub with that exact UUID in `db/contacts.db`.
 Pass
 `-operator-name "Your Name"` to `thane init` to name it immediately; the
 default display name is `Operator`. The generated config includes an explicit
-empty `person.contact_bindings` map, ready for UUID-to-Home-Assistant-person
-bindings once `person.track` is configured.
+empty `person.contact_bindings` map. Adding a binding there is what puts a
+person in the presence roster — the binding is the declaration of interest,
+and nothing else has to be configured to track them.
 
 In normal operation the runtime reads `core/config.yaml` from the
 workspace and nothing else (`-insecure-config` exists as a recovery path

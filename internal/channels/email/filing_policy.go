@@ -1,0 +1,293 @@
+package email
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	platformconfig "github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
+)
+
+// Filing policy: where email_move may put an account's mail. Go
+// enforces one rule per account (mailbox.move_into) and never names a
+// folder: the rule's entries are special-use roles or names the
+// operator wrote. INBOX is always a legal destination out of a listed
+// folder, so undoing a move or rescuing mail from junk needs no rule
+// of its own.
+//
+// The rule binds only turns the operator is not present for (attended,
+// in policy.go). In their own conversation the operator decides where
+// their mail goes, so email_move files into any folder the account
+// has, and a move the rule would refuse is logged rather than refused.
+// The protections that are not filing policy hold in every turn: the
+// drafts folder is never a source or a destination (drafts_guard.go),
+// and an account whose access is read refuses the tool.
+
+// moveRequest is one email_move call's arguments, validated.
+type moveRequest struct {
+	opts MoveOptions
+
+	// role is destination_role, when the call named its target that
+	// way. Exactly one of role and opts.Destination is set.
+	role FolderRole
+}
+
+// parseMoveRequest reads email_move's arguments and reports every
+// problem with them together, so one retry can fix them all.
+func parseMoveRequest(args map[string]any) (moveRequest, []string) {
+	req := moveRequest{opts: MoveOptions{
+		Folder:      toolargs.TrimmedString(args, "folder"),
+		Destination: toolargs.TrimmedString(args, "destination"),
+		Account:     toolargs.TrimmedString(args, "account"),
+		UIDs:        toolargs.Uint32Slice(args, "uids"),
+	}}
+	if len(req.opts.UIDs) == 0 {
+		if uid := toolargs.Uint32(args, "uid"); uid != 0 {
+			req.opts.UIDs = []uint32{uid}
+		}
+	}
+
+	// folder is always the source. A call that names only folder is
+	// refused rather than read as a destination: guessing which folder
+	// the model meant is how mail lands somewhere nobody chose.
+	var problems []string
+	if len(req.opts.UIDs) == 0 {
+		problems = append(problems, "uids is required: pass uids (array of integers) or uid (single integer) from an email_list or email_search result in the same account and folder")
+	}
+	if p := batchProblem("email_move", len(req.opts.UIDs), "nothing was moved"); p != "" {
+		problems = append(problems, p)
+	}
+	roleName := toolargs.TrimmedString(args, "destination_role")
+	switch {
+	case req.opts.Destination != "" && roleName != "":
+		problems = append(problems, "pass destination or destination_role, not both: destination names a folder exactly and destination_role names its special-use role, and nothing was moved")
+	case req.opts.Destination == "" && roleName == "":
+		problems = append(problems, "destination or destination_role is required; folder is the source: pass destination as a folder name exactly as email_folders or the Email Accounts block lists it for this account, or destination_role as a special-use role such as junk or trash, and nothing was moved")
+	case roleName != "":
+		role, ok := parseFolderRole(roleName)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("destination_role %q is not a special-use role; use one of %s, and nothing was moved", roleName, strings.Join(destinationRoleNames(), ", ")))
+		}
+		req.role = role
+	}
+	return req, problems
+}
+
+// resolveMoveDestination returns the folder a move files into: the
+// destination as given, or destination_role resolved through r. The
+// drafts role answers with drafts, the drafts folder the call already
+// resolved, so the drafts refusal meets it; on an account with no
+// drafts folder it is refused here. Any other unresolved role is
+// refused with the gap it names.
+func (s *Service) resolveMoveDestination(ctx context.Context, acct ResolvedAccount, r *folderResolver, req moveRequest, drafts string) (string, error) {
+	switch req.role {
+	case "":
+		return req.opts.Destination, nil
+	case RoleDrafts:
+		if drafts != "" {
+			return drafts, nil
+		}
+		s.logMoveRefusal(ctx, acct, "drafts_destination", normalizeFolder(req.opts.Folder), string(req.role))
+		return "", fmt.Errorf("email_move never files mail by destination_role drafts on account %q: drafts is not among destination_role's values, because a message moved into the drafts role would look like a draft waiting for the operator to send or discard, and nothing was moved. Pick another destination, or report the need", acct.Name)
+	}
+	folder := r.folder(ctx, req.role)
+	if r.err != nil {
+		return "", r.err
+	}
+	if folder != "" {
+		return folder, nil
+	}
+	s.logMoveRefusal(ctx, acct, "destination_role_unresolved", "", string(req.role))
+	if key := roleConfigKey(req.role); key != "" {
+		return "", fmt.Errorf("email_move cannot resolve destination_role %q on account %q: no folder there has the %s special-use role and the account sets no %s, so there is nowhere to move the mail until the operator configures %s; leave it where it is. Nothing was moved", req.role, acct.Name, req.role, key, key)
+	}
+	return "", fmt.Errorf("email_move cannot resolve destination_role %q on account %q: no folder there has the %s special-use role; pass destination with a folder name exactly as email_folders lists it, or leave the mail where it is. Nothing was moved", req.role, acct.Name, req.role)
+}
+
+// filingPolicy is an account's mailbox.move_into resolved to folder
+// names for one call or one render.
+type filingPolicy struct {
+	// anywhere is true when move_into is ["*"]: every folder is allowed.
+	anywhere bool
+
+	// folders are the folders move_into resolves to, in the order
+	// listed, without repeats.
+	folders []string
+
+	// unresolved are the roles move_into names that no folder on the
+	// account is known to hold.
+	unresolved []FolderRole
+}
+
+// resolveFilingPolicy resolves an account's move_into. resolve answers
+// one role with a folder name, or "" when it cannot.
+func resolveFilingPolicy(cfg AccountConfig, resolve func(FolderRole) string) filingPolicy {
+	if cfg.MovesAnywhere() {
+		return filingPolicy{anywhere: true}
+	}
+	var p filingPolicy
+	for _, token := range cfg.MoveIntoTokens() {
+		folder := token
+		if name, isRole := strings.CutPrefix(token, platformconfig.EmailMoveIntoRolePrefix); isRole {
+			role, ok := parseFolderRole(name)
+			if !ok {
+				// Config validation refuses an unknown role at load.
+				continue
+			}
+			if folder = resolve(role); folder == "" {
+				p.unresolved = append(p.unresolved, role)
+				continue
+			}
+		}
+		if !p.holds(folder) {
+			p.folders = append(p.folders, folder)
+		}
+	}
+	return p
+}
+
+// sameFolder compares folder names: exactly, except INBOX, which IMAP
+// names without regard to case (RFC 3501 §5.1).
+func sameFolder(a, b string) bool {
+	if strings.EqualFold(a, DefaultFolder) && strings.EqualFold(b, DefaultFolder) {
+		return true
+	}
+	return a == b
+}
+
+// namesFolder compares folder names without regard to case, for the
+// checks that only refuse (the drafts folder, the junk guard). Some
+// servers fold the case of every mailbox name, so a refusal keyed on
+// the exact spelling would let a case variant reach the same folder;
+// a refusal may be wider than the server, never narrower. The
+// move_into allow check stays exact, because there exact fails closed.
+func namesFolder(a, b string) bool {
+	return strings.EqualFold(a, b)
+}
+
+// holds reports whether folder is one move_into resolves to.
+func (p filingPolicy) holds(folder string) bool {
+	return slices.ContainsFunc(p.folders, func(f string) bool { return sameFolder(f, folder) })
+}
+
+// allows reports whether mail may move from source into destination:
+// destination is listed, or destination is INBOX and source is listed,
+// which is how a move is undone or mail rescued from junk.
+func (p filingPolicy) allows(source, destination string) bool {
+	if p.anywhere || p.holds(destination) {
+		return true
+	}
+	return sameFolder(destination, DefaultFolder) && p.holds(source)
+}
+
+// describe renders the resolved list for a refusal: each folder quoted,
+// and each role no folder holds named as such.
+func (p filingPolicy) describe() string {
+	parts := make([]string, 0, len(p.folders)+len(p.unresolved))
+	for _, f := range p.folders {
+		parts = append(parts, strconv.Quote(f))
+	}
+	for _, r := range p.unresolved {
+		parts = append(parts, "the "+string(r)+" role, which no folder here has")
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// entryNames renders the resolved list for the Email Accounts entry:
+// the folder names, then role:<role> for each role no folder is known
+// to hold yet, so the entry never reads as allowing nothing.
+func (p filingPolicy) entryNames() []string {
+	names := slices.Clone(p.folders)
+	for _, r := range p.unresolved {
+		names = append(names, platformconfig.EmailMoveIntoRolePrefix+string(r))
+	}
+	return names
+}
+
+// filingRecovery is how a move refused by move_into can still happen.
+// Only a turn the operator is not present for is refused, so the way
+// through is a message of their own on a route that attended counts as
+// present: Thane's native API or console, or a channel conversation
+// bound to their contact. The
+// Ollama-compatible shim is named because the operator can be the one
+// speaking there (Home Assistant voice) and still be refused, so asking
+// again the same way cannot be the recovery.
+const filingRecovery = "the operator can make the move themselves, or ask for it in their own message through Thane's native API or console, or in a channel conversation bound to their contact, where move_into does not apply; a request through the Ollama-compatible shim, such as Home Assistant voice, is not their own turn and is refused the same way"
+
+// refuseFiling returns the refusal for a move p does not allow, or nil.
+// Tools.move calls it only in a turn the operator is not present for,
+// so every refusal says so and ends on filingRecovery. On an operator
+// mailbox the refusal says what INBOX is to the operator, because that
+// is why the move cannot happen, and the next move (flag it) follows
+// from it.
+func (s *Service) refuseFiling(ctx context.Context, acct ResolvedAccount, p filingPolicy, source, destination string) error {
+	if p.allows(source, destination) {
+		return nil
+	}
+	if sameFolder(destination, DefaultFolder) && !sameFolder(source, DefaultFolder) {
+		// INBOX is refused only because the source is not listed, so
+		// the refusal names the source, not INBOX.
+		s.logMoveRefusal(ctx, acct, "inbox_return_outside_move_into", source, destination)
+		return fmt.Errorf("email_move cannot return mail to INBOX from %q on account %q: in a turn the operator is not present for, mail goes back to INBOX only out of a folder its mailbox.move_into lists, %s, and %q is not one of them. Leave the mail where it is: %s; nothing was moved", source, acct.Name, p.describe(), source, filingRecovery)
+	}
+	s.logMoveRefusal(ctx, acct, "outside_move_into", source, destination)
+	if acct.Config.OperatorMailbox() {
+		return fmt.Errorf("email_move cannot file into %q on account %q: it is the operator's own mailbox, where INBOX is their worklist and the server keeps its own filing tree, so in a turn the operator is not present for, mail may move only into %s, and back to INBOX from there. Flag it instead; if it needs filing, %s; nothing was moved", destination, acct.Name, p.describe(), filingRecovery)
+	}
+	return fmt.Errorf("email_move cannot file into %q on account %q: in a turn the operator is not present for, its mailbox.move_into allows only %s, and back to INBOX from there. Choose one of those, or leave the mail and report the need: %s; nothing was moved", destination, acct.Name, p.describe(), filingRecovery)
+}
+
+// logMoveRefusal records one refused move, keyed to the loop and
+// conversation that asked.
+func (s *Service) logMoveRefusal(ctx context.Context, acct ResolvedAccount, reason, source, destination string) {
+	s.logger.Info("email move refused", moveLogAttrs(ctx, acct, reason, source, destination)...)
+}
+
+// logMoveOutsideMoveInto records a completed move that move_into does
+// not allow, which went ahead because the operator was present for the
+// turn. It names the messages that moved, by UID on both sides and by
+// Message-ID, because recent_operations forgets them after a few
+// operations or a restart, and this line is how a later pass finds
+// which mail left a folder outside the rule. Tools.move calls it only
+// after the server moved the messages, so a move that failed never
+// reads as one made outside the rule; a result that moved nothing logs
+// nothing.
+func (s *Service) logMoveOutsideMoveInto(ctx context.Context, acct ResolvedAccount, result MoveResult, moved []movedMessage) {
+	if len(result.UIDs) == 0 {
+		return
+	}
+	messageIDs := make([]string, 0, len(moved))
+	for _, m := range moved {
+		if m.MessageID != "" {
+			messageIDs = append(messageIDs, m.MessageID)
+		}
+	}
+	attrs := append(moveLogAttrs(ctx, acct, "operator_present", result.SourceFolder, result.Destination),
+		"count", len(result.UIDs),
+		"uids", result.UIDs,
+		"destination_uids_known", result.DestUIDsKnown,
+		"destination_uids", result.DestUIDs,
+		"message_ids", messageIDs,
+	)
+	s.logger.Info("email move outside move_into allowed", attrs...)
+}
+
+// moveLogAttrs are the fields every filing decision logs, keyed to the
+// loop, conversation, request, and tool call that asked.
+func moveLogAttrs(ctx context.Context, acct ResolvedAccount, reason, source, destination string) []any {
+	return []any{
+		"account", acct.Name,
+		"reason", reason,
+		"source_folder", source,
+		"destination", destination,
+		"owner", acct.Config.MailboxOwner(),
+		"loop_id", tools.LoopIDFromContext(ctx),
+		"conversation_id", tools.ConversationIDFromContext(ctx),
+		"request_id", tools.RequestIDFromContext(ctx),
+		"tool_call_id", tools.ToolCallIDFromContext(ctx),
+	}
+}

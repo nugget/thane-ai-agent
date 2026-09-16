@@ -75,7 +75,10 @@ type Config struct {
 	// ChatResponse and nil error means recovery succeeded; the returned
 	// model name replaces the current model for subsequent iterations.
 	// Returning a nil response and non-nil error propagates the failure.
-	// If OnLLMError is nil, errors are returned immediately.
+	// [llm.ErrOutputBudgetExhausted] ends the run with [ExhaustTokenBudget]
+	// and static fallback content, without invoking this callback or
+	// executing assistant output returned alongside the error.
+	// If OnLLMError is nil, other errors are returned immediately.
 	OnLLMError func(ctx context.Context, err error, model string,
 		msgs []llm.Message, toolDefs []map[string]any,
 		stream llm.StreamCallback) (resp *llm.ChatResponse, newModel string, retErr error)
@@ -98,19 +101,20 @@ type Config struct {
 	OnTextResponse func(ctx context.Context, content string, msgs []llm.Message)
 
 	// CheckBudget is called after each LLM response with the cumulative
-	// output token count. Return true if the budget is exhausted and the
-	// engine should force a text response. Nil means no budget.
+	// output token count from successful iterations. Return true to stop
+	// tool execution. Callers tracking usage across retries should consult
+	// that shared total here and enforce its remaining allowance at the
+	// client boundary, including any calls made by OnLLMError.
+	// Nil leaves only MaxOutputTokens in effect.
 	CheckBudget func(totalOutput int) bool
 
 	// MaxOutputTokens is the output-token budget for the whole run, or 0
-	// for unlimited. CheckBudget already stops the run once a response
-	// has pushed the total past it; this exists because that check is
-	// necessarily after the fact and cannot bound the response that
-	// overshot. Carried to each provider as the remaining allowance so
-	// the server stops generating at the budget rather than at its own
-	// ceiling, which on a slow local runner is the difference between a
-	// cap and several minutes of wall clock spent producing tokens
-	// nobody will accept.
+	// for unlimited. The engine supplies the remaining allowance to its
+	// calls and stops once successful iterations consume it, even without
+	// CheckBudget. Clients with internal retries must additionally deduct
+	// failed-attempt usage at their call boundary; see CheckBudget.
+	// Providers may enforce a lower ceiling or report no usage, so this
+	// is not a guarantee of exact upstream token consumption.
 	MaxOutputTokens int
 
 	// CheckToolAvail reports whether a tool is available in the current
@@ -156,6 +160,28 @@ type Config struct {
 	// FallbackContent is the static text returned when the model fails
 	// to produce content even after nudging.
 	FallbackContent string
+
+	// ReplyAwaited reports that someone is waiting on this turn's final
+	// text — a channel message or an API response — rather than the turn
+	// being a loop wake, a delegate, or other work nobody reads as a
+	// reply. It selects the repeat guard's wording: only a turn with a
+	// reply awaited is told to stop calling tools and answer, because on
+	// any other turn that instruction reads as "abandon the work".
+	ReplyAwaited bool
+
+	// TargetKey names the document a tool call writes, so that each
+	// tool's outcome is also tallied per target ([ToolOutcome.Targets]).
+	// It is called for every call the model makes, including calls the
+	// repeat guard refuses. Nil gives every call the empty target. A call
+	// the tool refuses with [tools.ErrTargetRefused] is tallied under the
+	// empty target whatever TargetKey named, and so is a guard refusal of
+	// a target whose latest executed call was refused that way.
+	TargetKey func(tool string, args map[string]any) string
+}
+
+func (c Config) outputBudgetExhausted(totalOutput int) bool {
+	return (c.MaxOutputTokens > 0 && totalOutput >= c.MaxOutputTokens) ||
+		(c.CheckBudget != nil && c.CheckBudget(totalOutput))
 }
 
 // applyDefaults fills zero-valued fields with their defaults.

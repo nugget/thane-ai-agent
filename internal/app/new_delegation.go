@@ -28,7 +28,7 @@ func (a *App) initDelegation(s *newState) error {
 	// Register the thane_* delegation tools AFTER all other tools so
 	// the delegate executor's parent registry snapshot includes the
 	// full tool set.
-	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
+	delegateExec := delegate.NewExecutor(logger, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
 	conversationInjector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
 	completionDispatcher := a.ensureLoopCompletionDispatcher()
 	if len(cfg.Delegate.Profiles) > 0 {
@@ -48,7 +48,7 @@ func (a *App) initDelegation(s *newState) error {
 	delegateExec.SetEventBus(a.eventBus)
 	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()}, a.loopRegistry)
 	delegateExec.ConfigureLoopCompletionSink(completionDispatcher.Deliver)
-	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
+	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter)
 	if tfs := a.loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}

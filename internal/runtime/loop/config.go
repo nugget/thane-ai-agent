@@ -485,6 +485,9 @@ type IterationResult struct {
 	ContextWindow int
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int
+	// ToolOutcomes is the runner's per-tool tally for this turn: how each
+	// tool's calls ended. Nil for handler turns.
+	ToolOutcomes map[string]ToolOutcome
 	// EffectiveTools lists the tools that were visible to the model for
 	// this iteration after allowlists, excludes, capability tags, and
 	// delegation gating were applied.
@@ -669,6 +672,17 @@ type Status struct {
 	LastError string `json:"last_error,omitempty"`
 	// ConsecutiveErrors is the number of consecutive failed iterations.
 	ConsecutiveErrors int `json:"consecutive_errors"`
+	// UnpublishedWrites holds, per durable write tool and target, the
+	// latest wake that ended without landing that write while the turn
+	// itself completed normally — so ConsecutiveErrors and LastError
+	// never see it. A later completed wake in which the tool succeeds for
+	// the same target clears its entry; a wake ending in a runner error
+	// neither records nor clears. At most 16 entries, oldest dropped.
+	// Sorted by tool, then target.
+	UnpublishedWrites []UnpublishedWrite `json:"unpublished_writes,omitempty"`
+	// UnpublishedWakes counts the wakes since the loop started that
+	// ended with at least one durable write unpublished.
+	UnpublishedWakes int `json:"unpublished_wakes,omitempty"`
 	// RecentConvIDs holds conversation IDs from the most recent iterations
 	// (up to 10), newest first. Used by the visualizer to query log entries
 	// scoped to this loop.

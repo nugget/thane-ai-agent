@@ -19,6 +19,10 @@ type modelMutationResult struct {
 	SizeBytes     int64    `json:"size_bytes"`
 	Section       string   `json:"section,omitempty"`
 	Window        string   `json:"window,omitempty"`
+	// Warnings reach the author, so a write that landed with a
+	// reservation says so. Without this field the store's warnings stop
+	// at the envelope and the advisory tier is a no-op.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type modelDeleteResult struct {
@@ -125,6 +129,7 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 		SizeBytes:     result.SizeBytes,
 		Section:       result.Section,
 		Window:        result.Window,
+		Warnings:      append([]string(nil), result.Warnings...),
 	}
 }
 

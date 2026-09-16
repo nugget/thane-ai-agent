@@ -25,7 +25,8 @@ Choose the next move deliberately:
   `diagnostics`. Its `system_health` is the one-call annunciator panel;
   start there when you only know "something is off".
 - If the question is about model registry, routing, or policy, activate
-  `models`.
+  `models`. Steering one conversation to one model is a `session`
+  decision (`conversation_model_pin`), not a policy one.
 - If the work is about scheduled tasks or timing policy, activate
   `scheduler`.
 - If you need loop definitions, loop policy, or loop launches —

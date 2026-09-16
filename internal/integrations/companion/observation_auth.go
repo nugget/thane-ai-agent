@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 // ErrObservationUnauthorized is returned for a missing or invalid bearer
@@ -36,17 +38,17 @@ type ObservationAuthenticator interface {
 
 // BearerObservationAuthenticator adapts configured companion bearer tokens to
 // the replaceable observation-authentication seam. Token comparison is the
-// shared tokenMatcher, so this path and the WebSocket handshake hold the
+// shared listen.TokenSet, so this path and the WebSocket handshake hold the
 // same constant-time, digest-only posture.
 type BearerObservationAuthenticator struct {
-	tokens         tokenMatcher
+	tokens         *listen.TokenSet
 	identityLookup ObservationIdentityLookup
 }
 
 // NewBearerObservationAuthenticator copies and hashes the configured token
 // index so the authenticator does not retain plaintext bearer credentials.
 func NewBearerObservationAuthenticator(tokenIndex map[string]string, identityLookup ObservationIdentityLookup) *BearerObservationAuthenticator {
-	return &BearerObservationAuthenticator{tokens: newTokenMatcher(tokenIndex), identityLookup: identityLookup}
+	return &BearerObservationAuthenticator{tokens: listen.NewTokenSet(tokenIndex), identityLookup: identityLookup}
 }
 
 // AuthenticateObservation validates one bearer header, resolves the account,
@@ -64,7 +66,7 @@ func (a *BearerObservationAuthenticator) AuthenticateObservation(
 		return ObservationPrincipal{}, ErrObservationUnauthorized
 	}
 
-	account, matched := a.tokens.match(token)
+	account, matched := a.tokens.Match(token)
 	if !matched {
 		// Deliberately avoid a dummy SQLite lookup for invalid bearer tokens.
 		// This temporary bearer path is restricted to Thane's private-network

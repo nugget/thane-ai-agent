@@ -50,11 +50,24 @@ const (
 // members below use the same predicates — so the gate and its members cannot
 // drift into an empty container or a member orphaned under a missing parent.
 func unifiPollerEnabled(cfg *config.Config) bool {
-	return cfg.Unifi.Configured() && len(cfg.Person.Track) > 0
+	return cfg.Unifi.Configured() && personDeviceMappings(cfg) > 0
+}
+
+// personDeviceMappings counts configured MAC-to-person mappings, which is
+// the UniFi poller's real input: deviceOwners is built solely from
+// person.devices, so a poller with none polls the controller every
+// interval and can attribute nothing. Counting mappings rather than map
+// keys means `person.devices: {person.alice: []}` does not enable it.
+func personDeviceMappings(cfg *config.Config) int {
+	total := 0
+	for _, devices := range cfg.Person.Devices {
+		total += len(devices)
+	}
+	return total
 }
 
 func emailServicesEnabled(cfg *config.Config) bool {
-	return cfg.Email.Configured() && cfg.Email.PollIntervalSec > 0
+	return cfg.Email.PollingInterval() > 0
 }
 
 func forgePollerEnabled(cfg *config.Config) bool {
@@ -84,7 +97,7 @@ func builtInContainerDefinitionSpecs(cfg *config.Config, declared map[string]str
 		specs = append(specs, containerSpec(homeAssistantContainerName,
 			"Home Assistant integration: state watching, MQTT transport, and telemetry."))
 	}
-	if unifiPollerEnabled(cfg) || emailServicesEnabled(cfg) || forgePollerEnabled(cfg) || mediaServicesEnabled(cfg) {
+	if unifiPollerEnabled(cfg) || emailServicesEnabled(cfg) || emailReviewConfigured(cfg) || forgePollerEnabled(cfg) || mediaServicesEnabled(cfg) {
 		specs = append(specs, containerSpec(pollersContainerName,
 			"Outward integration services: presence, email, code-forge, and media-feed pollers and their triage handlers."))
 	}
@@ -171,31 +184,30 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		})
 	}
 
+	// The passes some account routes to: the operator-mailbox first pass,
+	// which only a poll wakes, and the review pass, which queued work
+	// wakes whether or not mail is polled (email_pass_builtins.go).
+	specs = append(specs, emailPassDefinitionSpecs(cfg)...)
+
 	if emailServicesEnabled(cfg) {
 		// Default landing zone for new-mail wakes when an operator
 		// hasn't pointed the poller at a custom handler. Event-driven
 		// so the loop sits idle on wakeCh until the poller delivers
-		// an event-source envelope. Profile mirrors the routing the
-		// retired emailPollTurnBuilder used to stamp on every wake —
-		// triage benefits from the cloud-eligible tier with a
-		// non-trivial quality floor; the per-iteration tags carried
-		// on the envelope (owner / trusted / household / known /
-		// stranger) let the model adapt depth without forking the
-		// route.
+		// an event-source envelope. It is deliberately unbound: one
+		// handler triages every configured mailbox, and each event's
+		// metadata says which account and folder its UID belongs to.
+		// Operators who want one handler per mailbox author their own
+		// loop with an email_account binding.
 		specs = append(specs, looppkg.Spec{
 			Name:       email.DefaultHandlerLoopName,
 			Enabled:    true,
 			ParentName: pollersContainerName,
-			Task:       "Triage incoming email wakes. Each event carries a sender trust-zone tag — owner/trusted/household/known/stranger — use it to adapt: owners get direct responses, trusted senders get reviewed action, strangers get a low-cost classify-and-defer pass. Read with email_read when a message warrants a deeper look, reply via email_reply or send a fresh message via email_send, file or trash with email_move when handled, and notify the owner about anything that genuinely needs attention.",
+			Task:       withLabelNote(emailDefaultHandlerTask, emailTriageLabelNote, cfg),
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
-			// "email" stays in the loop's permanent tag set so the
-			// email_* tools are loadable regardless of which
-			// per-wake sender-trust tag (owner/trusted/etc.) is
-			// active. Without this, the per-wake tags become a
-			// non-empty InitialTags set that enables tag filtering,
-			// and the email-tagged tools the handler is told to use
-			// get filtered out.
+			// The email tag is the handler's permanent tool surface;
+			// the poller stamps no per-wake tags (identity rides in
+			// event metadata), so this is the only tag the loop wears.
 			Tags: []string{"email"},
 			Profile: router.LoopProfile{
 				Mission:          "email_triage",
@@ -210,7 +222,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			},
 		})
 
-		pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
+		pollInterval := cfg.Email.PollingInterval()
 		specs = append(specs, looppkg.Spec{
 			Name:         emailPollerDefinitionName,
 			Enabled:      true,

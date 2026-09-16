@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -184,8 +185,13 @@ func applyHAPersonEntity(run sqlRunner, id uuid.UUID, entity string) error {
 // entity; empty when unbound. A missing contact is not an error — the
 // boolean reports existence.
 func (s *Store) HAPersonEntity(id uuid.UUID) (string, bool, error) {
+	return s.haPersonEntity(context.Background(), id)
+}
+
+// haPersonEntity is [Store.HAPersonEntity] bound to ctx.
+func (s *Store) haPersonEntity(ctx context.Context, id uuid.UUID) (string, bool, error) {
 	var entity sql.NullString
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT ha_person_entity FROM contacts WHERE id = ? AND deleted_at IS NULL`,
 		id.String(),
 	).Scan(&entity)
@@ -221,4 +227,41 @@ func (s *Store) FindByHAPersonEntity(entity string) (*Contact, error) {
 		return nil, fmt.Errorf("find contact by ha person entity %q: %w", entity, err)
 	}
 	return s.Get(parsed)
+}
+
+// HAPersonBoundEntities returns the Home Assistant person entities bound
+// to active contacts, in a stable order.
+//
+// This is the presence roster. A contact appears in the presence block
+// because it carries a binding, so the binding is the declaration of
+// interest and there is no separate membership list to keep in sync.
+//
+// Ordered by entity rather than by contact name: the roster fixes the row
+// order of an always-on prompt block, and renaming a contact must not
+// reorder every row and invalidate the cached prompt prefix.
+func (s *Store) HAPersonBoundEntities() ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT ha_person_entity FROM contacts
+		 WHERE ha_person_entity IS NOT NULL AND ha_person_entity != '' AND deleted_at IS NULL
+		 ORDER BY ha_person_entity`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list ha person bindings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entities []string
+	for rows.Next() {
+		var entity string
+		if err := rows.Scan(&entity); err != nil {
+			return nil, fmt.Errorf("scan ha person binding: %w", err)
+		}
+		if entity = strings.TrimSpace(entity); entity != "" {
+			entities = append(entities, entity)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list ha person bindings: %w", err)
+	}
+	return entities, nil
 }

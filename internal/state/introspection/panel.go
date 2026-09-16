@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -26,12 +27,33 @@ func NewDocFlags(store *documents.Store) DocFlagsFunc {
 		return nil
 	}
 	return func(ctx context.Context) ([]documents.DocumentActivity, error) {
+		defer phasetrace.Phase(ctx, "doc_flags")()
+		roots := store.RevisionBackedRoots()
+		if len(roots) == 0 {
+			return nil, nil
+		}
+		// Activity opens with Refresh, and Refresh walks every indexed
+		// root rather than the one being asked about. Left implicit,
+		// that whole-corpus cost is charged to whichever root sorts
+		// first, and the per-root phases below name the wrong root.
+		// Pay it here under its own name; the store's throttle then
+		// holds the Activity calls to the work their labels claim.
+		refreshDone := phasetrace.Phase(ctx, "doc_flags:refresh")
+		err := store.Refresh(ctx)
+		refreshDone()
+		if err != nil {
+			return nil, fmt.Errorf("refresh document index: %w", err)
+		}
 		var flagged []documents.DocumentActivity
-		for _, root := range store.RevisionBackedRoots() {
+		for _, root := range roots {
+			// Per root as well as in total: one expensive root among a
+			// dozen is invisible in an aggregate.
+			rootDone := phasetrace.Phase(ctx, "doc_flags:"+root)
 			report, err := store.Activity(ctx, documents.ActivityQuery{
 				Root:  root,
 				Since: time.Now().Add(-24 * time.Hour),
 			})
+			rootDone()
 			if err != nil {
 				return nil, fmt.Errorf("root %s: %w", root, err)
 			}
@@ -93,7 +115,9 @@ func (p *PanelProvider) TagContext(ctx context.Context, _ agentctx.ContextReques
 	if p == nil || p.inspector == nil {
 		return "", nil
 	}
+	healthDone := phasetrace.Phase(ctx, "health")
 	snap := p.inspector.Health(ctx)
+	healthDone()
 
 	// One projection for both surfaces: the panel body is exactly what
 	// system_health returns, plus the panel-only additions below.

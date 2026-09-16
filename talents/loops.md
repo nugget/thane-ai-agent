@@ -14,9 +14,32 @@ service loop can act without maintaining a document — and when an output
 is declared the running loop writes through a generated tool named for
 it: `replace_output_*` for a whole-document rewrite, or
 `publish_output_*` when the output declares facets.
-If a maintained output is marked `truncated` in Declared Durable
-Outputs, read the full document with `doc_read` before replacing it —
-the output tool overwrites the entire body.
+An output shown whole in Declared Durable Outputs counts as read for
+this wake, so the output tool can replace or publish it directly. If it
+is marked `truncated` there, read the full document with `doc_read`
+before replacing it — the output tool overwrites the entire body, tail
+included.
+An output tool that refuses returns an error, commits nothing — working
+notes passed alongside included — and says what happened, usually
+one of three things. If a projection failed validation, the error lists every
+failing field at once: correct all of them in the next call, because
+validation is deterministic and a value refused once is refused again.
+If this wake has no read of the whole document on record, read it with
+`doc_read` and make the call again. If the document changed since that
+read, the error carries the intervening change and Thane has already
+moved the comparison base to the current document: fold that change
+into revised content before calling again — repeating the same call now
+would overwrite it. Never repeat a refused call unchanged; the refusal
+is the answer.
+
+A refused publish means the wake's work is not done yet. Keep correcting
+until the publish lands. A wake that ends with every call to its output
+tool refused is recorded as unpublished — `loop_status` and
+`system_health` name the loop, the tool, and the rejection count — and
+the notifies and mailbox items that woke it are not delivered again, so
+whatever they carried is lost with the unpublished write. A
+`contact_dossier_write` is judged per contact the same way: landing one
+contact's dossier does not publish another's that was refused.
 
 A document-owning loop carries the read-side document tools —
 `doc_read`, `doc_outline`, `doc_section`, `doc_history`, `doc_diff`,
@@ -66,7 +89,15 @@ because a clipped teaser reads as a fragment with no sign that anything
 is missing. The budget is a ceiling, not a target: compose
 comfortably under it — a projection that needs every last rune is
 carrying too much, and you cannot count runes precisely enough to
-graze a ceiling safely. The document body
+graze a ceiling safely. When one is rejected anyway, the error gives its
+length, the limit, and the overage, and sizes the fix to the gap. A
+small gap closes by rewording. A large one means the projection holds
+more items than its budget has room for, and rewording lands still
+over: remove whole items, starting with anything resolved, superseded,
+or already said in another projection. The digest is where that growth
+happens. It is bounded current state, rewritten whole on every publish
+rather than appended to, so an item leaves once it is resolved instead
+of staying on marked resolved. The document body
 itself has a 96 KiB ceiling on every owner write — the guarantee that
 what you write, you can always read back whole in one call. A rejection
 at the ceiling is not a retry prompt: the document has outgrown
@@ -171,7 +202,10 @@ Choose stream wiring by attention cost:
 - Use event-source `wake_loop` targets when each event from a
   *producer stream* deserves an immediate iteration. Producer tools
   such as `forge_repo_follow` and `media_follow` own those
-  subscriptions.
+  subscriptions. New mail is not one of them: each email account's
+  wake loop, and the review loop that may follow it, are the
+  operator's configuration, so no tool points mail at a loop. Ask the
+  operator when mail should reach a different loop (see `email`).
 
 Treat running loops as bi-directional. A service loop can pull you in
 via `request_core_attention` when something deserves a decision; you
@@ -196,7 +230,11 @@ see what you decided, so a determination you reach and never send is
 one it never receives; the same concern comes back unchanged on its
 next pass. Escalating to a person is one available outcome, not the
 expected one, and "nothing needs to happen" is a real determination
-that still gets sent back with the reasoning behind it.
+that still gets sent back with the reasoning behind it. When the wake
+reaches you on a Signal thread, whether the person there hears
+anything is a separate decision: your final text is sent to them
+unless you hold it with `signal_hold_reply`, and neither the message
+nor the hold answers the requester.
 
 Natural-language timing inside a task does not schedule a service loop.
 Pick a sleep envelope (sleep_min, sleep_max) tight enough to catch what
@@ -262,7 +300,10 @@ muddle them and the loop drifts.
   "<name>"}`. An omitted `account` argument then resolves to the bound
   account instead of the primary, any other account is refused by
   name, and the account block in context narrows to the one account
-  you can actually use. Bindings inherit from container parents, and
+  you can actually use. Email accounts work the same way with
+  `email_account` — a triage loop that should only ever see one
+  mailbox binds it, and the Email Accounts block narrows to match.
+  Bindings inherit from container parents, and
   on collision the *ancestor* wins — a container's binding is a
   boundary its children cannot declare their way out of, which is the
   opposite of how `routing_factors` resolve. Binding to an account

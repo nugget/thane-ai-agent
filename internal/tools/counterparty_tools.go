@@ -29,9 +29,6 @@ type CounterpartyToolDeps struct {
 	// Presence returns the live tracker snapshot for an HA person
 	// entity; nil when no tracker is configured.
 	Presence func(entity string) (contacts.PersonSnapshot, bool)
-	// AccountsForContact maps a canonical contact UUID string to the
-	// companion accounts bound to it; nil when no bindings exist.
-	AccountsForContact func(contactID string) []string
 	// LiveIdentities reports which (account, client_id) pairs have an
 	// open connection right now; nil when companions are unconfigured.
 	LiveIdentities func() map[[2]string]bool
@@ -61,13 +58,17 @@ func (r *Registry) EnableCounterpartyTools(deps CounterpartyToolDeps) {
 			"companion_last_known_location only when you need one specific device's stored fix. " +
 			"Pass name (resolved like other contact tools) or contact_id (UUID). A contact with no HA " +
 			"person binding and no bound companion devices returns an error saying so — that is a " +
-			"configuration gap, not an unknown location.",
+			"configuration gap, not an unknown location. " +
+			"Every moment ships twice: since/room_since are deltas for judging recency in this turn, " +
+			"since_at/room_since_at are the same moments absolutely. Anything you write into a document " +
+			"takes the absolute form — a delta copied into stored prose is wrong minutes later, and " +
+			"document writes refuse it.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Contact name (formatted name or nickname; resolved with the standard contact cascade).",
+					"description": "Contact name. " + contactNameRetryByID,
 				},
 				"contact_id": map[string]any{
 					"type":        "string",
@@ -95,9 +96,16 @@ type whereaboutsSource struct {
 	State string `json:"state,omitempty"`
 	Room  string `json:"room,omitempty"`
 	// RoomVia is provider-specific evidence, such as a UniFi AP name.
-	RoomVia   string `json:"room_via,omitempty"`
-	Since     string `json:"since,omitempty"`
-	RoomSince string `json:"room_since,omitempty"`
+	RoomVia string `json:"room_via,omitempty"`
+	// Since and RoomSince are deltas; SinceAt and RoomSinceAt are the
+	// same moments absolutely. Both forms ship because they serve
+	// opposite jobs: the delta is how a reader judges recency in this
+	// turn, the instant is the only form that survives being written
+	// down. Quote the instant into a document and the delta nowhere.
+	Since       string `json:"since,omitempty"`
+	SinceAt     string `json:"since_at,omitempty"`
+	RoomSince   string `json:"room_since,omitempty"`
+	RoomSinceAt string `json:"room_since_at,omitempty"`
 
 	// Device fields (companion_location sources). Account, ClientID,
 	// and DeviceID make each entry uniquely identifiable and let the
@@ -178,6 +186,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 				zone := whereaboutsSource{Source: "ha_person_zone", State: snap.State}
 				if !snap.Since.IsZero() {
 					zone.Since = promptfmt.FormatDeltaOnly(snap.Since, now)
+					zone.SinceAt = snap.Since.In(now.Location()).Format(time.RFC3339)
 				}
 				if home && !roomConflict && snap.Room != "" {
 					room := whereaboutsSource{
@@ -187,6 +196,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 					}
 					if !snap.RoomSince.IsZero() {
 						room.RoomSince = promptfmt.FormatDeltaOnly(snap.RoomSince, now)
+						room.RoomSinceAt = snap.RoomSince.In(now.Location()).Format(time.RFC3339)
 					}
 					presenceSources = append(presenceSources, room)
 				}
@@ -203,12 +213,20 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 		observedAt time.Time
 	}
 	var availableDevices, withdrawnDevices []timedSource
-	var boundAccounts []string
-	if deps.AccountsForContact != nil {
-		boundAccounts = deps.AccountsForContact(contact.ID.String())
+	// Bound-device existence is its own question from bound-device
+	// output: a contact with a paired phone that has never published is
+	// bound-but-silent, not unbound, and the two produce different
+	// answers below.
+	var boundDevices []companions.Device
+	if deps.Companions != nil {
+		devices, err := deps.Companions.DevicesForContact(ctx, contact.ID.String())
+		if err != nil {
+			return "", fmt.Errorf("read bound companion devices: %w", err)
+		}
+		boundDevices = devices
 	}
-	if deps.Companions != nil && len(boundAccounts) > 0 {
-		observations, err := deps.Companions.LatestObservationsByKind(ctx, "ios.location", boundAccounts)
+	if deps.Companions != nil {
+		observations, err := deps.Companions.LatestObservationsForContact(ctx, "ios.location", contact.ID.String())
 		if err != nil {
 			return "", fmt.Errorf("read companion observations: %w", err)
 		}
@@ -261,7 +279,7 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 	// unbound contact. A bound contact whose sources yielded nothing
 	// gets a valid empty result whose basis says exactly which binding
 	// produced nothing — bound-but-silent is not misconfigured.
-	if !hasHABinding && len(boundAccounts) == 0 {
+	if !hasHABinding && len(boundDevices) == 0 {
 		return "", fmt.Errorf("contact %q has no HA person binding and no bound companion devices — there is no whereabouts source to consult; the operator binds the contact UUID to a tracked person entity via signed person.contact_bindings and companion accounts via companion.providers.<account>.contact", contact.FormattedName)
 	}
 
@@ -355,12 +373,12 @@ func handleContactWhereabouts(ctx context.Context, deps CounterpartyToolDeps, na
 
 	if len(result.Sources) == 0 {
 		switch {
-		case hasHABinding && len(boundAccounts) > 0:
+		case hasHABinding && len(boundDevices) > 0:
 			result.Basis = "bound, but silent: the person entity is not tracked (check person.track) and no bound device has published a location"
 		case hasHABinding:
 			result.Basis = "bound to a person entity that the presence tracker does not track (check person.track); no companion devices bound"
 		default:
-			result.Basis = "companion accounts are bound but no device has published a location yet"
+			result.Basis = "companion devices are bound but none has published a location yet"
 		}
 		out, err := json.Marshal(result)
 		if err != nil {

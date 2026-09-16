@@ -142,6 +142,7 @@ type CapabilitySurface struct {
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
+	"search":                        {CanonicalID: "native:search", Source: NativeToolSource, Tags: []string{"archive", "documents"}},
 	"tag_activate":                  {CanonicalID: "native:tag_activate", Source: NativeToolSource},
 	"lens_activate":                 {CanonicalID: "native:lens_activate", Source: NativeToolSource},
 	"archive_range":                 {CanonicalID: "native:archive_range", Source: NativeToolSource, Tags: []string{"archive"}},
@@ -154,6 +155,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"ha_call_service":               {CanonicalID: "native:ha_call_service", Source: NativeToolSource, Tags: []string{"ha"}},
 	"task_cancel":                   {CanonicalID: "native:task_cancel", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"ha_control_device":             {CanonicalID: "native:ha_control_device", Source: NativeToolSource, Tags: []string{"ha"}},
+	"conversation_model_pin":        {CanonicalID: "native:conversation_model_pin", Source: NativeToolSource, Tags: []string{"session"}},
 	"conversation_reset":            {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                  {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"doc_activity":                  {CanonicalID: "native:doc_activity", Source: NativeToolSource, Tags: []string{"diagnostics"}},
@@ -183,6 +185,11 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"doc_values":                    {CanonicalID: "native:doc_values", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_write":                     {CanonicalID: "native:doc_write", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_body_write":                {CanonicalID: "native:doc_body_write", Source: NativeToolSource, Tags: []string{"documents"}},
+	"email_draft_get":               {CanonicalID: "native:email_draft_get", Source: NativeToolSource, Tags: []string{"email_drafts"}},
+	"email_draft_revise":            {CanonicalID: "native:email_draft_revise", Source: NativeToolSource, Tags: []string{"email_drafts"}},
+	"email_draft_withdraw":          {CanonicalID: "native:email_draft_withdraw", Source: NativeToolSource, Tags: []string{"email_drafts"}},
+	"email_drafts":                  {CanonicalID: "native:email_drafts", Source: NativeToolSource, Tags: []string{"email_drafts"}},
+	"email_escalate":                {CanonicalID: "native:email_escalate", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_folders":                 {CanonicalID: "native:email_folders", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_list":                    {CanonicalID: "native:email_list", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_mark":                    {CanonicalID: "native:email_mark", Source: NativeToolSource, Tags: []string{"email"}},
@@ -309,6 +316,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"resolve_actionable":            {CanonicalID: "native:resolve_actionable", Source: NativeToolSource, Tags: []string{"notifications"}},
 	"contact_save":                  {CanonicalID: "native:contact_save", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"contact_whereabouts":           {CanonicalID: "native:contact_whereabouts", Source: NativeToolSource, Tags: []string{"contacts", "companion"}},
+	"contact_recent_places":         {CanonicalID: "native:contact_recent_places", Source: NativeToolSource, Tags: []string{"contacts", "companion"}},
 	"task_schedule":                 {CanonicalID: "native:task_schedule", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"send_reaction":                 {CanonicalID: "native:send_reaction", Source: NativeToolSource, Tags: []string{"message_channel"}},
 	"session_checkpoint":            {CanonicalID: "native:session_checkpoint", Source: NativeToolSource, Tags: []string{"session"}},
@@ -316,6 +324,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"session_split":                 {CanonicalID: "native:session_split", Source: NativeToolSource, Tags: []string{"session"}},
 	"session_working_memory":        {CanonicalID: "native:session_working_memory", Source: NativeToolSource, Tags: []string{"memory"}},
 	"send_notification":             {CanonicalID: "native:send_notification", Source: NativeToolSource, Tags: []string{"notifications"}},
+	"signal_hold_reply":             {CanonicalID: "native:signal_hold_reply", Source: NativeToolSource, Tags: []string{"signal"}},
 	"signal_send_message":           {CanonicalID: "native:signal_send_message", Source: NativeToolSource, Tags: []string{"signal"}},
 	"signal_send_reaction":          {CanonicalID: "native:signal_send_reaction", Source: NativeToolSource, Tags: []string{"signal"}},
 	"web_fetch":                     {CanonicalID: "native:web_fetch", Source: NativeToolSource, Tags: []string{"web"}},

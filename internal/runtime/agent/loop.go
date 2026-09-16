@@ -79,12 +79,18 @@ type Request struct {
 	RuntimeTools    []*tools.Tool                       `json:"-"` // Request-scoped tools visible only to this run
 	PullInput       func(context.Context) []llm.Message `json:"-"` // Polled at each iteration boundary and at closure to merge newly-arrived input into the live turn (#1221); nil disables
 	MaxIterations   int                                 `json:"-"` // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens int                                 `json:"-"` // Optional output-token budget across all iterations (0 = unlimited)
+	MaxOutputTokens int                                 `json:"-"` // Reported output-token budget across all model attempts, including recovery (0 = unlimited)
 	ToolTimeout     time.Duration                       `json:"-"` // Optional per-tool timeout (0 = no extra timeout)
 	UsageRole       string                              `json:"-"` // Optional usage role override (e.g., "delegate")
 	UsageTaskName   string                              `json:"-"` // Optional usage task name override
 	FallbackContent string                              `json:"-"` // Optional static fallback text when the run yields no content
 	PromptMode      agentctx.PromptMode                 `json:"-"` // Optional system-prompt shape override.
+
+	// TargetKey names the document a tool call writes, so that
+	// Response.ToolOutcomes also tallies each tool per target (see
+	// iterate.Config.TargetKey). The loop runtime sets it on the turns it
+	// prepares. Nil gives every call the empty target.
+	TargetKey func(tool string, args map[string]any) string `json:"-"`
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
@@ -168,6 +174,11 @@ type Response struct {
 	Iterations               int                                 `json:"iterations,omitempty"`
 	Exhausted                bool                                `json:"exhausted,omitempty"`
 
+	// ToolOutcomes is the engine's per-tool tally for this Run: how
+	// each tool's calls ended, including repeat-guard refusals. The loop
+	// runtime reads it to notice a wake that never landed its write.
+	ToolOutcomes map[string]iterate.ToolOutcome `json:"-"`
+
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
 	SessionID string `json:"session_id,omitempty"`
@@ -180,9 +191,10 @@ type Response struct {
 
 // MemoryStore is the conversation memory backend required by the agent loop.
 // It manages per-conversation message history and token accounting so the
-// loop can build prompts and enforce context-window limits.
+// loop can build prompts and enforce context-window limits. Reads honor ctx
+// cancellation and distinguish unavailable data from successful empty results.
 type MemoryStore interface {
-	GetMessages(conversationID string) []memory.Message
+	GetMessages(ctx context.Context, conversationID string) ([]memory.Message, error)
 	// AddMessage records a message. origin is the provenance stamp for
 	// the row (memory.Origin* constants); callers pass "" when the
 	// enqueue site cannot know how the message entered the conversation.
@@ -192,7 +204,7 @@ type MemoryStore interface {
 	// identify the injection structurally rather than by substring-matching
 	// the rendered arrival marker. origin follows the AddMessage contract.
 	AddMidTurnMessage(conversationID, role, content, origin string) error
-	GetTokenCount(conversationID string) int
+	GetTokenCount(ctx context.Context, conversationID string) (int, error)
 	Clear(conversationID string) error
 	Stats() map[string]any
 }
@@ -206,9 +218,17 @@ type ToolCallRecorder interface {
 	CompleteToolCall(toolCallID, result, errMsg string) error
 }
 
+// SessionToolCallRecorder records a tool call in the session that produced
+// its model iteration. Stores may implement it alongside [ToolCallRecorder]
+// to retain that ownership when an earlier tool in the same batch rotates
+// the conversation to a new session.
+type SessionToolCallRecorder interface {
+	RecordSessionToolCall(conversationID, sessionID, messageID, toolCallID, toolName, arguments string) error
+}
+
 // Compactor handles conversation compaction.
 type Compactor interface {
-	NeedsCompaction(conversationID string) bool
+	NeedsCompaction(ctx context.Context, conversationID string) (bool, error)
 	Compact(ctx context.Context, conversationID string) error
 	// CompactionThreshold returns the token count at which compaction
 	// triggers.
@@ -263,12 +283,7 @@ type ContextAdvertiser interface {
 
 // SessionArchiver handles session lifecycle and message archiving.
 type SessionArchiver interface {
-	// ArchiveConversation archives all messages from a conversation before clearing.
-	ArchiveConversation(conversationID string, messages []memory.Message, reason string) error
-	// StartSession begins a new session for a conversation.
-	StartSession(conversationID string) (sessionID string, err error)
-	// EndSession ends the current session.
-	EndSession(sessionID string, reason string) error
+	memory.SessionLifecycle
 	// ActiveSessionID returns the current session ID, or empty if none.
 	ActiveSessionID(conversationID string) string
 	// EnsureSession starts a session if none is active, returns the session ID.
@@ -278,8 +293,6 @@ type SessionArchiver interface {
 	// LinkPendingIterationToolCalls links archived tool calls to their
 	// parent iterations using stored tool_call_ids.
 	LinkPendingIterationToolCalls(sessionID string) error
-	// OnMessage is called after each message to track session stats.
-	OnMessage(conversationID string)
 	// ActiveSessionStartedAt returns when the active session began,
 	// or the zero time if there is no active session.
 	ActiveSessionStartedAt(conversationID string) time.Time
@@ -309,9 +322,16 @@ type Loop struct {
 	requestRecorder     logging.RequestRecordFunc      // nil = request detail inspection disabled
 	usageStore          *usage.Store                   // nil = no usage recording
 	pricing             map[string]config.PricingEntry // model→cost for usage recording
+	unpricedModels      sync.Map                       // paid models already warned as missing from pricing
 	usageCatalog        *fleet.Catalog
 	modelRegistry       *fleet.Registry
 	modelRuntime        *fleet.Runtime
+
+	// conversationPins holds the live conversation model pins. One Loop
+	// serves every conversation, so this is the one place a pin set by a
+	// tool in turn N is guaranteed to be seen by turn N+1 whichever
+	// bridge or API surface builds it. See [Loop.PinConversationModel].
+	conversationPins conversationModelPins
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -641,7 +661,11 @@ func (l *Loop) ConfigureSessionStores(w SessionStoreWiring) {
 	}
 	if w.UsageStore != nil {
 		l.usageStore = w.UsageStore
+	}
+	if w.Pricing != nil {
 		l.pricing = w.Pricing
+	}
+	if w.UsageCatalog != nil {
 		l.usageCatalog = w.UsageCatalog
 	}
 }
@@ -695,6 +719,20 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 			a.RegisterAlwaysProvider(gp.provider)
 		}
 	}
+}
+
+// Timezone returns the IANA household timezone the loop renders
+// now-relative values in, or "" when none is configured.
+//
+// Exported for reader surfaces outside the prompt path: temporal
+// templates render day distances as a calendar comparison, so a caller
+// that expands them must use the zone the reader thinks in or a late
+// evening renders tomorrow's date as "today".
+func (l *Loop) Timezone() string {
+	if l == nil {
+		return ""
+	}
+	return l.timezone
 }
 
 func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
@@ -818,9 +856,10 @@ func (l *Loop) UseCapabilitySurface(surface []toolcatalog.CapabilitySurface) {
 	l.capSurface = toolcatalog.SortCapabilitySurface(surface)
 }
 
-// SetUsageRecorder configures persistent token usage recording. When
-// set, every LLM completion in the agent loop is persisted for cost
-// attribution and analysis.
+// SetUsageRecorder configures model-call pricing and optional persistence.
+// Every provider-reported usage response is priced separately, including
+// retries and partial failures. A nil store disables persistence; request
+// observers attached with [usage.WithObserver] still receive priced records.
 func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *fleet.Catalog) {
 	l.usageStore = store
 	l.pricing = pricing
@@ -1317,10 +1356,10 @@ func (l *Loop) originContactContext(ctx context.Context, result *SessionOriginPo
 	if source == "" {
 		source = result.Origin.Channel
 	}
+	// An origin that names its contact by ID is that contact or none: a
+	// name another contact now answers to must not stand in for it.
 	if result.Origin.ContactID != "" {
-		if contact := l.contactLookup.LookupContactByID(ctx, result.Origin.ContactID, source); contact != nil {
-			return contact
-		}
+		return l.contactLookup.LookupContactByID(ctx, result.Origin.ContactID, source)
 	}
 	if result.Origin.ContactName != "" {
 		return l.contactLookup.LookupContact(ctx, result.Origin.ContactName, source)
@@ -1553,8 +1592,12 @@ func generateRequestID() string {
 	return "r_" + hex.EncodeToString(id[8:16])
 }
 
-// Run executes one iteration of the agent loop.
-// If stream is non-nil, tokens are pushed to it as they arrive.
+// Run executes an agent turn, including any tool iterations and recovery calls.
+// If stream is non-nil, tokens are pushed to it as they arrive. Response token
+// totals sum provider-reported usage across model calls. On failure Run returns
+// a nil response and an error; already-reported usage is still persisted and
+// published to request-scoped [usage.WithObserver] consumers. Required history
+// must be read successfully before new input is stored or a model is called.
 func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (resp *Response, err error) {
 	convID := req.ConversationID
 	if convID == "" {
@@ -1566,7 +1609,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	defer func() {
 		if err == nil && l.archiver != nil && !req.SkipContext {
 			l.archiver.EnsureSession(convID)
-			l.archiver.OnMessage(convID)
 		}
 	}()
 
@@ -1578,7 +1620,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			sessionID = sid
 		}
 	}
-	sessionTag := memory.ShortID(sessionID) // 8-char display tag for usage records
+	sessionTag := memory.ShortID(sessionID) // 8-char display tag for context
 
 	// Generate a request-scoped ID and logger. Every log line within this
 	// turn carries request_id so you can grep for a single user→response cycle.
@@ -1599,6 +1641,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// server id — be matched against the server's own record.
 	ctx = logging.WithRequestID(ctx, requestID)
 	runStarted := time.Now()
+	var accounting *modelCallAccounting
 	defer func() {
 		attrs := []any{
 			"kind", events.KindRequestComplete,
@@ -1607,7 +1650,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"skip_context", req.SkipContext,
 		}
 		if !req.SkipContext {
-			attrs = append(attrs, "context_tokens", l.memory.GetTokenCount(convID))
+			if tokens, readErr := l.memory.GetTokenCount(ctx, convID); readErr != nil {
+				log.Warn("failed to read request completion context tokens", "error", readErr)
+			} else {
+				attrs = append(attrs, "context_tokens", tokens)
+			}
 		}
 		if resp != nil {
 			attrs = append(attrs,
@@ -1623,6 +1670,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if len(resp.ToolsUsed) > 0 {
 				attrs = append(attrs, "tools_used", resp.ToolsUsed)
 			}
+		} else if accounting != nil && len(accounting.calls) > 0 {
+			// Failed runs still consumed any usage the provider reported.
+			partial := &iterate.Result{}
+			accounting.applyTotals(partial)
+			attrs = append(attrs,
+				"model", accounting.calls[len(accounting.calls)-1].Model,
+				"input_tokens", partial.InputTokens,
+				"output_tokens", partial.OutputTokens,
+				"cache_creation_input_tokens", partial.CacheCreationInputTokens,
+				"cache_read_input_tokens", partial.CacheReadInputTokens,
+			)
 		}
 		if err != nil {
 			log.Warn("request complete", append(attrs, "error", err.Error())...)
@@ -1657,7 +1715,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// to avoid polluting conversation history.
 	var history []memory.Message
 	if !req.SkipContext {
-		history = l.memory.GetMessages(convID)
+		history, err = l.memory.GetMessages(ctx, convID)
+		if err != nil {
+			return nil, fmt.Errorf("read conversation history: %w", err)
+		}
 
 		// Per-message Origin overrides the request stamp so one turn can
 		// carry mixed provenance — a notify summary riding a mailbox
@@ -1713,6 +1774,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}, nil
 	}
 
+	accounting = &modelCallAccounting{
+		loop: l, conversationID: convID, fallbackSession: sessionID,
+		request: req, requestID: requestID, observerContext: ctx,
+	}
+	runClient := &accountingClient{Client: l.llm, accounting: accounting}
+	defer accounting.persist(ctx)
+
 	// Lightweight path: skip memory, tools, and heavy context injection.
 	// Used for auxiliary requests (title/tag generation) that don't need the
 	// full agent loop. Just send messages to the LLM with no tools.
@@ -1749,7 +1817,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			})
 		}
 
-		llmResp, err := l.llm.ChatStream(ctx, liteModel, llmMessages, nil, stream)
+		llmResp, err := runClient.ChatStream(ctx, liteModel, llmMessages, nil, stream)
 		if err != nil {
 			// Record failed outcome
 			if l.router != nil && liteDecision != nil {
@@ -1773,8 +1841,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
-		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheCreation5mInputTokens, llmResp.CacheCreation1hInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID, llmResp.UpstreamRequestID)
-
 		return &Response{
 			Content:                  llmResp.Message.Content,
 			Model:                    llmResp.Model,
@@ -1790,7 +1856,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	channelBinding := req.ChannelBinding.Clone()
 	if channelBinding == nil {
-		channelBinding = l.conversationChannelBinding(convID)
+		channelBinding = l.conversationChannelBinding(ctx, convID)
 	}
 	// Inject subjects from the effective channel binding (request first,
 	// persisted conversation binding as fallback) so subject-aware
@@ -1923,6 +1989,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	var systemSections []llm.PromptSection
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
+		// Keep caller text in the section representation before appending
+		// context usage; providers that render sections must receive both.
+		systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 	} else {
 		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, llm.DefaultModelInteractionProfile())
 	}
@@ -1951,14 +2020,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			llmMessages[0].Content = systemPrompt
 			llmMessages[0].Sections = systemSections
 		}
-	}
-	rebuildSystemPromptForModel := func(model string) {
-		if req.SystemPrompt != "" {
-			return
-		}
-		usageInfo.Model = model
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
-		updateSystemMessage()
 	}
 
 	// Request-level tool restrictions are static for the run. Apply them
@@ -1993,15 +2054,27 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
 	}
 	skipTagFilter := req.SkipTagFilter
-
-	visibleTools := baseTools
-	if gatingActive {
-		visibleTools = visibleTools.FilteredCopy(l.orchestratorTools)
+	currentTools := func() *tools.Registry {
+		available := baseTools
+		if scope != nil && !skipTagFilter {
+			if tags := scope.Snapshot(); len(tags) > 0 {
+				tagList := make([]string, 0, len(tags))
+				for tag := range tags {
+					tagList = append(tagList, tag)
+				}
+				available = available.FilterByTags(tagList)
+			}
+		}
+		if gatingActive {
+			available = available.FilteredCopy(l.orchestratorTools)
+		}
+		return available
 	}
-	needsTools := len(visibleTools.List()) > 0
+	visibleToolDefs := currentTools().List()
+	needsTools := len(visibleToolDefs) > 0
 	needsStreaming := stream != nil
 	needsImages := messagesNeedImages(req.Messages)
-	contextSize := estimateLLMMessagesContextTokens(llmMessages)
+	contextSize := estimateRequestContextTokens(llmMessages, visibleToolDefs)
 	query := ""
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
@@ -2016,7 +2089,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			NeedsTools:     needsTools,
 			NeedsStreaming: needsStreaming,
 			NeedsImages:    needsImages,
-			ToolCount:      len(visibleTools.List()),
+			ToolCount:      len(visibleToolDefs),
 			Priority:       router.PriorityInteractive,
 			RoutingFactors: req.RoutingFactors,
 		}
@@ -2032,13 +2105,69 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	model := req.Model
 	var routerDecision *router.Decision
 
-	log.Debug("model selection start", "req_model", req.Model, "default_model", l.model)
+	// A conversation pin is the most specific model intent there is:
+	// set from inside this conversation, later than any channel config
+	// or client model field. It outranks the request model. It is read
+	// here, after tool gating and before routing, so preflight judges it
+	// on the tool surface this turn will actually expose.
+	var pinned tools.ConversationModelPin
+	pinnedModel := ""
+	pinSkipReason := ""
+	if pin, ok := l.conversationPins.get(convID); ok {
+		pinned = pin
+		pinnedModel = pin.Model
+		model = pin.Model
+		usageInfo.ModelPinAge = l.now().Sub(pin.PinnedAt)
+	}
+
+	// Finalize each candidate's complete prompt before estimating it. Start
+	// from the base every time so rerouting never duplicates usage metadata,
+	// and retain the successfully checked prompt unchanged for generation.
+	rebuildSystemPromptForModel := func(model string) {
+		usageInfo.Model = model
+		usageInfo.Routed = routerDecision != nil
+		usageInfo.ModelPinned = pinnedModel != "" && pinSkipReason == ""
+		usageInfo.ModelPinSkipped = ""
+		usageInfo.ModelPinSkipReason = ""
+		if pinnedModel != "" && pinSkipReason != "" {
+			usageInfo.ModelPinSkipped = pinnedModel
+			usageInfo.ModelPinSkipReason = pinSkipReason
+		}
+		usageInfo.ContextWindow = l.contextWindow
+		if cat := l.currentModelCatalog(); cat != nil {
+			if dep, err := cat.ResolveDeploymentRef(model); err == nil {
+				usageInfo.Model = dep.ID
+				if dep.ContextWindow > 0 {
+					usageInfo.ContextWindow = dep.ContextWindow
+				}
+			}
+		}
+		if req.SystemPrompt != "" {
+			systemPrompt = req.SystemPrompt
+			systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
+		} else {
+			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
+		}
+		updateSystemMessage()
+		usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
+		if line := awareness.FormatContextUsage(usageInfo); line != "" {
+			systemPrompt += "\n" + line
+			systemSections = appendPromptSection(systemSections, llm.PromptSection{
+				Name:    "CONTEXT USAGE",
+				Content: "\n" + line,
+			})
+		}
+		updateSystemMessage()
+	}
+
+	log.Debug("model selection start", "req_model", req.Model, "pinned_model", pinnedModel, "default_model", l.model)
 
 	if model == "" || model == "thane" {
 		if l.router != nil {
 			// Estimate effective prompt size for routing. This includes
 			// the assembled system prompt, user-visible message text, and
-			// a conservative surcharge for image-bearing inputs.
+			// a conservative surcharge for image-bearing inputs, and
+			// the tool schemas actually exposed to this request.
 			var routeErr error
 			model, routerDecision, routeErr = routeWithContextSize(contextSize)
 			if routeErr != nil {
@@ -2055,28 +2184,56 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// messages. Generation headroom is added when a load size is chosen,
 		// so that wanting room to answer never makes a servable request look
 		// incompatible here.
-		contextSize = estimateRequestContextTokens(llmMessages, visibleTools.List())
-		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
-			return nil, prepErr
+		contextSize = estimateRequestContextTokens(llmMessages, visibleToolDefs)
+		resolvedModel, explicitErr := l.selectExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize)
+		switch {
+		case explicitErr == nil:
+			model = resolvedModel
+			log.Debug("model specified in request, skipping router", "model", model, "pinned", pinnedModel != "")
+		case pinnedModel == "" || l.router == nil:
+			return nil, explicitErr
+		default:
+			// The pin cannot serve this turn. A conversation's needs change
+			// from turn to turn (an image arrives, the prompt grows) and a
+			// pin that turned every such turn into an error would be a trap
+			// rather than a preference. Route this one turn, keep the pin,
+			// and tell the next turn what happened through the context line.
+			pinSkipReason = explicitModelSkipReason(explicitErr)
+			log.Warn("conversation model pin skipped for this turn; routing instead",
+				"conversation_id", convID,
+				"pinned_model", pinnedModel,
+				"reason", pinSkipReason,
+			)
+			// Route on the same full request size (messages plus tool
+			// schemas) the pin was just judged on so routing and preflight
+			// agree on the capacity this request needs.
+			var routeErr error
+			model, routerDecision, routeErr = routeWithContextSize(contextSize)
+			if routeErr != nil {
+				return nil, routeErr
+			}
 		}
-		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
-		if err != nil {
-			return nil, err
-		}
-		model = resolvedModel
-		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
-	for routedPromptChecks := 0; routerDecision != nil; routedPromptChecks++ {
+	for routedPromptChecks := 0; ; routedPromptChecks++ {
 		rebuildSystemPromptForModel(model)
-		actualContextSize := estimateLLMMessagesContextTokens(llmMessages)
+		actualContextSize := estimateRequestContextTokens(llmMessages, visibleToolDefs)
 		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, actualContextSize)
 		if err == nil {
 			model = resolvedModel
 			break
 		}
-		if l.router == nil || !isContextWindowIncompatible(err) || routedPromptChecks >= 2 {
+		canSkipPin := pinnedModel != "" && pinSkipReason == ""
+		if l.router == nil || routedPromptChecks >= 2 || (!canSkipPin && (routerDecision == nil || !isContextWindowIncompatible(err))) {
 			return nil, err
+		}
+		if canSkipPin {
+			pinSkipReason = explicitModelSkipReason(err)
+			log.Warn("conversation model pin skipped after final prompt context check",
+				"conversation_id", convID,
+				"pinned_model", pinnedModel,
+				"reason", pinSkipReason,
+			)
 		}
 
 		previousModel := model
@@ -2095,24 +2252,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		)
 	}
 
-	rebuildSystemPromptForModel(model)
-
-	usageInfo.Model = model
-	usageInfo.Routed = routerDecision != nil
-	if cat := l.currentModelCatalog(); cat != nil {
-		if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
-			usageInfo.ContextWindow = dep.ContextWindow
-		}
+	if pinnedModel != "" && pinSkipReason != "" {
+		l.conversationPins.recordFallback(pinned, model, pinSkipReason, l.now())
 	}
-	usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
-	if line := awareness.FormatContextUsage(usageInfo); line != "" {
-		systemPrompt += "\n" + line
-		systemSections = appendPromptSection(systemSections, llm.PromptSection{
-			Name:    "CONTEXT USAGE",
-			Content: "\n" + line,
-		})
-	}
-	updateSystemMessage()
 
 	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
 
@@ -2123,9 +2265,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Check if memory store supports tool call recording.
 	recorder, hasRecorder := l.memory.(ToolCallRecorder)
+	sessionRecorder, hasSessionRecorder := l.memory.(SessionToolCallRecorder)
 
 	// Track whether the error handler triggered timeout recovery.
 	var timeoutRecovered bool
+	// A lifecycle tool can rotate the session during an iteration. Keep
+	// each model call with the session that supplied its starting context.
+	iterationSessions := make(map[int]string)
 
 	// Optional per-tool timeout wrapper for request-scoped runs such as
 	// delegates. Cancelled after each tool completes.
@@ -2138,19 +2284,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		maxIterations = req.MaxIterations
 	}
 
-	currentTools := func() *tools.Registry {
-		toolsForIter := baseTools
-		if scope != nil && !skipTagFilter {
-			if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
-				tagList := make([]string, 0, len(tagSnap))
-				for tag := range tagSnap {
-					tagList = append(tagList, tag)
-				}
-				toolsForIter = baseTools.FilterByTags(tagList)
-			}
-		}
-		return toolsForIter
-	}
 	activeTagList := func() []string {
 		if scope == nil {
 			return nil
@@ -2201,11 +2334,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 	effectiveToolNames := func() []string {
-		toolsForIter := currentTools()
-		if gatingActive {
-			toolsForIter = toolsForIter.FilteredCopy(l.orchestratorTools)
-		}
-		defs := toolsForIter.List()
+		defs := currentTools().List()
 		if len(defs) == 0 {
 			return nil
 		}
@@ -2225,30 +2354,24 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	iterCfg := iterate.Config{
 		MaxIterations:   maxIterations,
 		Model:           model,
-		LLM:             l.llm,
+		LLM:             runClient,
 		Stream:          liveStreamCallback,
 		DeferMixedText:  true,
 		NudgeOnEmpty:    true,
 		NudgePrompt:     prompts.EmptyResponseNudge,
 		FallbackContent: firstNonEmpty(req.FallbackContent, prompts.EmptyResponseFallback),
+		ReplyAwaited:    replyAwaited(req.MessageOrigin),
+		TargetKey:       req.TargetKey,
 
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via tag_activate are reflected.
 		ToolDefs: func(i int) []map[string]any {
-			toolsForIter := currentTools()
-			if gatingActive {
-				return toolsForIter.FilteredCopy(l.orchestratorTools).List()
-			}
-			return toolsForIter.List()
+			return currentTools().List()
 		},
 
 		// Tool availability check using the effective tools for this iteration.
 		CheckToolAvail: func(toolName string) bool {
-			toolsForIter := currentTools()
-			if gatingActive {
-				return toolsForIter.FilteredCopy(l.orchestratorTools).Get(toolName) != nil
-			}
-			return toolsForIter.Get(toolName) != nil
+			return currentTools().Get(toolName) != nil
 		},
 
 		NormalizeToolCall: func(iterCtx context.Context, i int, tc llm.ToolCall) llm.ToolCall {
@@ -2265,8 +2388,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		MaxOutputTokens: req.MaxOutputTokens,
 
-		CheckBudget: func(totalOut int) bool {
-			return req.MaxOutputTokens > 0 && totalOut >= req.MaxOutputTokens
+		CheckBudget: func(_ int) bool {
+			return accounting.outputBudgetExhausted()
 		},
 
 		// Mid-turn input merge (#1221): the loop builds req.PullInput over
@@ -2299,17 +2422,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		Executor: &iterate.DirectExecutor{
 			Exec: func(execCtx context.Context, name, argsJSON string) (string, error) {
-				toolsForExec := currentTools()
-				if gatingActive {
-					toolsForExec = toolsForExec.FilteredCopy(l.orchestratorTools)
-				}
-				return toolsForExec.Execute(execCtx, name, argsJSON)
+				return currentTools().Execute(execCtx, name, argsJSON)
 			},
 		},
 
 		// Iteration lifecycle callbacks.
 		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
+			if l.archiver != nil {
+				iterationSessions[i] = l.archiver.EnsureSession(convID)
+			}
 
 			// Rebuild system prompt each iteration so that:
 			// - Capability context reflects tags activated mid-run
@@ -2318,10 +2440,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use for callers
 			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt := l.buildSystemPromptWithProfile(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
+				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
+				// Providers may render Sections instead of Content, so refresh
+				// both representations of the same prompt together.
 				msgs[0].Content = rebuilt
+				msgs[0].Sections = sections
 				systemPrompt = rebuilt // keep retained content in sync
 				systemTokens = len(rebuilt) / 4
 			}
@@ -2396,7 +2521,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Error handling: timeout retry, recovery model, failover.
-		OnLLMError: l.buildLLMErrorHandler(ctx, stream, model, req, &timeoutRecovered),
+		OnLLMError: l.buildLLMErrorHandler(ctx, stream, runClient, req, &timeoutRecovered),
 
 		// Enrich context before each tool execution.
 		OnBeforeToolExec: func(iterCtx context.Context, i int, tc llm.ToolCall) context.Context {
@@ -2410,10 +2535,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if scope != nil {
 				toolCtx = tools.WithInheritableCapabilityTags(toolCtx, scope.InheritableTags())
 			}
-			if l.archiver != nil {
-				if sid := l.archiver.ActiveSessionID(convID); sid != "" {
-					toolCtx = tools.WithSessionID(toolCtx, sid)
-				}
+			if sid := iterationSessions[i]; sid != "" {
+				toolCtx = tools.WithSessionID(toolCtx, sid)
 			}
 			toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
 			toolCtx = tools.WithIterationIndex(toolCtx, i)
@@ -2446,8 +2569,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argsBytes, _ := json.Marshal(tc.Function.Arguments)
 					argsJSON = string(argsBytes)
 				}
-				if err := recorder.RecordToolCall(convID, "", toolCallIDStr, tc.Function.Name, argsJSON); err != nil {
-					logging.Logger(iterCtx).Warn("failed to record tool call", "error", err)
+				var recordErr error
+				if hasSessionRecorder {
+					recordErr = sessionRecorder.RecordSessionToolCall(convID, iterationSessions[i], "", toolCallIDStr, tc.Function.Name, argsJSON)
+				} else {
+					recordErr = recorder.RecordToolCall(convID, "", toolCallIDStr, tc.Function.Name, argsJSON)
+				}
+				if recordErr != nil {
+					logging.Logger(iterCtx).Warn("failed to record tool call", "error", recordErr)
 				}
 			}
 
@@ -2539,40 +2668,28 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					}
 				}()
 			}
-			// Compaction.
-			if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
-				preTokens := l.memory.GetTokenCount(convID)
-				preMessages := len(l.memory.GetMessages(convID))
-				logging.Logger(iterCtx).Info("triggering compaction",
-					"tokens_before", preTokens,
-					"messages_before", preMessages,
-				)
-				go func() {
-					compactStart := time.Now()
-					if err := l.compactor.Compact(context.Background(), convID); err != nil {
-						log.Error("compaction failed", "error", err)
-					} else {
-						postTokens := l.memory.GetTokenCount(convID)
-						postMessages := len(l.memory.GetMessages(convID))
-						log.Info("compaction completed",
-							"tokens_after", postTokens,
-							"messages_after", postMessages,
-							"tokens_freed", preTokens-postTokens,
-							"messages_compacted", preMessages-postMessages,
-							"elapsed", time.Since(compactStart).Round(time.Second),
-						)
-					}
-				}()
-			}
+			l.maybeCompact(iterCtx, convID)
 		},
 	}
 
 	engine := &iterate.Engine{}
 	iterResult, err := engine.Run(ctx, iterCfg, llmMessages)
+	accounting.applyTotals(iterResult)
+	if iterResult != nil {
+		l.archiveIterations(log, convID, iterResult.Iterations, iterationSessions)
+		l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
+		// Retain completed work on failures as well as successful turns.
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
+		}()
+	}
 	if err != nil {
 		if l.router != nil && routerDecision != nil {
 			latency := time.Since(startTime).Milliseconds()
-			l.router.RecordFailure(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), router.ClassifyResourceFailure(err))
+			tokens := l.routerContextTokens(ctx, convID, usageInfo.TokenCount)
+			l.router.RecordFailure(routerDecision.RequestID, latency, tokens, router.ClassifyResourceFailure(err))
 		}
 		return nil, err
 	}
@@ -2580,7 +2697,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Record router outcome.
 	if l.router != nil && routerDecision != nil {
 		latency := time.Since(startTime).Milliseconds()
-		l.router.RecordOutcome(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), true)
+		tokens := l.routerContextTokens(ctx, convID, usageInfo.TokenCount)
+		l.router.RecordOutcome(routerDecision.RequestID, latency, tokens, true)
 	}
 
 	// For exhausted runs, store the forced text in memory.
@@ -2598,7 +2716,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 	// Detect when the error handler triggered timeout recovery.
-	if timeoutRecovered {
+	if timeoutRecovered && iterResult.ExhaustReason != iterate.ExhaustTokenBudget {
 		finishReason = "timeout_recovery"
 	}
 
@@ -2635,6 +2753,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
 		ContextWindow:            usageInfo.ContextWindow,
 		ToolsUsed:                iterResult.ToolsUsed,
+		ToolOutcomes:             iterResult.ToolOutcomes,
 		EffectiveTools:           effectiveToolNames(),
 		Iterations:               iterResult.IterationCount,
 		Exhausted:                iterResult.Exhausted,
@@ -2644,33 +2763,25 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		LoadedCapabilities:       toolcatalog.BuildLoadedCapabilityEntries(l.capSurface, activeTags),
 	}
 
-	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
-
-	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID, iterResult.UpstreamRequestID)
-	l.archiveIterations(log, convID, iterResult.Iterations)
-
-	// Content retention is fire-and-forget with a short deadline so it
-	// never blocks response delivery.
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
-	}()
-
 	return resp, nil
 }
 
-func (l *Loop) conversationChannelBinding(conversationID string) *memory.ChannelBinding {
+func (l *Loop) conversationChannelBinding(ctx context.Context, conversationID string) *memory.ChannelBinding {
 	if conversationID == "" || l.memory == nil {
 		return nil
 	}
 	var conv *memory.Conversation
+	var err error
 	switch store := l.memory.(type) {
 	case *memory.SQLiteStore:
-		conv = store.GetConversation(conversationID)
+		conv, err = store.GetConversation(ctx, conversationID)
 	case *memory.Store:
-		conv = store.GetConversation(conversationID)
+		conv, err = store.GetConversation(ctx, conversationID)
 	default:
+		return nil
+	}
+	if err != nil {
+		logging.Logger(ctx).Warn("failed to read conversation channel binding", "error", err)
 		return nil
 	}
 	if conv == nil || conv.Metadata == nil {
@@ -2681,7 +2792,7 @@ func (l *Loop) conversationChannelBinding(conversationID string) *memory.Channel
 
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
-func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
+func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, client llm.Client, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
 	explicitModelRequested := strings.TrimSpace(req.Model) != ""
 
 	return func(iterCtx context.Context, err error, model string,
@@ -2692,6 +2803,9 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		if cancelErr := canceledContextError(ctx, iterCtx); cancelErr != nil {
 			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
 			return nil, "", cancelErr
+		}
+		if errors.Is(err, llm.ErrOutputBudgetExhausted) {
+			return nil, "", err
 		}
 		// A billing-blocked provider is a standing state the provider
 		// already announced on its transition edge; each iteration's
@@ -2724,12 +2838,12 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					return nil, "", ctx.Err()
 				case <-time.After(backoff):
 				}
-				resp, retryErr := l.llm.ChatStream(iterCtx, model, msgs, toolDefs, stream)
+				resp, retryErr := client.ChatStream(iterCtx, model, msgs, toolDefs, stream)
 				if retryErr == nil {
 					iterLog.Info("LLM retry succeeded", "retry", retry, "model", model)
 					return resp, model, nil
 				}
-				if !isTimeout(retryErr) {
+				if errors.Is(retryErr, llm.ErrOutputBudgetExhausted) || !isTimeout(retryErr) {
 					return nil, "", retryErr
 				}
 			}
@@ -2749,9 +2863,12 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				// generation is bounded like every other call.
 				recoveryBase := llm.WithMaxOutputTokens(context.Background(), llm.MaxOutputTokensFromContext(iterCtx))
 				recoveryCtx, recoveryCancel := context.WithTimeout(recoveryBase, timeoutRecoveryDeadline)
-				resp, recoveryErr := l.llm.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
+				resp, recoveryErr := client.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
 				if recoveryErr != nil {
+					if errors.Is(recoveryErr, llm.ErrOutputBudgetExhausted) {
+						return nil, "", recoveryErr
+					}
 					iterLog.Error("recovery model also failed",
 						"error", recoveryErr,
 						"recovery_model", l.recoveryModel,
@@ -2804,7 +2921,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		}
 
 		if explicitModelRequested {
-			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, model, err, msgs, toolDefs, stream); handled {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, client, model, err, msgs, toolDefs, stream); handled {
 				if recoveryErr != nil {
 					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
 					return nil, "", recoveryErr
@@ -2839,7 +2956,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					iterLog.Warn("failover handler failed", "error", ferr)
 				}
 			}
-			resp, failErr := l.llm.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
+			resp, failErr := client.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
 			if failErr != nil {
 				// Same demotion as above: a failover that ran into the
 				// standing billing wall did so instantly and learned
@@ -2881,22 +2998,46 @@ func toArchivedIterations(sessionID string, iters []iterate.IterationRecord) []m
 	return archived
 }
 
-// archiveIterations persists iteration records. Tool call linkage happens
-// later in ArchiveConversation when tool calls are moved to the archive.
+// archiveIterations persists iteration records in their originating sessions
+// and links tool calls already archived by a mid-turn lifecycle transition.
 // Errors are logged but not returned.
-func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []iterate.IterationRecord) {
+func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []iterate.IterationRecord, iterationSessions map[int]string) {
 	if l.archiver == nil || len(iterations) == 0 {
 		return
 	}
-	// Ensure a session exists so first-turn iterations are not lost.
-	sessionID := l.archiver.EnsureSession(convID)
-	if sessionID == "" {
-		log.Warn("no active session for iteration archive", "conversation_id", convID)
-		return
+	bySession := make(map[string][]iterate.IterationRecord)
+	var sessionOrder []string
+	for _, iter := range iterations {
+		sessionID := iterationSessions[iter.Index]
+		if sessionID == "" {
+			// Force-text recovery skips OnIterationStart. It runs after the
+			// final tool batch, so it belongs to the then-current session.
+			sessionID = l.archiver.EnsureSession(convID)
+		}
+		if sessionID == "" {
+			log.Warn("no active session for iteration archive", "conversation_id", convID, "iteration", iter.Index)
+			continue
+		}
+		if _, exists := bySession[sessionID]; !exists {
+			sessionOrder = append(sessionOrder, sessionID)
+		}
+		// The archive offsets each batch after the session's last iteration.
+		// Start at zero even when this session began mid-run; iter is a copy,
+		// so request-level indexes remain unchanged.
+		iter.Index = len(bySession[sessionID])
+		bySession[sessionID] = append(bySession[sessionID], iter)
 	}
-	archived := toArchivedIterations(sessionID, iterations)
-	if err := l.archiver.ArchiveIterations(archived); err != nil {
-		log.Warn("failed to archive iterations", "error", err)
+	// ArchiveStore offsets iteration indices per session, so each batch
+	// must contain exactly one session even when a turn crosses a boundary.
+	for _, sessionID := range sessionOrder {
+		archived := toArchivedIterations(sessionID, bySession[sessionID])
+		if err := l.archiver.ArchiveIterations(archived); err != nil {
+			log.Warn("failed to archive iterations", "session_id", sessionID, "error", err)
+			continue
+		}
+		if err := l.archiver.LinkPendingIterationToolCalls(sessionID); err != nil {
+			log.Warn("failed to link iteration tool calls", "session_id", sessionID, "error", err)
+		}
 	}
 }
 
@@ -3124,13 +3265,16 @@ func (l *Loop) MemoryStats() map[string]any {
 	return l.memory.Stats()
 }
 
-// GetHistory returns the conversation messages for a given conversation.
-func (l *Loop) GetHistory(conversationID string) []memory.Message {
-	return l.memory.GetMessages(conversationID)
+// GetHistory returns the active conversation messages. A failed or canceled
+// read returns an error instead of empty or partial history.
+func (l *Loop) GetHistory(ctx context.Context, conversationID string) ([]memory.Message, error) {
+	return l.memory.GetMessages(ctx, conversationID)
 }
 
-func (l *Loop) GetTokenCount(conversationID string) int {
-	return l.memory.GetTokenCount(conversationID)
+// GetTokenCount returns the stored active-context token count. Zero is a
+// measured empty context only when the returned error is nil.
+func (l *Loop) GetTokenCount(ctx context.Context, conversationID string) (int, error) {
+	return l.memory.GetTokenCount(ctx, conversationID)
 }
 
 // GetContextWindow returns the context window size of the default model.
@@ -3138,119 +3282,46 @@ func (l *Loop) GetContextWindow() int {
 	return l.contextWindow
 }
 
-// ResetConversation archives and then clears the conversation history.
+// ResetConversation closes the current session and opens an empty active
+// window. Durable stores preserve every transcript row and the conversation's
+// metadata; only transient files and active capability tags are cleared.
 func (l *Loop) ResetConversation(conversationID string) error {
-	l.archiveAndEndSession(conversationID, "reset")
-	l.clearPersistedCapabilityTags(conversationID)
-
-	// Clean up temp files for this conversation.
-	if l.tools != nil {
-		if tfs := l.tools.TempFileStore(); tfs != nil {
-			if err := tfs.Cleanup(conversationID); err != nil {
-				l.logger.Error("failed to clean up temp files on reset",
-					"conversation_id", conversationID,
-					"error", err,
-				)
-			}
-		}
-	}
-
-	if err := l.memory.Clear(conversationID); err != nil {
-		return err
-	}
-
-	// Start a fresh session.
-	if l.archiver != nil {
-		if _, err := l.archiver.StartSession(conversationID); err != nil {
-			l.logger.Error("failed to start new session after reset", "error", err)
-		}
-	}
-
-	return nil
+	return l.resetSession(conversationID, "reset", "")
 }
 
-// CloseSession gracefully closes the current session, archives messages,
-// injects a carry-forward handoff into the new session, and starts a
-// fresh session. Unlike ResetConversation, the carry-forward summary
-// provides continuity across the session boundary.
+// CloseSession closes the current session and starts its successor with an
+// optional carry-forward handoff, preserving the durable transcript.
 func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 	if reason == "" {
 		reason = "close"
 	}
+	return l.resetSession(conversationID, reason, carryForward)
+}
 
-	// Archive and end current session (same pattern as ResetConversation).
-	l.archiveAndEndSession(conversationID, reason)
-	l.clearPersistedCapabilityTags(conversationID)
-
-	// Clean up temp files for this conversation.
-	if l.tools != nil {
-		if tfs := l.tools.TempFileStore(); tfs != nil {
-			if err := tfs.Cleanup(conversationID); err != nil {
-				l.logger.Error("failed to clean up temp files on close",
-					"conversation_id", conversationID,
-					"error", err,
-				)
-			}
-		}
-	}
-
-	if err := l.memory.Clear(conversationID); err != nil {
-		return fmt.Errorf("clear memory: %w", err)
-	}
-
-	// Start a fresh session.
+func (l *Loop) resetSession(conversationID, reason, carryForward string) error {
 	if l.archiver != nil {
-		if _, err := l.archiver.StartSession(conversationID); err != nil {
-			l.logger.Error("failed to start new session after close", "error", err)
+		if err := l.archiver.ResetSession(conversationID, reason, carryForward); err != nil {
+			return fmt.Errorf("reset session: %w", err)
+		}
+	} else {
+		// The CLI's one-shot agent has an in-memory store and no archiver.
+		// Clearing that ephemeral context does not require a durable boundary.
+		if err := l.memory.Clear(conversationID); err != nil {
+			return fmt.Errorf("clear memory: %w", err)
 		}
 	}
-
-	// Inject carry-forward into the new session as a system message.
-	if carryForward != "" {
-		if cs, ok := l.memory.(interface {
-			AddCompactionSummary(string, string) error
-		}); ok {
-			if err := cs.AddCompactionSummary(conversationID, "[Session Handoff]\n"+carryForward); err != nil {
-				l.logger.Error("failed to inject carry-forward", "error", err)
-			}
-		}
-	}
-
-	l.logger.Info("session closed",
-		"conversation_id", conversationID,
-		"reason", reason,
-		"carry_forward_len", len(carryForward),
-	)
+	l.finishSessionTransition(conversationID)
 	return nil
 }
 
-// CheckpointSession archives a snapshot of the current conversation state
-// without ending the session. The active session continues uninterrupted.
+// CheckpointSession bookmarks the current transcript and active message IDs
+// without ending the session or changing its context. The durable bookmark
+// does not promise restoration of the full application state.
 func (l *Loop) CheckpointSession(conversationID, label string) error {
 	if l.archiver == nil {
 		return fmt.Errorf("no archiver configured")
 	}
-
-	messages := l.getAllMessages(conversationID)
-	if len(messages) == 0 {
-		return fmt.Errorf("no messages to checkpoint")
-	}
-
-	reason := "checkpoint"
-	if label != "" {
-		reason = "checkpoint:" + label
-	}
-
-	if err := l.archiver.ArchiveConversation(conversationID, messages, reason); err != nil {
-		return fmt.Errorf("archive checkpoint: %w", err)
-	}
-
-	l.logger.Info("session checkpoint created",
-		"conversation_id", conversationID,
-		"label", label,
-		"messages", len(messages),
-	)
-	return nil
+	return l.archiver.CheckpointSession(conversationID, label)
 }
 
 // SplitSession retroactively splits the current session at a past message
@@ -3262,57 +3333,30 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 	if l.archiver == nil {
 		return fmt.Errorf("no archiver configured")
 	}
-
-	messages := l.getAllMessages(conversationID)
+	reader, ok := l.memory.(interface {
+		CurrentSessionMessages(string) ([]memory.Message, error)
+	})
+	if !ok {
+		return fmt.Errorf("memory backend cannot select a durable session split boundary")
+	}
+	messages, err := reader.CurrentSessionMessages(conversationID)
+	if err != nil {
+		return fmt.Errorf("read split messages: %w", err)
+	}
 	if len(messages) == 0 {
 		return fmt.Errorf("no messages to split")
 	}
-
 	splitIdx, err := findSplitPoint(messages, atIndex, atMessage)
 	if err != nil {
 		return err
 	}
-
-	preSplit := messages[:splitIdx]
-	postSplit := messages[splitIdx:]
-
-	// Archive pre-split messages.
-	if err := l.archiver.ArchiveConversation(conversationID, preSplit, "split"); err != nil {
-		return fmt.Errorf("archive pre-split messages: %w", err)
-	}
-
-	// End the current session at the split-point timestamp.
-	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
-		if err := l.archiver.EndSession(sid, "split"); err != nil {
-			l.logger.Error("failed to end session at split point", "error", err)
-		}
+	if err := l.archiver.SplitSession(conversationID, messages[splitIdx].ID); err != nil {
+		return fmt.Errorf("split session: %w", err)
 	}
 	l.clearPersistedCapabilityTags(conversationID)
-
-	// Start a new session for the post-split messages.
-	if _, err := l.archiver.StartSession(conversationID); err != nil {
-		l.logger.Error("failed to start new session after split", "error", err)
-	}
-
-	// Rebuild working memory with only the post-split messages.
-	if err := l.memory.Clear(conversationID); err != nil {
-		return fmt.Errorf("clear memory for split: %w", err)
-	}
-	for _, m := range postSplit {
-		if err := l.memory.AddMessage(conversationID, m.Role, m.Content, m.Origin); err != nil {
-			l.logger.Error("failed to re-add post-split message", "error", err, "role", m.Role)
-		}
-	}
-
-	l.logger.Info("session split",
-		"conversation_id", conversationID,
-		"pre_split_msgs", len(preSplit),
-		"post_split_msgs", len(postSplit),
-	)
 	return nil
 }
 
-// getAllMessages retrieves all messages for a conversation, preferring the
 // now returns the current time via the configurable clock. If nowFunc
 // is nil (e.g., in tests using a bare struct literal), it falls back to
 // time.Now.
@@ -3323,14 +3367,14 @@ func (l *Loop) now() time.Time {
 	return time.Now()
 }
 
-// full-fidelity GetAllMessages when available.
-func (l *Loop) getAllMessages(conversationID string) []memory.Message {
+// getAllMessages prefers full-fidelity history over the active prompt window.
+func (l *Loop) getAllMessages(ctx context.Context, conversationID string) ([]memory.Message, error) {
 	if full, ok := l.memory.(interface {
-		GetAllMessages(string) []memory.Message
+		GetAllMessages(context.Context, string) ([]memory.Message, error)
 	}); ok {
-		return full.GetAllMessages(conversationID)
+		return full.GetAllMessages(ctx, conversationID)
 	}
-	return l.memory.GetMessages(conversationID)
+	return l.memory.GetMessages(ctx, conversationID)
 }
 
 // maxTranscriptBytes caps the transcript size returned by
@@ -3338,16 +3382,20 @@ func (l *Loop) getAllMessages(conversationID string) []memory.Message {
 const maxTranscriptBytes = 32 * 1024
 
 // ConversationTranscript returns a formatted text transcript of the
-// current in-memory conversation for the given ID. System and tool
+// stored conversation for the given ID. System and tool
 // messages are excluded to focus on user/assistant dialogue. Returns
 // an empty string if no user/assistant messages exist after filtering
 // (for example, when there are no messages or only system/tool
 // messages). The output is capped at [maxTranscriptBytes] to keep
-// downstream LLM prompts within reasonable context limits.
-func (l *Loop) ConversationTranscript(conversationID string) string {
-	messages := l.getAllMessages(conversationID)
+// downstream LLM prompts within reasonable context limits. Failed or canceled
+// reads return an error without a partial transcript.
+func (l *Loop) ConversationTranscript(ctx context.Context, conversationID string) (string, error) {
+	messages, err := l.getAllMessages(ctx, conversationID)
+	if err != nil {
+		return "", fmt.Errorf("read conversation transcript: %w", err)
+	}
 	if len(messages) == 0 {
-		return ""
+		return "", nil
 	}
 	now := l.now()
 	var b strings.Builder
@@ -3361,27 +3409,28 @@ func (l *Loop) ConversationTranscript(conversationID string) string {
 			break
 		}
 	}
-	return b.String()
+	return b.String(), nil
 }
 
-// archiveAndEndSession archives all messages and ends the active session.
-// Errors are logged but not propagated — callers should not be blocked by
-// archive failures.
+// archiveAndEndSession closes a durable conversation during shutdown.
+// Failures are logged because shutdown must continue draining other work.
 func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 	if l.archiver == nil {
 		return
 	}
-
-	messages := l.getAllMessages(conversationID)
-	if len(messages) > 0 {
-		if err := l.archiver.ArchiveConversation(conversationID, messages, reason); err != nil {
-			l.logger.Error("failed to archive conversation", "error", err)
-		}
+	if err := l.archiver.CloseConversation(conversationID, reason); err != nil {
+		l.logger.Error("failed to close conversation", "conversation_id", conversationID, "error", err)
 	}
+}
 
-	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
-		if err := l.archiver.EndSession(sid, reason); err != nil {
-			l.logger.Error("failed to end session", "error", err)
+// finishSessionTransition releases transient state after the boundary succeeds.
+func (l *Loop) finishSessionTransition(conversationID string) {
+	l.clearPersistedCapabilityTags(conversationID)
+	if l.tools != nil {
+		if files := l.tools.TempFileStore(); files != nil {
+			if err := files.Cleanup(conversationID); err != nil {
+				l.logger.Error("failed to clean up session temporary files", "conversation_id", conversationID, "error", err)
+			}
 		}
 	}
 }
@@ -3558,23 +3607,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// recordUsage persists a usage record for a completed LLM interaction.
-// No-op when usage recording is not configured. Errors are logged but
-// do not affect the caller.
-//
-// cacheCreate5m and cacheCreate1h break down cacheCreateIn by TTL when
-// the provider exposes the breakdown (Anthropic). Pass 0/0 when the
-// provider doesn't attribute the writes; pricing falls back to the 5m
-// rate for the unattributed portion.
-//
-// upstreamRequestID is the provider-side request ID (e.g. Anthropic's
-// `x-request-id` response header) when the provider exposes one. Pass
-// "" when no upstream ID is available; the column accepts empty.
-func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn int, convID, sessionTag, requestID, upstreamRequestID string) {
-	if l.usageStore == nil {
-		return
-	}
-
+// makeUsageRecord resolves pricing and provenance once, so persistent records
+// and live observers consume exactly the same per-call accounting.
+func (l *Loop) makeUsageRecord(req *Request, rec usage.Record) usage.Record {
 	role := "interactive"
 	taskName := ""
 	if req.UsageRole != "" {
@@ -3593,33 +3628,49 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 		}
 	}
 
-	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
-	cost := usage.ComputeDetailedCostForIdentityWithTTL(identity, totalIn, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn, totalOut, l.pricing)
-	rec := usage.Record{
-		Timestamp:                  time.Now(),
-		RequestID:                  requestID,
-		UpstreamRequestID:          upstreamRequestID,
-		SessionID:                  sessionTag,
-		ConversationID:             convID,
-		Model:                      identity.Model,
-		UpstreamModel:              identity.UpstreamModel,
-		Resource:                   identity.Resource,
-		Provider:                   identity.Provider,
-		InputTokens:                totalIn,
-		OutputTokens:               totalOut,
-		CacheCreationInputTokens:   cacheCreateIn,
-		CacheCreation5mInputTokens: cacheCreate5m,
-		CacheCreation1hInputTokens: cacheCreate1h,
-		CacheReadInputTokens:       cacheReadIn,
-		CostUSD:                    cost,
-		Role:                       role,
-		TaskName:                   taskName,
+	identity := usage.ResolveModelIdentity(rec.Model, l.currentModelCatalog())
+	rec.CostUSD = usage.ComputeDetailedCostForIdentityWithTTL(identity, rec.InputTokens,
+		rec.CacheCreationInputTokens, rec.CacheCreation5mInputTokens, rec.CacheCreation1hInputTokens,
+		rec.CacheReadInputTokens, rec.OutputTokens, l.pricing)
+	if identity.Provider == "anthropic" {
+		if _, priced := usage.PricingFor(identity, l.pricing); !priced {
+			l.warnUnpricedModel(identity)
+		}
 	}
+	rec.Model = identity.Model
+	rec.UpstreamModel = identity.UpstreamModel
+	rec.Resource = identity.Resource
+	rec.Provider = identity.Provider
+	rec.Role = role
+	rec.TaskName = taskName
+	return rec
+}
 
+// recordUsage persists an already priced model-call record. No-op when
+// persistence is not configured; write errors do not affect the caller.
+func (l *Loop) recordUsage(ctx context.Context, rec usage.Record) {
+	if l.usageStore == nil {
+		return
+	}
 	if err := l.usageStore.Record(ctx, rec); err != nil {
 		l.logger.Warn("failed to record usage",
 			"error", err,
-			"request_id", requestID,
+			"request_id", rec.RequestID,
 		)
 	}
+}
+
+// warnUnpricedModel reports, once per model, a paid-provider model
+// with no pricing entry. Its usage records carry cost_usd 0, so every
+// cost report under-counts until the model is added to the pricing
+// table.
+func (l *Loop) warnUnpricedModel(identity usage.ModelIdentity) {
+	if _, seen := l.unpricedModels.LoadOrStore(identity.Model, struct{}{}); seen {
+		return
+	}
+	l.logger.Warn("usage cost not recorded: model has no pricing entry",
+		"model", identity.Model,
+		"upstream_model", identity.UpstreamModel,
+		"provider", identity.Provider,
+	)
 }

@@ -80,7 +80,11 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"knowledge"},
 	},
 	"email": {
-		Description: "Email inbox reading, search, and sending tools.",
+		Description: "Email inbox reading, search, filing, and sending across the configured accounts; results are JSON that names the account and folder beside every UID, and sends are gated by the contact directory.",
+		Parents:     []string{"people"},
+	},
+	"email_drafts": {
+		Description: "Thane's own email drafts while they wait for the operator, and the edit path for them: list the drafts Thane wrote, read one beside the message it answers, revise its body for accuracy and tone, or withdraw it. Nothing here sends; the operator sends every draft by hand, and a draft the operator has touched is theirs.",
 		Parents:     []string{"people"},
 	},
 	"feeds": {

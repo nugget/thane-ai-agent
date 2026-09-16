@@ -96,6 +96,21 @@ the next iteration. Tool calls can be:
   document output tools
 - **Delegation** (spawning a local model to execute a multi-step task)
 
+Within one turn, the fourth call to the same tool with the same
+arguments, and every identical call after it, is refused without
+running. On a turn someone is waiting on (a channel message or an API
+request) the refusal tells the model to stop calling tools and answer.
+Everywhere else it says only that the call was not run and identical
+calls stay refused, pointing the model at the earlier result or at the
+arguments its error names, so a loop wake is never told to abandon a
+write. When a tool fails twice in a row on the same target, and both
+errors rejected an argument the second call resent unchanged, the result
+also names those unchanged arguments. An error counts as rejecting an
+argument only when the tool marked it so — an over-budget or missing
+projection, a dossier rule the value broke — never because its text
+happens to mention the argument, so a database, network or lookup
+failure never earns the note.
+
 ### 5. Response Shaping
 
 When the agent has enough information — or hits the iteration limit — it
@@ -127,10 +142,24 @@ Output shapes available today:
   document's consumers need: `status_line` and `teaser` are compact
   outward-facing signals with different shape budgets, while `digest`
   carries enough context to act.
-- **Working notes** outputs are a loop's private append-only process
-  log. They are internal-audience: excluded from document search and
-  from tagged-guidance injection, though the operator and the archive
-  still see them.
+Every output declares an `audience`: how far its content reaches inside
+Thane. `private` is the narrowest — the owning loop's own context and
+explicit reads by ref, which is what working notes get; it is excluded
+from document search and from tagged-guidance injection, though the
+operator and the archive still see it. `agent` is the whole instance:
+search, context injection, the ambient rail. `subscribers` sits between
+them, for an output only the loops that subscribe to it should read.
+
+The delivery half of `subscribers` is not built yet — a loop cannot
+declare a subscription to another loop's output, so today the tier
+behaves like `private` plus a `doc_search` opt-in. It exists because the
+vocabulary is written into frontmatter on disk, and because facets are
+refused on `private`, so it is the only way to declare a faceted document
+that is not advertised to the whole agent.
+
+Every reach stays inside Thane. Whether a projection may leave for an
+external surface is a separate declaration, so widening reach never
+widens the trust boundary.
 
 The same declaration also feeds context assembly. Each turn receives a
 `Declared Durable Outputs` block with the output name, document root
@@ -138,6 +167,38 @@ reference, generated tool name, current content or recent journal tail,
 and any truncation markers. The model should use those generated tools
 instead of generic file tools; the document root owns path safety,
 indexing, provenance, and signature policy.
+
+A generated output tool that refuses returns a tool error and commits
+nothing. A validation refusal lists every failing projection at once,
+each over-budget one with its overage and a fix sized to it. Because
+the turn around a refused write can still end normally, each wake
+tallies its tool calls per tool and per target, the document a call
+writes. A declared output's generated tool writes one document, so it
+has one, empty target; `contact_dossier_write` writes one dossier per
+`contact_id`, so each contact is its own target. A wake in which every
+call to a durable write tool for one target failed and none succeeded
+is recorded as an unpublished write for that tool and target.
+`loop_status` names the loop in its health rollup and lists the tool,
+target, rejection count, last rejection text, and conversation on the
+loop's row (`unpublished_writes`). The `system_health` loop census
+carries the same line and degrades the loops row until a later
+completed wake lands that write for the same target. Landing Alice's
+dossier does not clear a refused write of Bob's. A `contact_id` sent
+upper-case, braced, or without hyphens is keyed as the contact it
+spells. A dossier call whose `contact_id` spells no contact, or names
+one the tool refuses as the wrong record (not an active contact, or a
+second dossier for a person another record already holds one for),
+wrote no dossier of its own. It has no target and is judged per tool:
+it is recorded only when the wake landed no dossier, and any later
+landed dossier clears it. A loop keeps at most 16 entries and drops
+the oldest first. A wake that ends in a runner
+error is not observed, so it neither records nor clears an entry, even
+when it landed the write before failing. The record lives in
+memory; the wake's `iteration_complete` journal event keeps
+`write_rejections` and `unpublished_writes` counts across restarts.
+Detection changes nothing else: the mailbox is still acknowledged, no
+backoff applies, and the notifications the wake consumed are not
+redelivered.
 
 ## Capability Tags
 
@@ -151,15 +212,18 @@ domain.
 capability_tags:
   ha:
     description: "Home Assistant device control and monitoring"
-    tools: [ha_control_device, ha_find_entity, ha_get_state, ha_list_entities, ha_call_service]
   email:
     description: "Email reading, sending, and management"
-    tools: [email_list, email_read, email_search, email_send, email_reply]
+    exclude: [email_send]
   memory:
     description: "Fact storage and recall"
-    tools: [remember_fact, recall_fact, forget_fact]
     core: true
 ```
+
+A tag's tools come from the subsystems that register them, so the
+configuration names only what a site changes: `include` adds tools to a
+tag and `exclude` removes them. The `tools:` list older configs used is
+refused at load with a message saying how to migrate.
 
 ### Delegation Pressure
 
@@ -195,7 +259,19 @@ decides its own cadence — how long to dwell, when to look again.
 
 **Background tasks** have configurable iteration and wall-clock limits.
 
-The agent sees its token budget in the context, so it can make informed
+An optional output-token limit applies across all model attempts in a request,
+including failed attempts, retries, failover, and recovery. Each call receives
+only the allowance left after provider-reported output is deducted. Once spent,
+the agent stops generating and reports `token_budget`; completed tool work and
+its usage records remain available. A final response may use static fallback
+text when no complete model response is available. Zero means unlimited.
+
+This limit depends on provider reporting and enforcement: usage missing from an
+interrupted response cannot be deducted, and a provider may exceed the ceiling
+it was sent. Reported overruns are retained in accounting and stop further
+generation.
+
+The agent sees its context token budget in the context, so it can make informed
 decisions about when to checkpoint, delegate, or wrap up.
 
 ## Entry Points

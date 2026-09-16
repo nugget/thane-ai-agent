@@ -3,10 +3,12 @@ package introspection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
@@ -454,7 +456,7 @@ func TestLoopCensusTopWakersOrderAndCap(t *testing.T) {
 		// 459 in eight minutes and metacog misread it as a storm).
 		{Name: "ha-state-watcher", WakesLast24h: 459, HandlerOnly: true},
 	}
-	census := buildLoopCensus(statuses)
+	census := buildLoopCensus(statuses, time.Now())
 
 	if len(census.TopWakers) != maxCensusTopWakers {
 		t.Fatalf("top wakers = %d entries, want the cap %d", len(census.TopWakers), maxCensusTopWakers)
@@ -608,5 +610,134 @@ func TestDiskUsedPct(t *testing.T) {
 				t.Errorf("diskUsedPct(%d, %d) = %d, want %d", tt.free, tt.total, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestHealthContactDirectoryRow pins the contact_directory lamp: clean
+// is ok, findings degrade it with a bounded list and the operator's
+// remedy, a failed audit is itself a finding, and an unwired source
+// contributes no row.
+func TestHealthContactDirectoryRow(t *testing.T) {
+	findings := func(n int) []string {
+		out := make([]string, 0, n)
+		for i := 1; i <= n; i++ {
+			out = append(out, fmt.Sprintf("Record %d (admin, noreply@r%d.example: no-reply)", i, i))
+		}
+		return out
+	}
+	// source behaves like the real audit: it keeps at most limit lines
+	// and counts them all.
+	source := func(lines []string, err error) func(context.Context, int) ([]string, int, error) {
+		return func(_ context.Context, limit int) ([]string, int, error) {
+			return lines[:min(len(lines), limit)], len(lines), err
+		}
+	}
+	tests := []struct {
+		name       string
+		source     func(context.Context, int) ([]string, int, error)
+		wantRow    bool
+		wantStatus string
+		wantDetail []string
+		notDetail  []string
+	}{
+		{
+			name: "two findings degrade and name both with the remedy", source: source(findings(2), nil),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"2 automated-looking email addresses", "Record 1 (admin, noreply@r1.example: no-reply)", "Record 2 (", "reads at known", "demote each record to known", "CardDAV"},
+			notDetail:  []string{"more)"},
+		},
+		{
+			name: "one finding reads singular", source: source(findings(1), nil),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"1 automated-looking email address,"},
+		},
+		{
+			name: "seven findings name five and count the rest", source: source(findings(7), nil),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"7 automated-looking email addresses", "Record 5 (", "(+2 more)"},
+			notDetail:  []string{"Record 6 (", "Record 7 ("},
+		},
+		{
+			name: "a failed audit degrades with the error text", source: source(nil, errors.New("database is locked")),
+			wantRow: true, wantStatus: HealthDegraded,
+			wantDetail: []string{"database is locked"},
+		},
+		{name: "an empty result is ok", source: source(nil, nil), wantRow: true, wantStatus: HealthOK},
+		{name: "an unwired source contributes no row", source: nil, wantRow: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap := NewInspector(HealthSources{DirectoryFindings: tt.source}).Health(context.Background())
+			var row *HealthRow
+			for i := range snap.Annunciator {
+				if snap.Annunciator[i].Name == "contact_directory" {
+					row = &snap.Annunciator[i]
+				}
+			}
+			if (row != nil) != tt.wantRow {
+				t.Fatalf("contact_directory row present = %v, want %v: %+v", row != nil, tt.wantRow, snap.Annunciator)
+			}
+			if row == nil {
+				return
+			}
+			if row.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q (detail %q)", row.Status, tt.wantStatus, row.Detail)
+			}
+			for _, want := range tt.wantDetail {
+				if !strings.Contains(row.Detail, want) {
+					t.Errorf("detail = %q, want it to contain %q", row.Detail, want)
+				}
+			}
+			for _, not := range tt.notDetail {
+				if strings.Contains(row.Detail, not) {
+					t.Errorf("detail = %q, must not contain %q", row.Detail, not)
+				}
+			}
+			summary, _ := snapshotPayload(snap)["summary"].(string)
+			if degraded := tt.wantStatus != HealthOK; degraded != strings.Contains(summary, "contact_directory") {
+				t.Errorf("summary = %q, want contact_directory named only when degraded", summary)
+			}
+		})
+	}
+}
+
+// TestHealthContactDirectoryRowBounded pins the row's bounds against a
+// directory it cannot trust: it asks the source for no more than five
+// records, and oversized record text is clipped on a rune boundary, so
+// the model-facing detail stays small whatever the directory holds.
+func TestHealthContactDirectoryRowBounded(t *testing.T) {
+	var gotLimit int
+	// Each name is 100 KiB of a three-byte rune, so a byte cut that
+	// ignored rune boundaries would leave invalid UTF-8.
+	huge := strings.Repeat("é€", 100*1024/5)
+	src := func(_ context.Context, limit int) ([]string, int, error) {
+		gotLimit = limit
+		lines := make([]string, 0, limit)
+		for i := range limit {
+			lines = append(lines, fmt.Sprintf("%s%d (admin, noreply@r%d.example: no-reply)", huge, i, i))
+		}
+		return lines, 9, nil
+	}
+	snap := NewInspector(HealthSources{DirectoryFindings: src}).Health(context.Background())
+	var detail string
+	for _, row := range snap.Annunciator {
+		if row.Name == "contact_directory" {
+			detail = row.Detail
+		}
+	}
+	if gotLimit != maxDirectoryFindingsShown {
+		t.Errorf("source limit = %d, want %d", gotLimit, maxDirectoryFindingsShown)
+	}
+	if !strings.Contains(detail, "9 automated-looking email addresses") || !strings.Contains(detail, "(+4 more)") {
+		t.Errorf("detail = %.300q, want the total of 9 and (+4 more)", detail)
+	}
+	if !utf8.ValidString(detail) {
+		t.Error("detail is not valid UTF-8")
+	}
+	if limit := maxDirectoryFindingsShown*(maxDirectoryFindingBytes+2) + 512; len(detail) > limit {
+		t.Errorf("detail is %d bytes, want at most %d", len(detail), limit)
+	}
+	if got := strings.Count(detail, "…"); got != maxDirectoryFindingsShown {
+		t.Errorf("detail marks %d clipped records, want %d", got, maxDirectoryFindingsShown)
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -221,12 +223,24 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This is a reader surface: whoever fetches this is consuming the
+	// prose, not about to rewrite it, so curated "{{delta:2026-09-18}}"
+	// must arrive as "+20d" rather than as braces. Expanded before the
+	// facet parse so every negotiated representation agrees; the stored
+	// document keeps the raw template, which is what the author
+	// round-trip depends on.
+	//
+	// Day distance is a calendar comparison, so now is taken in the
+	// household zone — expanding in UTC renders tomorrow as "today" for
+	// the last hours of a local evening.
+	body := promptfmt.ExpandTemporalTemplates(record.Body, s.readerTemplateNow())
+
 	// The declared contract gates every representation: this endpoint
 	// is addressed by an output name on a definition, so what it serves
 	// is what that definition declares. A hand-edited body that happens
 	// to contain a reserved heading is content, not contract — parsed
 	// sections count only when the spec declared facets.
-	payload, sectioned := looppkg.ParseFacetSections(record.Body)
+	payload, sectioned := looppkg.ParseFacetSections(body)
 	faceted := sectioned && output.HasFacets()
 	declared := make(map[string]bool, len(output.Facets))
 	for _, facet := range output.Facets {
@@ -254,7 +268,7 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 			Output:     outputName,
 			Ref:        output.Ref,
 			ModifiedAt: record.ModifiedAt,
-			Full:       record.Body,
+			Full:       body,
 		}
 		if faceted {
 			out.Full = payload.Full
@@ -272,7 +286,7 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, out, s.logger)
 	case loopOutputMarkdown:
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		_, _ = w.Write([]byte(record.Body))
+		_, _ = w.Write([]byte(body))
 	default:
 		// Nothing acceptable is servable. The common shape is a
 		// plain-only request against a document with no published
@@ -286,4 +300,39 @@ func (s *Server) handleLoopOutputGet(w http.ResponseWriter, r *http.Request) {
 		}
 		s.errorResponse(w, http.StatusNotAcceptable, "output "+outputName+" declares or has published no status_line; available representations: "+available)
 	}
+}
+
+// readerTemplateNow is the instant temporal templates expand against on
+// this reader surface, in the household timezone the loop renders in.
+// An unset or unloadable zone falls back to local time, which is the
+// honest answer when the zone database cannot say otherwise.
+func (s *Server) readerTemplateNow() time.Time {
+	now := time.Now()
+	if s == nil {
+		return now
+	}
+	if s.nowFunc != nil {
+		now = s.nowFunc()
+	}
+	if s.loop == nil {
+		return now
+	}
+	return templateNowInZone(now, s.loop.Timezone())
+}
+
+// templateNowInZone restates an instant in a named IANA zone, leaving
+// it alone when the name is empty or the zone database cannot load it.
+// Falling back rather than failing is deliberate: local time is the
+// honest answer when nothing better is known, and a reader surface
+// should still serve prose when tzdata is missing.
+func templateNowInZone(now time.Time, zone string) time.Time {
+	name := strings.TrimSpace(zone)
+	if name == "" {
+		return now
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return now
+	}
+	return now.In(loc)
 }

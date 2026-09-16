@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -109,23 +111,104 @@ func (s *signalChannelSender) SendMessage(ctx context.Context, recipient, messag
 	return err
 }
 
-// emailContactResolver resolves email addresses to trust zone levels
-// for the email package's send gating. Implements email.ContactResolver.
-type emailContactResolver struct {
+// ResolveEmailContact resolves one email address against the contact
+// directory for the email channel: result tagging, the send gate, and
+// wake metadata all read this one answer. It implements
+// email.ContactResolver on the same resolver the Signal bridge uses, so
+// both channels agree about who an address is. One record is a match
+// carrying the same binding a Signal sender would; several records
+// sharing the address are ambiguous, with the least privileged zone
+// governing and no candidate treated as the operator; and a store
+// failure is returned as an error, which the email package renders as
+// lookup_failed rather than as a stranger.
+func (r *contactChannelBindingResolver) ResolveEmailContact(ctx context.Context, address string) (email.ContactMatch, error) {
+	if r == nil || r.store == nil {
+		return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
+	}
+	matches, err := r.store.FindAllByPropertyExact(ctx, "EMAIL", address)
+	if err != nil {
+		return email.ContactMatch{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
+	case 1:
+		binding := resolveChannelBinding(r.store, "email", address, r.operatorConfigured(), r.resolvedOperatorContactID())
+		if binding == nil || binding.ContactID == "" {
+			// The record vanished between the two reads; treat it as
+			// the stranger it now is.
+			return email.ContactMatch{Status: email.ContactUnmatched, TrustZone: contacts.ZoneUnknown}, nil
+		}
+		return email.ContactMatch{Status: email.ContactMatched, Binding: binding, TrustZone: binding.TrustZone}, nil
+	}
+	shown := matches[:min(len(matches), maxAmbiguousCandidates)]
+	candidates := make([]email.ContactCandidate, 0, len(shown))
+	for _, c := range shown {
+		candidates = append(candidates, email.ContactCandidate{ID: c.ID.String(), Name: c.FormattedName, TrustZone: c.TrustZone})
+	}
+	return email.ContactMatch{
+		Status:          email.ContactAmbiguous,
+		TrustZone:       leastPrivilegedZone(matches),
+		Candidates:      candidates,
+		CandidatesTotal: len(matches),
+	}, nil
+}
+
+// maxAmbiguousCandidates bounds the candidates one ambiguous address
+// reports to the model. The effective zone is still computed over every
+// record that shares the address.
+const maxAmbiguousCandidates = 10
+
+// leastPrivilegedZone returns the lowest zone among the contacts, in
+// the hierarchy contacts.Policies declares. A zone the hierarchy does
+// not know ranks below every zone it does.
+func leastPrivilegedZone(matches []*contacts.Contact) string {
+	rank := make(map[string]int)
+	for i, policy := range contacts.Policies() {
+		rank[policy.Zone] = i
+	}
+	lowest := ""
+	lowestRank := -1
+	for _, c := range matches {
+		r, known := rank[c.TrustZone]
+		if !known {
+			return contacts.ZoneUnknown
+		}
+		if r > lowestRank {
+			lowestRank = r
+			lowest = c.TrustZone
+		}
+	}
+	if lowest == "" {
+		return contacts.ZoneUnknown
+	}
+	return lowest
+}
+
+// emailInteractionRecorder writes email exchanges onto contact records.
+// It implements email.InteractionRecorder over the contacts store's
+// newer-only update, so a replayed poll batch cannot move a contact's
+// last interaction backwards.
+type emailInteractionRecorder struct {
 	store *contacts.Store
 }
 
-// ResolveTrustZone returns the trust zone for the contact matching the
-// given email address. Returns ("", false, nil) if no contact is found.
-func (r *emailContactResolver) ResolveTrustZone(addr string) (string, bool, error) {
-	matches, err := r.store.FindByPropertyExact("EMAIL", addr)
+// RecordEmailInteraction records one exchange on the named contact.
+func (r *emailInteractionRecorder) RecordEmailInteraction(ctx context.Context, in email.Interaction) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	id, err := uuid.Parse(in.ContactID)
 	if err != nil {
-		return "", false, err
+		return fmt.Errorf("contact id %q: %w", in.ContactID, err)
 	}
-	if len(matches) == 0 {
-		return "", false, nil
+	meta := &contacts.InteractionMeta{
+		Channel:   "email",
+		Direction: in.Direction,
+		Account:   in.Account,
+		MessageID: in.MessageID,
 	}
-	return matches[0].TrustZone, true, nil
+	return r.store.RecordInteractionIfNewer(ctx, id, in.At, meta)
 }
 
 // contactPhoneResolver resolves phone numbers to contact names via the
@@ -154,15 +237,38 @@ type contactChannelBindingResolver struct {
 
 	mu                      sync.Mutex
 	legacyOperatorContactID uuid.UUID
-	legacyOperatorCached    bool
+	// legacyOperatorErr is the error the cached resolution returned when
+	// it named no record (see resolvedOperator).
+	legacyOperatorErr    error
+	legacyOperatorCached bool
 }
 
 // ResolveChannelBinding returns a typed binding for the given
 // channel/address pair. It always returns a channel-scoped binding when
 // the inputs are non-empty, even if no contact match is found.
 func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
-	operatorConfigured := r.operatorContactID != uuid.Nil || strings.TrimSpace(r.legacyOwnerContactName) != ""
-	return resolveChannelBinding(r.store, channel, address, operatorConfigured, r.resolvedOperatorContactID())
+	return resolveChannelBinding(r.store, channel, address, r.operatorConfigured(), r.resolvedOperatorContactID())
+}
+
+// operatorConfigured reports whether either operator selector is set.
+// Both are: identity.operator_contact_id names a UUID directly, and the
+// legacy identity.owner_contact_name names a contact to look up.
+func (r *contactChannelBindingResolver) operatorConfigured() bool {
+	if r == nil {
+		return false
+	}
+	return r.operatorContactID != uuid.Nil || strings.TrimSpace(r.legacyOwnerContactName) != ""
+}
+
+// isOperator reports whether the given contact is the configured
+// operator. It routes through resolvedOperatorContactID so the legacy
+// name selector resolves to a UUID rather than failing closed, and so
+// every surface pins the same contact from the same cache.
+func (r *contactChannelBindingResolver) isOperator(contact *contacts.Contact) bool {
+	if r == nil {
+		return false
+	}
+	return isOwnerContact(r.store, contact, r.operatorConfigured(), r.resolvedOperatorContactID())
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
@@ -571,31 +677,45 @@ func resolveChannelBinding(store *contacts.Store, channel, address string, owner
 }
 
 func (r *contactChannelBindingResolver) resolvedOperatorContactID() uuid.UUID {
+	id, _ := r.resolvedOperator()
+	return id
+}
+
+// resolvedOperator returns the operator's record: the configured
+// operator_contact_id, or the record the legacy owner name resolved to
+// the first time it was asked, cached for the life of the process. When
+// the legacy name named no record it returns uuid.Nil with the error
+// ResolveContact returned, cached with it, so the contact tools can tell
+// a name several contacts answer to, where custody must fail closed,
+// from a name no contact answers to.
+func (r *contactChannelBindingResolver) resolvedOperator() (uuid.UUID, error) {
 	if r == nil {
-		return uuid.Nil
+		return uuid.Nil, nil
 	}
 	if r.operatorContactID != uuid.Nil {
-		return r.operatorContactID
+		return r.operatorContactID, nil
 	}
 	if r.store == nil {
-		return uuid.Nil
+		return uuid.Nil, nil
 	}
 	if strings.TrimSpace(r.legacyOwnerContactName) == "" {
-		return uuid.Nil
+		return uuid.Nil, nil
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.legacyOperatorCached {
-		return r.legacyOperatorContactID
+		return r.legacyOperatorContactID, r.legacyOperatorErr
 	}
 
 	operator, err := r.store.ResolveContact(r.legacyOwnerContactName)
 	if err == nil && operator != nil {
 		r.legacyOperatorContactID = operator.ID
+	} else {
+		r.legacyOperatorErr = err
 	}
 	r.legacyOperatorCached = true
-	return r.legacyOperatorContactID
+	return r.legacyOperatorContactID, r.legacyOperatorErr
 }
 
 func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerConfigured bool, ownerContactID uuid.UUID) bool {
@@ -690,6 +810,19 @@ func (n *conversationSystemInjector) IsSessionAlive(conversationID string) bool 
 		return false
 	}
 	return n.archiver.ActiveSessionID(conversationID) != ""
+}
+
+// signalReplyNoteRecorder returns the Signal bridge's RecordNote hook,
+// given the conversation store's AddMessage. The bridge calls it for a
+// wake turn whose final text was not sent. The note is stored as a
+// system row with OriginInternal, which later turns render as a framed
+// memory note (not_active_instruction) rather than as something said on
+// Signal. Unlike InjectSystemMessage it drops nothing silently: a store
+// error reaches the bridge, which logs it.
+func signalReplyNoteRecorder(addMessage func(conversationID, role, content, origin string) error) func(conversationID, note string) error {
+	return func(conversationID, note string) error {
+		return addMessage(conversationID, "system", note, memory.OriginInternal)
+	}
 }
 
 // notifDelegateSpawner adapts the delegate executor into a
@@ -1069,6 +1202,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, stream loopp
 		CacheReadInputTokens:     resp.CacheReadInputTokens,
 		ContextWindow:            ctxWindow,
 		ToolsUsed:                resp.ToolsUsed,
+		ToolOutcomes:             loopToolOutcomes(resp.ToolOutcomes),
 		EffectiveTools:           append([]string(nil), resp.EffectiveTools...),
 		LoadedCapabilities:       append([]toolcatalog.LoadedCapabilityEntry(nil), loadedCapabilities...),
 		RequestID:                resp.RequestID,
@@ -1133,6 +1267,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		UsageRole:             req.UsageRole,
 		UsageTaskName:         req.UsageTaskName,
 		FallbackContent:       req.FallbackContent,
+		TargetKey:             req.TargetKey,
 		SystemPrompt:          req.SystemPrompt,
 		PromptMode:            req.PromptMode,
 		SuppressAlwaysContext: req.SuppressAlwaysContext,

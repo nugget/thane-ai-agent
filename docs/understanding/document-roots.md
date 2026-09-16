@@ -140,6 +140,18 @@ The current policy fields are:
 - `git.sign_commits`: signs and commits each managed write/delete.
 - `git.verify_signatures`: sets the consumer policy: `none`, `warn`,
   or `required`.
+- `context.search`: controls explicit search visibility: `default` includes
+  the root in unscoped queries, `on_request` requires naming it, and `never`
+  excludes it even when named.
+- `context.search_body`: explicitly opts logical full document bodies into
+  the general `search` tool. Default `false` preserves metadata-only discovery;
+  `doc_search` continues to search metadata. Authored teasers remain summaries,
+  while matching passages are returned separately as excerpts. For example,
+  set `roots.dossiers.context.search_body: true` to search dossier bodies.
+  Indexing must also be enabled, and `context.search` still governs visibility.
+  This derived SQLite index refreshes with the document index: upgrades backfill
+  unchanged files, edits replace indexed text, and deletion or opting out removes
+  the corresponding body text. Source documents remain authoritative.
 - `context.advertise`: controls bounded document offers: `never`,
   capability-`tagged`, `always` ambient, or `exact_subject`. The last mode
   offers a document only when one of its tags exactly matches a canonical
@@ -350,6 +362,31 @@ reconcile and retry without another hash-bearing parameter. A missing or
 oversized patch falls back to a bounded current excerpt. A scoped whole-body
 replacement of an existing document requires a prior managed read; structured
 edits and creates derive a safe current/absent base within the operation.
+`doc_delete` / `doc_move` advance the caller's receipt for the removed ref to
+absent so the caller's next write there is a conditional create.
+
+For a service loop the scope is the wake: every wake runs as its own
+conversation, so a receipt must be recorded inside the wake that consumes it.
+Two reads record one. The Declared Durable Outputs context that opens each wake
+renders the loop's own documents, and a document rendered whole is recorded as
+that wake's read — the loop can replace or publish it directly. A document too
+large to render whole records nothing; the loop's own-output `doc_read`, which
+returns the whole body under a raised budget, records the receipt instead — and
+only when it returns the body whole. A read that itself truncates records
+nothing, so a document past the read budget cannot be replaced from a preview
+of it. Either way the receipt
+lands under the same loop/conversation scope the generated output tool
+computes, because the loop runtime stamps both identifiers on the wake before
+the turn is built.
+
+Receipts are an in-memory cache with a bounded size and a one-day lifetime,
+not durable state. A caller whose receipt has lapsed is asked to read again,
+which is one round trip; the write-side contract never depends on a receipt
+surviving. Model-facing `doc_*` tools deliver a refusal as an `applied: false`
+result. A loop's generated `replace_output_*` / `publish_output_*` tools
+deliver the same refusal as a tool error, because for the owner of a maintained
+document a successful-looking result with nothing committed is the worst
+failure shape: the loop reports healthy while the document goes stale.
 
 This coordinates Thane's managed writers and rejects operator edits that are
 already dirty when the mutation begins. It is not a general filesystem lock:
@@ -451,7 +488,11 @@ projections, not headings; Go applies the shared single-line and rune budgets,
 requires every already-present projection, renders the canonical section
 order, and stamps `managed_by: doc_write`. The document store independently
 rejects malformed or over-budget facet envelopes before any filesystem or Git
-mutation, regardless of which internal caller reached it.
+mutation, regardless of which internal caller reached it. A refused write
+stores nothing and reports every violation together. An over-budget projection
+carries its overage and a fix sized to it: rewording for a gap within a tenth
+of the limit or 30 characters, whichever is larger, and removing whole items
+past that. The error names no retry count.
 
 `doc_body_write` is the narrow exception for a document intentionally kept as
 one undifferentiated Markdown body. It still uses managed-root policy,
@@ -597,7 +638,8 @@ manually transcribed refs.
 root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
 layout in Go. Projection budgets are advertised in the schema, and one failed
-call reports every independently correctable projection violation together.
+call stores nothing and reports every independently correctable projection
+violation together.
 Generic document mutators reject the dossier and name
 `contact_dossier_write`; operator recovery remains available through Git
 history and direct repository administration rather than a second model-facing
@@ -661,8 +703,17 @@ Contact lifecycle does not rename or silently erase this history:
   the dossier file and its signed history remain until an operator explicitly
   moves or deletes the document.
 - Merging contacts is deliberate rather than inferred. Choose the surviving
-  structured UUID, reconcile any useful claims and citations into that
-  contact's dossier through `contact_dossier_write`, then forget the duplicate.
+  structured UUID and read the duplicate's dossier with `contact_dossier_read`
+  while the duplicate is still active, since neither dossier tool reaches a
+  forgotten contact. When the survivor already has a dossier, reconcile any
+  useful claims and citations into it through `contact_dossier_write`, then
+  forget the duplicate, by `contact_id` when its name resolves to the
+  survivor. When the survivor has none, forget the duplicate first:
+  `contact_dossier_write` refuses a contact's first dossier while an active
+  record that shares its name and looks like the same person already has
+  one. A duplicate above `known`, the
+  operator's own, or bound to a Home Assistant person is forgotten only by
+  the operator.
   The duplicate dossier is retained unless the operator explicitly archives it
   with `doc_move` to another suitable managed root or removes it with
   `doc_delete`.

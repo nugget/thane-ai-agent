@@ -1,26 +1,32 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 func newTestArchiveStore(t *testing.T) *ArchiveStore {
 	t.Helper()
+	return newTestArchiveStoreAt(t, t.TempDir()+"/test.db")
+}
 
-	dbPath := t.TempDir() + "/test-archive.db"
-	store, err := NewArchiveStore(dbPath, nil, nil, nil)
+func newTestArchiveStoreAt(t *testing.T, path string) *ArchiveStore {
+	t.Helper()
+	working, err := NewSQLiteStore(path, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
-
-	return store
+	t.Cleanup(func() { _ = working.Close() })
+	archive, err := NewArchiveStoreFromDB(working.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return archive
 }
 
 func TestSessionMetadata_MissingSessionReturnsSpecificError(t *testing.T) {
@@ -35,7 +41,7 @@ func TestSessionMetadata_MissingSessionReturnsSpecificError(t *testing.T) {
 	}
 }
 
-func TestArchiveMessages_BasicInsert(t *testing.T) {
+func TestImportMessages_BasicInsert(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	msgs := []Message{
@@ -53,7 +59,7 @@ func TestArchiveMessages_BasicInsert(t *testing.T) {
 		},
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,7 +103,7 @@ func TestListClosedSessionsPage_KeysetCutoffAndMessageCount(t *testing.T) {
 			t.Fatalf("insert session %s: %v", row.id, err)
 		}
 	}
-	if err := store.ArchiveMessages([]Message{{
+	if err := store.ImportMessages([]Message{{
 		ID:             "message-1",
 		ConversationID: "signal-test",
 		SessionID:      rows[0].id,
@@ -135,15 +141,12 @@ func TestListClosedSessionsPage_MessageCountFailure(t *testing.T) {
 		t.Fatalf("insert session: %v", err)
 	}
 
-	brokenMessages, err := database.OpenMemory()
-	if err != nil {
-		t.Fatalf("open broken message database: %v", err)
+	// Fail the actual shared-table count while leaving session lookup usable.
+	if _, err := store.db.Exec(`DROP TABLE messages`); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { brokenMessages.Close() })
-	store.messagesDB = brokenMessages
-	store.msgTableName = "messages"
 
-	_, _, err = store.ListClosedSessionsPage(cutoff, "", 1)
+	_, _, err := store.ListClosedSessionsPage(cutoff, "", 1)
 	if err == nil || !strings.Contains(err.Error(), "populate message counts") {
 		t.Fatalf("ListClosedSessionsPage error = %v, want message count failure", err)
 	}
@@ -153,7 +156,7 @@ func timePointer(value time.Time) *time.Time {
 	return &value
 }
 
-func TestArchiveMessages_Deduplication(t *testing.T) {
+func TestImportMessages_Deduplication(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	msg := Message{
@@ -164,10 +167,10 @@ func TestArchiveMessages_Deduplication(t *testing.T) {
 	}
 
 	// Insert twice — should not error or duplicate
-	if err := store.ArchiveMessages([]Message{msg}); err != nil {
+	if err := store.ImportMessages([]Message{msg}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ArchiveMessages([]Message{msg}); err != nil {
+	if err := store.ImportMessages([]Message{msg}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +207,7 @@ func TestSearch_BasicFTS(t *testing.T) {
 		},
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,7 +263,7 @@ func TestSearch_SilenceGapContextExpansion(t *testing.T) {
 			ArchiveReason: "reset"},
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -347,7 +350,7 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 
 	// Archive real messages so the computed count works.
-	if err := store.ArchiveMessages([]Message{
+	if err := store.ImportMessages([]Message{
 		{ID: "msg-1", ConversationID: "conv-1", SessionID: sess.ID, Role: "user", Content: "hello", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
 		{ID: "msg-2", ConversationID: "conv-1", SessionID: sess.ID, Role: "assistant", Content: "hi", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
 	}); err != nil {
@@ -416,14 +419,14 @@ func TestGetMessagesByTimeRange(t *testing.T) {
 		}
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
 	// Query a 5-minute window (should get messages 2-6)
 	from := base.Add(2 * time.Minute)
 	to := base.Add(6 * time.Minute)
-	results, err := store.GetMessagesByTimeRange(from, to, "conv-1", 100)
+	results, err := store.GetMessagesByTimeRange(context.Background(), from, to, "conv-1", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +450,7 @@ func TestExportSessionMarkdown(t *testing.T) {
 			ArchiveReason: "manual"},
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -478,7 +481,7 @@ func TestArchiveStats(t *testing.T) {
 			Content: "{}", Timestamp: time.Now(), ArchiveReason: "compaction"},
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -496,9 +499,9 @@ func TestArchiveStats(t *testing.T) {
 		t.Errorf("unexpected by_role: %v", byRole)
 	}
 
-	byReason := stats["by_reason"].(map[string]int)
-	if byReason["reset"] != 2 || byReason["compaction"] != 1 {
-		t.Errorf("unexpected by_reason: %v", byReason)
+	byStatus := stats["by_status"].(map[string]int)
+	if byStatus["archived"] != 3 {
+		t.Errorf("unexpected by_status: %v", byStatus)
 	}
 }
 
@@ -612,7 +615,7 @@ func TestUnsummarizedSessions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = store.ArchiveMessages([]Message{{
+		err = store.ImportMessages([]Message{{
 			ID:             fmt.Sprintf("msg-%d", i),
 			ConversationID: convID,
 			SessionID:      sess.ID,
@@ -635,7 +638,7 @@ func TestUnsummarizedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ArchiveMessages([]Message{{
+	if err := store.ImportMessages([]Message{{
 		ID:             "msg-summarized",
 		ConversationID: "conv-summarized",
 		SessionID:      summarized.ID,
@@ -752,7 +755,7 @@ func TestUnsummarizedSessions_EmptyQueueDoesNotBlockRealSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ArchiveMessages([]Message{{
+	if err := store.ImportMessages([]Message{{
 		ID: "msg-real", ConversationID: "conv-real", SessionID: real.ID,
 		Role: "user", Content: "real content", Timestamp: time.Now(),
 		ArchiveReason: "test",
@@ -1181,6 +1184,51 @@ func TestNewArchiveStoreFromDB_CloseIsNoop(t *testing.T) {
 	}
 }
 
+func TestNewArchiveStoreFromDB_UpgradePreservesRecords(t *testing.T) {
+	working, err := NewSQLiteStore(t.TempDir()+"/upgrade.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = working.Close() })
+	// Pre-parent-link and pre-tool-list session metadata in an existing
+	// shared database still needs the additive archive schema upgrades.
+	if _, err := working.DB().Exec(`
+		CREATE TABLE sessions (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+			started_at TIMESTAMP NOT NULL, ended_at TIMESTAMP, end_reason TEXT,
+			message_count INTEGER DEFAULT 0, summary TEXT);
+		INSERT INTO sessions (id, conversation_id, started_at, summary)
+			VALUES ('old-session', 'conv', '2026-02-01T10:00:00Z', 'preserved summary');
+		CREATE TABLE archive_iterations (session_id TEXT NOT NULL, iteration_index INTEGER NOT NULL,
+			model TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0, tool_call_count INTEGER NOT NULL DEFAULT 0,
+			started_at TIMESTAMP NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0,
+			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE, break_reason TEXT,
+			PRIMARY KEY (session_id, iteration_index));
+		INSERT INTO archive_iterations (session_id, iteration_index, model, input_tokens, output_tokens, started_at)
+			VALUES ('old-session', 3, 'original-model', 17, 9, '2026-02-01T10:00:01Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := NewArchiveStoreFromDB(working.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := archive.GetSession("old-session")
+	if err != nil || session.Summary != "preserved summary" {
+		t.Fatalf("session after upgrade = %+v, %v", session, err)
+	}
+	iterations, err := archive.GetSessionIterations("old-session")
+	if err != nil || len(iterations) != 1 || iterations[0].IterationIndex != 3 || iterations[0].Model != "original-model" || iterations[0].InputTokens != 17 || iterations[0].OutputTokens != 9 {
+		t.Fatalf("iterations after upgrade = %+v, %v", iterations, err)
+	}
+	if len(iterations[0].ToolCallIDs) != 0 || len(iterations[0].ToolsOffered) != 0 {
+		t.Fatalf("upgrade invented iteration provenance: %+v", iterations[0])
+	}
+	if _, err := archive.StartSessionWithOptions("child", WithParentSession("old-session"), WithParentToolCall("tool-call")); err != nil {
+		t.Fatalf("new session columns unavailable: %v", err)
+	}
+}
+
 // TestConsolidatedMode_FullLifecycle exercises the complete flow: session
 // start → archive messages → get transcript → archive iterations → get
 // iterations → search → end session, all in consolidated (single-DB) mode.
@@ -1339,7 +1387,7 @@ func TestLinkToolCallsToIteration(t *testing.T) {
 		},
 	}
 
-	if err := store.ArchiveToolCalls(calls); err != nil {
+	if err := store.ImportToolCalls(calls); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1398,7 +1446,7 @@ func TestActiveSessionsWithLastActivity(t *testing.T) {
 			ArchiveReason:  "test",
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1519,43 +1567,6 @@ func TestActiveSessionsWithLastActivity_Unified(t *testing.T) {
 	if diff > time.Second {
 		t.Errorf("LastActivity = %v, want ~%v (diff = %v); query may have missed NULL-session_id message",
 			info.LastActivity, msgTime, diff)
-	}
-}
-
-func TestImportMessages_Legacy(t *testing.T) {
-	store := newTestArchiveStore(t)
-
-	sess, err := store.StartSession("conv-import")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	msgs := []Message{
-		{
-			ID:             "imp-msg-1",
-			ConversationID: "conv-import",
-			SessionID:      sess.ID,
-			Role:           "user",
-			Content:        "imported message",
-			Timestamp:      time.Now().UTC(),
-			ArchiveReason:  "import",
-		},
-	}
-
-	if err := store.ImportMessages(msgs); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify the message is retrievable via transcript.
-	transcript, err := store.GetSessionTranscript(sess.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(transcript) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(transcript))
-	}
-	if transcript[0].Content != "imported message" {
-		t.Errorf("content = %q, want %q", transcript[0].Content, "imported message")
 	}
 }
 
@@ -1764,9 +1775,9 @@ func TestSearch_UnifiedModeNullArchivedAt(t *testing.T) {
 // newRangeTestStore creates a unified-mode ArchiveStore over a fresh
 // SQLiteStore — the production wiring shape. Messages inserted via the
 // returned helper bind time.Time directly, mirroring the format
-// go-sqlite3 writes when SQLiteStore.AddMessage runs in production.
-// Tests against this store exercise the same lexical timestamp
-// comparisons production hits, not the legacy archive_messages path.
+// the SQLite driver writes when SQLiteStore.AddMessage runs in production.
+// Tests against this store exercise the same timestamp
+// comparisons production hits.
 func newRangeTestStore(t *testing.T) (*ArchiveStore, func(convID, sessID, role, content string, ts time.Time)) {
 	t.Helper()
 	working, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
@@ -1782,7 +1793,7 @@ func newRangeTestStore(t *testing.T) (*ArchiveStore, func(convID, sessID, role, 
 
 	insert := func(convID, sessID, role, content string, ts time.Time) {
 		t.Helper()
-		// Bind time.Time directly so go-sqlite3 stores in its native
+		// Bind time.Time directly so the SQLite driver stores in its native
 		// "2026-04-25 10:00:00.x..." form — the same format production
 		// writes via SQLiteStore.AddMessage. Test data must match
 		// production storage shape for range queries to mean anything.
@@ -1809,10 +1820,10 @@ func TestGetMessagesInRange_TimeWindow(t *testing.T) {
 		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
-		From:           base.Add(2 * time.Minute),
-		To:             base.Add(6 * time.Minute),
+		From:           timePointer(base.Add(2 * time.Minute)),
+		To:             timePointer(base.Add(6 * time.Minute)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1841,10 +1852,10 @@ func TestGetMessagesInRange_MinMessagesFloorBeyondWindow(t *testing.T) {
 	// not "exactly 5" — once the floor triggers, return up to
 	// MaxMessages (default 200), so the model gets useful context
 	// rather than the bare minimum.
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
-		From:           base.Add(9 * time.Minute),
-		To:             base.Add(20 * time.Minute),
+		From:           timePointer(base.Add(9 * time.Minute)),
+		To:             timePointer(base.Add(20 * time.Minute)),
 		MinMessages:    5,
 	})
 	if err != nil {
@@ -1869,9 +1880,9 @@ func TestGetMessagesInRange_MaxMessagesCap(t *testing.T) {
 		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
-		To:             base.Add(20 * time.Minute),
+		To:             timePointer(base.Add(20 * time.Minute)),
 		MaxMessages:    5,
 	})
 	if err != nil {
@@ -1896,8 +1907,8 @@ func TestGetMessagesInRange_AllConversations(t *testing.T) {
 	insert("conv-a", "sa", "user", "a-first", base.Add(1*time.Minute))
 	insert("conv-b", "sb", "user", "b-first", base.Add(2*time.Minute))
 
-	got, _, err := store.GetMessagesInRange(RangeOptions{
-		To: base.Add(10 * time.Minute),
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
+		To: timePointer(base.Add(10 * time.Minute)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1920,10 +1931,10 @@ func TestGetMessagesInRange_FloorReportsTruncation(t *testing.T) {
 
 	// Tight in-window query returns 1 msg → floor path runs. MaxMessages=5
 	// caps the floor result; with 20 messages available, truncated=true.
-	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+	got, truncated, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
-		From:           base.Add(19 * time.Minute),
-		To:             base.Add(30 * time.Minute),
+		From:           timePointer(base.Add(19 * time.Minute)),
+		To:             timePointer(base.Add(30 * time.Minute)),
 		MinMessages:    5,
 		MaxMessages:    5,
 	})
@@ -1967,10 +1978,10 @@ func TestGetMessagesInRange_UnifiedTableSpaceFormat(t *testing.T) {
 	// Wide-open window. Pre-fix this would return zero rows on a
 	// production-shape store because the query bounds were T-format
 	// while the rows were space-format.
-	got, _, err := archiveStore.GetMessagesInRange(RangeOptions{
+	got, _, err := archiveStore.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID: "conv-1",
-		From:           time.Now().Add(-1 * time.Hour),
-		To:             time.Now().Add(1 * time.Hour),
+		From:           timePointer(time.Now().Add(-1 * time.Hour)),
+		To:             timePointer(time.Now().Add(1 * time.Hour)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1987,10 +1998,10 @@ func TestGetMessagesInRange_ExcludeSessionID(t *testing.T) {
 	insert("conv-1", "active", "user", "active-msg", base.Add(1*time.Minute))
 	insert("conv-1", "archived", "user", "archived-msg", base.Add(2*time.Minute))
 
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID:   "conv-1",
 		ExcludeSessionID: "active",
-		To:               base.Add(10 * time.Minute),
+		To:               timePointer(base.Add(10 * time.Minute)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2015,11 +2026,11 @@ func TestGetMessagesInRange_ExcludeSessionIDFloorPath(t *testing.T) {
 	}
 
 	// Tight window forces floor; floor must also honor the exclusion.
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID:   "conv-1",
 		ExcludeSessionID: "active",
-		From:             base.Add(100 * time.Minute),
-		To:               base.Add(200 * time.Minute),
+		From:             timePointer(base.Add(100 * time.Minute)),
+		To:               timePointer(base.Add(200 * time.Minute)),
 		MinMessages:      3,
 	})
 	if err != nil {
@@ -2049,17 +2060,17 @@ func TestGetMessagesInRange_ExcludeSessionIDPreservesNullRows(t *testing.T) {
 	// Hand-insert a row with NULL session_id, mirroring rows from
 	// before session-stamping or any other write path that leaves
 	// session_id unset.
-	if _, err := store.msgDB().Exec(`
+	if _, err := store.db.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, status)
 		VALUES (?, ?, ?, ?, ?, 'active')
 	`, "msg-null", "conv-1", "user", "null-session-msg", base.Add(3*time.Minute)); err != nil {
 		t.Fatalf("insert null-session row: %v", err)
 	}
 
-	got, _, err := store.GetMessagesInRange(RangeOptions{
+	got, _, err := store.GetMessagesInRange(context.Background(), RangeOptions{
 		ConversationID:   "conv-1",
 		ExcludeSessionID: "active",
-		To:               base.Add(10 * time.Minute),
+		To:               timePointer(base.Add(10 * time.Minute)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2108,7 +2119,7 @@ func TestSearch_PhraseFirstPreferred(t *testing.T) {
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2131,7 +2142,7 @@ func TestSearch_PhraseFirstPreferred(t *testing.T) {
 
 // TestSearch_TimeRangeScopesMessages verifies the #943 time_range
 // facet: From/To bound the raw-message surface to a window. The
-// datetime()-normalized compare must work against the legacy store's
+// datetime()-normalized compare must work against imported messages'
 // RFC3339Nano timestamps.
 func TestSearch_TimeRangeScopesMessages(t *testing.T) {
 	store := newTestArchiveStore(t)
@@ -2145,7 +2156,7 @@ func TestSearch_TimeRangeScopesMessages(t *testing.T) {
 		{ID: "new", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
 			Content: "pool heater status check", Timestamp: base.Add(4 * time.Hour), ArchiveReason: string(ArchiveReasonReset)},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2177,7 +2188,7 @@ func TestSearch_TimeRangeScopesMessages(t *testing.T) {
 func TestSearch_SurfacesScoreAndMatchType(t *testing.T) {
 	store := newTestArchiveStore(t)
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
-	if err := store.ArchiveMessages([]Message{
+	if err := store.ImportMessages([]Message{
 		{ID: "m1", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
 			Content: "the office door state is open", Timestamp: base, ArchiveReason: string(ArchiveReasonReset)},
 	}); err != nil {
@@ -2211,7 +2222,7 @@ func TestSearch_CountMatchesEstimatesTotal(t *testing.T) {
 			Content: "pool heater note", Timestamp: base.Add(time.Duration(i) * time.Minute), ArchiveReason: string(ArchiveReasonReset),
 		})
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 	total, err := store.CountMatches(SearchOptions{Query: "pool heater"})
@@ -2247,7 +2258,7 @@ func TestSearch_AnticipationsFilteredByDefault(t *testing.T) {
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2316,7 +2327,7 @@ func TestSearch_OrBackfillFillsThinPhrase(t *testing.T) {
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 

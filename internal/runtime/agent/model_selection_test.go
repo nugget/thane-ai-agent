@@ -96,9 +96,9 @@ func TestRun_ExplicitModelPreflightUsesModelSpecificPromptSize(t *testing.T) {
 	userMessage := "please inspect the loaded memory timeline"
 	reqMessages := []Message{{Role: "user", Content: userMessage}}
 	defaultPrompt, defaultSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, llm.DefaultModelInteractionProfile())
-	defaultSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}))
+	defaultSize := estimateRequestContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	modelPrompt, modelSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, loop.modelInteractionProfileForModel("gemma-local"))
-	modelSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(modelPrompt, modelSections, nil, reqMessages, "default", time.Time{}))
+	modelSize := estimateRequestContextTokens(buildInitialLLMMessages(modelPrompt, modelSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	if modelSize <= defaultSize {
 		t.Fatalf("model-specific prompt size = %d, want > default size %d", modelSize, defaultSize)
 	}
@@ -139,9 +139,9 @@ func TestRun_RoutedModelRechecksModelSpecificPromptSize(t *testing.T) {
 	userMessage := "what is the status"
 	reqMessages := []Message{{Role: "user", Content: userMessage}}
 	defaultPrompt, defaultSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, llm.DefaultModelInteractionProfile())
-	defaultSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}))
+	defaultSize := estimateRequestContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	qwenPrompt, qwenSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, loop.modelInteractionProfileForModel("qwen3:8b"))
-	qwenSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(qwenPrompt, qwenSections, nil, reqMessages, "default", time.Time{}))
+	qwenSize := estimateRequestContextTokens(buildInitialLLMMessages(qwenPrompt, qwenSections, nil, reqMessages, "default", time.Time{}), loop.tools.List())
 	if qwenSize <= defaultSize {
 		t.Fatalf("qwen prompt size = %d, want > default size %d", qwenSize, defaultSize)
 	}
@@ -1441,8 +1441,9 @@ func TestRun_ExplicitModelPreflightDoesNotRequireOutputHeadroom(t *testing.T) {
 		loop.tools.List(),
 	)
 
-	// A window that fits the request exactly, and cannot fit the headroom.
-	cfg.Models.Available[0].ContextWindow = required
+	// Leave room for the final context-usage metadata, but not the output
+	// headroom. Verify those bounds against the actual provider request.
+	cfg.Models.Available[0].ContextWindow = required + 256
 	loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
 
 	_, err := loop.Run(context.Background(), &Request{
@@ -1454,6 +1455,11 @@ func TestRun_ExplicitModelPreflightDoesNotRequireOutputHeadroom(t *testing.T) {
 	}
 	if len(mock.calls) == 0 {
 		t.Fatal("llm calls = 0, want the provider reached rather than preflight-rejected")
+	}
+	actual := estimateRequestContextTokens(mock.calls[0].Messages, mock.calls[0].Tools)
+	window := cfg.Models.Available[0].ContextWindow
+	if actual > window || actual+reservedOutputContextTokens <= window {
+		t.Fatalf("actual request=%d window=%d; want the final prompt to fit without full output headroom", actual, window)
 	}
 }
 

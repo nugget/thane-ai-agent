@@ -33,10 +33,11 @@ Thank you for your interest in contributing to Thane!
   markdown link check needs it. `just ci` skips link-check locally when
   it's absent (CI always installs a pinned build and enforces it).
 
-`golangci-lint` and `vacuum` are **not** host prerequisites — they're
-pinned in [`tools/go.mod`](tools/go.mod) and run via `go run`, so `just ci`
-builds and caches them automatically. Dependabot tracks their versions
-through that module.
+`golangci-lint`, `go-check-sumtype`, and `vacuum` are **not** host
+prerequisites — they're pinned in [`tools/go.mod`](tools/go.mod) and
+[`tools/gochecksumtype/go.mod`](tools/gochecksumtype/go.mod), then run via
+`go run`, so `just ci` builds and caches them automatically. Dependabot tracks
+their versions through those modules.
 
 ### Workflow
 

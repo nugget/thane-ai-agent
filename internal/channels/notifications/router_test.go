@@ -133,6 +133,48 @@ func TestRoute_EmptyHACompanionApp(t *testing.T) {
 	}
 }
 
+// TestRoute_FactKeysAnyCase pins that the router reads both routing
+// facts in any case, the lowercase spelling first, so a CardDAV or
+// contacts API edit, which upper-cases property names, still routes.
+func TestRoute_FactKeysAnyCase(t *testing.T) {
+	tests := []struct {
+		name    string
+		props   map[string][]string
+		want    string
+		wantErr bool
+	}{
+		{name: "upper-case preference", props: map[string][]string{"NOTIFICATION_PREFERENCE": {"signal"}}, want: "signal"},
+		{name: "upper-case device falls back to ha_push", props: map[string][]string{"HA_COMPANION_APP": {"mobile_app_x"}}, want: "ha_push"},
+		{name: "lowercase preference first", props: map[string][]string{"notification_preference": {"signal"}, "NOTIFICATION_PREFERENCE": {"ha_push"}}, want: "signal"},
+		{name: "mixed case preference", props: map[string][]string{"Notification_Preference": {"signal"}}, want: "signal"},
+		{name: "hyphenated keys do not route", props: map[string][]string{"ha-companion-app": {"mobile_app_x"}, "notification-preference": {"signal"}}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := &mockContactResolver{
+				contact: &contacts.Contact{ID: uuid.New(), FormattedName: "Bob"},
+				props:   tt.props,
+			}
+			router, _ := newTestRouter(t, resolver)
+			router.RegisterProvider(&mockProvider{name: "ha_push"})
+			router.RegisterProvider(&mockProvider{name: "signal"})
+			got, err := router.Route("Bob")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Route() = %q, want no provider", got.Name())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Route() error = %v", err)
+			}
+			if got.Name() != tt.want {
+				t.Errorf("Route() provider = %q, want %q", got.Name(), tt.want)
+			}
+		})
+	}
+}
+
 func TestRegisterProvider_Nil(t *testing.T) {
 	router := NewNotificationRouter(nil, nil, slog.Default())
 	// Should not panic.

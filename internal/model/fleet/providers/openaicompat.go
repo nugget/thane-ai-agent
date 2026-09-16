@@ -52,10 +52,15 @@ type OpenAICompatClient struct {
 	// resource names the configured endpoint this client serves. Kept
 	// as a value, not only baked into c.logger, so it can be re-applied
 	// onto the request-scoped logger from context.
-	resource   string
-	httpClient *http.Client
-	logger     *slog.Logger
-	watcher    llm.ReadyWatcher
+	resource string
+	// chatTemplateKwargs is sent verbatim as chat_template_kwargs on
+	// every request this client makes. It is resource policy, not
+	// per-call state: the endpoint serves one template dialect, and the
+	// keys mean nothing to Thane.
+	chatTemplateKwargs map[string]any
+	httpClient         *http.Client
+	logger             *slog.Logger
+	watcher            llm.ReadyWatcher
 }
 
 // NewOpenAICompatClient creates a client for an OpenAI-compatible
@@ -121,6 +126,46 @@ func (c *OpenAICompatClient) Logger() *slog.Logger {
 	return c.logger
 }
 
+// SetChatTemplateKwargs sets the chat_template_kwargs sent with every
+// request. An empty map clears the field rather than sending {}.
+func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
+	if len(kwargs) == 0 {
+		c.chatTemplateKwargs = nil
+		return
+	}
+	// Deep-copied, not aliased. A template kwarg may itself be an
+	// object or a list, and a shallow copy would leave those nested
+	// values shared with config: a later write through the original
+	// would change what subsequent requests ask the model to do, and
+	// could race a json.Marshal already reading the tree.
+	copied, _ := deepCopyJSONValue(kwargs).(map[string]any)
+	c.chatTemplateKwargs = copied
+}
+
+// deepCopyJSONValue copies a JSON-compatible value tree so that nothing
+// reachable from the result is shared with the original. Scalars are
+// returned as they are, being immutable; anything that is neither an
+// object nor an array is a scalar for this purpose, including the
+// map[any]any that json.Marshal would reject outright anyway.
+func deepCopyJSONValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, val := range typed {
+			out[k] = deepCopyJSONValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, val := range typed {
+			out[i] = deepCopyJSONValue(val)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // AttachWatcher sets the connection watcher for health status queries.
 func (c *OpenAICompatClient) AttachWatcher(w llm.ReadyWatcher) {
 	c.watcher = w
@@ -140,7 +185,8 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, model string, messages []
 }
 
 // ChatStream sends a chat request. If callback is non-nil,
-// tokens are streamed via OpenAI-compatible SSE.
+// tokens are streamed via OpenAI-compatible SSE. On error, a non-nil response
+// contains only provider-reported accounting metadata, not assistant output.
 func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
@@ -159,6 +205,10 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		// their launch configured, so the only limit worth sending is
 		// the caller's remaining budget, and 0 leaves the field off.
 		MaxTokens: llm.MaxOutputTokensFromContext(ctx),
+		// Sent as configured or not at all. An empty map would still
+		// marshal as {} on some encoders, and a server that validates
+		// the field is entitled to reject that.
+		ChatTemplateKwargs: c.chatTemplateKwargs,
 	}
 	if stream {
 		req.StreamOptions = &openAICompatStreamOptions{IncludeUsage: true}
@@ -182,6 +232,10 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		"tools", len(tools),
 		"idle_ttl_seconds", c.idleTTLSeconds,
 		"max_tokens", req.MaxTokens,
+		// Logged because it changes what the model does with the
+		// budget, so a turn that came back short is readable after the
+		// fact without re-deriving the config.
+		"chat_template_kwargs", req.ChatTemplateKwargs,
 	)
 	log.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
@@ -244,14 +298,18 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	if !stream {
 		var wire openAICompatChatResponse
 		if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
-			return nil, fmt.Errorf("decode response: %w", err)
+			partial := usageOnlyResponse(openAICompatResponseMetadata(&wire))
+			if partial != nil && headerRequestID != "" {
+				partial.UpstreamRequestID = headerRequestID
+			}
+			return partial, fmt.Errorf("decode response: %w", err)
 		}
 		result, err := c.chatResponseFromWire(&wire, validToolNames)
-		if err != nil {
-			return nil, err
-		}
-		if headerRequestID != "" {
+		if result != nil && headerRequestID != "" {
 			result.UpstreamRequestID = headerRequestID
+		}
+		if err != nil {
+			return result, err
 		}
 		log.Debug("response received",
 			"model", result.Model,
@@ -283,22 +341,47 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 	if wire == nil {
 		return nil, fmt.Errorf("nil response")
 	}
+	result := openAICompatResponseMetadata(wire)
 	if len(wire.Choices) == 0 || wire.Choices[0].Message == nil {
-		return nil, fmt.Errorf("response contained no choices")
+		return usageOnlyResponse(result), fmt.Errorf("response contained no choices")
 	}
 
 	toolCalls, err := decodeOpenAICompatToolCallsFromSlice(wire.Choices[0].Message.ToolCalls)
 	if err != nil {
-		return nil, err
+		return usageOnlyResponse(result), err
 	}
+	result.Message.Role = normalizeOpenAICompatMessageRole(wire.Choices[0].Message.Role)
+	result.Message.Content = openAICompatContentText(wire.Choices[0].Message.Content)
+	result.Message.ToolCalls = toolCalls
+	if err := applyTextToolFallback(result, validToolNames); err != nil {
+		return usageOnlyResponse(result), err
+	}
+	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
+		// Same reasoning-only diagnosis as the streaming path: no
+		// answer to return either way, but "the model thought and
+		// never answered" reads very differently from "the model said
+		// nothing". Sizes only; reasoning text stays out of logs.
+		if r := wire.Choices[0].Message.reasoningText(); r != "" {
+			return usageOnlyResponse(result), fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, wire.Model, len(r), result.StopReason)
+		}
+		return usageOnlyResponse(result), fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
+	}
+	result.Done = true
+	return result, nil
+}
+
+// Metadata is decoded before validating assistant output so refusals and
+// malformed tool payloads retain any provider-reported usage.
+func openAICompatResponseMetadata(wire *openAICompatChatResponse) *llm.ChatResponse {
 	result := &llm.ChatResponse{
 		Model:        wire.Model,
-		Done:         true,
+		Done:         false,
 		InputTokens:  0,
 		OutputTokens: 0,
 	}
-	if fr := wire.Choices[0].FinishReason; fr != nil {
-		result.StopReason = strings.TrimSpace(*fr)
+	if len(wire.Choices) > 0 && wire.Choices[0].FinishReason != nil {
+		result.StopReason = strings.TrimSpace(*wire.Choices[0].FinishReason)
 	}
 	result.UpstreamRequestID = wire.ID
 	if wire.Created > 0 {
@@ -308,24 +391,7 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		result.InputTokens = wire.Usage.PromptTokens
 		result.OutputTokens = wire.Usage.CompletionTokens
 	}
-	result.Message.Role = normalizeOpenAICompatMessageRole(wire.Choices[0].Message.Role)
-	result.Message.Content = openAICompatContentText(wire.Choices[0].Message.Content)
-	result.Message.ToolCalls = toolCalls
-	if err := applyTextToolFallback(result, validToolNames); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
-		// Same reasoning-only diagnosis as the streaming path: no
-		// answer to return either way, but "the model thought and
-		// never answered" reads very differently from "the model said
-		// nothing". Sizes only; reasoning text stays out of logs.
-		if r := wire.Choices[0].Message.reasoningText(); r != "" {
-			return nil, fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
-				c.provider, wire.Model, len(r), result.StopReason)
-		}
-		return nil, fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
-	}
-	return result, nil
+	return result
 }
 
 // normalizeOpenAICompatBaseURL trims the trailing slash and the

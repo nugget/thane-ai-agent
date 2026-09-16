@@ -198,10 +198,17 @@ func TestRoomObservationEvidenceKeepsBermudaIdentityPrivate(t *testing.T) {
 
 func TestFormatPersonPresenceConflictSuppressesResolvedRoom(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	rendered := FormatPersonPresence(
-		"person.alice", "Alice", "home", now.Add(-time.Hour),
-		"office", "unifi", "ap-office", true, now,
-	)
+	rendered := FormatPersonPresence(PersonPresenceInput{
+		EntityID:     "person.alice",
+		Name:         "Alice",
+		State:        "home",
+		StateSince:   now.Add(-time.Hour),
+		Room:         "office",
+		RoomProvider: "unifi",
+		RoomSource:   "ap-office",
+		RoomConflict: true,
+		Now:          now,
+	})
 	if !strings.Contains(rendered, `"room_conflict":true`) || strings.Contains(rendered, `"room":`) {
 		t.Fatalf("conflict context = %s, want conflict without resolved room", rendered)
 	}

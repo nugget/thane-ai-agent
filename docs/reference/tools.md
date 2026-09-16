@@ -61,21 +61,65 @@ These tools load on every turn regardless of active tags.
 
 ## `archive` — conversation archive retrieval
 
+`search` is the cross-source discovery tool, available through both `archive`
+and `documents`. It searches only sources whose own search tool is available
+in the current run; activate both capabilities for combined coverage. A typical
+call is `{"query":"MQTT decision","limit":8}`. Set `sources` to
+`["archives"]` or `["documents"]` to narrow it; specifying `root` alone
+selects documents and can include an `on_request` root.
+
+The default orchestrator allowlist includes `search`, `archive_search`, and
+`doc_search`, so either source remains usable after capability filtering.
+Custom allowlists must retain each desired source's own search tool; explicit
+request exclusions still remove that source from unified search.
+
+Results contain compact `hits` and per-source `coverage`. Ranking interleaves
+each source's own ordering; it does not compare scores from different corpora.
+Original transcript artifacts are labeled `primary`, summaries are `synthesis`,
+and documents have `unspecified` evidentiary status until their provenance is
+read. Primary means an original artifact, not a verified claim. A message and
+its session summary share a session reference and are not independent evidence.
+Follow a hit's `read` tool/arguments when present. Authored summaries are separate
+from matching excerpts, and ages identify whether they describe message time,
+session start, summary update, or document modification.
+
+The lookup is synchronous, has a 20-second deadline, and returns at most 20
+hits within 16 KB. A failed source is reported explicitly when another source
+completes; all-source failure and cancellation are tool errors. Unavailable
+sources and document root coverage remain visible. Search bodies require
+`roots.<root>.context.search_body: true`; otherwise documents are
+searched by indexed title, path, summary, and tags. This option defaults to
+false and does not change injection, advertisement, or restricted-audience
+rules. Email, facts, and web retain their separate tools.
+
 | Tool | Description |
 |------|-------------|
+| `search` | Discover evidence across available archives and searchable documents. |
 | `archive_search` | Full-text search across conversation archives. |
 | `archive_sessions` | Browse session archive metadata. |
 | `archive_session_transcript` | Retrieve a full session transcript. |
 | `archive_range` | Retrieve archived messages by time range or message-count floor. |
+
+`archive_range` selects the newest messages matching inclusive time bounds and
+returns them oldest first, breaking equal-time ties by message ID. Bounds accept
+RFC3339 timestamps or signed deltas and compare exact instants across time zones.
+Omitted `min_time` is unbounded and omitted `max_time` defaults to now; explicit
+timestamps, including `0001-01-01T00:00:00Z`, remain exact bounds.
+`max_messages` defaults to 200 and is capped at 1000. If `min_messages` cannot be
+met within the window, retrieval extends before `min_time`, up to that cap. The
+floor remains subject to available history and the tool's output size limit;
+`truncated` reports clipping. `archive_session_transcript` and session exports
+retain their separate whole-session retrieval contract.
 
 ## `session` — conversation lifecycle
 
 | Tool | Description |
 |------|-------------|
 | `conversation_reset` | Reset the current conversation's message history. |
-| `session_checkpoint` | Save current session state as a checkpoint. |
+| `conversation_model_pin` | Hold the current conversation to one model deployment, or clear the hold. Outranks channel and client model selection; memory-only, cleared by restart. |
+| `session_checkpoint` | Bookmark the current messages and active context without closing. |
 | `session_close` | Close the current session with carry-forward context. |
-| `session_split` | Fork the current session. |
+| `session_split` | Archive early messages and retain recent context in a successor session. |
 
 ## `awareness` — live-context entity management
 
@@ -225,8 +269,31 @@ newer content and includes a bounded `changed_since_read` patch. The receipt
 then advances to the current document so a reconciled retry has the right
 comparison base. When a patch is unavailable or truncated, the result includes
 a bounded current excerpt instead. Replacing an existing whole body requires
-reading it first; structured edits can safely derive a fresh base as part of
-the operation.
+reading it first, and the refusal names the document to read; structured edits
+can safely derive a fresh base as part of the operation. `doc_delete` and
+`doc_move` advance the caller's own receipt to absent, so recreating a document
+at a ref the same caller just removed is an ordinary create.
+
+A loop's generated `replace_output_*` and `publish_output_*` tools use the same
+receipts, scoped to the wake. The Declared Durable Outputs context that opens a
+wake records a receipt for every output it renders whole, so an output that fit
+the context can be replaced directly; one marked `truncated` must be read whole
+with `doc_read` first, and an own-output read that itself truncates records no
+receipt. These tools report a refusal as a tool error rather than an
+`applied: false` result: for the document's owner, a result that reads as
+success while nothing was committed is indistinguishable from a healthy
+publish. The error text carries the same message and reconciliation payload,
+and a refused publish never writes the accompanying working notes. A
+validation refusal lists every failing projection at once — an over-budget one
+with its overage and whether rewording closes it or whole items must go — so
+one corrected call recovers. The two receipt refusals recover differently: a
+missing read is answered by reading and calling again, while a stale receipt
+has already advanced to the current document and the error carries the
+intervening change, so the caller reconciles before calling again rather than
+replaying the same content over it. A wake whose every call to an output tool
+is refused still ends as a completed turn; the loop records the write as
+unpublished, and `loop_status` and `system_health` report it until a later
+wake lands it.
 
 | Tool | Description |
 |------|-------------|
@@ -235,7 +302,7 @@ the operation.
 | `doc_outline` | Emit the heading/section outline for a document. |
 | `doc_read` | Read a document by prefixed path, including faceting, available levels, and exact `write_tool`; on writable git-backed roots, also retain a hidden comparison base for this loop/conversation. |
 | `doc_section` | Retrieve a named section from a document. |
-| `doc_search` | Full-text and tagged search across roots; hits advertise facets and exact `write_tool`. |
+| `doc_search` | Search document metadata with tag/frontmatter filters; hits advertise facets and exact `write_tool`. Use `search` for opted-in body text. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
 | `doc_create` | Create a normal faceted document safely: corpus collision check + normalized placement + logical write in one call. New `dossiers:` documents must be direct children. |
@@ -266,30 +333,149 @@ instead of being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `email_list` | List messages in a folder. |
-| `email_read` | Read a message with its full body. |
-| `email_search` | Server-side IMAP search. |
-| `email_folders` | List available mailboxes. |
-| `email_mark` | Flag or unflag messages. |
-| `email_send` | Compose and send (markdown → MIME). |
-| `email_reply` | Reply with proper threading headers. |
-| `email_move` | Move messages between folders. |
+| `email_list` | List messages in one folder of one account, newest first, as JSON naming the account and folder beside every UID. In the drafts folder, a row that is one of Thane's open drafts carries `thane_draft {draft_id}`, matched on its UID and Message-ID together; a row without it is not Thane's. On an account whose `mailbox.labels` names labels, each row adds `labels`, the account's labels whose keyword the message carries, and `flag_label`, the label whose flag the message shows, present only when Thane's label record says Thane wrote that flag and the message still carries it as written; the raw `flags` stay beside them. |
+| `email_read` | Read a message: a JSON header object, a `---` line, then the readable body. Whether it marks the message seen follows `mark_seen`, which defaults to false on an account with `mailbox.owner: operator` and true elsewhere; on an operator mailbox, `mark_seen: true` is refused in a turn the operator is not present for. `auto_submitted` and `bulk` report what the message's own headers claim about how it was sent; nothing authenticates those headers and any sender can set or omit them, so they never change the sender's trust zone. When an HTML body's own markup hides text from a person reading it (the `hidden` attribute, `aria-hidden="true"`, or an inline `display:none`, `visibility:hidden`, zero font-size, or zero opacity), that text is withheld from the rendered body and `hidden_content` `{present, chars}` reports it beside `body_source`. A hidden link's target is withheld with it, so `chars` is 0 when the markup hid only a link with no text. Only those inline idioms are recognised: text a stylesheet, a colour, or positioning hides stays in the body with no `hidden_content`. `labels` and `flag_label` are as in `email_list`, and a message read from the drafts folder carries `thane_draft` as in `email_list`. |
+| `email_search` | Server-side IMAP search by text, headers, flags, dates (or deltas), Message-ID, and label. `flagged` and `unflagged` test `\Flagged` whoever set it, so a label's flag counts; `label`, offered only when a declared label has a keyword, searches for that keyword, and is refused on an account whose `mailbox.labels` does not name it. An argument the schema does not declare is refused, naming it and listing the accepted ones, and nothing is searched. Rows carry `labels`, `flag_label`, and, in the drafts folder, `thane_draft` as in `email_list`. |
+| `email_folders` | List an account's mailboxes with their special-use role (`inbox`, `drafts`, `sent`, `trash`, `junk`, `archive`, `all`, `flagged`, `important`, or none), raw attributes, and counts. Names are used verbatim as an `email_move` `destination`; `destination_role` finds a folder by its role instead. |
+| `email_mark` | Add or remove a flag, or a label the account carries; reports the UIDs affected and the UIDs not found. On an operator mailbox, adding `seen` is refused in a turn the operator is not present for. On an account whose `policy.delivery` is `drafts`, `answered` is refused, added or removed, because a draft is not an answer and Thane cannot know when the operator sends one. Adding `flagged` to a message whose flag is still the one Thane wrote for a label removes that colour's keywords, so it reads as a plain flag; removing `flagged` from such a message removes the colour's keywords with the flag; either way the message is listed under `thane_color_cleared`, and if the colour cannot be removed first, the removal is refused and the flag stays. `label`, offered only when a label without `apply` is declared, takes the place of `flag`: it is refused on an account whose `mailbox.labels` does not name it; it writes the label's keyword, and its colour only on a message without `\Flagged`; it refuses a colour label on a message carrying any flag but that label's own, listing it under `refused`; removing it takes away only what Thane recorded setting; a label with `apply` is refused; and in a folder whose `PERMANENTFLAGS` lack `\*`, a label that needs keywords refuses the whole call. The account's drafts folder is refused as the folder to act in. |
+| `email_send` | Compose a message (markdown → MIME); the account's policy and the recipients' trust zones decide whether it is sent, held in the account's drafts folder for the operator, or refused with a decision record. On an account with `policy.draft_gate: relaxed` (delivery `drafts`), a recipient refused only for its zone is drafted with gating `draft_only`, named in the draft by bare address; automated, unresolvable, and unparseable recipients, and those the recipient-domain rules refuse, are refused there too. A draft needs a folder with the drafts role (`drafts_folder`, else the server's `\Drafts` mark); without one it is refused with route `no_drafts_folder` and nothing is sent in its place. The `bcc_owner` audit copy rides only sent mail. An account whose access is not `send` is refused, and the refusal says the message must not be written from another account. A drafted result carries `draft_id`, the draft's key in the draft ledger that the `email_drafts` tools take. |
+| `email_reply` | Reply with threading headers through the same gate and decision, including the access refusal. In a turn the operator is not present for, a reply to a message marked `auto_submitted` or `bulk` is refused with route `automatic_response`, draft or not, except on an account with a relaxed `draft_gate`, which drafts a reply to `bulk` mail that is not `auto_submitted` and names the account's own address in its To or Cc, with route `personally_addressed_list_reply`; a lone `Precedence: junk`, the classic autoresponder mark, does not qualify. A reply that would be drafted is refused with route `draft_open` while an open Thane draft already answers the same message (the refusal names its `draft_id`, for `email_draft_revise`), and, on an account with `mailbox.owner: operator`, with route `operator_reply_started` when one `UID SEARCH HEADER In-Reply-To` of the drafts folder finds a reply to the same message that the draft ledger does not hold. Any message that would be drafted is refused with route `draft_limit` while the account already has 200 open Thane drafts. A reply sent directly while an open Thane draft answers the same message carries a `note` naming that `draft_id`, so it can be withdrawn. |
+| `email_escalate` | Hand one message to the account's review pass, the loop its `mailbox.review_loop` names: queues `message:<account>:<message_id>` in that loop's work queue (a repeat coalesces, replacing the reason) and returns `{queued, subject, pending_for_review}`, with `pending_for_review` null when the queue could not be counted. Changes nothing in the mailbox. Refused, with nothing queued and the `email_mark` call to flag the message instead, on an account without a `review_loop`, for a message without a Message-ID, and from the review loop itself. |
+| `email_move` | Move messages within an account. `folder` is always the source, and the target is exactly one of `destination` (an exact folder name) or `destination_role` (a special-use role Go resolves, taking `junk_folder` or `trash_folder` first); neither or both is refused, and so is a role no folder holds. In a turn the operator is not present for, only folders in the account's `mailbox.move_into` are accepted, plus INBOX out of one of them; in the operator's own turn `move_into` does not apply and any folder the account has is accepted. In every turn the drafts folder is neither source nor destination, and a folder the account lacks is refused. In a turn the operator is not present for, a move into the junk folder refuses each message from the operator's own record or a contact at `admin`, `household`, or `trusted` (or an address several contacts share when one of them is or may be at such a zone, or one the directory could not look up) and moves the rest. The result lists `moved` `{uid, destination_uid, message_id, from, trust_zone}` and `refused` `{uid, from, trust_zone, reason, recovery}`, reports the new UIDs when the server returns them, and records both UID lists in the Email Accounts block's recent operations. |
+
+Every email tool takes an `account`; in a loop bound with
+`email_account` an omitted account resolves to the binding and other
+accounts are refused. The `email` tag also injects an **Email Accounts**
+context block listing each account with its policy (`access`,
+`delivery`, `draft_gate` when it is relaxed, recipient-domain rules,
+the drafts folder), whose mailbox it
+is when the operator marked it (`owner`, `writes_as`, `voice`,
+`reads_mark_seen`), where it may file mail in a turn the operator is
+not present for when it limits that (`junk_folder`, `move_into`, and
+any `filing_note`), whether it may
+hand mail to SMTP itself, whether this turn is `attended`, which trust
+zones it sends directly to, drafts for, and refuses this turn, and its
+cached folder names with roles. While mail is polled, every account
+shows `wake_loop`, the loop its new mail wakes, its owner's default
+included; with polling off none does. An account with a review pass
+shows `review_loop`, `pending_review` (the account's queued review
+work, counted by the poller and on each enqueue, never at render), and
+`pending_review_as_of`. An account whose `mailbox.labels` names labels
+shows them as `labels` `[{label, meaning, shows_as, apply}]`, and
+INBOX's `PERMANENTFLAGS` verdict as
+`keywords` (`permanent`, `session_only`, or `unsupported`) once a
+read-write SELECT of INBOX has reported it; rendering never asks the
+server. An account whose `access` is `read`
+reads without marking messages seen and refuses flags and moves.
+
+**Review queue.** An account with `mailbox.review_loop` feeds that loop
+through the loopqueue store, in the partition named after the loop. A
+draft written on the account in a turn the operator is not present
+for, by any loop but the review loop, queues `draft:<account>:<draft_id>`, and
+`email_escalate` queues `message:<account>:<message_id>`; queueing a
+subject again coalesces with the waiting item. Each item's `source` is
+`email_review` and its summary is compact JSON: `{account, draft_id,
+message_subject, drafted_by}` for a draft, `{account, folder,
+message_id, from, message_subject, reason}` for a message, where
+`message_subject` is the message's Subject header and the item's own
+`subject` is its queue key. The review loop is woken with one
+`email_review` event of type `review_pending`, whose metadata counts
+`drafts`, `messages`, and `pending`. It carries three loop-private
+tools, attached at hydration to whatever definition an account names
+as `review_loop`, scoped to that loop's own partition, and never
+registered globally or listed in the tool catalog:
+
+| Tool | Description |
+|------|-------------|
+| `queue_pull` | Pull one batch per iteration (default 5, at most 25), highest priority first, then oldest. Each item gives `subject`, `source`, `summary`, `priority`, and `age`; the result adds `remaining`, the depth behind the batch (null when it could not be measured), and `oldest_wait`. A second pull in the same iteration is refused. |
+| `queue_ack` | Remove the exact item `queue_pull` returned, by subject, using a hidden one-shot receipt. Answers `ok`, `already_acknowledged`, or `retained_newer` when the subject was queued again while the item was worked; the newer item then stays queued. |
+| `queue_defer` | Keep a pulled item pending, moved behind every item currently queued, for a later wake. |
+
+The review loop has no `queue_enqueue`: its work comes only from drafts
+and escalations, and `email_escalate` refuses a call from the review
+loop itself.
+
+**Labels.** A label declared in `email.labels` and named in an
+account's `mailbox.labels` is written there as its IMAP keyword, its
+flag colour (`\Flagged` plus `$MailFlagBit0` to `$MailFlagBit2`), or
+both, always with `+FLAGS` and `-FLAGS`, never a replacing `STORE`, and
+never marking mail seen. The poller applies each label with `apply:
+contact_matched` to every new INBOX message whose sender matches exactly
+one contact record, once per message, before the message's wake is
+dispatched; the wake's `flags` metadata never includes a mark Thane
+still claims, even when a failed dispatch lists the message again or
+the account no longer carries the label, and a failed `STORE` is logged
+and costs only that message's label. What Thane set on each message
+(the keywords, the colour and its keywords, whether it set `\Flagged`,
+the derived labels applied, and the copy marked, by folder,
+UIDVALIDITY, and UID) is recorded in the operational state store,
+namespace `email_labels`, key the hex SHA-256 of the account name's
+byte length, `:`, the account name, and the bare Message-ID, for 90
+days after the last change; a record whose own account and Message-ID
+differ from the pair asked for is refused. Removing a label and handing
+a flag to the operator touch only what that record claims, on the one
+copy it describes, and a flag counts as Thane's only while it still
+carries exactly the recorded colour; `flag_label` on a row is read from
+the same record, under the message's whole Message-ID. A second copy
+of the message, and the message once someone else moves it, is not
+that copy, so its marks are the operator's; `email_move` carries the
+record to the new copy when the server returns COPYUID and the call
+moved no other copy under the same Message-ID, since go-imap keeps the
+COPYUID sets sorted rather than paired. Keywords,
+colour keywords included, are written only in a folder whose
+`PERMANENTFLAGS` include `\*`. See
+[Configuration](../operating/configuration.md#labels).
+
+## `email_drafts` — Thane's drafts in flight
+
+| Tool | Description |
+|------|-------------|
+| `email_drafts` | List the drafts Thane wrote, from the draft ledger, after checking each open one against its account's drafts folder: `draft_id`, account, `stage` (`open`, `gone`, or `withdrawn`), `closed_reason`, subject, recipients, the original it answers, the revision count, and `last_revised {by, at}`. Closed entries are listed only with `include_closed`. An account whose drafts folder could not be checked is listed under `errors`. |
+| `email_draft_get` | Read one draft by `draft_id` beside the message it answers: a JSON header (recipients, version history, and the account's `owner`, `writes_as`, and `voice`), a `---` line, the draft's text/plain part, another `---` line, and the original's body, found by Message-ID in the folder it was read from. Both are read with PEEK. |
+| `email_draft_revise` | Replace an open draft's body; recipients, subject, and threading headers never change. Holding the client lock throughout, it requires UIDPLUS or IMAP4rev2, proves the draft is still Thane's, writes a write-ahead record with a fresh Message-ID, appends the new version with `\Draft` and `\Seen`, records its UID in the write-ahead record, checks the old UID is still there and not already marked `\Deleted`, stores `\Deleted` on it (with `UNCHANGEDSINCE` when the server has CONDSTORE), reads the flag back, and expunges that UID alone. A draft the operator touched mid-revision stays theirs and the new copy is removed. The outbound inspector reviews the new body. Refusal reasons: `gone`, `held`, `withdrawn`, `no_uidplus`, `access`, `inspector`. |
+| `email_draft_withdraw` | Move an open draft to the account's trash folder (`trash_folder`, else the server's `\Trash` mark; `mailbox.move_into` does not apply) and mark its entry `withdrawn`. With no trash folder known it refuses with `no_trash_folder` and leaves the draft in place. Refused on an account whose access is `read`. |
+
+Every draft `email_send` or `email_reply` writes is recorded in a draft
+ledger in the operational state store (namespace `email_drafts`, key
+`<account>/<draft_id>`, where `draft_id` is a UUIDv7 the drafted result
+returns). An entry holds the draft's UIDVALIDITY, UID, and Message-ID,
+the original's Message-ID and folder when it is a reply, its recipients
+and subject, its stage, a revision history of `{by, at, note}`, and the
+previous body one level deep. A draft is Thane's only while the drafts
+folder still holds it at the recorded UIDVALIDITY, UID, and Message-ID,
+not marked `\Deleted`;
+an edit in the operator's client stores a new copy under another UID,
+and that draft becomes the operator's. The ledger records no review or
+approval state: its stages are only `open`, `gone`, and `withdrawn`.
+The draft tools reconcile the ledger when they are called, by examining
+the drafts folder and fetching only the recorded UIDs. They settle any
+revision a crash interrupted, adopting the new version only when the
+operator did not touch the draft meanwhile, and any draft whose UID the
+server never reported, which is found again by its Message-ID and the
+digest of its bytes, or closed once nothing carries its Message-ID.
+Each account keeps at most 200 entries: closed ones are forgotten
+oldest first and an open one never, so a new draft is refused with
+route `draft_limit` while 200 are open. Closed entries expire 14 days
+after they close. Every draft tool
+refuses a `draft_id` the ledger does not hold. The tag is separate from
+`email` so that a loop that only triages or writes first drafts never
+sees these tools; a loop that edits drafts carries both.
 
 ## `contacts` — directory and vCard administration
 
 | Tool | Description |
 |------|-------------|
-| `contact_save` | Create or update a contact with vCard properties. Model-authored property rows retain turn provenance. When an archivist refresh consumer is enabled, a committed change coalesces one canonical contact refresh; identical no-ops never enqueue one. |
-| `contact_lookup` | Search by name, query, kind, or property. Exact rich results include the canonical UUID and configured `contact_dossier_read` trailhead. |
+| `contact_save` | Create or update a contact with vCard properties. Model-authored property rows retain turn provenance. Refuses `trust_zone`, `KEY` and `X-THANE-*` fact keys, fact keys that are not plain names or that name a field the record owns, and control characters in argument values. Outside the operator's own message, refuses to add an address, number, or notification routing fact (`notification_preference`, `ha_companion_app`, in any case) to a contact above `known` or to the operator's contact, or to change such a contact's nickname or given name; in every turn, refuses a value an elevated or operator contact already holds, and a new contact's name or any nickname one already goes by; outside the operator's own message, also a new contact's name or any nickname that is one's given name or first word. Routing facts are additive and delivery reads only the first value, so the result names the value still used when a new one lands behind it. When an archivist refresh consumer is enabled, a committed change coalesces one canonical contact refresh; identical no-ops never enqueue one. |
+| `contact_lookup` | Search by name, query, kind, or property. A name matches a formatted name or nickname; when several contacts hold it that way, the operator's contact wins, then one above `known`, and two or more at the same standing are a tie that returns none of them, whichever holds it as a formatted name and whichever as a nickname, with an error that lists them as the first-name error does. Only when none holds the name that way does it take the one contact whose given name or first word it is; a first name two or more share is an error that lists up to five of them, each with its `contact_id`, zone, and matched field, and counts the rest. `query` set to that name lists every contact that answers to it ahead of any other match, those holding it as a formatted name or nickname first, each with its `contact_id`, so it reaches the rest while no more than 50 share the name; past 50 it lists only 50 of them, and the error says to ask the operator for the full formatted name of one it does not list. A name never matches notes, AI summaries, or organizations; `query` searches those as well as formatted names, nicknames, and given names, lists up to 50 matches, each with its `contact_id` and zone and, for a contact that answers to the query as a name, the field it answers by, and says so when more match than it lists. Every list it returns, by `query`, `kind`, or key/value, stays within 16 KB, cutting a long name, organization, or summary with `…[cut]` and counting the rows it leaves off the end. When dossiers are configured, a name result includes the canonical UUID and the `contact_dossier_read` trailhead. |
 | `contact_dossier_read` | Read or probe the canonical dossier for an active contact UUID. Go derives the ref and tracks revision state. Every success exposes `dossier.exists`, `dossier.ref`, and `dossier.document`; an absent dossier is a successful result with a null document and the exact create action. |
-| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Available only for a managed-writable `contacts` root. |
+| `contact_dossier_write` | Create or replace a canonical contact dossier from four structured projections; Go owns its ref, private tag, frontmatter, and section layout, and requires full canonical UUIDs in archive-session citations. Validates every projection together: a rejected write stores nothing and lists each violation in one error, an over-budget field with its overage and whether rewording closes it or whole items must go. A replacement with no read on record, or against a dossier that changed since that read, is refused as an error too. Refuses a contact's first dossier while an active contact that shares its name and looks like the same person (a shared address or number, a duplicate with no address of its own, or a `known` duplicate bound to a Home Assistant person) already has one, naming both UUIDs, the evidence, and which record keeps the dossier; people who merely share a name each keep their own, and replacing an existing dossier is never refused. Available only for a managed-writable `contacts` root. |
 | `contact_whereabouts` | Fuse a contact's room, HA zone, and bound-device location sources with provenance, freshness, and explicit room conflicts. |
-| `contact_forget` | Delete a contact. |
-| `contact_list` | List and filter contacts. |
+| `contact_forget` | Soft-delete one `known` contact, selected by exactly one of a name (resolved as `contact_lookup` resolves it) or a canonical `contact_id`, and name the record removed. Refuses contacts above `known`, the operator's contact, and contacts bound to a Home Assistant person, by name or by ID; a refusal by name names up to three removable `known` contacts the name also fits, with their UUIDs. A name that resolves to no one contact, a tie at the same standing or a first name several share, removes nothing. Forgetting the only contact that holds a name exactly leaves that name to the given-name and first-word step. |
+| `contact_list` | List and filter contacts in formatted-name order, up to 100, within 16 KB as `contact_lookup` lists are. |
 | `contact_export_vcf` | Export one contact as a vCard. |
 | `contact_export_vcf_qr` | Export one contact as a vCard QR code. |
 | `contact_export_all_vcf` | Bulk vCard export. |
-| `contact_import_vcf` | Import one or more vCards. |
+| `contact_import_vcf` | Import one or more vCards. Drops `KEY`, `X-THANE-KEY-*`, malformed property names, and values carrying control characters, drops addresses, numbers, notification routing facts, and nickname and given-name fills merged into an elevated or operator contact, addresses or numbers already held by one, and a nickname fill one already goes by or answers to by its given name or first word, and skips a card that would create a contact under such a name or nickname; rows carry turn provenance and the result counts every drop and names each skipped card. |
 
 ## `owner` — trusted operator context
 
@@ -486,7 +672,7 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 
 | Tool | Description |
 |------|-------------|
-| `loop_status` | Snapshot of currently running loops, plus a parent→child `tree` projection over the whole registry. |
+| `loop_status` | Snapshot of currently running loops, plus a parent→child `tree` projection over the whole registry and a whole-registry health rollup naming each degraded loop with its reason: consecutive errors, an error state, or a durable write a completed wake never landed (listed on the loop's row as `unpublished_writes`). |
 | `loop_containers` | Placement directory of container loops (intent, child/descendant counts, conferred tags, sample children) — the loop-graph analog of `doc_roots`. |
 | `set_next_sleep` | From inside a service loop, request the next sleep duration. |
 | `spawn_loop` | Launch an ad-hoc loop from a definition and input. |
@@ -538,10 +724,13 @@ Declared via a Provider with async binding; handlers return
 signal-cli isn't connected. In inbound Signal conversations, final
 response text is sent automatically by the bridge; prefer
 `message_channel` for in-channel reactions and reserve these native
-tools for Signal-specific workflows.
+tools for Signal-specific workflows. On a turn opened by a loop wake,
+`signal_hold_reply` is the only way to end the turn without sending
+the final text.
 
 | Tool | Description |
 |------|-------------|
+| `signal_hold_reply` | Runtime tool offered only on Signal loop-notification wake turns: send nothing to the person on the thread, with a required reason that is logged and stored in the conversation. |
 | `signal_send_message` | Send a Signal message to a phone number. |
 | `signal_send_reaction` | React to an inbound Signal message. |
 
@@ -564,12 +753,16 @@ tools for Signal-specific workflows.
 | `model_deployment_set_policy` | Update deployment-level routing policy. |
 | `model_resource_set_policy` | Update resource-level routing policy. |
 
+Policy here is fleet-wide and survives restart. Holding one conversation
+to one model is a `session` decision (`conversation_model_pin`, above),
+and pinning a loop definition is `loop_definition_update` under `loops`.
+
 ## `diagnostics` — operational visibility
 
 | Tool | Description |
 |------|-------------|
 | `get_version` | Agent version, build info, and commit SHA. |
-| `cost_summary` | Aggregated token usage and cost (uses `usage.Summary`, including `cache_hit_rate`). |
+| `cost_summary` | Aggregated token usage and cost, counting usage records rather than logical requests. New agent records represent model calls; older rows may aggregate iterations (uses `usage.Summary`, including `cache_hit_rate`). |
 | `logs_query` | Query the structured log index with attribute filters. |
 | `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, per-partition queue depths, a 24h telemetry rollup, the deploy story (running vs previous version, recent boots), and the process's own WARN/ERROR rates. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |

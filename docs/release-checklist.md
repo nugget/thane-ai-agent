@@ -190,9 +190,10 @@ same fix after a release ships is migration work.
   this audit once per release is what makes "periodically" automatic.
 
   - [ ] **Enumerate and bump the pins.** The homes:
-        [`tools/go.mod`](../tools/go.mod) — golangci-lint and vacuum,
-        the hermetic dev tools `just ci` runs — plus the `go`
-        directives in [`go.mod`](../go.mod) and `tools/go.mod`, and
+        [`tools/go.mod`](../tools/go.mod) — golangci-lint and vacuum — and
+        [`tools/gochecksumtype/go.mod`](../tools/gochecksumtype/go.mod),
+        the hermetic dev tools `just ci` runs, plus the `go`
+        directives in [`go.mod`](../go.mod) and both tool modules, and
         the action pins in
         [`.github/workflows/`](../.github/workflows/). Check each
         upstream for newer releases and read the changelogs

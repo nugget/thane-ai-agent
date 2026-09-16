@@ -7,12 +7,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/memguard"
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -79,6 +81,15 @@ type LoopCensus struct {
 	Degraded          int            `json:"degraded"`
 	DegradedLoops     []string       `json:"degraded_loops,omitempty"`
 	DegradedTruncated bool           `json:"degraded_truncated,omitempty"`
+	// UnpublishedWrites names the loops holding a durable write a
+	// completed wake never landed, each as the line loop_status's health
+	// rollup carries: "name (wake at -2h ended without publishing <tool>
+	// [for contact <id>] after N rejections)". Such a loop is also
+	// counted in Degraded; this
+	// is the why, because the turn ended normally and no error counter
+	// moved. Capped like DegradedLoops.
+	UnpublishedWrites          []string `json:"unpublished_writes,omitempty"`
+	UnpublishedWritesTruncated bool     `json:"unpublished_writes_truncated,omitempty"`
 	// TopWakers ranks loops by trailing-window iteration starts,
 	// busiest first. An outlier here against its usual rate is the
 	// wake-storm signal; loop_activity decomposes the why. Handler-only
@@ -283,6 +294,50 @@ func snapshotPayload(snap HealthSnapshot) map[string]any {
 	return payload
 }
 
+// maxDirectoryFindingsShown bounds how many findings the
+// contact_directory row names across both of its audits together; each
+// audit's count still covers every finding. Fork findings are named
+// first, because a fork can send a person's messages to the wrong
+// record, while an automated address only fails closed at known; the
+// automated-address audit names what remains.
+const maxDirectoryFindingsShown = 5
+
+// maxDirectoryFindingBytes bounds each named record in the
+// contact_directory detail. Record names and addresses are free text
+// from the directory, so without it five oversized records could make
+// the model-facing detail arbitrarily large. The source clips each
+// field first, so this is a backstop for a source that does not.
+const maxDirectoryFindingBytes = 256
+
+// directoryFindingsDetail renders the automated-address part of the
+// contact_directory detail: how many addresses the runtime reads below
+// their record's zone, the ones the row names, and the operator's
+// remedy. total counts every finding; shown is what the row names,
+// already within its budget, and may be empty when fork findings took
+// the whole budget.
+func directoryFindingsDetail(shown []string, total int) string {
+	plural := "es"
+	if total == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("Contact records above known hold %d automated-looking email address%s, which the runtime reads at known whatever the record's zone%s. The operator should demote each record to known, or move the address to its own known record, through CardDAV or PUT /v1/contacts/{id}.",
+		total, plural, directoryFindingList(shown, total, maxDirectoryFindingBytes))
+}
+
+// clipUTF8 cuts s to at most maxBytes on a rune boundary, ending a cut
+// with "…" so the reader can tell the text was shortened.
+func clipUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const mark = "…"
+	end := max(maxBytes-len(mark), 0)
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + mark
+}
+
 // HealthSources are the live feeds the Inspector reads. Every field is
 // optional (nil-safe): an unwired source simply contributes no rows, so
 // the Inspector works identically in production, tests, and reduced
@@ -312,6 +367,20 @@ type HealthSources struct {
 	// over billing state — persistent, operator-actionable, and not
 	// fixable by any retry. Nil-safe; an empty slice means healthy.
 	ProviderBilling func() []ProviderBillingState
+	// DirectoryFindings reports contact records whose stored zone the
+	// runtime does not honour in full: one formatted line each for at
+	// most limit of them (none when limit is zero), and the total count
+	// including those past the limit. A zero total means clean. It is a
+	// live query, so a directory fix clears the row on the next render.
+	// The contact_directory row asks it for what DirectoryForks left of
+	// the row's five named findings.
+	DirectoryFindings func(ctx context.Context, limit int) (shown []string, total int, err error)
+	// DirectoryForks reports records that split one person, names
+	// different people answer to, and placeholder addresses, each
+	// involving a record above known or the operator's own. It has the
+	// shape of DirectoryFindings and shares its contact_directory row,
+	// where it is asked first, for all five of the row's named findings.
+	DirectoryForks func(ctx context.Context, limit int) (shown []string, total int, err error)
 	// LoopStatuses snapshots the loop registry.
 	LoopStatuses func() []looppkg.Status
 	// Telemetry collects the 24h operational rollup.
@@ -421,7 +490,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	// Log index: dropped records or write errors mean logs_query
 	// completeness degraded.
 	if i.src.IndexStats != nil {
+		indexDone := phasetrace.Phase(ctx, "health:index_stats")
 		stats := i.src.IndexStats()
+		indexDone()
 		row := HealthRow{Name: "log_index", Status: HealthOK}
 		if stats.DroppedRecords > 0 || stats.WriteErrors > 0 {
 			row.Status = HealthDegraded
@@ -433,7 +504,10 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	// Document-root sync: clean/fast-forwarded/pushed are healthy;
 	// diverged/blocked/remote_behind degrade; an errored pass fails.
 	if i.src.SyncStates != nil {
-		for _, st := range i.src.SyncStates() {
+		syncDone := phasetrace.Phase(ctx, "health:sync_states")
+		syncStates := i.src.SyncStates()
+		syncDone()
+		for _, st := range syncStates {
 			row := HealthRow{Name: "doc_sync:" + st.Name, Status: HealthOK}
 			if !st.LastSyncAt.IsZero() {
 				row.LastCheck = promptfmt.FormatDeltaOnly(st.LastSyncAt, now)
@@ -465,11 +539,21 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		}
 	}
 
+	// Contact directory: records above known holding an address the
+	// runtime reads at known, and records that fork one person.
+	// Persistent and operator-actionable; no retry changes it, only a
+	// directory edit does.
+	if row, ok := i.directoryRow(ctx); ok {
+		snap.Annunciator = append(snap.Annunciator, row)
+	}
+
 	// Work queue backlog: a partition whose oldest pending item has aged
 	// past the threshold degrades the row — the consumer is not keeping up.
 	if i.src.QueueStats != nil {
 		row := HealthRow{Name: "queue_backlog", Status: HealthOK}
+		queueDone := phasetrace.Phase(ctx, "health:queue_stats")
 		stats, err := i.src.QueueStats(ctx)
+		queueDone()
 		if err != nil {
 			row.Status = HealthDegraded
 			row.Detail = fmt.Sprintf("backlog probe failed: %v", err)
@@ -493,10 +577,12 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	}
 
 	// Loop fleet: the census plus one lamp that degrades when any loop
-	// is errored.
+	// is errored or holds an unpublished write.
 	if i.src.LoopStatuses != nil {
+		loopsDone := phasetrace.Phase(ctx, "health:loop_statuses")
 		statuses := i.src.LoopStatuses()
-		snap.Loops = buildLoopCensus(statuses)
+		loopsDone()
+		snap.Loops = buildLoopCensus(statuses, now)
 		// Honest window: the in-memory wake ring only spans the uptime.
 		// With no usable start time the window is unknown, and unknown
 		// is omitted — claiming "24h" there would be the same lie this
@@ -517,6 +603,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 			row.Detail = fmt.Sprintf("%d of %d loops degraded: %v", snap.Loops.Degraded, snap.Loops.Total, snap.Loops.DegradedLoops)
 			if snap.Loops.DegradedTruncated {
 				row.Detail += fmt.Sprintf(" (+%d more)", snap.Loops.Degraded-len(snap.Loops.DegradedLoops))
+			}
+			if len(snap.Loops.UnpublishedWrites) > 0 {
+				row.Detail += "; unpublished: " + strings.Join(snap.Loops.UnpublishedWrites, "; ")
 			}
 		}
 		snap.Annunciator = append(snap.Annunciator, row)
@@ -539,7 +628,9 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 	}
 
 	if i.src.LogSeverity != nil {
+		sevDone := phasetrace.Phase(ctx, "health:log_severity")
 		sev := i.src.LogSeverity()
+		sevDone()
 		snap.LogActivity = LogActivity{
 			ErrorsLastHour:  sev.ErrorsLastHour,
 			WarnsLastHour:   sev.WarnsLastHour,
@@ -559,9 +650,13 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 		}
 	}
 
+	hostDone := phasetrace.Phase(ctx, "health:host_probe")
 	snap.Host = collectHostInfo(i.src.DataDir, i.src.StartedAt, now)
+	hostDone()
 	if i.src.Telemetry != nil {
+		telemetryDone := phasetrace.Phase(ctx, "health:telemetry")
 		metrics := i.src.Telemetry.Collect(ctx)
+		telemetryDone()
 		snap.Telemetry = TelemetryRollup{
 			Requests24h:  metrics.Requests24h,
 			Errors24h:    metrics.Errors24h,
@@ -582,7 +677,12 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	if i.src.BootHistory == nil {
 		return info
 	}
+	// The boot journal is a query against production state, not an
+	// in-memory read like the other collectors — so it gets its own
+	// phases rather than disappearing into the health aggregate.
+	historyDone := phasetrace.Phase(ctx, "health:boot_history")
 	boots, err := i.src.BootHistory(ctx)
+	historyDone()
 	if err != nil || len(boots) == 0 {
 		return info
 	}
@@ -622,7 +722,10 @@ func (i *Inspector) collectVersionInfo(ctx context.Context, now time.Time) Versi
 	}
 	info.BootsLast24h = pageCount
 	if i.src.BootCountSince != nil {
-		if count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour)); err == nil {
+		countDone := phasetrace.Phase(ctx, "health:boot_count")
+		count, err := i.src.BootCountSince(ctx, now.Add(-24*time.Hour))
+		countDone()
+		if err == nil {
 			info.BootsLast24h = count
 		}
 	}
@@ -684,10 +787,11 @@ func semverParts(v string) ([3]int, bool) {
 	return parts, true
 }
 
-// buildLoopCensus rolls the registry snapshot into totals. Degraded
-// matches loop_status's own definition: consecutive errors or an error
-// state.
-func buildLoopCensus(statuses []looppkg.Status) LoopCensus {
+// buildLoopCensus rolls the registry snapshot into totals. Degraded is
+// [looppkg.DegradedReason], the definition loop_status's health rollup
+// reads — consecutive errors, an error state, or an unpublished write —
+// so the two never disagree about which loops are degraded.
+func buildLoopCensus(statuses []looppkg.Status, now time.Time) LoopCensus {
 	census := LoopCensus{Total: len(statuses)}
 	for _, st := range statuses {
 		state := string(st.State)
@@ -698,12 +802,19 @@ func buildLoopCensus(statuses []looppkg.Status) LoopCensus {
 			census.ByState = make(map[string]int)
 		}
 		census.ByState[state]++
-		if st.ConsecutiveErrors > 0 || st.State == looppkg.StateError {
+		if looppkg.DegradedReason(st, now) != "" {
 			census.Degraded++
 			if len(census.DegradedLoops) < maxCensusDegradedNames {
 				census.DegradedLoops = append(census.DegradedLoops, st.Name)
 			} else {
 				census.DegradedTruncated = true
+			}
+		}
+		if clause := looppkg.UnpublishedWriteClause(st, now); clause != "" {
+			if len(census.UnpublishedWrites) < maxCensusDegradedNames {
+				census.UnpublishedWrites = append(census.UnpublishedWrites, fmt.Sprintf("%s (%s)", st.Name, clause))
+			} else {
+				census.UnpublishedWritesTruncated = true
 			}
 		}
 		if st.WakesLast24h > 0 && !st.HandlerOnly {

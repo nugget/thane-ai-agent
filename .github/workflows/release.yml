@@ -14,9 +14,9 @@ permissions:
 
 env:
   GO_VERSION: '1.27.0'
-  # golangci-lint and vacuum are pinned in tools/go.mod and run via `go run`
-  # (see the just recipes) — no install step here. lychee is a Rust tool and
-  # has no go.mod home, so it stays a pinned download.
+  # Go linters are pinned in tool modules and run via `go run` (see the just
+  # recipes) — no install step here. lychee is a Rust tool and has no go.mod
+  # home, so it stays a pinned download.
   LYCHEE_VERSION: '0.24.2'
 
 jobs:
@@ -43,6 +43,7 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/go.sum
+            tools/gochecksumtype/go.sum
 
       - name: Install just
         uses: extractions/setup-just@v4

@@ -38,7 +38,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -223,6 +222,11 @@ type Config struct {
 	// Thane-native /v1 API on the primary listen port).
 	OpenAIAPI OpenAIAPIConfig `yaml:"openai_api"`
 
+	// TLS configures the optional HTTPS front door: in-process TLS
+	// termination with certificates from certmagic, routing each
+	// configured hostname to one of the surfaces above.
+	TLS TLSConfig `yaml:"tls"`
+
 	// CardDAV configures the optional CardDAV server for native
 	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
 	CardDAV CardDAVConfig `yaml:"carddav"`
@@ -376,8 +380,9 @@ type Config struct {
 	// set, Thane connects to the broker and registers as an HA device.
 	MQTT MQTTConfig `yaml:"mqtt"`
 
-	// Person configures household member presence tracking. When Track
-	// contains entity IDs, the agent receives a "People & Presence"
+	// Person configures household member presence tracking.
+	// Membership comes from the contact store: when a contact carries an
+	// ha_person_entity binding, the agent receives a "People & Presence"
 	// section in its system prompt on every wake, eliminating tool
 	// calls for basic presence questions.
 	Person PersonConfig `yaml:"person"`
@@ -390,10 +395,10 @@ type Config struct {
 	// code review directly without an MCP forge server subprocess.
 	Forge ForgeConfig `yaml:"forge"`
 
-	// Email configures native IMAP email access. When configured, Thane
-	// can list, read, search, and manage email directly without an MCP
-	// email server subprocess.
-	Email email.Config `yaml:"email"`
+	// Email configures native IMAP and SMTP mailboxes. When configured,
+	// Thane reads, searches, files, and sends mail directly and polls
+	// each account for new messages.
+	Email EmailConfig `yaml:"email"`
 
 	// Identity configures contact identities for the agent and human operator.
 	Identity IdentityConfig `yaml:"identity"`
@@ -732,6 +737,61 @@ type ListenConfig struct {
 
 	// Port is the TCP port to listen on. Default: 8080.
 	Port int `yaml:"port"`
+
+	// Auth gates the native /v1 API and the console. See ListenAuthConfig.
+	Auth ListenAuthConfig `yaml:"auth"`
+}
+
+// ListenAuthConfig configures authentication for the native API and the
+// web console. When at least one token is configured the API requires a
+// credential on every route except the enumerated public ones (health,
+// version, identity evidence, console assets, and the endpoints that
+// authenticate themselves); with no tokens the API is open, as it was
+// before this block existed, and thane init closes that door on new
+// workspaces by minting a token. API clients present a token as
+// Authorization: Bearer. The console exchanges one once at
+// POST /v1/auth/login for an HttpOnly, SameSite=Strict session cookie.
+// Companion account tokens (companion.providers.<account>.tokens) are
+// accepted as bearer credentials on the same routes, so companion apps
+// that already send them keep working; they authenticate as the account.
+type ListenAuthConfig struct {
+	// Tokens are the operator's API credentials. The gate keeps only
+	// SHA-256 digests and compares in constant time; the loaded config
+	// itself still holds the plaintext for the process lifetime, as it
+	// does every other credential, until the secret store lands. Label
+	// names the holder in logs and in the session endpoint, never the
+	// token itself.
+	Tokens []APIToken `yaml:"tokens"`
+
+	// SessionTTL is how long a console session cookie stays valid
+	// without use; each authenticated request extends it. Default: 168h
+	// (7 days). Sessions live in memory and end on restart.
+	SessionTTL time.Duration `yaml:"session_ttl"`
+}
+
+// APIToken is one operator credential for the native API.
+type APIToken struct {
+	// Label identifies the holder (a person, a script, a device); it is
+	// what logs and the session endpoint report.
+	Label string `yaml:"label"`
+	// Token is the secret the holder presents. Treat this file
+	// accordingly.
+	Token string `yaml:"token"`
+}
+
+// Configured reports whether the native API gate is on, which is exactly
+// when at least one token is present.
+func (a ListenAuthConfig) Configured() bool {
+	return len(a.Tokens) > 0
+}
+
+// TokenIndex builds a token → label map for the constant-time token set.
+func (a ListenAuthConfig) TokenIndex() map[string]string {
+	idx := make(map[string]string, len(a.Tokens))
+	for _, t := range a.Tokens {
+		idx[t.Token] = t.Label
+	}
+	return idx
 }
 
 // OllamaAPIConfig configures the optional Ollama-compatible API server.
@@ -751,6 +811,14 @@ type OllamaAPIConfig struct {
 	// this only for token-capable clients (e.g. Open WebUI) or when HA
 	// connects through a proxy that injects the header.
 	APIKey string `yaml:"api_key"`
+	// AllowedSources, when non-empty, admits only callers whose address
+	// falls inside one of the listed CIDR prefixes; a bare address is a
+	// single host. A caller's address is the peer on the socket, never a
+	// forwarded header. This is the admission control for the one
+	// surface that cannot ask for a credential, so it is where an
+	// operator says which hosts may drive the agent loop through it.
+	// Empty leaves the surface open to anything that can reach the port.
+	AllowedSources []string `yaml:"allowed_sources"`
 }
 
 // OpenAIAPIConfig configures the optional OpenAI-compatible API server.
@@ -768,7 +836,193 @@ type OpenAIAPIConfig struct {
 	// delegation — so leaving it empty (open) is appropriate only when
 	// every host that can reach the port is trusted.
 	APIKey string `yaml:"api_key"`
+	// AllowedSources, when non-empty, admits only callers whose address
+	// falls inside one of the listed CIDR prefixes; a bare address is a
+	// single host. A caller's address is the peer on the socket, never a
+	// forwarded header. Clients of this shim can send a bearer key, so
+	// here the list is a second lock rather than the only one, and it is
+	// checked first: a refused caller never reaches the key comparison.
+	// Empty leaves the surface open.
+	AllowedSources []string `yaml:"allowed_sources"`
 }
+
+// TLSConfig configures Thane's HTTPS front door: one TLS listener that
+// holds a certificate for each configured hostname and routes each
+// hostname to one of the plaintext surfaces (the native API, the Ollama
+// shim, or the OpenAI shim), plus a plain-HTTP listener whose only job is
+// to redirect. Certificates are obtained and renewed in-process by
+// certmagic over the ACME DNS-01 challenge, so hostnames that resolve
+// only on a private network still get publicly trusted certificates.
+//
+// The CertMagic block is a pass-through: its fields mirror certmagic's
+// own configuration rather than a curated subset, so an operator who
+// knows certmagic or Caddy already knows this block. Thane adds only what
+// certmagic cannot know: which hostnames to hold and which surface each
+// reaches.
+type TLSConfig struct {
+	// Enabled starts the HTTPS front door. Off by default; the plaintext
+	// listeners are unaffected either way.
+	Enabled bool `yaml:"enabled"`
+
+	// HTTPS is the TLS listener. Port defaults to 443. Binding it needs
+	// privilege on every platform Thane runs on: Linux wants
+	// CAP_NET_BIND_SERVICE or the unprivileged-port sysctl, and macOS
+	// refuses ports below 1024 to ordinary users outright. Where Thane
+	// runs unprivileged, bind a high port and redirect 443 to it with the
+	// OS packet filter, then set PublicPort so redirects name the port
+	// clients actually use.
+	HTTPS TLSListenConfig `yaml:"https"`
+
+	// HTTP is the plain listener that answers every request with a
+	// permanent redirect to HTTPS and nothing else. Port defaults to 80.
+	HTTP TLSRedirectConfig `yaml:"http"`
+
+	// HSTSMaxAge is the Strict-Transport-Security max-age sent on every
+	// HTTPS response. Zero uses the default of 4320h (180 days); to send
+	// no header at all, set HSTSDisabled.
+	HSTSMaxAge time.Duration `yaml:"hsts_max_age"`
+
+	// HSTSDisabled omits the Strict-Transport-Security header entirely.
+	HSTSDisabled bool `yaml:"hsts_disabled"`
+
+	// Hostnames maps each hostname to the surface it reaches: "native"
+	// (the /v1 API and dashboard), "ollama", or "openai". Every hostname
+	// listed gets its own managed certificate; a request for a hostname
+	// not listed is refused with 421 Misdirected Request. Names are
+	// explicit, never issued on demand.
+	Hostnames map[string]string `yaml:"hostnames"`
+
+	// ClientAuth controls verification of client certificates presented
+	// during the handshake. See TLSClientAuthConfig.
+	ClientAuth TLSClientAuthConfig `yaml:"client_auth"`
+
+	// CertMagic is the certificate-management pass-through. See
+	// CertMagicConfig.
+	CertMagic CertMagicConfig `yaml:"certmagic"`
+}
+
+// TLSListenConfig is a bind address and port for the HTTPS listener.
+type TLSListenConfig struct {
+	// Address is the bind address; empty means all interfaces.
+	Address string `yaml:"address"`
+	// Port is the TCP port Thane binds. Default: 443.
+	Port int `yaml:"port"`
+	// PublicPort is the port clients reach the listener on when a packet
+	// filter or port map sits in front of it (Thane bound to 8443, the
+	// OS redirecting 443 to it). It is what the plain-HTTP redirect names
+	// in its Location; zero means the same as Port.
+	PublicPort int `yaml:"public_port"`
+}
+
+// EffectivePublicPort is the port clients use: PublicPort when set,
+// otherwise Port.
+func (l TLSListenConfig) EffectivePublicPort() int {
+	if l.PublicPort != 0 {
+		return l.PublicPort
+	}
+	return l.Port
+}
+
+// TLSRedirectConfig is the bind for the redirect-only HTTP listener.
+type TLSRedirectConfig struct {
+	// Disabled turns the redirect listener off entirely.
+	Disabled bool `yaml:"disabled"`
+	// Address is the bind address; empty means all interfaces.
+	Address string `yaml:"address"`
+	// Port is the TCP port. Default: 80.
+	Port int `yaml:"port"`
+}
+
+// TLSClientAuthConfig governs client certificates on the HTTPS front
+// door. When enabled (the default), the listener requests a client
+// certificate, verifies any it is given against the instance's channel
+// CA (core/ca/channel_root.crt) plus the trusted peer CAs listed here,
+// and attaches the verified identity to the request as a principal that
+// later authentication layers can consume. A connection that presents
+// no certificate is not refused; requiring one is a later policy.
+type TLSClientAuthConfig struct {
+	// Disabled turns client-certificate verification off. Certificates a
+	// client presents are then ignored rather than verified.
+	Disabled bool `yaml:"disabled"`
+	// TrustedPeerCAs lists additional CA certificate files (PEM) whose
+	// issued client certificates are accepted alongside the channel CA.
+	// Relative paths resolve against the core root.
+	TrustedPeerCAs []string `yaml:"trusted_peer_cas"`
+}
+
+// CertMagicConfig mirrors certmagic's certificate-management settings.
+// Field names follow certmagic's, in snake_case, so its documentation
+// applies directly.
+type CertMagicConfig struct {
+	// CA is the ACME directory URL. Empty selects Let's Encrypt
+	// production. Point it at the staging directory
+	// (https://acme-staging-v02.api.letsencrypt.org/directory) while
+	// bringing the front door up beside an existing proxy.
+	CA string `yaml:"ca"`
+	// Email is the ACME account contact. Strongly recommended: the CA
+	// uses it for expiry and revocation notices.
+	Email string `yaml:"email"`
+	// Agreed records acceptance of the CA's subscriber agreement. Must be
+	// true; the CA refuses account creation otherwise.
+	Agreed bool `yaml:"agreed"`
+	// KeyType selects the certificate key: ed25519, p256, p384, rsa2048,
+	// or rsa4096. Empty uses certmagic's default (p256).
+	KeyType string `yaml:"key_type"`
+	// RenewalWindowRatio is the fraction of a certificate's lifetime
+	// after which renewal is attempted. Zero uses certmagic's default
+	// (1/3, so a 90-day certificate renews at 60 days).
+	RenewalWindowRatio float64 `yaml:"renewal_window_ratio"`
+	// Storage is the directory for ACME account keys and issued
+	// certificates. Default: {workspace}/tls. Runtime state, never
+	// inside core; a path under the core root is refused.
+	Storage string `yaml:"storage"`
+	// MustStaple requests certificates with the OCSP must-staple
+	// extension.
+	MustStaple bool `yaml:"must_staple"`
+	// CertObtainTimeout bounds one issuance attempt end to end, including
+	// DNS propagation waits. Zero uses certmagic's default; set it above
+	// dns.propagation_delay plus dns.propagation_timeout or issuance is
+	// cut off while still waiting for DNS.
+	CertObtainTimeout time.Duration `yaml:"cert_obtain_timeout"`
+	// DNS configures the DNS-01 challenge solver, which is the only
+	// challenge the front door uses.
+	DNS CertMagicDNSConfig `yaml:"dns"`
+}
+
+// CertMagicDNSConfig mirrors certmagic's DNS-01 solver settings plus the
+// provider selection Thane adds.
+type CertMagicDNSConfig struct {
+	// Provider names the DNS provider from Thane's registry (currently
+	// "linode"). Required.
+	Provider string `yaml:"provider"`
+	// PropagationDelay is how long to wait after creating the challenge
+	// record before starting propagation checks. Providers whose
+	// authoritative servers lag their API need this; Linode's guidance is
+	// ten minutes, which is the registry default for that provider when
+	// this is zero.
+	PropagationDelay time.Duration `yaml:"propagation_delay"`
+	// PropagationTimeout is the longest to keep checking for the record
+	// after the delay. Zero uses the provider's registry default; -1
+	// (certmagic's sentinel) disables propagation checks so issuance
+	// proceeds as soon as the delay elapses.
+	PropagationTimeout time.Duration `yaml:"propagation_timeout"`
+	// Resolvers lists DNS servers to query during propagation checks,
+	// as host or host:port. Pointing these at the zone's authoritative
+	// nameservers avoids waiting on recursive-resolver caches.
+	Resolvers []string `yaml:"resolvers"`
+	// TTL is the challenge record's TTL. Zero uses the provider default.
+	TTL time.Duration `yaml:"ttl"`
+	// OverrideDomain delegates the challenge record to another domain
+	// (a CNAME'd _acme-challenge target).
+	OverrideDomain string `yaml:"override_domain"`
+	// Settings is passed through to the provider verbatim, with the
+	// provider's own field names (for linode: api_token, and optionally
+	// api_url and api_version). Unknown keys are rejected.
+	Settings map[string]any `yaml:"settings"`
+}
+
+// TLSSurfaceNames are the values Hostnames may route to.
+var TLSSurfaceNames = []string{"native", "ollama", "openai"}
 
 // CardDAVConfig configures the optional CardDAV server for native
 // contact app sync.  When Enabled is true and credentials are set,
@@ -1144,6 +1398,11 @@ type RootContextPolicy struct {
 	// "never".
 	Search string `yaml:"search,omitempty"`
 
+	// SearchBody opts this root's logical document bodies into explicit
+	// content search. Default false searches indexed metadata only.
+	// Search still governs visibility, and Indexing must be enabled.
+	SearchBody bool `yaml:"search_body,omitempty"`
+
 	// RequiresTag optionally gates the whole root behind one capability
 	// tag. It is a coarse companion to per-document tags: cheap to
 	// enforce, and the right shape when an entire corpus is only
@@ -1182,7 +1441,7 @@ type RootContextPolicy struct {
 // An undeclared policy keeps the root's historical behavior so an
 // existing config does not silently change how context is assembled.
 func (p RootContextPolicy) Declared() bool {
-	return p.Inject != "" || p.Search != "" || p.RequiresTag != "" || p.Advertise != ""
+	return p.Inject != "" || p.Search != "" || p.SearchBody || p.RequiresTag != "" || p.Advertise != ""
 }
 
 // EffectiveInject resolves the injection policy. A root that declares a
@@ -1512,11 +1771,22 @@ type ModelConfig struct {
 	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
 	SupportsTools     bool   `yaml:"supports_tools"`     // Optional per-deployment tool-use override. When omitted, runtime/provider capability is used.
 	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits observed runtime/provider capability.
-	ContextWindow     int    `yaml:"context_window"`     // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
-	Speed             int    `yaml:"speed"`              // Relative speed rating, 1 (slow) to 10 (fast)
-	Quality           int    `yaml:"quality"`            // Relative quality rating, 1 (low) to 10 (high)
-	CostTier          int    `yaml:"cost_tier"`          // 0=local/free, 1=cheap, 2=moderate, 3=expensive
-	MinComplexity     string `yaml:"min_complexity"`     // Minimum task complexity: simple, moderate, complex
+	// SupportsImages is an optional per-deployment vision override. Nil
+	// inherits what the resource reported or what the model name
+	// implies. It exists because that inference is the only one with no
+	// authoritative source on a plain OpenAI-compatible endpoint: the
+	// /v1/models schema carries an id and nothing about modality, so
+	// vision is inferred from the model name alone. A multimodal model
+	// whose name matches none of the vision-name patterns that
+	// inference knows is invisible to Thane however capable the server
+	// is. LM Studio escapes this only because its native inventory
+	// returns a vision flag.
+	SupportsImages *bool  `yaml:"supports_images"`
+	ContextWindow  int    `yaml:"context_window"` // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
+	Speed          int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
+	Quality        int    `yaml:"quality"`        // Relative quality rating, 1 (low) to 10 (high)
+	CostTier       int    `yaml:"cost_tier"`      // 0=local/free, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity  string `yaml:"min_complexity"` // Minimum task complexity: simple, moderate, complex
 
 	supportsToolsSet bool `yaml:"-"`
 }
@@ -1570,6 +1840,21 @@ type ModelServerConfig struct {
 	// this via the native `ttl` request field on inference endpoints.
 	// Zero lets the runner use its default behavior.
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
+	// ChatTemplateKwargs is passed through to the server as
+	// chat_template_kwargs, which OpenAI-compatible runners hand to the
+	// model's Jinja chat template. Its main use is the reasoning
+	// toggle: a model with thinking on by default spends the output
+	// budget on a think block, and a turn with a modest ceiling returns
+	// empty content rather than an answer.
+	//
+	// The accepted keys belong to the model's template, not to the
+	// server, and they differ by family — Qwen reads enable_thinking,
+	// DeepSeek reads thinking, gpt-oss reads reasoning_effort. This is
+	// nonetheless resource-scoped because it is wire dialect, like the
+	// max_tokens spelling; an operator who changes which family a
+	// resource serves must revisit it. Unknown keys are inert: the
+	// template simply never reads them.
+	ChatTemplateKwargs map[string]any `yaml:"chat_template_kwargs,omitempty"`
 	// StreamIdleTimeout bounds how long this endpoint may send nothing
 	// at all before a request is abandoned. It measures silence, not
 	// duration: a slow generation is still allowed to be slow, and the
@@ -1961,15 +2246,22 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
-// PersonConfig configures household member presence tracking. When Track
-// contains entity IDs, the person tracker maintains in-memory state from Home
-// Assistant, follows each person's linked device trackers for supported room
-// providers, and injects a presence summary into the agent's system prompt on
-// every wake.
+// PersonConfig configures household member presence tracking.
+// When the contact store holds ha_person_entity bindings, the person tracker
+// maintains in-memory state from Home Assistant for those people, follows each
+// one's linked device trackers for supported room providers, and injects a
+// presence summary into the agent's system prompt on every wake.
 type PersonConfig struct {
-	// Track is a list of Home Assistant person entity IDs to monitor
-	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin
-	// with "person.". An empty list disables person tracking.
+	// Track is a startup assertion, not the roster. Presence membership
+	// comes from the contact store: a contact is tracked because it
+	// carries an ha_person_entity binding. Every entity listed here must
+	// be claimed by some contact, or startup fails and names the
+	// unclaimed ones — which catches a config that has drifted from the
+	// contact graph instead of quietly shrinking the roster.
+	//
+	// Each entry must begin with "person.". An empty list asserts
+	// nothing and does not disable tracking; a contact store with no
+	// bindings does that.
 	Track []string `yaml:"track"`
 
 	// ContactBindings maps stable contact UUIDs to tracked Home
@@ -1981,9 +2273,12 @@ type PersonConfig struct {
 	// bindings; this key is ignored in recovery mode.
 	ContactBindings map[string]string `yaml:"contact_bindings"`
 
-	// Devices maps tracked person entity IDs to their wireless device
-	// MAC addresses. Used by the UniFi poller to determine which person
-	// a wireless client belongs to for room-level presence.
+	// Devices maps person entity IDs to their wireless device MAC
+	// addresses. Used by the UniFi poller to determine which person a
+	// wireless client belongs to for room-level presence. Keys need not
+	// appear in Track — membership is the contact store's answer, not
+	// this file's — but each key must name at least one MAC, since the
+	// poller with no mappings can attribute nothing.
 	Devices map[string][]DeviceMapping `yaml:"devices"`
 
 	// APRooms maps AP names (e.g., "ap-hor-office") to human-readable
@@ -2933,7 +3228,11 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
+	if c.Listen.Auth.SessionTTL == 0 {
+		c.Listen.Auth.SessionTTL = 168 * time.Hour
+	}
 	c.DataDir = ResolveDataDir(c.Workspace.Path, c.DataDir)
+	c.applyTLSDefaults()
 	if c.TalentsDir == "" {
 		// Derived, never authored: talents live inside core so they carry the
 		// same signed history and the same cleanliness rule as the prompts
@@ -3049,10 +3348,15 @@ func (c *Config) applyDefaults() {
 
 	if c.Pricing == nil {
 		c.Pricing = map[string]PricingEntry{
-			// Current models (per-million USD, input/output).
+			// Current models (per-million USD, input/output). Sonnet 5
+			// is $2/$10, below Sonnet 4.6's $3/$15.
+			"claude-opus-5":    {InputPerMillion: 5.0, OutputPerMillion: 25.0},
+			"claude-sonnet-5":  {InputPerMillion: 2.0, OutputPerMillion: 10.0},
+			"claude-haiku-4-5": {InputPerMillion: 1.0, OutputPerMillion: 5.0},
+			// Previous generation, still served and still present in
+			// usage history.
 			"claude-opus-4-8":   {InputPerMillion: 5.0, OutputPerMillion: 25.0},
 			"claude-sonnet-4-6": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
-			"claude-haiku-4-5":  {InputPerMillion: 1.0, OutputPerMillion: 5.0},
 			// Deprecated models kept for pricing historical usage records
 			// (retire 2026-06-15 / 2026-04-19); note Opus 4 was $15/$75,
 			// far above Opus 4.8's $5/$25.
@@ -3111,6 +3415,8 @@ func (c *Config) applyDefaults() {
 			"session_working_memory",
 			"session_close",
 			"archive_search",
+			"doc_search",
+			"search",
 		}
 	}
 
@@ -3191,6 +3497,15 @@ func (c *Config) Validate() error {
 	}
 	if c.OpenAIAPI.Enabled && (c.OpenAIAPI.Port < 1 || c.OpenAIAPI.Port > 65535) {
 		return fmt.Errorf("openai_api.port %d out of range (1-65535)", c.OpenAIAPI.Port)
+	}
+	if err := c.validateTLS(); err != nil {
+		return err
+	}
+	if err := c.validateListenAuth(); err != nil {
+		return err
+	}
+	if err := c.validateListenSources(); err != nil {
+		return err
 	}
 	if c.CardDAV.Enabled {
 		if c.CardDAV.Username == "" {
@@ -3326,11 +3641,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("person.track[%d] %q must start with \"person.\"", i, id)
 		}
 	}
-	// Validate person.devices references only tracked entities.
-	tracked := make(map[string]bool, len(c.Person.Track))
-	for _, id := range c.Person.Track {
-		tracked[id] = true
-	}
 	contactIDs := make([]string, 0, len(c.Person.ContactBindings))
 	for contactID := range c.Person.ContactBindings {
 		contactIDs = append(contactIDs, contactID)
@@ -3346,20 +3656,21 @@ func (c *Config) Validate() error {
 		if !validHAPersonEntityID(entityID) {
 			return fmt.Errorf("person.contact_bindings[%s] %q must match person.<object_id> (lowercase letters, digits, underscores)", contactID, entityID)
 		}
-		if !tracked[entityID] {
-			return fmt.Errorf("person.contact_bindings[%s] references untracked entity %q", contactID, entityID)
-		}
 		if holder, exists := claimedPeople[entityID]; exists {
 			return fmt.Errorf("person.contact_bindings assigns %q to both %s and %s", entityID, holder, contactID)
 		}
 		claimedPeople[entityID] = contactID
 	}
-	for entityID := range c.Person.Devices {
-		if !tracked[entityID] {
-			return fmt.Errorf("person.devices references untracked entity %q", entityID)
-		}
-	}
 	for entityID, devs := range c.Person.Devices {
+		// Membership lives in the contact store, which config validation
+		// cannot reach, so this checks shape only: presenceRoster does the
+		// reconciliation at startup where the bindings are readable.
+		if !validHAPersonEntityID(entityID) {
+			return fmt.Errorf("person.devices key %q must match person.<object_id> (lowercase letters, digits, underscores)", entityID)
+		}
+		if len(devs) == 0 {
+			return fmt.Errorf("person.devices[%s] lists no devices; remove the key or give it a MAC, since an empty list polls UniFi and can attribute nothing", entityID)
+		}
 		for i, d := range devs {
 			if d.MAC == "" {
 				return fmt.Errorf("person.devices[%s][%d].mac must not be empty", entityID, i)
@@ -3390,10 +3701,11 @@ func (c *Config) Validate() error {
 			return err
 		}
 	}
-	if c.Email.Configured() {
-		if err := c.Email.Validate(); err != nil {
-			return err
-		}
+	// Email is validated whenever any of it is written, not only once an
+	// account is complete: an account missing its host is a
+	// misconfiguration to report, not a reason to disable email quietly.
+	if err := c.Email.Validate(); err != nil {
+		return err
 	}
 	if c.StateWindow.MaxEntries < 1 {
 		return fmt.Errorf("state_window.max_entries %d must be positive", c.StateWindow.MaxEntries)

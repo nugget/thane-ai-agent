@@ -49,10 +49,10 @@ activates the `email` tag.
 
 ### Checkpoint
 
-A full state snapshot of conversations and metadata, persisted to SQLite.
-Triggered by message count threshold, graceful shutdown, or manual request.
-Checkpoints enable crash recovery — the agent resumes exactly where it left
-off.
+A diagnostic snapshot of selected conversation, fact, and task state,
+persisted to SQLite. Created by manual request, before model failover, or
+during graceful shutdown. Snapshots are incomplete and cannot restore agent
+state. Durable state stores provide persistence across restarts.
 See [Memory](memory.md).
 
 ### Compaction
@@ -105,12 +105,16 @@ orchestrator (cloud or large local) plans and reasons. The delegate (small
 local) executes tool calls. The smart model thinks; the cheap model does.
 See [Delegation](delegation.md).
 
-### Egress Gate *(planned)*
+### Egress Gate
 
-A single enforcement point for all outbound messages (email, eventually
-Signal and other channels). Will provide rate limiting by trust zone,
-dedup, and content scanning. The most critical planned structural safety
-control.
+The single enforcement point for outbound messages. It is implemented
+for email: every message passes one Go path that checks the account's
+access, each recipient's trust zone, and the account's recipient-domain
+rules, and ends sent, held in the account's drafts folder for the
+operator, or refused, with
+a logged decision. Sender identity on inbound mail is still a From-header
+claim until signature verification ships. Signal and other channels, and
+per-recipient rate limiting and reply deduplication, remain planned.
 See [Trust Architecture](trust-architecture.md).
 
 ### Episodic Summary
@@ -269,7 +273,9 @@ A classification assigned to every contact: `admin`, `household`,
 `trusted`, `known`, or `unknown` (implicit). Trust zones are the
 universal router for permissions across the system — gating email send,
 compute allocation, notification priority, and proactive behavior.
-Validated in Go, not prompts.
+Validated in Go, not prompts. An automated-looking email address (a
+no-reply, notification, or bounce mailbox) is read at `known` at most,
+whatever its record's zone.
 See [Trust Architecture](trust-architecture.md).
 
 ### Virtual Model

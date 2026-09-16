@@ -4,24 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
-	_ "modernc.org/sqlite"
 )
-
-// stubContacts implements ContactResolver from a fixed address→zone map.
-type stubContacts struct {
-	zones map[string]string
-}
-
-func (s stubContacts) ResolveTrustZone(addr string) (string, bool, error) {
-	zone, ok := s.zones[addr]
-	return zone, ok, nil
-}
 
 // recordingBus is a [messages.Bus] wired with a stub loop destination
 // that records every delivered envelope so tests can assert dispatch
@@ -62,58 +52,79 @@ func testOpstate(t *testing.T) *opstate.Store {
 	return s
 }
 
-// TestSenderTag pins the contacts-zone → wake-tag mapping documented
-// on senderTag. A new trust zone added to the contacts model defaults
-// to "stranger" instead of silently promoting senders.
-func TestSenderTag(t *testing.T) {
+func quietSlog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(discardWriter{}, nil))
+}
+
+func addr(s string) Address {
+	a, err := parseAddress(s)
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
+func TestParseHighWaterMark(t *testing.T) {
 	cases := []struct {
-		zone string
-		want string
+		name    string
+		raw     string
+		want    highWaterMark
+		wantErr bool
 	}{
-		{"admin", "owner"},
-		{"household", "household"},
-		{"trusted", "trusted"},
-		{"known", "known"},
-		{"", "stranger"},
-		{"newzone", "stranger"},
+		{"legacy bare uid", "391", highWaterMark{UID: 391}, false},
+		{"json", `{"uid_validity":7,"uid":391}`, highWaterMark{UIDValidity: 7, UID: 391}, false},
+		{"empty", "", highWaterMark{}, true},
+		{"garbage", "not-a-number", highWaterMark{}, true},
+		{"bad json", `{"uid":`, highWaterMark{}, true},
 	}
 	for _, tc := range cases {
-		if got := senderTag(tc.zone); got != tc.want {
-			t.Errorf("senderTag(%q) = %q, want %q", tc.zone, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseHighWaterMark(tc.raw)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("parseHighWaterMark(%q) = %+v, want %+v", tc.raw, got, tc.want)
+			}
+		})
+	}
+	round := highWaterMark{UIDValidity: 3, UID: 9}
+	back, err := parseHighWaterMark(round.encode())
+	if err != nil || back != round {
+		t.Errorf("encode/parse round trip = %+v, %v", back, err)
 	}
 }
 
-// TestPollerDispatchesPerMessageEventsWithTags pins the per-message
-// dispatch shape: each new IMAP message becomes one LoopEventPayload,
-// the envelope's wake_loop.Tags is the deduplicated union of
-// trust-zone-derived sender tags, and the envelope is delivered to the
+// TestPollerDispatchesPerMessageEvents pins the per-message dispatch
+// shape: each new IMAP message becomes one LoopEventPayload whose
+// metadata carries account, folder, uid, sender, and trust zone, no
+// per-wake tags are stamped, and the envelope is delivered to the
 // configured wake target (default: DefaultHandlerLoopName).
-func TestPollerDispatchesPerMessageEventsWithTags(t *testing.T) {
+func TestPollerDispatchesPerMessageEvents(t *testing.T) {
 	state := testOpstate(t)
 	cfg := Config{Accounts: []AccountConfig{{
 		Name:        "personal",
 		IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
 		DefaultFrom: "me@example.com",
 	}}}
-	mgr := NewManager(cfg, slog.Default())
+	mgr := NewManager(cfg, quietSlog())
 	bus, delivered := recordingBus()
-	contacts := stubContacts{zones: map[string]string{
-		"boss@example.com":   "admin",
-		"friend@example.com": "trusted",
-	}}
-	p := NewPoller(mgr, state, slog.Default(),
+	contacts := &stubContacts{
+		zones:  map[string]string{"boss@example.com": "admin", "friend@example.com": "trusted"},
+		owners: map[string]bool{"boss@example.com": true},
+	}
+	p := NewPoller(mgr, state, quietSlog(),
 		WithMessageBus(bus),
 		WithContactResolver(contacts),
 	)
 
 	// Order: newest-first, matching what fetchEnvelopes returns from IMAP.
 	new := []Envelope{
-		{UID: 103, From: "spammer@example.com", Subject: "Buy now"},
-		{UID: 102, From: "friend@example.com", Subject: "Hi"},
-		{UID: 101, From: "boss@example.com", Subject: "Urgent"},
+		{UID: 103, From: addr("spammer@example.com"), Subject: "Buy now", MessageID: "buy@example.com"},
+		{UID: 102, From: addr("Friend <Friend@Example.com>"), Subject: "Hi"},
+		{UID: 101, From: addr("boss@example.com"), Subject: "Urgent"},
 	}
-	sent, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", 100, new)
+	sent, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", highWaterMark{UIDValidity: 1, UID: 100}, new)
 	if err != nil {
 		t.Fatalf("dispatchAccountBatches: %v", err)
 	}
@@ -136,91 +147,128 @@ func TestPollerDispatchesPerMessageEventsWithTags(t *testing.T) {
 	if len(payload.Events) != 3 {
 		t.Fatalf("event count in envelope = %d, want 3", len(payload.Events))
 	}
-	tagSet := map[string]bool{}
-	for _, tag := range payload.Tags {
-		tagSet[tag] = true
-	}
-	if !tagSet["owner"] || !tagSet["trusted"] || !tagSet["stranger"] {
-		t.Errorf("payload.Tags = %v, want owner+trusted+stranger", payload.Tags)
+	if len(payload.Tags) != 0 {
+		t.Errorf("the poller must stamp no per-wake tags (identity rides in metadata), got %v", payload.Tags)
 	}
 
-	// Per-event metadata should carry the per-sender tag too, so the
-	// receiving loop can correlate each event with its sender's zone.
-	tagsByUID := map[string]string{}
+	byUID := map[string]messages.LoopEventPayload{}
 	for _, ev := range payload.Events {
-		tagsByUID[ev.Metadata["uid"]] = ev.Metadata["tag"]
+		byUID[ev.Metadata["uid"]] = ev
 	}
-	if tagsByUID["101"] != "owner" || tagsByUID["102"] != "trusted" || tagsByUID["103"] != "stranger" {
-		t.Errorf("per-event tags = %v, want 101=owner 102=trusted 103=stranger", tagsByUID)
+	if byUID["101"].Metadata["trust_zone"] != "admin" || byUID["102"].Metadata["trust_zone"] != "trusted" || byUID["103"].Metadata["trust_zone"] != "unknown" {
+		t.Errorf("per-event trust zones wrong: %v", byUID)
+	}
+	if byUID["101"].Metadata["contact_status"] != "matched" || byUID["101"].Metadata["contact_id"] != "id-boss" || byUID["101"].Metadata["contact_name"] != "Boss" || byUID["101"].Metadata["is_owner"] != "true" {
+		t.Errorf("matched sender metadata wrong: %v", byUID["101"].Metadata)
+	}
+	if byUID["102"].Metadata["is_owner"] != "false" {
+		t.Errorf("a matched non-operator must say is_owner=false explicitly: %v", byUID["102"].Metadata)
+	}
+	if byUID["103"].Metadata["contact_status"] != "unmatched" || byUID["103"].Metadata["is_owner"] != "false" {
+		t.Errorf("stranger metadata wrong: %v", byUID["103"].Metadata)
+	}
+	if _, present := byUID["103"].Metadata["contact_id"]; present {
+		t.Error("a stranger must carry no contact_id")
+	}
+	if _, present := byUID["101"].Metadata["tag"]; present {
+		t.Error("the tag metadata key is retired")
+	}
+	if byUID["102"].Metadata["from_name"] != "Friend" {
+		t.Errorf("from_name = %q", byUID["102"].Metadata["from_name"])
+	}
+	if _, present := byUID["101"].Metadata["from_name"]; present {
+		t.Error("from_name must be omitted when the header carries no display name")
+	}
+	// The lookup key is the lowercase bare address even when the
+	// header spelled it with a name and mixed case.
+	if byUID["102"].Metadata["from_address"] != "friend@example.com" {
+		t.Errorf("from_address = %q", byUID["102"].Metadata["from_address"])
+	}
+	if byUID["102"].Metadata["account"] != "personal" || byUID["102"].Metadata["folder"] != "INBOX" {
+		t.Errorf("account/folder metadata = %v", byUID["102"].Metadata)
+	}
+	if byUID["103"].Metadata["message_id"] != "buy@example.com" {
+		t.Errorf("message_id metadata = %q", byUID["103"].Metadata["message_id"])
+	}
+	if _, present := byUID["102"].Metadata["message_id"]; present {
+		t.Error("message_id must be omitted when the message has none")
+	}
+	if strings.Contains(byUID["101"].Summary, "personal/INBOX") {
+		t.Errorf("Summary must not spell account and folder as a path: %q", byUID["101"].Summary)
+	}
+	mustContain(t, byUID["101"].Summary, "account personal", "folder INBOX")
+
+	hwm, _ := state.Get(pollNamespace, "personal:INBOX")
+	if hwm != (highWaterMark{UIDValidity: 1, UID: 103}).encode() {
+		t.Errorf("high-water mark = %q, want validity 1 uid 103", hwm)
 	}
 }
 
 // TestPollerNoBusAdvancesQuietly verifies the no-op-on-missing-bus
 // behavior: an event observed without a bus configured doesn't error,
-// just logs and continues. The next poll won't re-deliver these
-// messages because the high-water mark already moved.
-func TestPollerNoBusAdvancesQuietly(t *testing.T) {
+// just logs and continues.
+// TestPollerWithoutBusRefusesToAdvance pins the no-bus contract: new
+// mail with nowhere to deliver it is an error, so checkAccount leaves
+// the high-water mark alone and the next poll with a bus sees it.
+func TestPollerWithoutBusRefusesToAdvance(t *testing.T) {
 	state := testOpstate(t)
 	cfg := Config{Accounts: []AccountConfig{{
 		Name: "readonly",
 		IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
 	}}}
-	mgr := NewManager(cfg, slog.Default())
-	p := NewPoller(mgr, state, slog.Default())
+	mgr := NewManager(cfg, quietSlog())
+	p := NewPoller(mgr, state, quietSlog())
 
-	sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", 0, []Envelope{
-		{UID: 200, From: "x@example.com"},
+	sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", highWaterMark{UIDValidity: 1, UID: 199}, []Envelope{
+		{UID: 200, From: addr("x@example.com")},
 	})
-	if err != nil {
-		t.Fatalf("dispatchAccountBatches without bus: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not dispatched") {
+		t.Fatalf("dispatch without a bus must fail, got %v", err)
 	}
 	if sent != 0 {
-		t.Errorf("delivered = %d, want 0 when bus is nil", sent)
+		t.Errorf("delivered = %d, want 0", sent)
+	}
+	if mark, _ := state.Get(pollNamespace, "readonly:INBOX"); mark != "" {
+		t.Errorf("high-water mark = %q; nothing may be recorded for undelivered mail", mark)
+	}
+	if sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", highWaterMark{}, nil); err != nil || sent != 0 {
+		t.Errorf("an empty window without a bus is not an error: %d, %v", sent, err)
 	}
 }
 
-// TestPollerBatchesAtMaxLoopEventsPerWake pins the Codex/Copilot fix:
-// a window with more than MaxLoopEventsPerWake new messages is split
-// into multiple envelopes, and per-batch high-water advance means a
-// late-batch failure preserves all earlier progress.
+// TestPollerBatchesAtMaxLoopEventsPerWake pins the batching contract: a
+// window with more than MaxLoopEventsPerWake new messages is split into
+// multiple envelopes, and the high-water mark lands on the newest UID
+// after every batch succeeds.
 func TestPollerBatchesAtMaxLoopEventsPerWake(t *testing.T) {
 	state := testOpstate(t)
 	cfg := Config{Accounts: []AccountConfig{{
 		Name: "personal",
 		IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
 	}}}
-	mgr := NewManager(cfg, slog.Default())
+	mgr := NewManager(cfg, quietSlog())
 	bus, delivered := recordingBus()
-	p := NewPoller(mgr, state, slog.Default(), WithMessageBus(bus))
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus))
 
 	total := messages.MaxLoopEventsPerWake + 2
 	newMessages := make([]Envelope, total)
 	for i := 0; i < total; i++ {
-		// Newest-first: highest UID at index 0.
-		newMessages[i] = Envelope{
-			UID:     uint32(1000 - i),
-			From:    "sender@example.com",
-			Subject: "msg",
-		}
+		newMessages[i] = Envelope{UID: uint32(1000 - i), From: addr("sender@example.com"), Subject: "msg"}
 	}
 
-	sent, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", 0, newMessages)
+	sent, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", highWaterMark{UIDValidity: 5}, newMessages)
 	if err != nil {
 		t.Fatalf("dispatchAccountBatches: %v", err)
 	}
 	if sent != total {
 		t.Fatalf("delivered = %d, want %d", sent, total)
 	}
-	envs := delivered()
-	if len(envs) != 2 {
+	if envs := delivered(); len(envs) != 2 {
 		t.Fatalf("envelope count = %d, want 2 (one for each batch)", len(envs))
 	}
-	// First batch contains the oldest 50 (ordered oldest-first), second
-	// batch contains the newest 2. High-water mark should be the newest
-	// UID delivered.
 	hwm, _ := state.Get(pollNamespace, "personal:INBOX")
-	if hwm != "1000" {
-		t.Errorf("high-water mark = %q, want 1000 (newest UID after success)", hwm)
+	if hwm != (highWaterMark{UIDValidity: 5, UID: 1000}).encode() {
+		t.Errorf("high-water mark = %q, want validity 5 uid 1000", hwm)
 	}
 }
 
@@ -234,9 +282,8 @@ func TestPollerBatchFailurePreservesPartialProgress(t *testing.T) {
 		Name: "personal",
 		IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
 	}}}
-	mgr := NewManager(cfg, slog.Default())
+	mgr := NewManager(cfg, quietSlog())
 
-	// Custom bus where the second batch's Send fails.
 	bus := messages.NewBus(nil)
 	sendCount := 0
 	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
@@ -247,15 +294,15 @@ func TestPollerBatchFailurePreservesPartialProgress(t *testing.T) {
 		return messages.DeliveryResult{}, errors.New("synthetic second-batch failure")
 	})
 
-	p := NewPoller(mgr, state, slog.Default(), WithMessageBus(bus))
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus))
 
 	total := messages.MaxLoopEventsPerWake + 2
 	newMessages := make([]Envelope, total)
 	for i := 0; i < total; i++ {
-		newMessages[i] = Envelope{UID: uint32(1000 - i), From: "sender@example.com"}
+		newMessages[i] = Envelope{UID: uint32(1000 - i), From: addr("sender@example.com")}
 	}
 
-	delivered, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", 0, newMessages)
+	delivered, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", highWaterMark{UIDValidity: 5}, newMessages)
 	if err == nil {
 		t.Fatal("expected error from failing second batch")
 	}
@@ -263,168 +310,23 @@ func TestPollerBatchFailurePreservesPartialProgress(t *testing.T) {
 		t.Fatalf("delivered = %d, want %d (first batch only)", delivered, messages.MaxLoopEventsPerWake)
 	}
 
-	// First batch contained the oldest 50 UIDs (after the oldest-first
-	// reorder): UIDs 951..1000-(50-1)=951..1000? Actually with the
-	// reorder applied to a newest-first list of 52 (UIDs 1000..949),
-	// the first batch oldest-first holds UIDs 949..998 (50 messages),
-	// so the high-water should land at 998 — not 1000 (the never-sent
-	// second batch) and not 0 (the starting mark).
+	// 52 messages with UIDs 1000..949 reordered oldest-first: the first
+	// batch of 50 holds 949..998, so the mark lands at 998.
 	hwm, _ := state.Get(pollNamespace, "personal:INBOX")
-	if hwm != "998" {
-		t.Errorf("high-water mark = %q, want 998 (last successful batch's max UID)", hwm)
-	}
-}
-
-func TestPollerHighWaterMark_FirstRunSeeds(t *testing.T) {
-	state := testOpstate(t)
-
-	// Verify no stored value initially.
-	val, err := state.Get(pollNamespace, "test:INBOX")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if val != "" {
-		t.Errorf("expected empty initial state, got %q", val)
-	}
-
-	// Simulate what checkAccount does on first run: seed without reporting.
-	if err := state.Set(pollNamespace, "test:INBOX", "500"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	val, err = state.Get(pollNamespace, "test:INBOX")
-	if err != nil {
-		t.Fatalf("Get after seed: %v", err)
-	}
-	if val != "500" {
-		t.Errorf("stored value = %q, want %q", val, "500")
-	}
-}
-
-func TestPollerHighWaterMark_UpdateOnNewMessages(t *testing.T) {
-	state := testOpstate(t)
-
-	// Seed initial high-water mark.
-	if err := state.Set(pollNamespace, "test:INBOX", "100"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	// Simulate new messages arriving (highest UID = 105).
-	if err := state.Set(pollNamespace, "test:INBOX", "105"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	val, err := state.Get(pollNamespace, "test:INBOX")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if val != "105" {
-		t.Errorf("stored value = %q, want %q", val, "105")
-	}
-}
-
-func TestPollerHighWaterMark_NamespaceIsolation(t *testing.T) {
-	state := testOpstate(t)
-
-	if err := state.Set(pollNamespace, "personal:INBOX", "200"); err != nil {
-		t.Fatalf("Set personal: %v", err)
-	}
-	if err := state.Set(pollNamespace, "work:INBOX", "300"); err != nil {
-		t.Fatalf("Set work: %v", err)
-	}
-
-	personal, err := state.Get(pollNamespace, "personal:INBOX")
-	if err != nil {
-		t.Fatalf("Get personal: %v", err)
-	}
-	work, err := state.Get(pollNamespace, "work:INBOX")
-	if err != nil {
-		t.Fatalf("Get work: %v", err)
-	}
-
-	if personal != "200" {
-		t.Errorf("personal = %q, want %q", personal, "200")
-	}
-	if work != "300" {
-		t.Errorf("work = %q, want %q", work, "300")
+	if hwm != (highWaterMark{UIDValidity: 5, UID: 998}).encode() {
+		t.Errorf("high-water mark = %q, want validity 5 uid 998", hwm)
 	}
 }
 
 func TestNewPoller(t *testing.T) {
 	state := testOpstate(t)
-	// NewPoller with nil manager is valid — it just won't check anything.
-	// This tests that the constructor doesn't panic.
 	p := NewPoller(nil, state, nil)
 	if p == nil {
 		t.Error("NewPoller returned nil")
 	}
 }
 
-func TestAdvanceHighWaterMark_Increases(t *testing.T) {
-	state := testOpstate(t)
-	p := NewPoller(nil, state, nil)
-
-	if err := state.Set(pollNamespace, "test:INBOX", "100"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := p.advanceHighWaterMark("test", "test:INBOX", 100, []Envelope{
-		{UID: 105},
-		{UID: 103},
-	}); err != nil {
-		t.Fatalf("advanceHighWaterMark: %v", err)
-	}
-
-	val, _ := state.Get(pollNamespace, "test:INBOX")
-	if val != "105" {
-		t.Errorf("high-water mark = %q, want %q", val, "105")
-	}
-}
-
-func TestAdvanceHighWaterMark_NeverDecreases(t *testing.T) {
-	state := testOpstate(t)
-	p := NewPoller(nil, state, nil)
-
-	if err := state.Set(pollNamespace, "test:INBOX", "391"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate messages with lower UIDs (e.g., after moves/deletes
-	// changed what's in INBOX).
-	if err := p.advanceHighWaterMark("test", "test:INBOX", 391, []Envelope{
-		{UID: 286},
-		{UID: 200},
-	}); err != nil {
-		t.Fatalf("advanceHighWaterMark: %v", err)
-	}
-
-	val, _ := state.Get(pollNamespace, "test:INBOX")
-	if val != "391" {
-		t.Errorf("high-water mark should not decrease: got %q, want %q", val, "391")
-	}
-}
-
-func TestAdvanceHighWaterMark_EmptyMessages(t *testing.T) {
-	state := testOpstate(t)
-	p := NewPoller(nil, state, nil)
-
-	if err := state.Set(pollNamespace, "test:INBOX", "100"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Empty message list should not change the mark.
-	if err := p.advanceHighWaterMark("test", "test:INBOX", 100, nil); err != nil {
-		t.Fatalf("advanceHighWaterMark: %v", err)
-	}
-
-	val, _ := state.Get(pollNamespace, "test:INBOX")
-	if val != "100" {
-		t.Errorf("high-water mark should not change with empty messages: got %q, want %q", val, "100")
-	}
-}
-
 func TestFilterSelfSent(t *testing.T) {
-	// Create a minimal manager with a configured account for testing.
 	cfg := Config{
 		Accounts: []AccountConfig{
 			{
@@ -435,51 +337,275 @@ func TestFilterSelfSent(t *testing.T) {
 			},
 		},
 	}
-	mgr := NewManager(cfg, slog.Default())
+	mgr := NewManager(cfg, quietSlog())
+	p := NewPoller(mgr, nil, quietSlog())
 
-	p := NewPoller(mgr, nil, nil)
-
-	messages := []Envelope{
-		{UID: 105, From: "alice@example.com", Subject: "Hello"},
-		{UID: 106, From: "Thane Agent <thane@example.com>", Subject: "Re: Hello"},
-		{UID: 107, From: "bob@example.com", Subject: "Meeting"},
-		{UID: 108, From: "thane@example.com", Subject: "Re: Meeting"},
+	envelopes := []Envelope{
+		{UID: 105, From: addr("alice@example.com"), Subject: "Hello"},
+		{UID: 106, From: addr("Thane Agent <thane@example.com>"), Subject: "Re: Hello"},
+		{UID: 107, From: addr("bob@example.com"), Subject: "Meeting"},
+		{UID: 108, From: addr("THANE@Example.com"), Subject: "Re: Meeting"},
 	}
 
-	filtered := p.filterSelfSent("work", messages)
+	filtered := p.filterSelfSent("work", envelopes)
 
 	if len(filtered) != 2 {
 		t.Fatalf("expected 2 messages after filtering, got %d", len(filtered))
 	}
-	if filtered[0].UID != 105 {
-		t.Errorf("first message UID = %d, want 105", filtered[0].UID)
-	}
-	if filtered[1].UID != 107 {
-		t.Errorf("second message UID = %d, want 107", filtered[1].UID)
+	if filtered[0].UID != 105 || filtered[1].UID != 107 {
+		t.Errorf("filtered UIDs = %d, %d; want 105, 107", filtered[0].UID, filtered[1].UID)
 	}
 }
 
 func TestFilterSelfSent_NoDefaultFrom(t *testing.T) {
-	// When DefaultFrom is empty (no SMTP configured), all messages pass through.
 	cfg := Config{
 		Accounts: []AccountConfig{
 			{
 				Name: "readonly",
 				IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "user"},
-				// No SMTP, no DefaultFrom.
 			},
 		},
 	}
-	mgr := NewManager(cfg, slog.Default())
+	mgr := NewManager(cfg, quietSlog())
+	p := NewPoller(mgr, nil, quietSlog())
 
-	p := NewPoller(mgr, nil, nil)
-
-	messages := []Envelope{
-		{UID: 100, From: "anyone@example.com"},
-	}
-
-	filtered := p.filterSelfSent("readonly", messages)
+	filtered := p.filterSelfSent("readonly", []Envelope{{UID: 100, From: addr("anyone@example.com")}})
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 message (no filtering without DefaultFrom), got %d", len(filtered))
+	}
+}
+
+// TestPollerEndToEnd drives CheckNewMessages against the in-memory IMAP
+// server: the first run seeds without dispatching, new mail becomes
+// events carrying account/folder/uid/message_id, self-sent mail is
+// skipped but still advances the mark, a legacy bare-UID mark is
+// adopted, and a UIDVALIDITY change reseeds instead of flooding.
+func TestPollerEndToEnd(t *testing.T) {
+	m := newMemIMAP(t)
+	imapCfg := m.imapConfig()
+	cfg := Config{Accounts: []AccountConfig{{
+		Name:        "personal",
+		IMAP:        imapCfg,
+		DefaultFrom: "Thane <thane@example.com>",
+	}}}
+	mgr := NewManager(cfg, quietSlog())
+	t.Cleanup(mgr.Close)
+	state := testOpstate(t)
+	bus, delivered := recordingBus()
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus), WithContactResolver(&stubContacts{zones: map[string]string{"alice@example.com": "trusted"}}))
+	ctx := context.Background()
+
+	preexisting := m.append("INBOX", rawMessage("old@example.com", "thane@example.com", "already there", "x"))
+
+	// First run: seed silently at UIDNEXT-1, dispatch nothing.
+	n, err := p.CheckNewMessages(ctx)
+	if err != nil || n != 0 {
+		t.Fatalf("first run: n=%d err=%v", n, err)
+	}
+	if len(delivered()) != 0 {
+		t.Fatal("first run must not dispatch pre-existing mail")
+	}
+	raw, _ := state.Get(pollNamespace, "personal:INBOX")
+	mark, err := parseHighWaterMark(raw)
+	if err != nil || mark.UID != preexisting || mark.UIDValidity == 0 {
+		t.Fatalf("seeded mark = %+v (%q), err %v; want uid %d with validity", mark, raw, err, preexisting)
+	}
+
+	// New mail: one from a contact, one self-sent copy.
+	uidAlice := m.append("INBOX", rawMessage("Alice <alice@example.com>", "thane@example.com", "Lunch", "tacos"))
+	uidSelf := m.append("INBOX", rawMessage("Thane <thane@example.com>", "alice@example.com", "Re: Lunch", "yes"))
+
+	n, err = p.CheckNewMessages(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("second run: n=%d err=%v, want 1 event", n, err)
+	}
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelopes = %d, want 1", len(envs))
+	}
+	payload := envs[0].Payload.(messages.LoopNotifyPayload)
+	if len(payload.Events) != 1 {
+		t.Fatalf("events = %d, want 1 (self-sent filtered)", len(payload.Events))
+	}
+	ev := payload.Events[0]
+	if ev.Metadata["uid"] != fmtUID(uidAlice) || ev.Metadata["account"] != "personal" || ev.Metadata["folder"] != "INBOX" {
+		t.Errorf("event metadata = %v", ev.Metadata)
+	}
+	if ev.Metadata["message_id"] != messageIDFor("Lunch") || ev.Metadata["trust_zone"] != "trusted" || ev.Metadata["from_address"] != "alice@example.com" {
+		t.Errorf("event metadata = %v", ev.Metadata)
+	}
+	if ev.Title != "Lunch" {
+		t.Errorf("Title = %q", ev.Title)
+	}
+	raw, _ = state.Get(pollNamespace, "personal:INBOX")
+	mark, _ = parseHighWaterMark(raw)
+	if mark.UID != uidSelf {
+		t.Errorf("mark after run = %+v, want uid %d (past the self-sent copy)", mark, uidSelf)
+	}
+
+	// Legacy bare-UID mark: adopted, and polling continues from it.
+	if err := state.Set(pollNamespace, "personal:INBOX", fmtUID(uidAlice)); err != nil {
+		t.Fatal(err)
+	}
+	n, err = p.CheckNewMessages(ctx)
+	if err != nil {
+		t.Fatalf("legacy run: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("legacy run dispatched %d, want 0 (only the self-sent copy is newer)", n)
+	}
+	raw, _ = state.Get(pollNamespace, "personal:INBOX")
+	mark, _ = parseHighWaterMark(raw)
+	if mark.UIDValidity == 0 || mark.UID != uidSelf {
+		t.Errorf("legacy mark not upgraded: %+v", mark)
+	}
+
+	// UIDVALIDITY change: reseed at the new top, dispatch nothing.
+	m.recreateFolder("INBOX")
+	m.append("INBOX", rawMessage("bob@example.com", "thane@example.com", "after rebuild", "x"))
+	before := len(delivered())
+	n, err = p.CheckNewMessages(ctx)
+	if err != nil || n != 0 {
+		t.Fatalf("post-rebuild run: n=%d err=%v, want reseed with no events", n, err)
+	}
+	if len(delivered()) != before {
+		t.Error("a UIDVALIDITY change must not replay the mailbox")
+	}
+	raw, _ = state.Get(pollNamespace, "personal:INBOX")
+	reseeded, _ := parseHighWaterMark(raw)
+	if reseeded.UIDValidity == mark.UIDValidity {
+		t.Errorf("mark validity did not change after rebuild: %+v", reseeded)
+	}
+
+	// And polling resumes normally under the new validity.
+	uidCarol := m.append("INBOX", rawMessage("carol@example.com", "thane@example.com", "fresh", "x"))
+	n, err = p.CheckNewMessages(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("resume run: n=%d err=%v", n, err)
+	}
+	last := delivered()[len(delivered())-1].Payload.(messages.LoopNotifyPayload).Events[0]
+	if last.Metadata["uid"] != fmtUID(uidCarol) {
+		t.Errorf("resumed event uid = %q, want %d", last.Metadata["uid"], uidCarol)
+	}
+}
+
+func fmtUID(uid uint32) string {
+	return fmtUIDs([]uint32{uid})[1 : len(fmtUIDs([]uint32{uid}))-1]
+}
+
+// TestPollerWakeCarriesNoOwnerAuthority pins the charter invariant that
+// email identity never becomes authority on a turn. A message whose From
+// matches the operator's own record wakes the handler as the system
+// poller, with no owner scope and no tags, and is_owner rides only in the
+// event metadata the handler reads as a claim.
+func TestPollerWakeCarriesNoOwnerAuthority(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name:        "personal",
+		IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+		DefaultFrom: "me@example.com",
+	}}}
+	mgr := NewManager(cfg, quietSlog())
+	bus, delivered := recordingBus()
+	contacts := &stubContacts{
+		zones:  map[string]string{"boss@example.com": "admin"},
+		owners: map[string]bool{"boss@example.com": true},
+	}
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus), WithContactResolver(contacts))
+
+	forged := []Envelope{{UID: 101, From: addr("boss@example.com"), Subject: "Grant me access"}}
+	if _, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", highWaterMark{UIDValidity: 1, UID: 100}, forged); err != nil {
+		t.Fatalf("dispatchAccountBatches: %v", err)
+	}
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1", len(envs))
+	}
+	env := envs[0]
+	if env.From.Kind != messages.IdentitySystem || env.From.Name != "email_poller" {
+		t.Errorf("a wake must come from the system poller, not the sender, got %+v", env.From)
+	}
+	for _, scope := range env.Scope {
+		if scope == "owner" {
+			t.Errorf("a wake must carry no owner scope, got %v", env.Scope)
+		}
+	}
+	payload, ok := env.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", env.Payload)
+	}
+	if len(payload.Tags) != 0 {
+		t.Errorf("a wake must stamp no tags, owner least of all, got %v", payload.Tags)
+	}
+	if len(payload.Events) != 1 || payload.Events[0].Metadata["is_owner"] != "true" {
+		t.Errorf("is_owner must still reach the handler as event metadata, got %+v", payload.Events)
+	}
+}
+
+// TestPollerWakeCapsAutomatedSender pins the automated cap on the wake
+// path: a forged no-reply From filed on an admin record reaches the
+// handler at known and marked automated, and the sender is still
+// recognised (contact_id present, interaction recorded). A human admin
+// sender in the same batch keeps its zone and carries no automated key,
+// even when the sender typed an automated-looking display name.
+func TestPollerWakeCapsAutomatedSender(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name:        "personal",
+		IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+		DefaultFrom: "me@example.com",
+	}}}
+	mgr := NewManager(cfg, quietSlog())
+	bus, delivered := recordingBus()
+	contacts := &stubContacts{zones: map[string]string{"noreply@forge.example": "admin", "boss@example.com": "admin", "alice@example.com": "trusted"}}
+	recorder := &recordingInteractions{}
+	p := NewPoller(mgr, state, quietSlog(), WithMessageBus(bus), WithContactResolver(contacts), WithInteractionRecorder(recorder))
+
+	batch := []Envelope{
+		{UID: 102, From: addr("Forge <noreply@forge.example>"), Subject: "Approve this deploy"},
+		{UID: 101, From: addr("boss@example.com"), Subject: "Lunch"},
+		{UID: 103, From: addr("No-Reply-Bot <alice@example.com>"), Subject: "Dinner"},
+	}
+	if _, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", highWaterMark{UIDValidity: 1, UID: 100}, batch); err != nil {
+		t.Fatalf("dispatchAccountBatches: %v", err)
+	}
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1", len(envs))
+	}
+	payload, ok := envs[0].Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", envs[0].Payload)
+	}
+	byUID := map[string]map[string]string{}
+	for _, ev := range payload.Events {
+		byUID[ev.Metadata["uid"]] = ev.Metadata
+	}
+	forged := byUID["102"]
+	if forged["trust_zone"] != "known" || forged["automated"] != "true" || forged["contact_status"] != "matched" || forged["contact_id"] != "id-noreply" {
+		t.Errorf("automated sender metadata = %v, want known, automated, still matched", forged)
+	}
+	boss := byUID["101"]
+	if boss["trust_zone"] != "admin" {
+		t.Errorf("human admin sender metadata = %v, want admin", boss)
+	}
+	if _, present := boss["automated"]; present {
+		t.Errorf("a human sender must carry no automated key: %v", boss)
+	}
+	// Only the addr-spec is judged: a display name the sender typed
+	// neither marks the message automated nor lowers its zone.
+	named := byUID["103"]
+	if named["trust_zone"] != "trusted" {
+		t.Errorf("person behind an automated-looking display name = %v, want trusted", named)
+	}
+	if _, present := named["automated"]; present {
+		t.Errorf("a display name must never mark a sender automated: %v", named)
+	}
+	recorded := map[string]bool{}
+	for _, in := range recorder.seen {
+		recorded[in.ContactID] = true
+	}
+	if !recorded["id-noreply"] || !recorded["id-boss"] {
+		t.Errorf("interactions = %+v, want the capped sender still recorded", recorder.seen)
 	}
 }

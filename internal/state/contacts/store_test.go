@@ -1,10 +1,14 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -178,25 +182,6 @@ func TestSoftDeleteNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteByName(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Delete Me", Kind: "individual"}
-	_, err := store.Upsert(c)
-	if err != nil {
-		t.Fatalf("Upsert() error = %v", err)
-	}
-
-	if err := store.DeleteByName("delete me"); err != nil {
-		t.Fatalf("DeleteByName() error = %v", err)
-	}
-
-	_, err = store.FindByName("Delete Me")
-	if err != sql.ErrNoRows {
-		t.Errorf("FindByName() after DeleteByName: got err = %v, want sql.ErrNoRows", err)
-	}
-}
-
 func TestFindByName_CaseInsensitive(t *testing.T) {
 	store := newTestStore(t)
 
@@ -354,7 +339,7 @@ func TestSearch_LIKEFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := store.searchLIKE("handyman")
+	results, err := store.searchLIKE(context.Background(), "handyman", searchOrder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,6 +692,77 @@ func TestFTS5Enabled(t *testing.T) {
 	}
 }
 
+// TestNewStore_MigratesFTSIndexToSearchColumns pins the migration of a
+// database indexed before given_name was searched: NewStore drops the
+// old contacts_fts, creates it with searchColumns and reindexes the rows
+// already stored, so a given name the old index never held is found,
+// and a second open leaves the migrated index as it is.
+func TestNewStore_MigratesFTSIndexToSearchColumns(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "contacts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := database.Migrate(db, schema, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE VIRTUAL TABLE contacts_fts USING fts5(formatted_name, nickname, note, ai_summary, org, content=contacts, content_rowid=rowid)`,
+		`INSERT INTO contacts (id, kind, formatted_name, given_name, trust_zone, rev, created_at, updated_at)
+			VALUES ('01990000-0000-7000-8000-000000000001', 'individual', 'Dr. A. Jones', 'Alice', 'known',
+				'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO contacts_fts(contacts_fts) VALUES('rebuild')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("build the old index: %v", err)
+		}
+	}
+	matches := func(expr string) int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM contacts_fts WHERE contacts_fts MATCH ?`, expr).Scan(&n); err != nil {
+			t.Fatalf("MATCH %s: %v", expr, err)
+		}
+		return n
+	}
+	if n := matches(`"alice"`); n != 0 {
+		t.Fatalf("the old index matches alice %d times; the case needs it to miss the given name", n)
+	}
+
+	for open := range 2 {
+		store, err := NewStore(db, slog.Default())
+		if err != nil {
+			t.Fatalf("open %d: %v", open, err)
+		}
+		if !store.ftsEnabled {
+			t.Fatalf("open %d: FTS5 disabled after migration", open)
+		}
+		var columns []string
+		rows, err := db.Query(`SELECT name FROM pragma_table_info('contacts_fts')`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			columns = append(columns, name)
+		}
+		rows.Close()
+		if !slices.Equal(columns, searchColumns) {
+			t.Errorf("open %d: contacts_fts columns = %v, want %v", open, columns, searchColumns)
+		}
+		if n := matches(`given_name : "alice"`); n != 1 {
+			t.Errorf("open %d: the migrated index matches given name alice %d times, want the stored row reindexed once", open, n)
+		}
+		found, err := store.Search("Alice")
+		if err != nil || len(found) != 1 || found[0].FormattedName != "Dr. A. Jones" {
+			t.Errorf("open %d: Search(Alice) = %+v, %v, want Dr. A. Jones", open, found, err)
+		}
+	}
+}
+
 func TestSemanticSearch_ZeroLimit(t *testing.T) {
 	store := newTestStore(t)
 
@@ -967,44 +1023,8 @@ func TestResolveContact_Nickname(t *testing.T) {
 	}
 }
 
-func TestResolveContact_SearchFallback(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Eve Engineer", Kind: "individual", AISummary: "Backend developer"}
-	if _, err := store.Upsert(c); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ResolveContact("Eve")
-	if err != nil {
-		t.Fatalf("ResolveContact() error = %v", err)
-	}
-	if got.FormattedName != "Eve Engineer" {
-		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "Eve Engineer")
-	}
-}
-
-func TestResolveContact_Ambiguous(t *testing.T) {
-	store := newTestStore(t)
-
-	contacts := []*Contact{
-		{FormattedName: "Eve Alpha", Kind: "individual", AISummary: "Eve works on alpha"},
-		{FormattedName: "Eve Beta", Kind: "individual", AISummary: "Eve works on beta"},
-	}
-	for _, c := range contacts {
-		if _, err := store.Upsert(c); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	_, err := store.ResolveContact("Eve")
-	if err == nil {
-		t.Fatal("expected error for ambiguous contact")
-	}
-	if !strings.Contains(err.Error(), "ambiguous") {
-		t.Errorf("error = %q, want to contain 'ambiguous'", err.Error())
-	}
-}
+// A name no record holds exactly, first names and ambiguity are pinned
+// by TestResolveContact_NameFieldsOnly in resolve_order_test.go.
 
 func TestResolveContact_NotFound(t *testing.T) {
 	store := newTestStore(t)
@@ -1015,27 +1035,39 @@ func TestResolveContact_NotFound(t *testing.T) {
 	}
 }
 
+// TestResolveContact_PriorityOrder pins #1545's precedence. It once
+// pinned the opposite: a record whose formatted name was the operator's
+// nickname won over the operator's own record, which is how a known
+// duplicate took the operator's name lookups, presence and dossier. A
+// record's authority now outranks the kind of match, so the operator's
+// nickname wins, whether the operator is pinned or only above known.
 func TestResolveContact_PriorityOrder(t *testing.T) {
-	store := newTestStore(t)
+	for _, pinned := range []bool{true, false} {
+		t.Run(fmt.Sprintf("operator pinned=%v", pinned), func(t *testing.T) {
+			store := newTestStore(t)
+			duplicate, err := store.Upsert(&Contact{FormattedName: "Ally", Kind: "individual"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			operator := &Contact{FormattedName: "Alice Operator", Kind: "individual", Nickname: "Ally", TrustZone: ZoneAdmin}
+			if pinned {
+				operator.TrustZone = ZoneKnown
+			}
+			if _, err := store.Upsert(operator); err != nil {
+				t.Fatal(err)
+			}
+			if pinned {
+				store.pinOperatorContactID(operator.ID)
+			}
 
-	// Create a contact named "Nugget" and a different contact with
-	// Nickname = "Nugget". The exact name match should win.
-	c1 := &Contact{FormattedName: "Nugget", Kind: "individual"}
-	if _, err := store.Upsert(c1); err != nil {
-		t.Fatal(err)
-	}
-
-	c2 := &Contact{FormattedName: "David McNett", Kind: "individual", Nickname: "Nugget"}
-	if _, err := store.Upsert(c2); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.ResolveContact("Nugget")
-	if err != nil {
-		t.Fatalf("ResolveContact() error = %v", err)
-	}
-	if got.FormattedName != "Nugget" {
-		t.Errorf("FormattedName = %q, want %q (exact match should win)", got.FormattedName, "Nugget")
+			got, err := store.ResolveContact("Ally")
+			if err != nil {
+				t.Fatalf("ResolveContact() error = %v", err)
+			}
+			if got.ID != operator.ID || got.ID == duplicate.ID {
+				t.Errorf("ResolveContact(Ally) = %q, want the operator's record %q, not the duplicate", got.FormattedName, operator.FormattedName)
+			}
+		})
 	}
 }
 
@@ -1398,6 +1430,59 @@ func TestUpdateLastInteraction_NotFound(t *testing.T) {
 	}
 }
 
+// TestRecordInteractionIfNewer pins the poller-facing update: a newer
+// timestamp lands, an older one is a silent no-op, neither touches
+// updated_at, and a missing contact is an error rather than silence.
+func TestRecordInteractionIfNewer(t *testing.T) {
+	store := newTestStore(t)
+	created, err := store.Upsert(&Contact{FormattedName: "Newer Test", Kind: "individual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, first, &InteractionMeta{Channel: "email", Direction: "inbound", Account: "primary", MessageID: "a@example.com"}); err != nil {
+		t.Fatalf("first record: %v", err)
+	}
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LastInteraction.Equal(first) || got.LastInteractionMeta == nil || got.LastInteractionMeta.Direction != "inbound" || got.LastInteractionMeta.Account != "primary" || got.LastInteractionMeta.MessageID != "a@example.com" {
+		t.Errorf("after first record: %v %+v", got.LastInteraction, got.LastInteractionMeta)
+	}
+	if !got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("updated_at moved from %v to %v; an observed interaction is not an edit", before.UpdatedAt, got.UpdatedAt)
+	}
+
+	// Older: no-op, and the newer meta survives.
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, first.Add(-time.Hour), &InteractionMeta{Channel: "email", Direction: "inbound", MessageID: "old@example.com"}); err != nil {
+		t.Fatalf("older record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if !got.LastInteraction.Equal(first) || got.LastInteractionMeta.MessageID != "a@example.com" {
+		t.Errorf("older timestamp must not regress the record: %v %+v", got.LastInteraction, got.LastInteractionMeta)
+	}
+
+	// Newer: lands.
+	later := first.Add(time.Hour)
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, later, &InteractionMeta{Channel: "email", Direction: "outbound"}); err != nil {
+		t.Fatalf("later record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if !got.LastInteraction.Equal(later) || got.LastInteractionMeta.Direction != "outbound" {
+		t.Errorf("newer timestamp must land: %v %+v", got.LastInteraction, got.LastInteractionMeta)
+	}
+
+	if err := store.RecordInteractionIfNewer(context.Background(), uuid.New(), later, nil); err == nil {
+		t.Error("a missing contact must be an error")
+	}
+}
+
 func TestForeignKeysEnabled(t *testing.T) {
 	store := newTestStore(t)
 
@@ -1518,5 +1603,88 @@ func TestPropertyProvenanceMigrationKeepsLegacyRowsUnknown(t *testing.T) {
 	}
 	if properties[0].Provenance != nil {
 		t.Fatalf("legacy row fabricated provenance: %#v", properties[0].Provenance)
+	}
+}
+
+// TestRecordInteractionIfNewer_ComparesInstants pins the instant
+// comparison: a stored value with a non-UTC offset is compared by the
+// moment it names, not by its text, and a future timestamp is recorded
+// as now.
+func TestRecordInteractionIfNewer_ComparesInstants(t *testing.T) {
+	store := newTestStore(t)
+	cdt := time.FixedZone("CDT", -5*3600)
+	stored := time.Date(2026, 9, 1, 10, 0, 0, 0, cdt) // 15:00Z
+	created, err := store.Upsert(&Contact{FormattedName: "Offset Test", Kind: "individual", LastInteraction: stored})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	older := time.Date(2026, 9, 1, 14, 0, 0, 0, time.UTC) // sorts after the stored text, but is an hour earlier
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, older, &InteractionMeta{Channel: "email"}); err != nil {
+		t.Fatalf("older record: %v", err)
+	}
+	got, _ := store.Get(created.ID)
+	if !got.LastInteraction.Equal(stored) {
+		t.Errorf("an earlier instant overwrote a later one: %v", got.LastInteraction)
+	}
+
+	newer := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, newer, &InteractionMeta{Channel: "email"}); err != nil {
+		t.Fatalf("newer record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if !got.LastInteraction.Equal(newer) {
+		t.Errorf("a later instant must land: %v", got.LastInteraction)
+	}
+
+	if err := store.RecordInteractionIfNewer(context.Background(), created.ID, time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), nil); err != nil {
+		t.Fatalf("future record: %v", err)
+	}
+	got, _ = store.Get(created.ID)
+	if got.LastInteraction.After(time.Now()) {
+		t.Errorf("a future timestamp must be recorded as now, got %v", got.LastInteraction)
+	}
+}
+
+// TestFindAllByPropertyExactIsUncapped pins that the lookup the send
+// gate uses sees every record sharing a value, past the cap the
+// display-oriented lookup applies.
+func TestFindAllByPropertyExactIsUncapped(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 55; i++ {
+		c, err := store.Upsert(&Contact{FormattedName: fmt.Sprintf("Dup %02d", i), Kind: "individual"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AddProperty(c.ID, &Property{Property: "EMAIL", Value: "shared@example.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capped, err := store.FindByPropertyExact("EMAIL", "shared@example.com")
+	if err != nil || len(capped) != 50 {
+		t.Fatalf("capped lookup = %d, %v", len(capped), err)
+	}
+	all, err := store.FindAllByPropertyExact(context.Background(), "EMAIL", "SHARED@example.com")
+	if err != nil || len(all) != 55 {
+		t.Errorf("uncapped lookup = %d, %v; want every record", len(all), err)
+	}
+}
+
+// TestContactLookupsHonorCancellation pins the context propagation the
+// email resolver and recorder rely on: a cancelled context fails the
+// query instead of running it.
+func TestContactLookupsHonorCancellation(t *testing.T) {
+	store := newTestStore(t)
+	created, err := store.Upsert(&Contact{FormattedName: "Cancel Test", Kind: "individual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.FindAllByPropertyExact(ctx, "EMAIL", "x@example.com"); err == nil {
+		t.Error("a cancelled lookup must fail")
+	}
+	if err := store.RecordInteractionIfNewer(ctx, created.ID, time.Now(), nil); err == nil {
+		t.Error("a cancelled interaction write must fail")
 	}
 }

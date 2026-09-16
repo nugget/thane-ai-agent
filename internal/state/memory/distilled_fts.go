@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,17 +14,23 @@ import (
 // SearchBundle is the multi-surface result envelope. Always carries
 // all three slices — an empty slice means "no hits on this surface"
 // (the non-nil zero-length list is the explicit signal to the
-// model). Truncated propagates from the underlying raw-message
-// search; distilled surfaces don't truncate within a single call.
+// model). Truncated reports overflow on any searched surface, conservatively
+// including a full raw-message page when the LIKE fallback cannot count matches.
+// UnavailableSurfaces distinguishes sources that were not searched from
+// successful searches that returned no matches.
 type SearchBundle struct {
 	Messages      []SearchResult
 	Sessions      []SessionMatch
 	WorkingMemory []WorkingMemoryMatch
 	Truncated     bool
+	// UnavailableSurfaces names surfaces skipped because their store or
+	// search index is unavailable: messages, sessions, or working_memory.
+	// The raw-message LIKE fallback still counts as a searched surface.
+	UnavailableSurfaces []string `json:"unavailable_surfaces,omitempty"`
 	// TotalMessages estimates how many raw messages matched the query
 	// before the limit (the broadest OR-of-terms recall set), so the
 	// model can gauge overflow without a cursor. Zero when unknown
-	// (FTS5 unavailable or the count failed).
+	// (FTS5 unavailable).
 	TotalMessages int
 }
 
@@ -34,15 +41,15 @@ type SearchBundle struct {
 // uniformly to both. Implementations: [MemorySearch] for production
 // (composed from the real stores), and test mocks.
 //
-// **Contract:** Search MUST return a non-nil *SearchBundle whenever
-// it returns a nil error. Callers may rely on this — "no hits" is
+// SearchContext honors caller cancellation and MUST return a non-nil
+// *SearchBundle whenever it returns a nil error. Callers may rely on this — "no hits" is
 // signaled by an empty bundle (all three slices empty), not by a nil
 // bundle. A nil bundle paired with a nil error is treated as a
 // programming bug by the prewarm provider and logged as a soft
 // fault. Returning a non-nil error means the bundle value is
 // undefined and callers should not read it.
 type MemorySearcher interface {
-	Search(opts SearchOptions) (*SearchBundle, error)
+	SearchContext(ctx context.Context, opts SearchOptions) (*SearchBundle, error)
 }
 
 // MemorySearch is the production MemorySearcher: composes
@@ -51,10 +58,9 @@ type MemorySearcher interface {
 // distilled state via working_memory_fts) into a single search
 // surface.
 //
-// Session and working_memory hits soft-fail individually — a query
-// error on a distilled surface doesn't suppress the raw-message
-// results the model would otherwise have seen. Only a raw-message
-// search failure propagates.
+// A query or decoding failure on any searched surface fails the bundle. This
+// lets callers distinguish an empty result from an incomplete archive search;
+// a coordinator can still report independent document or email results.
 type MemorySearch struct {
 	archive *ArchiveStore
 	working *WorkingMemoryStore
@@ -85,96 +91,88 @@ func NewMemorySearch(archive *ArchiveStore, working *WorkingMemoryStore, logger 
 	return &MemorySearch{archive: archive, working: working, logger: logger}
 }
 
-// Search runs the query across every available memory surface and
-// returns a SearchBundle. The raw-message path uses opts.Limit; the
-// distilled surfaces use their own tighter caps so the envelope
-// stays bounded.
-//
-// When opts.ConversationID is non-empty, ALL three surfaces are
-// scoped to that conversation. The raw-message search honors it
-// via ArchiveStore.Search's SQL filter; the distilled surfaces are
-// filtered in Go after the FTS pass (sessions_fts and
-// working_memory_fts are scoped over the global corpus today).
-// Filtering after BM25 ranking is acceptable because the distilled
-// hit count is capped small (5 sessions, 3 working memory) — the
-// extra fetched-then-discarded rows are bounded and cheap.
+// Search queries every available memory surface. Callers with a request
+// context should use [MemorySearch.SearchContext].
 func (m *MemorySearch) Search(opts SearchOptions) (*SearchBundle, error) {
+	return m.SearchContext(context.Background(), opts)
+}
+
+// SearchContext queries every available memory surface with caller cancellation.
+// ConversationID scopes all surfaces before ranking and limiting; time bounds
+// apply only to raw messages, not session summaries or living working memory.
+// Raw messages use opts.Limit, while distilled surfaces use their tighter caps.
+// Any query, count, or decoding error returns a nil bundle: partial archive
+// results are never presented as a complete search. Unconfigured stores and
+// unavailable distilled indexes are reported in UnavailableSurfaces; their
+// peers remain searchable. Success always returns a non-nil bundle.
+func (m *MemorySearch) SearchContext(ctx context.Context, opts SearchOptions) (*SearchBundle, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	bundle := &SearchBundle{}
 	if m.archive == nil {
+		bundle.UnavailableSurfaces = []string{"messages", "sessions", "working_memory"}
 		return bundle, nil
 	}
 
-	msgs, err := m.archive.Search(opts)
+	msgs, err := m.archive.SearchContext(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 	bundle.Messages = msgs
 
-	// Total raw-message matches (pre-limit) for the overflow gauge.
-	// Soft-fail: an estimate failure must not drop the hits we have.
-	if total, err := m.archive.CountMatches(opts); err == nil {
+	if total, err := m.archive.CountMatchesContext(ctx, opts); err == nil {
 		bundle.TotalMessages = total
-	} else if m.logger != nil {
+		bundle.Truncated = total > len(msgs)
+	} else {
 		m.logger.Warn("message match count failed", "query", opts.Query, "error", err)
+		return nil, err
 	}
-
-	// Session summaries. Soft-fail: a sessions_fts query error
-	// shouldn't drop the raw-message results we already collected.
-	if sess, err := m.archive.SearchSessions(opts.Query, maxDistilledSessions); err == nil {
-		bundle.Sessions = filterSessionMatchesByConversation(sess, opts.ConversationID)
-	} else if m.logger != nil {
-		m.logger.Warn("session summaries search failed", "query", opts.Query, "error", err)
+	if !m.archive.ftsEnabled {
+		limit := opts.Limit
+		if limit <= 0 {
+			limit = 10 // ArchiveStore.SearchContext's default.
+		}
+		// LIKE cannot estimate total matches. A full page may omit rows,
+		// so report that uncertainty instead of claiming completeness.
+		bundle.Truncated = len(msgs) >= limit
 	}
-
-	// Working memory. Soft-fail for the same reason.
-	if m.working != nil {
-		if wm, err := m.working.Search(opts.Query, maxDistilledWorkingMemory); err == nil {
-			bundle.WorkingMemory = filterWorkingMemoryMatchesByConversation(wm, opts.ConversationID)
-		} else if m.logger != nil {
+	if !m.archive.sessionsFTSEnabled {
+		bundle.UnavailableSurfaces = append(bundle.UnavailableSurfaces, "sessions")
+	} else {
+		sess, err := m.archive.searchSessionsContext(ctx, opts.Query, opts.ConversationID, maxDistilledSessions+1)
+		if err != nil {
+			m.logger.Warn("session summaries search failed", "query", opts.Query, "error", err)
+			return nil, err
+		}
+		if len(sess) > maxDistilledSessions {
+			sess = sess[:maxDistilledSessions]
+			bundle.Truncated = true
+		}
+		bundle.Sessions = sess
+	}
+	if m.working == nil || !m.working.ftsEnabled {
+		bundle.UnavailableSurfaces = append(bundle.UnavailableSurfaces, "working_memory")
+	} else {
+		wm, err := m.working.searchContext(ctx, opts.Query, opts.ConversationID, maxDistilledWorkingMemory+1)
+		if err != nil {
 			m.logger.Warn("working memory search failed", "query", opts.Query, "error", err)
+			return nil, err
 		}
+		if len(wm) > maxDistilledWorkingMemory {
+			wm = wm[:maxDistilledWorkingMemory]
+			bundle.Truncated = true
+		}
+		bundle.WorkingMemory = wm
 	}
-
 	return bundle, nil
-}
-
-// filterSessionMatchesByConversation returns matches scoped to a
-// conversation when convID is non-empty; otherwise passes through.
-// Used by [MemorySearch.Search] to honor opts.ConversationID across
-// distilled surfaces (the raw-message search already filters in SQL).
-func filterSessionMatchesByConversation(matches []SessionMatch, convID string) []SessionMatch {
-	if convID == "" {
-		return matches
-	}
-	out := matches[:0]
-	for _, m := range matches {
-		if m.ConversationID == convID {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// filterWorkingMemoryMatchesByConversation — analogous helper for
-// the working_memory surface.
-func filterWorkingMemoryMatchesByConversation(matches []WorkingMemoryMatch, convID string) []WorkingMemoryMatch {
-	if convID == "" {
-		return matches
-	}
-	out := matches[:0]
-	for _, m := range matches {
-		if m.ConversationID == convID {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 // sessionsFTSTable is the FTS5 virtual table name covering the
 // sessions table's distilled columns. Indexes title, summary, and
 // tags so a single query against a household-vocabulary phrase can
 // reach the summarizer's per-session output. Held alongside the
-// raw-message index [ArchiveStore.msgFTSName].
+// raw-message messages_fts index.
 const sessionsFTSTable = "sessions_fts"
 
 // workingMemoryFTSTable is the FTS5 virtual table name covering
@@ -336,6 +334,18 @@ type SessionMatch struct {
 // the query trims to empty, or when no rows match. Caller composes
 // this with [ArchiveStore.Search] to build a multi-surface envelope.
 func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, error) {
+	return s.SearchSessionsContext(context.Background(), query, limit)
+}
+
+// SearchSessionsContext is [ArchiveStore.SearchSessions] with caller cancellation.
+func (s *ArchiveStore) SearchSessionsContext(ctx context.Context, query string, limit int) ([]SessionMatch, error) {
+	return s.searchSessionsContext(ctx, query, "", limit)
+}
+
+func (s *ArchiveStore) searchSessionsContext(ctx context.Context, query, conversationID string, limit int) ([]SessionMatch, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Gate on the sessions-specific FTS setup, not the core ftsEnabled
 	// flag. trySetupSessionsFTS can fail independently (corrupt
 	// pre-existing virtual table, shadow-table permissions issue) even
@@ -362,11 +372,16 @@ func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, 
 		FROM %s
 		JOIN sessions s ON s.rowid = %s.rowid
 		WHERE %s MATCH ?
-		ORDER BY rank
-		LIMIT ?
 	`, sessionsFTSTable, sessionsFTSTable, sessionsFTSTable, sessionsFTSTable)
+	args := []any{q}
+	if conversationID != "" {
+		sqlText += " AND s.conversation_id = ?"
+		args = append(args, conversationID)
+	}
+	sqlText += " ORDER BY rank, s.id LIMIT ?"
+	args = append(args, limit)
 
-	rows, err := s.db.Query(sqlText, q, limit)
+	rows, err := s.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search sessions: %w", err)
 	}
@@ -390,16 +405,11 @@ func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, 
 				return nil, fmt.Errorf("parse session ended_at: %w", err)
 			}
 		}
-		// Tags is stored as a JSON blob ([]string) — unmarshal so the
-		// caller gets a consistent shape with Session.Tags. Corrupt JSON
-		// is logged but not fatal (matches populateSession's posture).
+		// A malformed stored tag list must not look like a valid session
+		// with no tags in a search that promises complete decoded results.
 		if tagsJSON != "" {
 			if err := json.Unmarshal([]byte(tagsJSON), &m.Tags); err != nil {
-				if s.logger != nil {
-					s.logger.Warn("corrupt tags JSON on session match",
-						"session", ShortID(m.SessionID), "error", err)
-				}
-				m.Tags = nil
+				return nil, fmt.Errorf("parse session tags: %w", err)
 			}
 		}
 		out = append(out, m)

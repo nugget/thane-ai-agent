@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func TestOllamaAuth(t *testing.T) {
@@ -204,5 +206,73 @@ func TestOpenAIAuth(t *testing.T) {
 				t.Fatalf("error envelope = %+v, want invalid_api_key/invalid_request_error", body.Error)
 			}
 		})
+	}
+}
+
+// TestOllamaHandlerClaimsNoOwnership drives a chat request through the
+// handler exactly as Home Assistant or Open WebUI does — no credential,
+// no identity, nothing but a body — and pins that the binding reaching
+// the loop claims only the surface it arrived on.
+//
+// This surface used to set the owner flag here (#1503), which meant the
+// protected owner tag was pinned for any caller who could open a socket
+// to port 11434. The tag has to come from a caller identified as the
+// operator's contact, and nothing on this surface can identify anyone.
+func TestOllamaHandlerClaimsNoOwnership(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := loop.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutdownCancel()
+		registry.ShutdownAll(shutdownCtx)
+	})
+
+	runner := &owuRecordingRunner{requests: make(chan loop.Request, 1)}
+	tracker, err := NewOWUTracker(ctx, registry, events.New(), runner, slog.Default())
+	if err != nil {
+		t.Fatalf("NewOWUTracker: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"model":"thane:latest","stream":false,` +
+		`"messages":[{"role":"system","content":"You are a helpful assistant for David."},` +
+		`{"role":"user","content":"turn on the garage lights"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", body)
+	rec := httptest.NewRecorder()
+
+	// The handler reads the router's quality ceiling off the loop and
+	// otherwise routes through the tracker, so a zero-value loop (nil
+	// router, quality floor default) is all this path needs.
+	//
+	// Called on the test's own goroutine: the recording runner's channel
+	// is buffered, so nothing here deadlocks, and the handler is finished
+	// before the assertions and before cleanup cancels the tracker.
+	handleOllamaChatShared(rec, req, &agent.Loop{}, tracker, slog.Default())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want the request to complete", rec.Code, rec.Body.String())
+	}
+
+	var got loop.Request
+	select {
+	case got = <-runner.requests:
+	default:
+		t.Fatal("the handler returned without the request reaching the loop")
+	}
+
+	if got.ChannelBinding == nil {
+		t.Fatal("ChannelBinding = nil, want the surface to be named")
+	}
+	if got.ChannelBinding.Channel != "owu" {
+		t.Errorf("Channel = %q, want owu", got.ChannelBinding.Channel)
+	}
+	if got.ChannelBinding.IsOwner {
+		t.Error("IsOwner = true for a caller that presented no identity")
+	}
+	// Nothing else on the binding was established either, which is the
+	// honest description of an anonymous caller.
+	if got.ChannelBinding.ContactID != "" || got.ChannelBinding.ContactName != "" || got.ChannelBinding.TrustZone != "" {
+		t.Errorf("binding claims an identity it never verified: %#v", got.ChannelBinding)
 	}
 }

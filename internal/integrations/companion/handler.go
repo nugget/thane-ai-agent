@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
+	"github.com/nugget/thane-ai-agent/internal/server/listen"
 )
 
 const (
@@ -47,7 +48,7 @@ var upgrader = websocket.Upgrader{
 
 // Handler is the HTTP handler for companion app WebSocket connections.
 type Handler struct {
-	tokens    tokenMatcher // hashed token → account resolution
+	tokens    *listen.TokenSet // hashed token → account resolution
 	registry  *Registry
 	devices   DeviceRecorder             // optional durable inventory sink; nil disables
 	deviceOps chan func(context.Context) // ordered async inventory writes
@@ -71,7 +72,7 @@ func NewHandler(tokenIndex map[string]string, registry *Registry, logger *slog.L
 		registry = NewRegistry(logger)
 	}
 	return &Handler{
-		tokens:   newTokenMatcher(tokenIndex),
+		tokens:   listen.NewTokenSet(tokenIndex),
 		registry: registry,
 		logger:   logger,
 	}
@@ -202,7 +203,7 @@ func (h *Handler) authenticate(conn *websocket.Conn, requestType string) (*Provi
 	// Step 3: Validate token and resolve account. Constant-time over
 	// digests, matching the HTTP observation path; a map lookup keyed by
 	// the plaintext token compared byte-by-byte and stopped early.
-	account, ok := h.tokens.match(msg.Token)
+	account, ok := h.tokens.Match(msg.Token)
 	if !ok {
 		_ = writeJSONWithDeadline(conn, writeWait, authFailed{
 			Type:    typeAuthFailed,

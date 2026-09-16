@@ -49,6 +49,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
+	"github.com/nugget/thane-ai-agent/internal/server/edge"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/companions"
@@ -86,6 +87,12 @@ type App struct {
 	// contactBindingsConfigOwned records the verified startup decision so
 	// CardDAV cannot reinterpret an ignored unverified config later.
 	contactBindingsConfigOwned bool
+	// Operator identity, built in initChannels and read by later stages.
+	// initAwareness runs after channels, so the presence contact
+	// resolver can rely on this being set. Shared with the Signal
+	// bridge so both surfaces pin the same contact as operator,
+	// including under the legacy identity.owner_contact_name selector.
+	contactBindingResolver *contactChannelBindingResolver
 
 	// LLM clients
 	llmClient             llm.Client
@@ -151,6 +158,7 @@ type App struct {
 	ollamaServer  *api.OllamaServer
 	openaiServer  *api.OpenAIServer
 	carddavServer *cdav.Server
+	edgeServer    *edge.Server
 
 	// MQTT
 	mqttPub        *mqtt.Publisher
@@ -188,7 +196,6 @@ type App struct {
 	// Service loop runtimes hydrated into built-in loop definitions.
 	unifiPoller        *unifi.Poller
 	haStateWatcher     *homeassistant.StateWatcher
-	emailPoller        *email.Poller
 	mediaFeedPoller    *media.FeedPoller
 	telemetryPublisher *telemetry.Publisher
 	telCollector       *telemetry.Collector // shared; see App.telemetryCollector
@@ -246,7 +253,11 @@ type App struct {
 	messageBus *messages.Bus
 
 	// Email manager (for Close on shutdown)
-	emailMgr *email.Manager
+	emailService *email.Service
+
+	// emailReviewWake wakes email review loops on queued review work;
+	// nil when no account names a review_loop.
+	emailReviewWake *emailReviewWaker
 
 	// Signal bridge
 	signalClient *sigcli.Client

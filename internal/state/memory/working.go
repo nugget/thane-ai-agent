@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -12,7 +13,7 @@ import (
 // Working memory captures experiential context that mechanical
 // summarisation destroys: emotional tone, conversational arc,
 // relationship temperature, and unresolved threads. The table lives in
-// archive.db alongside session transcripts.
+// the shared database alongside session transcripts.
 type WorkingMemoryStore struct {
 	db         *sql.DB
 	ftsEnabled bool
@@ -117,6 +118,18 @@ func (s *WorkingMemoryStore) Delete(conversationID string) error {
 // [WorkingMemoryStore.Get] for the full content), an updated_at
 // timestamp, the content, and the snippet highlight.
 func (s *WorkingMemoryStore) Search(query string, limit int) ([]WorkingMemoryMatch, error) {
+	return s.SearchContext(context.Background(), query, limit)
+}
+
+// SearchContext is [WorkingMemoryStore.Search] with caller cancellation.
+func (s *WorkingMemoryStore) SearchContext(ctx context.Context, query string, limit int) ([]WorkingMemoryMatch, error) {
+	return s.searchContext(ctx, query, "", limit)
+}
+
+func (s *WorkingMemoryStore) searchContext(ctx context.Context, query, conversationID string, limit int) ([]WorkingMemoryMatch, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !s.ftsEnabled {
 		return nil, nil
 	}
@@ -128,15 +141,21 @@ func (s *WorkingMemoryStore) Search(query string, limit int) ([]WorkingMemoryMat
 		limit = 5
 	}
 
-	rows, err := s.db.Query(fmt.Sprintf(`
+	sqlText := fmt.Sprintf(`
 		SELECT w.conversation_id, w.content, w.updated_at,
 		       snippet(%s, 0, '**', '**', '...', 32) AS highlight
 		FROM %s
 		JOIN working_memory w ON w.rowid = %s.rowid
 		WHERE %s MATCH ?
-		ORDER BY rank
-		LIMIT ?
-	`, workingMemoryFTSTable, workingMemoryFTSTable, workingMemoryFTSTable, workingMemoryFTSTable), q, limit)
+	`, workingMemoryFTSTable, workingMemoryFTSTable, workingMemoryFTSTable, workingMemoryFTSTable)
+	args := []any{q}
+	if conversationID != "" {
+		sqlText += " AND w.conversation_id = ?"
+		args = append(args, conversationID)
+	}
+	sqlText += " ORDER BY rank, w.conversation_id LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search working memory: %w", err)
 	}

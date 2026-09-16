@@ -1,4 +1,6 @@
-// Package checkpoint provides state snapshotting and restoration for Thane.
+// Package checkpoint captures diagnostic snapshots of selected Thane state.
+// Snapshots can be created, inspected, and deleted; restoration is unsupported.
+// Restart persistence is provided by the underlying state stores.
 package checkpoint
 
 import (
@@ -54,7 +56,7 @@ type Trigger string
 
 const (
 	TriggerManual      Trigger = "manual"       // Explicit API call
-	TriggerPeriodic    Trigger = "periodic"     // Every N messages
+	TriggerPeriodic    Trigger = "periodic"     // Retained for stored snapshots; no automatic periodic hook
 	TriggerPreFailover Trigger = "pre-failover" // Before model switch
 	TriggerShutdown    Trigger = "shutdown"     // Graceful shutdown
 	TriggerPreCompact  Trigger = "pre-compact"  // Before memory compaction
@@ -76,9 +78,12 @@ type Checkpoint struct {
 	FactCount    int   `json:"fact_count"`    // Total facts captured
 }
 
-// State holds the actual restorable data.
+// State holds the data captured by the configured providers. It is a diagnostic
+// projection, not a complete backup: the application captures conversation
+// working windows, facts, and selected task fields, without full message
+// provenance, task payloads, or configuration.
 type State struct {
-	// Conversations with full message history
+	// Conversations with the messages selected by the provider
 	Conversations []Conversation `json:"conversations"`
 
 	// Long-term memory facts

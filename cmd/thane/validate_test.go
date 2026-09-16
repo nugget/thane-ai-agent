@@ -478,3 +478,49 @@ func TestAdmissionReportPreservesAReasonsOwnIndentation(t *testing.T) {
 		t.Errorf("the reason's own two-space nesting was flattened:\n%s", buf.String())
 	}
 }
+
+// TestRunValidate_JSONReportsTLSPreflight pins that -o json runs the
+// front-door preflight: a config whose DNS provider is not registered
+// is reported invalid with the reason, not as a valid file.
+func TestRunValidate_JSONReportsTLSPreflight(t *testing.T) {
+	storage := t.TempDir()
+	body := minimalValidConfig + `
+tls:
+  enabled: true
+  hostnames:
+    thane.example.net: native
+  certmagic:
+    agreed: true
+    storage: ` + storage + `
+    dns:
+      provider: nosuchprovider
+`
+	path := writeConfig(t, body)
+	var buf bytes.Buffer
+
+	err := runValidate(&buf, path, "", "json")
+	if err == nil {
+		t.Fatal("expected error from runValidate, got nil")
+	}
+	var got struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+		TLS   struct {
+			Enabled bool   `json:"enabled"`
+			OK      bool   `json:"ok"`
+			Error   string `json:"error"`
+		} `json:"tls"`
+	}
+	if jerr := json.Unmarshal(buf.Bytes(), &got); jerr != nil {
+		t.Fatalf("json output is not valid JSON: %v\nbody:\n%s", jerr, buf.String())
+	}
+	if got.Valid {
+		t.Error("expected valid=false when the front-door preflight fails")
+	}
+	if !got.TLS.Enabled || got.TLS.OK || !strings.Contains(got.TLS.Error, "not registered") {
+		t.Errorf("tls report = %+v, want enabled, not ok, naming the unregistered provider", got.TLS)
+	}
+	if !strings.Contains(got.Error, "not registered") {
+		t.Errorf("top-level error should carry the preflight failure, got %q", got.Error)
+	}
+}

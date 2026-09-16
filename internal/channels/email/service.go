@@ -1,0 +1,379 @@
+package email
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
+)
+
+// folderCacheMaxAge is how old a cached folder listing may be before
+// the poller refreshes it on its next visit to the account.
+const folderCacheMaxAge = 10 * time.Minute
+
+// ServiceDependencies supplies the runtime collaborators a [Service]
+// needs. Fields are optional unless stated: a service without a contact
+// resolver sends without trust gating, and polling requires both a
+// state store and a message bus.
+type ServiceDependencies struct {
+	// State persists the poller's per-account high-water marks and the
+	// draft ledger. Required when polling is enabled; without it drafts
+	// are not recorded and the draft tools refuse.
+	State *opstate.Store `json:"-"`
+
+	// MessageBus delivers new-mail wake envelopes to the handler loop.
+	// Required when polling is enabled: a poller that cannot deliver a
+	// wake must not advance past the mail it saw.
+	MessageBus *messages.Bus `json:"-"`
+
+	// Contacts resolves addresses against the contact directory for
+	// result tagging, the send gate, and wake metadata. Nil disables
+	// trust gating and renders every address as unmatched.
+	Contacts ContactResolver `json:"-"`
+
+	// Interactions records inbound exchanges on matched contacts. Nil
+	// records nothing.
+	Interactions InteractionRecorder `json:"-"`
+
+	// Authenticator checks inbound signatures. Nil means every message
+	// reads as [AuthAbsent].
+	Authenticator Authenticator `json:"-"`
+
+	// Signers picks a per-account outbound signer. Nil sends unsigned.
+	Signers SignerResolver `json:"-"`
+
+	// Inspector reviews every outbound message after the policy
+	// decision and may only refuse it. Nil inspects nothing.
+	Inspector Inspector `json:"-"`
+
+	// Queue is the loop work queue that review work goes into: a draft
+	// an unattended turn writes on an account with a review_loop, and a
+	// message email_escalate hands over. Nil means nothing is queued for
+	// review and email_escalate refuses.
+	Queue *loopqueue.Store `json:"-"`
+
+	// Logger receives account, poller, and tool diagnostics. Nil means
+	// the default logger.
+	Logger *slog.Logger `json:"-"`
+}
+
+// Service owns the configured email runtime: account resolution, the
+// model-facing tools and context block, the poller, the recent
+// operations log, and the folder cache. Application code depends on
+// this facade rather than assembling those pieces separately, and
+// every account lookup a tool performs goes through
+// [Service.ResolveAccount], which is where loop bindings are enforced.
+type Service struct {
+	manager         *Manager
+	logger          *slog.Logger
+	tools           *Tools
+	contextProvider *ContextProvider
+	poller          *Poller
+	opLog           *OperationLog
+	contacts        ContactResolver
+	interactions    InteractionRecorder
+	authenticator   Authenticator
+	signers         SignerResolver
+	inspector       Inspector
+
+	// state holds the draft ledger (draft_ledger.go). It is nil when the
+	// service was built without a state store.
+	state *opstate.Store
+
+	// drafts holds the per-account draft-ledger locks (draft_lock.go).
+	drafts draftLocks
+
+	// queue holds review work (review_queue.go). It is nil when the
+	// service was built without one.
+	queue *loopqueue.Store
+
+	// reviewMu guards pendingReview, the per-account count of queued
+	// review work the Email Accounts block renders. Counts are measured
+	// by the poller and after each enqueue, never at render time.
+	reviewMu      sync.Mutex
+	pendingReview map[string]reviewCount
+
+	foldersMu sync.Mutex
+	folders   map[string]folderSnapshot
+}
+
+// folderSnapshot is one account's most recent successful folder listing.
+type folderSnapshot struct {
+	Folders []Folder
+	At      time.Time
+}
+
+// ResolvedAccount is the client and configuration selected for one
+// operation. Name is always explicit, including when the caller
+// selected the primary account by omitting a name or was routed to a
+// bound account.
+type ResolvedAccount struct {
+	Name   string        `json:"-"`
+	Client *Client       `json:"-"`
+	Config AccountConfig `json:"-"`
+}
+
+// HealthProbe is one account's liveness check for connwatch: the
+// account name and a probe bound by the caller's context.
+type HealthProbe struct {
+	Account string                          `json:"account"`
+	Probe   func(ctx context.Context) error `json:"-"`
+}
+
+// NewService creates the email runtime from configuration and shared
+// dependencies. The configuration is defaulted and validated here so a
+// caller cannot construct a service around an inconsistent block.
+func NewService(cfg Config, deps ServiceDependencies) (*Service, error) {
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if !cfg.Configured() {
+		return nil, fmt.Errorf("email service requires at least one configured account")
+	}
+
+	s := &Service{
+		manager:       NewManager(cfg, deps.Logger),
+		logger:        deps.Logger,
+		opLog:         NewOperationLog(),
+		folders:       make(map[string]folderSnapshot),
+		contacts:      deps.Contacts,
+		interactions:  deps.Interactions,
+		authenticator: deps.Authenticator,
+		signers:       deps.Signers,
+		inspector:     deps.Inspector,
+		state:         deps.State,
+		queue:         deps.Queue,
+		pendingReview: make(map[string]reviewCount),
+	}
+	s.tools = newTools(s, deps.Contacts, deps.Logger)
+	s.contextProvider = newContextProvider(s)
+
+	if cfg.PollingInterval() > 0 {
+		if deps.State == nil {
+			return nil, fmt.Errorf("email polling is enabled but no operational state store was provided")
+		}
+		if deps.MessageBus == nil {
+			return nil, fmt.Errorf("email polling is enabled but no message bus was provided: new mail could not wake a handler. Provide a bus, or set email.poll_interval: 0 to disable polling")
+		}
+		s.poller = newPoller(s, deps.State, deps.Logger, WithContactResolver(deps.Contacts), WithInteractionRecorder(deps.Interactions), WithMessageBus(deps.MessageBus))
+	}
+	return s, nil
+}
+
+// ToolProvider returns the email-owned model tool provider.
+func (s *Service) ToolProvider() *Tools {
+	if s == nil {
+		return nil
+	}
+	return s.tools
+}
+
+// ContextProvider returns the tag-gated Email Accounts context provider.
+func (s *Service) ContextProvider() *ContextProvider {
+	if s == nil {
+		return nil
+	}
+	return s.contextProvider
+}
+
+// ResolveAccount selects the account an operation runs against while
+// enforcing any email_account loop binding carried by ctx: an omitted
+// name resolves to the bound account when one is present and to the
+// primary account otherwise, and a name that differs from the binding
+// is refused with text that names both and the retry. An unknown name
+// lists the accounts that exist.
+func (s *Service) ResolveAccount(ctx context.Context, requested string) (ResolvedAccount, error) {
+	if s == nil || s.manager == nil {
+		return ResolvedAccount{}, fmt.Errorf("email service is not configured")
+	}
+	requested = strings.TrimSpace(requested)
+
+	if bound := boundAccount(ctx); bound != "" {
+		if requested != "" && requested != bound {
+			s.logger.Warn("email account request refused by binding",
+				"requested_account", requested,
+				"bound_account", bound,
+				"loop_id", looppkg.LoopIDFromContext(ctx))
+			return ResolvedAccount{}, fmt.Errorf("email account %q is not available here: this loop is bound to account %q, and the binding is part of its definition rather than something a tool call can change. Retry with account=%q or omit the argument, and if the work genuinely requires %q, say so instead of routing around it",
+				requested, bound, bound, requested)
+		}
+		requested = bound
+	}
+
+	name, err := s.manager.resolveName(requested)
+	if err != nil {
+		return ResolvedAccount{}, err
+	}
+	return ResolvedAccount{
+		Name:   name,
+		Client: s.manager.clients[name],
+		Config: s.manager.configs[name],
+	}, nil
+}
+
+// boundAccount returns the email account this caller is scoped to, or
+// an empty string when the caller is unbound.
+func boundAccount(ctx context.Context) string {
+	// Trimmed here because validation and hydration trim the name too:
+	// a binding written with stray whitespace must resolve at runtime
+	// to the account it validated against.
+	return strings.TrimSpace(looppkg.BindingFromContext(ctx, looppkg.BindingEmailAccount))
+}
+
+// AccountsInConfigOrder returns the account configurations in
+// declaration order, primary first.
+func (s *Service) AccountsInConfigOrder() []AccountConfig {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	return s.manager.AccountsInConfigOrder()
+}
+
+// AccountNames returns the configured account names, primary first.
+func (s *Service) AccountNames() []string {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	return s.manager.AccountNames()
+}
+
+// BccOwner returns the configured audit-copy address, or empty.
+func (s *Service) BccOwner() string {
+	if s == nil || s.manager == nil {
+		return ""
+	}
+	return s.manager.BccOwner()
+}
+
+// HealthProbes returns one liveness probe per account for connwatch.
+func (s *Service) HealthProbes() []HealthProbe {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	probes := make([]HealthProbe, 0, len(s.manager.order))
+	for _, name := range s.manager.order {
+		client := s.manager.clients[name]
+		probes = append(probes, HealthProbe{Account: name, Probe: client.Ping})
+	}
+	return probes
+}
+
+// PollingEnabled reports whether new-mail polling is configured.
+// Built-in loop definitions honor this rather than assuming a poller
+// exists.
+func (s *Service) PollingEnabled() bool {
+	return s != nil && s.poller != nil
+}
+
+// CheckNewMessages runs one poll cycle across every account and returns
+// the number of wake events delivered. See [Poller.CheckNewMessages].
+func (s *Service) CheckNewMessages(ctx context.Context) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("email service is not configured")
+	}
+	if s.poller == nil {
+		return 0, fmt.Errorf("email polling is disabled")
+	}
+	return s.poller.CheckNewMessages(ctx)
+}
+
+// Close closes every account connection.
+func (s *Service) Close() {
+	if s == nil || s.manager == nil {
+		return
+	}
+	s.manager.Close()
+}
+
+// authenticate runs the configured authenticator over a fetched message
+// and normalizes its answer. No authenticator means nothing was checked;
+// an implementation error means the check was unavailable, never that
+// it failed.
+func (s *Service) authenticate(ctx context.Context, account string, msg *Message) Authentication {
+	if s == nil || s.authenticator == nil || msg == nil {
+		return AbsentAuthentication()
+	}
+	result, err := s.authenticator.Authenticate(ctx, InboundMessage{
+		Account:   account,
+		Raw:       msg.raw,
+		Truncated: msg.RawTruncated,
+		From:      msg.From,
+	})
+	if err != nil {
+		s.logger.Warn("email authenticator failed", "account", account, "uid", msg.UID, "error", err)
+		return Authentication{Method: AuthMethodNone, Status: AuthUnavailable, Reason: "authenticator error: " + err.Error()}
+	}
+	return result.normalize()
+}
+
+// signerFor returns the outbound signer for an account, or nil.
+func (s *Service) signerFor(account string) Signer {
+	if s == nil || s.signers == nil {
+		return nil
+	}
+	return s.signers.SignerFor(account)
+}
+
+// recordOp appends a successful operation to the recent-operations log.
+func (s *Service) recordOp(tool, account, folder, ref string) {
+	if s == nil {
+		return
+	}
+	s.opLog.Record(Operation{Tool: tool, Account: account, Folder: folder, Ref: ref})
+}
+
+// listFolders lists an account's folders and records the result in the
+// cache the context block renders from. Every successful LIST feeds the
+// cache — email_folders, the poller's refresh, and the re-list a tool
+// makes after a folder-not-found failure — so the block reflects the
+// freshest listing anyone made rather than depending on any one caller.
+func (s *Service) listFolders(ctx context.Context, acct ResolvedAccount) ([]Folder, error) {
+	folders, err := acct.Client.ListFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.rememberFolders(acct.Name, folders)
+	return folders, nil
+}
+
+// rememberFolders stores a listing in the cache.
+func (s *Service) rememberFolders(account string, folders []Folder) {
+	s.foldersMu.Lock()
+	s.folders[account] = folderSnapshot{Folders: slices.Clone(folders), At: time.Now()}
+	s.foldersMu.Unlock()
+}
+
+// cachedFolders returns the most recent listing for an account, or
+// ok=false when none has succeeded yet.
+func (s *Service) cachedFolders(account string) (folderSnapshot, bool) {
+	s.foldersMu.Lock()
+	defer s.foldersMu.Unlock()
+	snap, ok := s.folders[account]
+	return snap, ok
+}
+
+// refreshFoldersIfStale re-lists an account's folders when the cache
+// has no listing or one older than folderCacheMaxAge. The poller calls
+// it on every visit so a handler that only ever wakes from the poller
+// still sees folder vocabulary. Failures are logged at Debug: the
+// listing is a convenience, and the poll itself must not fail on it.
+func (s *Service) refreshFoldersIfStale(ctx context.Context, acct ResolvedAccount) {
+	if snap, ok := s.cachedFolders(acct.Name); ok && time.Since(snap.At) < folderCacheMaxAge {
+		return
+	}
+	if _, err := s.listFolders(ctx, acct); err != nil {
+		s.logger.Debug("email folder cache refresh failed", "account", acct.Name, "error", err)
+	}
+}

@@ -103,7 +103,7 @@ func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentTools, outputs)...)
 		spec.RuntimeTools = append(spec.RuntimeTools, a.ownOutputReadTools(outputs)...)
 		spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
-			return renderLoopOutputContextWithNow(ctx, a.documentStore, outputs, time.Now())
+			return renderLoopOutputContextWithNow(ctx, a.documentStore, a.documentTools, outputs, time.Now())
 		}
 	}
 	return a.hydrateLoopFocusTools(spec)
@@ -180,7 +180,23 @@ func wrapOwnOutputDocRead(runtimeTools []looppkg.RuntimeTool, docTools *document
 			ref = strings.TrimSpace(ref)
 			level, _ := args["level"].(string)
 			if ownRefs[ref] && strings.TrimSpace(level) == "" {
-				return docTools.ReadWithResultBudget(ctx, documents.RefArgs{Ref: ref}, ownOutputReadResultBytes)
+				// This read is the one the replace tool's precondition
+				// consults: a whole-document replacement is only applied
+				// against a version the caller has read, and the record of
+				// that read is the receipt keyed by this scope. The native
+				// doc_read has always passed the scope; this privileged
+				// path once dropped it, so an owning loop told to "read
+				// first, then retry" could read all day and never satisfy
+				// the check — four document-owning loops sat refused for
+				// ten hours doing exactly that. The receipt is withheld
+				// when even this budget truncates: a preview of an
+				// oversized document is not the read a whole-body
+				// replacement is protected by.
+				return docTools.ReadWithResultBudget(ctx, documents.RefArgs{
+					Ref:                  ref,
+					ReceiptScope:         tools.DocumentRevisionScope(ctx),
+					ReceiptRequiresWhole: true,
+				}, ownOutputReadResultBytes)
 			}
 			return native(ctx, args)
 		}
@@ -264,6 +280,13 @@ func buildLoopOutputTools(docTools *documents.Tools, outputs []looppkg.OutputSpe
 						Body:           &content,
 						ReceiptScope:   tools.DocumentRevisionScope(ctx),
 						StructuredTool: output.ToolName(),
+						// A refusal is a failed call here, not a result:
+						// ok:true with nothing committed reads as a healthy
+						// publish to the loop, the event log, and any model
+						// that does not check doc_history — and drives the
+						// identical-call retry storm the refusal text cannot
+						// stop on its own.
+						RejectionIsError: true,
 						// Stamped on every write, not only the first: the
 						// exclusion in search and tagged-guidance injection
 						// reads this key off the document, so a rewrite that
@@ -278,13 +301,22 @@ func buildLoopOutputTools(docTools *documents.Tools, outputs []looppkg.OutputSpe
 	return out
 }
 
-func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store, outputs []looppkg.OutputSpec, now time.Time) (string, error) {
+// renderLoopOutputContextWithNow renders a loop's declared outputs into
+// its wake and, through docTools, records each whole-shown document as the
+// wake's read receipt (see [documents.Tools.RememberRead]). A nil docTools
+// renders without recording — the shape callers that only want the text
+// take. The receipt lands under the revision scope of ctx, which the loop
+// runtime stamps with the wake's loop ID and conversation so it resolves to
+// the same scope the generated output tool computes from its tool-call
+// context.
+func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store, docTools *documents.Tools, outputs []looppkg.OutputSpec, now time.Time) (string, error) {
 	if store == nil || len(outputs) == 0 {
 		return "", nil
 	}
 	if now.IsZero() {
 		now = time.Now()
 	}
+	receiptScope := tools.DocumentRevisionScope(ctx)
 	payload := loopOutputContext{Outputs: make([]loopOutputContextEntry, 0, len(outputs))}
 	for _, output := range outputs {
 		entry := loopOutputContextEntry{
@@ -355,6 +387,15 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 			// The head, not the tail: a loop rewriting its current
 			// thinking needs to see what it is replacing.
 			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes)
+		}
+		// What the wake was shown whole, the wake has read: the
+		// generated output tool's read-first precondition is satisfied
+		// by this rendering, not by a second doc_read of the same bytes.
+		// A truncated rendering records nothing — the loop has not seen
+		// the tail it is about to overwrite, and the refusal it meets
+		// says to read the whole document first.
+		if docTools != nil && !entry.Truncated {
+			docTools.RememberRead(receiptScope, doc)
 		}
 		payload.Outputs = append(payload.Outputs, entry)
 	}
@@ -433,7 +474,7 @@ func replaceOutputDescription(output looppkg.OutputSpec) string {
 	if output.Type == looppkg.OutputTypeWorkingNotes {
 		return workingNotesDescription(output)
 	}
-	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane. The body has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call.", output.Name, output.Ref)
+	return fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane. The body has a 96 KiB ceiling — the guarantee that this document always reads back whole in one call. The Declared Durable Outputs context counts as this wake's read when it shows the document whole; one marked truncated must be read whole with doc_read first. A refused replacement returns an error, commits nothing, and says which of two things happened: no read of the whole document on record for this wake (read it with doc_read, then call again), or the document changed since that read (the error carries the intervening change — fold it into a revised body before calling again). Never repeat a refused call unchanged.", output.Name, output.Ref)
 }
 
 // workingNotesDescription frames the loop's private thinking. What

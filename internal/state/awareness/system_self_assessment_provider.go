@@ -41,6 +41,12 @@ type SystemSelfAssessmentProvider struct {
 	logger *slog.Logger
 	now    func() time.Time
 
+	// homeZone anchors temporal-template expansion in the verdict.
+	// Day words are a calendar comparison, so a verdict reading
+	// "freeze window opens {{delta:2026-12-25}}" renders against the
+	// household's day, not the process's. nil falls back to time.Local.
+	homeZone *time.Location
+
 	// Last-good verdict, served with its honest age when a live read
 	// fails. The 2026-08-12 prod incident was exactly this seam: the
 	// shared context budget died upstream, the read failed every turn,
@@ -53,12 +59,16 @@ type SystemSelfAssessmentProvider struct {
 }
 
 // NewSystemSelfAssessmentProvider wires the provider over a document
-// read function. logger may be nil (defaults to slog.Default()).
-func NewSystemSelfAssessmentProvider(read func(ctx context.Context) (string, time.Time, error), logger *slog.Logger) *SystemSelfAssessmentProvider {
+// read function. logger may be nil (defaults to slog.Default()), and
+// homeZone may be nil (defaults to time.Local).
+func NewSystemSelfAssessmentProvider(read func(ctx context.Context) (string, time.Time, error), homeZone *time.Location, logger *slog.Logger) *SystemSelfAssessmentProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &SystemSelfAssessmentProvider{read: read, logger: logger, now: time.Now}
+	if homeZone == nil {
+		homeZone = time.Local
+	}
+	return &SystemSelfAssessmentProvider{read: read, logger: logger, now: time.Now, homeZone: homeZone}
 }
 
 // TagContextBucket places the verdict in live state: it is a current
@@ -171,6 +181,16 @@ func (p *SystemSelfAssessmentProvider) TagContext(ctx context.Context, _ agentct
 // stretching the turn unboundedly.
 const readTimeout = 1500 * time.Millisecond
 
+// zone is the household location templates and deltas render against.
+// A provider built by hand in a test can leave it nil, so the fallback
+// lives here rather than only in the constructor.
+func (p *SystemSelfAssessmentProvider) zone() *time.Location {
+	if p.homeZone == nil {
+		return time.Local
+	}
+	return p.homeZone
+}
+
 func (p *SystemSelfAssessmentProvider) clearCache() {
 	p.mu.Lock()
 	p.lastVerdict, p.lastUpdatedAt = "", time.Time{}
@@ -180,14 +200,28 @@ func (p *SystemSelfAssessmentProvider) clearCache() {
 // render formats the verdict block. cached marks a verdict served
 // because the live read failed — the age delta carries how stale it
 // is, the marker carries why.
+//
+// This is a reader surface, so temporal templates in the verdict
+// expand: metacog is told to write "{{delta:2026-09-18}}" rather than
+// a literal delta (talents/loops.md), and without expansion the one
+// line that is a judgment about the whole system reaches the model as
+// braces. The cache stores the raw verdict and expansion happens here,
+// per render, so a verdict served after a failed read carries a delta
+// computed now rather than one frozen at cache time — the block's
+// whole point is that a stale verdict wears its honest age.
+//
+// One clock for the block: the same instant renders the template and
+// the age stamp, so the two cannot disagree about what "now" is.
 func (p *SystemSelfAssessmentProvider) render(verdict string, updatedAt time.Time, cached bool) string {
+	now := p.now().In(p.zone())
+
 	var sb strings.Builder
 	sb.WriteString("### System Self-Assessment\n\n")
-	sb.WriteString(verdict)
+	sb.WriteString(promptfmt.ExpandTemporalTemplates(verdict, now))
 	sb.WriteString(" (metacognitive verdict")
 	if !updatedAt.IsZero() {
 		sb.WriteString("; age_delta=")
-		sb.WriteString(promptfmt.FormatDeltaOnly(updatedAt, p.now()))
+		sb.WriteString(promptfmt.FormatDeltaOnly(updatedAt, now))
 	}
 	if cached {
 		sb.WriteString("; cached, live read failed")

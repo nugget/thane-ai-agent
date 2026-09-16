@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -57,8 +58,8 @@ func TestMessageOriginRoundTrip(t *testing.T) {
 				path, mid.MidTurn, mid.Origin, OriginChannel)
 		}
 	}
-	check("GetMessages", store.GetMessages("conv-1"))
-	check("GetAllMessages", store.GetAllMessages("conv-1"))
+	check("GetMessages", mustReadMessages(t, store.GetMessages, "conv-1"))
+	check("GetAllMessages", mustReadMessages(t, store.GetAllMessages, "conv-1"))
 }
 
 // TestMessageOriginNullLegacyRow pins the read paths against a row whose
@@ -87,8 +88,8 @@ func TestMessageOriginNullLegacyRow(t *testing.T) {
 		}
 		t.Fatalf("%s: NULL-origin row dropped from the read (silent message loss)", path)
 	}
-	find("GetMessages", store.GetMessages("conv-1"))
-	find("GetAllMessages", store.GetAllMessages("conv-1"))
+	find("GetMessages", mustReadMessages(t, store.GetMessages, "conv-1"))
+	find("GetAllMessages", mustReadMessages(t, store.GetAllMessages, "conv-1"))
 }
 
 // TestMessageOriginInMemoryParity confirms the in-memory Store honors the
@@ -102,7 +103,7 @@ func TestMessageOriginInMemoryParity(t *testing.T) {
 		t.Fatalf("AddMidTurnMessage: %v", err)
 	}
 	byContent := make(map[string]Message)
-	for _, m := range s.GetMessages("c") {
+	for _, m := range mustReadMessages(t, s.GetMessages, "c") {
 		byContent[m.Content] = m
 	}
 	if got := byContent["from-channel"].Origin; got != OriginChannel {
@@ -125,19 +126,19 @@ func TestMessageOriginCompactionRows(t *testing.T) {
 	if err := store.AddMessage("conv-1", "user", "to be compacted", OriginChannel); err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
-	compacted := store.GetMessages("conv-1")
+	compacted := mustReadMessages(t, store.GetMessages, "conv-1")
 	if len(compacted) != 1 {
 		t.Fatalf("seed message missing")
 	}
 	summaryTS := time.Now().Add(-time.Minute)
-	if err := store.ApplyCompaction("conv-1", []string{compacted[0].ID}, CompactionSummaryPrefix+" the earlier exchange", summaryTS); err != nil {
+	if err := store.ApplyCompaction(context.Background(), "conv-1", []string{compacted[0].ID}, CompactionSummaryPrefix+" the earlier exchange", summaryTS); err != nil {
 		t.Fatalf("ApplyCompaction: %v", err)
 	}
 	if err := store.AddCompactionSummary("conv-1", CompactionSummaryPrefix+" session handoff"); err != nil {
 		t.Fatalf("AddCompactionSummary: %v", err)
 	}
 
-	for _, m := range store.GetMessages("conv-1") {
+	for _, m := range mustReadMessages(t, store.GetMessages, "conv-1") {
 		if m.Role == "system" && m.Origin != OriginInternal {
 			t.Errorf("compaction row %q origin = %q, want %q", m.Content, m.Origin, OriginInternal)
 		}
@@ -145,10 +146,9 @@ func TestMessageOriginCompactionRows(t *testing.T) {
 }
 
 // TestMessageOriginArchiveRoundTrip verifies origin survives the archive
-// write and read paths in both storage modes: ImportMessages into the
+// write and read paths: ImportMessages into the
 // unified table read back through the session-transcript and search
-// scanners, and legacy split-DB ArchiveMessages into archive_messages —
-// including a NULL-origin legacy row surviving the legacy scanner.
+// scanners, including a pre-stamp NULL-origin row in the shared table.
 func TestMessageOriginArchiveRoundTrip(t *testing.T) {
 	base := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
 	imported := []Message{
@@ -174,6 +174,15 @@ func TestMessageOriginArchiveRoundTrip(t *testing.T) {
 			t.Fatalf("ImportMessages: %v", err)
 		}
 
+		// A pre-stamp legacy row: NULL origin must scan as "" rather
+		// than dropping the message.
+		if _, err := archive.DB().Exec(`
+			INSERT INTO messages (id, conversation_id, session_id, role, content, timestamp, archived_at, archive_reason, origin)
+			VALUES ('arch-legacy', 'conv-arch', 'sess-arch', 'user', 'pre-stamp row', ?, ?, 'import', NULL)
+		`, base.Add(2*time.Minute).Format(time.RFC3339Nano), base.Add(2*time.Minute).Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("insert NULL-origin legacy row: %v", err)
+		}
+
 		transcript, err := archive.GetSessionTranscript("sess-arch")
 		if err != nil {
 			t.Fatalf("GetSessionTranscript: %v", err)
@@ -181,6 +190,7 @@ func TestMessageOriginArchiveRoundTrip(t *testing.T) {
 		assertOrigins(t, "transcript", transcript, map[string]string{
 			"archived inbound greeting": OriginChannel,
 			"archived wake prompt":      OriginWake,
+			"pre-stamp row":             "",
 		})
 
 		results, err := archive.Search(SearchOptions{Query: "archived inbound", Limit: 5})
@@ -193,36 +203,6 @@ func TestMessageOriginArchiveRoundTrip(t *testing.T) {
 		if got := results[0].Match.Origin; got != OriginChannel {
 			t.Errorf("search match origin = %q, want %q", got, OriginChannel)
 		}
-	})
-
-	t.Run("legacy split-DB", func(t *testing.T) {
-		archive, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil, nil)
-		if err != nil {
-			t.Fatalf("NewArchiveStore: %v", err)
-		}
-		t.Cleanup(func() { _ = archive.Close() })
-
-		if err := archive.ArchiveMessages(imported); err != nil {
-			t.Fatalf("ArchiveMessages: %v", err)
-		}
-		// A pre-stamp legacy row: NULL origin must scan as "" rather
-		// than dropping the message.
-		if _, err := archive.DB().Exec(`
-			INSERT INTO archive_messages (id, conversation_id, session_id, role, content, timestamp, archived_at, archive_reason, origin)
-			VALUES ('arch-legacy', 'conv-arch', 'sess-arch', 'user', 'pre-stamp row', ?, ?, 'import', NULL)
-		`, base.Add(2*time.Minute).Format(time.RFC3339Nano), base.Add(2*time.Minute).Format(time.RFC3339Nano)); err != nil {
-			t.Fatalf("insert NULL-origin legacy row: %v", err)
-		}
-
-		transcript, err := archive.GetSessionTranscript("sess-arch")
-		if err != nil {
-			t.Fatalf("GetSessionTranscript: %v", err)
-		}
-		assertOrigins(t, "legacy transcript", transcript, map[string]string{
-			"archived inbound greeting": OriginChannel,
-			"archived wake prompt":      OriginWake,
-			"pre-stamp row":             "",
-		})
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // Name identifies one compact public projection of a document. Full is the
@@ -132,6 +133,8 @@ func (p Payload) ByKey(key string) (string, bool) {
 
 // FromArgs decodes structured writer arguments according to contract. Missing
 // fields remain empty so [Contract.Validate] can report all omissions at once.
+// A value that is not a string is refused and marked ([toolargs.Rejected])
+// with its key, as [Contract.Validate] marks its violations.
 func (c Contract) FromArgs(args map[string]any) (Payload, error) {
 	var payload Payload
 	for _, field := range c.Fields() {
@@ -145,7 +148,7 @@ func (c Contract) FromArgs(args map[string]any) (Payload, error) {
 		}
 		value, ok := raw.(string)
 		if !ok {
-			return Payload{}, fmt.Errorf("%s must be a string", field.Key)
+			return Payload{}, toolargs.Rejected(fmt.Errorf("%s must be a string", field.Key), field.Key)
 		}
 		*section.value(&payload) = value
 	}

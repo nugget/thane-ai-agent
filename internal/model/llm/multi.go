@@ -47,11 +47,6 @@ func (m *MultiClient) AddProvider(name string, client Client) {
 	m.clients[name] = client
 }
 
-// AddModel maps a model name to a provider.
-func (m *MultiClient) AddModel(modelName, providerName string) {
-	m.AddRoute(modelName, providerName, modelName)
-}
-
 // AddRoute maps a route target to a provider/resource and upstream
 // model name.
 func (m *MultiClient) AddRoute(target, providerName, modelName string) {
@@ -106,13 +101,10 @@ func (m *MultiClient) Chat(ctx context.Context, model string, messages []Message
 		return nil, err
 	}
 	resp, err := client.Chat(ctx, routedModel, messages, tools)
-	if err != nil {
-		return nil, err
-	}
 	if resp != nil {
 		resp.Model = routeTarget
 	}
-	return resp, nil
+	return resp, err
 }
 
 // ChatStream sends a streaming request to the appropriate provider.
@@ -131,13 +123,10 @@ func (m *MultiClient) ChatStream(ctx context.Context, model string, messages []M
 		}
 	}
 	resp, err := client.ChatStream(ctx, routedModel, messages, tools, wrapped)
-	if err != nil {
-		return nil, err
-	}
 	if resp != nil {
 		resp.Model = routeTarget
 	}
-	return resp, nil
+	return resp, err
 }
 
 // Ping checks the fallback provider.

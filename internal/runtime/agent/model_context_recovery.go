@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -13,6 +14,7 @@ import (
 
 func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	ctx context.Context,
+	client llm.Client,
 	model string,
 	err error,
 	msgs []llm.Message,
@@ -120,15 +122,15 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 
 	retryCall := func(tools []map[string]any) (*llm.ChatResponse, error) {
 		if retryUpstreamModel != "" {
-			if client := l.modelRuntime.LMStudioClient(dep.ResourceID); client != nil {
-				resp, err := client.ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
+			if direct := l.modelRuntime.LMStudioClient(dep.ResourceID); direct != nil {
+				resp, err := accountRecoveryClient(client, direct, retryModel).ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
 				if resp != nil {
 					resp.Model = retryModel
 				}
 				return resp, err
 			}
 		}
-		return l.llm.ChatStream(ctx, retryModel, msgs, tools, stream)
+		return client.ChatStream(ctx, retryModel, msgs, tools, stream)
 	}
 
 	// Dropping the tool schemas is the cheaper lever than growing the window
@@ -142,6 +144,9 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 		resp, retryErr := retryCall(toolDefs)
 		if retryErr == nil {
 			return resp, retryModel, nil, true
+		}
+		if errors.Is(retryErr, llm.ErrOutputBudgetExhausted) {
+			return nil, "", retryErr, true
 		}
 		if !toolsAreALever && isLMStudioLoadedContextError(retryErr) {
 			escalated, escalateErr := escalateToMax()
@@ -164,6 +169,9 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 		resp, retryErr := retryCall(nil)
 		if retryErr == nil {
 			return resp, retryModel, nil, true
+		}
+		if errors.Is(retryErr, llm.ErrOutputBudgetExhausted) {
+			return nil, "", retryErr, true
 		}
 		if isLMStudioLoadedContextError(retryErr) {
 			escalated, escalateErr := escalateToMax()

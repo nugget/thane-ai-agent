@@ -77,7 +77,10 @@ func newWhereaboutsFixture(t *testing.T, state, room string, observations map[st
 		t.Fatal(err)
 	}
 
-	companionStore := newObservationToolStore(t)
+	// The account-to-contact declaration reaches the store as a resolver,
+	// so seeded devices are stamped with alice's contact exactly as a real
+	// registration would stamp them.
+	companionStore := newObservationToolStoreForContact(t, map[string]string{"alice-acct": alice.ID.String()})
 	now := time.Now().UTC()
 	i := 0
 	for device, status := range observations {
@@ -100,12 +103,6 @@ func newWhereaboutsFixture(t *testing.T, state, room string, observations map[st
 				snap.RoomSince = now.Add(-20 * time.Minute)
 			}
 			return snap, true
-		},
-		AccountsForContact: func(id string) []string {
-			if id == alice.ID.String() {
-				return []string{"alice-acct"}
-			}
-			return nil
 		},
 		LiveIdentities: func() map[[2]string]bool { return nil },
 	}
@@ -142,6 +139,31 @@ func TestContactWhereaboutsHomeRanking(t *testing.T) {
 	}
 	if res.BestSource != "unifi_room" || !strings.Contains(res.Basis, "home") {
 		t.Errorf("verdict = %q / %q", res.BestSource, res.Basis)
+	}
+
+	// Every moment ships twice. The delta answers "how recent" inside
+	// this turn; only the instant keeps its meaning once a loop writes
+	// it into a document, and document writes now refuse the delta —
+	// so a source carrying one without the other leaves the caller
+	// with nothing it is allowed to store.
+	room, zone := res.Sources[0], res.Sources[1]
+	if room.RoomSince == "" || room.RoomSinceAt == "" {
+		t.Errorf("room source = %+v, want both room_since and room_since_at", room)
+	}
+	if _, err := time.Parse(time.RFC3339, room.RoomSinceAt); err != nil {
+		t.Errorf("room_since_at %q is not RFC3339: %v", room.RoomSinceAt, err)
+	}
+	if zone.Since == "" || zone.SinceAt == "" {
+		t.Errorf("zone source = %+v, want both since and since_at", zone)
+	}
+	if _, err := time.Parse(time.RFC3339, zone.SinceAt); err != nil {
+		t.Errorf("since_at %q is not RFC3339: %v", zone.SinceAt, err)
+	}
+	// The pair must name the same moment, not two independent reads of
+	// the clock: the fixture puts the zone change two hours back.
+	at, err := time.Parse(time.RFC3339, zone.SinceAt)
+	if err == nil && time.Since(at).Round(time.Minute) != 2*time.Hour {
+		t.Errorf("since_at %q does not match the delta %q", zone.SinceAt, zone.Since)
 	}
 }
 

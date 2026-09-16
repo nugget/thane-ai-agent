@@ -82,6 +82,12 @@ type Request struct {
 	// mid-turn input. Runtime-only.
 	PullInput func(ctx context.Context) []llm.Message `yaml:"-" json:"-"`
 
+	// TargetKey names the document a tool call writes, so the runner's
+	// tool tally also counts each tool per target
+	// ([ToolOutcome.Targets]). The loop sets it on every turn it
+	// prepares. Nil gives every call the empty target. Runtime-only.
+	TargetKey func(tool string, args map[string]any) string `yaml:"-" json:"-"`
+
 	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
@@ -157,6 +163,9 @@ type Response struct {
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
 	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
+	// ToolOutcomes is the runner's per-tool tally for the turn: how each
+	// tool's calls ended, repeat-guard refusals included. Runtime-only.
+	ToolOutcomes map[string]ToolOutcome `yaml:"-" json:"-"`
 }
 
 // RunResponse is a compatibility alias for [Response], the primary
@@ -402,6 +411,10 @@ type Loop struct {
 
 	// consecutiveErrors tracks sequential failures for backoff.
 	consecutiveErrors int
+
+	// writes records wakes that ended without landing a durable write
+	// ([UnpublishedWrite]); it never feeds consecutiveErrors.
+	writes writeOutcomeState
 
 	// wakeCh interrupts timer sleep when a signal is queued for the next
 	// iteration. Buffered size 1 coalesces multiple wake requests.
@@ -810,6 +823,8 @@ func (l *Loop) Status() Status {
 		ContextWindow:         l.contextWindow,
 		LastError:             l.lastError,
 		ConsecutiveErrors:     l.consecutiveErrors,
+		UnpublishedWrites:     l.writes.snapshot(),
+		UnpublishedWakes:      l.writes.wakes,
 		RecentConvIDs:         convIDsCopy,
 		RecentIterations:      iterCopy,
 		LLMContext:            llmCtxCopy,
@@ -1655,6 +1670,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
+			handlerCtx = withConversationID(handlerCtx, convID)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
 			handlerCtx = withMailboxItems(handlerCtx, mailboxItems)
@@ -1744,6 +1760,10 @@ func (l *Loop) run(ctx context.Context) {
 		} else {
 			iterStart := time.Now()
 			turnCtx := withLoopID(iterCtx, l.id)
+			// The wake's conversation rides with the loop ID so the
+			// output-context render that follows records its document
+			// receipts under the scope the agent's tool calls will use.
+			turnCtx = withConversationID(turnCtx, convID)
 			turnCtx = withFallbackContent(turnCtx, l.config.FallbackContent)
 			turnCtx = withNotifyEnvelopes(turnCtx, signals)
 			turnCtx = withMailboxItems(turnCtx, mailboxItems)
@@ -1934,6 +1954,7 @@ func (l *Loop) run(ctx context.Context) {
 				}
 				snap.Number = l.iterations
 				l.mu.Unlock()
+				writeTally := l.recordWriteOutcomes(iterLog, result.ToolOutcomes, convID)
 
 				snap.Model = result.Model
 				snap.FinishReason = result.FinishReason
@@ -1999,6 +2020,10 @@ func (l *Loop) run(ctx context.Context) {
 					// for a "folded N messages" turn badge. 0 for an ordinary
 					// turn.
 					"midturn_merged": len(midTurnPulled),
+					// Durable-write outcome of the wake: rejected calls to its
+					// write tools, and how many of them it never landed.
+					"write_rejections":   writeTally.rejections,
+					"unpublished_writes": len(writeTally.unpublished),
 				}
 				if len(handlerSummary) > 0 {
 					eventData["summary"] = handlerSummary
@@ -2406,6 +2431,9 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		req.RuntimeTools = append(req.RuntimeTools, sleepTool)
 	}
 	req.FallbackContent = firstNonEmpty(l.requestOverride.FallbackContent, req.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent)
+	// The loop owns which document each durable write targets, because
+	// it judges the wake's writes per target, so no caller supplies it.
+	req.TargetKey = writeTarget
 	req.MaxIterations = firstPositiveInt(l.requestOverride.MaxIterations, req.MaxIterations)
 	req.MaxOutputTokens = firstPositiveInt(l.requestOverride.MaxOutputTokens, req.MaxOutputTokens)
 	req.ToolTimeout = firstPositiveDuration(l.requestOverride.ToolTimeout, req.ToolTimeout)
@@ -2448,6 +2476,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 		OutputTokens:       resp.OutputTokens,
 		ContextWindow:      resp.ContextWindow,
 		ToolsUsed:          resp.ToolsUsed,
+		ToolOutcomes:       cloneToolOutcomes(resp.ToolOutcomes),
 		EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
 		ActiveTags:         append([]string(nil), resp.ActiveTags...),
 		LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
@@ -2571,6 +2600,7 @@ func cloneResponse(resp *Response) *Response {
 	if len(resp.ActiveTags) > 0 {
 		out.ActiveTags = append([]string(nil), resp.ActiveTags...)
 	}
+	out.ToolOutcomes = cloneToolOutcomes(resp.ToolOutcomes)
 	return &out
 }
 

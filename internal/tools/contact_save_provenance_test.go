@@ -67,6 +67,25 @@ func TestContactSaveToolStampsCurrentTurnProvenance(t *testing.T) {
 	if len(properties) != 1 || !reflect.DeepEqual(properties[0].Provenance, want) {
 		t.Fatalf("stored property provenance = %#v, want %#v", properties, want)
 	}
+
+	if _, err := registry.Get("contact_import_vcf").Handler(ctx, map[string]any{
+		"text": "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Imported Person\r\nTEL:+15550004444\r\nEND:VCARD\r\n",
+	}); err != nil {
+		t.Fatalf("contact_import_vcf handler: %v", err)
+	}
+	imported, err := store.FindByName("Imported Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	importedProperties, err := store.GetProperties(imported.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantImport := *want
+	wantImport.Source = "contact_import_vcf"
+	if len(importedProperties) != 1 || !reflect.DeepEqual(importedProperties[0].Provenance, &wantImport) {
+		t.Fatalf("imported property provenance = %#v, want %#v", importedProperties, &wantImport)
+	}
 }
 
 func TestContactSaveDescriptionReflectsArchivistRefreshWiring(t *testing.T) {

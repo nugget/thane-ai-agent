@@ -25,7 +25,11 @@ func TestRegisterRoutes(t *testing.T) {
 		wantCTPart string
 		wantBody   string
 	}{
-		{"/docs", "text/html", "createApiReference"},
+		// The page bootstraps through /docs/boot.js rather than an inline
+		// block, so the explorer's content policy can keep script-src
+		// 'self' on the one surface serving a vendored bundle.
+		{"/docs", "text/html", `<script src="/docs/boot.js">`},
+		{"/docs/boot.js", "javascript", "createApiReference"},
 		{"/docs/scalar.js", "javascript", "createApiReference"},
 		{"/docs/openapi/native.yaml", "yaml", "openapi: 3.1.0"},
 		{"/docs/openapi/compat.yaml", "yaml", "openapi: 3.1.0"},

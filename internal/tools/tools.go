@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -29,6 +28,7 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -65,7 +65,6 @@ type Registry struct {
 	logger       *slog.Logger
 	factTools    *knowledge.Tools
 	contactTools *contacts.Tools
-	emailTools   *email.Tools
 
 	// policy is shared by pointer with every registry derived from this
 	// one, so a scoped copy cannot regain what the parent withheld.
@@ -85,6 +84,7 @@ type Registry struct {
 	homeLocation       *time.Location
 	workingMemoryStore *memory.WorkingMemoryStore
 	archiveStore       *memory.ArchiveStore
+	documentSearch     *documents.Tools
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 
@@ -106,7 +106,7 @@ type Registry struct {
 	launchLoopDefinition                       func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	liveLoopRegistry                           *looppkg.Registry
 	launchLoop                                 func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
-	mailboxPendingCounts                       func(context.Context) (map[string]int, error)
+	queuePendingCounts                         func(context.Context) (map[string]int, error)
 	messageBus                                 *messages.Bus
 	loopIntentDeps                             LoopIntentToolDeps
 
@@ -1363,7 +1363,7 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		}
 	}
 
-	return tool.Handler(ctx, args)
+	return tool.Handler(withToolExecutionScope(ctx, r), args)
 }
 
 func mergeUniqueStrings(parts ...[]string) []string {

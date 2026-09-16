@@ -5,12 +5,18 @@
 // tag. The Processes and Forensics surfaces are real views; the rest (Models,
 // Loop Definitions, Usage, Schedule) are placeholders until their step lands.
 
+import { ensureSession } from './data/auth.js';
 import { initRouter, registerSurface } from './router.js';
 import { placeholderView } from './views/placeholder.js';
 import { createGraph, getStore } from './app.js';
 import { createViewState } from './data/viewState.js';
 import { loopTableView } from './views/loopTable.js';
 import { forensicsView } from './views/forensics.js';
+
+// Nothing below talks to the API until the browser holds a session (or no
+// credential is required). The sign-in overlay blocks here and reloads on
+// success, so the rest of the boot never sees a 401 storm.
+await ensureSession();
 
 // Shared interaction state (anchor + selection) for the views that read the
 // same store as the graph, so they stay in sync.

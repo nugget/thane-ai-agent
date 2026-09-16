@@ -109,14 +109,22 @@ func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCal
 		resp, err := t.run(ctx, loopReq, loopStreamFromAgent(streamCallback))
 		return agentResponseFromLoop(resp), err
 	}
+	// The binding records which surface the request arrived on, and that
+	// is all this surface knows. It used to set IsOwner here — on the
+	// binding it created and on any binding that named the owu channel —
+	// which asserted the operator's identity from the fact that a request
+	// reached port 11434. That is not a fact about who is calling: the
+	// same port answers Home Assistant, Open WebUI, and every host on the
+	// network segment, and the surface has no credential that could tell
+	// them apart. The owner flag belongs to a binding whose contact was
+	// actually resolved to the operator (see isOwnerContact in
+	// internal/app/adapters.go); until this surface can identify a
+	// caller, its conversations run at the trust the caller has
+	// established, which is none. See #1503.
 	if loopReq.ChannelBinding == nil {
-		loopReq.ChannelBinding = (&memory.ChannelBinding{Channel: "owu", IsOwner: true}).Normalize()
-	} else {
-		loopReq.ChannelBinding = loopReq.ChannelBinding.Normalize()
-		if loopReq.ChannelBinding != nil && loopReq.ChannelBinding.Channel == "owu" {
-			loopReq.ChannelBinding.IsOwner = true
-		}
+		loopReq.ChannelBinding = &memory.ChannelBinding{Channel: "owu"}
 	}
+	loopReq.ChannelBinding = loopReq.ChannelBinding.Normalize()
 	if req != nil {
 		req.ChannelBinding = loopReq.ChannelBinding
 	}

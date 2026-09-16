@@ -71,6 +71,29 @@ func (l *Loop) currentModelCatalog() *fleet.Catalog {
 	return l.usageCatalog
 }
 
+// selectExplicitModel prepares and preflights an explicit deployment
+// reference for one request and returns the resolved deployment ID. Both
+// a request model and a conversation pin come through here, so the two
+// are judged by exactly the same rules.
+func (l *Loop) selectExplicitModel(ctx context.Context, ref string, needsTools, needsStreaming, needsImages bool, contextSize int) (string, error) {
+	if _, err := l.maybePrepareExplicitModel(ctx, ref, needsTools, needsStreaming, needsImages, contextSize); err != nil {
+		return "", err
+	}
+	return l.preflightExplicitModel(ref, needsTools, needsStreaming, needsImages, contextSize)
+}
+
+// explicitModelSkipReason renders why an explicit deployment could not
+// serve a turn in the shortest form that still teaches: the preflight
+// reasons alone when the verdict was a capability mismatch, the whole
+// error otherwise.
+func explicitModelSkipReason(err error) string {
+	var incompatible *IncompatibleModelError
+	if errors.As(err, &incompatible) && len(incompatible.Reasons) > 0 {
+		return strings.Join(incompatible.Reasons, "; ")
+	}
+	return err.Error()
+}
+
 func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, needsImages bool, contextSize int) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || ref == "thane" {
@@ -88,6 +111,14 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	}
 
 	var reasons []string
+	// Operator policy is judged here, per turn, and not only where a
+	// reference is first accepted: a deployment or resource switched off
+	// after a conversation pinned it must stop receiving that
+	// conversation's traffic, the same as it stops receiving routed
+	// traffic (see fleet routingEligible).
+	if dep.PolicyState == fleet.DeploymentPolicyStateInactive {
+		reasons = append(reasons, "this deployment is currently inactive by operator policy")
+	}
 	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		reasons = append(reasons, "its resource is currently inactive by operator policy")
 	}
@@ -130,7 +161,7 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	if err != nil {
 		return false, nil
 	}
-	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
+	if dep.PolicyState == fleet.DeploymentPolicyStateInactive || dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		return false, nil
 	}
 	// contextSize is what the request requires; the window worth loading for

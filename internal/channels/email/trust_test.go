@@ -1,160 +1,202 @@
 package email
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// mockResolver implements ContactResolver for testing.
-type mockResolver struct {
-	zones map[string]string // email → trust zone
+// stubContacts implements ContactResolver from fixed tables: one
+// address to one zone for matches, an address to several candidates
+// for ambiguity, and an address whose lookup fails.
+type stubContacts struct {
+	zones     map[string]string             // address → zone (matched)
+	owners    map[string]bool               // address → is_owner
+	ambiguous map[string][]ContactCandidate // address → candidates
+	failing   map[string]error              // address → store error
+	calls     int
 }
 
-func (m *mockResolver) ResolveTrustZone(email string) (string, bool, error) {
-	zone, ok := m.zones[email]
+func (s *stubContacts) ResolveEmailContact(_ context.Context, addr string) (ContactMatch, error) {
+	s.calls++
+	addr = strings.ToLower(addr)
+	if err, ok := s.failing[addr]; ok {
+		return ContactMatch{}, err
+	}
+	if cands, ok := s.ambiguous[addr]; ok {
+		lowest := cands[len(cands)-1].TrustZone
+		return ContactMatch{Status: ContactAmbiguous, TrustZone: lowest, Candidates: cands}, nil
+	}
+	zone, ok := s.zones[addr]
 	if !ok {
-		return "", false, nil
+		return ContactMatch{Status: ContactUnmatched, TrustZone: ZoneUnknown}, nil
 	}
-	if zone == "error" {
-		return "", false, fmt.Errorf("database error")
-	}
-	return zone, true, nil
+	local := strings.SplitN(addr, "@", 2)[0]
+	return ContactMatch{
+		Status:    ContactMatched,
+		TrustZone: zone,
+		Binding: &memory.ChannelBinding{
+			Channel:     "email",
+			Address:     addr,
+			ContactID:   "id-" + local,
+			ContactName: strings.ToUpper(local[:1]) + local[1:],
+			TrustZone:   zone,
+			LinkSource:  "email",
+			IsOwner:     s.owners[addr],
+		},
+	}, nil
 }
 
 func TestCheckRecipientTrust_NilResolver(t *testing.T) {
-	result := CheckRecipientTrust(nil, []string{"a@example.com", "b@example.com"})
-
-	if len(result.Allowed) != 2 {
-		t.Errorf("nil resolver should allow all, got %d allowed", len(result.Allowed))
+	result := CheckRecipientTrust(context.Background(), nil, []string{"a@example.com", "B@Example.com", "not an address"})
+	if len(result.Allowed) != 2 || len(result.Blocked) != 1 {
+		t.Errorf("nil resolver should allow every parseable address and block the rest, got %+v", result)
 	}
-	if result.HasIssues() {
-		t.Error("nil resolver should not have issues")
+	if len(result.Assessments) != 3 || result.Assessments[1].Address != "b@example.com" || result.Assessments[1].ContactStatus != ContactUnmatched || !result.Assessments[1].Allowed || result.Assessments[1].Contact != nil {
+		t.Errorf("nil resolver must still assess every recipient: %+v", result.Assessments)
+	}
+
+	// A nil resolver turns off contact gating, not the automated
+	// refusal: the mailbox's own name decides it, as list and read
+	// results under a nil resolver already mark it.
+	mixed := CheckRecipientTrust(context.Background(), nil, []string{"alice@example.com", "noreply@example.com"})
+	if len(mixed.Assessments) != 2 {
+		t.Fatalf("nil resolver assessments = %+v, want 2", mixed.Assessments)
+	}
+	if len(mixed.Allowed) != 1 || mixed.Allowed[0] != "alice@example.com" || len(mixed.Blocked) != 1 {
+		t.Errorf("nil resolver must allow the person and refuse the automated mailbox, got %+v", mixed)
+	}
+	if a := mixed.Assessments[0]; a.Automated || !a.Allowed {
+		t.Errorf("a person's address under a nil resolver = %+v, want allowed and not automated", a)
+	}
+	if a := mixed.Assessments[1]; !a.Automated || a.Allowed || a.Gating != GatingBlocked || a.TrustZone != ZoneUnknown || !strings.Contains(a.Reason, "automated mailbox") {
+		t.Errorf("an automated address under a nil resolver = %+v, want refused, automated, at unknown", a)
 	}
 }
 
 func TestCheckRecipientTrust(t *testing.T) {
-	resolver := &mockResolver{
+	resolver := &stubContacts{
 		zones: map[string]string{
 			"admin@example.com":     "admin",
 			"household@example.com": "household",
 			"trusted@example.com":   "trusted",
 			"known@example.com":     "known",
+			"noreply@example.com":   "admin",
+		},
+		ambiguous: map[string][]ContactCandidate{
+			"twins@example.com":           {{ID: "t1", Name: "Twin One", TrustZone: "trusted"}, {ID: "t2", Name: "Twin Two", TrustZone: "known"}},
+			"triple@example.com":          {{ID: "a", Name: "A", TrustZone: "admin"}, {ID: "b", Name: "B", TrustZone: "household"}},
+			"notifications@twins.example": {{ID: "a", Name: "A", TrustZone: "admin"}, {ID: "b", Name: "B", TrustZone: "household"}},
+		},
+		failing: map[string]error{
+			"broken@example.com":     errors.New("database is locked"),
+			"noreply@broken.example": errors.New("database is locked"),
 		},
 	}
 
 	tests := []struct {
-		name         string
-		addresses    []string
-		wantAllowed  int
-		wantWarnings int
-		wantBlocked  int
+		name        string
+		addresses   []string
+		wantAllowed int
+		wantBlocked int
+		wantReason  string
+		wantStatus  ContactStatus
+		// wantZone, when set, is the first assessment's effective zone;
+		// wantAutomated is checked on every row, so each row without it
+		// is a negative control for the automated mark.
+		wantZone      string
+		wantAutomated bool
+		notReason     string
 	}{
-		{
-			name:        "admin allowed",
-			addresses:   []string{"admin@example.com"},
-			wantAllowed: 1,
-		},
-		{
-			name:        "household allowed",
-			addresses:   []string{"household@example.com"},
-			wantAllowed: 1,
-		},
-		{
-			name:        "trusted allowed",
-			addresses:   []string{"trusted@example.com"},
-			wantAllowed: 1,
-		},
-		{
-			name:         "known warns",
-			addresses:    []string{"known@example.com"},
-			wantWarnings: 1,
-		},
-		{
-			name:        "unknown blocked",
-			addresses:   []string{"stranger@example.com"},
-			wantBlocked: 1,
-		},
-		{
-			name:         "mixed recipients",
-			addresses:    []string{"admin@example.com", "known@example.com", "stranger@example.com"},
-			wantAllowed:  1,
-			wantWarnings: 1,
-			wantBlocked:  1,
-		},
+		{name: "admin allowed", addresses: []string{"admin@example.com"}, wantAllowed: 1, wantStatus: ContactMatched, wantZone: "admin"},
+		{name: "household allowed", addresses: []string{"household@example.com"}, wantAllowed: 1, wantStatus: ContactMatched},
+		{name: "trusted allowed", addresses: []string{"trusted@example.com"}, wantAllowed: 1, wantStatus: ContactMatched},
+		{name: "known blocked", addresses: []string{"known@example.com"}, wantBlocked: 1, wantReason: "known trust zone", wantStatus: ContactMatched},
+		{name: "unknown blocked", addresses: []string{"stranger@example.com"}, wantBlocked: 1, wantReason: "no contact record", wantStatus: ContactUnmatched},
+		{name: "ambiguous governed by least privileged", addresses: []string{"twins@example.com"}, wantBlocked: 1, wantReason: "2 contact records", wantStatus: ContactAmbiguous},
+		{name: "ambiguous but every candidate eligible", addresses: []string{"triple@example.com"}, wantAllowed: 1, wantStatus: ContactAmbiguous},
+		{name: "lookup failure is not a stranger", addresses: []string{"broken@example.com"}, wantBlocked: 1, wantReason: "could not be consulted (database is locked)", wantStatus: ContactLookupFailed},
+		{name: "unparseable address blocked", addresses: []string{"not an address"}, wantBlocked: 1, wantReason: "not a valid email address"},
+		{name: "mixed recipients", addresses: []string{"admin@example.com", "known@example.com", "stranger@example.com"}, wantAllowed: 1, wantBlocked: 2},
+		{name: "automated address on an admin record is refused at known", addresses: []string{"noreply@example.com"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "ask them", wantStatus: ContactMatched, wantZone: "known", wantAutomated: true},
+		{name: "unmatched automated address gets the automated reason", addresses: []string{"no-reply@stranger.example"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "no contact record", wantStatus: ContactUnmatched, wantZone: ZoneUnknown, wantAutomated: true},
+		{name: "automated refusal precedes a failed lookup", addresses: []string{"noreply@broken.example"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "retry later", wantStatus: ContactLookupFailed, wantZone: ZoneUnknown, wantAutomated: true},
+		{name: "ambiguous automated address is refused though every candidate is eligible", addresses: []string{"notifications@twins.example"}, wantBlocked: 1, wantReason: "automated mailbox", notReason: "least privileged zone", wantStatus: ContactAmbiguous, wantZone: "known", wantAutomated: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := CheckRecipientTrust(resolver, tt.addresses)
-
+			result := CheckRecipientTrust(context.Background(), resolver, tt.addresses)
 			if len(result.Allowed) != tt.wantAllowed {
-				t.Errorf("Allowed = %d, want %d", len(result.Allowed), tt.wantAllowed)
-			}
-			if len(result.Warnings) != tt.wantWarnings {
-				t.Errorf("Warnings = %d, want %d", len(result.Warnings), tt.wantWarnings)
+				t.Errorf("Allowed = %d, want %d: %+v", len(result.Allowed), tt.wantAllowed, result)
 			}
 			if len(result.Blocked) != tt.wantBlocked {
-				t.Errorf("Blocked = %d, want %d", len(result.Blocked), tt.wantBlocked)
+				t.Errorf("Blocked = %d, want %d: %+v", len(result.Blocked), tt.wantBlocked, result)
+			}
+			if len(result.Assessments) != len(tt.addresses) {
+				t.Fatalf("assessments = %d, want one per address", len(result.Assessments))
+			}
+			if tt.wantReason != "" && !strings.Contains(result.Assessments[0].Reason, tt.wantReason) {
+				t.Errorf("reason = %q, want it to mention %q", result.Assessments[0].Reason, tt.wantReason)
+			}
+			if tt.wantStatus != "" && result.Assessments[0].ContactStatus != tt.wantStatus {
+				t.Errorf("contact_status = %q, want %q", result.Assessments[0].ContactStatus, tt.wantStatus)
+			}
+			first := result.Assessments[0]
+			if tt.wantZone != "" && first.TrustZone != tt.wantZone {
+				t.Errorf("trust_zone = %q, want %q", first.TrustZone, tt.wantZone)
+			}
+			if first.Automated != tt.wantAutomated {
+				t.Errorf("automated = %v, want %v", first.Automated, tt.wantAutomated)
+			}
+			if tt.notReason != "" && strings.Contains(first.Reason, tt.notReason) {
+				t.Errorf("reason = %q, must not teach %q", first.Reason, tt.notReason)
+			}
+			if tt.wantAutomated && (first.Allowed || first.Gating != GatingBlocked || !strings.Contains(first.Reason, "drop the recipient")) {
+				t.Errorf("an automated recipient is blocked with a reason that says to drop it: %+v", first)
 			}
 		})
 	}
 }
 
-func TestCheckRecipientTrust_ExtractsAddress(t *testing.T) {
-	resolver := &mockResolver{
-		zones: map[string]string{
-			"user@example.com": "trusted",
-		},
+func TestCheckRecipientTrust_ExtractsAddressAndMemoizes(t *testing.T) {
+	resolver := &stubContacts{zones: map[string]string{"user@example.com": "trusted"}}
+	result := CheckRecipientTrust(context.Background(), resolver, []string{"Alice <user@example.com>", "USER@example.com"})
+	if len(result.Allowed) != 2 {
+		t.Errorf("display-name and case variants should both match, got %+v", result)
 	}
-
-	// "Name <addr>" format should extract the bare address.
-	result := CheckRecipientTrust(resolver, []string{"Alice <user@example.com>"})
-
-	if len(result.Allowed) != 1 {
-		t.Errorf("should extract and match bare address, got %d allowed", len(result.Allowed))
+	if resolver.calls != 1 {
+		t.Errorf("resolver calls = %d, want 1 (memoized by address key)", resolver.calls)
 	}
-}
-
-func TestCheckRecipientTrust_Error(t *testing.T) {
-	resolver := &mockResolver{
-		zones: map[string]string{
-			"error@example.com": "error",
-		},
-	}
-
-	result := CheckRecipientTrust(resolver, []string{"error@example.com"})
-
-	if len(result.Blocked) != 1 {
-		t.Errorf("error should block, got %d blocked", len(result.Blocked))
+	if c := result.Assessments[0].Contact; c == nil || c.ID != "id-user" || c.Name != "User" {
+		t.Errorf("assessment should carry the matched contact: %+v", result.Assessments[0])
 	}
 }
 
-func TestTrustResult_HasIssues(t *testing.T) {
-	clean := TrustResult{Allowed: []string{"a@test.com"}}
-	if clean.HasIssues() {
-		t.Error("clean result should not have issues")
+func TestTrustResultHasIssuesFollowsAssessments(t *testing.T) {
+	resolver := &stubContacts{zones: map[string]string{"known@example.com": "known", "ok@example.com": "admin"}}
+	result := CheckRecipientTrust(context.Background(), resolver, []string{"ok@example.com", "known@example.com"})
+	if !result.HasIssues() {
+		t.Fatal("a refused recipient is an issue")
 	}
-
-	warned := TrustResult{Warnings: []string{"warning"}}
-	if !warned.HasIssues() {
-		t.Error("warned result should have issues")
+	if clean := CheckRecipientTrust(context.Background(), resolver, []string{"ok@example.com"}); clean.HasIssues() {
+		t.Errorf("an all-allowed result has no issues: %+v", clean)
 	}
-
-	blocked := TrustResult{Blocked: []string{"blocked"}}
-	if !blocked.HasIssues() {
-		t.Error("blocked result should have issues")
+	if !strings.Contains(strings.Join(result.Blocked, "\n"), "Cannot send to known@example.com") {
+		t.Errorf("Blocked should carry the refusal line: %v", result.Blocked)
 	}
 }
 
-func TestTrustResult_FormatIssues(t *testing.T) {
-	result := TrustResult{
-		Warnings: []string{"warn message"},
-		Blocked:  []string{"block message"},
-	}
-
-	formatted := result.FormatIssues()
-
-	if formatted == "" {
-		t.Error("FormatIssues should return non-empty string")
-	}
+// TestAmbiguousRefusalCountsEveryRecord pins that the refusal reason
+// names the full number of records, not only the rendered candidates.
+func TestAmbiguousRefusalCountsEveryRecord(t *testing.T) {
+	resolver := resolverFunc(func(context.Context, string) (ContactMatch, error) {
+		return ContactMatch{Status: ContactAmbiguous, TrustZone: "known", CandidatesTotal: 55,
+			Candidates: []ContactCandidate{{ID: "a", Name: "A", TrustZone: "trusted"}, {ID: "b", Name: "B", TrustZone: "known"}}}, nil
+	})
+	result := CheckRecipientTrust(context.Background(), resolver, []string{"shared@example.com"})
+	mustContain(t, result.Assessments[0].Reason, "belongs to 55 contact records", "and 53 more")
 }

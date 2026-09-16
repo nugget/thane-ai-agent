@@ -99,13 +99,120 @@ from the workspace's structured log index.
 
 ## Network Requirements
 
-Thane listens on three ports (configurable):
+Thane listens on these ports (all configurable):
 
 | Port | Service | Required |
 |------|---------|----------|
 | 8080 | Native API + web dashboard | Yes |
 | 11434 | Ollama-compatible API (for HA) | Yes |
+| 8081 | OpenAI-compatible API | Optional |
 | 8843 | CardDAV server | Optional (contact sync) |
+| 443 | HTTPS front door | Optional (`tls.enabled`) |
+| 80 | HTTP to HTTPS redirect | Optional (with the front door) |
+
+The HTTPS front door terminates TLS in-process and routes each configured
+hostname to one of the plaintext surfaces above, so no reverse proxy is
+needed; see [HTTPS Front Door](configuration.md#https-front-door).
+
+Ports 80 and 443 need privilege on every platform Thane runs on, and
+Thane should never hold it. The front door therefore accepts listening
+sockets a supervisor bound as root and handed down under the systemd
+socket-activation contract: descriptors from 3 up, `LISTEN_FDS` saying how
+many, `LISTEN_PID` naming the intended child, and `LISTEN_FDNAMES` naming
+each one. A descriptor named `https` replaces the TLS bind and one named
+`http` replaces the redirect bind; an absent name binds the configured
+port as usual, and the redirect names the inherited socket's own port.
+Thane clears the variables after adopting the sockets and marks every
+handed-down descriptor close-on-exec so no tool subprocess inherits one.
+Because the supervisor still owns the listening socket, connection
+attempts that arrive during a restart wait in its backlog for the new
+process instead of being refused; connections already established with
+the old process still close with it.
+
+On Linux that is one socket unit per name, both tied to the service:
+
+```ini
+# thane-https.socket
+[Socket]
+ListenStream=443
+FileDescriptorName=https
+Service=thane.service
+
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
+# thane-http.socket
+[Socket]
+ListenStream=80
+FileDescriptorName=http
+Service=thane.service
+
+[Install]
+WantedBy=sockets.target
+```
+
+with `Requires=thane-https.socket thane-http.socket` in the service;
+systemd binds both ports as root and starts Thane unprivileged with the
+environment above, `LISTEN_PID` included. Granting
+the binary `CAP_NET_BIND_SERVICE` or lowering
+`net.ipv4.ip_unprivileged_port_start` also works, at the cost of privilege
+in the process.
+
+macOS refuses ports below 1024 to ordinary users, admin or not, and offers
+no capability to grant. The supported path is the companion app's port
+broker: a LaunchDaemon the app registers through `SMAppService`, whose
+plist declares `Sockets` for 443 and 80 so launchd binds them at boot and
+hands them to the app, which starts Thane with the same environment
+(`LISTEN_PID` set from inside the child by a shell that execs Thane in
+place, since the app cannot know the pid before the spawn). On a
+Mac without the companion, keep Thane on high ports and let the packet
+filter carry the public ones instead: bind `tls.https.port: 8443` and
+`tls.http.port: 8880`, set `tls.https.public_port: 443` so the redirect
+names the port clients use, and install a `pf` redirect once as root, for
+example an anchor containing
+
+```
+rdr pass on en0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443
+rdr pass on en0 inet proto tcp from any to any port 80  -> 127.0.0.1 port 8880
+```
+
+and reference it from `/etc/pf.conf` so it survives a reboot:
+
+```
+rdr-anchor "thane"
+load anchor "thane" from "/etc/pf.anchors/thane"
+```
+
+Adjust the interface name to the one carrying LAN traffic, load with
+`pfctl -f /etc/pf.conf` and enable with `pfctl -e`, and verify by naming
+the anchor, since `pfctl -s nat` alone does not descend into anchors:
+`pfctl -a thane -s nat`.
+
+### Replacing a reverse proxy with the front door
+
+Bring the front door up beside the proxy rather than in place of it.
+Configure `tls:` with `certmagic.ca` set to the Let's Encrypt staging
+directory and `https.port` on an alternate port such as 8443, then start
+Thane and watch `subsystem=tls` log lines for `tls certificate obtained`
+against every hostname. Staging certificates are not browser-trusted, so
+verify with `curl --insecure` or by inspecting the issuer. Once every
+hostname issues, remove `certmagic.ca`, move the front door onto the public
+ports, stop the proxy, and restart Thane; the hostnames already point at
+the host, so no DNS change is involved. Moving onto the public ports means
+`https.port: 443` and `http.port: 80` only where Thane has been granted
+the privilege to bind them (the Linux capability above); on macOS, and on
+any host where Thane stays unprivileged, keep the high binds and set
+`https.public_port: 443` with the packet-filter redirect above carrying
+443 and 80. Thane's own access log now records real client addresses where
+the proxy reported its own, and `allowed_sources` on the compat shims is
+what makes those addresses actionable: the proxy's access policy, if it
+had one, moves into `ollama_api.allowed_sources` and
+`openai_api.allowed_sources` (see
+[Configuration](configuration.md#listen-addresses)). Read the access log
+first and let it tell you which hosts actually call each shim, then write
+the list from what you find.
 
 Thane also needs outbound access to:
 - Your Home Assistant instance (REST + WebSocket)

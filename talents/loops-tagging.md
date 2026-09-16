@@ -82,12 +82,20 @@ job:
 - **Forge curator** (release digest, PR queue dashboard) — `forge`
   plus `documents` for the output doc.
 - **Email triage loop** — `email`. Add `contacts` if the loop should
-  ground claims in person records. Escalation is not a tag-add
+  ground claims in person records. On a multi-account site, bind the
+  loop to its mailbox with `bindings: {email_account: "<name>"}` so an
+  omitted `account` resolves correctly and other accounts are refused
+  by name. Escalation is not a tag-add
   decision: every loop already has `request_core_attention` from the
   core tool set, and that is the path. The `notifications` tag holds
   the human-egress tools the core loop calls *after* it decides to
   escalate; granting it to a non-core service or delegate loop
   bypasses that boundary, not strengthens it.
+- **Draft-editing loop** — `email` and `email_drafts`. `email_drafts`
+  holds the tools that revise and withdraw drafts Thane wrote, and
+  `email` carries the Email Accounts block with each account's
+  `writes_as` and `voice`. A loop that only triages or writes first
+  drafts leaves `email_drafts` off, so it never sees the edit tools.
 
 Whether omitting `tags:` differs from passing `tags: []` depends on
 which loop family is doing the launching:

@@ -34,7 +34,11 @@ func TestCompaction_PreservesMessages(t *testing.T) {
 		}
 	}
 
-	if !compactor.NeedsCompaction("test-conv") {
+	needed, err := compactor.NeedsCompaction(context.Background(), "test-conv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needed {
 		t.Skip("not enough tokens to trigger compaction")
 	}
 
@@ -81,7 +85,7 @@ func TestSearch_NoContext(t *testing.T) {
 			ArchiveReason: "reset"},
 	}
 
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,7 +162,7 @@ func TestSessionMessageCount(t *testing.T) {
 			Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test",
 		}
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
+	if err := store.ImportMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,8 +189,8 @@ func TestSetSessionSummary(t *testing.T) {
 	}
 }
 
-// TestArchiveToolCalls stores and retrieves tool call records.
-func TestArchiveToolCalls(t *testing.T) {
+// TestImportToolCalls stores and retrieves tool call records.
+func TestImportToolCalls(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	now := time.Now().UTC()
@@ -206,7 +210,7 @@ func TestArchiveToolCalls(t *testing.T) {
 		},
 	}
 
-	if err := store.ArchiveToolCalls(calls); err != nil {
+	if err := store.ImportToolCalls(calls); err != nil {
 		t.Fatal(err)
 	}
 
@@ -233,8 +237,8 @@ func TestArchiveToolCalls(t *testing.T) {
 	}
 }
 
-// TestArchiveToolCalls_Dedup verifies tool calls are deduplicated.
-func TestArchiveToolCalls_Dedup(t *testing.T) {
+// TestImportToolCalls_Dedup verifies tool calls are deduplicated.
+func TestImportToolCalls_Dedup(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	call := ArchivedToolCall{
@@ -242,10 +246,10 @@ func TestArchiveToolCalls_Dedup(t *testing.T) {
 		ToolName: "test", Arguments: "{}", StartedAt: time.Now(),
 	}
 
-	if err := store.ArchiveToolCalls([]ArchivedToolCall{call}); err != nil {
+	if err := store.ImportToolCalls([]ArchivedToolCall{call}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ArchiveToolCalls([]ArchivedToolCall{call}); err != nil {
+	if err := store.ImportToolCalls([]ArchivedToolCall{call}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -329,20 +333,20 @@ func TestPurgeImported(t *testing.T) {
 			Role: "user", Content: "hello from session 2",
 			Timestamp: time.Now(), ArchiveReason: "import"},
 	}
-	store.ArchiveMessages(msgs)
+	store.ImportMessages(msgs)
 
 	calls := []ArchivedToolCall{
 		{ID: "tc1", ConversationID: "imported", SessionID: sess1.ID,
 			ToolName: "test", Arguments: "{}", StartedAt: time.Now()},
 	}
-	store.ArchiveToolCalls(calls)
+	store.ImportToolCalls(calls)
 
 	store.RecordImport("oc-1", "openclaw", sess1.ID)
 	store.RecordImport("oc-2", "openclaw", sess2.ID)
 
 	// Also create a non-imported session that should survive the purge
 	nativeSess, _ := store.StartSession("native")
-	store.ArchiveMessages([]Message{
+	store.ImportMessages([]Message{
 		{ID: "m3", ConversationID: "native", SessionID: nativeSess.ID,
 			Role: "user", Content: "native message",
 			Timestamp: time.Now(), ArchiveReason: "reset"},
@@ -392,5 +396,69 @@ func TestPurgeImported_NoData(t *testing.T) {
 	}
 	if purged != 0 {
 		t.Errorf("expected 0 purged, got %d", purged)
+	}
+}
+
+func TestPurgeImported_SharedTransaction(t *testing.T) {
+	for _, foreignKeys := range []bool{false, true} {
+		t.Run(fmt.Sprintf("foreign_keys=%t", foreignKeys), func(t *testing.T) {
+			store := newTestArchiveStore(t)
+			store.DB().SetMaxOpenConns(1)
+			if foreignKeys {
+				if _, err := store.DB().Exec(`PRAGMA foreign_keys = ON`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			now := time.Now().UTC()
+			if _, err := store.DB().Exec(`INSERT INTO conversations (id, created_at, updated_at) VALUES ('imported', ?, ?)`, now, now); err != nil {
+				t.Fatal(err)
+			}
+			session, err := store.StartSession("imported")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ImportMessages([]Message{{ID: "message", ConversationID: "imported", SessionID: session.ID,
+				Role: "user", Content: "rollback marker", Timestamp: now, ArchiveReason: "import"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ImportToolCalls([]ArchivedToolCall{{ID: "call", ConversationID: "imported", SessionID: session.ID,
+				ToolName: "inspect", Arguments: "{}", StartedAt: now}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.DB().Exec(`UPDATE tool_calls SET message_id = 'message' WHERE id = 'call'`); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.RecordImport("external", "test", session.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.DB().Exec(`CREATE TRIGGER block_purge BEFORE DELETE ON sessions BEGIN
+				SELECT RAISE(ABORT, 'test blocked session delete'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if count, err := store.PurgeImported("test"); err == nil || count != 0 {
+				t.Fatalf("blocked purge = %d, %v", count, err)
+			}
+			if messages, err := store.GetSessionTranscript(session.ID); err != nil || len(messages) != 1 || messages[0].ID != "message" {
+				t.Fatalf("rollback lost transcript: %+v, %v", messages, err)
+			}
+			if calls, err := store.GetSessionToolCalls(session.ID); err != nil || len(calls) != 1 || calls[0].ID != "call" {
+				t.Fatalf("rollback lost tool call: %+v, %v", calls, err)
+			}
+			if imported, err := store.IsImported("external", "test"); err != nil || !imported {
+				t.Fatalf("rollback lost import metadata: %t, %v", imported, err)
+			}
+			if results, err := store.Search(SearchOptions{Query: "rollback marker", NoContext: true}); err != nil || len(results) != 1 {
+				t.Fatalf("rollback lost search index: %+v, %v", results, err)
+			}
+			if _, err := store.DB().Exec(`DROP TRIGGER block_purge`); err != nil {
+				t.Fatal(err)
+			}
+			if count, err := store.PurgeImported("test"); err != nil || count != 1 {
+				t.Fatalf("retry purge = %d, %v", count, err)
+			}
+			if results, err := store.Search(SearchOptions{Query: "rollback marker", NoContext: true}); err != nil || len(results) != 0 {
+				t.Fatalf("purged message remains searchable: %+v, %v", results, err)
+			}
+		})
 	}
 }

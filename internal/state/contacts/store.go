@@ -3,13 +3,16 @@
 package contacts
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -128,6 +131,18 @@ type InteractionMeta struct {
 	Channel   string   `json:"channel,omitempty"`    // e.g. "signal", "email"
 	SessionID string   `json:"session_id,omitempty"` // session that last interacted
 	Topics    []string `json:"topics,omitempty"`     // LLM-generated session tags
+
+	// Direction is "inbound" when the contact wrote to the agent and
+	// "outbound" when the agent wrote to them; empty for interactions
+	// recorded before the distinction existed.
+	Direction string `json:"direction,omitempty"`
+
+	// Account is the channel account the exchange went through, for
+	// channels that have several (an email mailbox name).
+	Account string `json:"account,omitempty"`
+
+	// MessageID identifies the message on channels that have one.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // Store manages contact persistence in SQLite.
@@ -135,6 +150,10 @@ type Store struct {
 	db         *sql.DB
 	ftsEnabled bool
 	logger     *slog.Logger
+
+	// operatorID is the operator's own record, which a shared nickname
+	// resolves to first (see operator_order.go).
+	operatorID atomic.Pointer[uuid.UUID]
 }
 
 // Open creates a contact store at path and owns the resulting database
@@ -192,20 +211,25 @@ func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 	return s, nil
 }
 
-// tryEnableFTS creates the FTS5 virtual table for full-text search.
-// Falls back to LIKE-based search when FTS5 is not available.
+// searchColumns are the contact columns [Store.Search] reads, in the
+// order the FTS5 index declares them. The LIKE fallback reads the same
+// list, so both paths find a contact by the same fields. given_name is
+// among them because name resolution answers to a given name, and an
+// ambiguous name's continuation sends the model to query to find the
+// contacts the error did not list.
+var searchColumns = []string{"formatted_name", "nickname", "given_name", "note", "ai_summary", "org"}
+
+// tryEnableFTS creates the FTS5 virtual table for full-text search,
+// first dropping one whose columns are not [searchColumns] so it is
+// created again with them. Falls back to LIKE-based search when FTS5 is
+// not available.
 func (s *Store) tryEnableFTS() {
-	_, err := s.db.Exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(
-			formatted_name,
-			nickname,
-			note,
-			ai_summary,
-			org,
-			content=contacts,
-			content_rowid=rowid
-		)
-	`)
+	if err := s.dropStaleFTS(); err != nil {
+		s.logger.Warn("contacts FTS index could not be migrated, using LIKE fallback", "error", err)
+		return
+	}
+	_, err := s.db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(` +
+		strings.Join(searchColumns, ", ") + `, content=contacts, content_rowid=rowid)`)
 	if err != nil {
 		s.logger.Warn("FTS5 not available for contacts, using LIKE fallback", "error", err)
 		return
@@ -219,10 +243,48 @@ func (s *Store) tryEnableFTS() {
 	}
 }
 
+// dropStaleFTS drops the contacts_fts index when it exists with columns
+// other than [searchColumns], as a database indexed before given_name
+// was searched has it. Nothing is lost: the index is external-content
+// over contacts and keeps no text of its own, and the rebuild
+// tryEnableFTS runs after creating it again reindexes every row.
+func (s *Store) dropStaleFTS() error {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info('contacts_fts')`)
+	if err != nil {
+		return fmt.Errorf("read contacts_fts columns: %w", err)
+	}
+	var columns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan contacts_fts column: %w", err)
+		}
+		columns = append(columns, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read contacts_fts columns: %w", err)
+	}
+	if len(columns) == 0 || slices.Equal(columns, searchColumns) {
+		return nil
+	}
+	s.logger.Info("recreating contacts FTS index with new columns", "columns", columns, "want", searchColumns)
+	if _, err := s.db.Exec(`DROP TABLE contacts_fts`); err != nil {
+		return fmt.Errorf("drop stale contacts_fts: %w", err)
+	}
+	return nil
+}
+
 // Upsert creates or updates a contact. If the contact has no ID, a new
 // UUIDv7 is assigned. Soft-deleted contacts with the same ID are
 // resurrected. Rev is automatically set to the current timestamp.
 func (s *Store) Upsert(c *Contact) (*Contact, error) {
+	return s.upsert(context.Background(), c)
+}
+
+// upsert is [Store.Upsert] bound to ctx.
+func (s *Store) upsert(ctx context.Context, c *Contact) (*Contact, error) {
 	now := time.Now().UTC()
 
 	if c.Kind == "" {
@@ -250,7 +312,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 		c.CreatedAt = now
 		c.UpdatedAt = now
 
-		_, err = s.db.Exec(`
+		_, err = s.db.ExecContext(ctx, `
 			INSERT INTO contacts (id, kind, formatted_name, family_name, given_name,
 				additional_names, name_prefix, name_suffix, nickname,
 				birthday, anniversary, gender, org, title, role,
@@ -275,7 +337,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 
 	// Update existing (resurrect if soft-deleted).
 	c.UpdatedAt = now
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		UPDATE contacts SET kind = ?, formatted_name = ?, family_name = ?, given_name = ?,
 			additional_names = ?, name_prefix = ?, name_suffix = ?, nickname = ?,
 			birthday = ?, anniversary = ?, gender = ?, org = ?, title = ?, role = ?,
@@ -302,64 +364,96 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 // FindByName returns the first active contact with a case-insensitive
 // formatted name match. Returns sql.ErrNoRows if not found.
 func (s *Store) FindByName(name string) (*Contact, error) {
-	return s.scanContact(s.db.QueryRow(
+	return s.findByName(context.Background(), name)
+}
+
+// findByName is [Store.FindByName] bound to ctx.
+func (s *Store) findByName(ctx context.Context, name string) (*Contact, error) {
+	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(formatted_name) = LOWER(?)`,
 		name))
 }
 
 // FindByNickname returns the first active contact with a case-insensitive
-// nickname match. Returns sql.ErrNoRows if not found.
+// nickname match. When several active contacts share the nickname, the
+// operator's own record wins at any zone, then one above known (or with
+// a malformed zone), then the lowest id. It is not how a name resolves:
+// no notification, lookup or context path calls it, and
+// [Store.ResolveContact], which they all call, reports two holders at
+// the same standing as an ambiguity instead of taking the lower id.
+// Returns sql.ErrNoRows if not found.
 func (s *Store) FindByNickname(name string) (*Contact, error) {
-	return s.scanContact(s.db.QueryRow(
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)`,
-		name))
+	return s.findByNickname(context.Background(), name)
 }
 
-// ResolveContact finds a contact by name using cascading resolution
-// strategies: exact formatted name → nickname → search fallback.
-// Returns [sql.ErrNoRows] if no match is found, or an error listing
-// ambiguous matches if search returns multiple results.
+// findByNickname is [Store.FindByNickname] bound to ctx.
+func (s *Store) findByNickname(ctx context.Context, name string) (*Contact, error) {
+	args := append([]any{name}, s.authorityOrderArgs()...)
+	return s.scanContact(s.db.QueryRowContext(ctx,
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)
+		ORDER BY `+authorityOrderSQL+`, id`,
+		args...))
+}
+
+// ResolveContact finds the active contact a name identifies, reading
+// name fields only: first the one contact whose formatted name or
+// nickname is the name in the highest band of standing any such
+// contact reaches, as operator_order.go describes (the operator's own
+// record, then records above known, then records at known), then the
+// one contact that answers to it by a given name or the first word of
+// its formatted name, as name_resolve.go describes. Notes, AI summaries
+// and organizations are never read; [Store.Search] reads them. Both
+// steps compare the name and each stored name trimmed of edge space and
+// folded with LOWER, as the fork audit folds them, so a blank name
+// answers to no one. Returns [sql.ErrNoRows] when no contact answers to
+// the name, and an [*AmbiguousNameError] when two or more hold it
+// exactly in that band (ExactTie), or when none holds it exactly and
+// two or more answer to it by a given name or first word.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
-	// 1. Exact formatted name match (fast, indexed).
-	c, err := s.FindByName(name)
+	return s.resolveContact(context.Background(), name)
+}
+
+// resolveContact is [Store.ResolveContact] bound to ctx.
+func (s *Store) resolveContact(ctx context.Context, name string) (*Contact, error) {
+	// Trimmed once, so both steps, and the errors that echo the name, see
+	// the name the lookup was made by.
+	name = strings.TrimSpace(name)
+
+	// 1. Formatted name or nickname, the highest band of standing, where
+	// two holders are a tie and not a pick.
+	c, err := s.findByNameOrNickname(ctx, name)
 	if err == nil {
 		return c, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("find by name %q: %w", name, err)
-	}
-
-	// 2. Nickname match (direct column query).
-	c, err = s.FindByNickname(name)
-	if err == nil {
-		return c, nil
+	var ambiguous *AmbiguousNameError
+	if errors.As(err, &ambiguous) {
+		// An exact tie is reported as itself; a short form cannot settle
+		// what a formatted name or nickname left open.
+		return nil, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("find by nickname %q: %w", name, err)
+		return nil, fmt.Errorf("find by name or nickname %q: %w", name, err)
 	}
 
-	// 3. Search fallback (FTS or LIKE).
-	results, err := s.Search(name)
+	// 2. The fork audit's other name keys, with no tie-break.
+	c, err = s.resolveByNameKeys(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("search fallback for %q: %w", name, err)
-	}
-	if len(results) == 1 {
-		return results[0], nil
-	}
-	if len(results) > 1 {
-		names := make([]string, len(results))
-		for i, c := range results {
-			names[i] = c.FormattedName
+		if errors.Is(err, sql.ErrNoRows) || errors.As(err, &ambiguous) {
+			return nil, err
 		}
-		return nil, fmt.Errorf("ambiguous contact %q: matches %v", name, names)
+		return nil, fmt.Errorf("resolve %q by given name or first word: %w", name, err)
 	}
-
-	return nil, sql.ErrNoRows
+	return c, nil
 }
 
 // Get retrieves a contact by ID.
 func (s *Store) Get(id uuid.UUID) (*Contact, error) {
-	return s.scanContact(s.db.QueryRow(
+	return s.get(context.Background(), id)
+}
+
+// get is [Store.Get] bound to ctx.
+func (s *Store) get(ctx context.Context, id uuid.UUID) (*Contact, error) {
+	return s.scanContact(s.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND id = ?`,
 		id.String()))
 }
@@ -367,54 +461,165 @@ func (s *Store) Get(id uuid.UUID) (*Contact, error) {
 // GetWithProperties retrieves a contact by ID and populates its
 // Properties slice.
 func (s *Store) GetWithProperties(id uuid.UUID) (*Contact, error) {
-	c, err := s.Get(id)
+	return s.getWithProperties(context.Background(), id)
+}
+
+// getWithProperties is [Store.GetWithProperties] bound to ctx.
+func (s *Store) getWithProperties(ctx context.Context, id uuid.UUID) (*Contact, error) {
+	c, err := s.get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	c.Properties, err = s.GetProperties(id)
+	c.Properties, err = s.getProperties(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get properties: %w", err)
 	}
 	return c, nil
 }
 
-// Search finds contacts matching the query using FTS5 or LIKE fallback.
+// SearchLimit bounds the contacts [Store.Search] returns.
+const SearchLimit = 50
+
+// Search finds up to [SearchLimit] active contacts whose formatted name,
+// nickname, given name, note, AI summary or organization matches the
+// query, using FTS5 or the LIKE fallback. The contacts that answer to
+// the query as a name, by the name keys resolution reads (a formatted
+// name, nickname, given name or first word of a formatted name), come
+// first, so up to SearchLimit of them are listed ahead of any contact
+// whose other text only mentions it.
 func (s *Store) Search(query string) ([]*Contact, error) {
-	if s.ftsEnabled {
-		return s.searchFTS(query)
-	}
-	return s.searchLIKE(query)
+	found, _, err := s.search(context.Background(), query)
+	return found, err
 }
 
-func (s *Store) searchFTS(query string) ([]*Contact, error) {
+// search is [Store.Search] bound to ctx. Both paths read one row past
+// SearchLimit, so truncated says whether more contacts match than it
+// returns.
+func (s *Store) search(ctx context.Context, query string) (found []*Contact, truncated bool, err error) {
+	first, err := s.nameHoldersFirst(ctx, query)
+	if err != nil {
+		return nil, false, err
+	}
+	if s.ftsEnabled {
+		found, err = s.searchFTS(ctx, query, first)
+	} else {
+		found, err = s.searchLIKE(ctx, query, first)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if len(found) > SearchLimit {
+		return found[:SearchLimit], true, nil
+	}
+	return found, false, nil
+}
+
+// searchOrder is the leading ORDER BY term [Store.nameHoldersFirst]
+// builds, and its arguments. A zero searchOrder orders nothing.
+type searchOrder struct {
+	sql  string
+	args []any
+}
+
+// then returns the ORDER BY clause body: the leading term, if any,
+// followed by rest.
+func (o searchOrder) then(rest string) string {
+	if o.sql == "" {
+		return rest
+	}
+	return o.sql + ", " + rest
+}
+
+// nameHoldersFirst builds the ORDER BY term that puts first the active
+// contacts answering to query as a name, as [nameKeys.answersTo] reads
+// their name keys, so a search lists them ahead of contacts it matches
+// only by other text. It orders them among themselves as an ambiguous
+// name lists them: the contacts holding the query exactly, as a
+// formatted name or nickname, before those answering by a short form,
+// and within each the operator's first, then those above known, then by
+// name and id. So the contacts an exact tie is between come first, and
+// no lower-standing holder or short form is listed among them. It names
+// at most SearchLimit+1 of them, since a search returns no more than
+// that.
+func (s *Store) nameHoldersFirst(ctx context.Context, query string) (searchOrder, error) {
+	key := nameKey(query)
+	if key == "" {
+		return searchOrder{}, nil
+	}
+	records, err := s.activeDirectoryNames(ctx)
+	if err != nil {
+		return searchOrder{}, fmt.Errorf("find contacts answering to %q: %w", query, err)
+	}
+	type holder struct {
+		member ContactForkMember
+		exact  bool
+	}
+	var holders []holder
+	for _, r := range records {
+		if r.keys.answersTo(key) {
+			holders = append(holders, holder{r.member, containsNameKey(r.keys.exact, key)})
+		}
+	}
+	if len(holders) == 0 {
+		return searchOrder{}, nil
+	}
+	sort.SliceStable(holders, func(i, j int) bool {
+		if holders[i].exact != holders[j].exact {
+			return holders[i].exact
+		}
+		return forkMemberLess(holders[i].member, holders[j].member)
+	})
+	holders = holders[:min(len(holders), SearchLimit+1)]
+	var b strings.Builder
+	b.WriteString("CASE contacts.id")
+	args := make([]any, 0, 2*len(holders))
+	for i, h := range holders {
+		b.WriteString(" WHEN ? THEN ?")
+		args = append(args, h.member.ContactID.String(), i)
+	}
+	fmt.Fprintf(&b, " ELSE %d END", len(holders))
+	return searchOrder{sql: b.String(), args: args}, nil
+}
+
+func (s *Store) searchFTS(ctx context.Context, query string, first searchOrder) ([]*Contact, error) {
 	sanitized := sanitizeFTS5Query(query)
 	if sanitized == "" {
 		return nil, nil
 	}
 
-	rows, err := s.db.Query(`
+	args := append([]any{sanitized}, first.args...)
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+qualifiedContactColumns+`
 		FROM contacts_fts
 		JOIN contacts ON contacts_fts.rowid = contacts.rowid
 		WHERE contacts_fts MATCH ? AND contacts.`+activeFilter+`
-		ORDER BY rank
-		LIMIT 50
-	`, sanitized)
+		ORDER BY `+first.then("rank")+`
+		LIMIT ?
+	`, append(args, SearchLimit+1)...)
 	if err != nil {
 		s.logger.Warn("FTS5 search failed, falling back to LIKE", "error", err, "query", query)
-		return s.searchLIKE(query)
+		return s.searchLIKE(ctx, query, first)
 	}
 	defer rows.Close()
 
 	return s.scanContacts(rows)
 }
 
-func (s *Store) searchLIKE(query string) ([]*Contact, error) {
+// searchLIKE is the search path without FTS5. It reads the same
+// [searchColumns] the FTS5 index declares.
+func (s *Store) searchLIKE(ctx context.Context, query string, first searchOrder) ([]*Contact, error) {
 	pattern := "%" + query + "%"
-	rows, err := s.db.Query(
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+
-			` AND (formatted_name LIKE ? OR nickname LIKE ? OR note LIKE ? OR ai_summary LIKE ? OR org LIKE ?) ORDER BY updated_at DESC LIMIT 50`,
-		pattern, pattern, pattern, pattern, pattern)
+	match := make([]string, len(searchColumns))
+	args := make([]any, 0, len(searchColumns)+len(first.args)+1)
+	for i, column := range searchColumns {
+		match[i] = "contacts." + column + " LIKE ?"
+		args = append(args, pattern)
+	}
+	args = append(args, first.args...)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+qualifiedContactColumns+` FROM contacts WHERE contacts.`+activeFilter+
+			` AND (`+strings.Join(match, " OR ")+`) ORDER BY `+first.then("contacts.updated_at DESC")+` LIMIT ?`,
+		append(args, SearchLimit+1)...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -585,6 +790,11 @@ func (s *Store) DeleteAllProperties(contactID uuid.UUID) error {
 // Unlike [Upsert], a non-nil ID that does not yet exist in the
 // database is INSERT-ed (enabling CardDAV clients to create contacts
 // by PUTing to a new URL).
+//
+// The store applies no identity custody here: CardDAV and /v1/contacts
+// are operator writers with full power over which contact holds an
+// address or number. A model-facing writer must never call it; model
+// identity writes go through identityViolations.
 func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, error) {
 	return s.upsertWithPropertiesBinding(c, props, nil)
 }
@@ -599,8 +809,9 @@ func (s *Store) UpsertWithPropertiesAndHAPerson(c *Contact, props []Property, ha
 }
 
 func (s *Store) upsertWithPropertiesBinding(c *Contact, props []Property, haPersonEntity *string) (*Contact, error) {
-	// Full-record writers (CardDAV, vCard import, and the native contacts API)
-	// do not execute inside a model turn. Ignore any caller-supplied JSON here
+	// Full-record writers (CardDAV and the native contacts API) do not
+	// execute inside a model turn; the model-facing vCard import is not a
+	// full-record writer. Ignore any caller-supplied JSON here
 	// so those surfaces cannot fabricate model provenance; their authored rows
 	// deliberately retain the nil/unknown posture.
 	props = append([]Property(nil), props...)
@@ -745,23 +956,52 @@ func insertPropertyTx(tx *sql.Tx, contactID uuid.UUID, p Property, now time.Time
 // inside the transaction so a concurrent identical insert remains a true
 // no-op. The returned changed bit is therefore safe to use as the archivist
 // refresh gate.
+//
+// This is also where contact_save's identity custody is enforced, because
+// the target rule is only as good as the zone it reads. For an existing
+// record the transaction first re-reads trust_zone, nickname and
+// deleted_at and returns errContactChangedConcurrently when any moved
+// since the guard's snapshot was read; that also keeps the snapshot
+// re-upsert below from reverting a concurrent operator zone or nickname
+// change or resurrecting a deleted contact. It then runs
+// identityViolations over the additions and returns an
+// *IdentityCustodyError on any refusal. Either way nothing is written.
+// The store's other writers apply no identity custody.
+//
+// The outcome's routing note is judged from the target's properties as
+// this transaction reads them after its inserts, so a routing value
+// another writer committed after the caller's snapshot is the one it
+// names as still in use.
 func (s *Store) applyContactSave(
 	c *Contact,
 	contactChanged bool,
 	additions []Property,
 	replacements map[string][]Property,
-) (*Contact, bool, error) {
+	guard identityGuard,
+) (*Contact, contactSaveOutcome, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, false, fmt.Errorf("begin contact save: %w", err)
+		return nil, contactSaveOutcome{}, fmt.Errorf("begin contact save: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on defer
 
 	now := time.Now().UTC()
 	isNew := c.ID == uuid.Nil
+	if !isNew {
+		if err := checkSaveSnapshot(tx, c.ID, guard); err != nil {
+			return nil, contactSaveOutcome{}, err
+		}
+	}
+	violations, err := identityViolations(tx.Query, c.ID, guard, additions)
+	if err != nil {
+		return nil, contactSaveOutcome{}, fmt.Errorf("check identity custody: %w", err)
+	}
+	if len(violations) > 0 {
+		return nil, contactSaveOutcome{}, &IdentityCustodyError{Violations: violations}
+	}
 	if isNew {
 		if err := upsertContactTx(tx, c, now); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 	}
 
@@ -775,53 +1015,70 @@ func (s *Store) applyContactSave(
 		if _, err := tx.Exec(
 			`DELETE FROM contact_properties WHERE contact_id = ? AND property = ?`,
 			c.ID.String(), property); err != nil {
-			return nil, false, fmt.Errorf("replace contact property %s: %w", property, err)
+			return nil, contactSaveOutcome{}, fmt.Errorf("replace contact property %s: %w", property, err)
 		}
 		for _, p := range replacements[property] {
 			if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
-				return nil, false, err
+				return nil, contactSaveOutcome{}, err
 			}
 		}
 		propertyChanged = true
 	}
 
+	var insertedRouting []Property
 	for _, p := range additions {
 		exists, err := propertyExistsTx(tx, c.ID, p.Property, p.Value)
 		if err != nil {
-			return nil, false, fmt.Errorf("check existing property %s: %w", p.Property, err)
+			return nil, contactSaveOutcome{}, fmt.Errorf("check existing property %s: %w", p.Property, err)
 		}
 		if exists {
 			continue
 		}
 		if err := insertPropertyTx(tx, c.ID, p, now); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 		propertyChanged = true
+		if _, ok := routingPropertyFor(p.Property); ok {
+			insertedRouting = append(insertedRouting, p)
+		}
 	}
 
-	changed := isNew || contactChanged || propertyChanged
-	if !changed {
-		return c, false, nil
+	outcome := contactSaveOutcome{changed: isNew || contactChanged || propertyChanged}
+	if !outcome.changed {
+		return c, outcome, nil
+	}
+	if len(insertedRouting) > 0 {
+		props, err := readPropertiesMap(tx.Query, c.ID)
+		if err != nil {
+			return nil, contactSaveOutcome{}, fmt.Errorf("read routing facts after save: %w", err)
+		}
+		outcome.routingNote = routingShadowNotes(props, insertedRouting)
 	}
 	if !isNew {
 		// A property mutation advances the parent contact revision and CTag
 		// just as the pre-provenance contact_save path did.
 		if err := upsertContactTx(tx, c, now); err != nil {
-			return nil, false, err
+			return nil, contactSaveOutcome{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("commit contact save: %w", err)
+		return nil, contactSaveOutcome{}, fmt.Errorf("commit contact save: %w", err)
 	}
 	s.rebuildFTS()
-	return c, true, nil
+	return c, outcome, nil
 }
 
+// propertyExistsTx reports whether the contact already carries value
+// under property. A routing fact matches in any spelling of its key,
+// because delivery reads every spelling as one fact.
 func propertyExistsTx(tx *sql.Tx, contactID uuid.UUID, property, value string) (bool, error) {
+	match, name := "property = ?", property
+	if key, ok := routingPropertyFor(property); ok {
+		match, name = "LOWER(property) = ?", key
+	}
 	rows, err := tx.Query(`
 		SELECT value FROM contact_properties
-		WHERE contact_id = ? AND property = ?
-	`, contactID.String(), property)
+		WHERE contact_id = ? AND `+match, contactID.String(), name)
 	if err != nil {
 		return false, err
 	}
@@ -861,16 +1118,6 @@ func (s *Store) Delete(id uuid.UUID) error {
 	return nil
 }
 
-// DeleteByName soft-deletes a contact by name, using [ResolveContact]
-// for cascading name resolution.
-func (s *Store) DeleteByName(name string) error {
-	c, err := s.ResolveContact(name)
-	if err != nil {
-		return fmt.Errorf("find contact: %w", err)
-	}
-	return s.Delete(c.ID)
-}
-
 // --- Interaction tracking ---
 
 // UpdateLastInteraction updates a contact's last interaction timestamp
@@ -904,14 +1151,75 @@ func (s *Store) UpdateLastInteraction(contactID uuid.UUID, t time.Time, meta *In
 	return nil
 }
 
+// RecordInteractionIfNewer sets a contact's last interaction only when
+// t is later than what is already recorded, and leaves updated_at
+// alone: an observed exchange is not an edit to the record. It exists
+// for channel pollers that may replay or reorder a batch, so a stale
+// timestamp is a silent no-op rather than a regression, and a future
+// timestamp is recorded as now. A missing or deleted contact is an
+// error.
+func (s *Store) RecordInteractionIfNewer(ctx context.Context, contactID uuid.UUID, t time.Time, meta *InteractionMeta) error {
+	var metaJSON sql.NullString
+	if meta != nil {
+		b, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal interaction meta: %w", err)
+		}
+		metaJSON = sql.NullString{String: string(b), Valid: true}
+	}
+
+	// A future instant is recorded as now: it can only come from a
+	// clock or a claim that is wrong, and storing it would make every
+	// genuine exchange after it look older.
+	if now := time.Now(); t.After(now) {
+		t = now
+	}
+	// Stored values may carry any offset (nullTime preserves the one the
+	// time had), so compare instants with julianday rather than strings.
+	stamp := t.UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE contacts SET last_interaction = ?, last_interaction_meta = ?
+		WHERE id = ? AND `+activeFilter+`
+		  AND (last_interaction IS NULL OR last_interaction = ''
+		       OR julianday(last_interaction) IS NULL
+		       OR julianday(last_interaction) < julianday(?))`,
+		stamp, metaJSON, contactID.String(), stamp)
+	if err != nil {
+		return fmt.Errorf("record interaction: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected > 0 {
+		return nil
+	}
+
+	// Nothing changed: either the contact is gone or the stored
+	// interaction is already at least this new. Tell those apart.
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM contacts WHERE id = ? AND `+activeFilter, contactID.String()).Scan(&exists); err != nil {
+		return fmt.Errorf("record interaction: %w", err)
+	}
+	if exists == 0 {
+		return fmt.Errorf("contact not found or deleted: %s", contactID)
+	}
+	return nil
+}
+
 // --- Property CRUD ---
 
 // AddProperty adds a vCard property to a contact. If the exact
 // (contact_id, property, value) triple already exists (case-insensitive
 // on value), this is a no-op. Multiple values per property are supported.
+//
+// The store applies no identity custody: operator writers call it with
+// full power, and model-facing writers go through applyContactSave and
+// applyContactImport, which check custody inside their transactions.
 func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
+	return s.addProperty(context.Background(), contactID, p)
+}
+
+// addProperty is [Store.AddProperty] bound to ctx.
+func (s *Store) addProperty(ctx context.Context, contactID uuid.UUID, p *Property) error {
 	var exists int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM contact_properties WHERE contact_id = ? AND property = ? AND LOWER(value) = LOWER(?)`,
 		contactID.String(), p.Property, p.Value).Scan(&exists)
 	if err != nil {
@@ -927,7 +1235,7 @@ func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 	if err != nil {
 		return fmt.Errorf("encode property provenance: %w", err)
 	}
-	result, err := s.db.Exec(`
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, provenance, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, contactID.String(), p.Property, p.Value,
@@ -946,7 +1254,12 @@ func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 // GetProperties returns all properties for a contact, ordered by
 // property name then preference.
 func (s *Store) GetProperties(contactID uuid.UUID) ([]Property, error) {
-	rows, err := s.db.Query(`
+	return s.getProperties(context.Background(), contactID)
+}
+
+// getProperties is [Store.GetProperties] bound to ctx.
+func (s *Store) getProperties(ctx context.Context, contactID uuid.UUID) ([]Property, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+propertyColumns+`
 		FROM contact_properties
 		WHERE contact_id = ?
@@ -1008,23 +1321,7 @@ func (s *Store) GetPropertiesForContacts(contactIDs []uuid.UUID) (map[uuid.UUID]
 // property name as a map of name→values. This is a convenience view
 // for callers that don't need the full Property metadata.
 func (s *Store) GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error) {
-	rows, err := s.db.Query(
-		`SELECT property, value FROM contact_properties WHERE contact_id = ? ORDER BY property, pref NULLS LAST, id`,
-		contactID.String())
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	m := make(map[string][]string)
-	for rows.Next() {
-		var prop, val string
-		if err := rows.Scan(&prop, &val); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		m[prop] = append(m[prop], val)
-	}
-	return m, rows.Err()
+	return readPropertiesMap(s.db.Query, contactID)
 }
 
 // FindByPropertyExact returns contacts with an exact property-value
@@ -1039,6 +1336,28 @@ func (s *Store) FindByPropertyExact(property, value string) ([]*Contact, error) 
 		  AND LOWER(contact_properties.value) = LOWER(?)
 		ORDER BY contacts.formatted_name
 		LIMIT 50
+	`, property, value)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
+}
+
+// FindAllByPropertyExact is [Store.FindByPropertyExact] without the
+// result cap, for decisions that must see every record sharing a value:
+// the email send gate computes the least privileged zone across all of
+// them, and a capped list could drop the one that should govern.
+func (s *Store) FindAllByPropertyExact(ctx context.Context, property, value string) ([]*Contact, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT `+qualifiedContactColumns+`
+		FROM contacts
+		JOIN contact_properties ON contacts.id = contact_properties.contact_id
+		WHERE contacts.`+activeFilter+`
+		  AND contact_properties.property = ?
+		  AND LOWER(contact_properties.value) = LOWER(?)
+		ORDER BY contacts.formatted_name
 	`, property, value)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -1129,8 +1448,13 @@ func (s *Store) FindByTrustZoneLimit(zone string, limit int) ([]*Contact, error)
 
 // SetEmbedding updates a contact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
+	return s.setEmbedding(context.Background(), id, embedding)
+}
+
+// setEmbedding is [Store.SetEmbedding] bound to ctx.
+func (s *Store) setEmbedding(ctx context.Context, id uuid.UUID, embedding []float32) error {
 	blob := knowledge.EncodeEmbedding(embedding)
-	_, err := s.db.Exec(`UPDATE contacts SET embedding = ? WHERE id = ?`, blob, id.String())
+	_, err := s.db.ExecContext(ctx, `UPDATE contacts SET embedding = ? WHERE id = ?`, blob, id.String())
 	return err
 }
 

@@ -25,12 +25,12 @@ func newTestAdapter(t *testing.T) (*ArchiveAdapter, *ArchiveStore, *SQLiteStore)
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	adapter := NewArchiveAdapter(archiveStore, workingStore, workingStore, logger)
+	adapter := NewArchiveAdapter(archiveStore, workingStore, logger)
 
 	return adapter, archiveStore, workingStore
 }
 
-func TestAdapter_ArchiveConversation(t *testing.T) {
+func TestAdapter_CloseConversation(t *testing.T) {
 	adapter, archiveStore, workingStore := newTestAdapter(t)
 
 	// Start a session first.
@@ -47,12 +47,7 @@ func TestAdapter_ArchiveConversation(t *testing.T) {
 		}
 	}
 
-	msgs := []Message{
-		{Role: "user", Content: "hello", Timestamp: time.Now()},
-		{Role: "assistant", Content: "hi there!", Timestamp: time.Now()},
-	}
-
-	if err := adapter.ArchiveConversation("conv-1", msgs, "reset"); err != nil {
+	if err := adapter.CloseConversation("conv-1", "reset"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,7 +79,7 @@ func TestAdapter_ArchiveConversation(t *testing.T) {
 	}
 }
 
-func TestAdapter_ArchiveConversation_WithToolCalls(t *testing.T) {
+func TestAdapter_CloseConversation_WithToolCalls(t *testing.T) {
 	adapter, _, workingStore := newTestAdapter(t)
 
 	sid, _ := adapter.StartSession("conv-1")
@@ -95,11 +90,7 @@ func TestAdapter_ArchiveConversation_WithToolCalls(t *testing.T) {
 	workingStore.RecordToolCall("conv-1", "", "tc-1", "web_search", `{"query":"test"}`)
 	workingStore.CompleteToolCall("tc-1", "search results", "")
 
-	msgs := []Message{
-		{Role: "user", Content: "search for test", Timestamp: time.Now()},
-	}
-
-	if err := adapter.ArchiveConversation("conv-1", msgs, "reset"); err != nil {
+	if err := adapter.CloseConversation("conv-1", "reset"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,7 +135,7 @@ func TestAdapter_SessionLifecycle(t *testing.T) {
 	}
 
 	// End session.
-	if err := adapter.EndSession(sid, "reset"); err != nil {
+	if err := adapter.CloseConversation("conv-1", "reset"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -202,7 +193,7 @@ func TestAdapter_EnsureSession(t *testing.T) {
 	}
 }
 
-func TestAdapter_OnMessage(t *testing.T) {
+func TestAdapter_MessageCountTracksUnifiedRows(t *testing.T) {
 	adapter, archiveStore, workingStore := newTestAdapter(t)
 
 	sid, _ := adapter.StartSession("conv-1")
@@ -247,7 +238,7 @@ func TestAdapter_ActiveSessionStartedAt(t *testing.T) {
 	}
 
 	// Start session.
-	sid, _ := adapter.StartSession("conv-1")
+	_, _ = adapter.StartSession("conv-1")
 
 	// Should return non-zero start time.
 	got := adapter.ActiveSessionStartedAt("conv-1")
@@ -256,7 +247,7 @@ func TestAdapter_ActiveSessionStartedAt(t *testing.T) {
 	}
 
 	// End session — clear cache.
-	adapter.EndSession(sid, "reset")
+	adapter.CloseConversation("conv-1", "reset")
 
 	// Should return zero again.
 	if got := adapter.ActiveSessionStartedAt("conv-1"); !got.IsZero() {

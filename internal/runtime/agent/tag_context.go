@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/phasetrace"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -406,7 +408,7 @@ const slowContextSourceThreshold = 250 * time.Millisecond
 // warnSlowContextSource emits the budget-accounting WARN for a context
 // source that ran long. detail is a tag name or provider type; empty
 // is fine for block-level sources.
-func warnSlowContextSource(logger *slog.Logger, source, detail string, start time.Time) {
+func warnSlowContextSource(logger *slog.Logger, source, detail string, start time.Time, trace *phasetrace.Trace) {
 	elapsed := time.Since(start)
 	if elapsed <= slowContextSourceThreshold {
 		return
@@ -415,7 +417,178 @@ func warnSlowContextSource(logger *slog.Logger, source, detail string, start tim
 	if detail != "" {
 		args = append(args, "detail", detail)
 	}
+	// The breakdown, when the provider recorded one. Without it this line
+	// says a provider took two seconds and nothing about which half of it
+	// did — which is answerable only by reading source and querying
+	// production by hand, and was, for a day.
+	if phases := trace.Summary(); phases != "" {
+		args = append(args, "phases", phases)
+	}
 	logger.Warn("context source ran long against the shared assembly budget", args...)
+}
+
+const (
+	// perProviderContextBudget is the most any single context provider
+	// may take, however much budget remains. Comfortably above
+	// slowContextSourceThreshold: a merely slow provider should finish
+	// and be warned about, not be killed.
+	perProviderContextBudget = 500 * time.Millisecond
+
+	// minGatedProviderSlice is the per-provider floor the gated reserve
+	// is sized from.
+	//
+	// A flat reserve does not work here. The gated tier holds around a
+	// dozen providers and the document advertiser registers near the end
+	// of them, so a reserve equal to one provider's cap guarantees the
+	// advertiser nothing: any earlier slow provider spends the whole
+	// thing and the tier that was supposedly protected is skipped anyway.
+	minGatedProviderSlice = 100 * time.Millisecond
+)
+
+// reserveForGatedProviders returns a context for the tagged tier that
+// expires early enough to leave the gated tier a slice per provider.
+//
+// The reserve scales with how many gated providers were admitted, and is
+// bounded at half the remaining budget so protecting the gated tier
+// cannot starve the tagged one — the same failure wearing the other hat.
+// Returns the parent unchanged when there is no deadline to divide, or
+// nothing to divide it for.
+func reserveForGatedProviders(ctx context.Context, gatedCount int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || gatedCount <= 0 {
+		return ctx, func() {}
+	}
+	remaining := time.Until(deadline)
+	reserve := time.Duration(gatedCount) * minGatedProviderSlice
+	if half := remaining / 2; reserve > half {
+		reserve = half
+	}
+	if reserve <= 0 || remaining <= reserve {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, deadline.Add(-reserve))
+}
+
+// providerSlice bounds one provider's run to an equal share of what its
+// tier has left, never more than the per-provider cap.
+//
+// Shared rather than flat so that position in the registration order
+// stops deciding who runs at all. Providers that finish quickly hand
+// their unused time to the ones behind them, so the advertiser at the end
+// of the gated tier gets the slack in the healthy case and a floor in the
+// bad one.
+func providerSlice(ctx context.Context, remainingProviders int) (context.Context, context.CancelFunc) {
+	slice := perProviderContextBudget
+	if deadline, ok := ctx.Deadline(); ok && remainingProviders > 1 {
+		if share := time.Until(deadline) / time.Duration(remainingProviders); share < slice {
+			slice = share
+		}
+	}
+	return context.WithTimeout(ctx, slice)
+}
+
+// activeTaggedProviders lists the tagged providers this request will run,
+// so each can be given an equal share of the tier rather than a flat cap
+// that lets the first few spend everything.
+func activeTaggedProviders(providers map[string]TagContextProvider, req agentctx.ContextRequest) []string {
+	var out []string
+	for _, tag := range sortedActiveTags(req.ActiveTags) {
+		if _, ok := providers[tag]; ok {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+// admittedGatedProviders counts the gated providers this request will
+// actually admit, which is what the reserve must be sized against — a
+// task-mode turn opens neither gate and needs no reserve at all.
+func admittedGatedProviders(providers []gatedContextProvider, req agentctx.ContextRequest) int {
+	n := 0
+	for _, gp := range providers {
+		if gp.loopScoped {
+			if req.IncludeLoopScoped {
+				n++
+			}
+			continue
+		}
+		if req.IncludeAlways {
+			n++
+		}
+	}
+	return n
+}
+
+// assemblyBudget tracks who spent the shared context-assembly deadline,
+// so a provider that never got to run can say why instead of reporting a
+// failure of its own.
+//
+// This is the other half of the fix the 2026-08-12 incident prompted.
+// That one added the slow-source WARN above, which names the culprit on
+// its own line; the victim still logged "context deadline exceeded" under
+// its own name on another, with nothing connecting the two. A reader —
+// human or loop — saw a document provider time out and went looking at
+// the document corpus. Twice, in one hour, on 2026-09-04.
+type assemblyBudget struct {
+	// spentBy identifies the provider running when the *shared* deadline
+	// expired. Empty while the assembly budget remains.
+	spentBy string
+}
+
+// note records a provider that has just finished, marking it as the
+// spender if the shared deadline died on its watch.
+//
+// parent is deliberately the assembler's own context, never a tier's:
+// the tagged tier expires early by design, and recording that as an
+// assembly spender would blame a well-behaved provider for a deadline
+// nobody had reached. Only DeadlineExceeded attributes — a cancelled
+// request spent no budget, and naming a culprit for one would be an
+// invented fact of exactly the kind this field exists to prevent.
+func (b *assemblyBudget) note(parent context.Context, source, detail string) {
+	if b.spentBy != "" || !errors.Is(parent.Err(), context.DeadlineExceeded) {
+		return
+	}
+	b.spentBy = source
+	if detail != "" {
+		b.spentBy += " (" + detail + ")"
+	}
+}
+
+// skipped reports a provider that was never run and returns whether to
+// skip it. tier is the context it would have run under; parent is the
+// assembler's own.
+//
+// The three reasons stay apart because they mean different things to
+// whoever reads the log. A spent assembly budget names its spender. A
+// tier reaching its reserved boundary is the reserve working as designed
+// and names no culprit, because there is no fault. A cancelled request is
+// neither, and inventing a spender for it would be the same species of
+// error as the one this whole change exists to remove.
+//
+// A WARN rather than a DEBUG: a context section silently missing is how a
+// loop ends up auditing the system with one sense switched off and no
+// signal that it is off.
+func (b *assemblyBudget) skipped(tier, parent context.Context, logger *slog.Logger, source, detail string) bool {
+	if tier.Err() == nil {
+		return false
+	}
+	args := []any{"source", source}
+	switch {
+	case errors.Is(parent.Err(), context.DeadlineExceeded):
+		args = append(args, "reason", "assembly budget already spent upstream")
+		if b.spentBy != "" {
+			args = append(args, "spent_by", b.spentBy)
+		}
+	case errors.Is(tier.Err(), context.DeadlineExceeded):
+		args = append(args, "reason", "tier reached its reserved slice; the assembly budget is intact")
+	default:
+		args = append(args, "reason", "assembly cancelled")
+	}
+	if detail != "" {
+		args = append(args, "detail", detail)
+	}
+	logger.Warn("context provider skipped, not attempted", args...)
+	return true
 }
 
 func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.ContextRequest) []agentctx.ContextSection {
@@ -434,6 +607,7 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 	seen := make(map[string]bool)
 	acc := newContextAccumulator()
 	var advertisements []contextAdvertisementCandidate
+	var budget assemblyBudget
 
 	// Source 1: Tagged KB articles. Re-scanned and re-read each turn
 	// so frontmatter edits, additions, and deletions propagate
@@ -486,17 +660,38 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		}
 	}
 
-	warnSlowContextSource(a.logger, "tagged_kb_articles", "", kbStart)
+	warnSlowContextSource(a.logger, "tagged_kb_articles", "", kbStart, nil)
+	// Source 1 runs outside the per-provider cap — it is a filesystem
+	// scan, not a registered provider — so it can overrun the shared
+	// deadline on its own. Recorded here, or every provider behind it
+	// would be skipped with no spender named, which is exactly the
+	// disconnected culprit and victim this change exists to end.
+	budget.note(ctx, "tagged_kb_articles", "")
 
 	// Source 2: Tagged live providers, filtered by ActiveTags.
+	//
+	// Run against a deadline that expires before the assembler's, so the
+	// gated tier below is reached even when every tagged provider runs
+	// to its cap.
+	gatedRemaining := admittedGatedProviders(gatedProviders, req)
+	taggedRemaining := len(activeTaggedProviders(tagProviders, req))
+	taggedCtx, releaseTagged := reserveForGatedProviders(ctx, gatedRemaining)
 	for _, tag := range sortedActiveTags(req.ActiveTags) {
 		p, ok := tagProviders[tag]
 		if !ok {
 			continue
 		}
+		if budget.skipped(taggedCtx, ctx, a.logger, "tagged_provider", tag) {
+			continue
+		}
 		pStart := time.Now()
-		content, advertised, err := a.contextFromProvider(ctx, req, p, &advertisements)
-		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart)
+		providerCtx, releaseProvider := providerSlice(taggedCtx, taggedRemaining)
+		taggedRemaining--
+		tracedCtx, trace := phasetrace.New(providerCtx)
+		content, advertised, err := a.contextFromProvider(tracedCtx, req, p, &advertisements)
+		releaseProvider()
+		warnSlowContextSource(a.logger, "tagged_provider", tag, pStart, trace)
+		budget.note(ctx, "tagged_provider", tag)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
 				"tag", tag, "error", err)
@@ -515,6 +710,8 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 				"tag", tag, "source", "tagged_provider", "limit_bytes", maxTagContextBytes)
 		}
 	}
+
+	releaseTagged()
 
 	// Source 3: Gated providers — always-on and loop-scoped — walked
 	// as one list in registration order, each entry admitted by its
@@ -541,9 +738,18 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		if gp.loopScoped {
 			defaultBucket, source = agentctx.ContextBucketLiveState, "loop_scoped_provider"
 		}
+		detail := fmt.Sprintf("%T", gp.provider)
+		if budget.skipped(ctx, ctx, a.logger, source, detail) {
+			continue
+		}
 		pStart := time.Now()
-		content, advertised, err := a.contextFromProvider(ctx, req, gp.provider, &advertisements)
-		warnSlowContextSource(a.logger, source, fmt.Sprintf("%T", gp.provider), pStart)
+		providerCtx, releaseProvider := providerSlice(ctx, gatedRemaining)
+		gatedRemaining--
+		tracedCtx, trace := phasetrace.New(providerCtx)
+		content, advertised, err := a.contextFromProvider(tracedCtx, req, gp.provider, &advertisements)
+		releaseProvider()
+		warnSlowContextSource(a.logger, source, detail, pStart, trace)
+		budget.note(ctx, source, detail)
 		if err != nil {
 			a.logger.Warn("gated context provider failed", "source", source, "error", err)
 			continue
@@ -616,6 +822,13 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		return ""
 	}
 
+	// One clock for the whole aggregate. Sampling per ref would let two
+	// documents carrying the same date render "today" above and
+	// "tomorrow" below if the call crossed local midnight — two refs
+	// appearing to disagree when only the clock moved. The tagged
+	// article path holds the same invariant.
+	templateNow := a.templateNow()
+
 	seen := make(map[string]bool, len(refs))
 	var buf strings.Builder
 	for _, ref := range refs {
@@ -645,6 +858,15 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		if content == "" {
 			continue
 		}
+		// Same reader-surface treatment as tagged-article injection, and
+		// for the same reason: this content is injected whole for the
+		// model to act on, so a curated "{{delta:2026-09-18}}" must read
+		// as "+20d" rather than as braces. Expansion precedes ha-inject
+		// resolution so only authored prose is expanded, never entity
+		// state fetched a moment ago. Contact origin policy points these
+		// refs at dossiers, which are exactly the documents the house
+		// rule tells authors to write templates into.
+		content = promptfmt.ExpandTemporalTemplates(content, templateNow)
 		resolved := homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		var entry strings.Builder
 		entry.WriteString("#### ")
@@ -1019,10 +1241,11 @@ func scanKBArticles(dir, untagged string) ([]kbArticle, error) {
 			}
 			return nil // untagged documents are not auto-loaded
 		}
-		if strings.EqualFold(strings.TrimSpace(meta.Audience), "internal") {
-			// The #1250 audience contract: an internal-audience document
-			// is a private working surface (loop working notes, process
-			// logs). Tags on it must not turn it into injected guidance —
+		if documents.IsRestrictedAudience(meta.Audience) {
+			// The #1250 audience contract: a document reaching less than
+			// the whole agent is a working surface (loop working notes,
+			// process logs) or is scoped to its subscribers. Tags on it
+			// must not turn it into injected guidance —
 			// doc_search already excludes it, and this scanner is the
 			// other injection path.
 			return nil
