@@ -120,6 +120,55 @@ func TestRecentPlacesDistinguishesAbsences(t *testing.T) {
 	}
 }
 
+func TestRecentPlacesPreservesCompanionContextWithoutPromotingIt(t *testing.T) {
+	contextJSON := `{"provider":"future-provider","data":[{"unknown":[null,true,9007199254740993,"café"]}],"state":"here_now","contact":"Mallory","device":"other-phone","captured_at":"2099-01-01T00:00:00Z","basis":"trusted"}`
+	window := `{"captured_at":"2026-09-06T17:00:00Z","visits":[{"visit_id":"stay-1","captured_at":"2026-09-06T17:00:00Z","arrived_at":"2026-09-06T16:00:00Z","departed_at":"2026-09-06T17:00:00Z","latitude":1,"longitude":2,"state":"settled","place_context":` + contextJSON + `}]}`
+	deps, contactID := newPlacesFixture(t, window)
+	out, err := handleContactRecentPlaces(context.Background(), deps, "", contactID)
+	if err != nil {
+		t.Fatalf("handleContactRecentPlaces: %v", err)
+	}
+	var result recentPlacesResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(result.Places) != 1 {
+		t.Fatalf("got %d places, want 1", len(result.Places))
+	}
+	place := result.Places[0]
+	if place.VisitID != "stay-1" || string(place.PlaceContext) != contextJSON {
+		t.Errorf("identity/context not preserved: %+v", place)
+	}
+	if result.Contact != "Alice Operator" || result.Device != "iphone" || place.State != "left" {
+		t.Errorf("context replaced the server projection: %+v", result)
+	}
+	if result.Basis == "trusted" || strings.HasPrefix(result.CapturedAt, "2099-") || place.DepartedAt == "" {
+		t.Errorf("context replaced freshness or visit evidence: %+v", result)
+	}
+}
+
+func TestRecentPlacesOmitsAbsentCompanionContext(t *testing.T) {
+	deps, contactID := newPlacesFixture(t, productionVisitWindowJSON)
+	out, err := handleContactRecentPlaces(context.Background(), deps, "", contactID)
+	if err != nil {
+		t.Fatalf("handleContactRecentPlaces: %v", err)
+	}
+	var result struct {
+		Places []map[string]json.RawMessage `json:"places"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(result.Places) == 0 {
+		t.Fatal("legacy window lost its visits")
+	}
+	for _, place := range result.Places {
+		if place["visit_id"] != nil || place["place_context"] != nil {
+			t.Errorf("legacy place gained optional fields: %s/%s", place["visit_id"], place["place_context"])
+		}
+	}
+}
+
 const productionVisitWindowJSON = `{"captured_at":"2026-09-06T17:05:50.111Z","max_entries":16,"returned_count":6,"truncated":false,"visits":[
 {"arrival":"precise","arrived_at":"2026-09-06T17:05:13.098Z","captured_at":"2026-09-06T17:05:50.110Z","dwell_is_partial":true,"dwell_seconds":37.01,"horizontal_accuracy_meters":5,"latitude":29.831151442236557,"longitude":-98.464568898586,"state":"ongoing"},
 {"arrival":"precise","arrived_at":"2026-09-06T16:47:26.719Z","captured_at":"2026-09-06T16:59:22.041Z","departed_at":"2026-09-06T16:58:45.128Z","dwell_is_partial":false,"dwell_seconds":678.4,"horizontal_accuracy_meters":108.75,"latitude":29.79732248483415,"longitude":-98.43010016634825,"state":"settled"},

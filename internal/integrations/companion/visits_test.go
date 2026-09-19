@@ -2,9 +2,112 @@ package companion
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
+
+func TestParseVisitWindowPreservesOptionalContext(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		fields  string
+		visitID string
+		context string
+	}{
+		{name: "legacy"},
+		{
+			name:    "opaque nested context",
+			fields:  `,"visit_id":"stay-1","place_context":{"provider":"future-provider","data":[{"unknown":[null,true,9007199254740993,"café"]}]}`,
+			visitID: "stay-1",
+			context: `{"provider":"future-provider","data":[{"unknown":[null,true,9007199254740993,"café"]}]}`,
+		},
+		{name: "explicit null", fields: `,"place_context":null`, context: "null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			window, err := ParseVisitWindow(json.RawMessage(`{"visits":[{"latitude":1,"longitude":2` + test.fields + `}]}`))
+			if err != nil {
+				t.Fatalf("ParseVisitWindow: %v", err)
+			}
+			if len(window.Visits) != 1 {
+				t.Fatalf("got %d visits, want 1", len(window.Visits))
+			}
+			visit := window.Visits[0]
+			if visit.VisitID != test.visitID || string(visit.PlaceContext) != test.context {
+				t.Errorf("identity/context = %q/%s, want %q/%s", visit.VisitID, visit.PlaceContext, test.visitID, test.context)
+			}
+			encoded, err := json.Marshal(visit)
+			if err != nil {
+				t.Fatalf("marshal visit: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatalf("decode fields: %v", err)
+			}
+			if string(fields["place_context"]) != test.context {
+				t.Errorf("encoded context = %s, want %s", fields["place_context"], test.context)
+			}
+			if test.visitID == "" && fields["visit_id"] != nil {
+				t.Errorf("legacy visit gained an identity: %s", fields["visit_id"])
+			}
+		})
+	}
+}
+
+func TestParseVisitWindowPrefersCompanionIdentityAndLatestContext(t *testing.T) {
+	older := `{"visit_id":"stay-1","captured_at":"2026-09-06T16:00:00Z","latitude":1,"longitude":2,"state":"ongoing","place_context":{"status":"pending"}}`
+	newer := `{"visit_id":"stay-1","captured_at":"2026-09-06T17:00:00Z","latitude":1.1,"longitude":2,"state":"settled","place_context":{"status":"resolved"}}`
+	other := `{"visit_id":"stay-2","captured_at":"2026-09-06T15:00:00Z","latitude":1,"longitude":2,"state":"settled"}`
+	for _, test := range []struct {
+		name   string
+		visits string
+	}{
+		{name: "newer first", visits: newer + "," + older + "," + other},
+		{name: "older first", visits: older + "," + newer + "," + other},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			window, err := ParseVisitWindow(json.RawMessage(fmt.Sprintf(`{"visits":[%s]}`, test.visits)))
+			if err != nil {
+				t.Fatalf("ParseVisitWindow: %v", err)
+			}
+			if len(window.Visits) != 2 {
+				t.Fatalf("got %d visits, want 2 distinct companion identities", len(window.Visits))
+			}
+			for _, visit := range window.Visits {
+				if visit.VisitID == "stay-1" && (visit.State != "settled" || string(visit.PlaceContext) != `{"status":"resolved"}`) {
+					t.Errorf("did not keep the latest stay and its context together: %+v", visit)
+				}
+			}
+		})
+	}
+}
+
+func TestParseVisitWindowKeepsArrivalDeduplicationForMigratedIDs(t *testing.T) {
+	var payload struct {
+		Visits []map[string]json.RawMessage `json:"visits"`
+	}
+	if err := json.Unmarshal([]byte(productionVisitWindow), &payload); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	for i, visit := range payload.Visits {
+		// A legacy on-device window can contain the same arrival captured at
+		// refined coordinates; migration assigns those records different IDs.
+		visit["visit_id"] = json.RawMessage(fmt.Sprintf(`"migrated-%d"`, i))
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+	window, err := ParseVisitWindow(encoded)
+	if err != nil {
+		t.Fatalf("ParseVisitWindow: %v", err)
+	}
+	if len(window.Visits) != 4 {
+		t.Fatalf("got %d visits, want the original 4 distinct stays", len(window.Visits))
+	}
+	if got := window.Visits[1]; got.VisitID != "migrated-1" || got.State != "settled" {
+		t.Errorf("did not preserve the latest capture and its ID: %+v", got)
+	}
+}
 
 // productionVisitWindow is a real payload from an operator's phone: two
 // errands and a return home. It carries six entries for four stays,

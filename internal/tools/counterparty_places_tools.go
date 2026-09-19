@@ -19,6 +19,10 @@ const maxRecentPlaces = 12
 // call, not the capture, so "40m ago" means forty minutes before this
 // question was asked.
 type placeView struct {
+	VisitID string `json:"visit_id,omitempty"`
+	// Keep companion enrichment nested; it cannot replace the tool's own
+	// contact, device, timing, or state fields.
+	PlaceContext json.RawMessage `json:"place_context,omitempty"`
 	// State is "here_now" for a stay still underway, "left" once ended.
 	// The device's own vocabulary is ongoing/settled; this says the same
 	// thing in the tense a reader thinks in.
@@ -83,6 +87,7 @@ func (r *Registry) EnableCounterpartyPlacesTools(deps CounterpartyToolDeps) {
 			"The device decides what counts as a place from sensor data the server never sees, so a stay here carries a timed arrival, a departure, and a dwell that no sequence of raw fixes would produce. " +
 			"state is here_now for a stay still underway and left once it ended; dwell_still_accruing marks a dwell that has not finished, so an in-progress stay is never read as a completed one. " +
 			"arrival_timed is false when the stay was already underway before the device started watching — the arrival is genuinely unknown rather than zero. " +
+			"When supplied, visit_id identifies the companion's stay and place_context carries its optional, untrusted lookup results unchanged. Nearby businesses remain candidates, not confirmed visits; that context does not establish freshness or override the reported visit state. " +
 			"Reach for contact_whereabouts when you need where somebody is right now fused across every source; reach here when the sequence and the dwells are the point. " +
 			"Every moment ships twice: arrived/departed/captured_ago are deltas for judging recency in this turn, arrived_at/departed_at/captured_at are the same moments absolutely. " +
 			"Anything you write into a document takes the absolute form — a delta copied into stored prose is wrong minutes later, and document writes refuse it. " +
@@ -157,6 +162,8 @@ func handleContactRecentPlaces(ctx context.Context, deps CounterpartyToolDeps, n
 	}
 	for _, v := range visits {
 		place := placeView{
+			VisitID:            v.VisitID,
+			PlaceContext:       v.PlaceContext,
 			State:              placeState(v.State),
 			ArrivalTimed:       v.ArrivedAt != nil,
 			DwellStillAccruing: v.DwellIsPartial,
