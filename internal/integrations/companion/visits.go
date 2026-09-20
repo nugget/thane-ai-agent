@@ -29,8 +29,16 @@ type VisitWindow struct {
 // which is why a visit is worth more than the fix that would otherwise
 // stand in for it: somebody already decided this was a place.
 type Visit struct {
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
+	// VisitID is the companion's identity for this stay, when supplied.
+	// A known arrival still joins legacy records that received different IDs
+	// during migration; otherwise the ID distinguishes untimed stays.
+	VisitID string `json:"visit_id,omitempty"`
+	// PlaceContext is optional companion-authored enrichment. It remains opaque
+	// so a companion can evolve its lookup results without a server release.
+	// Its contents do not establish identity, freshness, or a confirmed visit.
+	PlaceContext json.RawMessage `json:"place_context,omitempty"`
+	Latitude     float64         `json:"latitude"`
+	Longitude    float64         `json:"longitude"`
 	// HorizontalAccuracyMeters is the platform's own confidence in the
 	// coordinate, not a dwell-area radius.
 	HorizontalAccuracyMeters float64 `json:"horizontal_accuracy_meters,omitempty"`
@@ -51,13 +59,15 @@ type Visit struct {
 }
 
 // identity keys a visit for deduplication. A window carries the same
-// stay more than once — captured while ongoing, then again once settled
-// — so the arrival time is the stay's identity. A stay that began before
-// monitoring has no arrival, and its departure identifies it instead.
+// stay more than once — captured while ongoing, then again once settled.
+// A known arrival joins migrated copies whose IDs differ. Otherwise prefer
+// the companion's explicit identity, falling back to departure or position.
 func (v Visit) identity() string {
 	switch {
 	case v.ArrivedAt != nil:
 		return "arrived:" + v.ArrivedAt.UTC().Format(time.RFC3339Nano)
+	case v.VisitID != "":
+		return "visit:" + v.VisitID
 	case v.DepartedAt != nil:
 		return "departed:" + v.DepartedAt.UTC().Format(time.RFC3339Nano)
 	default:
@@ -78,7 +88,8 @@ func (v Visit) sortKey() time.Time {
 }
 
 // ParseVisitWindow decodes a stored ios.visits payload into distinct
-// visits, newest first.
+// visits, newest first. Deduplication is local to this device's window;
+// companion visit IDs are not identities shared across devices.
 //
 // Deduplication is the point. The device republishes a stay as its state
 // advances, so a six-entry window is commonly four stays: the same
@@ -97,16 +108,18 @@ func ParseVisitWindow(payload json.RawMessage) (VisitWindow, error) {
 		ReturnedCount int     `json:"returned_count"`
 		Truncated     bool    `json:"truncated"`
 		Visits        []struct {
-			Latitude                 float64 `json:"latitude"`
-			Longitude                float64 `json:"longitude"`
-			HorizontalAccuracyMeters float64 `json:"horizontal_accuracy_meters"`
-			Arrival                  string  `json:"arrival"`
-			ArrivedAt                string  `json:"arrived_at"`
-			DepartedAt               string  `json:"departed_at"`
-			CapturedAt               string  `json:"captured_at"`
-			State                    string  `json:"state"`
-			DwellSeconds             float64 `json:"dwell_seconds"`
-			DwellIsPartial           bool    `json:"dwell_is_partial"`
+			VisitID                  string          `json:"visit_id"`
+			PlaceContext             json.RawMessage `json:"place_context"`
+			Latitude                 float64         `json:"latitude"`
+			Longitude                float64         `json:"longitude"`
+			HorizontalAccuracyMeters float64         `json:"horizontal_accuracy_meters"`
+			Arrival                  string          `json:"arrival"`
+			ArrivedAt                string          `json:"arrived_at"`
+			DepartedAt               string          `json:"departed_at"`
+			CapturedAt               string          `json:"captured_at"`
+			State                    string          `json:"state"`
+			DwellSeconds             float64         `json:"dwell_seconds"`
+			DwellIsPartial           bool            `json:"dwell_is_partial"`
 		} `json:"visits"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
@@ -129,6 +142,8 @@ func ParseVisitWindow(payload json.RawMessage) (VisitWindow, error) {
 	best := make(map[string]candidate, len(raw.Visits))
 	for _, entry := range raw.Visits {
 		visit := Visit{
+			VisitID:                  entry.VisitID,
+			PlaceContext:             entry.PlaceContext,
 			Latitude:                 entry.Latitude,
 			Longitude:                entry.Longitude,
 			HorizontalAccuracyMeters: entry.HorizontalAccuracyMeters,
