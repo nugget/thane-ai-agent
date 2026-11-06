@@ -3,13 +3,17 @@ package providers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -945,10 +949,14 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 	// config however carefully the outer map was copied.
 	nested := map[string]any{"depth": "original"}
 	list := []any{"first"}
+	typed := []string{"typed"}
+	box := &privateBox{m: map[string]string{"k": "original"}}
 	caller := map[string]any{
 		"enable_thinking": false,
 		"options":         nested,
 		"stops":           list,
+		"typed":           typed,
+		"box":             box,
 	}
 	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
 	c.SetChatTemplateKwargs(caller)
@@ -956,6 +964,8 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 	caller["enable_thinking"] = true
 	nested["depth"] = "mutated"
 	list[0] = "mutated"
+	typed[0] = "mutated"
+	box.Set("k", "mutated")
 
 	if _, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -966,8 +976,448 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 		"enable_thinking": false,
 		"options":         map[string]any{"depth": "original"},
 		"stops":           []any{"first"},
+		"typed":           []any{"typed"},
+		"box":             map[string]any{"k": "original"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("chat_template_kwargs = %#v, want %#v — a caller mutation leaked in", got, want)
+	}
+}
+
+// wireFixtureMessages is a history that exercises every map-valued
+// field the encoder writes: tool call arguments nested several levels
+// deep, beside plain text and a tool result.
+func wireFixtureMessages() []llm.Message {
+	call := llm.ToolCall{ID: "call_1"}
+	call.Function.Name = "lookup_place"
+	call.Function.Arguments = map[string]any{
+		"zeta":   "last",
+		"alpha":  1,
+		"middle": map[string]any{"y": []any{"b", "a"}, "x": true},
+		"beta":   nil,
+	}
+	return []llm.Message{
+		{Role: "system", Content: "You are a test fixture."},
+		{Role: "user", Content: "Where is Alice?"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{call}},
+		{Role: "tool", ToolCallID: "call_1", Content: `{"place":"garden"}`},
+	}
+}
+
+// wireFixtureTools returns a tool surface whose description can be
+// varied, so a test can show that one changed description changes the
+// digest.
+func wireFixtureTools(description string) []map[string]any {
+	return []map[string]any{{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "lookup_place",
+			"description": description,
+			"parameters": map[string]any{
+				"type":     "object",
+				"required": []any{"name"},
+				"properties": map[string]any{
+					"name":  map[string]any{"type": "string"},
+					"limit": map[string]any{"type": "integer"},
+				},
+			},
+		},
+	}}
+}
+
+// wireRecorder is an OpenAI-compatible server that keeps the exact
+// bytes of every request body it receives and answers in whichever
+// shape the request asked for.
+type wireRecorder struct {
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+func (r *wireRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	r.mu.Lock()
+	r.bodies = append(r.bodies, body)
+	r.mu.Unlock()
+
+	var shape struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &shape)
+	if shape.Stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+}
+
+func (r *wireRecorder) received() [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]byte(nil), r.bodies...)
+}
+
+// TestEncodeChatRequestIsWhatChatStreamSends pins the property replay
+// verification rests on: the bytes a server receives are exactly what
+// EncodeChatRequest returns for the same arguments, and the observer's
+// digest is the digest of those bytes. If ChatStream ever re-encoded,
+// added a field after encoding, or reported a digest of something other
+// than the body, a replay could no longer prove what production sent.
+// LM Studio is covered separately because it reaches ChatStream through
+// embedding, and an override there would silently lose the observer.
+func TestEncodeChatRequestIsWhatChatStreamSends(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		lmstudio bool
+		stream   bool
+		ttl      int
+		model    string
+		provider string
+	}{
+		{name: "openai_compat non-streaming", model: "Example/Model-1", provider: "vllm"},
+		{name: "openai_compat streaming", stream: true, model: "Example/Model-1", provider: "vllm"},
+		{name: "lmstudio non-streaming", lmstudio: true, ttl: 900, model: "example-model:2", provider: "lmstudio"},
+		{name: "lmstudio streaming", lmstudio: true, stream: true, ttl: 900, model: "example-model:2", provider: "lmstudio"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := &wireRecorder{}
+			srv := httptest.NewServer(rec)
+			defer srv.Close()
+
+			kwargs := map[string]any{"enable_thinking": false, "options": map[string]any{"depth": 2}}
+			var (
+				chat   func(context.Context, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, error)
+				encode func(context.Context, string, []llm.Message, []map[string]any, bool) ([]byte, llm.WireFacts, error)
+			)
+			if tt.lmstudio {
+				lm := NewLMStudioClientWithTTL(srv.URL, "", "res-lm", nil, tt.ttl)
+				lm.SetChatTemplateKwargs(kwargs)
+				chat, encode = lm.ChatStream, lm.EncodeChatRequest
+			} else {
+				oc := NewOpenAICompatClient(srv.URL, "", tt.provider, "res-oc", nil, tt.ttl)
+				oc.SetChatTemplateKwargs(kwargs)
+				chat, encode = oc.ChatStream, oc.EncodeChatRequest
+			}
+
+			var observed []llm.WireFacts
+			ctx := llm.WithMaxOutputTokens(context.Background(), 2048)
+			ctx = llm.WithWireObserver(ctx, func(f llm.WireFacts) { observed = append(observed, f) })
+
+			var callback llm.StreamCallback
+			if tt.stream {
+				callback = func(llm.StreamEvent) {}
+			}
+			messages, tools := wireFixtureMessages(), wireFixtureTools("Find where a person is.")
+			if _, err := chat(ctx, tt.model, messages, tools, callback); err != nil {
+				t.Fatalf("ChatStream: %v", err)
+			}
+
+			want, wantFacts, err := encode(ctx, tt.model, wireFixtureMessages(), wireFixtureTools("Find where a person is."), tt.stream)
+			if err != nil {
+				t.Fatalf("EncodeChatRequest: %v", err)
+			}
+			bodies := rec.received()
+			if len(bodies) != 1 {
+				t.Fatalf("server received %d requests, want 1", len(bodies))
+			}
+			if !bytes.Equal(bodies[0], want) {
+				t.Fatalf("received body differs from EncodeChatRequest output\nreceived: %s\nencoded:  %s", bodies[0], want)
+			}
+
+			if len(observed) != 1 {
+				t.Fatalf("observer called %d times, want 1", len(observed))
+			}
+			got := observed[0]
+			sum := sha256.Sum256(bodies[0])
+			if got.BodySHA256 != hex.EncodeToString(sum[:]) {
+				t.Errorf("observer digest = %s, want sha256 of the received body %x", got.BodySHA256, sum)
+			}
+			if got.BodyBytes != len(bodies[0]) {
+				t.Errorf("observer length = %d, want %d", got.BodyBytes, len(bodies[0]))
+			}
+			if !reflect.DeepEqual(got, wantFacts) {
+				t.Errorf("observed facts = %+v, want the encoder's %+v", got, wantFacts)
+			}
+
+			wantStatic := llm.WireFacts{
+				Provider:   tt.provider,
+				Resource:   map[bool]string{true: "res-lm", false: "res-oc"}[tt.lmstudio],
+				Model:      tt.model,
+				TTLSeconds: tt.ttl,
+				MaxTokens:  2048,
+				Stream:     tt.stream,
+				// Facts carry the kwargs as plain JSON data: the number
+				// keeps its literal text as a json.Number.
+				ChatTemplateKwargs: map[string]any{"enable_thinking": false, "options": map[string]any{"depth": json.Number("2")}},
+				BodySHA256:         got.BodySHA256,
+				BodyBytes:          got.BodyBytes,
+			}
+			if !reflect.DeepEqual(got, wantStatic) {
+				t.Errorf("observed facts = %+v, want %+v", got, wantStatic)
+			}
+
+			// The facts must agree with the body they describe, not
+			// only with the client's configuration.
+			var sent map[string]any
+			if err := json.Unmarshal(bodies[0], &sent); err != nil {
+				t.Fatalf("decode received body: %v", err)
+			}
+			if sent["model"] != tt.model {
+				t.Errorf("body model = %v, want %q", sent["model"], tt.model)
+			}
+			if !reflect.DeepEqual(sent["chat_template_kwargs"], map[string]any{"enable_thinking": false, "options": map[string]any{"depth": float64(2)}}) {
+				t.Errorf("body chat_template_kwargs = %#v", sent["chat_template_kwargs"])
+			}
+			// The encoder omits zero values, so an absent key reads as the
+			// zero fact. Numbers decode as float64.
+			bodyInt := func(key string) int {
+				v, _ := sent[key].(float64)
+				return int(v)
+			}
+			bodyStream, _ := sent["stream"].(bool)
+			if bodyInt("ttl") != got.TTLSeconds {
+				t.Errorf("body ttl = %d, facts say %d", bodyInt("ttl"), got.TTLSeconds)
+			}
+			if bodyInt("max_tokens") != got.MaxTokens {
+				t.Errorf("body max_tokens = %d, facts say %d", bodyInt("max_tokens"), got.MaxTokens)
+			}
+			if bodyStream != got.Stream {
+				t.Errorf("body stream = %v, facts say %v", bodyStream, got.Stream)
+			}
+		})
+	}
+}
+
+// TestEncodeChatRequestDeterministic pins that equal arguments encode
+// to equal bytes even though Go randomizes map iteration: tool call
+// arguments, tool schemas, and template kwargs are all maps, and a
+// digest that varied run to run would make every replay a mismatch.
+// The same table also serves as the negative control: changing any one
+// input a replay must reproduce changes the digest.
+func TestEncodeChatRequestDeterministic(t *testing.T) {
+	t.Parallel()
+
+	newClient := func(ttl int, kwargs map[string]any) *OpenAICompatClient {
+		c := NewOpenAICompatClient("http://example.invalid", "", "vllm", "res", nil, ttl)
+		c.SetChatTemplateKwargs(kwargs)
+		return c
+	}
+	baseKwargs := func() map[string]any {
+		return map[string]any{"enable_thinking": false, "b": map[string]any{"z": 1, "a": 2}}
+	}
+	encode := func(t *testing.T, c *OpenAICompatClient, maxTokens int, description string, stream bool) llm.WireFacts {
+		t.Helper()
+		ctx := llm.WithMaxOutputTokens(context.Background(), maxTokens)
+		_, facts, err := c.EncodeChatRequest(ctx, "Example/Model-1", wireFixtureMessages(), wireFixtureTools(description), stream)
+		if err != nil {
+			t.Fatalf("EncodeChatRequest: %v", err)
+		}
+		return facts
+	}
+
+	base := newClient(0, baseKwargs())
+	want := encode(t, base, 1024, "Find where a person is.", false)
+	for i := range 50 {
+		// A fresh client and freshly built maps each time, so nothing
+		// is shared between encodings but the values themselves.
+		if got := encode(t, newClient(0, baseKwargs()), 1024, "Find where a person is.", false); got.BodySHA256 != want.BodySHA256 {
+			t.Fatalf("encoding %d digest = %s, want %s: equal arguments encoded differently", i, got.BodySHA256, want.BodySHA256)
+		}
+	}
+
+	tests := []struct {
+		name  string
+		facts llm.WireFacts
+	}{
+		{name: "one tool description", facts: encode(t, base, 1024, "Find where someone is.", false)},
+		{name: "max_tokens", facts: encode(t, base, 1023, "Find where a person is.", false)},
+		{name: "no max_tokens", facts: encode(t, base, 0, "Find where a person is.", false)},
+		{name: "ttl", facts: encode(t, newClient(60, baseKwargs()), 1024, "Find where a person is.", false)},
+		{name: "kwargs value", facts: encode(t, newClient(0, map[string]any{"enable_thinking": true, "b": map[string]any{"z": 1, "a": 2}}), 1024, "Find where a person is.", false)},
+		{name: "no kwargs", facts: encode(t, newClient(0, nil), 1024, "Find where a person is.", false)},
+		{name: "stream", facts: encode(t, base, 1024, "Find where a person is.", true)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.facts.BodySHA256 == want.BodySHA256 {
+				t.Errorf("changing %s left the digest at %s; a replay could not detect it", tt.name, want.BodySHA256)
+			}
+		})
+	}
+}
+
+// TestWireObserverNegativeCases pins when the observer must stay
+// silent and what it must not be able to reach: a request that fails to
+// encode was never sent and reports nothing, a call without an observer
+// still works, and facts handed to an observer are its own copy. It also
+// pins the one case where an observation outlives the post: a transport
+// failure after the observer fired leaves the facts recorded, which is
+// why they must be read with the call's error.
+func TestWireObserverNegativeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		tools        []map[string]any
+		observe      bool
+		wantErr      string
+		transportErr bool
+		wantRequests int
+		wantObserved int
+	}{
+		{name: "unencodable tools", tools: []map[string]any{{"bad": make(chan int)}}, observe: true, wantErr: "marshal request", wantRequests: 0, wantObserved: 0},
+		{name: "no observer attached", tools: wireFixtureTools("Find where a person is."), observe: false, wantRequests: 1, wantObserved: 0},
+		{name: "observer attached", tools: wireFixtureTools("Find where a person is."), observe: true, wantRequests: 1, wantObserved: 1},
+		{name: "transport failure", tools: wireFixtureTools("Find where a person is."), observe: true, transportErr: true, wantErr: "request failed", wantRequests: 0, wantObserved: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := &wireRecorder{}
+			srv := httptest.NewServer(rec)
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "vllm", "res", nil, 0)
+			// Typed values as well as untyped ones: a programmatic caller
+			// can hand over a []string or map[string]string, and those
+			// must be detached as thoroughly as decoded config.
+			c.SetChatTemplateKwargs(map[string]any{
+				"options": map[string]any{"depth": "original"},
+				"stops":   []string{"original"},
+				"labels":  map[string]string{"k": "original"},
+			})
+			if tt.transportErr {
+				// A transport that never reaches the server, without the
+				// production retry backoff in the way.
+				c.httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, errors.New("connection refused")
+				})}
+			}
+
+			var observed []llm.WireFacts
+			ctx := context.Background()
+			if tt.observe {
+				ctx = llm.WithWireObserver(ctx, func(f llm.WireFacts) {
+					observed = append(observed, f)
+					// An observer scribbling on what it was handed
+					// must not change what later requests send.
+					if opts, ok := f.ChatTemplateKwargs["options"].(map[string]any); ok {
+						opts["depth"] = "mutated"
+					}
+					// Facts carry plain JSON data, whatever types the
+					// configuration was built from.
+					if stops, ok := f.ChatTemplateKwargs["stops"].([]any); ok {
+						stops[0] = "mutated"
+					}
+					if labels, ok := f.ChatTemplateKwargs["labels"].(map[string]any); ok {
+						labels["k"] = "mutated"
+					}
+				})
+			}
+
+			_, err := c.Chat(ctx, "m", wireFixtureMessages(), tt.tools)
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("Chat error = %v, want one naming %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("Chat: %v", err)
+			}
+			if got := len(rec.received()); got != tt.wantRequests {
+				t.Errorf("server received %d requests, want %d", got, tt.wantRequests)
+			}
+			if len(observed) != tt.wantObserved {
+				t.Errorf("observer called %d times, want %d", len(observed), tt.wantObserved)
+			}
+
+			_, facts, err := c.EncodeChatRequest(context.Background(), "m", wireFixtureMessages(), wireFixtureTools("x"), false)
+			if err != nil {
+				t.Fatalf("EncodeChatRequest: %v", err)
+			}
+			wantKwargs := map[string]any{
+				"options": map[string]any{"depth": "original"},
+				"stops":   []any{"original"},
+				"labels":  map[string]any{"k": "original"},
+			}
+			if !reflect.DeepEqual(facts.ChatTemplateKwargs, wantKwargs) {
+				t.Errorf("kwargs after observation = %#v: an observer reached the client's configuration", facts.ChatTemplateKwargs)
+			}
+		})
+	}
+}
+
+// TestOpenAICompatRejectsUnencodableKwargsWithoutKeepingThem pins that a
+// kwargs map the encoder rejects fails every request and is not kept: a
+// caller who later turns that same map valid must not have requests start
+// succeeding with it behind the client's back. Only setting valid kwargs
+// again restores requests.
+func TestOpenAICompatRejectsUnencodableKwargsWithoutKeepingThem(t *testing.T) {
+	t.Parallel()
+
+	var bodies [][]byte
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	caller := map[string]any{"enable_thinking": false, "bad": make(chan int)}
+	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+	c.SetChatTemplateKwargs(caller)
+
+	msgs := []llm.Message{{Role: "user", Content: "hi"}}
+	if _, err := c.Chat(context.Background(), "m", msgs, nil); err == nil || !strings.Contains(err.Error(), "chat_template_kwargs") {
+		t.Fatalf("Chat with unencodable kwargs: err = %v, want a chat_template_kwargs error", err)
+	}
+
+	// The caller turns its own map valid. The client kept no reference,
+	// so requests still fail rather than silently sending this map.
+	delete(caller, "bad")
+	caller["enable_thinking"] = true
+	if _, err := c.Chat(context.Background(), "m", msgs, nil); err == nil {
+		t.Fatal("Chat succeeded after the caller mutated rejected kwargs; the client kept the caller's map")
+	}
+	mu.Lock()
+	sent := len(bodies)
+	mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("server received %d requests while kwargs were rejected, want 0", sent)
+	}
+
+	// Setting valid kwargs restores requests, with exactly what was set.
+	c.SetChatTemplateKwargs(map[string]any{"enable_thinking": true})
+	if _, err := c.Chat(context.Background(), "m", msgs, nil); err != nil {
+		t.Fatalf("Chat after valid kwargs: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("server received %d requests, want 1", len(bodies))
+	}
+	var body map[string]any
+	if err := json.Unmarshal(bodies[0], &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := body["chat_template_kwargs"]; !reflect.DeepEqual(got, map[string]any{"enable_thinking": true}) {
+		t.Errorf("chat_template_kwargs = %#v, want enable_thinking true", got)
 	}
 }

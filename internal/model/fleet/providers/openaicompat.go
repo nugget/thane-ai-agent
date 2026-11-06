@@ -3,6 +3,8 @@ package providers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -58,9 +60,13 @@ type OpenAICompatClient struct {
 	// per-call state: the endpoint serves one template dialect, and the
 	// keys mean nothing to Thane.
 	chatTemplateKwargs map[string]any
-	httpClient         *http.Client
-	logger             *slog.Logger
-	watcher            llm.ReadyWatcher
+	// chatTemplateKwargsErr is why the configured kwargs could not be
+	// normalized. Every request fails with it until valid kwargs are set,
+	// and no reference to the rejected map is kept.
+	chatTemplateKwargsErr error
+	httpClient            *http.Client
+	logger                *slog.Logger
+	watcher               llm.ReadyWatcher
 }
 
 // NewOpenAICompatClient creates a client for an OpenAI-compatible
@@ -129,8 +135,8 @@ func (c *OpenAICompatClient) Logger() *slog.Logger {
 // SetChatTemplateKwargs sets the chat_template_kwargs sent with every
 // request. An empty map clears the field rather than sending {}.
 func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
+	c.chatTemplateKwargs, c.chatTemplateKwargsErr = nil, nil
 	if len(kwargs) == 0 {
-		c.chatTemplateKwargs = nil
 		return
 	}
 	// Deep-copied, not aliased. A template kwarg may itself be an
@@ -138,32 +144,12 @@ func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
 	// values shared with config: a later write through the original
 	// would change what subsequent requests ask the model to do, and
 	// could race a json.Marshal already reading the tree.
-	copied, _ := deepCopyJSONValue(kwargs).(map[string]any)
-	c.chatTemplateKwargs = copied
-}
-
-// deepCopyJSONValue copies a JSON-compatible value tree so that nothing
-// reachable from the result is shared with the original. Scalars are
-// returned as they are, being immutable; anything that is neither an
-// object nor an array is a scalar for this purpose, including the
-// map[any]any that json.Marshal would reject outright anyway.
-func deepCopyJSONValue(v any) any {
-	switch typed := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for k, val := range typed {
-			out[k] = deepCopyJSONValue(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, val := range typed {
-			out[i] = deepCopyJSONValue(val)
-		}
-		return out
-	default:
-		return v
+	copied, err := deepCopyJSONValue(kwargs)
+	if err != nil {
+		c.chatTemplateKwargsErr = fmt.Errorf("chat_template_kwargs: %w", err)
+		return
 	}
+	c.chatTemplateKwargs, _ = copied.(map[string]any)
 }
 
 // AttachWatcher sets the connection watcher for health status queries.
@@ -184,15 +170,24 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, model string, messages []
 	return c.ChatStream(ctx, model, messages, tools, nil)
 }
 
-// ChatStream sends a chat request. If callback is non-nil,
-// tokens are streamed via OpenAI-compatible SSE. On error, a non-nil response
-// contains only provider-reported accounting metadata, not assistant output.
-func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
-	stream := callback != nil
-
+// EncodeChatRequest builds the exact request body ChatStream posts for
+// these arguments, together with the [llm.WireFacts] that describe it.
+// ChatStream sends these bytes and nothing else, so a caller re-encoding
+// a recorded call through a client configured the same way — same ttl
+// and chat_template_kwargs, with the recorded output budget attached to
+// ctx via [llm.WithMaxOutputTokens] — gets the same digest production
+// reported. stream is whether ChatStream would be given a callback.
+//
+// Exported for replay verification, which must use this encoder rather
+// than a second one: a parallel encoder that drifts is how a replay ends
+// up measuring itself instead of the model.
+func (c *OpenAICompatClient) EncodeChatRequest(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, stream bool) ([]byte, llm.WireFacts, error) {
+	if c.chatTemplateKwargsErr != nil {
+		return nil, llm.WireFacts{}, c.chatTemplateKwargsErr
+	}
 	wireMessages, err := toOpenAICompatMessages(messages)
 	if err != nil {
-		return nil, fmt.Errorf("encode messages: %w", err)
+		return nil, llm.WireFacts{}, fmt.Errorf("encode messages: %w", err)
 	}
 
 	req := openAICompatChatRequest{
@@ -214,9 +209,46 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 		req.StreamOptions = &openAICompatStreamOptions{IncludeUsage: true}
 	}
 
-	jsonData, err := json.Marshal(req)
+	// encoding/json writes map keys in sorted order, which is what makes
+	// these bytes a pure function of the arguments: the same call
+	// encodes to the same digest however its maps were built.
+	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, llm.WireFacts{}, fmt.Errorf("marshal request: %w", err)
+	}
+
+	sum := sha256.Sum256(body)
+	facts := llm.WireFacts{
+		Provider:   c.provider,
+		Resource:   c.resource,
+		Model:      req.Model,
+		TTLSeconds: req.TTL,
+		MaxTokens:  req.MaxTokens,
+		Stream:     req.Stream,
+		BodySHA256: hex.EncodeToString(sum[:]),
+		BodyBytes:  len(body),
+	}
+	// Copied so an observer holding the facts cannot reach the map
+	// every later request from this client sends.
+	if len(req.ChatTemplateKwargs) > 0 {
+		copied, err := deepCopyJSONValue(req.ChatTemplateKwargs)
+		if err != nil {
+			return nil, llm.WireFacts{}, fmt.Errorf("copy chat_template_kwargs: %w", err)
+		}
+		facts.ChatTemplateKwargs, _ = copied.(map[string]any)
+	}
+	return body, facts, nil
+}
+
+// ChatStream sends a chat request. If callback is non-nil,
+// tokens are streamed via OpenAI-compatible SSE. On error, a non-nil response
+// contains only provider-reported accounting metadata, not assistant output.
+func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
+	stream := callback != nil
+
+	jsonData, facts, err := c.EncodeChatRequest(ctx, model, messages, tools, stream)
+	if err != nil {
+		return nil, err
 	}
 
 	// Built before the first line this call writes, so every one of them
@@ -230,12 +262,14 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	log.Debug("preparing request",
 		"messages", len(messages),
 		"tools", len(tools),
-		"idle_ttl_seconds", c.idleTTLSeconds,
-		"max_tokens", req.MaxTokens,
+		"idle_ttl_seconds", facts.TTLSeconds,
+		"max_tokens", facts.MaxTokens,
 		// Logged because it changes what the model does with the
 		// budget, so a turn that came back short is readable after the
 		// fact without re-deriving the config.
-		"chat_template_kwargs", req.ChatTemplateKwargs,
+		"chat_template_kwargs", facts.ChatTemplateKwargs,
+		"body_sha256", facts.BodySHA256,
+		"body_bytes", facts.BodyBytes,
 	)
 	log.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
@@ -261,6 +295,14 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	if clientRequestID := logging.RequestIDFromContext(ctx); clientRequestID != "" {
 		httpReq.Header.Set("X-Client-Request-Id", clientRequestID)
 	}
+
+	// Reported once the request exists and nothing but the post itself
+	// remains, so a request that failed to encode or build reports
+	// nothing. A transport failure after this point still leaves the
+	// observation, so it describes what was about to be posted and must
+	// be read with the call's error. Retries inside the transport resend
+	// these same bytes.
+	llm.ObserveWire(ctx, facts)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
