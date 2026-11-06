@@ -121,16 +121,23 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	}
 
 	retryCall := func(tools []map[string]any) (*llm.ChatResponse, error) {
+		// Only a retry that removed tools the turn offered is the
+		// tool-free kind; a turn that offered none has nothing removed.
+		kind := llm.CallKindContextRecovery
+		if len(tools) == 0 && len(toolDefs) > 0 {
+			kind = llm.CallKindContextRecoveryNoTools
+		}
+		callCtx := llm.WithCallKind(ctx, kind)
 		if retryUpstreamModel != "" {
 			if direct := l.modelRuntime.LMStudioClient(dep.ResourceID); direct != nil {
-				resp, err := accountRecoveryClient(client, direct, retryModel).ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
+				resp, err := accountRecoveryClient(client, direct, retryModel).ChatStream(callCtx, retryUpstreamModel, msgs, tools, stream)
 				if resp != nil {
 					resp.Model = retryModel
 				}
 				return resp, err
 			}
 		}
-		return client.ChatStream(ctx, retryModel, msgs, tools, stream)
+		return client.ChatStream(callCtx, retryModel, msgs, tools, stream)
 	}
 
 	// Dropping the tool schemas is the cheaper lever than growing the window

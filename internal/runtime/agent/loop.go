@@ -1827,7 +1827,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			})
 		}
 
-		llmResp, err := runClient.ChatStream(ctx, liteModel, llmMessages, nil, stream)
+		liteCtx := llm.WithCallSite(ctx, llm.CallSite{Iteration: 0, Kind: llm.CallKindLite})
+		llmResp, err := runClient.ChatStream(liteCtx, liteModel, llmMessages, nil, stream)
 		if err != nil {
 			// Record failed outcome
 			if l.router != nil && liteDecision != nil {
@@ -2851,7 +2852,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					return nil, "", ctx.Err()
 				case <-time.After(backoff):
 				}
-				resp, retryErr := client.ChatStream(iterCtx, model, msgs, toolDefs, stream)
+				resp, retryErr := client.ChatStream(llm.WithCallKind(iterCtx, llm.CallKindRetry), model, msgs, toolDefs, stream)
 				if retryErr == nil {
 					iterLog.Info("LLM retry succeeded", "retry", retry, "model", model)
 					return resp, model, nil
@@ -2871,10 +2872,11 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				recoveryMessages := buildRecoveryPrompt(msgs, toolsUsedFromMessages(msgs))
 				// Detached from the parent on purpose — the deadline
 				// that just expired must not cancel the recovery — but
-				// detaching drops context values with it, and the output
-				// budget is one of them. Re-attach it so the recovery
-				// generation is bounded like every other call.
-				recoveryBase := llm.WithMaxOutputTokens(context.Background(), llm.MaxOutputTokensFromContext(iterCtx))
+				// detaching drops context values with it, among them the
+				// output budget and the call site. Carry them across so
+				// the recovery generation is bounded like every other
+				// call and stays placed in the iteration it replaces.
+				recoveryBase := llm.WithCallKind(llm.CarryCallScope(context.Background(), iterCtx), llm.CallKindTimeoutRecovery)
 				recoveryCtx, recoveryCancel := context.WithTimeout(recoveryBase, timeoutRecoveryDeadline)
 				resp, recoveryErr := client.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
@@ -2969,7 +2971,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					iterLog.Warn("failover handler failed", "error", ferr)
 				}
 			}
-			resp, failErr := client.ChatStream(iterCtx, fallbackModel, msgs, toolDefs, stream)
+			resp, failErr := client.ChatStream(llm.WithCallKind(iterCtx, llm.CallKindFailover), fallbackModel, msgs, toolDefs, stream)
 			if failErr != nil {
 				// Same demotion as above: a failover that ran into the
 				// standing billing wall did so instantly and learned

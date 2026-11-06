@@ -362,10 +362,10 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		// never answered" reads very differently from "the model said
 		// nothing". Sizes only; reasoning text stays out of logs.
 		if r := wire.Choices[0].Message.reasoningText(); r != "" {
-			return usageOnlyResponse(result), fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
-				c.provider, wire.Model, len(r), result.StopReason)
+			return usageOnlyResponse(result), llm.WithErrorClass(llm.ErrReasoningOnly, fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, wire.Model, len(r), result.StopReason))
 		}
-		return usageOnlyResponse(result), fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
+		return usageOnlyResponse(result), llm.WithErrorClass(llm.ErrEmptyCompletion, fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model))
 	}
 	result.Done = true
 	return result, nil
@@ -415,6 +415,17 @@ func (c *OpenAICompatClient) SetStreamIdleTimeout(d time.Duration) {
 		return
 	}
 	c.streamIdleTimeout = d
+}
+
+// StreamIdleTimeout returns how long this endpoint may go silent before
+// a request is abandoned; zero means the guard is disabled. Exposed for
+// tests, since the window never reaches the wire and the default is too
+// long to wait out; production callers should not depend on it.
+func (c *OpenAICompatClient) StreamIdleTimeout() time.Duration {
+	if c == nil {
+		return 0
+	}
+	return c.streamIdleTimeout
 }
 
 // callLogger returns the logger for one request, preferring the
