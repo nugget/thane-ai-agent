@@ -13,23 +13,45 @@ import (
 // response before the escalation tool returns a timeout.
 const defaultEscalationTimeout = 10 * time.Minute
 
-// EscalationDeps holds the dependencies for escalation tools.
+// EscalationDeps holds the dependencies for escalation tools. The two
+// tools are gated independently: Router, Records, Dispatcher and Waiter
+// together enable request_human_escalation, and Advise alone enables
+// request_ai_escalation.
 type EscalationDeps struct {
 	Router     *notifications.NotificationRouter
 	Records    *notifications.RecordStore
 	Dispatcher *notifications.CallbackDispatcher
 	Waiter     *notifications.ResponseWaiter
+
+	// Advise answers an [AIEscalationRequest] with the advisor's
+	// judgment as model-facing text. When nil, request_ai_escalation is
+	// not registered, so no loop is offered a tool it cannot use.
+	Advise func(ctx context.Context, req AIEscalationRequest) (string, error)
 }
 
-// SetEscalationTools registers the request_human_escalation and
-// request_ai_escalation tools. Requires notification routing, record
-// tracking, callback dispatch, and synchronous response waiting.
+// AIEscalationRequest is the question a model puts to
+// request_ai_escalation, as passed to [EscalationDeps.Advise].
+type AIEscalationRequest struct {
+	// Question is the decision or question the caller needs answered.
+	Question string `json:"question"`
+	// Context is background the caller supplies to inform the answer.
+	Context string `json:"context,omitempty"`
+	// Constraints are requirements the answer must respect.
+	Constraints []string `json:"constraints,omitempty"`
+}
+
+// SetEscalationTools registers each escalation tool whose dependencies
+// are present. request_human_escalation requires notification routing,
+// record tracking, callback dispatch and synchronous response waiting.
+// request_ai_escalation requires only [EscalationDeps.Advise]. A tool
+// whose dependencies are missing is not registered at all.
 func (r *Registry) SetEscalationTools(deps EscalationDeps) {
-	if deps.Router == nil || deps.Records == nil || deps.Dispatcher == nil || deps.Waiter == nil {
-		return
+	if deps.Router != nil && deps.Records != nil && deps.Dispatcher != nil && deps.Waiter != nil {
+		r.registerHumanEscalation(deps)
 	}
-	r.registerHumanEscalation(deps)
-	r.registerAIEscalation(deps)
+	if deps.Advise != nil {
+		r.registerAIEscalation(deps.Advise)
+	}
 }
 
 // registerHumanEscalation adds the request_human_escalation tool.
@@ -176,14 +198,10 @@ func (r *Registry) registerHumanEscalation(deps EscalationDeps) {
 	})
 }
 
-// registerAIEscalation adds the request_ai_escalation tool.
-// This tool sends a question to a frontier model for judgment.
-func (r *Registry) registerAIEscalation(deps EscalationDeps) {
-	// AI escalation uses the LLM directly — it doesn't need the
-	// notification router. For now, register a placeholder that
-	// documents the intent. The actual implementation requires
-	// access to the LLM client with a high quality floor, which
-	// will be wired in a follow-up.
+// registerAIEscalation adds the request_ai_escalation tool, which
+// passes the caller's question to advise and returns its answer. It
+// needs no notification dependency, so it is gated on advise alone.
+func (r *Registry) registerAIEscalation(advise func(context.Context, AIEscalationRequest) (string, error)) {
 	r.Register(&Tool{
 		Name: "request_ai_escalation",
 		Description: "Request a decision from a frontier AI model. Use this when you need " +
@@ -211,7 +229,21 @@ func (r *Registry) registerAIEscalation(deps EscalationDeps) {
 			"required": []string{"question"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return "", fmt.Errorf("request_ai_escalation is not yet implemented; use request_human_escalation, or escalate by selecting a higher-quality routing profile (e.g. thane:premium) on the orchestrator side")
+			question, _ := args["question"].(string)
+			question = strings.TrimSpace(question)
+			if question == "" {
+				return "", fmt.Errorf("question is required: state the decision you need the advisor to make")
+			}
+			escalationCtx, _ := args["context"].(string)
+			answer, err := advise(ctx, AIEscalationRequest{
+				Question:    question,
+				Context:     strings.TrimSpace(escalationCtx),
+				Constraints: stringSliceArg(args, "constraints"),
+			})
+			if err != nil {
+				return "", fmt.Errorf("ai escalation: %w", err)
+			}
+			return answer, nil
 		},
 	})
 }
