@@ -427,12 +427,14 @@ func TestNewResourceClientOptionsOverride(t *testing.T) {
 
 // TestNewResourceClientStreamIdleTimeout pins which silence window a
 // stalled stream is abandoned after: the configured one, or the
-// option's in its place.
+// option's in its place. A want of zero means the guard is disabled,
+// so the stream must outlast several configured windows.
 func TestNewResourceClientStreamIdleTimeout(t *testing.T) {
 	t.Parallel()
 
 	const configured = 100 * time.Millisecond
 	const override = 140 * time.Millisecond
+	disable := []ResourceClientOption{WithStreamIdleTimeout(0)}
 
 	tests := []struct {
 		name     string
@@ -444,6 +446,8 @@ func TestNewResourceClientStreamIdleTimeout(t *testing.T) {
 		{name: "lmstudio uses the configured window", provider: "lmstudio", want: configured},
 		{name: "openai_compat option replaces it", provider: "openai_compat", opts: []ResourceClientOption{WithStreamIdleTimeout(override)}, want: override},
 		{name: "lmstudio option replaces it", provider: "lmstudio", opts: []ResourceClientOption{WithStreamIdleTimeout(override)}, want: override},
+		{name: "openai_compat zero option disables the guard", provider: "openai_compat", opts: disable},
+		{name: "lmstudio zero option disables the guard", provider: "lmstudio", opts: disable},
 	}
 
 	for _, tt := range tests {
@@ -451,6 +455,8 @@ func TestNewResourceClientStreamIdleTimeout(t *testing.T) {
 			t.Parallel()
 
 			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseStream := func() { releaseOnce.Do(func() { close(release) }) }
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 					w.Header().Set("Content-Type", "application/json")
@@ -468,7 +474,7 @@ func TestNewResourceClientStreamIdleTimeout(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			defer close(release)
+			defer releaseStream()
 
 			res := Resource{ID: "res-a", Provider: tt.provider, URL: srv.URL}
 			cfg := resourcesConfig(res.ID, config.ModelServerConfig{StreamIdleTimeout: configured})
@@ -483,19 +489,91 @@ func TestNewResourceClientStreamIdleTimeout(t *testing.T) {
 				done <- err
 			}()
 
+			if tt.want == 0 {
+				select {
+				case err := <-done:
+					t.Fatalf("stream with the guard disabled returned early: %v", err)
+				case <-time.After(4 * configured):
+				}
+				releaseStream()
+			}
+
 			select {
 			case err := <-done:
 				var idle *modelproviders.StreamIdleTimeoutError
-				if !errors.As(err, &idle) {
+				isIdle := errors.As(err, &idle)
+				if tt.want == 0 {
+					if isIdle {
+						t.Fatalf("stream with the guard disabled was abandoned after %v", idle.Idle)
+					}
+					return
+				}
+				if !isIdle {
 					t.Fatalf("stalled stream error = %v, want a stream idle timeout", err)
 				}
 				if idle.Idle != tt.want {
 					t.Fatalf("idle window = %v, want %v", idle.Idle, tt.want)
 				}
 			case <-time.After(10 * time.Second):
-				t.Fatal("stalled stream was never abandoned")
+				t.Fatal("stalled stream never returned")
 			}
 		})
+	}
+}
+
+// TestNewResourceClientEffectiveStreamIdleTimeout pins the window each
+// built client ends up with. A config entry that leaves
+// stream_idle_timeout unset (zero) must keep the client default, or
+// every resource without that line would have its guard disabled; only
+// an explicit option may disable it, and it does so over a configured
+// window. The window never reaches the wire and the default is too long
+// to wait out, so it is read off the client rather than a stalled
+// stream.
+func TestNewResourceClientEffectiveStreamIdleTimeout(t *testing.T) {
+	t.Parallel()
+
+	const configured = 100 * time.Millisecond
+	const override = 140 * time.Millisecond
+	withWindow := config.ModelServerConfig{StreamIdleTimeout: configured}
+	withoutWindow := config.ModelServerConfig{ChatTemplateKwargs: map[string]any{"enable_thinking": false}}
+
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		opts []ResourceClientOption
+		want time.Duration
+	}{
+		{name: "nil config keeps the default", want: modelproviders.DefaultStreamIdleTimeout},
+		{name: "config for another resource keeps the default", cfg: resourcesConfig("res-other", withWindow), want: modelproviders.DefaultStreamIdleTimeout},
+		{name: "entry without stream_idle_timeout keeps the default", cfg: resourcesConfig("res-a", withoutWindow), want: modelproviders.DefaultStreamIdleTimeout},
+		{name: "configured window applies", cfg: resourcesConfig("res-a", withWindow), want: configured},
+		{name: "option replaces the configured window", cfg: resourcesConfig("res-a", withWindow), opts: []ResourceClientOption{WithStreamIdleTimeout(override)}, want: override},
+		{name: "zero option disables over a configured window", cfg: resourcesConfig("res-a", withWindow), opts: []ResourceClientOption{WithStreamIdleTimeout(0)}, want: 0},
+		{name: "zero option disables over an unset window", cfg: resourcesConfig("res-a", withoutWindow), opts: []ResourceClientOption{WithStreamIdleTimeout(0)}, want: 0},
+	}
+
+	for _, provider := range []string{"openai_compat", "lmstudio"} {
+		for _, tt := range tests {
+			t.Run(provider+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				res := Resource{ID: "res-a", Provider: provider, URL: "http://model.invalid"}
+				rc, err := NewResourceClient(res, tt.cfg, tt.opts...)
+				if err != nil {
+					t.Fatalf("NewResourceClient: %v", err)
+				}
+				var got time.Duration
+				switch provider {
+				case "openai_compat":
+					got = rc.OpenAICompat.StreamIdleTimeout()
+				case "lmstudio":
+					got = rc.LMStudio.StreamIdleTimeout()
+				}
+				if got != tt.want {
+					t.Errorf("stream idle timeout = %v, want %v", got, tt.want)
+				}
+			})
+		}
 	}
 }
 
