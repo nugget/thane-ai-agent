@@ -86,9 +86,9 @@ type ChatResponse struct {
 
 	// ToolCallSource names the channel Message.ToolCalls arrived
 	// through: the provider's structured tool_calls field, or Thane's
-	// recovery of a call the model wrote as text. Empty when the
-	// response carried no tool calls or the provider does not report
-	// the channel (Ollama native, Anthropic).
+	// recovery of a call the model wrote as text. It is set by
+	// [ApplyTextToolCallFallback], so it is empty when that fallback did
+	// not run on the response or the response had no tool calls.
 	ToolCallSource ToolCallSource
 
 	// TextToolAction is what [ApplyTextToolCallFallback] did to the

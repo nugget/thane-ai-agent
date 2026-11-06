@@ -53,11 +53,12 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		lightweight bool
-		responses   []*llm.ChatResponse
-		want        []map[string]any
-		wantAbsent  []string
+		name         string
+		lightweight  bool
+		systemPrompt string
+		responses    []*llm.ChatResponse
+		want         []map[string]any
+		wantAbsent   []string
 	}{
 		{
 			name: "full loop",
@@ -78,6 +79,17 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"stop_reason": "stop", "tool_call_source": "text_fallback", "text_tool_action": "recovered", "profile": "anthropic_native"},
 				{"stop_reason": "end_turn", "tool_call_source": "", "text_tool_action": "", "profile": "anthropic_native"},
 			},
+		},
+		{
+			// A caller-supplied prompt is used verbatim, so no
+			// interaction profile rendered it.
+			name:         "custom system prompt",
+			systemPrompt: "You are a test loop.",
+			responses: []*llm.ChatResponse{{
+				Model: "claude-primary", StopReason: "end_turn",
+				Message: llm.Message{Role: "assistant", Content: "Done."},
+			}},
+			want: []map[string]any{{"stop_reason": "end_turn", "profile": ""}},
 		},
 		{
 			name:        "lightweight",
@@ -111,6 +123,7 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				ConversationID: "provenance-log",
 				Model:          "claude-primary",
 				SkipContext:    tt.lightweight,
+				SystemPrompt:   tt.systemPrompt,
 				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
 			}, nil); err != nil {
 				t.Fatal(err)

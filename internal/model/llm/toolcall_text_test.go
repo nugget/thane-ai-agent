@@ -65,14 +65,15 @@ func TestApplyTextToolCallFallback_ReportsAction(t *testing.T) {
 		offered     []string
 		message     Message
 		want        TextToolAction
+		wantSource  ToolCallSource
 		wantCalls   []string
 		wantContent string
 	}{
 		{
-			name:      "structured calls are left alone",
-			offered:   offered,
-			message:   Message{Content: "Loading it now.", ToolCalls: []ToolCall{native}},
-			want:      TextToolActionNone,
+			name:    "structured calls are left alone",
+			offered: offered,
+			message: Message{Content: "Loading it now.", ToolCalls: []ToolCall{native}},
+			want:    TextToolActionNone, wantSource: ToolCallSourceNative,
 			wantCalls: []string{"tag_activate"}, wantContent: "Loading it now.",
 		},
 		{
@@ -89,43 +90,58 @@ func TestApplyTextToolCallFallback_ReportsAction(t *testing.T) {
 			wantContent: "All four lights are off.",
 		},
 		{
-			name:      "whole-text json",
-			offered:   offered,
-			message:   Message{Content: `{"name":"tag_activate","arguments":{"tag":"forge"}}`},
-			want:      TextToolActionRecovered,
+			name:    "whole-text json",
+			offered: offered,
+			message: Message{Content: `{"name":"tag_activate","arguments":{"tag":"forge"}}`},
+			want:    TextToolActionRecovered, wantSource: ToolCallSourceTextFallback,
 			wantCalls: []string{"tag_activate"},
 		},
 		{
-			name:      "fenced",
-			offered:   offered,
-			message:   Message{Content: "```json\n{\"name\":\"tag_activate\",\"arguments\":{\"tag\":\"forge\"}}\n```"},
-			want:      TextToolActionRecovered,
+			name:    "fenced",
+			offered: offered,
+			message: Message{Content: "```json\n{\"name\":\"tag_activate\",\"arguments\":{\"tag\":\"forge\"}}\n```"},
+			want:    TextToolActionRecovered, wantSource: ToolCallSourceTextFallback,
 			wantCalls: []string{"tag_activate"},
 		},
 		{
-			name:      "tagged",
-			offered:   offered,
-			message:   Message{Content: "<tool_call>\n{\"name\":\"tag_deactivate\",\"arguments\":{\"tag\":\"forge\"}}\n</tool_call>"},
-			want:      TextToolActionRecovered,
+			name:    "tagged",
+			offered: offered,
+			message: Message{Content: "<tool_call>\n{\"name\":\"tag_deactivate\",\"arguments\":{\"tag\":\"forge\"}}\n</tool_call>"},
+			want:    TextToolActionRecovered, wantSource: ToolCallSourceTextFallback,
 			wantCalls: []string{"tag_deactivate"},
 		},
 		{
-			name:      "any name recovers when nothing was offered",
-			message:   Message{Content: `{"name":"tag_activate","arguments":{}}`},
-			want:      TextToolActionRecovered,
+			name:    "any name recovers when nothing was offered",
+			message: Message{Content: `{"name":"tag_activate","arguments":{}}`},
+			want:    TextToolActionRecovered, wantSource: ToolCallSourceTextFallback,
 			wantCalls: []string{"tag_activate"},
 		},
 		{
-			name:      "unoffered name",
-			offered:   offered,
-			message:   Message{Content: `{"name":"request_capability","arguments":{"tag":"forge"}}`},
-			want:      TextToolActionRepairRecoveredUnoffered,
+			name:    "unoffered name",
+			offered: offered,
+			message: Message{Content: `{"name":"request_capability","arguments":{"tag":"forge"}}`},
+			want:    TextToolActionRepairRecoveredUnoffered, wantSource: ToolCallSourceTextFallback,
 			wantCalls: []string{"request_capability"},
 		},
 		{
 			name:    "stringified arguments",
 			offered: offered,
 			message: Message{Content: `{"name":"tag_activate","arguments":"{\"tag\":\"forge\"}"}`},
+			want:    TextToolActionSuppressed,
+		},
+		{
+			// The tag is found anywhere in the content, so the prose
+			// before it is discarded along with the tag.
+			name:    "tagged call after prose",
+			offered: offered,
+			message: Message{Content: `Loading forge now. <tool_call>{"name":"tag_activate","arguments":{"tag":"forge"}}</tool_call>`},
+			want:    TextToolActionRecovered, wantSource: ToolCallSourceTextFallback,
+			wantCalls: []string{"tag_activate"},
+		},
+		{
+			name:    "malformed tagged call after prose",
+			offered: offered,
+			message: Message{Content: `Loading forge now. <tool_call>{"name":"tag_activate","arguments":"{\"tag\":\"forge\"}"}</tool_call>`},
 			want:    TextToolActionSuppressed,
 		},
 		{
@@ -153,6 +169,9 @@ func TestApplyTextToolCallFallback_ReportsAction(t *testing.T) {
 			}
 			if resp.TextToolAction != tt.want {
 				t.Fatalf("resp.TextToolAction = %q, want %q", resp.TextToolAction, tt.want)
+			}
+			if resp.ToolCallSource != tt.wantSource {
+				t.Fatalf("resp.ToolCallSource = %q, want %q", resp.ToolCallSource, tt.wantSource)
 			}
 			var names []string
 			for _, call := range resp.Message.ToolCalls {

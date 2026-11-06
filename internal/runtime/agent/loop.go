@@ -2524,11 +2524,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 			// The profile is the one this iteration's prompt was rendered
 			// for, which follows the dispatched model and can change
-			// mid-turn. IterationRecord is not archived, so this line is
-			// the durable record of how each call's tool calls arrived.
-			liveStreamMu.Lock()
-			dispatchedModel := liveStreamModel
-			liveStreamMu.Unlock()
+			// mid-turn. A caller-supplied SystemPrompt is used verbatim,
+			// so no profile rendered it and the field stays empty.
+			// IterationRecord is not archived, so this line is the
+			// durable record of how each call's tool calls arrived.
+			var profile string
+			if req.SystemPrompt == "" {
+				liveStreamMu.Lock()
+				dispatchedModel := liveStreamModel
+				liveStreamMu.Unlock()
+				profile = l.modelInteractionProfileForModel(dispatchedModel).Name
+			}
 			iterLog := logging.Logger(iterCtx)
 			iterLog.Info("llm response",
 				"kind", events.KindLLMResponse,
@@ -2540,7 +2546,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"stop_reason", llmResp.StopReason,
 				"tool_call_source", string(llmResp.ToolCallSource),
 				"text_tool_action", string(llmResp.TextToolAction),
-				"profile", l.modelInteractionProfileForModel(dispatchedModel).Name,
+				"profile", profile,
 			)
 		},
 
