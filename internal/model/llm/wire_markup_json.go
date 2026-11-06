@@ -17,9 +17,10 @@ func jsonCallFinding(text string) (wireFinding, bool) {
 	}
 	closed, unclosed := braceSpans(text)
 	// A cut-off call is the outermost object still open at the end of
-	// the text whose own top level reads as a call. Objects nested in it
-	// are its arguments, which often carry a "name" of their own, and
-	// closed ones among them are not calls either.
+	// the text whose own top level reads as a call. Objects opened inside
+	// its own text are its arguments or other data, which often carry a
+	// "name" of their own, and closed ones among them are not calls
+	// either. Objects after its text are separate calls.
 	cutOff, hasCutOff := openObject{}, false
 	for _, o := range unclosed {
 		if o.callShaped(text) {
@@ -27,12 +28,16 @@ func jsonCallFinding(text string) (wireFinding, bool) {
 			break
 		}
 	}
+	cutOffEnd := 0
+	if hasCutOff {
+		cutOffEnd = cutOff.textEnd(text, closed)
+	}
 	var best wireFinding
 	found := false
 	skipUntil, attempts := -1, 0
 	for _, sp := range closed {
-		if hasCutOff && sp.start > cutOff.start {
-			break
+		if hasCutOff && sp.start > cutOff.start && sp.start < cutOffEnd {
+			continue
 		}
 		if sp.start < skipUntil || !anyOffsetIn(nameKeys, sp.start, sp.end) {
 			continue
@@ -105,8 +110,9 @@ type openObject struct {
 	start int
 	// nameKey is the offset of its top-level "name" key, or -1.
 	nameKey int
-	// hasArgs reports a top-level "arguments" key.
-	hasArgs bool
+	// argsKey is the offset just past its top-level "arguments" key, or
+	// -1.
+	argsKey int
 	// keys counts its top-level keys.
 	keys int
 }
@@ -121,7 +127,49 @@ func (o openObject) callShaped(text string) bool {
 	if o.nameKey < 0 {
 		return false
 	}
-	return o.hasArgs || (o.keys == 1 && cutBeforeArguments(text[o.nameKey+len(`"name"`):]))
+	return o.argsKey >= 0 || (o.keys == 1 && cutBeforeArguments(text[o.nameKey+len(`"name"`):]))
+}
+
+// textEnd returns the offset where a cut-off object's own text ends:
+// just past its "arguments" value when no further key follows it, so a
+// model that dropped one closing brace and wrote another call after it
+// still has that call seen. Without a closed arguments value, or with a
+// comma after it, the object runs to the end of the text.
+func (o openObject) textEnd(text string, closed []textSpan) int {
+	if o.argsKey < 0 {
+		return len(text)
+	}
+	rest := strings.TrimLeft(text[o.argsKey:], " \t\r\n")
+	rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t\r\n")
+	end := jsonValueEnd(text, len(text)-len(rest), closed)
+	if strings.HasPrefix(strings.TrimLeft(text[end:], " \t\r\n"), ",") {
+		return len(text)
+	}
+	return end
+}
+
+// jsonValueEnd returns the offset just past the JSON value that starts
+// at text[v:], or len(text) when the value is cut off or is an array,
+// whose extent is not tracked.
+func jsonValueEnd(text string, v int, closed []textSpan) int {
+	rest := text[v:]
+	switch {
+	case rest == "", rest[0] == '[':
+		return len(text)
+	case rest[0] == '{':
+		i, ok := slices.BinarySearchFunc(closed, v, func(sp textSpan, start int) int { return sp.start - start })
+		if !ok {
+			return len(text)
+		}
+		return closed[i].end
+	case rest[0] == '"':
+		end, _ := jsonStringEnd(rest)
+		return v + end
+	}
+	if i := strings.IndexAny(rest, ", \t\r\n"); i >= 0 {
+		return v + i
+	}
+	return len(text)
 }
 
 // cutBeforeArguments reads the tail of a cut-off object from just after
@@ -195,7 +243,7 @@ func braceSpans(text string) (closed []textSpan, unclosed []openObject) {
 		case '"':
 			inString, strStart = len(stack) > 0, i
 		case '{':
-			stack = append(stack, openObject{start: i, nameKey: -1})
+			stack = append(stack, openObject{start: i, nameKey: -1, argsKey: -1})
 		case '}':
 			if n := len(stack); n > 0 {
 				closed = append(closed, textSpan{start: stack[n-1].start, end: i + 1})
@@ -220,7 +268,9 @@ func noteObjectKey(obj *openObject, text string, start, end int) {
 			obj.nameKey = start
 		}
 	case `"arguments"`:
-		obj.hasArgs = true
+		if obj.argsKey < 0 {
+			obj.argsKey = end
+		}
 	}
 }
 

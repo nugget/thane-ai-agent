@@ -220,6 +220,26 @@ func TestScanWire(t *testing.T) {
 			want:    contentScan(WireMarkupJSONCall, false, false, false),
 		},
 		{
+			name:    "json call after an unclosed call's closed arguments is a separate call",
+			content: "{\"name\":\"loop_create\",\"arguments\":{\"x\":1}\nSorry, retrying:\n" + `{"name":"get_state","arguments":{}}`,
+			want:    contentScan(WireMarkupJSONCall, true, true, true),
+		},
+		{
+			name:    "json call right after an unclosed call's closed arguments is a separate call",
+			content: "{\"name\":\"loop_create\",\"arguments\":{}\n" + `{"name":"get_state","arguments":{}}`,
+			want:    contentScan(WireMarkupJSONCall, true, true, true),
+		},
+		{
+			name:    "json closed call in a later key of an unclosed call is its data",
+			content: `{"name":"loop_create","arguments":{},"spec":{"name":"get_state","arguments":{}}`,
+			want:    contentScan(WireMarkupJSONCall, false, false, false),
+		},
+		{
+			name:    "json closed call before an unclosed call's arguments is its data",
+			content: `{"name":"loop_create","spec":{"name":"get_state","arguments":{}},"arguments":{`,
+			want:    contentScan(WireMarkupJSONCall, false, false, false),
+		},
+		{
 			name:    "json closed call after an unclosed stray prose brace",
 			content: `Use {braces like this: {"name":"get_state","arguments":{}}`,
 			want:    contentScan(WireMarkupJSONCall, true, true, true),
