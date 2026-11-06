@@ -453,6 +453,15 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"malformed function headers before trailing space", func(n int) string {
 			return strings.Repeat("<function=a\n", n) + strings.Repeat(" ", n)
 		}},
+		{"named data objects before a call", func(n int) string {
+			return strings.Repeat(`{"name":"x","state":"on"},`, n) + jsonCall
+		}},
+		// Every level is a candidate that parses but is not a call, so
+		// only the candidate cap keeps this linear. Depth stays under the
+		// JSON decoder's nesting limit, which would otherwise end it early.
+		{"nested call-shaped decoys", func(n int) string {
+			return strings.Repeat(`{"name":"a","x":`, n/4) + `{"arguments":1}` + strings.Repeat("}", n/4)
+		}},
 	}
 	// fastest of a few runs, so a scheduler hiccup cannot fake a slope.
 	measure := func(text string) time.Duration {

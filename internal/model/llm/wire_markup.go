@@ -111,8 +111,12 @@ func ScanWire(content, reasoning string, offered []string) WireScan {
 
 // maxWireCandidates bounds how many candidate calls each detector
 // examines in one text. Every candidate costs a parse over its span,
-// so an adversarial or runaway text with thousands of braces or
-// recipients would otherwise make a detection pass quadratic. Real
+// so an adversarial or runaway text with thousands of nested calls or
+// recipients would otherwise make a detection pass quadratic. Only
+// call-shaped markup is a candidate: a Qwen function or <tool_call>
+// tag, a Harmony recipient, or a JSON object with a top-level "name"
+// key and a quoted "arguments" key. Named data is never one, so a real
+// call is hidden only behind this many malformed calls before it. Real
 // replies carry a handful of calls.
 const maxWireCandidates = 16
 
