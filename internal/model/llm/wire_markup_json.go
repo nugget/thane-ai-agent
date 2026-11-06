@@ -11,16 +11,16 @@ import (
 // anywhere in text: closed objects first, then an unclosed object cut
 // off at the end of the text.
 //
-// Only call-shaped closed objects, with a "name" key at their own top
-// level and a quoted "arguments" key inside them, are parsed and
-// charged against [maxWireCandidates]. Named data such as a recapped
-// tool result or tool list costs nothing, so no amount of it can hide
-// a later call.
+// Only call-shaped closed objects, with both a "name" key and an
+// "arguments" key at their own top level, are parsed and charged
+// against [maxWireCandidates]. Named data such as a recapped tool
+// result or tool list costs nothing, even when "arguments" appears
+// deeper inside it or as a value, so no amount of it can hide a later
+// call.
 func jsonCallFinding(text string) (wireFinding, bool) {
 	if !strings.Contains(text, `"name"`) {
 		return wireFinding{}, false
 	}
-	argKeys := quotedOffsets(text, `"arguments"`)
 	closed, unclosed := braceSpans(text)
 	cutOffs := cutOffCalls(text, closed, unclosed)
 	var best wireFinding
@@ -33,7 +33,7 @@ func jsonCallFinding(text string) (wireFinding, bool) {
 		if c < len(cutOffs) && sp.start > cutOffs[c].start {
 			continue
 		}
-		if sp.start < skipUntil || !sp.named || !anyOffsetIn(argKeys, sp.start, sp.end) {
+		if sp.start < skipUntil || !sp.named || !sp.argued {
 			continue
 		}
 		if attempts++; attempts > maxWireCandidates {
@@ -132,6 +132,8 @@ type textSpan struct {
 	start, end int
 	// named reports a "name" key at the object's own top level.
 	named bool
+	// argued reports an "arguments" key at the object's own top level.
+	argued bool
 }
 
 // openObject is a brace still open at the end of the text, with what
@@ -313,7 +315,7 @@ func braceSpans(text string) (closed []textSpan, unclosed []openObject) {
 		case '}':
 			if n := len(stack); n > 0 {
 				top := stack[n-1]
-				closed = append(closed, textSpan{start: top.start, end: i + 1, named: top.nameKey >= 0})
+				closed = append(closed, textSpan{start: top.start, end: i + 1, named: top.nameKey >= 0, argued: top.argsKey >= 0})
 				stack = stack[:n-1]
 			}
 		}
@@ -371,25 +373,6 @@ func jsonNameKeyOffsets(text string) []int {
 			out = append(out, at)
 		}
 	}
-}
-
-// quotedOffsets returns the ascending offsets of every occurrence of
-// the quoted string key in text.
-func quotedOffsets(text, key string) []int {
-	var out []int
-	for pos := 0; ; {
-		i := strings.Index(text[pos:], key)
-		if i < 0 {
-			return out
-		}
-		out = append(out, pos+i)
-		pos += i + len(key)
-	}
-}
-
-func anyOffsetIn(sorted []int, start, end int) bool {
-	i, _ := slices.BinarySearch(sorted, start)
-	return i < len(sorted) && sorted[i] < end
 }
 
 // looseJSONName reads the string value of the first "name" key without

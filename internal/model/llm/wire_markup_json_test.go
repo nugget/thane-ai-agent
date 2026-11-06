@@ -65,11 +65,25 @@ func TestScanWireJSONCandidates(t *testing.T) {
 		)
 	}
 	tools := strings.TrimSuffix(strings.Repeat(`{"name":"get_state","description":"Read an entity's state."},`, 17), ",")
+	// Named records that mention "arguments" below their own top level,
+	// or only as a value, are still data.
+	nestedArgs := strings.TrimSuffix(strings.Repeat(`{"name":"turn","call":{"tool":"x","arguments":{}}},`, 20), ",")
+	argsValue := strings.Repeat(`{"name":"n","label":"arguments"} `, 20)
 	decoys := func(n int) string { return strings.Repeat(`{"name":"a","arguments":[1]} `, n) }
 	tests = append(tests,
 		row{
 			name:    "a recap of 17 tool definitions then a call",
 			content: "Available: [" + tools + "] calling " + jsonCall,
+			want:    contentCall,
+		},
+		row{
+			name:    "20 named records with nested arguments then a call",
+			content: "History: [" + nestedArgs + "] calling " + jsonCall,
+			want:    contentCall,
+		},
+		row{
+			name:    "20 named records quoting arguments as a value then a call",
+			content: "Labels: " + argsValue + "calling " + jsonCall,
 			want:    contentCall,
 		},
 		// Call-shaped decoys do spend it: that is what keeps the scan
