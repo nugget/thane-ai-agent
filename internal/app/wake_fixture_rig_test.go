@@ -60,10 +60,6 @@ type fixtureLLM struct {
 	// overrun counts calls made after the script ran out.
 	overrun int
 	calls   []recordedCall
-	// onCall, when set, runs inside each call before it is answered,
-	// with the call's index. A non-nil error fails the call. It lets a
-	// test observe a call in flight or block it on ctx.
-	onCall func(ctx context.Context, i int) error
 }
 
 // extend appends responses to the script.
@@ -95,21 +91,11 @@ func (f *fixtureLLM) Chat(ctx context.Context, model string, msgs []llm.Message,
 	return f.ChatStream(ctx, model, msgs, defs, nil)
 }
 
-func (f *fixtureLLM) ChatStream(ctx context.Context, _ string, msgs []llm.Message, defs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
-	f.mu.Lock()
-	i := len(f.calls)
-	f.calls = append(f.calls, recordedCall{messages: deepCopy(msgs), tools: deepCopy(defs)})
-	hook := f.onCall
-	f.mu.Unlock()
-
-	if hook != nil {
-		if err := hook(ctx, i); err != nil {
-			return nil, err
-		}
-	}
-
+func (f *fixtureLLM) ChatStream(_ context.Context, _ string, msgs []llm.Message, defs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	i := len(f.calls)
+	f.calls = append(f.calls, recordedCall{messages: deepCopy(msgs), tools: deepCopy(defs)})
 	if f.next >= len(f.script) {
 		f.overrun++
 		return nil, fmt.Errorf("fixtureLLM: call %d is past the end of its %d-response script", i, len(f.script))
@@ -384,6 +370,13 @@ type wakeObservation struct {
 // is no mailbox in the rig. The barrier is the wake's
 // iteration_complete (or loop_error) event, which the loop publishes
 // after it updates Status.
+//
+// wake does not wait for the loop to re-enter its wait first. Only
+// newWakeRig waits for wait_start, once, so the first notify reaches a
+// loop that is already running. After that a notify needs no
+// barrier: the loop queues it in pendingNotifies and pokes its wake
+// channel even while the previous wake is still finishing, so the next
+// wait drains it.
 func (r *wakeRig) wake(t *testing.T, notify string, script []*llm.ChatResponse) wakeObservation {
 	t.Helper()
 	servedBefore, overrunBefore := r.llm.consumed()
@@ -564,7 +557,7 @@ func TestWakeRigInvariantsCatchDrift(t *testing.T) {
 			calls: []recordedCall{{tools: deepCopy(offer("Publish the x digest.", params)), response: emit}},
 		},
 		{
-			name:  "round-7 stub description",
+			name:  "placeholder stub description",
 			calls: []recordedCall{{tools: offer("Thane tool publish_output_x", params), response: emit}},
 			want:  "with description \"Thane tool publish_output_x\"",
 		},
