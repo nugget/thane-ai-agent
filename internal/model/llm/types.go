@@ -45,6 +45,21 @@ type ToolCall struct {
 	} `json:"function"`
 }
 
+// ToolCallSource names the channel a response's tool calls arrived
+// through. It is decided by which branch produced the calls, never by
+// the shape of their IDs: a runner that omits IDs on structured calls
+// gets generated ones, and those calls are still native.
+type ToolCallSource string
+
+const (
+	// ToolCallSourceNative means the provider returned the calls in its
+	// structured tool_calls field.
+	ToolCallSourceNative ToolCallSource = "native"
+	// ToolCallSourceTextFallback means the provider returned text and
+	// [ApplyTextToolCallFallback] recovered the calls from it.
+	ToolCallSourceTextFallback ToolCallSource = "text_fallback"
+)
+
 // ChatResponse is the unified response from any LLM provider.
 // All fields use proper Go types — wire format conversion happens
 // at provider boundaries (ollama.go, anthropic.go).
@@ -68,6 +83,18 @@ type ChatResponse struct {
 	// attention). Empty when the provider doesn't expose one or the
 	// stream ended unexpectedly.
 	StopReason string
+
+	// ToolCallSource names the channel Message.ToolCalls arrived
+	// through: the provider's structured tool_calls field, or Thane's
+	// recovery of a call the model wrote as text. Empty when the
+	// response carried no tool calls or the provider does not report
+	// the channel (Ollama native, Anthropic).
+	ToolCallSource ToolCallSource
+
+	// TextToolAction is what [ApplyTextToolCallFallback] did to the
+	// response's text. Empty when the provider does not run the
+	// fallback.
+	TextToolAction TextToolAction
 
 	// Token usage (provider-neutral)
 	InputTokens              int

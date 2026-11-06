@@ -1849,6 +1849,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
+			"stop_reason", llmResp.StopReason,
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
@@ -2521,6 +2522,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					},
 				})
 			}
+			// The profile is the one this iteration's prompt was rendered
+			// for, which follows the dispatched model and can change
+			// mid-turn. IterationRecord is not archived, so this line is
+			// the durable record of how each call's tool calls arrived.
+			liveStreamMu.Lock()
+			dispatchedModel := liveStreamModel
+			liveStreamMu.Unlock()
 			iterLog := logging.Logger(iterCtx)
 			iterLog.Info("llm response",
 				"kind", events.KindLLMResponse,
@@ -2529,6 +2537,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"input_tokens", llmResp.InputTokens,
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
+				"stop_reason", llmResp.StopReason,
+				"tool_call_source", string(llmResp.ToolCallSource),
+				"text_tool_action", string(llmResp.TextToolAction),
+				"profile", l.modelInteractionProfileForModel(dispatchedModel).Name,
 			)
 		},
 

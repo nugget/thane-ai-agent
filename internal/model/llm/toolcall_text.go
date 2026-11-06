@@ -67,28 +67,71 @@ func LooksLikeTextToolCall(content string, profile ToolCallTextProfile) bool {
 	return false
 }
 
+// TextToolAction records which branch of [ApplyTextToolCallFallback]
+// changed a response, so the evidence of a call written as text
+// survives the rewrite that consumes it.
+type TextToolAction string
+
+const (
+	// TextToolActionNone means the fallback left the response as it
+	// arrived: it already had structured calls, had no content, or its
+	// content held no tool-call shape.
+	TextToolActionNone TextToolAction = "none"
+	// TextToolActionRecovered means the whole content parsed as calls
+	// to offered tools (any name, when the request offered none) and
+	// replaced it.
+	TextToolActionRecovered TextToolAction = "recovered"
+	// TextToolActionRepairRecoveredUnoffered means the whole content
+	// parsed as calls whose names the request did not offer. The calls
+	// replace the content so runtime alias repair can map them, or the
+	// engine can refuse them as unavailable.
+	TextToolActionRepairRecoveredUnoffered TextToolAction = "repair_recovered_unoffered"
+	// TextToolActionSuppressed means the content had a tool call's
+	// name and arguments keys but did not parse as one, such as
+	// arguments sent as a JSON string, and was cleared.
+	TextToolActionSuppressed TextToolAction = "suppressed"
+	// TextToolActionStrippedTrailing means a tool-call payload after
+	// prose was removed and the prose kept. The call is not executed.
+	TextToolActionStrippedTrailing TextToolAction = "stripped_trailing"
+)
+
 // ApplyTextToolCallFallback upgrades raw-text tool call emissions into
 // structured ToolCalls, suppresses obvious hallucinated tool-call
 // shapes, and strips trailing tool-call payloads from mixed responses.
-func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) {
-	if resp == nil || len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
-		return
+// It returns the action it took, which is also stored on
+// resp.TextToolAction.
+func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) TextToolAction {
+	if resp == nil {
+		return TextToolActionNone
+	}
+	resp.TextToolAction = applyTextToolCallFallback(resp, validToolNames, profile)
+	return resp.TextToolAction
+}
+
+func applyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) TextToolAction {
+	if len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
+		return TextToolActionNone
 	}
 	if parsed := ParseTextToolCalls(resp.Message.Content, validToolNames, profile); len(parsed) > 0 {
 		resp.Message.ToolCalls = parsed
 		resp.Message.Content = ""
-		return
+		return TextToolActionRecovered
 	}
 	if parsed := ParseTextToolCallsForRepair(resp.Message.Content, profile); len(parsed) > 0 {
 		resp.Message.ToolCalls = parsed
 		resp.Message.Content = ""
-		return
+		return TextToolActionRepairRecoveredUnoffered
 	}
 	if profile.SuppressHallucinatedText && LooksLikeHallucinatedToolCall(resp.Message.Content, profile) {
 		resp.Message.Content = ""
-		return
+		return TextToolActionSuppressed
 	}
-	resp.Message.Content = StripTrailingToolCallText(resp.Message.Content, validToolNames, profile)
+	stripped := StripTrailingToolCallText(resp.Message.Content, validToolNames, profile)
+	if stripped == resp.Message.Content {
+		return TextToolActionNone
+	}
+	resp.Message.Content = stripped
+	return TextToolActionStrippedTrailing
 }
 
 // LooksLikeHallucinatedToolCall reports whether content has the shape
