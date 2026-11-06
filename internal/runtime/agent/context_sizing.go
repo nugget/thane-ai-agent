@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -22,24 +23,56 @@ const estimatedImageContextTokens = 1536
 // advertised maximum of the local models this applies to.
 const reservedOutputContextTokens = 4096
 
-func estimateLLMMessagesContextTokens(msgs []llm.Message) int {
-	total := 0
-	for _, msg := range msgs {
-		total += roughTokenCount(msg.Content)
-		total += len(msg.Images) * estimatedImageContextTokens
-		total += estimateMessageToolCallTokens(msg)
-	}
-	return total
+// requestEstimate is one model call's estimated size, split by where the
+// tokens come from. The split is what makes a gap against the provider's
+// reported input_tokens diagnosable: a gap that stays constant across
+// iterations points at a fixed component such as the tool schemas, one
+// that grows points at the conversation.
+type requestEstimate struct {
+	// Messages counts the message text, attached images, and the id a
+	// tool result carries to name the call it answers.
+	Messages int
+
+	// ToolCalls counts the tool calls assistant messages carry: each
+	// call's id, function name and JSON-encoded arguments.
+	ToolCalls int
+
+	// Tools counts the tool schemas sent beside the messages.
+	Tools int
 }
 
-// estimateMessageToolCallTokens counts what a message carries besides its
-// text. Providers serialize a call's id, function name and JSON arguments
-// into the message itself, and a tool result carries the id it answers, so a
-// conversation several tool-calling iterations deep occupies considerably
-// more of the window than its prose suggests.
-func estimateMessageToolCallTokens(msg llm.Message) int {
-	total := roughTokenCount(msg.ToolCallID)
-	for _, tc := range msg.ToolCalls {
+// total is the whole request: everything the runner tokenizes as input.
+func (e requestEstimate) total() int {
+	return e.Messages + e.ToolCalls + e.Tools
+}
+
+// estimateRequest estimates one model call from exactly what is sent: the
+// messages and the tool definitions offered with them.
+func estimateRequest(msgs []llm.Message, toolDefs []map[string]any) requestEstimate {
+	var e requestEstimate
+	for _, msg := range msgs {
+		e.Messages += roughTokenCount(msg.Content)
+		e.Messages += len(msg.Images) * estimatedImageContextTokens
+		e.Messages += roughTokenCount(msg.ToolCallID)
+		e.ToolCalls += estimateToolCallsTokens(msg.ToolCalls)
+	}
+	e.Tools = estimateToolDefsContextTokens(toolDefs)
+	return e
+}
+
+func estimateLLMMessagesContextTokens(msgs []llm.Message) int {
+	e := estimateRequest(msgs, nil)
+	return e.Messages + e.ToolCalls
+}
+
+// estimateToolCallsTokens counts the tool calls an assistant message
+// carries besides its text. Providers serialize a call's id, function name and JSON
+// arguments into the message itself, so a conversation several
+// tool-calling iterations deep occupies considerably more of the window
+// than its prose suggests.
+func estimateToolCallsTokens(calls []llm.ToolCall) int {
+	total := 0
+	for _, tc := range calls {
 		total += roughTokenCount(tc.ID)
 		total += roughTokenCount(tc.Function.Name)
 		if len(tc.Function.Arguments) == 0 {
@@ -75,7 +108,33 @@ func estimateToolDefsContextTokens(toolDefs []map[string]any) int {
 // deployment has to be able to hold for the request to be servable at all,
 // and so it is the size to judge a deployment's compatibility against.
 func estimateRequestContextTokens(msgs []llm.Message, toolDefs []map[string]any) int {
-	return estimateLLMMessagesContextTokens(msgs) + estimateToolDefsContextTokens(toolDefs)
+	return estimateRequest(msgs, toolDefs).total()
+}
+
+// systemSectionBytes reports the size in bytes of each named section of
+// the system prompt, in prompt order, as one log attribute. Sizes are
+// bytes rather than estimated tokens because they are exact: they say
+// which section grew between two deploys without depending on the
+// estimator. A name that appears twice is summed under its first
+// position. It reports false when the request carries no sectioned
+// system prompt.
+func systemSectionBytes(msgs []llm.Message) (slog.Attr, bool) {
+	if len(msgs) == 0 || msgs[0].Role != "system" || len(msgs[0].Sections) == 0 {
+		return slog.Attr{}, false
+	}
+	var order []string
+	sizes := make(map[string]int, len(msgs[0].Sections))
+	for _, section := range msgs[0].Sections {
+		if _, seen := sizes[section.Name]; !seen {
+			order = append(order, section.Name)
+		}
+		sizes[section.Name] += len(section.Content)
+	}
+	attrs := make([]slog.Attr, 0, len(order))
+	for _, name := range order {
+		attrs = append(attrs, slog.Int(name, sizes[name]))
+	}
+	return slog.Attr{Key: "system_section_bytes", Value: slog.GroupValue(attrs...)}, true
 }
 
 // desiredLoadContextTokens turns the size a request requires into the size

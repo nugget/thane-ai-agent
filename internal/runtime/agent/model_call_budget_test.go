@@ -86,8 +86,8 @@ func TestOutputBudgetBoundsFailover(t *testing.T) {
 			if initialErr == nil {
 				t.Fatal("initial attempt unexpectedly succeeded")
 			}
-			timeoutRecovered := false
-			handler := loop.buildLLMErrorHandler(ctx, nil, client, req, &timeoutRecovered)
+			var outcome llmErrorOutcome
+			handler := loop.buildLLMErrorHandler(ctx, nil, client, req, &outcome)
 			_, model, err := handler(ctx, initialErr, "claude-primary", nil, nil, nil)
 			want := []int{1000}
 			if spent < 1000 {
