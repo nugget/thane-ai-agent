@@ -274,6 +274,27 @@ func TestRun_RequestEstimateMatchesWhatIsSent(t *testing.T) {
 			callsByIteration: map[int][]int{0: {0}, 1: {1, 2, 3}},
 			responseEstimate: map[int]bool{0: true, 1: false},
 		},
+		{
+			// The recovery call fails too, and the handler answers
+			// with canned text no model produced.
+			name: "recovery model also fails",
+			model: &mockTimeoutLLM{
+				responses: []*llm.ChatResponse{toolCallResp()},
+				errors:    []error{nil, context.DeadlineExceeded, context.DeadlineExceeded, context.DeadlineExceeded, context.DeadlineExceeded},
+			},
+			recoveryModel:    "recovery-model",
+			callsByIteration: map[int][]int{0: {0}, 1: {1, 2, 3}},
+			responseEstimate: map[int]bool{0: true, 1: false},
+		},
+		{
+			name: "no recovery model answers with a static fallback",
+			model: &mockTimeoutLLM{
+				responses: []*llm.ChatResponse{toolCallResp()},
+				errors:    []error{nil, context.DeadlineExceeded, context.DeadlineExceeded, context.DeadlineExceeded},
+			},
+			callsByIteration: map[int][]int{0: {0}, 1: {1, 2, 3}},
+			responseEstimate: map[int]bool{0: true, 1: false},
+		},
 	}
 
 	for _, tt := range tests {

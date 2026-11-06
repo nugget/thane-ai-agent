@@ -2282,8 +2282,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	recorder, hasRecorder := l.memory.(ToolCallRecorder)
 	sessionRecorder, hasSessionRecorder := l.memory.(SessionToolCallRecorder)
 
-	// Track whether the error handler triggered timeout recovery.
-	var timeoutRecovered bool
+	// What the error handler reports about the responses it produced.
+	var llmErr llmErrorOutcome
 	// A lifecycle tool can rotate the session during an iteration. Keep
 	// each model call with the session that supplied its starting context.
 	iterationSessions := make(map[int]string)
@@ -2487,6 +2487,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				iterMsgTokens += len(m.Content) / 4
 			}
 			iterEstimate = estimateRequest(msgs, toolDefs)
+			llmErr.requestReplaced = false
 			callAttrs := []any{
 				"kind", events.KindLLMCall,
 				"iteration", i,
@@ -2552,18 +2553,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
 			}
-			// A same-model retry or a failover resends the estimated
-			// request. Timeout recovery answers with a different,
-			// toolless request or with no call at all, so the
-			// iteration's estimate does not describe it and is left off.
-			if !timeoutRecovered {
+			// The estimate is attached only when the response answers
+			// the request it describes. The error handler reports when
+			// it answered something else instead; see
+			// llmErrorOutcome.requestReplaced.
+			if !llmErr.requestReplaced {
 				respAttrs = append(respAttrs, "est_request_tokens", iterEstimate.total())
 			}
 			iterLog.Info("llm response", respAttrs...)
 		},
 
 		// Error handling: timeout retry, recovery model, failover.
-		OnLLMError: l.buildLLMErrorHandler(ctx, stream, runClient, req, &timeoutRecovered),
+		OnLLMError: l.buildLLMErrorHandler(ctx, stream, runClient, req, &llmErr),
 
 		// Enrich context before each tool execution.
 		OnBeforeToolExec: func(iterCtx context.Context, i int, tc llm.ToolCall) context.Context {
@@ -2760,7 +2761,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 	// Detect when the error handler triggered timeout recovery.
-	if timeoutRecovered && iterResult.ExhaustReason != iterate.ExhaustTokenBudget {
+	if llmErr.timeoutRecovered && iterResult.ExhaustReason != iterate.ExhaustTokenBudget {
 		finishReason = "timeout_recovery"
 	}
 
@@ -2834,9 +2835,23 @@ func (l *Loop) conversationChannelBinding(ctx context.Context, conversationID st
 	return conv.Metadata.ChannelBinding.Clone()
 }
 
+// llmErrorOutcome is what the OnLLMError handler leaves for the rest of
+// Run to read about the responses it produced.
+type llmErrorOutcome struct {
+	// timeoutRecovered is set once timeout recovery answers in place of
+	// the model the Run asked, and makes the Run's finish reason
+	// timeout_recovery.
+	timeoutRecovered bool
+	// requestReplaced is set when the handler's response answers a
+	// request other than the iteration's own messages and tools, or
+	// is canned text no call produced. Run clears it as each iteration
+	// starts.
+	requestReplaced bool
+}
+
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
-func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, client llm.Client, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
+func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, client llm.Client, req *Request, outcome *llmErrorOutcome) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
 	explicitModelRequested := strings.TrimSpace(req.Model) != ""
 
 	return func(iterCtx context.Context, err error, model string,
@@ -2919,6 +2934,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 						"recovery_model", l.recoveryModel,
 					)
 					// Return a static recovery response as content.
+					outcome.requestReplaced = true
 					return &llm.ChatResponse{
 						Model:   l.recoveryModel,
 						Message: llm.Message{Role: "assistant", Content: prompts.TimeoutRecoveryEmpty},
@@ -2928,13 +2944,15 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				if resp.Message.Content == "" {
 					resp.Message.Content = prompts.TimeoutRecoveryEmpty
 				}
-				*timeoutRecovered = true
+				outcome.timeoutRecovered = true
+				outcome.requestReplaced = true
 				return resp, l.recoveryModel, nil
 			}
 			// No recovery model — return a static fallback response
 			// so the user sees something rather than an error.
 			iterLog.Error("LLM timeout with no recovery model, returning static fallback")
-			*timeoutRecovered = true
+			outcome.timeoutRecovered = true
+			outcome.requestReplaced = true
 			used := toolsUsedFromMessages(msgs)
 			names := make([]string, 0, len(used))
 			for name := range used {
@@ -2966,7 +2984,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		}
 
 		if explicitModelRequested {
-			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, client, model, err, msgs, toolDefs, stream); handled {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, client, model, err, msgs, toolDefs, stream, outcome); handled {
 				if recoveryErr != nil {
 					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
 					return nil, "", recoveryErr
