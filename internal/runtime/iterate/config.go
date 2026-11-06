@@ -75,6 +75,10 @@ type Config struct {
 	// ChatResponse and nil error means recovery succeeded; the returned
 	// model name replaces the current model for subsequent iterations.
 	// Returning a nil response and non-nil error propagates the failure.
+	// ctx is the failed call's own context: it carries that call's
+	// [llm.CallSite] and, when the run has one, its output budget, so a
+	// handler that makes a call in the failed call's stead derives that
+	// call's context from ctx (for example with [llm.WithCallKind]).
 	// [llm.ErrOutputBudgetExhausted] ends the run with [ExhaustTokenBudget]
 	// and static fallback content, without invoking this callback or
 	// executing assistant output returned alongside the error.

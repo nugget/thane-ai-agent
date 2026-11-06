@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // callSiteCall is what one model call arrived with.
@@ -264,7 +265,9 @@ func TestRun_StampsCallSite(t *testing.T) {
 
 // TestRun_StampsContextRecoveryCallSite pins the two context-recovery
 // kinds: the retry that keeps its tools after the runner's window was
-// refreshed, and the retry that drops them to fit. The loaded instance
+// refreshed, and the retry that drops them to fit. A turn that offered
+// no tools has none to drop, so its retry is the plain kind even though
+// it, too, goes out without tools. The loaded instance
 // has no id, so the retry returns through the loop's own client where
 // the recorder can see it; the direct-instance branch is handed the same
 // stamped context.
@@ -283,13 +286,27 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 		// its own, so recovery's refresh sees a changed window.
 		growAfterFirstChat bool
 		rejectWithTools    bool
-		want               []llm.CallSite
+		// noTools runs the turn with an empty registry, so it offers
+		// the model no tools at all.
+		noTools bool
+		want    []llm.CallSite
 	}{
 		{
 			name:               "refreshed window retries with tools",
 			trainedForTools:    true,
 			initialContext:     32768,
 			growAfterFirstChat: true,
+			want: []llm.CallSite{
+				{Iteration: 0, Kind: llm.CallKindIteration},
+				{Iteration: 0, Kind: llm.CallKindContextRecovery},
+			},
+		},
+		{
+			name:               "refreshed window on a tool-less turn is not the tool-free kind",
+			trainedForTools:    true,
+			initialContext:     32768,
+			growAfterFirstChat: true,
+			noTools:            true,
 			want: []llm.CallSite{
 				{Iteration: 0, Kind: llm.CallKindIteration},
 				{Iteration: 0, Kind: llm.CallKindContextRecovery},
@@ -394,6 +411,9 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 			}
 			rec := &callSiteRecordingClient{Client: runtime.Client()}
 			loop := buildTestLoopWithLLM(rec, []string{"ha_get_state"})
+			if tt.noTools {
+				loop.tools = tools.NewEmptyRegistry()
+			}
 			loop.UseModelRegistry(runtime.Registry())
 			loop.UseModelRuntime(runtime)
 
