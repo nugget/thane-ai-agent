@@ -417,6 +417,17 @@ func (c *OpenAICompatClient) SetStreamIdleTimeout(d time.Duration) {
 	c.streamIdleTimeout = d
 }
 
+// StreamIdleTimeout returns how long this endpoint may go silent before
+// a request is abandoned; zero means the guard is disabled. Exposed for
+// tests, since the window never reaches the wire and the default is too
+// long to wait out; production callers should not depend on it.
+func (c *OpenAICompatClient) StreamIdleTimeout() time.Duration {
+	if c == nil {
+		return 0
+	}
+	return c.streamIdleTimeout
+}
+
 // callLogger returns the logger for one request, preferring the
 // request-scoped logger the caller put on the context so provider lines
 // carry request_id, conversation_id, and session_id and can be grepped
