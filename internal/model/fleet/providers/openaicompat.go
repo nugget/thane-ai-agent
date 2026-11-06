@@ -306,8 +306,11 @@ func (c *OpenAICompatClient) ChatStream(ctx context.Context, model string, messa
 	}
 
 	// Reported once the request exists and nothing but the post itself
-	// remains, so an observer never records a body that was never posted.
-	// Retries inside the transport resend these same bytes.
+	// remains, so a request that failed to encode or build reports
+	// nothing. A transport failure after this point still leaves the
+	// observation, so it describes what was about to be posted and must
+	// be read with the call's error. Retries inside the transport resend
+	// these same bytes.
 	llm.ObserveWire(ctx, facts)
 
 	resp, err := c.httpClient.Do(httpReq)

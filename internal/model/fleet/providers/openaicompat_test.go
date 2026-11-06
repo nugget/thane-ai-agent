@@ -1094,6 +1094,22 @@ func TestEncodeChatRequestIsWhatChatStreamSends(t *testing.T) {
 			if !reflect.DeepEqual(sent["chat_template_kwargs"], map[string]any{"enable_thinking": false, "options": map[string]any{"depth": float64(2)}}) {
 				t.Errorf("body chat_template_kwargs = %#v", sent["chat_template_kwargs"])
 			}
+			// The encoder omits zero values, so an absent key reads as the
+			// zero fact. Numbers decode as float64.
+			bodyInt := func(key string) int {
+				v, _ := sent[key].(float64)
+				return int(v)
+			}
+			bodyStream, _ := sent["stream"].(bool)
+			if bodyInt("ttl") != got.TTLSeconds {
+				t.Errorf("body ttl = %d, facts say %d", bodyInt("ttl"), got.TTLSeconds)
+			}
+			if bodyInt("max_tokens") != got.MaxTokens {
+				t.Errorf("body max_tokens = %d, facts say %d", bodyInt("max_tokens"), got.MaxTokens)
+			}
+			if bodyStream != got.Stream {
+				t.Errorf("body stream = %v, facts say %v", bodyStream, got.Stream)
+			}
 		})
 	}
 }
@@ -1160,7 +1176,10 @@ func TestEncodeChatRequestDeterministic(t *testing.T) {
 // TestWireObserverNegativeCases pins when the observer must stay
 // silent and what it must not be able to reach: a request that fails to
 // encode was never sent and reports nothing, a call without an observer
-// still works, and facts handed to an observer are its own copy.
+// still works, and facts handed to an observer are its own copy. It also
+// pins the one case where an observation outlives the post: a transport
+// failure after the observer fired leaves the facts recorded, which is
+// why they must be read with the call's error.
 func TestWireObserverNegativeCases(t *testing.T) {
 	t.Parallel()
 
@@ -1169,12 +1188,14 @@ func TestWireObserverNegativeCases(t *testing.T) {
 		tools        []map[string]any
 		observe      bool
 		wantErr      string
+		transportErr bool
 		wantRequests int
 		wantObserved int
 	}{
 		{name: "unencodable tools", tools: []map[string]any{{"bad": make(chan int)}}, observe: true, wantErr: "marshal request", wantRequests: 0, wantObserved: 0},
 		{name: "no observer attached", tools: wireFixtureTools("Find where a person is."), observe: false, wantRequests: 1, wantObserved: 0},
 		{name: "observer attached", tools: wireFixtureTools("Find where a person is."), observe: true, wantRequests: 1, wantObserved: 1},
+		{name: "transport failure", tools: wireFixtureTools("Find where a person is."), observe: true, transportErr: true, wantErr: "request failed", wantRequests: 0, wantObserved: 1},
 	}
 
 	for _, tt := range tests {
@@ -1187,6 +1208,13 @@ func TestWireObserverNegativeCases(t *testing.T) {
 
 			c := NewOpenAICompatClient(srv.URL, "", "vllm", "res", nil, 0)
 			c.SetChatTemplateKwargs(map[string]any{"options": map[string]any{"depth": "original"}})
+			if tt.transportErr {
+				// A transport that never reaches the server, without the
+				// production retry backoff in the way.
+				c.httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, errors.New("connection refused")
+				})}
+			}
 
 			var observed []llm.WireFacts
 			ctx := context.Background()
