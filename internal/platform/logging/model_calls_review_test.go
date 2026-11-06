@@ -171,3 +171,128 @@ func TestModelCallStore_StalledWritesAreBounded(t *testing.T) {
 		})
 	}
 }
+
+// TestModelCallStore_UnsentSectionsMarkInputIncomplete pins that a call
+// is stored complete only when the captured prompt is what the provider
+// sent. A provider that transmits declared sections (Anthropic) received
+// something other than the Content stored once those sections cannot be
+// located in it; a provider that sends Content received exactly what was
+// stored.
+func TestModelCallStore_UnsentSectionsMarkInputIncomplete(t *testing.T) {
+	tests := []struct {
+		name           string
+		provider       string
+		unlocatable    bool
+		wantIncomplete bool
+	}{
+		{name: "anthropic with unlocatable sections", provider: "anthropic", unlocatable: true, wantIncomplete: true},
+		{name: "openai_compat with unlocatable sections", provider: "openai_compat", unlocatable: true},
+		{name: "anthropic with located sections", provider: "anthropic"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			s := NewModelCallStore(db, ModelCallStoreConfig{InstanceID: "test", Logger: slog.New(slog.DiscardHandler)})
+			c := fixtureCall()
+			c.Profile.Provider = tt.provider
+			if tt.unlocatable {
+				c.Messages[0].Content = "rewritten prompt"
+			}
+			if !s.Turn("r_alice").Capture(c) {
+				t.Fatal("capture not queued")
+			}
+			s.Close()
+			got := countRows(t, db, `SELECT COUNT(*) FROM log_model_calls WHERE input_incomplete = 1`) == 1
+			if got != tt.wantIncomplete {
+				t.Errorf("input_incomplete = %v, want %v", got, tt.wantIncomplete)
+			}
+		})
+	}
+}
+
+// TestModelCallStore_TurnRowRecordsLostCalls pins that a turn's outcome
+// row says when its capture is incomplete, including when the lost call
+// was the last one and no later call exists to carry input_incomplete,
+// and that it records every call the turn tried to capture.
+func TestModelCallStore_TurnRowRecordsLostCalls(t *testing.T) {
+	tests := []struct {
+		name           string
+		failFinalWrite bool
+		wantIncomplete bool
+	}{
+		{name: "every call stored", wantIncomplete: false},
+		{name: "the final call's write failed", failFinalWrite: true, wantIncomplete: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			if tt.failFinalWrite {
+				if _, err := db.Exec(`CREATE TRIGGER inject_failure BEFORE INSERT ON log_model_calls
+					WHEN NEW.request_id = 'r_alice' AND NEW.call_seq = 2
+					BEGIN SELECT RAISE(ABORT, 'injected failure'); END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := NewModelCallStore(db, ModelCallStoreConfig{InstanceID: "test", Logger: slog.New(slog.DiscardHandler)})
+			turn := s.Turn("r_alice")
+			for range 2 {
+				if !turn.Capture(fixtureCall()) {
+					t.Fatal("capture not queued")
+				}
+			}
+			if !turn.Finish(ModelTurn{Completed: true, At: time.Now()}) {
+				t.Fatal("Finish not queued")
+			}
+			s.Close()
+
+			var calls int
+			var incomplete bool
+			if err := db.QueryRow(`SELECT call_count, capture_incomplete FROM log_model_turns WHERE request_id = 'r_alice'`).
+				Scan(&calls, &incomplete); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 {
+				t.Errorf("call_count = %d, want 2", calls)
+			}
+			if incomplete != tt.wantIncomplete {
+				t.Errorf("capture_incomplete = %v, want %v", incomplete, tt.wantIncomplete)
+			}
+		})
+	}
+}
+
+// TestModelCallTurn_DroppedCallMarksTurnIncomplete pins that a call
+// rejected by a full queue, which never reaches the writer and so can
+// poison nothing, still leaves the turn's outcome row incomplete.
+func TestModelCallTurn_DroppedCallMarksTurnIncomplete(t *testing.T) {
+	db := openTestDB(t)
+	s := newModelCallStore(db, ModelCallStoreConfig{InstanceID: "test", QueueSize: 2, Logger: slog.New(slog.DiscardHandler)})
+	turn := s.Turn("r_alice")
+	for i := range 3 {
+		if queued := turn.Capture(fixtureCall()); queued != (i < 2) {
+			t.Fatalf("capture %d queued = %v, want %v", i+1, queued, i < 2)
+		}
+	}
+	s.start()
+	deadline := time.Now().Add(5 * time.Second)
+	for countRows(t, db, `SELECT COUNT(*) FROM log_model_calls WHERE request_id = 'r_alice'`) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("drain did not commit the queued calls")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !turn.Finish(ModelTurn{Completed: true, At: time.Now()}) {
+		t.Fatal("Finish not queued")
+	}
+	s.Close()
+
+	var calls int
+	var incomplete bool
+	if err := db.QueryRow(`SELECT call_count, capture_incomplete FROM log_model_turns WHERE request_id = 'r_alice'`).
+		Scan(&calls, &incomplete); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || !incomplete {
+		t.Errorf("call_count = %d, capture_incomplete = %v; want 3, true", calls, incomplete)
+	}
+}

@@ -15,6 +15,9 @@ type ModelCallTurn struct {
 	mu   sync.Mutex
 	seq  int
 	sent map[string]struct{}
+	// lost records that a call never reached the writer, so the turn's
+	// outcome row can say its capture is incomplete.
+	lost bool
 }
 
 // Turn begins capture for one request. A nil store returns a nil turn,
@@ -36,7 +39,17 @@ func (t *ModelCallTurn) Capture(call ModelCall) bool {
 	hashed, err := hashModelCall(call.Messages, call.Tools, call.Response, call.Profile)
 	if err != nil {
 		t.store.warnPowersOfTwo(t.store.hashErrors.Add(1), "model call capture could not hash call", "hash_errors", err)
+		t.mu.Lock()
+		t.seq++
+		t.lost = true
+		t.mu.Unlock()
 		return false
+	}
+	// A provider that sent sections the capture could not locate saw a
+	// different prompt from the one stored, so the row cannot stand as a
+	// faithful replay case.
+	if hashed.sectionsNotSent {
+		call.InputIncomplete = true
 	}
 	// The queued row keeps only owned values: the inputs live on as
 	// hashed bytes, and the pointed-to facts are copied.
@@ -61,6 +74,7 @@ func (t *ModelCallTurn) Capture(call ModelCall) bool {
 	hashed.blobs = nil
 	row := &modelCallRow{requestID: t.requestID, callSeq: t.seq, call: call, hashed: hashed, refs: refs}
 	if !t.store.enqueue(modelCallItem{call: row, blobs: fresh}) {
+		t.lost = true
 		return false
 	}
 	for _, b := range fresh {
@@ -85,7 +99,10 @@ func (t *ModelCallTurn) Finish(turn ModelTurn) bool {
 	// row takes its own copy: a caller reusing its ledger after Finish
 	// returns must neither change what is stored nor race the marshal.
 	turn.ToolOutcomes = copyToolOutcomes(turn.ToolOutcomes)
-	return t.store.enqueue(modelCallItem{turn: &modelTurnRow{requestID: t.requestID, turn: turn}})
+	t.mu.Lock()
+	row := &modelTurnRow{requestID: t.requestID, turn: turn, callCount: t.seq, lost: t.lost}
+	t.mu.Unlock()
+	return t.store.enqueue(modelCallItem{turn: row})
 }
 
 // copyToolOutcomes copies an outcome ledger down to each record's

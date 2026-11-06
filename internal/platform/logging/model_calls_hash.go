@@ -225,7 +225,30 @@ type hashedCall struct {
 	profileHash      string
 	responseHash     string // empty when there was no response
 	imageDependent   bool
-	blobs            *blobSet
+	// sectionsNotSent is true when the provider transmits the system
+	// message's declared sections, not its Content, and those sections
+	// could not be located in the Content stored here: the capture then
+	// differs from what the model actually received.
+	sectionsNotSent bool
+	blobs           *blobSet
+}
+
+// providerSendsDeclaredSections reports whether a provider transmits a
+// system message's declared sections rather than its Content. Anthropic
+// does: the providers package's anthropicSystemPayload sends every
+// non-empty section as its own block whenever any is present. The
+// OpenAI-compatible providers send Content.
+func providerSendsDeclaredSections(provider string) bool {
+	return provider == "anthropic"
+}
+
+func hasNonEmptySection(sections []llm.PromptSection) bool {
+	for _, s := range sections {
+		if s.Content != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // hashModelCall canonicalizes and hashes one call's inputs. It runs
@@ -245,6 +268,8 @@ func hashModelCall(messages []llm.Message, tools []map[string]any, response *llm
 	if len(messages) > 0 && messages[0].Role == "system" {
 		segs, ok := segmentPrompt(messages[0].Content, messages[0].Sections)
 		hc.segmentFallback = !ok
+		hc.sectionsNotSent = !ok && providerSendsDeclaredSections(profile.Provider) &&
+			hasNonEmptySection(messages[0].Sections)
 		hc.segments = make([]PromptSegment, 0, len(segs))
 		for _, s := range segs {
 			hc.segments = append(hc.segments, PromptSegment{

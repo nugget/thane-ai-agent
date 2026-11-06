@@ -59,8 +59,12 @@ func (s *ModelCallStore) drainOne(item modelCallItem) {
 		}
 		s.blobBytes.Add(uint64(written))
 	case item.turn != nil:
+		// The marker is the only record that a call's write failed; carry
+		// it onto the turn row before forgetting it, or a turn whose last
+		// call was lost would read as fully captured.
+		_, failed := s.poisoned[item.turn.requestID]
 		delete(s.poisoned, item.turn.requestID)
-		if err := s.writeTurn(ctx, item.turn); err != nil {
+		if err := s.writeTurn(ctx, item.turn, failed || item.turn.lost); err != nil {
 			s.warnPowersOfTwo(s.writeErrors.Add(1), "model turn capture write failed", "write_errors", err)
 		}
 	}
@@ -209,7 +213,7 @@ func insertModelCallRow(ctx context.Context, tx *sql.Tx, instanceID string, row 
 	return nil
 }
 
-func (s *ModelCallStore) writeTurn(ctx context.Context, row *modelTurnRow) error {
+func (s *ModelCallStore) writeTurn(ctx context.Context, row *modelTurnRow, incomplete bool) error {
 	var outcomes sql.NullString
 	if len(row.turn.ToolOutcomes) > 0 {
 		b, err := json.Marshal(row.turn.ToolOutcomes)
@@ -219,10 +223,12 @@ func (s *ModelCallStore) writeTurn(ctx context.Context, row *modelTurnRow) error
 		outcomes = sql.NullString{String: string(b), Valid: true}
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO log_model_turns
-		(request_id, instance_id, completed, exhausted, exhaust_reason, tool_outcomes, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		(request_id, instance_id, completed, exhausted, exhaust_reason, tool_outcomes,
+		call_count, capture_incomplete, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.requestID, s.instanceID, row.turn.Completed, row.turn.Exhausted,
-		nullString(row.turn.ExhaustReason), outcomes, FormatTimestamp(row.turn.At))
+		nullString(row.turn.ExhaustReason), outcomes,
+		row.callCount, incomplete, FormatTimestamp(row.turn.At))
 	if err != nil {
 		return fmt.Errorf("insert turn: %w", err)
 	}

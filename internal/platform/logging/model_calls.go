@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS log_model_turns (
 	exhausted INTEGER NOT NULL DEFAULT 0,
 	exhaust_reason TEXT,
 	tool_outcomes TEXT,
+	call_count INTEGER NOT NULL DEFAULT 0,
+	capture_incomplete INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_model_turns_request ON log_model_turns(request_id);
@@ -335,6 +337,11 @@ type modelCallRow struct {
 type modelTurnRow struct {
 	requestID string
 	turn      ModelTurn
+	// callCount is every call the turn tried to capture, stored or not.
+	// lost is true when one of them never reached the writer, because
+	// the queue was full or its inputs could not be hashed.
+	callCount int
+	lost      bool
 }
 
 // NewModelCallStore starts a writer over db, which must already be
