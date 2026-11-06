@@ -44,6 +44,14 @@ type SummarizerConfig struct {
 	// rotation boundary is delivered via the message_channel context
 	// provider's verbatim tail, not an LLM-driven carry-forward.
 	IdleTimeout time.Duration
+
+	// OnIdleClose, when non-nil, runs synchronously on the worker
+	// goroutine after an idle close commits, with the conversation and
+	// session just ended. It lets in-process session caches (the
+	// app wires [ArchiveAdapter.ForgetSession]) drop the closed session so
+	// the conversation's next turn starts a fresh one. It is not called
+	// when the close fails. Keep it fast and non-blocking.
+	OnIdleClose func(conversationID, sessionID string)
 }
 
 // DefaultSummarizerConfig returns sensible defaults for the summarizer worker.
@@ -246,6 +254,9 @@ func (w *SummarizerWorker) closeIdleSessions(ctx context.Context) {
 					"error", err,
 				)
 				continue
+			}
+			if w.config.OnIdleClose != nil {
+				w.config.OnIdleClose(s.ConversationID, s.SessionID)
 			}
 			w.logger.Info("closed idle session (backstop)",
 				"session", ShortID(s.SessionID),
