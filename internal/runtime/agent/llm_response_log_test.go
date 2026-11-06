@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -45,6 +46,9 @@ func (b *lockedLogBuffer) records(t *testing.T, msg string) []map[string]any {
 	return out
 }
 
+// errTestTimeout is a model call that timed out, as isTimeout reads it.
+var errTestTimeout = errors.New("request timeout")
+
 // TestRun_LLMResponseLineCarriesProvenance pins the INFO "llm response"
 // line as the durable record of each call's stop reason and tool-call
 // provenance: IterationRecord is not archived, so this line is what a
@@ -56,9 +60,13 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		name         string
 		lightweight  bool
 		systemPrompt string
-		responses    []*llm.ChatResponse
-		want         []map[string]any
-		wantAbsent   []string
+		// recoveryModel enables the timeout downshift.
+		recoveryModel string
+		responses     []*llm.ChatResponse
+		// errs fails the model call at that index instead of answering.
+		errs       map[int]error
+		want       []map[string]any
+		wantAbsent []string
 	}{
 		{
 			name: "full loop",
@@ -92,6 +100,39 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			want: []map[string]any{{"stop_reason": "end_turn", "profile": ""}},
 		},
 		{
+			// The recovery model answers buildRecoveryPrompt, which no
+			// interaction profile rendered.
+			name:          "timeout recovery model",
+			recoveryModel: "claude-recovery",
+			responses: []*llm.ChatResponse{
+				accountingToolResponse(),
+				nil, nil, nil,
+				{
+					Model: "claude-recovery", StopReason: "end_turn",
+					Message: llm.Message{Role: "assistant", Content: "Inspected before the timeout."},
+				},
+			},
+			errs: map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout},
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "anthropic_native"},
+				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": ""},
+			},
+		},
+		{
+			// With no recovery model the reply is synthesized; no
+			// prompt at all produced it.
+			name: "timeout static fallback",
+			responses: []*llm.ChatResponse{
+				accountingToolResponse(),
+				nil, nil, nil,
+			},
+			errs: map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout},
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "anthropic_native"},
+				{"stop_reason": "", "profile": ""},
+			},
+		},
+		{
 			name:        "lightweight",
 			lightweight: true,
 			responses: []*llm.ChatResponse{{
@@ -108,13 +149,18 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			loop, _, _ := newAccountingTestLoop(t)
+			loop.recoveryModel = tt.recoveryModel
 			var calls int
 			loop.llm = accountingTestClient{call: func(context.Context, string, []map[string]any) (*llm.ChatResponse, error) {
 				if calls >= len(tt.responses) {
 					return nil, fmt.Errorf("unexpected model call %d", calls+1)
 				}
-				resp := *tt.responses[calls]
+				n := calls
 				calls++
+				if err := tt.errs[n]; err != nil {
+					return nil, err
+				}
+				resp := *tt.responses[n]
 				return &resp, nil
 			}}
 			logs := &lockedLogBuffer{}

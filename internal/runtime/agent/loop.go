@@ -1999,13 +1999,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	var systemPrompt string
 	var systemSections []llm.PromptSection
+	// promptProfile names the interaction profile that rendered the
+	// system prompt now in the message history. It is set wherever the
+	// prompt is rendered, and stays empty for a caller-supplied prompt,
+	// which is used verbatim.
+	var promptProfile string
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
 		// Keep caller text in the section representation before appending
 		// context usage; providers that render sections must receive both.
 		systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 	} else {
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, llm.DefaultModelInteractionProfile())
+		defaultProfile := llm.DefaultModelInteractionProfile()
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, defaultProfile)
+		promptProfile = defaultProfile.Name
 	}
 
 	usageInfo := awareness.ContextUsageInfo{
@@ -2158,7 +2165,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			systemPrompt = req.SystemPrompt
 			systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 		} else {
-			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
+			profile := l.modelInteractionProfileForModel(model)
+			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, profile)
+			promptProfile = profile.Name
 		}
 		updateSystemMessage()
 		usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
@@ -2453,7 +2462,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use for callers
 			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
+				profile := l.modelInteractionProfileForModel(currentModel)
+				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, profile)
+				promptProfile = profile.Name
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
 				// Providers may render Sections instead of Content, so refresh
@@ -2522,18 +2533,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					},
 				})
 			}
-			// The profile is the one this iteration's prompt was rendered
-			// for, which follows the dispatched model and can change
-			// mid-turn. A caller-supplied SystemPrompt is used verbatim,
-			// so no profile rendered it and the field stays empty.
-			// IterationRecord is not archived, so this line is the
-			// durable record of how each call's tool calls arrived.
-			var profile string
-			if req.SystemPrompt == "" {
-				liveStreamMu.Lock()
-				dispatchedModel := liveStreamModel
-				liveStreamMu.Unlock()
-				profile = l.modelInteractionProfileForModel(dispatchedModel).Name
+			// The profile is the one that rendered the prompt this call
+			// answered, which follows the dispatched model and can change
+			// mid-turn. It is empty when no profile rendered that prompt:
+			// a caller-supplied SystemPrompt is used verbatim, and a
+			// timeout-recovered reply answered buildRecoveryPrompt or was
+			// synthesized without a call. IterationRecord is not
+			// archived, so this line is the durable record of how each
+			// call's tool calls arrived.
+			profile := promptProfile
+			if timeoutRecovered {
+				profile = ""
 			}
 			iterLog := logging.Logger(iterCtx)
 			iterLog.Info("llm response",

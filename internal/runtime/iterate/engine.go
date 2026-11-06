@@ -586,6 +586,13 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 			return partial, nil
 		}
 
+		// The recovery call is reported like every other successful
+		// call, under the index it is recorded at below, so a count of
+		// per-call response lines includes the turn's final call.
+		if cfg.OnLLMResponse != nil {
+			cfg.OnLLMResponse(recoveryCtx, resp, len(partial.Iterations))
+		}
+
 		partial.InputTokens += resp.InputTokens
 		partial.OutputTokens += resp.OutputTokens
 		if cfg.outputBudgetExhausted(partial.OutputTokens) {
