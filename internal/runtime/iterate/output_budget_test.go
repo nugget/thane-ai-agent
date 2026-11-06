@@ -199,7 +199,7 @@ func TestEngine_OutputBudgetErrorPreservesCompletedWork(t *testing.T) {
 				if result.UpstreamRequestID != completed.UpstreamRequestID || record.UpstreamRequestID != completed.UpstreamRequestID || !reflect.DeepEqual(record.ToolCallIDs, []string{"completed-call"}) {
 					t.Fatalf("completed provenance lost: %+v", result)
 				}
-				if result.CacheCreationInputTokens != 5 || result.CacheCreation5mInputTokens != 2 || result.CacheCreation1hInputTokens != 3 || result.CacheReadInputTokens != 7 || result.PeakInputTokens != completed.InputTokens {
+				if result.CacheCreationInputTokens != 5 || result.CacheCreation5mInputTokens != 2 || result.CacheCreation1hInputTokens != 3 || result.CacheReadInputTokens != 7 || result.PeakInputTokens != completed.InputTokens+5+7 {
 					t.Fatalf("completed usage lost: %+v", result)
 				}
 			}
