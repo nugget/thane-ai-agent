@@ -2916,7 +2916,10 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 						"error", recoveryErr,
 						"recovery_model", l.recoveryModel,
 					)
-					// Return a static recovery response as content.
+					// Return a static recovery response as content. It
+					// answered no prompt, and the turn still ended in
+					// timeout recovery.
+					*timeoutRecovered = true
 					return &llm.ChatResponse{
 						Model:   l.recoveryModel,
 						Message: llm.Message{Role: "assistant", Content: prompts.TimeoutRecoveryEmpty},

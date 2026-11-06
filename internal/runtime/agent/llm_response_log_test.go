@@ -67,6 +67,8 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		errs       map[int]error
 		want       []map[string]any
 		wantAbsent []string
+		// wantFinish, when set, is the run's finish reason.
+		wantFinish string
 	}{
 		{
 			name: "full loop",
@@ -117,6 +119,24 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": ""},
 			},
+			wantFinish: "timeout_recovery",
+		},
+		{
+			// When the recovery call itself fails, the reply is a
+			// static text attributed to the recovery model; no prompt
+			// produced it.
+			name:          "timeout recovery model also fails",
+			recoveryModel: "claude-recovery",
+			responses: []*llm.ChatResponse{
+				accountingToolResponse(),
+				nil, nil, nil, nil,
+			},
+			errs: map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout, 4: errors.New("recovery unavailable")},
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "anthropic_native"},
+				{"model": "claude-recovery", "stop_reason": "", "profile": ""},
+			},
+			wantFinish: "timeout_recovery",
 		},
 		{
 			// With no recovery model the reply is synthesized; no
@@ -131,6 +151,7 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"stop_reason": "", "profile": ""},
 			},
+			wantFinish: "timeout_recovery",
 		},
 		{
 			name:        "lightweight",
@@ -165,14 +186,18 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			}}
 			logs := &lockedLogBuffer{}
 			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(logs, nil)))
-			if _, err := loop.Run(ctx, &Request{
+			resp, err := loop.Run(ctx, &Request{
 				ConversationID: "provenance-log",
 				Model:          "claude-primary",
 				SkipContext:    tt.lightweight,
 				SystemPrompt:   tt.systemPrompt,
 				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
-			}, nil); err != nil {
+			}, nil)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if tt.wantFinish != "" && resp.FinishReason != tt.wantFinish {
+				t.Errorf("finish reason = %q, want %q", resp.FinishReason, tt.wantFinish)
 			}
 
 			lines := logs.records(t, "llm response")
