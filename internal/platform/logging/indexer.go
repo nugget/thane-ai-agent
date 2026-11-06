@@ -473,6 +473,12 @@ func Migrate(db *sql.DB) error {
 		return fmt.Errorf("migrate content messages: %w", err)
 	}
 
+	// The private eval store sits beside the content tables, never in
+	// them: it has its own custody and retention.
+	if err := migrateModelCalls(db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
