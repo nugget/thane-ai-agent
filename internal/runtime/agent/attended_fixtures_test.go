@@ -21,11 +21,12 @@ import (
 )
 
 // The attended fixtures characterise what an interactive conversation
-// keeps of the work a turn did. They pin today's behaviour, the
-// "ungated" column of the Off-Grid fixtures: a turn that changed three
-// of six requested loop definitions and then claimed all six is a clean
-// stop, and a turn that only narrated an action it never took is a
-// clean stop too. In both, the next turn's model input carries the
+// keeps of the work a turn did. They are the before-state of the
+// regression fixtures #1626 calls for, pinned with neither completion
+// enforcement (#1626) nor memory of action (#1628) in place: a turn
+// that changed three of six requested loop definitions and then claimed
+// all six is a clean stop, and a turn that only narrated an action it
+// never took is a clean stop too. In both, the next turn's model input carries the
 // narration and nothing that records what was actually done; the
 // action record exists only in the tool_calls table. Memory of action
 // (#1628) is expected to change that, and it edits these expectations
@@ -208,10 +209,10 @@ func hasAssistantReply(msgs []llm.Message, reply string) bool {
 	return false
 }
 
-// TestAttendedFixtures pins the ungated behaviour of two attended
-// incidents. F-d/attended: asked to change six loop definitions, the
-// model changes three and claims all six. F-n: the model says it will
-// act and stops without a call, twice.
+// TestAttendedFixtures pins today's behaviour for two attended failure
+// shapes. In the first, asked to change six loop definitions, the model
+// changes three and claims all six. In the second, the model says it
+// will act and stops without a call, twice.
 func TestAttendedFixtures(t *testing.T) {
 	const narratedDone = "Done — all six now use task mode."
 	cases := []struct {
@@ -225,7 +226,7 @@ func TestAttendedFixtures(t *testing.T) {
 		wantAssistant []string
 	}{
 		{
-			name: "F-d/attended: six definitions asked, three changed",
+			name: "six definitions asked, three changed, all claimed",
 			turns: []attendedTurn{
 				{
 					user: "Switch the loop definitions alpha, bravo, charlie, delta, echo and foxtrot to task prompt mode.",
@@ -252,7 +253,7 @@ func TestAttendedFixtures(t *testing.T) {
 			wantAssistant: []string{narratedDone, "Yes, foxtrot now uses task mode."},
 		},
 		{
-			name: "F-n: narrate-then-stop",
+			name: "narrate-then-stop twice",
 			turns: []attendedTurn{
 				{
 					user:         "Please switch the loop definition alpha to task prompt mode.",
