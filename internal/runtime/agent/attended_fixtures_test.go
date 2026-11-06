@@ -301,8 +301,13 @@ func TestAttendedFixtures(t *testing.T) {
 			var history []string // assistant replies of earlier turns
 			for i, turn := range tc.turns {
 				before := len(model.recorded())
+				// Stamp the origin the REST, OpenAI-compatible and
+				// Ollama-compatible surfaces declare, so the turn is
+				// classified as attended (replyAwaited) and its user
+				// message is persisted with the attended origin.
 				resp, err := loop.Run(context.Background(), &Request{
 					ConversationID: convID,
+					MessageOrigin:  memory.OriginAPI,
 					Messages:       []Message{{Role: "user", Content: turn.user}},
 				}, nil)
 				if err != nil {
@@ -389,6 +394,9 @@ func TestAttendedFixtures(t *testing.T) {
 			for _, msg := range stored {
 				if msg.Role == "assistant" {
 					assistant = append(assistant, msg.Content)
+				}
+				if msg.Role == "user" && msg.Origin != memory.OriginAPI {
+					t.Errorf("stored user message %q has origin %q, want %q", msg.Content, msg.Origin, memory.OriginAPI)
 				}
 			}
 			if !slices.Equal(assistant, tc.wantAssistant) {
