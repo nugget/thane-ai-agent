@@ -144,30 +144,6 @@ func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
 	c.chatTemplateKwargs = copied
 }
 
-// deepCopyJSONValue copies a JSON-compatible value tree so that nothing
-// reachable from the result is shared with the original. Scalars are
-// returned as they are, being immutable; anything that is neither an
-// object nor an array is a scalar for this purpose, including the
-// map[any]any that json.Marshal would reject outright anyway.
-func deepCopyJSONValue(v any) any {
-	switch typed := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for k, val := range typed {
-			out[k] = deepCopyJSONValue(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, val := range typed {
-			out[i] = deepCopyJSONValue(val)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
 // AttachWatcher sets the connection watcher for health status queries.
 func (c *OpenAICompatClient) AttachWatcher(w llm.ReadyWatcher) {
 	c.watcher = w

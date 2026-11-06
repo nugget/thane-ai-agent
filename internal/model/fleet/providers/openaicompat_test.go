@@ -1207,7 +1207,14 @@ func TestWireObserverNegativeCases(t *testing.T) {
 			defer srv.Close()
 
 			c := NewOpenAICompatClient(srv.URL, "", "vllm", "res", nil, 0)
-			c.SetChatTemplateKwargs(map[string]any{"options": map[string]any{"depth": "original"}})
+			// Typed values as well as untyped ones: a programmatic caller
+			// can hand over a []string or map[string]string, and those
+			// must be detached as thoroughly as decoded config.
+			c.SetChatTemplateKwargs(map[string]any{
+				"options": map[string]any{"depth": "original"},
+				"stops":   []string{"original"},
+				"labels":  map[string]string{"k": "original"},
+			})
 			if tt.transportErr {
 				// A transport that never reaches the server, without the
 				// production retry backoff in the way.
@@ -1225,6 +1232,12 @@ func TestWireObserverNegativeCases(t *testing.T) {
 					// must not change what later requests send.
 					if opts, ok := f.ChatTemplateKwargs["options"].(map[string]any); ok {
 						opts["depth"] = "mutated"
+					}
+					if stops, ok := f.ChatTemplateKwargs["stops"].([]string); ok {
+						stops[0] = "mutated"
+					}
+					if labels, ok := f.ChatTemplateKwargs["labels"].(map[string]string); ok {
+						labels["k"] = "mutated"
 					}
 				})
 			}
@@ -1247,8 +1260,13 @@ func TestWireObserverNegativeCases(t *testing.T) {
 			if err != nil {
 				t.Fatalf("EncodeChatRequest: %v", err)
 			}
-			if got := facts.ChatTemplateKwargs["options"]; !reflect.DeepEqual(got, map[string]any{"depth": "original"}) {
-				t.Errorf("kwargs after observation = %#v: an observer reached the client's configuration", got)
+			wantKwargs := map[string]any{
+				"options": map[string]any{"depth": "original"},
+				"stops":   []string{"original"},
+				"labels":  map[string]string{"k": "original"},
+			}
+			if !reflect.DeepEqual(facts.ChatTemplateKwargs, wantKwargs) {
+				t.Errorf("kwargs after observation = %#v: an observer reached the client's configuration", facts.ChatTemplateKwargs)
 			}
 		})
 	}
