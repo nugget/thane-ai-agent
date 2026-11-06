@@ -246,6 +246,12 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		case reasoningBytes > 0:
 			return failStream(llm.WithErrorClass(llm.ErrReasoningOnly, fmt.Errorf("%s produced only reasoning for model %q (%d bytes over %d frames, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
 				c.provider, requestedModel, reasoningBytes, chunks, finishReason)))
+		case silentClose:
+			// Nothing said and nothing to say it ended: a connection
+			// that died after the opening frame (or before any frame)
+			// is a transport or runner fault, not the model falling
+			// silent, so it keeps its text but carries no class.
+			return failStream(fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks))
 		default:
 			return failStream(llm.WithErrorClass(llm.ErrEmptyCompletion, fmt.Errorf("%s returned an empty stream for model %q (frames=%d)", c.provider, requestedModel, chunks)))
 		}

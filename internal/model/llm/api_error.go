@@ -45,9 +45,12 @@ func IsBillingBlocked(err error) bool {
 }
 
 // ErrEmptyCompletion classifies a response the provider reported as
-// finished that carried no assistant content, no tool calls and no
-// reasoning: the model said nothing at all. Match it with errors.Is;
-// the error text stays the provider's own diagnosis.
+// finished (a complete non-streaming body, or a stream that ended with
+// a finish reason or end-of-stream marker) that carried no assistant
+// content, no tool calls and no reasoning: the model said nothing at
+// all. A stream that closed without a terminal marker is a truncation,
+// not this class. Match it with errors.Is; the error text stays the
+// provider's own diagnosis.
 var ErrEmptyCompletion = errors.New("empty completion")
 
 // ErrReasoningOnly classifies a response that ended with terminal

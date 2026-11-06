@@ -691,6 +691,19 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 			wantIn: "truncated response",
 		},
 		{
+			// A runner or proxy that dies after the role-only opener
+			// and closes cleanly said nothing and never said it was
+			// done: a transport fault, not the model falling silent.
+			name:   "role-only opener then silent close is not an empty completion",
+			frames: []string{`{"choices":[{"delta":{"role":"assistant"}}]}`},
+			wantIn: "empty stream",
+		},
+		{
+			name:   "zero frames then silent close is not an empty completion",
+			frames: nil,
+			wantIn: "empty stream",
+		},
+		{
 			name: "reasoning then content is a real completion",
 			frames: []string{
 				`{"choices":[{"delta":{"reasoning":"think think"}}]}`,
