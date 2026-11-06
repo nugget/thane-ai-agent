@@ -1,90 +1,39 @@
 package providers
 
-import "reflect"
+import (
+	"bytes"
+	"encoding/json"
+)
 
-// deepCopyJSONValue copies a JSON-encodable value tree so that nothing
-// reachable from the result is shared with the original. Maps, slices,
-// arrays, pointers and exported struct fields are copied all the way
-// down with their concrete types kept, so the copy encodes byte for byte
-// like the original. A caller can therefore hand out the copy (to a wire
-// observer, or keep it as configuration) and no later write through
-// either side, including through a typed []string or map[string]string,
-// reaches the other. Scalars, strings and funcs are returned as they
-// are, being immutable or never encoded.
+// deepCopyJSONValue returns v as the plain JSON data it encodes to:
+// objects become map[string]any, arrays []any, and numbers
+// json.Number, which keeps each number's literal text. Going through
+// the encoder is what makes the copy share nothing with v. A typed
+// slice or map, state a custom MarshalJSON reads from unexported
+// fields, and anything reachable only through fields JSON ignores all
+// stay behind, and the last is never visited at all, so a
+// self-reference behind json:"-" cannot recurse.
+//
+// The copy encodes to the same JSON value as v. Only key order can
+// differ, and only for a struct: its fields encode in declaration
+// order, while the copy is a map and encodes with sorted keys.
+//
+// A value that cannot be encoded is returned unchanged. Every request
+// built from it fails to encode anyway, so no request body, digest or
+// observer ever sees the shared value.
 func deepCopyJSONValue(v any) any {
-	switch typed := v.(type) {
-	case nil:
+	if v == nil {
 		return nil
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for k, val := range typed {
-			out[k] = deepCopyJSONValue(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, val := range typed {
-			out[i] = deepCopyJSONValue(val)
-		}
-		return out
 	}
-	return deepCopyReflect(reflect.ValueOf(v)).Interface()
-}
-
-// deepCopyReflect is the typed-value half of [deepCopyJSONValue]: the two
-// fast paths above cover what YAML config decodes to, and this covers any
-// other map, slice, array, pointer or struct a programmatic caller passes.
-func deepCopyReflect(v reflect.Value) reflect.Value {
-	switch v.Kind() {
-	case reflect.Map:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.MakeMapWithSize(v.Type(), v.Len())
-		iter := v.MapRange()
-		for iter.Next() {
-			out.SetMapIndex(iter.Key(), deepCopyReflect(iter.Value()))
-		}
-		return out
-	case reflect.Slice:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
-		for i := range v.Len() {
-			out.Index(i).Set(deepCopyReflect(v.Index(i)))
-		}
-		return out
-	case reflect.Array:
-		out := reflect.New(v.Type()).Elem()
-		for i := range v.Len() {
-			out.Index(i).Set(deepCopyReflect(v.Index(i)))
-		}
-		return out
-	case reflect.Interface:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.New(v.Type()).Elem()
-		out.Set(deepCopyReflect(v.Elem()))
-		return out
-	case reflect.Pointer:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.New(v.Type().Elem())
-		out.Elem().Set(deepCopyReflect(v.Elem()))
-		return out
-	case reflect.Struct:
-		out := reflect.New(v.Type()).Elem()
-		out.Set(v)
-		for i := range v.NumField() {
-			if field := out.Field(i); field.CanSet() {
-				field.Set(deepCopyReflect(v.Field(i)))
-			}
-		}
-		return out
-	default:
+	raw, err := json.Marshal(v)
+	if err != nil {
 		return v
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var out any
+	if err := dec.Decode(&out); err != nil {
+		return v
+	}
+	return out
 }

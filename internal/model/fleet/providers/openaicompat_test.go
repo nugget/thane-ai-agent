@@ -873,10 +873,14 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 	// config however carefully the outer map was copied.
 	nested := map[string]any{"depth": "original"}
 	list := []any{"first"}
+	typed := []string{"typed"}
+	box := &privateBox{m: map[string]string{"k": "original"}}
 	caller := map[string]any{
 		"enable_thinking": false,
 		"options":         nested,
 		"stops":           list,
+		"typed":           typed,
+		"box":             box,
 	}
 	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
 	c.SetChatTemplateKwargs(caller)
@@ -884,6 +888,8 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 	caller["enable_thinking"] = true
 	nested["depth"] = "mutated"
 	list[0] = "mutated"
+	typed[0] = "mutated"
+	box.Set("k", "mutated")
 
 	if _, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -894,6 +900,8 @@ func TestOpenAICompatChatTemplateKwargsCopiesCaller(t *testing.T) {
 		"enable_thinking": false,
 		"options":         map[string]any{"depth": "original"},
 		"stops":           []any{"first"},
+		"typed":           []any{"typed"},
+		"box":             map[string]any{"k": "original"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("chat_template_kwargs = %#v, want %#v — a caller mutation leaked in", got, want)
@@ -1068,13 +1076,15 @@ func TestEncodeChatRequestIsWhatChatStreamSends(t *testing.T) {
 			}
 
 			wantStatic := llm.WireFacts{
-				Provider:           tt.provider,
-				Resource:           map[bool]string{true: "res-lm", false: "res-oc"}[tt.lmstudio],
-				Model:              tt.model,
-				TTLSeconds:         tt.ttl,
-				MaxTokens:          2048,
-				Stream:             tt.stream,
-				ChatTemplateKwargs: map[string]any{"enable_thinking": false, "options": map[string]any{"depth": 2}},
+				Provider:   tt.provider,
+				Resource:   map[bool]string{true: "res-lm", false: "res-oc"}[tt.lmstudio],
+				Model:      tt.model,
+				TTLSeconds: tt.ttl,
+				MaxTokens:  2048,
+				Stream:     tt.stream,
+				// Facts carry the kwargs as plain JSON data: the number
+				// keeps its literal text as a json.Number.
+				ChatTemplateKwargs: map[string]any{"enable_thinking": false, "options": map[string]any{"depth": json.Number("2")}},
 				BodySHA256:         got.BodySHA256,
 				BodyBytes:          got.BodyBytes,
 			}
@@ -1233,10 +1243,12 @@ func TestWireObserverNegativeCases(t *testing.T) {
 					if opts, ok := f.ChatTemplateKwargs["options"].(map[string]any); ok {
 						opts["depth"] = "mutated"
 					}
-					if stops, ok := f.ChatTemplateKwargs["stops"].([]string); ok {
+					// Facts carry plain JSON data, whatever types the
+					// configuration was built from.
+					if stops, ok := f.ChatTemplateKwargs["stops"].([]any); ok {
 						stops[0] = "mutated"
 					}
-					if labels, ok := f.ChatTemplateKwargs["labels"].(map[string]string); ok {
+					if labels, ok := f.ChatTemplateKwargs["labels"].(map[string]any); ok {
 						labels["k"] = "mutated"
 					}
 				})
@@ -1262,8 +1274,8 @@ func TestWireObserverNegativeCases(t *testing.T) {
 			}
 			wantKwargs := map[string]any{
 				"options": map[string]any{"depth": "original"},
-				"stops":   []string{"original"},
-				"labels":  map[string]string{"k": "original"},
+				"stops":   []any{"original"},
+				"labels":  map[string]any{"k": "original"},
 			}
 			if !reflect.DeepEqual(facts.ChatTemplateKwargs, wantKwargs) {
 				t.Errorf("kwargs after observation = %#v: an observer reached the client's configuration", facts.ChatTemplateKwargs)
