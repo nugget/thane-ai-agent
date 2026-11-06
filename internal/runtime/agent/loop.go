@@ -1849,6 +1849,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
+			"stop_reason", llmResp.StopReason,
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
@@ -1998,13 +1999,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	var systemPrompt string
 	var systemSections []llm.PromptSection
+	// promptProfile names the interaction profile that rendered the
+	// system prompt now in the message history. It is set wherever the
+	// prompt is rendered, and stays empty for a caller-supplied prompt,
+	// which is used verbatim.
+	var promptProfile string
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
 		// Keep caller text in the section representation before appending
 		// context usage; providers that render sections must receive both.
 		systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 	} else {
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, llm.DefaultModelInteractionProfile())
+		defaultProfile := llm.DefaultModelInteractionProfile()
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, defaultProfile)
+		promptProfile = defaultProfile.Name
 	}
 
 	usageInfo := awareness.ContextUsageInfo{
@@ -2157,7 +2165,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			systemPrompt = req.SystemPrompt
 			systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 		} else {
-			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
+			profile := l.modelInteractionProfileForModel(model)
+			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, profile)
+			promptProfile = profile.Name
 		}
 		updateSystemMessage()
 		usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
@@ -2452,7 +2462,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use for callers
 			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
+				profile := l.modelInteractionProfileForModel(currentModel)
+				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, profile)
+				promptProfile = profile.Name
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
 				// Providers may render Sections instead of Content, so refresh
@@ -2521,6 +2533,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					},
 				})
 			}
+			// The profile is the one that rendered the prompt this call
+			// answered, which follows the dispatched model and can change
+			// mid-turn. It is empty when no profile rendered that prompt:
+			// a caller-supplied SystemPrompt is used verbatim, and a
+			// timeout-recovered reply answered buildRecoveryPrompt or was
+			// synthesized without a call. IterationRecord is not
+			// archived, so this line is the durable record of how each
+			// call's tool calls arrived.
+			profile := promptProfile
+			if timeoutRecovered {
+				profile = ""
+			}
 			iterLog := logging.Logger(iterCtx)
 			iterLog.Info("llm response",
 				"kind", events.KindLLMResponse,
@@ -2529,6 +2553,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"input_tokens", llmResp.InputTokens,
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
+				"stop_reason", llmResp.StopReason,
+				"tool_call_source", string(llmResp.ToolCallSource),
+				"text_tool_action", string(llmResp.TextToolAction),
+				"profile", profile,
 			)
 		},
 
@@ -2888,7 +2916,10 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 						"error", recoveryErr,
 						"recovery_model", l.recoveryModel,
 					)
-					// Return a static recovery response as content.
+					// Return a static recovery response as content. It
+					// answered no prompt, and the turn still ended in
+					// timeout recovery.
+					*timeoutRecovered = true
 					return &llm.ChatResponse{
 						Model:   l.recoveryModel,
 						Message: llm.Message{Role: "assistant", Content: prompts.TimeoutRecoveryEmpty},

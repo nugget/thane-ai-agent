@@ -155,6 +155,8 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				Model:                      llmResp.Model,
 				UpstreamRequestID:          llmResp.UpstreamRequestID,
 				StopReason:                 llmResp.StopReason,
+				ToolCallSource:             llmResp.ToolCallSource,
+				TextToolAction:             llmResp.TextToolAction,
 				InputTokens:                llmResp.InputTokens,
 				OutputTokens:               llmResp.OutputTokens,
 				CacheCreationInputTokens:   llmResp.CacheCreationInputTokens,
@@ -216,6 +218,8 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			Model:                      llmResp.Model,
 			UpstreamRequestID:          llmResp.UpstreamRequestID,
 			StopReason:                 llmResp.StopReason,
+			ToolCallSource:             llmResp.ToolCallSource,
+			TextToolAction:             llmResp.TextToolAction,
 			InputTokens:                llmResp.InputTokens,
 			OutputTokens:               llmResp.OutputTokens,
 			CacheCreationInputTokens:   llmResp.CacheCreationInputTokens,
@@ -582,6 +586,13 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 			return partial, nil
 		}
 
+		// The recovery call is reported like every other successful
+		// call, under the index it is recorded at below, so a count of
+		// per-call response lines includes the turn's final call.
+		if cfg.OnLLMResponse != nil {
+			cfg.OnLLMResponse(recoveryCtx, resp, len(partial.Iterations))
+		}
+
 		partial.InputTokens += resp.InputTokens
 		partial.OutputTokens += resp.OutputTokens
 		if cfg.outputBudgetExhausted(partial.OutputTokens) {
@@ -608,6 +619,8 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 			Model:                      resp.Model,
 			UpstreamRequestID:          resp.UpstreamRequestID,
 			StopReason:                 resp.StopReason,
+			ToolCallSource:             resp.ToolCallSource,
+			TextToolAction:             resp.TextToolAction,
 			InputTokens:                resp.InputTokens,
 			OutputTokens:               resp.OutputTokens,
 			CacheCreationInputTokens:   resp.CacheCreationInputTokens,
