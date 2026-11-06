@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 )
 
 // deepCopyJSONValue returns v as the plain JSON data it encodes to:
@@ -18,22 +19,22 @@ import (
 // differ, and only for a struct: its fields encode in declaration
 // order, while the copy is a map and encodes with sorted keys.
 //
-// A value that cannot be encoded is returned unchanged. Every request
-// built from it fails to encode anyway, so no request body, digest or
-// observer ever sees the shared value.
-func deepCopyJSONValue(v any) any {
+// A value that cannot be encoded yields an error and no copy, never the
+// value itself: a reference kept to it could later be mutated into
+// something encodable and change requests behind the caller's back.
+func deepCopyJSONValue(v any) (any, error) {
 	if v == nil {
-		return nil
+		return nil, nil
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return v
+		return nil, fmt.Errorf("encode: %w", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var out any
 	if err := dec.Decode(&out); err != nil {
-		return v
+		return nil, fmt.Errorf("decode: %w", err)
 	}
-	return out
+	return out, nil
 }

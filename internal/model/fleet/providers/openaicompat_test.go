@@ -1359,3 +1359,65 @@ func TestWireObserverNegativeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAICompatRejectsUnencodableKwargsWithoutKeepingThem pins that a
+// kwargs map the encoder rejects fails every request and is not kept: a
+// caller who later turns that same map valid must not have requests start
+// succeeding with it behind the client's back. Only setting valid kwargs
+// again restores requests.
+func TestOpenAICompatRejectsUnencodableKwargsWithoutKeepingThem(t *testing.T) {
+	t.Parallel()
+
+	var bodies [][]byte
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	caller := map[string]any{"enable_thinking": false, "bad": make(chan int)}
+	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+	c.SetChatTemplateKwargs(caller)
+
+	msgs := []llm.Message{{Role: "user", Content: "hi"}}
+	if _, err := c.Chat(context.Background(), "m", msgs, nil); err == nil || !strings.Contains(err.Error(), "chat_template_kwargs") {
+		t.Fatalf("Chat with unencodable kwargs: err = %v, want a chat_template_kwargs error", err)
+	}
+
+	// The caller turns its own map valid. The client kept no reference,
+	// so requests still fail rather than silently sending this map.
+	delete(caller, "bad")
+	caller["enable_thinking"] = true
+	if _, err := c.Chat(context.Background(), "m", msgs, nil); err == nil {
+		t.Fatal("Chat succeeded after the caller mutated rejected kwargs; the client kept the caller's map")
+	}
+	mu.Lock()
+	sent := len(bodies)
+	mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("server received %d requests while kwargs were rejected, want 0", sent)
+	}
+
+	// Setting valid kwargs restores requests, with exactly what was set.
+	c.SetChatTemplateKwargs(map[string]any{"enable_thinking": true})
+	if _, err := c.Chat(context.Background(), "m", msgs, nil); err != nil {
+		t.Fatalf("Chat after valid kwargs: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("server received %d requests, want 1", len(bodies))
+	}
+	var body map[string]any
+	if err := json.Unmarshal(bodies[0], &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := body["chat_template_kwargs"]; !reflect.DeepEqual(got, map[string]any{"enable_thinking": true}) {
+		t.Errorf("chat_template_kwargs = %#v, want enable_thinking true", got)
+	}
+}

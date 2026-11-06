@@ -60,9 +60,13 @@ type OpenAICompatClient struct {
 	// per-call state: the endpoint serves one template dialect, and the
 	// keys mean nothing to Thane.
 	chatTemplateKwargs map[string]any
-	httpClient         *http.Client
-	logger             *slog.Logger
-	watcher            llm.ReadyWatcher
+	// chatTemplateKwargsErr is why the configured kwargs could not be
+	// normalized. Every request fails with it until valid kwargs are set,
+	// and no reference to the rejected map is kept.
+	chatTemplateKwargsErr error
+	httpClient            *http.Client
+	logger                *slog.Logger
+	watcher               llm.ReadyWatcher
 }
 
 // NewOpenAICompatClient creates a client for an OpenAI-compatible
@@ -131,8 +135,8 @@ func (c *OpenAICompatClient) Logger() *slog.Logger {
 // SetChatTemplateKwargs sets the chat_template_kwargs sent with every
 // request. An empty map clears the field rather than sending {}.
 func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
+	c.chatTemplateKwargs, c.chatTemplateKwargsErr = nil, nil
 	if len(kwargs) == 0 {
-		c.chatTemplateKwargs = nil
 		return
 	}
 	// Deep-copied, not aliased. A template kwarg may itself be an
@@ -140,8 +144,12 @@ func (c *OpenAICompatClient) SetChatTemplateKwargs(kwargs map[string]any) {
 	// values shared with config: a later write through the original
 	// would change what subsequent requests ask the model to do, and
 	// could race a json.Marshal already reading the tree.
-	copied, _ := deepCopyJSONValue(kwargs).(map[string]any)
-	c.chatTemplateKwargs = copied
+	copied, err := deepCopyJSONValue(kwargs)
+	if err != nil {
+		c.chatTemplateKwargsErr = fmt.Errorf("chat_template_kwargs: %w", err)
+		return
+	}
+	c.chatTemplateKwargs, _ = copied.(map[string]any)
 }
 
 // AttachWatcher sets the connection watcher for health status queries.
@@ -174,6 +182,9 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, model string, messages []
 // than a second one: a parallel encoder that drifts is how a replay ends
 // up measuring itself instead of the model.
 func (c *OpenAICompatClient) EncodeChatRequest(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, stream bool) ([]byte, llm.WireFacts, error) {
+	if c.chatTemplateKwargsErr != nil {
+		return nil, llm.WireFacts{}, c.chatTemplateKwargsErr
+	}
 	wireMessages, err := toOpenAICompatMessages(messages)
 	if err != nil {
 		return nil, llm.WireFacts{}, fmt.Errorf("encode messages: %w", err)
@@ -220,7 +231,11 @@ func (c *OpenAICompatClient) EncodeChatRequest(ctx context.Context, model string
 	// Copied so an observer holding the facts cannot reach the map
 	// every later request from this client sends.
 	if len(req.ChatTemplateKwargs) > 0 {
-		facts.ChatTemplateKwargs, _ = deepCopyJSONValue(req.ChatTemplateKwargs).(map[string]any)
+		copied, err := deepCopyJSONValue(req.ChatTemplateKwargs)
+		if err != nil {
+			return nil, llm.WireFacts{}, fmt.Errorf("copy chat_template_kwargs: %w", err)
+		}
+		facts.ChatTemplateKwargs, _ = copied.(map[string]any)
 	}
 	return body, facts, nil
 }

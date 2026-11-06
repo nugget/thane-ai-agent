@@ -133,7 +133,10 @@ func TestDeepCopyJSONValue(t *testing.T) {
 			orig := tt.build()
 			want := canonicalJSON(t, orig)
 
-			copied := deepCopyJSONValue(orig)
+			copied, err := deepCopyJSONValue(orig)
+			if err != nil {
+				t.Fatalf("deepCopyJSONValue: %v", err)
+			}
 			assertPlainJSON(t, copied)
 			if got := canonicalJSON(t, copied); got != want {
 				t.Fatalf("copy encodes as %s, want %s", got, want)
@@ -147,16 +150,19 @@ func TestDeepCopyJSONValue(t *testing.T) {
 	}
 }
 
-// TestDeepCopyJSONValueEdges pins the two values that are returned as
-// they are: nil, and a value the encoder rejects, which no request can
-// ever send.
+// TestDeepCopyJSONValueEdges pins nil copying to nil, and a value the
+// encoder rejects yielding an error and no copy: never the value itself,
+// which a caller could later mutate into something encodable.
 func TestDeepCopyJSONValueEdges(t *testing.T) {
 	t.Parallel()
-	if got := deepCopyJSONValue(nil); got != nil {
-		t.Errorf("nil copies as %#v, want nil", got)
+	if got, err := deepCopyJSONValue(nil); got != nil || err != nil {
+		t.Errorf("nil copies as %#v, %v; want nil, nil", got, err)
 	}
-	ch := make(chan int)
-	if got, ok := deepCopyJSONValue(ch).(chan int); !ok || got != ch {
-		t.Errorf("unencodable value copies as %#v, want it returned unchanged", got)
+	got, err := deepCopyJSONValue(map[string]any{"bad": make(chan int)})
+	if err == nil {
+		t.Fatal("unencodable value copied without error")
+	}
+	if got != nil {
+		t.Errorf("unencodable value copies as %#v, want no copy", got)
 	}
 }
