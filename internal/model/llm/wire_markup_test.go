@@ -84,6 +84,21 @@ func TestScanWire(t *testing.T) {
 			want:    contentScan(WireMarkupQwenXML, true, false, false),
 		},
 		{
+			name:    "qwen free-text body is not a parameter",
+			content: "<function=get_state>\nentity_id: light.kitchen\n</function>",
+			want:    contentScan(WireMarkupQwenXML, false, true, false),
+		},
+		{
+			name:    "qwen prose after the last parameter with no closer",
+			content: "<function=get_state>\n<parameter=entity_id>\nlight.kitchen\n</parameter>\nThe light is on, done.",
+			want:    contentScan(WireMarkupQwenXML, false, true, false),
+		},
+		{
+			name:    "qwen prose quoting the function tag",
+			content: "The Qwen format wraps calls as <function=name> tags.",
+			want:    contentScan(WireMarkupQwenXML, false, false, true),
+		},
+		{
 			name:    "qwen bare tool_call tag cut off",
 			content: "I'll look that up.\n<tool_call>\n",
 			want:    contentScan(WireMarkupQwenXML, false, false, true),
@@ -172,6 +187,30 @@ func TestScanWire(t *testing.T) {
 			want:    contentScan(WireMarkupJSONCall, false, true, true),
 		},
 		{
+			name:    "json truncated inside arguments that carry their own name",
+			content: `{"name":"note_add","arguments":{"name":"Alice","sched`,
+			want:    contentScan(WireMarkupJSONCall, false, true, false),
+		},
+		{
+			name:    "json truncated inside nested service data with a name",
+			content: `{"name":"call_service","arguments":{"domain":"light","service_data":{"name":"Kitchen","bri`,
+			want:    contentScan(WireMarkupJSONCall, false, true, false),
+		},
+		{
+			name:    "json truncated with only the name key so far",
+			content: `{"name":"get_sta`,
+			want:    contentScan(WireMarkupJSONCall, false, false, false),
+		},
+		{
+			name:    "json truncated after the name, inside the arguments key",
+			content: `{"name":"get_state","argu`,
+			want:    contentScan(WireMarkupJSONCall, false, true, false),
+		},
+		{
+			name:    "json truncated object with a name key is not a call",
+			content: `{"name": "Alice", "email": "alice@exa`,
+		},
+		{
 			name:    "json truncated after a stray prose brace",
 			content: `Use the {braces as shown: {"name":"get_state","arguments":{"entity`,
 			want:    contentScan(WireMarkupJSONCall, false, true, true),
@@ -197,6 +236,14 @@ func TestScanWire(t *testing.T) {
 			name:    "harmony recipient in the role header",
 			content: "<|start|>assistant to=functions.get_weather<|channel|>commentary json<|message|>{\"location\":\"Paris\"}<|call|>",
 			want:    contentScan(WireMarkupHarmony, true, true, false),
+		},
+		{
+			// The stripped role header runs "commentary" into the name.
+			// The suffix is deliberately not trimmed: doing so would
+			// shorten real tool names that end in it.
+			name:    "harmony stripped role header keeps the commentary suffix on the name",
+			content: "assistant to=functions.get_weathercommentary json{\"location\":\"Paris\"}",
+			want:    contentScan(WireMarkupHarmony, true, false, false),
 		},
 		{
 			name:    "harmony after analysis",
@@ -343,6 +390,27 @@ func TestParseQwenXMLCalls(t *testing.T) {
 			name: "truncated header",
 			text: "<function=get_st",
 			want: []qwenXMLCall{{name: "get_st"}},
+		},
+		{
+			name: "free-text body is incomplete",
+			text: "<function=get_state>\nentity_id: light.kitchen\n</function>",
+			want: []qwenXMLCall{{name: "get_state"}},
+		},
+		{
+			name: "text between parameters is incomplete",
+			text: "<function=call_service>\n<parameter=domain>\nlight\n</parameter>\nand then\n<parameter=service>\nturn_on\n</parameter>\n</function>",
+			want: []qwenXMLCall{{
+				name:   "call_service",
+				params: []qwenXMLParam{{key: "domain", value: "light"}},
+			}},
+		},
+		{
+			name: "prose after the last parameter at end of text is incomplete",
+			text: "<function=get_state>\n<parameter=entity_id>\nlight.kitchen\n</parameter>\nThe light is on.",
+			want: []qwenXMLCall{{
+				name:   "get_state",
+				params: []qwenXMLParam{{key: "entity_id", value: "light.kitchen"}},
+			}},
 		},
 		{
 			name: "empty parameter key",

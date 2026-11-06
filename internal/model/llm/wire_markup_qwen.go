@@ -24,11 +24,13 @@ type qwenXMLCall struct {
 	// params keep the model's order and its raw string values. Typing
 	// a value is the recovering caller's job, against the tool schema.
 	params []qwenXMLParam
-	// complete means a readable header, every parameter closed by
-	// </parameter>, and the function closed by </function>,
-	// </tool_call> or the end of the text. A call cut off inside its
-	// header or a parameter value is not complete, so a truncated value
-	// can never be mistaken for the model's intended argument.
+	// complete means a readable header, a body of nothing but
+	// whitespace and parameters each closed by </parameter>, and the
+	// function closed by </function>, </tool_call> or the end of the
+	// text. A call cut off inside its header or a parameter value is not
+	// complete, so a truncated value can never be mistaken for the
+	// model's intended argument, and neither is a body holding free text,
+	// whose arguments a runtime could not read.
 	complete bool
 }
 
@@ -83,14 +85,20 @@ func parseQwenXMLFunction(text string, open int) (qwenXMLCall, int) {
 }
 
 // parseQwenXMLParams parses a function body. It reports false when a
-// parameter header or value is cut off or a value runs into the next
-// <parameter= without its </parameter>.
+// parameter header or value is cut off, a value runs into the next
+// <parameter= without its </parameter>, or non-whitespace text sits
+// outside the parameters: before the first, between two, or after the
+// last. That last case also covers prose that merely quotes a
+// <function=...> tag and runs to the end of the text.
 func parseQwenXMLParams(body string) ([]qwenXMLParam, bool) {
 	var params []qwenXMLParam
 	for pos := 0; ; {
 		i := strings.Index(body[pos:], qwenParamOpen)
 		if i < 0 {
-			return params, true
+			return params, strings.TrimSpace(body[pos:]) == ""
+		}
+		if strings.TrimSpace(body[pos:pos+i]) != "" {
+			return params, false
 		}
 		keyStart := pos + i + len(qwenParamOpen)
 		gt := strings.IndexAny(body[keyStart:], ">\n<")

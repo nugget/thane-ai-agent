@@ -59,15 +59,16 @@ type WireScan struct {
 	// then zero.
 	Markup WireMarkup `json:"markup,omitempty"`
 
-	// Location is the channel the described call came from. Content
-	// takes precedence: reasoning is scanned only when content holds no
-	// markup at all.
+	// Location is the channel the described call came from.
 	Location WireLocation `json:"location,omitempty"`
 
 	// WellFormed reports that the call parsed completely: a non-empty
-	// function name and an argument object a runtime could execute
-	// as-is. Truncated markup, unparseable JSON and stringified
-	// arguments are not well-formed.
+	// function name and arguments a runtime could execute as-is. For
+	// json_call and harmony the arguments are a JSON object, or for
+	// json_call JSON null, which means no arguments and runs as {}. For
+	// qwen_xml they are zero or more closed parameters and nothing else
+	// in the function body. Truncated markup, unparseable JSON and
+	// stringified arguments are not well-formed.
 	WellFormed bool `json:"well_formed"`
 
 	// NameOffered reports that the call's function name is one of the
@@ -94,6 +95,11 @@ func (s WireScan) Found() bool { return s.Markup != "" }
 // reasoning, as the provider returned them and before any text
 // fallback rewrites the content. offered is the list of tool names the
 // request offered; it only decides [WireScan.NameOffered].
+//
+// Content takes precedence: reasoning is scanned only when content
+// holds no markup at all, so a malformed call in content hides a
+// well-formed one in reasoning. Within a channel the first well-formed
+// call is described, or the first markup when none is well-formed.
 func ScanWire(content, reasoning string, offered []string) WireScan {
 	if f, ok := scanWireText(content); ok {
 		return f.scan(content, WireLocationContent, offered)
@@ -218,21 +224,22 @@ func jsonCallFinding(text string) (wireFinding, bool) {
 		// not further calls.
 		skipUntil = sp.end
 	}
-	// An unclosed object is the innermost one cut off at the end of the
-	// text that still holds a "name" key.
-	lastKey := nameKeys[len(nameKeys)-1]
-	for i := len(unclosed) - 1; i >= 0; i-- {
-		if s := unclosed[i]; s < lastKey {
-			f := wireFinding{
-				markup: WireMarkupJSONCall,
-				start:  markupStart(text, s, jsonWrapperTokens),
-				name:   looseJSONName(text[s:]),
-			}
-			if !found || f.betterThan(best) {
-				best, found = f, true
-			}
-			break
+	// A cut-off call is the outermost object still open at the end of
+	// the text whose own top level reads as a call. Objects nested in it
+	// are its arguments, which often carry a "name" of their own.
+	for _, o := range unclosed {
+		if !o.callShaped() {
+			continue
 		}
+		f := wireFinding{
+			markup: WireMarkupJSONCall,
+			start:  markupStart(text, o.start, jsonWrapperTokens),
+			name:   looseJSONName(text[o.nameKey:]),
+		}
+		if !found || f.betterThan(best) {
+			best, found = f, true
+		}
+		break
 	}
 	return best, found
 }
@@ -268,13 +275,33 @@ func classifyJSONCallObject(obj string) (wireFinding, bool) {
 
 type textSpan struct{ start, end int }
 
+// openObject is a brace still open at the end of the text, with what
+// its own top level showed before the text ran out.
+type openObject struct {
+	start int
+	// nameKey is the offset of its top-level "name" key, or -1.
+	nameKey int
+	// hasArgs reports a top-level "arguments" key.
+	hasArgs bool
+	// keys counts its top-level keys.
+	keys int
+}
+
+// callShaped reports whether a cut-off object reads as a call so far: a
+// top-level "name" key beside "arguments", or "name" as its only key
+// because the text ended before the next one.
+func (o openObject) callShaped() bool {
+	return o.nameKey >= 0 && (o.hasArgs || o.keys == 1)
+}
+
 // braceSpans returns every balanced {...} span in text, sorted by
-// start, and the offsets of the braces still open at the end. Quotes
+// start, and the braces still open at the end, outermost first. Quotes
 // are tracked only inside braces, so apostrophes and quotation marks
 // in prose do not hide a call that follows them.
-func braceSpans(text string) (closed []textSpan, unclosed []int) {
-	var stack []int
+func braceSpans(text string) (closed []textSpan, unclosed []openObject) {
+	var stack []openObject
 	inString, escaped := false, false
+	strStart := 0
 	for i := 0; i < len(text); i++ {
 		c := text[i]
 		if inString {
@@ -285,23 +312,41 @@ func braceSpans(text string) (closed []textSpan, unclosed []int) {
 				escaped = true
 			case c == '"':
 				inString = false
+				noteObjectKey(&stack[len(stack)-1], text, strStart, i+1)
 			}
 			continue
 		}
 		switch c {
 		case '"':
-			inString = len(stack) > 0
+			inString, strStart = len(stack) > 0, i
 		case '{':
-			stack = append(stack, i)
+			stack = append(stack, openObject{start: i, nameKey: -1})
 		case '}':
 			if n := len(stack); n > 0 {
-				closed = append(closed, textSpan{start: stack[n-1], end: i + 1})
+				closed = append(closed, textSpan{start: stack[n-1].start, end: i + 1})
 				stack = stack[:n-1]
 			}
 		}
 	}
 	slices.SortFunc(closed, func(a, b textSpan) int { return a.start - b.start })
 	return closed, stack
+}
+
+// noteObjectKey records the quoted string text[start:end] on obj when a
+// colon follows it, which makes it one of obj's top-level keys.
+func noteObjectKey(obj *openObject, text string, start, end int) {
+	if !strings.HasPrefix(strings.TrimLeft(text[end:], " \t\r\n"), ":") {
+		return
+	}
+	obj.keys++
+	switch text[start:end] {
+	case `"name"`:
+		if obj.nameKey < 0 {
+			obj.nameKey = start
+		}
+	case `"arguments"`:
+		obj.hasArgs = true
+	}
 }
 
 // balancedObjectEnd returns the offset just past the object that opens
