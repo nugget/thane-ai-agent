@@ -638,11 +638,12 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		frames  []string
-		wantIn  string
-		wantOK  bool
-		wantOut string
+		name      string
+		frames    []string
+		wantIn    string
+		wantClass error // nil: the refusal must match neither completion class
+		wantOK    bool
+		wantOut   string
 	}{
 		{
 			name: "ollama reasoning key with budget death",
@@ -653,7 +654,8 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 				`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
 				"[DONE]",
 			},
-			wantIn: "produced only reasoning",
+			wantIn:    "produced only reasoning",
+			wantClass: llm.ErrReasoningOnly,
 		},
 		{
 			name: "deepseek reasoning_content key",
@@ -662,12 +664,20 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
 				"[DONE]",
 			},
-			wantIn: "produced only reasoning",
+			wantIn:    "produced only reasoning",
+			wantClass: llm.ErrReasoningOnly,
 		},
 		{
-			name:   "scaffolding-only keeps the empty-stream diagnosis",
-			frames: []string{`{"choices":[{"delta":{"role":"assistant"}}]}`, "[DONE]"},
-			wantIn: "empty stream",
+			name:      "scaffolding-only keeps the empty-stream diagnosis",
+			frames:    []string{`{"choices":[{"delta":{"role":"assistant"}}]}`, "[DONE]"},
+			wantIn:    "empty stream",
+			wantClass: llm.ErrEmptyCompletion,
+		},
+		{
+			name:      "finish reason with nothing said is empty",
+			frames:    []string{`{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
+			wantIn:    "empty stream",
+			wantClass: llm.ErrEmptyCompletion,
 		},
 		{
 			// A reasoning stream that closed with no [DONE] and no
@@ -679,6 +689,19 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 				`{"choices":[{"delta":{"reasoning":"deep in thought"}}]}`,
 			},
 			wantIn: "truncated response",
+		},
+		{
+			// A runner or proxy that dies after the role-only opener
+			// and closes cleanly said nothing and never said it was
+			// done: a transport fault, not the model falling silent.
+			name:   "role-only opener then silent close is not an empty completion",
+			frames: []string{`{"choices":[{"delta":{"role":"assistant"}}]}`},
+			wantIn: "empty stream",
+		},
+		{
+			name:   "zero frames then silent close is not an empty completion",
+			frames: nil,
+			wantIn: "empty stream",
 		},
 		{
 			name: "reasoning then content is a real completion",
@@ -730,6 +753,7 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.wantIn) {
 				t.Errorf("error %q missing %q", err.Error(), tt.wantIn)
 			}
+			assertCompletionClass(t, err, tt.wantClass)
 		})
 	}
 }
@@ -739,22 +763,74 @@ func TestOpenAICompatReasoningOnlyStreamIsDiagnosed(t *testing.T) {
 func TestOpenAICompatReasoningOnlyCompletionIsDiagnosed(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","reasoning":"deep thoughts"},"finish_reason":"length"}]}`))
-	}))
-	defer srv.Close()
+	tests := []struct {
+		name      string
+		body      string
+		wantIn    []string
+		wantClass error // nil: the refusal must match neither completion class
+	}{
+		{
+			name:      "reasoning without content",
+			body:      `{"model":"m","choices":[{"message":{"role":"assistant","reasoning":"deep thoughts"},"finish_reason":"length"}]}`,
+			wantIn:    []string{"produced only reasoning", `finish_reason="length"`},
+			wantClass: llm.ErrReasoningOnly,
+		},
+		{
+			name:      "reasoning_content without content",
+			body:      `{"model":"m","choices":[{"message":{"role":"assistant","reasoning_content":"hmm"},"finish_reason":"stop"}]}`,
+			wantIn:    []string{"produced only reasoning", `finish_reason="stop"`},
+			wantClass: llm.ErrReasoningOnly,
+		},
+		{
+			name:      "nothing said at all",
+			body:      `{"model":"m","choices":[{"message":{"role":"assistant","content":"  "},"finish_reason":"stop"}]}`,
+			wantIn:    []string{`test returned an empty assistant completion for model "m"`},
+			wantClass: llm.ErrEmptyCompletion,
+		},
+		{
+			// A response with no choices is malformed, not an empty
+			// completion: no message was offered to judge.
+			name:   "no choices is not a completion class",
+			body:   `{"model":"m","choices":[]}`,
+			wantIn: []string{"response contained no choices"},
+		},
+	}
 
-	c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
-	_, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil)
-	if err == nil {
-		t.Fatal("want error for a reasoning-only completion")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			c := NewOpenAICompatClient(srv.URL, "", "test", "res", nil, 0)
+			_, err := c.Chat(context.Background(), "m", []llm.Message{{Role: "user", Content: "hi"}}, nil)
+			if err == nil {
+				t.Fatal("want error for a completion with no answer")
+			}
+			for _, want := range tt.wantIn {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err.Error(), want)
+				}
+			}
+			assertCompletionClass(t, err, tt.wantClass)
+		})
 	}
-	if !strings.Contains(err.Error(), "produced only reasoning") {
-		t.Errorf("error %q missing reasoning diagnosis", err.Error())
-	}
-	if !strings.Contains(err.Error(), `finish_reason="length"`) {
-		t.Errorf("error %q missing finish_reason", err.Error())
+}
+
+// assertCompletionClass checks that err matches exactly the wanted
+// completion class under errors.Is, or neither class when want is nil.
+// The classes are disjoint: a reasoning-only refusal is not an empty
+// one, and a truncation or malformed response is neither.
+func assertCompletionClass(t *testing.T, err, want error) {
+	t.Helper()
+	for _, class := range []error{llm.ErrEmptyCompletion, llm.ErrReasoningOnly} {
+		if got := errors.Is(err, class); got != (class == want) {
+			t.Errorf("errors.Is(%q, %v) = %t, want %t", err, class, got, class == want)
+		}
 	}
 }
 
