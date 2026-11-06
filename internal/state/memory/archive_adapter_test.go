@@ -1,10 +1,12 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -376,14 +378,21 @@ func TestAdapter_IdleCloseStartsFreshSession(t *testing.T) {
 
 			type closed struct{ conv, session string }
 			var calls []closed
+			var logs bytes.Buffer
 			cfg := SummarizerConfig{
 				IdleTimeout: 30 * time.Minute,
 				OnIdleClose: func(conversationID, sessionID string) {
+					// The close is the cause and the eviction its effect,
+					// so the backstop line must already be in the log.
+					if !strings.Contains(logs.String(), "closed idle session (backstop)") {
+						t.Errorf("OnIdleClose ran before the backstop close was logged; log so far:\n%s", logs.String())
+					}
 					calls = append(calls, closed{conversationID, sessionID})
 					adapter.ForgetSession(conversationID, sessionID)
 				},
 			}
-			w := NewSummarizerWorker(store, &mockLLMClient{}, newTestRouter(), adapter.logger, cfg)
+			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			w := NewSummarizerWorker(store, &mockLLMClient{}, newTestRouter(), logger, cfg)
 			w.closeIdleSessions(context.Background())
 
 			if !tt.wantClose {
@@ -417,9 +426,15 @@ func TestAdapter_IdleCloseStartsFreshSession(t *testing.T) {
 	}
 }
 
-// TestAdapter_ForgetSessionConcurrent runs idle-close evictions against
-// concurrent lookups under -race. However the calls interleave, the
-// session EnsureSession settles on afterwards must be open.
+// TestAdapter_ForgetSessionConcurrent races the idle-close eviction
+// against cache-miss repopulation. Each round cools the cache while the
+// session is still open, so concurrent lookups read it from the store,
+// then ends it in the store and evicts it the way the summarizer's hook
+// does, and checks that the very next EnsureSession returns an open
+// session. If ForgetSession stopped holding lifecycleMu, a lookup that
+// read the session just before EndSession committed could cache it again
+// after the eviction, and the check would see the closed session. Workers
+// also replay superseded session IDs, which the match guard must ignore.
 func TestAdapter_ForgetSessionConcurrent(t *testing.T) {
 	const conv = "conv-race"
 	adapter, store, _ := newTestAdapter(t)
@@ -430,36 +445,43 @@ func TestAdapter_ForgetSessionConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			var superseded string
 			for {
 				select {
 				case <-stop:
 					return
 				default:
 				}
-				sid := adapter.EnsureSession(conv)
 				_ = adapter.ActiveSessionID(conv)
-				adapter.ForgetSession(conv, sid+"-stale")
+				sid := adapter.EnsureSession(conv)
+				if superseded != "" && superseded != sid {
+					adapter.ForgetSession(conv, superseded)
+				}
+				superseded = sid
 			}
 		}()
 	}
 
-	for range 20 {
+	for i := range 200 {
 		sid := adapter.EnsureSession(conv)
+		adapter.ForgetSession(conv, sid)
 		if err := store.EndSession(sid, "idle_timeout"); err != nil {
 			t.Error(err)
 			break
 		}
 		adapter.ForgetSession(conv, sid)
+
+		next := adapter.EnsureSession(conv)
+		sess, err := store.GetSession(next)
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		if sess.EndedAt != nil {
+			t.Errorf("round %d: EnsureSession after evicting %q returned closed session %q", i, sid, next)
+			break
+		}
 	}
 	close(stop)
 	wg.Wait()
-
-	final := adapter.EnsureSession(conv)
-	sess, err := store.GetSession(final)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sess.EndedAt != nil {
-		t.Errorf("EnsureSession settled on closed session %q", final)
-	}
 }
