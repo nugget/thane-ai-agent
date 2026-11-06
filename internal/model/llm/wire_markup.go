@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bytes"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -190,222 +189,6 @@ func markupStart(text string, start int, tokens []string) int {
 	}
 }
 
-// jsonCallFinding finds JSON objects carrying "name" and "arguments"
-// anywhere in text: closed objects first, then an unclosed object cut
-// off at the end of the text.
-func jsonCallFinding(text string) (wireFinding, bool) {
-	nameKeys := jsonNameKeyOffsets(text)
-	if len(nameKeys) == 0 {
-		return wireFinding{}, false
-	}
-	closed, unclosed := braceSpans(text)
-	var best wireFinding
-	found := false
-	skipUntil, attempts := -1, 0
-	for _, sp := range closed {
-		if sp.start < skipUntil || !anyOffsetIn(nameKeys, sp.start, sp.end) {
-			continue
-		}
-		if attempts++; attempts > maxWireCandidates {
-			break
-		}
-		f, ok := classifyJSONCallObject(text[sp.start:sp.end])
-		if !ok {
-			continue
-		}
-		f.start = markupStart(text, sp.start, jsonWrapperTokens)
-		if f.wellFormed {
-			return f, true
-		}
-		if !found {
-			best, found = f, true
-		}
-		// Objects nested in a call-shaped object are its arguments,
-		// not further calls.
-		skipUntil = sp.end
-	}
-	// A cut-off call is the outermost object still open at the end of
-	// the text whose own top level reads as a call. Objects nested in it
-	// are its arguments, which often carry a "name" of their own.
-	for _, o := range unclosed {
-		if !o.callShaped() {
-			continue
-		}
-		f := wireFinding{
-			markup: WireMarkupJSONCall,
-			start:  markupStart(text, o.start, jsonWrapperTokens),
-			name:   looseJSONName(text[o.nameKey:]),
-		}
-		if !found || f.betterThan(best) {
-			best, found = f, true
-		}
-		break
-	}
-	return best, found
-}
-
-// classifyJSONCallObject decides whether a balanced object is a call
-// and whether it is well-formed. A balanced object that is not valid
-// JSON still counts as a malformed call when it quotes both keys.
-func classifyJSONCallObject(obj string) (wireFinding, bool) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(obj), &fields); err != nil {
-		if strings.Contains(obj, `"arguments"`) {
-			return wireFinding{markup: WireMarkupJSONCall, name: looseJSONName(obj)}, true
-		}
-		return wireFinding{}, false
-	}
-	rawName, hasName := fields["name"]
-	rawArgs, hasArgs := fields["arguments"]
-	if !hasName || !hasArgs {
-		return wireFinding{}, false
-	}
-	f := wireFinding{markup: WireMarkupJSONCall}
-	nameOK := json.Unmarshal(rawName, &f.name) == nil && f.name != ""
-	args := bytes.TrimSpace(rawArgs)
-	switch {
-	case len(args) > 0 && args[0] == '"':
-		f.stringifiedArgs = true
-	case len(args) > 0 && args[0] == '{', bytes.Equal(args, []byte("null")):
-		// null arguments are what the text fallback executes as {}.
-		f.wellFormed = nameOK
-	}
-	return f, true
-}
-
-type textSpan struct{ start, end int }
-
-// openObject is a brace still open at the end of the text, with what
-// its own top level showed before the text ran out.
-type openObject struct {
-	start int
-	// nameKey is the offset of its top-level "name" key, or -1.
-	nameKey int
-	// hasArgs reports a top-level "arguments" key.
-	hasArgs bool
-	// keys counts its top-level keys.
-	keys int
-}
-
-// callShaped reports whether a cut-off object reads as a call so far: a
-// top-level "name" key beside "arguments", or "name" as its only key
-// because the text ended before the next one.
-func (o openObject) callShaped() bool {
-	return o.nameKey >= 0 && (o.hasArgs || o.keys == 1)
-}
-
-// braceSpans returns every balanced {...} span in text, sorted by
-// start, and the braces still open at the end, outermost first. Quotes
-// are tracked only inside braces, so apostrophes and quotation marks
-// in prose do not hide a call that follows them.
-func braceSpans(text string) (closed []textSpan, unclosed []openObject) {
-	var stack []openObject
-	inString, escaped := false, false
-	strStart := 0
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-				noteObjectKey(&stack[len(stack)-1], text, strStart, i+1)
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString, strStart = len(stack) > 0, i
-		case '{':
-			stack = append(stack, openObject{start: i, nameKey: -1})
-		case '}':
-			if n := len(stack); n > 0 {
-				closed = append(closed, textSpan{start: stack[n-1].start, end: i + 1})
-				stack = stack[:n-1]
-			}
-		}
-	}
-	slices.SortFunc(closed, func(a, b textSpan) int { return a.start - b.start })
-	return closed, stack
-}
-
-// noteObjectKey records the quoted string text[start:end] on obj when a
-// colon follows it, which makes it one of obj's top-level keys.
-func noteObjectKey(obj *openObject, text string, start, end int) {
-	if !strings.HasPrefix(strings.TrimLeft(text[end:], " \t\r\n"), ":") {
-		return
-	}
-	obj.keys++
-	switch text[start:end] {
-	case `"name"`:
-		if obj.nameKey < 0 {
-			obj.nameKey = start
-		}
-	case `"arguments"`:
-		obj.hasArgs = true
-	}
-}
-
-// balancedObjectEnd returns the offset just past the object that opens
-// s, or false when s does not open with '{' or the object never closes.
-func balancedObjectEnd(s string) (int, bool) {
-	if s == "" || s[0] != '{' {
-		return 0, false
-	}
-	closed, _ := braceSpans(s)
-	for _, sp := range closed {
-		if sp.start == 0 {
-			return sp.end, true
-		}
-	}
-	return 0, false
-}
-
-// jsonNameKeyOffsets returns the ascending offsets of every quoted
-// "name" key, meaning "name" followed by a colon.
-func jsonNameKeyOffsets(text string) []int {
-	var out []int
-	for pos := 0; ; {
-		i := strings.Index(text[pos:], `"name"`)
-		if i < 0 {
-			return out
-		}
-		at := pos + i
-		pos = at + len(`"name"`)
-		if rest := strings.TrimLeft(text[pos:], " \t\r\n"); strings.HasPrefix(rest, ":") {
-			out = append(out, at)
-		}
-	}
-}
-
-func anyOffsetIn(sorted []int, start, end int) bool {
-	i, _ := slices.BinarySearch(sorted, start)
-	return i < len(sorted) && sorted[i] < end
-}
-
-// looseJSONName reads the string value of the first "name" key without
-// requiring the surrounding JSON to parse, so a truncated or invalid
-// call still reports whether it named an offered tool.
-func looseJSONName(s string) string {
-	offsets := jsonNameKeyOffsets(s)
-	if len(offsets) == 0 {
-		return ""
-	}
-	rest := strings.TrimLeft(s[offsets[0]+len(`"name"`):], " \t\r\n")
-	rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t\r\n")
-	if !strings.HasPrefix(rest, `"`) {
-		return ""
-	}
-	end := strings.IndexByte(rest[1:], '"')
-	if end < 0 {
-		return ""
-	}
-	return rest[1 : 1+end]
-}
-
 const (
 	harmonyRecipient = "to=functions."
 	harmonyMessage   = "<|message|>"
@@ -447,6 +230,11 @@ func parseHarmonyCall(text string, anchor int) (wireFinding, int) {
 	f.name = text[nameStart:nameEnd]
 	rest := text[nameEnd:]
 	window := rest[:min(len(rest), harmonyArgsWindow)]
+	// Arguments after the next recipient are that recipient's, so an
+	// argument-less recipient stays malformed and cannot borrow them.
+	if next := strings.Index(window, harmonyRecipient); next >= 0 {
+		window = window[:next]
+	}
 	argsAt := strings.Index(window, harmonyMessage)
 	if argsAt >= 0 {
 		argsAt += len(harmonyMessage)

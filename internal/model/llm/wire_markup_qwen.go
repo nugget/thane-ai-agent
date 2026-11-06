@@ -60,9 +60,12 @@ func parseQwenXMLFunction(text string, open int) (qwenXMLCall, int) {
 	gt := strings.IndexAny(text[headerStart:], ">\n<")
 	if gt < 0 || text[headerStart+gt] != '>' {
 		// The header never closed: the text was cut inside the name.
-		call.name = strings.TrimSpace(text[headerStart:])
+		// Only the bounded header is trimmed, so a run of malformed
+		// headers cannot each re-trim the same long tail.
 		if gt >= 0 {
 			call.name = strings.TrimSpace(text[headerStart : headerStart+gt])
+		} else {
+			call.name = strings.TrimSpace(text[headerStart:])
 		}
 		return call, headerStart
 	}

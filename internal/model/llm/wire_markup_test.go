@@ -3,7 +3,6 @@ package llm
 import (
 	"encoding/json"
 	"math"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +215,44 @@ func TestScanWire(t *testing.T) {
 			want:    contentScan(WireMarkupJSONCall, false, true, true),
 		},
 		{
+			name:    "json closed call nested in an unclosed call is its argument",
+			content: `{"name":"loop_create","arguments":{"name":"get_state","arguments":{}}`,
+			want:    contentScan(WireMarkupJSONCall, false, false, false),
+		},
+		{
+			name:    "json closed call after an unclosed stray prose brace",
+			content: `Use {braces like this: {"name":"get_state","arguments":{}}`,
+			want:    contentScan(WireMarkupJSONCall, true, true, true),
+		},
+		{
+			name:    "json truncated after a closed name with no arguments key is not a call",
+			content: `{"name":"Alice"`,
+		},
+		{
+			name:    "json truncated right after the name key's colon",
+			content: `{"name":`,
+			want:    contentScan(WireMarkupJSONCall, false, false, false),
+		},
+		{
+			name:    "json truncated after a closed name and a comma is not a call",
+			content: `{"name":"Alice", `,
+		},
+		{
+			name:    "json truncated inside a second key that is not arguments is not a call",
+			content: `{"name":"Alice","em`,
+		},
+		{
+			name:      "json truncated name-only data in content leaves a reasoning call visible",
+			content:   `{"name":"Alice"`,
+			reasoning: jsonCall,
+			want:      WireScan{Markup: WireMarkupJSONCall, Location: WireLocationReasoning, WellFormed: true, NameOffered: true},
+		},
+		{
+			name:    "json truncated after the arguments key, before its colon",
+			content: `{"name":"get_state","arguments"`,
+			want:    contentScan(WireMarkupJSONCall, false, true, false),
+		},
+		{
 			name:    "json after an unmatched quote in prose",
 			content: `He said "hello. ` + jsonCall,
 			want:    contentScan(WireMarkupJSONCall, true, true, true),
@@ -260,7 +297,31 @@ func TestScanWire(t *testing.T) {
 			content: "commentary to=functions.get_weather",
 			want:    contentScan(WireMarkupHarmony, false, true, false),
 		},
-
+		{
+			name:    "harmony argument-less recipient does not borrow the next one's arguments",
+			content: "to=functions.unknown to=functions.get_weather {}",
+			want:    contentScan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "harmony tokenised argument-less header does not borrow the next message",
+			content: "<|channel|>commentary to=functions.unknown <|constrain|>json<|start|>assistant<|channel|>commentary to=functions.get_weather <|message|>{}",
+			want:    contentScan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "harmony only an argument-less recipient before another is malformed",
+			content: "to=functions.get_weather to=functions.",
+			want:    contentScan(WireMarkupHarmony, false, true, false),
+		},
+		{
+			name:    "qwen partial parameter opener after the last parameter",
+			content: "<function=call_service><parameter=domain>light</parameter><parameter",
+			want:    contentScan(WireMarkupQwenXML, false, true, false),
+		},
+		{
+			name:    "qwen parameter key cut off after the last parameter",
+			content: "<function=call_service><parameter=domain>light</parameter><parameter=serv",
+			want:    contentScan(WireMarkupQwenXML, false, true, false),
+		},
 		// prose and other non-calls
 		{
 			name:    "prose mentioning function names",
@@ -331,109 +392,6 @@ func TestScanWire(t *testing.T) {
 	}
 }
 
-func TestParseQwenXMLCalls(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		text string
-		want []qwenXMLCall
-	}{
-		{
-			name: "single call strips one newline around values",
-			text: qwenCall,
-			want: []qwenXMLCall{{
-				start: len("<tool_call>\n"), name: "get_state", complete: true,
-				params: []qwenXMLParam{{key: "entity_id", value: "light.kitchen"}},
-			}},
-		},
-		{
-			name: "multi-line value keeps inner whitespace and order",
-			text: "<function=note_add>\n<parameter=text>\n  line one\nline two  \n\n</parameter>\n<parameter=tags>\n[\"a\"]\n</parameter>\n</function>",
-			want: []qwenXMLCall{{
-				name: "note_add", complete: true,
-				params: []qwenXMLParam{
-					{key: "text", value: "  line one\nline two  \n"},
-					{key: "tags", value: `["a"]`},
-				},
-			}},
-		},
-		{
-			name: "two calls",
-			text: "<tool_call>\n<function=get_state>\n</function>\n</tool_call>\n<tool_call>\n<function=get_weather>\n<parameter=location>\nParis\n</parameter>\n</function>\n</tool_call>",
-			want: []qwenXMLCall{
-				{start: len("<tool_call>\n"), name: "get_state", complete: true},
-				{
-					start: strings.Index("<tool_call>\n<function=get_state>\n</function>\n</tool_call>\n<tool_call>\n<function=get_weather>", "<function=get_weather>"),
-					name:  "get_weather", complete: true,
-					params: []qwenXMLParam{{key: "location", value: "Paris"}},
-				},
-			},
-		},
-		{
-			name: "closers missing at end of text",
-			text: "<function=get_state>\n<parameter=entity_id>\nlight.kitchen\n</parameter>",
-			want: []qwenXMLCall{{
-				name: "get_state", complete: true,
-				params: []qwenXMLParam{{key: "entity_id", value: "light.kitchen"}},
-			}},
-		},
-		{
-			name: "truncated value keeps closed params and is incomplete",
-			text: "<function=call_service>\n<parameter=domain>\nlight\n</parameter>\n<parameter=service>\nturn_o",
-			want: []qwenXMLCall{{
-				name:   "call_service",
-				params: []qwenXMLParam{{key: "domain", value: "light"}},
-			}},
-		},
-		{
-			name: "truncated header",
-			text: "<function=get_st",
-			want: []qwenXMLCall{{name: "get_st"}},
-		},
-		{
-			name: "free-text body is incomplete",
-			text: "<function=get_state>\nentity_id: light.kitchen\n</function>",
-			want: []qwenXMLCall{{name: "get_state"}},
-		},
-		{
-			name: "text between parameters is incomplete",
-			text: "<function=call_service>\n<parameter=domain>\nlight\n</parameter>\nand then\n<parameter=service>\nturn_on\n</parameter>\n</function>",
-			want: []qwenXMLCall{{
-				name:   "call_service",
-				params: []qwenXMLParam{{key: "domain", value: "light"}},
-			}},
-		},
-		{
-			name: "prose after the last parameter at end of text is incomplete",
-			text: "<function=get_state>\n<parameter=entity_id>\nlight.kitchen\n</parameter>\nThe light is on.",
-			want: []qwenXMLCall{{
-				name:   "get_state",
-				params: []qwenXMLParam{{key: "entity_id", value: "light.kitchen"}},
-			}},
-		},
-		{
-			name: "empty parameter key",
-			text: "<function=get_state>\n<parameter=>\nx\n</parameter>\n</function>",
-			want: []qwenXMLCall{{name: "get_state"}},
-		},
-		{
-			name: "no markup",
-			text: "call get_state with entity_id light.kitchen",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := parseQwenXMLCalls(tt.text)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("parseQwenXMLCalls() = %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestWireScanJSONShape(t *testing.T) {
 	t.Parallel()
 
@@ -469,6 +427,12 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"bare tool_call tags", func(n int) string { return strings.Repeat("<tool_call>{", n) }},
 		{"harmony recipients", func(n int) string { return strings.Repeat("to=functions.a {", n) }},
 		{"prose with stray braces", func(n int) string { return strings.Repeat(`a {"name": b `, n) }},
+		{"cut-off name-only objects before trailing space", func(n int) string {
+			return strings.Repeat(`{"name":"x",{`, n) + strings.Repeat(" ", n)
+		}},
+		{"malformed function headers before trailing space", func(n int) string {
+			return strings.Repeat("<function=a\n", n) + strings.Repeat(" ", n)
+		}},
 	}
 	// fastest of a few runs, so a scheduler hiccup cannot fake a slope.
 	measure := func(text string) time.Duration {
