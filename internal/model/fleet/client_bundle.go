@@ -38,7 +38,8 @@ type ResourceHealthClient struct {
 }
 
 // BuildClients constructs provider clients and a routed llm.Client from
-// the normalized catalog.
+// the normalized catalog. Each resource's client comes from
+// [NewResourceClient]; every anthropic resource shares one client.
 func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*ClientBundle, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("nil model catalog")
@@ -56,54 +57,24 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	var anthropicClient *modelproviders.AnthropicClient
 
 	for _, res := range cat.Resources {
-		var client llm.Client
-		switch res.Provider {
-		case "ollama":
-			oc := modelproviders.NewOllamaClient(res.URL, logger.With("resource", res.ID))
-			ollamaClients[res.ID] = oc
-			healthClients[res.ID] = ResourceHealthClient{
-				Ping:          oc.Ping,
-				AttachWatcher: oc.SetWatcher,
-			}
-			client = oc
-		case "lmstudio":
-			lc := modelproviders.NewLMStudioClientWithTTL(res.URL, serverAPIKey(cfg, res.ID), res.ID, logger.With("resource", res.ID), res.IdleTTLSeconds)
-			applyStreamIdleTimeout(lc.OpenAICompatClient, cfg, res.ID)
-			applyChatTemplateKwargs(lc.OpenAICompatClient, cfg, res.ID)
-			lmstudioClients[res.ID] = lc
-			healthClients[res.ID] = ResourceHealthClient{
-				Ping:          lc.Ping,
-				AttachWatcher: lc.AttachWatcher,
-			}
-			client = lc
-		case "openai_compat":
-			// Any server speaking the OpenAI chat protocol: vLLM,
-			// SGLang, llama-server, NIM, or Ollama's own /v1 surface.
-			// No idle TTL — that is an LM Studio extension, and sending
-			// it to a server that does not know the field is a needless
-			// compatibility risk.
-			oc := modelproviders.NewOpenAICompatClient(res.URL, serverAPIKey(cfg, res.ID), "openai_compat", res.ID, logger.With("resource", res.ID), 0)
-			applyStreamIdleTimeout(oc, cfg, res.ID)
-			applyChatTemplateKwargs(oc, cfg, res.ID)
-			openAICompatClients[res.ID] = oc
-			healthClients[res.ID] = ResourceHealthClient{
-				Ping:          oc.Ping,
-				AttachWatcher: oc.AttachWatcher,
-			}
-			client = oc
-		case "anthropic":
-			if !cfg.Anthropic.Configured() {
-				return nil, fmt.Errorf("resource %q requires anthropic config", res.ID)
-			}
-			if anthropicClient == nil {
-				anthropicClient = modelproviders.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
-			}
-			client = anthropicClient
-		default:
-			return nil, fmt.Errorf("provider %q is not implemented for resource %q", res.Provider, res.ID)
+		rc, err := NewResourceClient(res, cfg, WithClientLogger(logger), WithSharedAnthropicClient(anthropicClient))
+		if err != nil {
+			return nil, err
 		}
-
-		resourceClients[res.ID] = client
+		resourceClients[res.ID] = rc.Client
+		if rc.Health != nil {
+			healthClients[res.ID] = *rc.Health
+		}
+		switch {
+		case rc.Ollama != nil:
+			ollamaClients[res.ID] = rc.Ollama
+		case rc.LMStudio != nil:
+			lmstudioClients[res.ID] = rc.LMStudio
+		case rc.OpenAICompat != nil:
+			openAICompatClients[res.ID] = rc.OpenAICompat
+		case rc.Anthropic != nil:
+			anthropicClient = rc.Anthropic
+		}
 	}
 
 	bundle := &ClientBundle{
@@ -120,16 +91,6 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	}
 	bundle.Client = client
 	return bundle, nil
-}
-
-func serverAPIKey(cfg *config.Config, id string) string {
-	if cfg == nil {
-		return ""
-	}
-	if srv, ok := cfg.Models.Resources[id]; ok {
-		return srv.APIKey
-	}
-	return ""
 }
 
 // BuildRoutedClient constructs a routed llm.Client for the provided
@@ -204,34 +165,4 @@ func (b *ClientBundle) fallbackClient(cat *Catalog) (llm.Client, error) {
 	}
 	sort.Strings(ids)
 	return b.ResourceClients[ids[0]], nil
-}
-
-// applyStreamIdleTimeout overrides a client's silence bound when the
-// resource configured one. An unset value keeps the client's default
-// rather than collapsing to zero, since zero means "never give up" and
-// an omitted config line does not mean that.
-func applyStreamIdleTimeout(c *modelproviders.OpenAICompatClient, cfg *config.Config, resourceID string) {
-	if c == nil || cfg == nil {
-		return
-	}
-	res, ok := cfg.Models.Resources[resourceID]
-	if !ok || res.StreamIdleTimeout == 0 {
-		return
-	}
-	c.SetStreamIdleTimeout(res.StreamIdleTimeout)
-}
-
-// applyChatTemplateKwargs forwards the resource's configured
-// chat_template_kwargs onto its client. Resources that configured none
-// are left alone, which keeps the field off the wire for every server
-// that has no opinion about it.
-func applyChatTemplateKwargs(c *modelproviders.OpenAICompatClient, cfg *config.Config, resourceID string) {
-	if c == nil || cfg == nil {
-		return
-	}
-	res, ok := cfg.Models.Resources[resourceID]
-	if !ok || len(res.ChatTemplateKwargs) == 0 {
-		return
-	}
-	c.SetChatTemplateKwargs(res.ChatTemplateKwargs)
 }
