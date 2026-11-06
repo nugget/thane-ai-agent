@@ -2273,6 +2273,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Estimate system prompt size for cost logging.
 	systemTokens := len(llmMessages[0].Content) / 4 // rough char-to-token ratio
+	// The estimate of the request the current iteration sends, set when
+	// the iteration starts and read when its response arrives so the two
+	// INFO lines can be compared.
+	var iterEstimate requestEstimate
 
 	// Check if memory store supports tool call recording.
 	recorder, hasRecorder := l.memory.(ToolCallRecorder)
@@ -2438,7 +2442,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Iteration lifecycle callbacks.
-		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
+		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, toolDefs []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
 			if l.archiver != nil {
 				iterationSessions[i] = l.archiver.EnsureSession(convID)
@@ -2473,23 +2477,41 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgSnapshot)
 
+			// est_tokens is the legacy message-text-only figure, kept
+			// for one release so new rows compare with old ones.
+			// est_request_tokens is the whole request — messages,
+			// tool-call arguments and tool schemas — and is the one to
+			// read against the response's input_tokens.
 			iterMsgTokens := 0
 			for _, m := range msgs {
 				iterMsgTokens += len(m.Content) / 4
 			}
-			iterLog.Info("llm call",
+			iterEstimate = estimateRequest(msgs, toolDefs)
+			callAttrs := []any{
 				"kind", events.KindLLMCall,
 				"iteration", i,
 				"model", currentModel,
 				"message_count", len(msgs),
 				"est_tokens", iterMsgTokens,
 				"system_tokens", systemTokens,
-			)
+				"est_request_tokens", iterEstimate.total(),
+				"est_tool_tokens", iterEstimate.Tools,
+				"est_tool_call_tokens", iterEstimate.ToolCalls,
+			}
+			// The section map is the Run's baseline for comparing one
+			// deploy's prompt with another's. Repeating it on every
+			// iteration would only multiply the line's size.
+			if i == 0 {
+				if sections, ok := systemSectionBytes(msgs); ok {
+					callAttrs = append(callAttrs, sections)
+				}
+			}
+			iterLog.Info("llm call", callAttrs...)
 			if stream != nil {
 				effectiveTools := effectiveToolNames()
 				startData := map[string]any{
 					"request_id":      requestID,
-					"est_tokens":      iterMsgTokens + systemTokens,
+					"est_tokens":      iterEstimate.total(),
 					"messages":        len(msgs),
 					"iteration":       i,
 					"tools":           len(effectiveTools),
@@ -2522,14 +2544,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				})
 			}
 			iterLog := logging.Logger(iterCtx)
-			iterLog.Info("llm response",
+			respAttrs := []any{
 				"kind", events.KindLLMResponse,
 				"iteration", i,
 				"model", llmResp.Model,
 				"input_tokens", llmResp.InputTokens,
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
-			)
+			}
+			// A same-model retry or a failover resends the estimated
+			// request. Timeout recovery answers with a different,
+			// toolless request or with no call at all, so the
+			// iteration's estimate does not describe it and is left off.
+			if !timeoutRecovered {
+				respAttrs = append(respAttrs, "est_request_tokens", iterEstimate.total())
+			}
+			iterLog.Info("llm response", respAttrs...)
 		},
 
 		// Error handling: timeout retry, recovery model, failover.
