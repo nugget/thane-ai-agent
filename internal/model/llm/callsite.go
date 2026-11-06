@@ -47,9 +47,9 @@ type CallSite struct {
 	// belongs to, matching the Index of its iterate.IterationRecord. A
 	// retry, failover or recovery keeps the iteration of the call it
 	// replaces. A lite call, which runs no engine, is iteration 0.
-	Iteration int
+	Iteration int `json:"iteration"`
 	// Kind is why the call was made.
-	Kind CallKind
+	Kind CallKind `json:"kind"`
 }
 
 // WithCallSite attaches site to ctx, replacing any call site already

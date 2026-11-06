@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -100,6 +101,49 @@ func TestCarryCallScope(t *testing.T) {
 			cancel()
 			if err := got.Err(); err != nil {
 				t.Errorf("cancelling the source cancelled the carried context: %v", err)
+			}
+		})
+	}
+}
+
+// TestCallSiteJSON pins the serialized field names. CallSite crosses
+// package boundaries into capture and evaluation, so its wire names are
+// part of the contract and must not drift to Go's default spelling.
+func TestCallSiteJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		site CallSite
+		want string
+	}{
+		{
+			name: "ordinary iteration",
+			site: CallSite{Iteration: 0, Kind: CallKindIteration},
+			want: `{"iteration":0,"kind":"iteration"}`,
+		},
+		{
+			name: "recovery keeps its iteration",
+			site: CallSite{Iteration: 4, Kind: CallKindContextRecoveryNoTools},
+			want: `{"iteration":4,"kind":"context_recovery_no_tools"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := json.Marshal(tt.site)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("json = %s, want %s", got, tt.want)
+			}
+			var back CallSite
+			if err := json.Unmarshal(got, &back); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if back != tt.site {
+				t.Fatalf("round trip = %+v, want %+v", back, tt.site)
 			}
 		})
 	}
