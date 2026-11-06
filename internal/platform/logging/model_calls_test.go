@@ -636,10 +636,14 @@ func TestModelCallStore_PoisonedRequestReleasedWhenFinishIsDropped(t *testing.T)
 				t.Fatal("Finish queued, want a full-queue drop")
 			}
 			s.start()
+			// Wait for the second call's row to commit, not merely for the
+			// queue to empty: an empty queue only means the drain has
+			// received the item, and advancing the clock before it reads
+			// the time would make the poisoned request look newly active.
 			deadline := time.Now().Add(5 * time.Second)
-			for len(s.ch) > 0 {
+			for countRows(t, db, `SELECT COUNT(*) FROM log_model_calls WHERE request_id = 'r_poisoned'`) < 1 {
 				if time.Now().After(deadline) {
-					t.Fatal("drain did not take the queued items")
+					t.Fatal("drain did not commit the second call")
 				}
 				time.Sleep(time.Millisecond)
 			}

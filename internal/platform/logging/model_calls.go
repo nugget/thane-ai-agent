@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -257,6 +258,9 @@ type ModelCallStats struct {
 	HashErrors uint64 `json:"hash_errors"`
 	// WriteErrors counts failed write transactions.
 	WriteErrors uint64 `json:"write_errors"`
+	// MissingBlobRows counts call rows marked input_incomplete at write
+	// time because a blob they reference was never stored.
+	MissingBlobRows uint64 `json:"missing_blob_rows"`
 	// BlobBytesWritten counts bytes of newly stored blobs.
 	BlobBytesWritten uint64 `json:"blob_bytes_written"`
 	// SegmentFallbacks counts calls whose prompt was stored WHOLE.
@@ -295,9 +299,16 @@ type ModelCallStore struct {
 	lastSweep time.Time
 	// now is the drain's clock.
 	now func() time.Time
+	// baseCtx parents every queued write; cancelBase aborts what remains
+	// once Close's grace runs out. writeTimeout bounds one write and
+	// closeGrace how long Close waits before cancelling.
+	baseCtx      context.Context
+	cancelBase   context.CancelFunc
+	writeTimeout time.Duration
+	closeGrace   time.Duration
 
-	enqueued, dropped, hashErrors, writeErrors atomic.Uint64
-	blobBytes, segmentFallbacks                atomic.Uint64
+	enqueued, dropped, hashErrors, writeErrors   atomic.Uint64
+	blobBytes, segmentFallbacks, missingBlobRows atomic.Uint64
 }
 
 // modelCallItem is one queued write: a call with the blobs its turn has
@@ -344,14 +355,19 @@ func newModelCallStore(db *sql.DB, cfg ModelCallStoreConfig) *ModelCallStore {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	baseCtx, cancelBase := context.WithCancel(context.Background())
 	return &ModelCallStore{
-		db:         db,
-		instanceID: cfg.InstanceID,
-		logger:     logger,
-		ch:         make(chan modelCallItem, size),
-		done:       make(chan struct{}),
-		poisoned:   make(map[string]time.Time),
-		now:        time.Now,
+		db:           db,
+		instanceID:   cfg.InstanceID,
+		logger:       logger,
+		ch:           make(chan modelCallItem, size),
+		done:         make(chan struct{}),
+		poisoned:     make(map[string]time.Time),
+		now:          time.Now,
+		baseCtx:      baseCtx,
+		cancelBase:   cancelBase,
+		writeTimeout: modelCallWriteTimeout,
+		closeGrace:   modelCallCloseGrace,
 	}
 }
 
@@ -360,7 +376,9 @@ func (s *ModelCallStore) start() {
 }
 
 // Close flushes queued writes and stops the drain. Safe to call more
-// than once; later captures are discarded.
+// than once; later captures are discarded. Close is bounded: once the
+// queue has had a grace period to drain, the remaining writes are
+// cancelled and counted as write errors rather than waited for.
 func (s *ModelCallStore) Close() {
 	if s == nil {
 		return
@@ -371,7 +389,15 @@ func (s *ModelCallStore) Close() {
 		s.closed = true
 		close(s.ch)
 		s.mu.Unlock()
-		<-s.done
+		grace := time.NewTimer(s.closeGrace)
+		defer grace.Stop()
+		select {
+		case <-s.done:
+		case <-grace.C:
+			s.cancelBase()
+			<-s.done
+		}
+		s.cancelBase()
 	})
 }
 
@@ -385,6 +411,7 @@ func (s *ModelCallStore) Stats() ModelCallStats {
 		Dropped:          s.dropped.Load(),
 		HashErrors:       s.hashErrors.Load(),
 		WriteErrors:      s.writeErrors.Load(),
+		MissingBlobRows:  s.missingBlobRows.Load(),
 		BlobBytesWritten: s.blobBytes.Load(),
 		SegmentFallbacks: s.segmentFallbacks.Load(),
 	}
@@ -418,81 +445,4 @@ func (s *ModelCallStore) warnPowersOfTwo(count uint64, msg, key string, err erro
 		attrs = append(attrs, "error", err)
 	}
 	s.logger.Warn(msg, attrs...)
-}
-
-// ModelCallTurn is one request's capture state. It numbers the
-// request's calls and remembers which blobs it has already queued, so
-// each call's queue item carries only blobs new to the turn. A blob is
-// remembered only once the item carrying it is queued: a dropped item
-// leaves the next one to carry its blobs, so no stored row references a
-// blob that was never offered to the writer.
-type ModelCallTurn struct {
-	store     *ModelCallStore
-	requestID string
-
-	mu   sync.Mutex
-	seq  int
-	sent map[string]struct{}
-}
-
-// Turn begins capture for one request. A nil store returns a nil turn,
-// whose methods do nothing, so disabled capture costs no hashing.
-func (s *ModelCallStore) Turn(requestID string) *ModelCallTurn {
-	if s == nil {
-		return nil
-	}
-	return &ModelCallTurn{store: s, requestID: requestID, sent: make(map[string]struct{})}
-}
-
-// Capture hashes one call synchronously, so the caller may mutate its
-// messages and response as soon as it returns, and queues it. It
-// reports whether the call was queued.
-func (t *ModelCallTurn) Capture(call ModelCall) bool {
-	if t == nil {
-		return false
-	}
-	hashed, err := hashModelCall(call.Messages, call.Tools, call.Response, call.Profile)
-	if err != nil {
-		t.store.warnPowersOfTwo(t.store.hashErrors.Add(1), "model call capture could not hash call", "hash_errors", err)
-		return false
-	}
-	// The queued row keeps only owned values: the inputs live on as
-	// hashed bytes, and the pointed-to facts are copied.
-	call.Messages, call.Tools, call.Response = nil, nil, nil
-	call.Profile.ChatTemplateKwargs = nil
-	call.TTL, call.MaxTokens = copyPtr(call.TTL), copyPtr(call.MaxTokens)
-	call.Stream, call.FirstEvent = copyPtr(call.Stream), copyPtr(call.FirstEvent)
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.seq++
-	row := &modelCallRow{requestID: t.requestID, callSeq: t.seq, call: call, hashed: hashed, refs: hashed.blobs.order}
-	var fresh []modelBlob
-	for _, h := range hashed.blobs.order {
-		if _, ok := t.sent[h]; !ok {
-			fresh = append(fresh, modelBlob{hash: h, data: hashed.blobs.data[h]})
-		}
-	}
-	if !t.store.enqueue(modelCallItem{call: row, blobs: fresh}) {
-		return false
-	}
-	for _, b := range fresh {
-		t.sent[b.hash] = struct{}{}
-	}
-	if hashed.segmentFallback {
-		t.store.segmentFallbacks.Add(1)
-	}
-	return true
-}
-
-// Finish queues the request's outcome row and reports whether it was
-// queued. Once written, it closes the request: the writer forgets any
-// failed transaction recorded against it. When Finish returns false
-// the row is lost, and a failed transaction stays remembered until
-// the request has been idle for an hour.
-func (t *ModelCallTurn) Finish(turn ModelTurn) bool {
-	if t == nil {
-		return false
-	}
-	return t.store.enqueue(modelCallItem{turn: &modelTurnRow{requestID: t.requestID, turn: turn}})
 }

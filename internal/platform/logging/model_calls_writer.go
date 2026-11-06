@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -17,36 +18,53 @@ const (
 	// poisonedSweepInterval bounds how often the drain prunes stale
 	// poisoned requests.
 	poisonedSweepInterval = time.Minute
+	// modelCallWriteTimeout bounds each queued write, including the wait
+	// for a connection, so one stalled transaction cannot stop the
+	// writer's only consumer for good.
+	modelCallWriteTimeout = 15 * time.Second
+	// modelCallCloseGrace is how long Close lets queued writes drain
+	// normally before it cancels the rest.
+	modelCallCloseGrace = 30 * time.Second
+	// refCheckChunk keeps each existence query well under SQLite's
+	// host-parameter limit.
+	refCheckChunk = 400
 )
 
 // drain writes queued items one transaction each until Close.
 func (s *ModelCallStore) drain() {
 	defer close(s.done)
-	ctx := context.Background()
 	for item := range s.ch {
-		now := s.now()
-		switch {
-		case item.call != nil:
-			id := item.call.requestID
-			if _, poisoned := s.poisoned[id]; poisoned {
-				item.call.call.InputIncomplete = true
-				s.poisoned[id] = now
-			}
-			written, err := s.writeCall(ctx, item)
-			if err != nil {
-				s.poisoned[id] = now
-				s.warnPowersOfTwo(s.writeErrors.Add(1), "model call capture write failed; later calls in the request marked input_incomplete", "write_errors", err)
-				break
-			}
-			s.blobBytes.Add(uint64(written))
-		case item.turn != nil:
-			delete(s.poisoned, item.turn.requestID)
-			if err := s.writeTurn(ctx, item.turn); err != nil {
-				s.warnPowersOfTwo(s.writeErrors.Add(1), "model turn capture write failed", "write_errors", err)
-			}
-		}
-		s.sweepPoisoned(now)
+		s.drainOne(item)
 	}
+}
+
+// drainOne writes one item under its own deadline, derived from the
+// store's base context so Close can cancel what remains.
+func (s *ModelCallStore) drainOne(item modelCallItem) {
+	ctx, cancel := context.WithTimeout(s.baseCtx, s.writeTimeout)
+	defer cancel()
+	now := s.now()
+	switch {
+	case item.call != nil:
+		id := item.call.requestID
+		if _, poisoned := s.poisoned[id]; poisoned {
+			item.call.call.InputIncomplete = true
+			s.poisoned[id] = now
+		}
+		written, err := s.writeCall(ctx, item)
+		if err != nil {
+			s.poisoned[id] = now
+			s.warnPowersOfTwo(s.writeErrors.Add(1), "model call capture write failed; later calls in the request marked input_incomplete", "write_errors", err)
+			break
+		}
+		s.blobBytes.Add(uint64(written))
+	case item.turn != nil:
+		delete(s.poisoned, item.turn.requestID)
+		if err := s.writeTurn(ctx, item.turn); err != nil {
+			s.warnPowersOfTwo(s.writeErrors.Add(1), "model turn capture write failed", "write_errors", err)
+		}
+	}
+	s.sweepPoisoned(now)
 }
 
 // sweepPoisoned forgets poisoned requests idle longer than
@@ -98,6 +116,20 @@ func (s *ModelCallStore) writeCall(ctx context.Context, item modelCallItem) (wri
 			return 0, fmt.Errorf("touch blob: %w", err)
 		}
 	}
+	// A row is complete only if every blob it references exists when it
+	// commits. The poisoned-request marker covers the usual way a blob
+	// goes missing, a rolled-back earlier call, but it is forgotten after
+	// an hour idle, and a turn's sent set still suppresses those blobs if
+	// the turn later resumes. Checking here makes the flag true by
+	// construction rather than by bookkeeping.
+	missing, err := countMissingBlobs(ctx, tx, row.refs)
+	if err != nil {
+		return 0, err
+	}
+	if missing > 0 && !row.call.InputIncomplete {
+		row.call.InputIncomplete = true
+		s.warnPowersOfTwo(s.missingBlobRows.Add(1), "model call references blobs that were never stored; row marked input_incomplete", "missing_blob_rows", nil)
+	}
 	if err := insertModelCallRow(ctx, tx, s.instanceID, row); err != nil {
 		return 0, err
 	}
@@ -105,6 +137,26 @@ func (s *ModelCallStore) writeCall(ctx context.Context, item modelCallItem) (wri
 		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return written, nil
+}
+
+// countMissingBlobs reports how many of refs, which are unique, have no
+// row in log_model_blobs.
+func countMissingBlobs(ctx context.Context, tx *sql.Tx, refs []string) (int, error) {
+	missing := 0
+	for start := 0; start < len(refs); start += refCheckChunk {
+		chunk := refs[start:min(start+refCheckChunk, len(refs))]
+		args := make([]any, len(chunk))
+		for i, h := range chunk {
+			args[i] = h
+		}
+		var present int
+		query := `SELECT COUNT(*) FROM log_model_blobs WHERE hash IN (?` + strings.Repeat(", ?", len(chunk)-1) + `)`
+		if err := tx.QueryRowContext(ctx, query, args...).Scan(&present); err != nil {
+			return 0, fmt.Errorf("check referenced blobs: %w", err)
+		}
+		missing += len(chunk) - present
+	}
+	return missing, nil
 }
 
 func insertModelCallRow(ctx context.Context, tx *sql.Tx, instanceID string, row *modelCallRow) error {
