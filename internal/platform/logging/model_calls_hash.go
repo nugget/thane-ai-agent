@@ -242,13 +242,24 @@ func providerSendsDeclaredSections(provider string) bool {
 	return provider == "anthropic"
 }
 
-func hasNonEmptySection(sections []llm.PromptSection) bool {
-	for _, s := range sections {
-		if s.Content != "" {
-			return true
+// declaredSectionSource returns the index of the system message whose
+// declared sections a section-sending provider transmits, or -1 when it
+// sends no sections. It mirrors anthropicSystemPayload: the first system
+// message with any declared sections decides, and if every one of them is
+// empty the provider falls back to sending no sections at all.
+func declaredSectionSource(messages []llm.Message) int {
+	for i, msg := range messages {
+		if msg.Role != "system" || len(msg.Sections) == 0 {
+			continue
 		}
+		for _, s := range msg.Sections {
+			if s.Content != "" {
+				return i
+			}
+		}
+		return -1
 	}
-	return false
+	return -1
 }
 
 // hashModelCall canonicalizes and hashes one call's inputs. It runs
@@ -265,11 +276,11 @@ func hashModelCall(messages []llm.Message, tools []map[string]any, response *llm
 	hc := hashedCall{blobs: newBlobSet()}
 
 	rest := messages
+	segmentsLocated := true
 	if len(messages) > 0 && messages[0].Role == "system" {
 		segs, ok := segmentPrompt(messages[0].Content, messages[0].Sections)
+		segmentsLocated = ok
 		hc.segmentFallback = !ok
-		hc.sectionsNotSent = !ok && providerSendsDeclaredSections(profile.Provider) &&
-			hasNonEmptySection(messages[0].Sections)
 		hc.segments = make([]PromptSegment, 0, len(segs))
 		for _, s := range segs {
 			hc.segments = append(hc.segments, PromptSegment{
@@ -279,6 +290,16 @@ func hashModelCall(messages []llm.Message, tools []map[string]any, response *llm
 			})
 		}
 		rest = messages[1:]
+	}
+
+	// A provider that sends declared sections sends those of one system
+	// message. The capture is faithful only when that is the first message
+	// and its sections were located in the Content stored as segments;
+	// sections taken from any later system message are not retained.
+	if providerSendsDeclaredSections(profile.Provider) {
+		if src := declaredSectionSource(messages); src > 0 || (src == 0 && !segmentsLocated) {
+			hc.sectionsNotSent = true
+		}
 	}
 
 	hc.messageHashes = make([]string, 0, len(rest))

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
 // TestModelCallTurn_FinishSnapshotsOutcomes pins that a queued outcome
@@ -183,11 +186,16 @@ func TestModelCallStore_UnsentSectionsMarkInputIncomplete(t *testing.T) {
 		name           string
 		provider       string
 		unlocatable    bool
+		unsectioned    bool // the first system message declares no sections
+		laterSections  bool // a later system message declares sections
 		wantIncomplete bool
 	}{
 		{name: "anthropic with unlocatable sections", provider: "anthropic", unlocatable: true, wantIncomplete: true},
 		{name: "openai_compat with unlocatable sections", provider: "openai_compat", unlocatable: true},
 		{name: "anthropic with located sections", provider: "anthropic"},
+		{name: "anthropic sending a later message's sections", provider: "anthropic", unsectioned: true, laterSections: true, wantIncomplete: true},
+		{name: "openai_compat with a later message's sections", provider: "openai_compat", unsectioned: true, laterSections: true},
+		{name: "anthropic with no sections anywhere", provider: "anthropic", unsectioned: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -197,6 +205,15 @@ func TestModelCallStore_UnsentSectionsMarkInputIncomplete(t *testing.T) {
 			c.Profile.Provider = tt.provider
 			if tt.unlocatable {
 				c.Messages[0].Content = "rewritten prompt"
+			}
+			if tt.unsectioned {
+				c.Messages[0].Sections = nil
+			}
+			if tt.laterSections {
+				c.Messages = append(c.Messages, llm.Message{
+					Role: "system", Content: "Late guidance.",
+					Sections: []llm.PromptSection{{Name: "LATE GUIDANCE", Content: "Late guidance."}},
+				})
 			}
 			if !s.Turn("r_alice").Capture(c) {
 				t.Fatal("capture not queued")
@@ -294,5 +311,70 @@ func TestModelCallTurn_DroppedCallMarksTurnIncomplete(t *testing.T) {
 	}
 	if calls != 3 || !incomplete {
 		t.Errorf("call_count = %d, capture_incomplete = %v; want 3, true", calls, incomplete)
+	}
+}
+
+// TestModelCallStore_EvictedMarkerStillLeavesTurnIncomplete pins that a
+// turn which lost a call reads incomplete even after the failure marker
+// aged out before Finish: the stored-row count, not the marker, is what
+// decides.
+func TestModelCallStore_EvictedMarkerStillLeavesTurnIncomplete(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`CREATE TRIGGER inject_failure BEFORE INSERT ON log_model_calls
+		WHEN NEW.request_id = 'r_alice' AND NEW.call_seq = 2
+		BEGIN SELECT RAISE(ABORT, 'injected failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s := newModelCallStore(db, ModelCallStoreConfig{InstanceID: "test", Logger: slog.New(slog.DiscardHandler)})
+	var clock atomic.Int64
+	clock.Store(time.Unix(1_800_000_000, 0).UnixNano())
+	s.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	s.start()
+
+	alice := s.Turn("r_alice")
+	for range 2 {
+		if !alice.Capture(fixtureCall()) {
+			t.Fatal("capture not queued")
+		}
+	}
+	waitFor(t, "the second call's write to fail", func() bool { return s.Stats().WriteErrors == 1 })
+
+	// An hour and more passes, and another request's write sweeps the
+	// idle marker away before alice finishes.
+	clock.Add(int64(poisonedIdleTTL + 2*poisonedSweepInterval))
+	if !s.Turn("r_bob").Capture(fixtureCall()) {
+		t.Fatal("capture not queued")
+	}
+	waitFor(t, "bob's call to commit", func() bool {
+		return countRows(t, db, `SELECT COUNT(*) FROM log_model_calls WHERE request_id = 'r_bob'`) == 1
+	})
+	if !alice.Finish(ModelTurn{Completed: true, At: time.Now()}) {
+		t.Fatal("Finish not queued")
+	}
+	s.Close()
+
+	if len(s.poisoned) != 0 {
+		t.Fatalf("poisoned = %v, want the marker swept before Finish (test precondition)", s.poisoned)
+	}
+	var calls int
+	var incomplete bool
+	if err := db.QueryRow(`SELECT call_count, capture_incomplete FROM log_model_turns WHERE request_id = 'r_alice'`).
+		Scan(&calls, &incomplete); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || !incomplete {
+		t.Errorf("call_count = %d, capture_incomplete = %v; want 2, true", calls, incomplete)
+	}
+}
+
+// waitFor polls cond until it holds or five seconds pass.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

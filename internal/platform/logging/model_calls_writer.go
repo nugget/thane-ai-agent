@@ -213,7 +213,20 @@ func insertModelCallRow(ctx context.Context, tx *sql.Tx, instanceID string, row 
 	return nil
 }
 
+// writeTurn stores a turn's outcome. incomplete carries what the drain
+// knows (a failed write it still remembers, or a call that never reached
+// the writer); the stored-row count below catches a failure whose marker
+// has since aged out, since only the rows on disk say what survived.
 func (s *ModelCallStore) writeTurn(ctx context.Context, row *modelTurnRow, incomplete bool) error {
+	if !incomplete {
+		var stored int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM log_model_calls WHERE request_id = ? AND instance_id = ?`,
+			row.requestID, s.instanceID).Scan(&stored); err != nil {
+			return fmt.Errorf("count stored calls: %w", err)
+		}
+		incomplete = stored < row.callCount
+	}
 	var outcomes sql.NullString
 	if len(row.turn.ToolOutcomes) > 0 {
 		b, err := json.Marshal(row.turn.ToolOutcomes)
