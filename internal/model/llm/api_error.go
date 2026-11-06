@@ -43,3 +43,44 @@ func IsBillingBlocked(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Billing
 }
+
+// ErrEmptyCompletion classifies a response the provider reported as
+// finished that carried no assistant content, no tool calls and no
+// reasoning: the model said nothing at all. Match it with errors.Is;
+// the error text stays the provider's own diagnosis.
+var ErrEmptyCompletion = errors.New("empty completion")
+
+// ErrReasoningOnly classifies a response that ended with terminal
+// evidence (a finish reason or end-of-stream marker) after carrying
+// reasoning but no content and no tool calls: the model was working and
+// the answer never reached the content channel. A reasoning stream that
+// closed without a terminal marker is a truncation, not this class.
+// Match it with errors.Is; the error text stays the provider's own
+// diagnosis.
+var ErrReasoningOnly = errors.New("reasoning-only completion")
+
+// classifiedError attaches a class sentinel to a provider error without
+// changing its text, so callers can switch on errors.Is instead of
+// matching message fragments while logs and API responses read exactly
+// as before.
+type classifiedError struct {
+	class error
+	err   error
+}
+
+// Error returns the wrapped error's text unchanged.
+func (e *classifiedError) Error() string { return e.err.Error() }
+
+// Unwrap exposes both the class and the original chain to errors.Is
+// and errors.As.
+func (e *classifiedError) Unwrap() []error { return []error{e.class, e.err} }
+
+// WithErrorClass returns err marked as belonging to class (one of the
+// sentinels above). The returned error's text is err's text. A nil err
+// stays nil.
+func WithErrorClass(class, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &classifiedError{class: class, err: err}
+}

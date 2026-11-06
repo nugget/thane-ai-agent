@@ -362,10 +362,10 @@ func (c *OpenAICompatClient) chatResponseFromWire(wire *openAICompatChatResponse
 		// never answered" reads very differently from "the model said
 		// nothing". Sizes only; reasoning text stays out of logs.
 		if r := wire.Choices[0].Message.reasoningText(); r != "" {
-			return usageOnlyResponse(result), fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
-				c.provider, wire.Model, len(r), result.StopReason)
+			return usageOnlyResponse(result), llm.WithErrorClass(llm.ErrReasoningOnly, fmt.Errorf("%s produced only reasoning for model %q (%d bytes, finish_reason=%q): the answer never reached the content channel — token budget exhausted mid-think, or a runner template routing the final answer into the reasoning field",
+				c.provider, wire.Model, len(r), result.StopReason))
 		}
-		return usageOnlyResponse(result), fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model)
+		return usageOnlyResponse(result), llm.WithErrorClass(llm.ErrEmptyCompletion, fmt.Errorf("%s returned an empty assistant completion for model %q", c.provider, wire.Model))
 	}
 	result.Done = true
 	return result, nil
