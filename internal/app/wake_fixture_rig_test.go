@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -233,6 +234,19 @@ type wakeRig struct {
 	hydrated map[string]looppkg.RuntimeTool
 }
 
+// snapshotRuntimeTools records every hydrated runtime tool by name as an
+// independent deep copy. Hydration, the loop's runtime-tool compilation
+// and the registry all keep the same Parameters maps, so a by-value copy
+// would move with any in-place schema change and let the tool-surface
+// invariant accept the drift it exists to catch.
+func snapshotRuntimeTools(tools []looppkg.RuntimeTool) map[string]looppkg.RuntimeTool {
+	out := make(map[string]looppkg.RuntimeTool, len(tools))
+	for _, tool := range tools {
+		out[tool.Name] = deepCopy(tool)
+	}
+	return out
+}
+
 // newWakeRig builds, registers and starts an event-driven loop over
 // real output hydration and SQLite memory, and returns once the loop is
 // waiting for its first wake. Cleanup stops the loop before closing
@@ -255,10 +269,7 @@ func newWakeRig(t *testing.T, rs wakeRigSpec) *wakeRig {
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
-	hydrated := make(map[string]looppkg.RuntimeTool, len(spec.RuntimeTools))
-	for _, tool := range spec.RuntimeTools {
-		hydrated[tool.Name] = tool
-	}
+	hydrated := snapshotRuntimeTools(spec.RuntimeTools)
 
 	mem, err := memory.NewSQLiteStoreWithLogger(filepath.Join(t.TempDir(), "mem.db"), 100, logger)
 	if err != nil {
@@ -604,5 +615,47 @@ func TestWakeRigInvariantsCatchDrift(t *testing.T) {
 				t.Errorf("checkScriptConsumed() = %v, want error %t", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestSnapshotRuntimeToolsIsIndependent pins that the tool-surface
+// reference cannot move with the tools it describes: an in-place change
+// to a hydrated schema after the snapshot must leave the snapshot as it
+// was, or the surface invariant would compare a drifted schema against
+// itself and pass.
+func TestSnapshotRuntimeToolsIsIndependent(t *testing.T) {
+	t.Parallel()
+
+	tools := []looppkg.RuntimeTool{{
+		Name:        "publish_output_fixture",
+		Description: "Publish the fixture output.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"status_line": map[string]any{"type": "string", "description": "One line."},
+			},
+			"required": []any{"status_line"},
+		},
+		ContentResolveExempt: []string{"status_line"},
+	}}
+	want := deepCopy(tools[0])
+
+	got := snapshotRuntimeTools(tools)
+
+	props := tools[0].Parameters["properties"].(map[string]any)
+	props["status_line"].(map[string]any)["description"] = "Drifted."
+	props["digest"] = map[string]any{"type": "string"}
+	tools[0].Parameters["required"].([]any)[0] = "digest"
+	tools[0].ContentResolveExempt[0] = "digest"
+
+	snap, ok := got["publish_output_fixture"]
+	if !ok {
+		t.Fatal("snapshot lacks publish_output_fixture")
+	}
+	if !reflect.DeepEqual(snap.Parameters, want.Parameters) {
+		t.Errorf("snapshot parameters moved with the source:\n got %v\nwant %v", snap.Parameters, want.Parameters)
+	}
+	if !slices.Equal(snap.ContentResolveExempt, want.ContentResolveExempt) {
+		t.Errorf("snapshot exemptions moved with the source: got %v, want %v", snap.ContentResolveExempt, want.ContentResolveExempt)
 	}
 }
