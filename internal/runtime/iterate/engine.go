@@ -89,9 +89,12 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// Without it the run can only notice an overrun after paying for
 		// it in full, which on a runner generating single-digit tokens
 		// per second is minutes of work discarded on arrival.
-		callCtx := iterCtx
+		// The call site rides only this call's context, not iterCtx, so
+		// tools and callbacks never inherit a stamp that names a model
+		// call they are not.
+		callCtx := llm.WithCallSite(iterCtx, llm.CallSite{Iteration: i, Kind: llm.CallKindIteration})
 		if cfg.MaxOutputTokens > 0 {
-			callCtx = llm.WithMaxOutputTokens(iterCtx, llm.ClampMaxOutputTokens(iterCtx, cfg.MaxOutputTokens-totalOutput))
+			callCtx = llm.WithMaxOutputTokens(callCtx, llm.ClampMaxOutputTokens(iterCtx, cfg.MaxOutputTokens-totalOutput))
 		}
 		llmResp, err := cfg.LLM.ChatStream(callCtx, model, messages, toolDefs, cfg.Stream)
 		if err != nil && !errors.Is(err, llm.ErrOutputBudgetExhausted) && cfg.OnLLMError != nil {
@@ -546,7 +549,9 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		// exceeded to say something nice about being over budget is not
 		// a budget; when nothing remains the caller gets the fallback
 		// content, which is what that path already exists to provide.
-		recoveryCtx := ctx
+		// The recovery call is recorded below as the next iteration, so
+		// it is placed there too.
+		recoveryCtx := llm.WithCallSite(ctx, llm.CallSite{Iteration: len(partial.Iterations), Kind: llm.CallKindForceText})
 		if cfg.MaxOutputTokens > 0 {
 			remaining := cfg.MaxOutputTokens - partial.OutputTokens
 			if remaining <= 0 {
@@ -557,7 +562,7 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 				partial.Messages = messages
 				return partial, nil
 			}
-			recoveryCtx = llm.WithMaxOutputTokens(ctx, llm.ClampMaxOutputTokens(ctx, remaining))
+			recoveryCtx = llm.WithMaxOutputTokens(recoveryCtx, llm.ClampMaxOutputTokens(ctx, remaining))
 		}
 		resp, err := cfg.LLM.ChatStream(recoveryCtx, model, messages, nil, cfg.Stream)
 		if err != nil {
