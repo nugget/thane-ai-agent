@@ -5,6 +5,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
+)
+
+const (
+	// poisonedIdleTTL is how long a poisoned request is remembered
+	// after its last item reached the drain. A turn's Finish normally
+	// clears it, but Finish can be dropped on a full queue; a request
+	// idle this long has ended.
+	poisonedIdleTTL = time.Hour
+	// poisonedSweepInterval bounds how often the drain prunes stale
+	// poisoned requests.
+	poisonedSweepInterval = time.Minute
 )
 
 // drain writes queued items one transaction each until Close.
@@ -12,16 +24,19 @@ func (s *ModelCallStore) drain() {
 	defer close(s.done)
 	ctx := context.Background()
 	for item := range s.ch {
+		now := s.now()
 		switch {
 		case item.call != nil:
-			if _, poisoned := s.poisoned[item.call.requestID]; poisoned {
+			id := item.call.requestID
+			if _, poisoned := s.poisoned[id]; poisoned {
 				item.call.call.InputIncomplete = true
+				s.poisoned[id] = now
 			}
 			written, err := s.writeCall(ctx, item)
 			if err != nil {
-				s.poisoned[item.call.requestID] = struct{}{}
+				s.poisoned[id] = now
 				s.warnPowersOfTwo(s.writeErrors.Add(1), "model call capture write failed; later calls in the request marked input_incomplete", "write_errors", err)
-				continue
+				break
 			}
 			s.blobBytes.Add(uint64(written))
 		case item.turn != nil:
@@ -29,6 +44,22 @@ func (s *ModelCallStore) drain() {
 			if err := s.writeTurn(ctx, item.turn); err != nil {
 				s.warnPowersOfTwo(s.writeErrors.Add(1), "model turn capture write failed", "write_errors", err)
 			}
+		}
+		s.sweepPoisoned(now)
+	}
+}
+
+// sweepPoisoned forgets poisoned requests idle longer than
+// [poisonedIdleTTL], at most once per [poisonedSweepInterval], so a
+// request whose Finish was dropped does not stay for the process's life.
+func (s *ModelCallStore) sweepPoisoned(now time.Time) {
+	if len(s.poisoned) == 0 || now.Sub(s.lastSweep) < poisonedSweepInterval {
+		return
+	}
+	s.lastSweep = now
+	for id, seen := range s.poisoned {
+		if now.Sub(seen) > poisonedIdleTTL {
+			delete(s.poisoned, id)
 		}
 	}
 }

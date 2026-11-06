@@ -115,9 +115,13 @@ func ModelCallInstanceID(hostname string, start time.Time) string {
 // turn-scoped model call. Pointer fields are nil when the provider did
 // not report the value, which is stored as NULL, never as zero.
 type ModelCall struct {
+	// ConversationID is the conversation the call served, empty when
+	// it served none.
 	ConversationID string
-	LoopID         string
-	LoopName       string
+	// LoopID is the loop instance the call ran in, empty outside a loop.
+	LoopID string
+	// LoopName is that loop's name, empty outside a loop.
+	LoopName string
 	// Iteration is the engine iteration the call served.
 	Iteration int
 	// Kind is the call site's kind (iteration, force_text, retry, ...).
@@ -155,14 +159,26 @@ type ModelCall struct {
 	// when the call failed.
 	Response *llm.Message
 
+	// StopReason is the stop or finish reason the provider reported,
+	// empty when it reported none.
 	StopReason string
 	// ErrorClass classifies a failed call, empty on success.
-	ErrorClass               string
-	InputTokens              int
-	OutputTokens             int
+	ErrorClass string
+	// InputTokens is the uncached input token count the provider
+	// reported, 0 when it reported none.
+	InputTokens int
+	// OutputTokens is the output token count the provider reported,
+	// 0 when it reported none.
+	OutputTokens int
+	// CacheCreationInputTokens is the input written to the provider's
+	// prompt cache, 0 when it reported none.
 	CacheCreationInputTokens int
-	CacheReadInputTokens     int
-	Duration                 time.Duration
+	// CacheReadInputTokens is the input served from the provider's
+	// prompt cache, 0 when it reported none.
+	CacheReadInputTokens int
+	// Duration is the call's wall time, from sending the request until
+	// the response or error was complete.
+	Duration time.Duration
 	// FirstEvent is the time to the first stream event, nil when the
 	// call did not stream or no event arrived.
 	FirstEvent *time.Duration
@@ -178,34 +194,57 @@ type ModelCall struct {
 
 // ToolOutcomeRecord is the stored form of one tool's tally in a run's
 // outcome ledger. It mirrors the iterate package's ToolOutcome, which
-// cannot be stored directly without an import cycle.
+// cannot be stored directly without an import cycle, and keeps its
+// counting rules.
 type ToolOutcomeRecord struct {
-	Calls     int                         `json:"calls"`
-	Failures  int                         `json:"failures"`
-	Blocked   int                         `json:"blocked"`
-	Successes int                         `json:"successes"`
-	LastError string                      `json:"last_error,omitempty"`
-	Targets   map[string]ToolTargetRecord `json:"targets,omitempty"`
+	// Calls counts the calls the repeat guard let through: executed
+	// calls plus calls refused as unavailable.
+	Calls int `json:"calls"`
+	// Failures counts calls that returned an error plus calls the
+	// repeat guard refused, so it includes every Blocked call.
+	Failures int `json:"failures"`
+	// Blocked counts the calls the repeat guard refused without
+	// running them. Each is also in Failures, never in Calls.
+	Blocked int `json:"blocked"`
+	// Successes counts executed calls that returned without error.
+	Successes int `json:"successes"`
+	// LastError is the most recent execution error; guard refusals
+	// never overwrite it.
+	LastError string `json:"last_error,omitempty"`
+	// Targets breaks the tally down by the document each call wrote;
+	// the counts above are its sums.
+	Targets map[string]ToolTargetRecord `json:"targets,omitempty"`
 }
 
-// ToolTargetRecord is one target's share of a [ToolOutcomeRecord].
+// ToolTargetRecord is one target's share of a [ToolOutcomeRecord],
+// counted by the same rules.
 type ToolTargetRecord struct {
-	Calls     int    `json:"calls"`
-	Failures  int    `json:"failures"`
-	Blocked   int    `json:"blocked"`
-	Successes int    `json:"successes"`
+	// Calls counts the target's calls the repeat guard let through.
+	Calls int `json:"calls"`
+	// Failures counts the target's errors and guard refusals.
+	Failures int `json:"failures"`
+	// Blocked counts the target's guard refusals, each also in Failures.
+	Blocked int `json:"blocked"`
+	// Successes counts the target's calls that returned without error.
+	Successes int `json:"successes"`
+	// LastError is the target's most recent execution error.
 	LastError string `json:"last_error,omitempty"`
 }
 
 // ModelTurn is how one agent run ended.
 type ModelTurn struct {
 	// Completed is true when the run returned without error.
-	Completed     bool
-	Exhausted     bool
+	Completed bool
+	// Exhausted is true when the run stopped on a budget, such as its
+	// iteration limit, rather than on a final answer.
+	Exhausted bool
+	// ExhaustReason names the budget that stopped an exhausted run,
+	// empty otherwise.
 	ExhaustReason string
 	// ToolOutcomes is the run's ledger, keyed by tool name.
 	ToolOutcomes map[string]ToolOutcomeRecord
-	At           time.Time
+	// At is when the run ended.
+	At time.Time
 }
 
 // ModelCallStats reports the eval store writer's counters.
@@ -249,9 +288,13 @@ type ModelCallStore struct {
 	startOnce  sync.Once
 	closeOnce  sync.Once
 
-	// poisoned holds request IDs with a failed transaction. Only the
-	// drain goroutine touches it.
-	poisoned map[string]struct{}
+	// poisoned maps each request with a failed transaction to the last
+	// time one of its items reached the drain; lastSweep is when stale
+	// entries were last pruned. Only the drain goroutine touches them.
+	poisoned  map[string]time.Time
+	lastSweep time.Time
+	// now is the drain's clock.
+	now func() time.Time
 
 	enqueued, dropped, hashErrors, writeErrors atomic.Uint64
 	blobBytes, segmentFallbacks                atomic.Uint64
@@ -307,7 +350,8 @@ func newModelCallStore(db *sql.DB, cfg ModelCallStoreConfig) *ModelCallStore {
 		logger:     logger,
 		ch:         make(chan modelCallItem, size),
 		done:       make(chan struct{}),
-		poisoned:   make(map[string]struct{}),
+		poisoned:   make(map[string]time.Time),
+		now:        time.Now,
 	}
 }
 
@@ -442,8 +486,10 @@ func (t *ModelCallTurn) Capture(call ModelCall) bool {
 }
 
 // Finish queues the request's outcome row and reports whether it was
-// queued. It closes the request: the writer forgets any failed
-// transaction recorded against it.
+// queued. Once written, it closes the request: the writer forgets any
+// failed transaction recorded against it. When Finish returns false
+// the row is lost, and a failed transaction stays remembered until
+// the request has been idle for an hour.
 func (t *ModelCallTurn) Finish(turn ModelTurn) bool {
 	if t == nil {
 		return false

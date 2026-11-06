@@ -12,9 +12,14 @@ import (
 )
 
 // WholePromptSegment names the single segment a system prompt is
-// stored as when its sections cannot be located in its text. A call
-// stored this way is replayable, but its prompt has no section
-// boundaries a treatment could act on.
+// stored as when it cannot be split into sections. That happens in two
+// cases. A prompt that declares no sections is stored WHOLE as a matter
+// of course: segment_fallback is 0, and its stable prefix is the tool
+// surface alone. A prompt whose declared sections cannot be located in
+// its text, in order, is stored WHOLE as a fallback: segment_fallback
+// is 1, and stable_prefix_hash is NULL. Either way the call is
+// replayable, but its prompt has no section boundaries a treatment
+// could act on.
 const WholePromptSegment = "WHOLE"
 
 // PromptSegment is one contiguous piece of a captured system prompt.
@@ -36,8 +41,13 @@ type PromptSegment struct {
 // hashes were served the same way, whatever build or process sent
 // them; build, TTL and loaded context are provenance, not profile.
 type ServingProfile struct {
-	Provider      string `json:"provider"`
-	Resource      string `json:"resource"`
+	// Provider is the provider type that encoded the request, such as
+	// anthropic or openai_compat.
+	Provider string `json:"provider"`
+	// Resource is the configured serving resource the call went to.
+	Resource string `json:"resource"`
+	// UpstreamModel is the model the resource actually serves, as
+	// opposed to the deployment name the call was routed by.
 	UpstreamModel string `json:"upstream_model"`
 	// ChatTemplateKwargs are the kwargs as encoded on the wire. Nil
 	// means the provider did not report them, which hashes apart from
@@ -147,9 +157,13 @@ func canonicalizeMessage(msg llm.Message) (canonicalMessage, bool) {
 // segmentPrompt splits a system prompt into ordered segments: each
 // section where it is found from a moving cursor, and the separator
 // text between sections as unnamed segments. It reports false, and a
-// single [WholePromptSegment], when a section cannot be found or the
-// segments do not re-concatenate to content byte for byte. A prompt
-// without sections is one [WholePromptSegment] and is not a fallback.
+// single [WholePromptSegment], when a section cannot be found after the
+// one before it. A prompt without sections is one [WholePromptSegment]
+// and is not a fallback.
+//
+// The segments re-concatenate to content byte for byte by construction:
+// the cursor walk emits every byte of content exactly once, each named
+// segment's text having just been matched at the cursor.
 func segmentPrompt(content string, sections []llm.PromptSection) (segs []llm.PromptSection, ok bool) {
 	whole := []llm.PromptSection{{Name: WholePromptSegment, Content: content}}
 	if len(sections) == 0 {
@@ -169,14 +183,6 @@ func segmentPrompt(content string, sections []llm.PromptSection) (segs []llm.Pro
 	}
 	if cursor < len(content) {
 		segs = append(segs, llm.PromptSection{Content: content[cursor:]})
-	}
-	var rebuilt strings.Builder
-	rebuilt.Grow(len(content))
-	for _, s := range segs {
-		rebuilt.WriteString(s.Content)
-	}
-	if rebuilt.String() != content {
-		return whole, false
 	}
 	return segs, true
 }

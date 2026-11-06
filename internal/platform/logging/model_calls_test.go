@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -245,12 +246,11 @@ func TestSegmentPrompt(t *testing.T) {
 		return llm.PromptSection{Name: name, Content: content, CacheTTL: ttl}
 	}
 	tests := []struct {
-		name         string
-		content      string
-		sections     []llm.PromptSection
-		wantOK       bool
-		wantNames    []string
-		wantSegments int
+		name      string
+		content   string
+		sections  []llm.PromptSection
+		wantOK    bool
+		wantNames []string
 	}{
 		{
 			name:      "separators become unnamed segments",
@@ -603,6 +603,62 @@ func TestModelCallStore_FailedTransactionPoisonsRequest(t *testing.T) {
 	}
 }
 
+func TestModelCallStore_PoisonedRequestReleasedWhenFinishIsDropped(t *testing.T) {
+	tests := []struct {
+		name         string
+		idle         time.Duration
+		wantPoisoned int
+	}{
+		{name: "a recently active request stays poisoned", idle: time.Minute, wantPoisoned: 1},
+		{name: "an idle request is released", idle: poisonedIdleTTL + time.Minute, wantPoisoned: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			if _, err := db.Exec(`CREATE TRIGGER inject_failure BEFORE INSERT ON log_model_calls
+				WHEN NEW.request_id = 'r_poisoned' AND NEW.call_seq = 1
+				BEGIN SELECT RAISE(ABORT, 'injected failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			s := newModelCallStore(db, ModelCallStoreConfig{InstanceID: "test", QueueSize: 2, Logger: slog.New(slog.DiscardHandler)})
+			var clock atomic.Int64
+			clock.Store(time.Unix(1_800_000_000, 0).UnixNano())
+			s.now = func() time.Time { return time.Unix(0, clock.Load()) }
+
+			poisoned := s.Turn("r_poisoned")
+			for range 2 {
+				if !poisoned.Capture(fixtureCall()) {
+					t.Fatal("capture not queued")
+				}
+			}
+			// The queue is full, so the poisoned request's Finish is lost.
+			if poisoned.Finish(ModelTurn{Completed: true, At: time.Now()}) {
+				t.Fatal("Finish queued, want a full-queue drop")
+			}
+			s.start()
+			deadline := time.Now().Add(5 * time.Second)
+			for len(s.ch) > 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("drain did not take the queued items")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			clock.Add(int64(tt.idle))
+			if !s.Turn("r_bob").Capture(fixtureCall()) {
+				t.Fatal("later capture not queued")
+			}
+			s.Close()
+
+			if got := len(s.poisoned); got != tt.wantPoisoned {
+				t.Errorf("poisoned requests = %d, want %d", got, tt.wantPoisoned)
+			}
+			if got := countRows(t, db, `SELECT COUNT(*) FROM log_model_calls WHERE request_id = 'r_poisoned' AND input_incomplete = 1`); got != 1 {
+				t.Errorf("input_incomplete rows = %d, want 1", got)
+			}
+		})
+	}
+}
+
 func TestModelCallStore_WireFactsNullWhenUnknown(t *testing.T) {
 	zero, off := 0, false
 	firstEvent := 250 * time.Millisecond
@@ -778,8 +834,8 @@ func TestMigrate_ModelCallsIdempotentOnExistingLogsDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	// A logs.db from before the eval store, including the column a
-	// closed branch build once added to log_request_content.
+	// A logs.db from before the eval store, whose log_request_content
+	// carries an extra column Migrate does not know about.
 	legacy := `
 	CREATE TABLE log_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
 		level TEXT NOT NULL, msg TEXT NOT NULL, request_id TEXT, session_id TEXT,
@@ -791,7 +847,7 @@ func TestMigrate_ModelCallsIdempotentOnExistingLogsDB(t *testing.T) {
 		request_id TEXT NOT NULL UNIQUE, prompt_hash TEXT, user_content TEXT,
 		assistant_content TEXT, model TEXT, iteration_count INTEGER, input_tokens INTEGER,
 		output_tokens INTEGER, tools_used TEXT, exhausted BOOLEAN DEFAULT FALSE,
-		exhaust_reason TEXT, created_at TEXT NOT NULL, tool_definitions_json TEXT);
+		exhaust_reason TEXT, created_at TEXT NOT NULL, extra_column TEXT);
 	INSERT INTO log_entries (timestamp, level, msg) VALUES ('2026-01-01T00:00:00.000000000Z', 'INFO', 'before');
 	INSERT INTO log_request_content (request_id, created_at) VALUES ('r_old', '2026-01-01T00:00:00.000000000Z');
 	`
