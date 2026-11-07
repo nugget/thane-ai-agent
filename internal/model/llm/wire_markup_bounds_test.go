@@ -170,6 +170,16 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupQwenXML, true, true, true),
 		},
 		{
+			name:    "a call-shaped harmony argument object cut off by an end token",
+			content: `to=functions.note_add {"name":"get_state","arguments":{"text":"<|call|>"}}`,
+			want:    scan(WireMarkupHarmony, false, true, false),
+		},
+		{
+			name:    "a harmony message body that is not an object",
+			content: `to=functions.get_weather <|message|>null {"location":"Paris"}`,
+			want:    scan(WireMarkupHarmony, false, true, false),
+		},
+		{
 			name:    "a recipient's message ending before any arguments",
 			content: `<|channel|>commentary to=functions.get_state <|constrain|>json<|message|><|call|><|start|>assistant<|channel|>final<|message|>{"done":true}`,
 			want:    scan(WireMarkupHarmony, false, true, false),

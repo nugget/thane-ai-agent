@@ -7,6 +7,9 @@ import (
 
 const (
 	harmonyRecipient = "to=functions."
+	// harmonyMessage ends a tokenised Harmony header: what follows it
+	// is the message body.
+	harmonyMessage = "<|message|>"
 	// harmonyArgsWindow bounds how far after the recipient name the
 	// argument value may start. The longest real gap is a
 	// "<|channel|>commentary <|constrain|>json<|message|>" header.
@@ -77,7 +80,10 @@ func parseHarmonyCall(text string, anchor int) (wireCandidate, int) {
 		return c, nameEnd
 	}
 	end, closed := harmonyValueEnd(text, open)
-	c.data = []textRange{{open + 1, end}}
+	// The value's own opening brace is in its data, so an object there
+	// is this call's arguments and never a call of its own, even one
+	// with name and arguments keys that outlives a value cut short.
+	c.data = []textRange{{open, end}}
 	if closed && text[open] == '{' {
 		var obj map[string]any
 		c.wellFormed = json.Unmarshal([]byte(text[open:end]), &obj) == nil
@@ -88,18 +94,27 @@ func parseHarmonyCall(text string, anchor int) (wireCandidate, int) {
 // harmonyArgsStart returns the offset in window where a recipient's
 // argument value begins, window being the text after the recipient's
 // name. Only the header may come first: whitespace, special tokens such
-// as <|constrain|> and <|message|>, and the words around them, such as
-// a channel or a content type (commentary, json, code). The value
-// begins at the first byte that is none of those, so json[...] begins
-// at its bracket rather than at an object inside it, and a token quoted
-// inside the value stays in the value. It returns -1 when the window
-// holds nothing but header, or when an end token closes the
+// as <|constrain|>, and the words around them, such as a channel or a
+// content type (commentary, json, code). A <|message|> token ends the
+// header, so the value is whatever follows it past whitespace, and
+// <|message|>null is a null body rather than a prefix to skip. Text
+// with the tokens stripped has no such marker, and there the value
+// begins at the first byte that is not header, so json[...] begins at
+// its bracket rather than at an object inside it. Either way a token
+// quoted inside the value stays in the value. It returns -1 when the
+// window holds nothing but header, or when an end token closes the
 // recipient's message first: a value after it belongs to a later one.
 func harmonyArgsStart(window string) int {
 	for pos := 0; pos < len(window); {
 		switch c := window[pos]; {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n' || isHarmonyNameByte(c):
 			pos++
+		case strings.HasPrefix(window[pos:], harmonyMessage):
+			body := strings.TrimLeft(window[pos+len(harmonyMessage):], " \t\r\n")
+			if body == "" {
+				return -1
+			}
+			return len(window) - len(body)
 		case strings.HasPrefix(window[pos:], "<|"):
 			end := strings.Index(window[pos:], "|>")
 			if end < 0 || hasAnyPrefix(window[pos:], harmonyEndTokens) {
