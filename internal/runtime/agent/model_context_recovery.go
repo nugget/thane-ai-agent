@@ -20,6 +20,7 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	msgs []llm.Message,
 	toolDefs []map[string]any,
 	stream llm.StreamCallback,
+	outcome *llmErrorOutcome,
 ) (*llm.ChatResponse, string, error, bool) {
 	if l == nil || l.modelRuntime == nil || err == nil {
 		return nil, "", nil, false
@@ -127,6 +128,10 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 		if len(tools) == 0 && len(toolDefs) > 0 {
 			kind = llm.CallKindContextRecoveryNoTools
 		}
+		// The tool-free retry sends a smaller request than the one the
+		// iteration estimated, and its response must not be read
+		// against that estimate.
+		outcome.requestReplaced = kind == llm.CallKindContextRecoveryNoTools
 		callCtx := llm.WithCallKind(ctx, kind)
 		if retryUpstreamModel != "" {
 			if direct := l.modelRuntime.LMStudioClient(dep.ResourceID); direct != nil {
