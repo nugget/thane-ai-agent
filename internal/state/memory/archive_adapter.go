@@ -165,6 +165,28 @@ func (a *ArchiveAdapter) activeSessionLocked(conversationID string) sessionEntry
 	return entry
 }
 
+// ForgetSession evicts the conversation's cached session when it is still
+// sessionID. Callers that end a session outside the adapter's own
+// transitions (the summarizer's idle close) use it so the next lookup
+// falls through to the store and EnsureSession starts a successor instead
+// of returning the closed session. A stale call, where the cache already
+// holds a different session, is a no-op and never drops the successor.
+func (a *ArchiveAdapter) ForgetSession(conversationID, sessionID string) {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.sessions[conversationID]
+	if !ok || entry.id != sessionID {
+		return
+	}
+	delete(a.sessions, conversationID)
+	a.logger.Debug("evicted closed session from cache",
+		"conversation_id", conversationID,
+		"session_id", sessionID,
+	)
+}
+
 // EnsureSession starts a session if none is active for the conversation.
 func (a *ArchiveAdapter) EnsureSession(conversationID string) string {
 	a.lifecycleMu.Lock()
