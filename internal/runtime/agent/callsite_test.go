@@ -175,8 +175,8 @@ func TestLLMErrorHandler_StampsCallSite(t *testing.T) {
 				iterCtx = llm.WithCallSite(iterCtx, llm.CallSite{Iteration: iteration, Kind: llm.CallKindIteration})
 			}
 
-			timeoutRecovered := false
-			handler := loop.buildLLMErrorHandler(context.Background(), nil, rec, &Request{}, &timeoutRecovered)
+			var outcome llmErrorOutcome
+			handler := loop.buildLLMErrorHandler(context.Background(), nil, rec, &Request{}, &outcome)
 			resp, _, err := handler(iterCtx, tt.err, "stalled-model", toolResultHistory(), nil, nil)
 			if err != nil || resp == nil {
 				t.Fatalf("handler = resp %v, err %v; want a response", resp, err)

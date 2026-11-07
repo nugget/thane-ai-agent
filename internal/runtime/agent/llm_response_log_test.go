@@ -64,7 +64,10 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		recoveryModel string
 		responses     []*llm.ChatResponse
 		// errs fails the model call at that index instead of answering.
-		errs       map[int]error
+		errs map[int]error
+		// pullAfter, when nonzero, delivers one user message on the
+		// first input poll after that many model calls.
+		pullAfter  int
 		want       []map[string]any
 		wantAbsent []string
 		// wantFinish, when set, is the run's finish reason.
@@ -139,6 +142,34 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			wantFinish: "timeout_recovery",
 		},
 		{
+			// Input arriving as the recovered reply closes holds the
+			// turn open, and the next call answers a freshly rendered
+			// prompt. Only the recovered reply goes without a profile;
+			// the finish reason still records that recovery happened.
+			name:          "timeout recovery then input at closure",
+			recoveryModel: "claude-recovery",
+			responses: []*llm.ChatResponse{
+				accountingToolResponse(),
+				nil, nil, nil,
+				{
+					Model: "claude-recovery", StopReason: "end_turn",
+					Message: llm.Message{Role: "assistant", Content: "Inspected before the timeout."},
+				},
+				{
+					Model: "claude-recovery", StopReason: "end_turn",
+					Message: llm.Message{Role: "assistant", Content: "Answered the follow-up."},
+				},
+			},
+			errs:      map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout},
+			pullAfter: 5,
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "anthropic_native"},
+				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": ""},
+				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": "anthropic_native"},
+			},
+			wantFinish: "timeout_recovery",
+		},
+		{
 			// With no recovery model the reply is synthesized; no
 			// prompt at all produced it.
 			name: "timeout static fallback",
@@ -184,6 +215,17 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				resp := *tt.responses[n]
 				return &resp, nil
 			}}
+			var pullInput func(context.Context) []llm.Message
+			if tt.pullAfter > 0 {
+				delivered := false
+				pullInput = func(context.Context) []llm.Message {
+					if delivered || calls < tt.pullAfter {
+						return nil
+					}
+					delivered = true
+					return []llm.Message{{Role: "user", Content: "And the tests?"}}
+				}
+			}
 			logs := &lockedLogBuffer{}
 			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(logs, nil)))
 			resp, err := loop.Run(ctx, &Request{
@@ -192,6 +234,7 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				SkipContext:    tt.lightweight,
 				SystemPrompt:   tt.systemPrompt,
 				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
+				PullInput:      pullInput,
 			}, nil)
 			if err != nil {
 				t.Fatal(err)
