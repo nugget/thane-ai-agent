@@ -102,9 +102,72 @@ func TestParseQwenXMLCalls(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got := parseQwenXMLCalls(tt.text)
+			// Value spans are pinned by TestParseQwenXMLValueSpans.
+			for i := range got {
+				got[i].values = nil
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("parseQwenXMLCalls() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseQwenXMLValueSpans pins the spans a call's argument data
+// occupies, which is what keeps markup quoted in a value from being
+// read as a call. A cut-off or unkeyed value is data all the same.
+func TestParseQwenXMLValueSpans(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{name: "closed values", text: qwenCall, want: []string{"\nlight.kitchen\n"}},
+		{
+			name: "value cut off by the end of the text",
+			text: "<function=note_add>\n<parameter=text>\n{\"name\":\"get_state\"",
+			want: []string{"\n{\"name\":\"get_state\""},
+		},
+		{
+			name: "value running into the next parameter",
+			text: "<function=note_add>\n<parameter=a>\nx\n<parameter=b>\ny\n</parameter>",
+			want: []string{"\nx\n"},
+		},
+		{name: "unkeyed value", text: "<function=get_state>\n<parameter=>\nx\n</parameter>\n</function>", want: []string{"\nx\n"}},
+		{name: "cut-off header has no value", text: "<function=note_add>\n<parameter=te"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			calls := parseQwenXMLCalls(tt.text)
+			if len(calls) != 1 {
+				t.Fatalf("parseQwenXMLCalls() = %d calls, want 1", len(calls))
+			}
+			var got []string
+			for _, v := range calls[0].values {
+				got = append(got, tt.text[v.start:v.end])
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("value spans = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestQwenXMLCandidatesStopAtLimit proves detection parses no more than
+// its candidate limit: allocations stay flat however many calls follow.
+func TestQwenXMLCandidatesStopAtLimit(t *testing.T) {
+	few := strings.Repeat(qwenCall, maxWireCandidates)
+	many := strings.Repeat(qwenCall, 50*maxWireCandidates)
+	if got := len(qwenXMLCandidates(many)); got != maxWireCandidates {
+		t.Fatalf("qwenXMLCandidates() = %d candidates, want %d", got, maxWireCandidates)
+	}
+	fewAllocs := testing.AllocsPerRun(20, func() { qwenXMLCandidates(few) })
+	manyAllocs := testing.AllocsPerRun(20, func() { qwenXMLCandidates(many) })
+	if manyAllocs != fewAllocs {
+		t.Fatalf("allocations grew with the calls after the limit: %v for %d calls, %v for %d",
+			fewAllocs, maxWireCandidates, manyAllocs, 50*maxWireCandidates)
 	}
 }

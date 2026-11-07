@@ -446,6 +446,11 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"unclosed functions", func(n int) string { return strings.Repeat("<function=a>\n<parameter=b>\n", n) }},
 		{"bare tool_call tags", func(n int) string { return strings.Repeat("<tool_call>{", n) }},
 		{"harmony recipients", func(n int) string { return strings.Repeat("to=functions.a {", n) }},
+		{"empty tool_call tags", func(n int) string { return strings.Repeat("<tool_call></tool_call>", n) }},
+		{"qwen calls in a JSON call's arguments", func(n int) string {
+			return `{"name":"a","arguments":"` + strings.Repeat("<function=b></function>", n) + `"}`
+		}},
+		{"JSON calls in a cut-off qwen value", func(n int) string { return "<function=a>\n<parameter=b>\n" + strings.Repeat(jsonCall, n) }},
 		{"prose with stray braces", func(n int) string { return strings.Repeat(`a {"name": b `, n) }},
 		{"cut-off name-only objects before trailing space", func(n int) string {
 			return strings.Repeat(`{"name":"x",{`, n) + strings.Repeat(" ", n)

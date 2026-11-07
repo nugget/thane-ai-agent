@@ -24,6 +24,10 @@ type qwenXMLCall struct {
 	// params keep the model's order and its raw string values. Typing
 	// a value is the recovering caller's job, against the tool schema.
 	params []qwenXMLParam
+	// values are the spans of the parameter values in the text, in
+	// order, including a value the body cut off, which params omit.
+	// Markup inside them is argument data, never a call.
+	values []textRange
 	// complete means a readable header, a body of nothing but
 	// whitespace and parameters each closed by </parameter>, and the
 	// function closed by </function>, </tool_call> or the end of the
@@ -40,7 +44,9 @@ type qwenXMLParam struct {
 }
 
 // parseQwenXMLCalls returns every <function=...> call in text, in
-// order, complete or not.
+// order, complete or not. Detection examines a bounded number of calls
+// with [parseQwenXMLFunction] instead, so it never parses past its
+// candidate limit; recovery, which needs every call, uses this.
 func parseQwenXMLCalls(text string) []qwenXMLCall {
 	var calls []qwenXMLCall
 	for pos := 0; ; {
@@ -77,8 +83,11 @@ func parseQwenXMLFunction(text string, open int) (qwenXMLCall, int) {
 	// </tool_call> or at the end of the text. Running into the next
 	// opening tag means the call was never closed.
 	closedHere := closer != qwenFunctionOpen && closer != qwenToolCallOpen
-	params, paramsOK := parseQwenXMLParams(text[bodyStart:bodyEnd])
+	params, values, paramsOK := parseQwenXMLParams(text[bodyStart:bodyEnd])
 	call.params = params
+	for _, v := range values {
+		call.values = append(call.values, textRange{bodyStart + v.start, bodyStart + v.end})
+	}
 	call.complete = call.name != "" && closedHere && paramsOK
 	next := bodyEnd
 	if closer == qwenFunctionClose {
@@ -87,32 +96,37 @@ func parseQwenXMLFunction(text string, open int) (qwenXMLCall, int) {
 	return call, next
 }
 
-// parseQwenXMLParams parses a function body. It reports false when a
+// parseQwenXMLParams parses a function body, returning its parameters
+// and the body-relative spans of their values. It reports false when a
 // parameter header or value is cut off, a value runs into the next
 // <parameter= without its </parameter>, or non-whitespace text sits
 // outside the parameters: before the first, between two, or after the
 // last. That last case also covers prose that merely quotes a
-// <function=...> tag and runs to the end of the text.
-func parseQwenXMLParams(body string) ([]qwenXMLParam, bool) {
+// <function=...> tag and runs to the end of the text. A value that is
+// cut off or unkeyed still has its span returned, since its text is
+// argument data all the same.
+func parseQwenXMLParams(body string) ([]qwenXMLParam, []textRange, bool) {
 	var params []qwenXMLParam
+	var values []textRange
 	for pos := 0; ; {
 		i := strings.Index(body[pos:], qwenParamOpen)
 		if i < 0 {
-			return params, strings.TrimSpace(body[pos:]) == ""
+			return params, values, strings.TrimSpace(body[pos:]) == ""
 		}
 		if strings.TrimSpace(body[pos:pos+i]) != "" {
-			return params, false
+			return params, values, false
 		}
 		keyStart := pos + i + len(qwenParamOpen)
 		gt := strings.IndexAny(body[keyStart:], ">\n<")
 		if gt < 0 || body[keyStart+gt] != '>' {
-			return params, false
+			return params, values, false
 		}
 		key := strings.TrimSpace(body[keyStart : keyStart+gt])
 		valueStart := keyStart + gt + 1
 		valueEnd, closer := nextQwenToken(body, valueStart, qwenParamClose, qwenParamOpen)
+		values = append(values, textRange{valueStart, valueEnd})
 		if key == "" || closer != qwenParamClose {
-			return params, false
+			return params, values, false
 		}
 		params = append(params, qwenXMLParam{key: key, value: trimQwenValue(body[valueStart:valueEnd])})
 		pos = valueEnd + len(qwenParamClose)
@@ -147,34 +161,40 @@ func nextQwenToken(text string, from int, tokens ...string) (int, string) {
 	return len(text), ""
 }
 
-// qwenXMLFinding reduces the parsed calls to a detector finding. A bare
-// <tool_call> tag holding neither a function nor a JSON object, as when
-// the text is cut right after it, also counts as malformed qwen_xml; a
-// tag holding JSON is left to the json_call detector.
-func qwenXMLFinding(text string) (wireFinding, bool) {
-	var best wireFinding
-	found := false
-	for i, call := range parseQwenXMLCalls(text) {
-		if i >= maxWireCandidates {
+// qwenXMLCandidates examines up to [maxWireCandidates] functions, one
+// at a time, then the bare <tool_call> tags.
+func qwenXMLCandidates(text string) []wireCandidate {
+	var out []wireCandidate
+	for pos := 0; len(out) < maxWireCandidates; {
+		i := strings.Index(text[pos:], qwenFunctionOpen)
+		if i < 0 {
 			break
 		}
-		f := wireFinding{
-			markup:     WireMarkupQwenXML,
-			start:      markupStart(text, call.start, jsonWrapperTokens),
-			name:       call.name,
-			wellFormed: call.complete,
-		}
-		if f.wellFormed {
-			return f, true
-		}
-		if !found {
-			best, found = f, true
-		}
+		call, next := parseQwenXMLFunction(text, pos+i)
+		out = append(out, wireCandidate{
+			wireFinding: wireFinding{
+				markup:     WireMarkupQwenXML,
+				start:      markupStart(text, call.start, jsonWrapperTokens),
+				name:       call.name,
+				wellFormed: call.complete,
+			},
+			anchor: call.start,
+			data:   call.values,
+		})
+		pos = next
 	}
-	if found {
-		return best, true
-	}
-	for pos, n := 0, 0; n < maxWireCandidates; n++ {
+	return append(out, bareToolCallCandidates(text)...)
+}
+
+// bareToolCallCandidates returns, as malformed qwen_xml, up to
+// [maxWireCandidates] <tool_call> tags holding neither a function nor
+// a JSON object, as when the text is cut right after the tag. A tag
+// holding a function is that function's wrapper, and one holding JSON
+// is left to the json_call detector. Tag bodies do not overlap, so the
+// walk stays linear however many tags it passes over.
+func bareToolCallCandidates(text string) []wireCandidate {
+	var out []wireCandidate
+	for pos := 0; len(out) < maxWireCandidates; {
 		i := strings.Index(text[pos:], qwenToolCallOpen)
 		if i < 0 {
 			break
@@ -182,10 +202,13 @@ func qwenXMLFinding(text string) (wireFinding, bool) {
 		open := pos + i
 		bodyStart := open + len(qwenToolCallOpen)
 		bodyEnd, _ := nextQwenToken(text, bodyStart, qwenToolCallClose, qwenToolCallOpen)
-		if !strings.Contains(text[bodyStart:bodyEnd], "{") {
-			return wireFinding{markup: WireMarkupQwenXML, start: markupStart(text, open, jsonWrapperTokens)}, true
+		if body := text[bodyStart:bodyEnd]; !strings.Contains(body, "{") && !strings.Contains(body, qwenFunctionOpen) {
+			out = append(out, wireCandidate{
+				wireFinding: wireFinding{markup: WireMarkupQwenXML, start: markupStart(text, open, jsonWrapperTokens)},
+				anchor:      open,
+			})
 		}
 		pos = bodyEnd
 	}
-	return wireFinding{}, false
+	return out
 }

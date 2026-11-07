@@ -7,24 +7,23 @@ import (
 	"strings"
 )
 
-// jsonCallFinding finds JSON objects carrying "name" and "arguments"
-// anywhere in text: closed objects first, then an unclosed object cut
-// off at the end of the text.
+// jsonCallCandidates finds JSON objects carrying "name" and
+// "arguments" anywhere in text: closed objects first, then the first
+// object cut off at the end of the text.
 //
 // Only call-shaped closed objects, with both a "name" key and an
 // "arguments" key at their own top level, are parsed and charged
 // against [maxWireCandidates]. Named data such as a recapped tool
 // result or tool list costs nothing, even when "arguments" appears
 // deeper inside it or as a value, so no amount of it can hide a later
-// call.
-func jsonCallFinding(text string) (wireFinding, bool) {
+// call. Objects nested in a call are its data and are skipped.
+func jsonCallCandidates(text string) []wireCandidate {
 	if !strings.Contains(text, `"name"`) {
-		return wireFinding{}, false
+		return nil
 	}
 	closed, unclosed := braceSpans(text)
 	cutOffs := cutOffCalls(text, closed, unclosed)
-	var best wireFinding
-	found := false
+	var out []wireCandidate
 	skipUntil, attempts, c := -1, 0, 0
 	for _, sp := range closed {
 		for c < len(cutOffs) && sp.start >= cutOffs[c].end {
@@ -33,39 +32,33 @@ func jsonCallFinding(text string) (wireFinding, bool) {
 		if c < len(cutOffs) && sp.start > cutOffs[c].start {
 			continue
 		}
-		if sp.start < skipUntil || !sp.named || !sp.argued {
+		if sp.start < skipUntil || sp.nameKey < 0 || !sp.argued {
 			continue
 		}
 		if attempts++; attempts > maxWireCandidates {
 			break
 		}
-		f, ok := classifyJSONCallObject(text[sp.start:sp.end])
+		f, ok := classifyJSONCallObject(text[sp.start:sp.end], sp.nameKey-sp.start)
 		if !ok {
 			continue
 		}
 		f.start = markupStart(text, sp.start, jsonWrapperTokens)
-		if f.wellFormed {
-			return f, true
-		}
-		if !found {
-			best, found = f, true
-		}
-		// Objects nested in a call-shaped object are its arguments,
-		// not further calls.
+		out = append(out, wireCandidate{wireFinding: f, anchor: sp.start, data: []textRange{{sp.start + 1, sp.end}}})
 		skipUntil = sp.end
 	}
 	if len(cutOffs) > 0 {
 		first := cutOffs[0]
-		f := wireFinding{
-			markup: WireMarkupJSONCall,
-			start:  markupStart(text, first.start, jsonWrapperTokens),
-			name:   looseJSONName(text[first.nameKey:]),
-		}
-		if !found || f.betterThan(best) {
-			best, found = f, true
-		}
+		out = append(out, wireCandidate{
+			wireFinding: wireFinding{
+				markup: WireMarkupJSONCall,
+				start:  markupStart(text, first.start, jsonWrapperTokens),
+				name:   looseJSONName(text[first.nameKey:]),
+			},
+			anchor: first.start,
+			data:   []textRange{{first.start + 1, first.end}},
+		})
 	}
-	return best, found
+	return out
 }
 
 // cutOffCall is a call left open at the end of the text, and where its
@@ -99,15 +92,14 @@ func cutOffCalls(text string, closed []textSpan, unclosed []openObject) []cutOff
 }
 
 // classifyJSONCallObject decides whether a balanced object is a call
-// and whether it is well-formed. A balanced object that is not valid
-// JSON still counts as a malformed call when it quotes both keys.
-func classifyJSONCallObject(obj string) (wireFinding, bool) {
+// and whether it is well-formed. nameKey is the offset in obj of its
+// top-level "name" key. A balanced object that is not valid JSON still
+// counts as a malformed call, named by that top-level key rather than
+// by any "name" nested in its arguments.
+func classifyJSONCallObject(obj string, nameKey int) (wireFinding, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(obj), &fields); err != nil {
-		if strings.Contains(obj, `"arguments"`) {
-			return wireFinding{markup: WireMarkupJSONCall, name: looseJSONName(obj)}, true
-		}
-		return wireFinding{}, false
+		return wireFinding{markup: WireMarkupJSONCall, name: looseJSONName(obj[nameKey:])}, true
 	}
 	rawName, hasName := fields["name"]
 	rawArgs, hasArgs := fields["arguments"]
@@ -130,8 +122,9 @@ func classifyJSONCallObject(obj string) (wireFinding, bool) {
 // textSpan is a balanced {...} span of the text.
 type textSpan struct {
 	start, end int
-	// named reports a "name" key at the object's own top level.
-	named bool
+	// nameKey is the offset of the "name" key at the object's own top
+	// level, or -1.
+	nameKey int
 	// argued reports an "arguments" key at the object's own top level.
 	argued bool
 }
@@ -315,7 +308,7 @@ func braceSpans(text string) (closed []textSpan, unclosed []openObject) {
 		case '}':
 			if n := len(stack); n > 0 {
 				top := stack[n-1]
-				closed = append(closed, textSpan{start: top.start, end: i + 1, named: top.nameKey >= 0, argued: top.argsKey >= 0})
+				closed = append(closed, textSpan{start: top.start, end: i + 1, nameKey: top.nameKey, argued: top.argsKey >= 0})
 				stack = stack[:n-1]
 			}
 		}
@@ -375,9 +368,10 @@ func jsonNameKeyOffsets(text string) []int {
 	}
 }
 
-// looseJSONName reads the string value of the first "name" key without
-// requiring the surrounding JSON to parse, so a truncated or invalid
-// call still reports whether it named an offered tool.
+// looseJSONName reads the string value of the first "name" key in s
+// without requiring the surrounding JSON to parse, so a truncated or
+// invalid call still reports whether it named an offered tool. Callers
+// pass s starting at the call's own top-level key.
 func looseJSONName(s string) string {
 	offsets := jsonNameKeyOffsets(s)
 	if len(offsets) == 0 {
