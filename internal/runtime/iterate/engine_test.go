@@ -748,16 +748,6 @@ func TestEngine_EmptyResponseStandIn(t *testing.T) {
 			wantCalls:     2,
 		},
 		{
-			name:          "empty on the last iteration without a hold: fallback, no nudge",
-			maxIterations: 2,
-			responses: []*llm.ChatResponse{
-				toolCallResponse(makeToolCall("search", map[string]any{"q": "A"})),
-				textResponse(""),
-			},
-			wantContent: fallback,
-			wantCalls:   2,
-		},
-		{
 			name:          "hold then empty with an iteration left: nudged",
 			maxIterations: 3,
 			responses: []*llm.ChatResponse{
@@ -845,6 +835,78 @@ func TestEngine_EmptyResponseStandIn(t *testing.T) {
 			}
 			if nudges != tt.wantNudges {
 				t.Errorf("calls answering a nudge = %d, want %d", nudges, tt.wantNudges)
+			}
+		})
+	}
+}
+
+// TestEngine_EmptyOnLastIterationRunsOut pins how a run ends when its
+// last iteration comes back empty and nothing the model wrote can stand
+// in. No iteration remains to answer a nudge, so the run ends as
+// exhausted, the way any run that runs out of iterations does, instead of
+// returning the canned fallback as though it finished: delegates and the
+// registry read exhaustion as a run that ran out. Force-text recovery
+// tries once when the last message is a tool result.
+func TestEngine_EmptyOnLastIterationRunsOut(t *testing.T) {
+	const nudge = "Nudge: please answer."
+	tests := []struct {
+		name          string
+		maxIterations int
+		responses     []*llm.ChatResponse
+		wantContent   string
+		wantCalls     int
+	}{
+		{
+			name:          "after a tool call, force text answers",
+			maxIterations: 2,
+			responses: []*llm.ChatResponse{
+				toolCallResponse(makeToolCall("search", map[string]any{"q": "A"})),
+				textResponse(""),
+				textResponse("Forced answer."),
+			},
+			wantContent: "Forced answer.",
+			wantCalls:   3,
+		},
+		{
+			name:          "on the only iteration there is no tool result to force text from",
+			maxIterations: 1,
+			responses:     []*llm.ChatResponse{textResponse("")},
+			wantCalls:     1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockLLM{responses: tt.responses}
+			cfg := baseCfg(mock, &mockExecutor{results: map[string]string{"search": "ok"}})
+			cfg.MaxIterations = tt.maxIterations
+			cfg.NudgeOnEmpty = true
+			cfg.NudgePrompt = nudge
+			cfg.FallbackContent = "Fallback: please try again."
+			var replies []string
+			cfg.OnTextResponse = func(_ context.Context, content string, _ []llm.Message) {
+				replies = append(replies, content)
+			}
+
+			result, err := (&Engine{}).Run(context.Background(), cfg, baseMessages())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !result.Exhausted || result.ExhaustReason != ExhaustMaxIterations {
+				t.Errorf("exhausted = %v (%q), want %q", result.Exhausted, result.ExhaustReason, ExhaustMaxIterations)
+			}
+			if result.Content != tt.wantContent {
+				t.Errorf("content = %q, want %q", result.Content, tt.wantContent)
+			}
+			if len(replies) != 0 {
+				t.Errorf("OnTextResponse got %q, want no call for a run that ran out", replies)
+			}
+			if len(mock.calls) != tt.wantCalls {
+				t.Errorf("LLM calls = %d, want %d", len(mock.calls), tt.wantCalls)
+			}
+			for i, call := range mock.calls {
+				if n := len(call.Messages); n > 0 && call.Messages[n-1].Content == nudge {
+					t.Errorf("call %d answers a nudge no iteration was left to answer", i)
+				}
 			}
 		})
 	}

@@ -143,10 +143,11 @@ type Config struct {
 	// MaxOutputTokens is at least what that reply spent. A non-empty return
 	// there holds the turn open: the reply joins history without reaching
 	// OnTextResponse, the input follows it, and the next iteration answers
-	// both. If no later iteration produces text, the run returns the held
-	// reply instead of FallbackContent. When either condition fails the
-	// poll is skipped, so the reply closes the turn and input that arrived
-	// while it was composed stays with the caller.
+	// both. If a later reply comes back empty with nothing newer to stand
+	// in, the run returns the held reply instead of FallbackContent. When
+	// either condition fails the poll is skipped, so the reply closes the
+	// turn and input that arrived while it was composed stays with the
+	// caller.
 	//
 	// Nil disables mid-turn input. The callback owns delta-gating (return
 	// only what is new) and any per-turn drain budget (return empty once
@@ -171,7 +172,9 @@ type Config struct {
 	// NudgeOnEmpty enables empty-response nudging: when the model
 	// returns no content and left no deferred text, inject NudgePrompt to
 	// give it one more chance to produce text. The nudge is tried once per
-	// run, and only while another iteration remains to answer it. Agent
+	// run, and only while another iteration remains to answer it; an empty
+	// reply on the last iteration with nothing to stand in ends the run as
+	// exhausted instead, like any run that runs out of iterations. Agent
 	// sets true.
 	NudgeOnEmpty bool
 
@@ -180,10 +183,10 @@ type Config struct {
 
 	// FallbackContent is the static text a run returns when it has no
 	// reply to give. An empty response gets it only when NudgeOnEmpty is
-	// set, no nudge is left to try, and nothing the model wrote earlier
-	// can stand in (neither deferred text nor a reply held at closure; see
-	// PullInput). A run the output budget ends without text, or whose
-	// force-text recovery fails or comes back empty, gets it too.
+	// set, the nudge was already tried, and nothing the model wrote
+	// earlier can stand in (neither deferred text nor a reply held at
+	// closure; see PullInput). A run the output budget ends without text,
+	// or whose force-text recovery fails or comes back empty, gets it too.
 	FallbackContent string
 
 	// ReplyAwaited reports that someone is waiting on this turn's final

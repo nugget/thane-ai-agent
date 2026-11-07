@@ -460,10 +460,19 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				iterLog.Warn("empty response after a closure hold, returning the held reply",
 					"held_len", len(heldReply), "nudged", emptyRetried)
 				llmResp.Message.Content = heldReply
+			} else if cfg.NudgeOnEmpty && !emptyRetried {
+				// The nudge was not spent, but no iteration remains to
+				// answer it, so the run has run out. It ends the way any
+				// run that runs out of iterations does: exhausted, with
+				// force-text recovery trying once when the last message
+				// is a tool result. A canned fallback here would read to
+				// callers such as delegates as a run that finished.
+				iterLog.Warn("empty response on the last iteration, ending the run as exhausted")
+				break
 			} else if cfg.NudgeOnEmpty {
-				// The nudge was already spent, or no iteration remains to
-				// answer one — apply fallback.
-				iterLog.Error("empty response, returning fallback", "nudged", emptyRetried)
+				// The nudge was already spent and the model still wrote
+				// nothing — apply fallback.
+				iterLog.Error("empty response after nudge, returning fallback")
 				fallback := cfg.FallbackContent
 				if fallback == "" {
 					fallback = prompts.EmptyResponseFallback
@@ -513,7 +522,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// That re-wake is a new run with its own iterations and budget.
 		if cfg.PullInput != nil && llmResp.Message.Content != "" {
 			if blocker := cfg.closureHoldBlocker(i, totalOutput, llmResp.OutputTokens); blocker != "" {
-				iterLog.Info("closure poll skipped, reply closes the turn",
+				iterLog.Debug("closure poll skipped, reply closes the turn",
 					"blocker", blocker)
 			} else if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
 				messages = append(messages, llmResp.Message)
