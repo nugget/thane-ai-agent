@@ -1189,7 +1189,7 @@ func (b *Bridge) finishHeldReply(log *slog.Logger, req loop.Request, resp *loop.
 
 // finishUndeliverableWakeReply closes a wake turn that ended with neither
 // a hold nor text the model wrote: an empty final text, one of the
-// runtime's placeholders, or the text of a timeout-recovered turn.
+// runtime's placeholders, or a final reply timeout recovery supplied.
 // Nothing is sent. It is a Warn because the model skipped the contract
 // the wake prompt states — a deliberate "nothing to send" is a hold — or
 // timed out before it could keep it.
