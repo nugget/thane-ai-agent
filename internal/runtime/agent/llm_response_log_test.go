@@ -87,6 +87,8 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		pullAfter int
 		// maxIterations, when nonzero, caps the run's iterations.
 		maxIterations int
+		// maxOutputTokens, when nonzero, is the run's output budget.
+		maxOutputTokens int
 		// estimated lists the response lines that must carry the
 		// estimate their iteration's llm call line logged.
 		estimated  []int
@@ -299,33 +301,31 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			wantFinish:     iterate.ExhaustMaxIterations,
 		},
 		{
-			// When input arrives at closure on the run's last
-			// iteration, the turn is held open with no iteration left
-			// and no tool result to force text after, so the recovered
-			// response is the last one reported but the run ends on no
-			// reply. It still finishes with the reason it ran out. The
-			// Response credits the model of the last response the run
-			// reported, which is the recovery model's.
-			name:          "timeout recovery then input at closure on the last iteration",
-			recoveryModel: "claude-recovery",
-			maxIterations: 2,
+			// A recovered reply that spends the rest of the output
+			// budget is the last response the run reports and the
+			// reply it ends on, but the run ran out on it, so it
+			// finishes with the reason it ran out. No iteration started
+			// after the reply, so the Response credits the recovery
+			// model.
+			name:            "timeout recovery reply spends the output budget",
+			recoveryModel:   "claude-recovery",
+			maxOutputTokens: 50,
 			responses: []*llm.ChatResponse{
 				accountingToolResponse(),
 				nil, nil, nil,
 				{
-					Model: "claude-recovery", StopReason: "end_turn",
+					Model: "claude-recovery", StopReason: "end_turn", OutputTokens: 40,
 					Message: llm.Message{Role: "assistant", Content: "Inspected before the timeout."},
 				},
 			},
-			errs:      map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout},
-			pullAfter: 5,
+			errs: map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout},
 			want: []map[string]any{
 				{"model": "claude-primary", "profile": "anthropic_native"},
-				{"model": "claude-recovery", "profile": ""},
+				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": ""},
 			},
 			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery"},
 			wantModel:      "claude-recovery",
-			wantFinish:     iterate.ExhaustMaxIterations,
+			wantFinish:     iterate.ExhaustTokenBudget,
 		},
 		{
 			// With no recovery model the reply is synthesized; no
@@ -404,13 +404,14 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			logs := &lockedLogBuffer{}
 			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(logs, nil)))
 			resp, err := loop.Run(ctx, &Request{
-				ConversationID: "provenance-log",
-				Model:          requestModel,
-				SkipContext:    tt.lightweight,
-				SystemPrompt:   tt.systemPrompt,
-				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
-				PullInput:      pullInput,
-				MaxIterations:  tt.maxIterations,
+				ConversationID:  "provenance-log",
+				Model:           requestModel,
+				SkipContext:     tt.lightweight,
+				SystemPrompt:    tt.systemPrompt,
+				Messages:        []Message{{Role: "user", Content: "Inspect the source."}},
+				PullInput:       pullInput,
+				MaxIterations:   tt.maxIterations,
+				MaxOutputTokens: tt.maxOutputTokens,
 			}, nil)
 			if err != nil {
 				t.Fatal(err)
