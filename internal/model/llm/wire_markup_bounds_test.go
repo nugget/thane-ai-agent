@@ -165,6 +165,11 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupQwenXML, true, true, true),
 		},
 		{
+			name:    "another grammar's tag outside a string ends an unclosed harmony value",
+			content: "to=functions.note_add {\"x\": 1\n" + qwenGetState,
+			want:    scan(WireMarkupQwenXML, true, true, true),
+		},
+		{
 			name:    "a recipient's message ending before any arguments",
 			content: `<|channel|>commentary to=functions.get_state <|constrain|>json<|message|><|call|><|start|>assistant<|channel|>final<|message|>{"done":true}`,
 			want:    scan(WireMarkupHarmony, false, true, false),
@@ -182,6 +187,11 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupJSONCall, false, false, false),
 		},
 		// A malformed call is named by its own top-level key.
+		{
+			name:    "a cut-off call naming a tool with a JSON escape",
+			content: `{"name":"get\u005fstate","arguments":{"entity_id":"light.kit`,
+			want:    scan(WireMarkupJSONCall, false, true, false),
+		},
 		{
 			name:    "invalid JSON call with arguments before its name",
 			content: `{"arguments":{"name":"get_state"},"name":"call_service",}`,
