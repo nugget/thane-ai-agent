@@ -67,9 +67,11 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		errs map[int]error
 		// pullAfter, when nonzero, delivers one user message on the
 		// first input poll after that many model calls.
-		pullAfter  int
-		want       []map[string]any
-		wantAbsent []string
+		pullAfter int
+		// maxIterations, when nonzero, caps the run's iterations.
+		maxIterations int
+		want          []map[string]any
+		wantAbsent    []string
 		// wantFinish, when set, is the run's finish reason.
 		wantFinish string
 	}{
@@ -143,20 +145,21 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		},
 		{
 			// Input arriving as the recovered reply closes holds the
-			// turn open, and the next call answers a freshly rendered
-			// prompt. Only the recovered reply goes without a profile;
-			// the finish reason still records that recovery happened.
+			// turn open, and the next call answers a prompt rendered
+			// afresh for the recovery model the engine switched to,
+			// whose profile differs from the primary's. Only the
+			// recovered reply goes without a profile.
 			name:          "timeout recovery then input at closure",
-			recoveryModel: "claude-recovery",
+			recoveryModel: "qwen-recovery",
 			responses: []*llm.ChatResponse{
 				accountingToolResponse(),
 				nil, nil, nil,
 				{
-					Model: "claude-recovery", StopReason: "end_turn",
+					Model: "qwen-recovery", StopReason: "end_turn",
 					Message: llm.Message{Role: "assistant", Content: "Inspected before the timeout."},
 				},
 				{
-					Model: "claude-recovery", StopReason: "end_turn",
+					Model: "qwen-recovery", StopReason: "end_turn",
 					Message: llm.Message{Role: "assistant", Content: "Answered the follow-up."},
 				},
 			},
@@ -164,10 +167,39 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			pullAfter: 5,
 			want: []map[string]any{
 				{"model": "claude-primary", "profile": "anthropic_native"},
-				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": ""},
+				{"model": "qwen-recovery", "stop_reason": "end_turn", "profile": ""},
+				{"model": "qwen-recovery", "stop_reason": "end_turn", "profile": "local_raw_text_tools"},
+			},
+		},
+		{
+			// A recovery reply can carry tool calls, as when a runner
+			// recovers them from its text. Once they run out the
+			// iterations, the force-text call reports its response
+			// without starting an iteration, and it answers the prompt
+			// the primary's profile rendered.
+			name:          "timeout recovery with tool calls then force text",
+			recoveryModel: "claude-recovery",
+			maxIterations: 2,
+			responses: []*llm.ChatResponse{
+				accountingToolResponse(),
+				nil, nil, nil,
+				func() *llm.ChatResponse {
+					resp := accountingToolResponse()
+					resp.Model = "claude-recovery"
+					resp.Message.ToolCalls[0].ID = "recovery-call"
+					return resp
+				}(),
+				{
+					Model: "claude-recovery", StopReason: "end_turn",
+					Message: llm.Message{Role: "assistant", Content: "Forced text."},
+				},
+			},
+			errs: map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout},
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "anthropic_native"},
+				{"model": "claude-recovery", "profile": ""},
 				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": "anthropic_native"},
 			},
-			wantFinish: "timeout_recovery",
 		},
 		{
 			// With no recovery model the reply is synthesized; no
@@ -235,6 +267,7 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				SystemPrompt:   tt.systemPrompt,
 				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
 				PullInput:      pullInput,
+				MaxIterations:  tt.maxIterations,
 			}, nil)
 			if err != nil {
 				t.Fatal(err)
