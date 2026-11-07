@@ -70,8 +70,11 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		pullAfter int
 		// maxIterations, when nonzero, caps the run's iterations.
 		maxIterations int
-		want          []map[string]any
-		wantAbsent    []string
+		// estimated lists the response lines that must carry the
+		// estimate their iteration's llm call line logged.
+		estimated  []int
+		want       []map[string]any
+		wantAbsent []string
 		// wantFinish, when set, is the run's finish reason.
 		wantFinish string
 	}{
@@ -170,6 +173,9 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "qwen-recovery", "stop_reason": "end_turn", "profile": ""},
 				{"model": "qwen-recovery", "stop_reason": "end_turn", "profile": "local_raw_text_tools"},
 			},
+			// The follow-up answers its own iteration's request again,
+			// though recovery replaced the one before it.
+			estimated: []int{0, 2},
 		},
 		{
 			// A recovery reply can carry tool calls, as when a runner
@@ -277,6 +283,21 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			}
 
 			lines := logs.records(t, "llm response")
+			callLines := logs.records(t, "llm call")
+			for _, idx := range tt.estimated {
+				if idx >= len(lines) {
+					t.Fatalf("no response line %d to check its estimate", idx)
+				}
+				var want any
+				for _, call := range callLines {
+					if call["iteration"] == lines[idx]["iteration"] {
+						want = call["est_request_tokens"]
+					}
+				}
+				if got := lines[idx]["est_request_tokens"]; got == nil || got != want {
+					t.Errorf("line %d est_request_tokens = %v, want its llm call line's %v", idx, got, want)
+				}
+			}
 			if len(lines) != len(tt.want) {
 				t.Fatalf("llm response lines = %d, want %d: %v", len(lines), len(tt.want), lines)
 			}

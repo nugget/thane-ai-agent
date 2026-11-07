@@ -69,10 +69,13 @@ func TestEngine_ForceTextFiresOnLLMResponse(t *testing.T) {
 			type seen struct {
 				index int
 				resp  llm.ChatResponse
+				site  llm.CallSite
+				sited bool
 			}
 			var got []seen
-			cfg.OnLLMResponse = func(_ context.Context, resp *llm.ChatResponse, i int) {
-				got = append(got, seen{index: i, resp: *resp})
+			cfg.OnLLMResponse = func(ctx context.Context, resp *llm.ChatResponse, i int) {
+				site, sited := llm.CallSiteFromContext(ctx)
+				got = append(got, seen{index: i, resp: *resp, site: site, sited: sited})
 			}
 			tt.configure(&cfg)
 
@@ -94,6 +97,16 @@ func TestEngine_ForceTextFiresOnLLMResponse(t *testing.T) {
 			if last.resp.StopReason != "stop" || last.resp.TextToolAction != llm.TextToolActionStrippedTrailing {
 				t.Errorf("force-text callback response = %q/%q, want stop/%q",
 					last.resp.StopReason, last.resp.TextToolAction, llm.TextToolActionStrippedTrailing)
+			}
+			// Callers tell the force-text response from an iteration's by
+			// the call site its context carries; iterations carry none.
+			if !last.sited || last.site.Kind != llm.CallKindForceText {
+				t.Errorf("force-text callback call site = %+v (present %v), want kind %q", last.site, last.sited, llm.CallKindForceText)
+			}
+			for _, s := range got[:len(got)-1] {
+				if s.sited {
+					t.Errorf("iteration %d callback carries call site %+v, want none", s.index, s.site)
+				}
 			}
 		})
 	}
